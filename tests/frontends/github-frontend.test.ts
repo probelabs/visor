@@ -259,4 +259,91 @@ describe('GitHubFrontend (event-bus v2)', () => {
     }
     return '';
   }
+
+  test('Creates separate group threads (overview vs review) without mixing sections', async () => {
+    const bus = new EventBus();
+    const octokit = makeFakeOctokit();
+    const fe = new GitHubFrontend();
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: {
+        checks: {
+          overview: { group: 'overview', schema: 'overview' },
+          security: { group: 'review', schema: 'code-review' },
+        },
+      },
+      run: { runId: 'r-7', repo: { owner: 'o', name: 'r' }, pr: 456, headSha: 'cafebad' },
+      octokit,
+    });
+
+    await bus.emit({ type: 'CheckScheduled', checkId: 'overview', scope: ['root'] });
+    await bus.emit({ type: 'CheckScheduled', checkId: 'security', scope: ['root'] });
+
+    // Two distinct comments should exist: one for group=overview, one for group=review
+    const bodies = octokit.__state.comments.map((c: any) => String(c.body));
+    const headerJsons = bodies.map(parseThreadHeader).filter(Boolean) as any[];
+    const groups = headerJsons.map(h => h.group);
+    expect(groups.sort()).toEqual(['overview', 'review']);
+
+    // Ensure sections are not mixed
+    const overviewBody = bodies.find((b: string) => /\"group\":\"overview\"/.test(b))!;
+    const reviewBody = bodies.find((b: string) => /\"group\":\"review\"/.test(b))!;
+    expect(overviewBody).toContain('visor:section={');
+    expect(overviewBody).toContain('overview');
+    expect(overviewBody).not.toContain('security');
+    expect(reviewBody).toContain('visor:section={');
+    expect(reviewBody).toContain('security');
+    expect(reviewBody).not.toContain('overview');
+  });
+
+  test('No duplicate sections after multiple updates; content rendered appears', async () => {
+    const bus = new EventBus();
+    const octokit = makeFakeOctokit();
+    const fe = new GitHubFrontend();
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: { checks: { security: { group: 'review', schema: 'code-review' } } },
+      run: { runId: 'r-8', repo: { owner: 'o', name: 'r' }, pr: 101, headSha: 'abcabcd' },
+      octokit,
+    });
+
+    await bus.emit({ type: 'CheckScheduled', checkId: 'security', scope: ['root'] });
+
+    // First completion with content
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'security',
+      scope: ['root'],
+      result: { issues: [], content: 'First render content' },
+    });
+
+    // Second completion (updated content)
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'security',
+      scope: ['root'],
+      result: { issues: [], content: 'Second render content' },
+    });
+
+    const body = octokit.__state.comments.find((c: any) => /\"group\":\"review\"/.test(String(c.body)))
+      .body as string;
+
+    // Only one security section block present
+    const count = (body.match(/visor:section=.*security/g) || []).length;
+    expect(count).toBe(1);
+    // Updated content appears
+    expect(body).toContain('Second render content');
+  });
+
+  function parseThreadHeader(body: string): any | null {
+    const m = body.match(/<!--\s*visor:thread=(\{[\s\S]*?\})\s*-->/);
+    if (!m) return null;
+    try {
+      return JSON.parse(m[1]);
+    } catch {
+      return null;
+    }
+  }
 });
