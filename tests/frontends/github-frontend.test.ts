@@ -110,6 +110,70 @@ describe('GitHubFrontend (event-bus v2)', () => {
     expect(body).toContain('security');
   });
 
+  test('GitHub Check conclusion reflects fail_if evaluation (failure when triggered)', async () => {
+    const bus = new EventBus();
+    const octokit = makeFakeOctokit();
+    const fe = new GitHubFrontend();
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      // Configure a fail_if that fails when any issue exists
+      config: {
+        checks: {
+          security: {
+            fail_if: 'Array.isArray(output.issues) && output.issues.length > 0',
+            schema: 'code-review',
+          },
+        },
+      },
+      run: { runId: 'r-5', repo: { owner: 'o', name: 'r' }, pr: 789, headSha: 'deafbee' },
+      octokit,
+    });
+
+    await bus.emit({ type: 'CheckScheduled', checkId: 'security', scope: ['root'] });
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'security',
+      scope: ['root'],
+      result: {
+        issues: [{ file: 'a', line: 1, message: 'x', severity: 'error', category: 'logic' }],
+      },
+    });
+
+    // Last update call should complete with conclusion failure
+    const lastUpdate = octokit.rest.checks.update.mock.calls.pop()?.[0];
+    expect(lastUpdate).toBeDefined();
+    expect(lastUpdate.conclusion).toBe('failure');
+  });
+
+  test('GitHub Check conclusion is success when issues exist but fail_if not triggered', async () => {
+    const bus = new EventBus();
+    const octokit = makeFakeOctokit();
+    const fe = new GitHubFrontend();
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      // No fail_if => presence of issues should not force failure
+      config: { checks: { security: { schema: 'code-review' } } },
+      run: { runId: 'r-6', repo: { owner: 'o', name: 'r' }, pr: 111, headSha: 'bead123' },
+      octokit,
+    });
+
+    await bus.emit({ type: 'CheckScheduled', checkId: 'security', scope: ['root'] });
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'security',
+      scope: ['root'],
+      result: {
+        issues: [{ file: 'a', line: 1, message: 'x', severity: 'error', category: 'logic' }],
+      },
+    });
+
+    const lastUpdate = octokit.rest.checks.update.mock.calls.pop()?.[0];
+    expect(lastUpdate).toBeDefined();
+    expect(lastUpdate.conclusion).toBe('success');
+  });
+
   test('CheckErrored marks failure and writes error into section', async () => {
     const bus = new EventBus();
     const octokit = makeFakeOctokit();

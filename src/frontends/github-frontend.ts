@@ -97,13 +97,14 @@ export class GitHubFrontend implements Frontend {
           if (canPost && svc && this.checkRunIds.has(ev.checkId)) {
             const id = this.checkRunIds.get(ev.checkId)!;
             const issues = Array.isArray(ev.result?.issues) ? ev.result.issues : [];
-            // Minimal mapping: conclusion by presence of issues
+            // Evaluate failure conditions so GitHub conclusion reflects actual pass/fail
+            const failureResults = await this.evaluateFailureResults(ctx, ev.checkId, ev.result);
             await svc.completeCheckRun(
               repo!.owner,
               repo!.name,
               id,
               ev.checkId,
-              [],
+              failureResults,
               issues,
               undefined,
               undefined,
@@ -115,9 +116,13 @@ export class GitHubFrontend implements Frontend {
           // Update grouped summary comment
           if (canPost && comments) {
             const count = Array.isArray(ev.result?.issues) ? ev.result.issues.length : 0;
+            const failureResults = await this.evaluateFailureResults(ctx, ev.checkId, ev.result);
+            const failed = Array.isArray(failureResults)
+              ? failureResults.some((r: any) => r && r.failed)
+              : false;
             this.stepStatus.set(ev.checkId, {
               status: 'completed',
-              conclusion: count > 0 ? 'failure' : 'success',
+              conclusion: failed ? 'failure' : 'success',
               issues: count,
               lastUpdated: new Date().toISOString(),
             });
@@ -356,6 +361,70 @@ ${end}`);
 
   private escapeRegExp(s: string): string {
     return s.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&');
+  }
+
+  /**
+   * Compute failure condition results for a completed check so Check Runs map to the
+   * correct GitHub conclusion. This mirrors the engine's evaluation for fail_if.
+   */
+  private async evaluateFailureResults(
+    ctx: FrontendContext,
+    checkId: string,
+    result: { issues?: any[]; output?: unknown }
+  ): Promise<any[]> {
+    try {
+      const config: any = ctx.config || {};
+      const checks = (config && config.checks) || {};
+      const checkCfg = checks[checkId] || {};
+      const checkSchema = typeof checkCfg.schema === 'string' ? checkCfg.schema : 'code-review';
+      const checkGroup = checkCfg.group || 'default';
+
+      const { FailureConditionEvaluator } = require('../failure-condition-evaluator');
+      const evaluator = new FailureConditionEvaluator();
+      const reviewSummary = { issues: Array.isArray(result?.issues) ? result.issues : [] };
+
+      const failures: any[] = [];
+
+      // Global fail_if
+      if (config.fail_if) {
+        const failed = await evaluator.evaluateSimpleCondition(
+          checkId,
+          checkSchema,
+          checkGroup,
+          reviewSummary,
+          config.fail_if
+        );
+        failures.push({
+          conditionName: 'global_fail_if',
+          failed,
+          expression: config.fail_if,
+          severity: 'error',
+          haltExecution: false,
+        });
+      }
+
+      // Check-level fail_if
+      if (checkCfg.fail_if) {
+        const failed = await evaluator.evaluateSimpleCondition(
+          checkId,
+          checkSchema,
+          checkGroup,
+          reviewSummary,
+          checkCfg.fail_if
+        );
+        failures.push({
+          conditionName: `${checkId}_fail_if`,
+          failed,
+          expression: checkCfg.fail_if,
+          severity: 'error',
+          haltExecution: false,
+        });
+      }
+
+      return failures;
+    } catch {
+      return [];
+    }
   }
 
   // Debounce helpers
