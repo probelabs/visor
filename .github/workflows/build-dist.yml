@@ -34,8 +34,22 @@ jobs:
           # Explicitly install rollup platform-specific binary
           npm install --no-save @rollup/rollup-linux-x64-gnu
 
+      - name: Remove dist before build (ensure clean bundle)
+        run: rm -rf dist
+
       - name: Build project
         run: npm run build
+
+      - name: Clean transient artifacts from dist (avoid committing runtime noise)
+        run: |
+          # Remove debug and trace artifacts that can be produced by local/test runs
+          rm -rf dist/debug-artifacts || true
+          rm -rf dist/traces || true
+          # Remove any nested traces directories (e.g., dist/output/traces)
+          find dist -type d -name traces -prune -exec rm -rf {} + || true
+          # Remove sanitized temp configs and debug trace files if present
+          find dist -type f -name '.visor-config-sanitized-*.yaml' -delete || true
+          find dist -type f -name 'trace-*.jsonl' -delete || true
 
       - name: Prepare bundled directory
         run: |
@@ -59,8 +73,9 @@ jobs:
           fi
 
           if [ -d dist/output ]; then
-            cp -r dist/output bundled/
-            echo "✅ Copied output schemas to bundle"
+            # Copy output folder but ensure no transient traces are present
+            rsync -a --delete --exclude 'traces/**' dist/output/ bundled/output/
+            echo "✅ Copied output schemas to bundle (traces excluded)"
           fi
 
           # Copy SDK build artifacts
@@ -100,7 +115,7 @@ jobs:
 
           # Copy schema files if they exist
           if [ -d bundled/output ]; then
-            cp -r bundled/output dist/
+            rsync -a --delete bundled/output/ dist/output/
             echo "✅ Copied output schemas to dist/"
           fi
 
