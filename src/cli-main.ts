@@ -282,13 +282,18 @@ async function handleTestCommand(argv: string[]): Promise<void> {
           write(`   ${rel(s.file)}`);
           // best-effort line hints
           let raw: string | undefined;
-          try { raw = fsSync.readFileSync(s.file, 'utf8'); } catch {}
+          try {
+            raw = fsSync.readFileSync(s.file, 'utf8');
+          } catch {}
           const findLine = (caseName: string, stageName?: string): number | undefined => {
             if (!raw) return undefined;
             const lines = raw.split(/\r?\n/);
             let caseLine: number | undefined;
             for (let i = 0; i < lines.length; i++) {
-              if (lines[i].includes('- name:') && lines[i].includes(caseName)) { caseLine = i + 1; break; }
+              if (lines[i].includes('- name:') && lines[i].includes(caseName)) {
+                caseLine = i + 1;
+                break;
+              }
             }
             if (!stageName) return caseLine;
             if (caseLine !== undefined) {
@@ -300,7 +305,9 @@ async function handleTestCommand(argv: string[]): Promise<void> {
           };
           for (const c of fcases) {
             if (Array.isArray(c.stages) && c.stages.length > 0) {
-              const bad = c.stages.filter((st: any) => Array.isArray(st.errors) && st.errors.length > 0);
+              const bad = c.stages.filter(
+                (st: any) => Array.isArray(st.errors) && st.errors.length > 0
+              );
               for (const st of bad) {
                 const stageNameOnly = String(st.name || '').includes('#')
                   ? String(st.name).split('#').pop()
@@ -311,7 +318,11 @@ async function handleTestCommand(argv: string[]): Promise<void> {
                 for (const e of st.errors || []) write(`       • ${e}`);
               }
             }
-            if ((!c.stages || c.stages.length === 0) && Array.isArray(c.errors) && c.errors.length > 0) {
+            if (
+              (!c.stages || c.stages.length === 0) &&
+              Array.isArray(c.errors) &&
+              c.errors.length > 0
+            ) {
               const ln = findLine(c.name);
               write(`     ${cross} ${c.name}${ln ? ` (${rel(s.file)}:${ln})` : ''}`);
               for (const e of c.errors) write(`       • ${e}`);

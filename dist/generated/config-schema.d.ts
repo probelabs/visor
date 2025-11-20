@@ -110,6 +110,24 @@ export declare const configSchema: {
                     readonly $ref: "#/definitions/LimitsConfig";
                     readonly description: "Global execution limits";
                 };
+                readonly frontends: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "object";
+                        readonly properties: {
+                            readonly name: {
+                                readonly type: "string";
+                                readonly description: "Frontend name, e.g., 'ndjson-sink', 'github'";
+                            };
+                            readonly config: {
+                                readonly description: "Frontend-specific configuration";
+                            };
+                        };
+                        readonly required: readonly ["name"];
+                        readonly additionalProperties: false;
+                    };
+                    readonly description: "Optional integrations: event-driven frontends (e.g., ndjson-sink, github)";
+                };
             };
             readonly required: readonly ["output", "version"];
             readonly patternProperties: {
@@ -574,7 +592,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-33972%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -1178,13 +1196,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-33972>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-33972%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-33972>': {
+        readonly 'Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };

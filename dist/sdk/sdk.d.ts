@@ -877,6 +877,13 @@ interface VisorConfig {
     routing?: RoutingDefaults;
     /** Global execution limits */
     limits?: LimitsConfig;
+    /** Optional integrations: event-driven frontends (e.g., ndjson-sink, github) */
+    frontends?: Array<{
+        /** Frontend name, e.g., 'ndjson-sink', 'github' */
+        name: string;
+        /** Frontend-specific configuration */
+        config?: unknown;
+    }>;
 }
 
 /**
