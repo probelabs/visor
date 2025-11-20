@@ -820,7 +820,7 @@ export class StateMachineExecutionEngine {
 
     // Determine template to use
     const schema = checkConfig.schema || 'plain';
-    let templateContent: string;
+    let templateContent: string | undefined;
 
     if (checkConfig.template) {
       // Custom template
@@ -880,8 +880,34 @@ export class StateMachineExecutionEngine {
       if (!sanitizedSchema) {
         throw new Error('Invalid schema name');
       }
-      const templatePath = path.join(__dirname, `output/${sanitizedSchema}/template.liquid`);
-      templateContent = await fs.readFile(templatePath, 'utf-8');
+      // When bundled with ncc, __dirname is dist/ and output/ is at dist/output/
+      // When running from source, __dirname varies based on build location
+      const candidatePaths = [
+        path.join(__dirname, `output/${sanitizedSchema}/template.liquid`), // bundled: dist/output/
+        path.join(__dirname, '..', `output/${sanitizedSchema}/template.liquid`), // source fallback
+        path.join(process.cwd(), `output/${sanitizedSchema}/template.liquid`), // cwd/output/
+        path.join(process.cwd(), `dist/output/${sanitizedSchema}/template.liquid`), // cwd/dist/output/
+      ];
+
+      for (const templatePath of candidatePaths) {
+        try {
+          const content = await fs.readFile(templatePath, 'utf-8');
+          if (content) {
+            templateContent = content;
+            break;
+          }
+        } catch {
+          // try next
+        }
+      }
+
+      if (!templateContent) {
+        throw new Error(`Template not found for schema: ${sanitizedSchema}`);
+      }
+    }
+
+    if (!templateContent) {
+      throw new Error('No template content available');
     }
 
     // Create liquid instance with extended functionality

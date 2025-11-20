@@ -933,7 +933,7 @@ describe('CheckExecutionEngine', () => {
 
       await expect(
         (checkEngine as any).renderCheckContent('security', mockReviewSummary, checkConfig)
-      ).rejects.toThrow('Template file not found');
+      ).rejects.toThrow('Template not found for schema: nonexistent-schema');
 
       expect(mockPath.join).toHaveBeenCalledWith(
         expect.any(String),

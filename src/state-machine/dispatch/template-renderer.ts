@@ -29,9 +29,13 @@ export async function renderTemplateContent(
     } else if (schema && schema !== 'plain') {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, '');
       if (sanitized) {
+        // When bundled with ncc, __dirname is dist/ and output/ is at dist/output/
+        // When running from source, __dirname is src/state-machine/dispatch/ and output/ is at output/
         const candidatePaths = [
-          path.join(__dirname, '..', '..', 'output', sanitized, 'template.liquid'),
-          path.join(process.cwd(), 'output', sanitized, 'template.liquid'),
+          path.join(__dirname, 'output', sanitized, 'template.liquid'), // bundled: dist/output/
+          path.join(__dirname, '..', '..', 'output', sanitized, 'template.liquid'), // source: output/
+          path.join(process.cwd(), 'output', sanitized, 'template.liquid'), // fallback: cwd/output/
+          path.join(process.cwd(), 'dist', 'output', sanitized, 'template.liquid'), // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
