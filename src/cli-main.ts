@@ -633,7 +633,7 @@ export async function main(): Promise<void> {
     }
 
     // Load configuration FIRST (before starting debug server)
-    let config;
+    let config: import('./types/config').VisorConfig;
     if (options.configPath) {
       try {
         logger.step('Loading configuration');
@@ -953,6 +953,21 @@ export async function main(): Promise<void> {
 
     logger.info('🔍 Visor - AI-powered code review tool');
     logger.info(`Configuration version: ${config.version}`);
+
+    // Experimental: enable new GitHub integration via event bus when --github-v2 is set
+    if ((options as any).githubV2) {
+      try {
+        const cfg = JSON.parse(JSON.stringify(config));
+        const fronts = Array.isArray(cfg.frontends) ? cfg.frontends : [];
+        // Avoid duplicate entries
+        if (!fronts.some((f: any) => f && f.name === 'github')) fronts.push({ name: 'github' });
+        cfg.frontends = fronts;
+        config = cfg;
+        logger.info('🔄 GitHub V2 integration: ENABLED (event-bus frontends)');
+      } catch {
+        logger.warn('⚠️  Failed to enable --github-v2; continuing without frontends');
+      }
+    }
     logger.verbose(`Configuration source: ${options.configPath || 'default search locations'}`);
 
     // Check if there are any changes to analyze (only when code context is needed)

@@ -261,10 +261,62 @@ export class StateMachineExecutionEngine {
     // Store context for later access (e.g., getOutputHistorySnapshot)
     this._lastContext = context;
 
+    // Optionally enable event-driven frontends if configured
+    let frontendsHost: any | undefined;
+    if (
+      Array.isArray((configWithTagFilter as any).frontends) &&
+      (configWithTagFilter as any).frontends.length > 0
+    ) {
+      try {
+        const { EventBus } = await import('./event-bus/event-bus');
+        const { FrontendsHost } = await import('./frontends/host');
+        const bus = new EventBus();
+        (context as any).eventBus = bus;
+        frontendsHost = new FrontendsHost(bus, logger);
+        await frontendsHost.load((configWithTagFilter as any).frontends);
+        // Derive repo/pr/headSha and octokit if available
+        let owner: string | undefined;
+        let name: string | undefined;
+        let prNum: number | undefined;
+        let headSha: string | undefined;
+        try {
+          const anyInfo: any = prInfo as any;
+          owner =
+            anyInfo?.eventContext?.repository?.owner?.login ||
+            process.env.GITHUB_REPOSITORY?.split('/')?.[0];
+          name =
+            anyInfo?.eventContext?.repository?.name ||
+            process.env.GITHUB_REPOSITORY?.split('/')?.[1];
+          prNum = typeof anyInfo?.number === 'number' ? anyInfo.number : undefined;
+          headSha = anyInfo?.eventContext?.pull_request?.head?.sha || process.env.GITHUB_SHA;
+        } catch {}
+        const repoObj = owner && name ? { owner, name } : undefined;
+        const octokit = (this.executionContext as any)?.octokit;
+        await frontendsHost.startAll(() => ({
+          eventBus: bus,
+          logger,
+          config: undefined,
+          run: { runId: (context as any).sessionId, repo: repoObj, pr: prNum, headSha },
+          octokit,
+        }));
+      } catch (err) {
+        logger.warn(
+          `[Frontends] Failed to initialize frontends: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+
     // Create and run state machine with debug server support (M4)
     const runner = new StateMachineRunner(context, this.debugServer);
     this._lastRunner = runner;
     const result = await runner.run();
+
+    // Stop frontends if started
+    if (frontendsHost && typeof frontendsHost.stopAll === 'function') {
+      try {
+        await frontendsHost.stopAll();
+      } catch {}
+    }
 
     if (debug) {
       logger.info('[StateMachine] Execution complete');

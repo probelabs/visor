@@ -8,7 +8,14 @@ export interface FrontendContext {
     error: (...a: any[]) => void;
   };
   config: unknown;
-  run: { runId: string; workflowId?: string; repo?: string; pr?: number; headSha?: string };
+  run: {
+    runId: string;
+    workflowId?: string;
+    repo?: { owner: string; name: string };
+    pr?: number;
+    headSha?: string;
+  };
+  octokit?: any;
 }
 
 export interface Frontend {
@@ -39,6 +46,9 @@ export class FrontendsHost {
       if (spec.name === 'ndjson-sink') {
         const { NdjsonSink } = await import('./ndjson-sink');
         this.frontends.push(new NdjsonSink(spec.config));
+      } else if (spec.name === 'github') {
+        const { GitHubFrontend } = await import('./github-frontend');
+        this.frontends.push(new GitHubFrontend());
       } else {
         this.log.warn(`[FrontendsHost] Unknown frontend '${spec.name}', skipping`);
       }

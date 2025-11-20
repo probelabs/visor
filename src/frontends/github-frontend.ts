@@ -1,0 +1,388 @@
+import type { Frontend, FrontendContext } from './host';
+import { logger } from '../logger';
+
+/**
+ * Skeleton GitHub frontend.
+ * - Subscribes to engine events via EventBus when present
+ * - Maps key events to debug logs for now (no side effects)
+ * - Real implementation will upsert checks and manage grouped PR comments
+ */
+export class GitHubFrontend implements Frontend {
+  public readonly name = 'github';
+  private subs: Array<{ unsubscribe(): void }> = [];
+  private checkRunIds: Map<string, number> = new Map();
+  private revision = 0;
+  private cachedCommentId?: string; // comment manager id
+  private stepStatus: Map<
+    string,
+    {
+      status: 'queued' | 'in_progress' | 'completed' | 'errored';
+      conclusion?: 'success' | 'failure' | 'neutral' | 'skipped';
+      issues?: number;
+      lastUpdated: string;
+      error?: string;
+    }
+  > = new Map();
+
+  // Debounce/coalescing state
+  private debounceMs: number = 400;
+  private maxWaitMs: number = 2000;
+  private _timer: NodeJS.Timeout | null = null;
+  private _lastFlush: number = 0;
+  private _pendingIds: Set<string> = new Set<string>();
+
+  start(ctx: FrontendContext): void {
+    const log = ctx.logger;
+    const bus = ctx.eventBus;
+    const octokit = (ctx as any).octokit;
+    const repo = ctx.run.repo;
+    const pr = ctx.run.pr;
+    const headSha = ctx.run.headSha;
+
+    // If we cannot act (missing octokit or repo/pr), remain passive but keep logging
+    const canPost = !!(octokit && repo && pr && headSha);
+
+    // Create helpers if possible
+    const svc = canPost
+      ? new (require('../github-check-service').GitHubCheckService)(octokit)
+      : null;
+    const CommentManager = require('../github-comments').CommentManager;
+    const comments = canPost ? new CommentManager(octokit) : null;
+
+    const threadKey =
+      repo && pr && headSha
+        ? `${repo.owner}/${repo.name}#${pr}@${(headSha || '').substring(0, 7)}`
+        : ctx.run.runId;
+    this.cachedCommentId = `visor-thread-${threadKey}`;
+
+    // CheckScheduled → create queued check run
+    this.subs.push(
+      bus.on('CheckScheduled', async (env: any) => {
+        const ev = (env && env.payload) || env;
+        try {
+          if (!canPost || !svc) return;
+          if (this.checkRunIds.has(ev.checkId)) return; // already created
+          // Update local model and grouped comment
+          this.stepStatus.set(ev.checkId, {
+            status: 'queued',
+            lastUpdated: new Date().toISOString(),
+          });
+          if (comments) await this.updateGroupedComment(ctx, comments, ev.checkId);
+          const res = await svc.createCheckRun(
+            {
+              owner: repo!.owner,
+              repo: repo!.name,
+              head_sha: headSha!,
+              name: `Visor: ${ev.checkId}`,
+              external_id: `visor:${ctx.run.runId}:${ev.checkId}`,
+              engine_mode: 'state-machine',
+            },
+            { title: `${ev.checkId}`, summary: 'Queued' }
+          );
+          this.checkRunIds.set(ev.checkId, res.id);
+        } catch (e) {
+          log.warn(
+            `[github-frontend] createCheckRun failed for ${ev.checkId}: ${e instanceof Error ? e.message : e}`
+          );
+        }
+      })
+    );
+
+    // CheckCompleted → complete check run and update grouped comment
+    this.subs.push(
+      bus.on('CheckCompleted', async (env: any) => {
+        const ev = (env && env.payload) || env;
+        try {
+          // Complete check run
+          if (canPost && svc && this.checkRunIds.has(ev.checkId)) {
+            const id = this.checkRunIds.get(ev.checkId)!;
+            const issues = Array.isArray(ev.result?.issues) ? ev.result.issues : [];
+            // Minimal mapping: conclusion by presence of issues
+            await svc.completeCheckRun(
+              repo!.owner,
+              repo!.name,
+              id,
+              ev.checkId,
+              [],
+              issues,
+              undefined,
+              undefined,
+              pr!,
+              headSha!
+            );
+          }
+
+          // Update grouped summary comment
+          if (canPost && comments) {
+            const count = Array.isArray(ev.result?.issues) ? ev.result.issues.length : 0;
+            this.stepStatus.set(ev.checkId, {
+              status: 'completed',
+              conclusion: count > 0 ? 'failure' : 'success',
+              issues: count,
+              lastUpdated: new Date().toISOString(),
+            });
+            await this.updateGroupedComment(ctx, comments, ev.checkId);
+          }
+        } catch (e) {
+          log.warn(
+            `[github-frontend] handle CheckCompleted failed: ${e instanceof Error ? e.message : e}`
+          );
+        }
+      })
+    );
+
+    // CheckErrored → mark failure and update comment
+    this.subs.push(
+      bus.on('CheckErrored', async (env: any) => {
+        const ev = (env && env.payload) || env;
+        try {
+          if (canPost && svc && this.checkRunIds.has(ev.checkId)) {
+            const id = this.checkRunIds.get(ev.checkId)!;
+            await svc.completeCheckRun(
+              repo!.owner,
+              repo!.name,
+              id,
+              ev.checkId,
+              [],
+              [],
+              ev.error?.message || 'Execution error',
+              undefined,
+              pr!,
+              headSha!
+            );
+          }
+          if (comments) {
+            this.stepStatus.set(ev.checkId, {
+              status: 'errored',
+              conclusion: 'failure',
+              issues: 0,
+              lastUpdated: new Date().toISOString(),
+              error: ev.error?.message || 'Execution error',
+            });
+            await this.updateGroupedComment(ctx, comments, ev.checkId);
+          }
+        } catch (e) {
+          log.warn(
+            `[github-frontend] handle CheckErrored failed: ${e instanceof Error ? e.message : e}`
+          );
+        }
+      })
+    );
+
+    // StateTransition: update summary on terminal
+    this.subs.push(
+      bus.on('StateTransition', async (env: any) => {
+        const ev = (env && env.payload) || env;
+        try {
+          if (ev.to === 'Completed' || ev.to === 'Error') {
+            if (comments) await this.updateGroupedComment(ctx, comments);
+          }
+        } catch (e) {
+          log.warn(
+            `[github-frontend] handle StateTransition failed: ${e instanceof Error ? e.message : e}`
+          );
+        }
+      })
+    );
+  }
+
+  stop(): void {
+    for (const s of this.subs) s.unsubscribe();
+    this.subs = [];
+  }
+
+  private async buildFullBody(ctx: FrontendContext): Promise<string> {
+    const header = this.renderThreadHeader(ctx);
+    const sections = this.renderSections(ctx);
+    return `${header}
+
+${sections}
+
+<!-- visor:thread-end key="${this.threadKeyFor(ctx)}" -->`;
+  }
+
+  private threadKeyFor(ctx: FrontendContext): string {
+    const r = ctx.run;
+    return r.repo && r.pr && r.headSha
+      ? `${r.repo.owner}/${r.repo.name}#${r.pr}@${(r.headSha || '').substring(0, 7)}`
+      : r.runId;
+  }
+
+  private renderThreadHeader(ctx: FrontendContext): string {
+    const header = {
+      key: this.threadKeyFor(ctx),
+      runId: ctx.run.runId,
+      workflowId: ctx.run.workflowId,
+      revision: this.revision,
+      generatedAt: new Date().toISOString(),
+    } as any;
+    return `<!-- visor:thread=${JSON.stringify(header)} -->`;
+  }
+
+  private renderSections(_ctx: FrontendContext): string {
+    const lines: string[] = [];
+    const now = new Date().toISOString();
+    for (const [checkId, st] of this.stepStatus.entries()) {
+      const start = `<!-- visor:section=${JSON.stringify({ id: checkId, revision: this.revision })} -->`;
+      const end = `<!-- visor:section-end id="${checkId}" -->`;
+      const icon = st.conclusion === 'success' ? '✅' : st.conclusion === 'failure' ? '❌' : '⏳';
+      const statusText = st.status === 'completed' ? st.conclusion || 'completed' : st.status;
+      const details = st.error
+        ? `Error: ${st.error}`
+        : typeof st.issues === 'number'
+          ? `Issues: ${st.issues}`
+          : '';
+      lines.push(`${start}
+### ${icon} ${checkId} — ${statusText}
+${details}
+_updated: ${now}_
+${end}`);
+    }
+    return lines.join('\n\n');
+  }
+
+  private async updateGroupedComment(
+    ctx: FrontendContext,
+    comments: any,
+    changedIds?: string | string[]
+  ) {
+    try {
+      if (!ctx.run.repo || !ctx.run.pr) return;
+      this.revision++;
+      const mergedBody = await this.mergeIntoExistingBody(ctx, comments, changedIds);
+      await comments.updateOrCreateComment(
+        ctx.run.repo.owner,
+        ctx.run.repo.name,
+        ctx.run.pr,
+        mergedBody,
+        {
+          commentId: this.cachedCommentId,
+          triggeredBy: 'github-frontend',
+          commitSha: ctx.run.headSha,
+        }
+      );
+    } catch (e) {
+      logger.debug(
+        `[github-frontend] updateGroupedComment failed: ${e instanceof Error ? e.message : e}`
+      );
+    }
+  }
+
+  private async mergeIntoExistingBody(
+    ctx: FrontendContext,
+    comments: any,
+    changedIds?: string | string[]
+  ): Promise<string> {
+    const repo = ctx.run.repo!;
+    const pr = ctx.run.pr!;
+    const existing = await comments.findVisorComment(
+      repo.owner,
+      repo.name,
+      pr,
+      this.cachedCommentId
+    );
+    if (!existing || !existing.body) return this.buildFullBody(ctx);
+    const body = String(existing.body);
+    const doc = this.parseSections(body);
+    doc.header = {
+      ...(doc.header || {}),
+      key: this.threadKeyFor(ctx),
+      revision: this.revision,
+    } as any;
+    if (changedIds) {
+      const ids = Array.isArray(changedIds) ? changedIds : [changedIds];
+      const fresh = this.renderSections(ctx);
+      for (const id of ids) {
+        const block = this.extractSectionById(fresh, id);
+        if (block) doc.sections.set(id, block);
+      }
+    } else {
+      // Add any missing new sections; leave others untouched to preserve text
+      const fresh = this.renderSections(ctx);
+      for (const [checkId] of this.stepStatus.entries()) {
+        if (!doc.sections.has(checkId)) {
+          const block = this.extractSectionById(fresh, checkId);
+          if (block) doc.sections.set(checkId, block);
+        }
+      }
+    }
+    return this.serializeSections(doc);
+  }
+
+  private parseSections(body: string): { header?: any; sections: Map<string, string> } {
+    const sections = new Map<string, string>();
+    const headerRe = /<!--\s*visor:thread=(\{[\s\S]*?\})\s*-->/m;
+    const startRe = /<!--\s*visor:section=(\{[\s\S]*?\})\s*-->/g;
+    const endRe = /<!--\s*visor:section-end\s+id=\"([^\"]+)\"\s*-->/g;
+    let header: any;
+    try {
+      const h = headerRe.exec(body);
+      if (h) header = JSON.parse(h[1]);
+    } catch {}
+    let cursor = 0;
+    while (true) {
+      const s = startRe.exec(body);
+      if (!s) break;
+      const meta = JSON.parse(s[1]);
+      const startIdx = startRe.lastIndex;
+      endRe.lastIndex = startIdx;
+      const e = endRe.exec(body);
+      if (!e) break;
+      const id = String(meta.id || e[1]);
+      const content = body.substring(startIdx, e.index).trim();
+      const block = `<!-- visor:section=${JSON.stringify(meta)} -->\n${content}\n<!-- visor:section-end id="${id}" -->`;
+      sections.set(id, block);
+      cursor = endRe.lastIndex;
+      startRe.lastIndex = cursor;
+    }
+    return { header, sections };
+  }
+
+  private serializeSections(doc: { header?: any; sections: Map<string, string> }): string {
+    const header = `<!-- visor:thread=${JSON.stringify({ ...(doc.header || {}), generatedAt: new Date().toISOString() })} -->`;
+    const blocks = Array.from(doc.sections.values()).join('\n\n');
+    const key = (doc.header && (doc.header as any).key) || '';
+    return `${header}\n\n${blocks}\n\n<!-- visor:thread-end key="${key}" -->`;
+  }
+
+  private extractSectionById(rendered: string, id: string): string | undefined {
+    const rx = new RegExp(
+      `<!--\\s*visor:section=(\\{[\\s\\S]*?\\})\\s*-->[\\s\\S]*?<!--\\s*visor:section-end\\s+id=\\"${this.escapeRegExp(id)}\\"\\s*-->`,
+      'm'
+    );
+    const m = rx.exec(rendered);
+    return m ? m[0] : undefined;
+  }
+
+  private escapeRegExp(s: string): string {
+    return s.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&');
+  }
+
+  // Debounce helpers
+  private scheduleUpdate(ctx: FrontendContext, comments: any, id?: string) {
+    if (id) this._pendingIds.add(id);
+    const now = Date.now();
+    const since = now - this._lastFlush;
+    const remaining = this.maxWaitMs - since;
+    if (this._timer) clearTimeout(this._timer);
+    const wait = Math.max(0, Math.min(this.debounceMs, remaining));
+    this._timer = setTimeout(async () => {
+      const ids = Array.from(this._pendingIds);
+      this._pendingIds.clear();
+      this._timer = null;
+      await this.updateGroupedComment(ctx, comments, ids.length > 0 ? ids : undefined);
+      this._lastFlush = Date.now();
+    }, wait);
+  }
+
+  private async flushNow(ctx: FrontendContext, comments: any) {
+    if (this._timer) {
+      clearTimeout(this._timer);
+      this._timer = null;
+    }
+    const ids = Array.from(this._pendingIds);
+    this._pendingIds.clear();
+    await this.updateGroupedComment(ctx, comments, ids.length > 0 ? ids : undefined);
+    this._lastFlush = Date.now();
+  }
+}

@@ -57,6 +57,8 @@ export interface CliOptions {
   debugPort?: number;
   /** Message for human-input checks (inline string or file path) */
   message?: string;
+  /** Enable event-bus based GitHub integration (experimental) */
+  githubV2?: boolean;
 }
 
 /**

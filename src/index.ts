@@ -251,6 +251,21 @@ export async function run(): Promise<void> {
       }
     }
 
+    // Optionally enable GitHub v2 frontend (event bus)
+    try {
+      const githubV2Flag =
+        String(getInput('github-v2') || '').toLowerCase() === 'true' ||
+        String(process.env.VISOR_GITHUB_V2 || '').toLowerCase() === 'true';
+      if (githubV2Flag) {
+        const cfg: any = JSON.parse(JSON.stringify(config));
+        const fronts = Array.isArray(cfg.frontends) ? cfg.frontends : [];
+        if (!fronts.some((f: any) => f && f.name === 'github')) fronts.push({ name: 'github' });
+        cfg.frontends = fronts;
+        (config as any) = cfg;
+        console.log('🔄 GitHub V2 integration: ENABLED (event-bus frontends)');
+      }
+    } catch {}
+
     // Determine AI provider overrides && fallbacks for issue flows
     const hasAnyAIKey = Boolean(
       process.env.GOOGLE_API_KEY ||
@@ -561,7 +576,9 @@ async function handleEvent(
           inputs,
           config,
           checksToRun,
-          context
+          context,
+          String(getInput('github-v2') || '').toLowerCase() === 'true' ||
+            String(process.env.VISOR_GITHUB_V2 || '').toLowerCase() === 'true'
         );
         break;
       case 'issues':
@@ -716,6 +733,9 @@ async function handleIssueEvent(
     undefined,
     octokit
   );
+  try {
+    (engine as any).setExecutionContext?.({ octokit });
+  } catch {}
 
   try {
     // Build tag filter from action inputs (if provided)
@@ -1279,7 +1299,8 @@ async function handlePullRequestWithConfig(
   inputs: GitHubActionInputs,
   config: import('./types/config').VisorConfig,
   checksToRun: string[],
-  context: GitHubContext
+  context: GitHubContext,
+  githubV2?: boolean
 ): Promise<void> {
   const pullRequest = context.event?.pull_request as any;
   const action = context.event?.action as string | undefined;
@@ -1342,6 +1363,36 @@ async function handlePullRequestWithConfig(
   }
 
   console.log(`📋 Executing checks: ${checksToExecute.join(', ')}`);
+
+  // Github v2 path: run state-machine engine with event-bus frontends
+  if (githubV2) {
+    const engine = new (
+      await import('./state-machine-execution-engine')
+    ).StateMachineExecutionEngine(undefined, octokit);
+    try {
+      (engine as any).setExecutionContext?.({ octokit });
+    } catch {}
+
+    // Ensure frontends include github (may already be injected earlier)
+    const cfgAny: any = JSON.parse(JSON.stringify(config));
+    const fronts = Array.isArray(cfgAny.frontends) ? cfgAny.frontends : [];
+    if (!fronts.some((f: any) => f && f.name === 'github')) fronts.push({ name: 'github' });
+    cfgAny.frontends = fronts;
+
+    await engine.executeGroupedChecks(
+      prInfo,
+      checksToExecute,
+      undefined,
+      cfgAny,
+      undefined,
+      inputs.debug === 'true'
+    );
+
+    setOutput('review-completed', 'true');
+    setOutput('checks-executed', checksToExecute.length.toString());
+    setOutput('pr-action', action);
+    return;
+  }
 
   // Create review options
   // Build tag filter from inputs && labels

@@ -1,0 +1,198 @@
+import { EventBus } from '../../src/event-bus/event-bus';
+import { GitHubFrontend } from '../../src/frontends/github-frontend';
+
+function makeFakeOctokit() {
+  let commentIdSeq = 1000;
+  const comments: any[] = [];
+  const checksCreated: any[] = [];
+
+  const rest = {
+    checks: {
+      create: jest.fn(async (req: any) => {
+        const id = 5000 + checksCreated.length;
+        checksCreated.push({ id, req });
+        return { data: { id, html_url: `https://example/check/${id}` } } as any;
+      }),
+      update: jest.fn(async (_req: any) => ({ data: {} }) as any),
+      listForRef: jest.fn(async (_req: any) => ({ data: { check_runs: [] } }) as any),
+    },
+    issues: {
+      listComments: jest.fn(async (_req: any) => ({ data: comments.slice() }) as any),
+      getComment: jest.fn(async (req: any) => {
+        const found = comments.find(c => c.id === req.comment_id);
+        return { data: found } as any;
+      }),
+      updateComment: jest.fn(async (req: any) => {
+        const found = comments.find(c => c.id === req.comment_id);
+        if (found) {
+          found.body = req.body;
+          found.updated_at = new Date().toISOString();
+        }
+        return { data: found } as any;
+      }),
+      createComment: jest.fn(async (req: any) => {
+        const id = commentIdSeq++;
+        const c = {
+          id,
+          body: req.body,
+          user: { login: 'bot' },
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        comments.push(c);
+        return { data: c } as any;
+      }),
+    },
+  };
+
+  return { rest, __state: { comments, checksCreated } } as any;
+}
+
+describe('GitHubFrontend (event-bus v2)', () => {
+  test('CheckScheduled creates queued check run and grouped comment', async () => {
+    const bus = new EventBus();
+    const octokit = makeFakeOctokit();
+    const fe = new GitHubFrontend();
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: undefined,
+      run: { runId: 'r-1', repo: { owner: 'o', name: 'r' }, pr: 123, headSha: 'abcdef1' },
+      octokit,
+    });
+
+    await bus.emit({ type: 'CheckScheduled', checkId: 'overview', scope: ['root'] });
+
+    // Check Run created
+    expect(octokit.rest.checks.create).toHaveBeenCalledTimes(1);
+    const call = octokit.rest.checks.create.mock.calls[0][0];
+    expect(call.name).toBe('Visor: overview');
+    expect(call.head_sha).toBe('abcdef1');
+
+    // Grouped comment created with markers
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledTimes(1);
+    const body = octokit.__state.comments[0]?.body as string;
+    expect(body).toContain('visor:thread=');
+    expect(body).toContain('visor:section={');
+    expect(body).toContain('overview');
+  });
+
+  test('CheckCompleted finalizes check and updates grouped comment', async () => {
+    const bus = new EventBus();
+    const octokit = makeFakeOctokit();
+    const fe = new GitHubFrontend();
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: undefined,
+      run: { runId: 'r-2', repo: { owner: 'o', name: 'r' }, pr: 123, headSha: 'abc9999' },
+      octokit,
+    });
+
+    await bus.emit({ type: 'CheckScheduled', checkId: 'security', scope: ['root'] });
+    expect(octokit.rest.issues.createComment).toHaveBeenCalledTimes(1);
+
+    // Complete with 0 issues
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'security',
+      scope: ['root'],
+      result: { issues: [] },
+    });
+
+    // Check run completed (update called by service)
+    expect(octokit.rest.checks.update).toHaveBeenCalled();
+
+    // Comment updated in place (no new comment created)
+    expect(octokit.rest.issues.updateComment).toHaveBeenCalledTimes(1);
+    const body = octokit.__state.comments[0]?.body as string;
+    expect(body).toMatch(/section-start|visor:section=/);
+    expect(body).toContain('security');
+  });
+
+  test('CheckErrored marks failure and writes error into section', async () => {
+    const bus = new EventBus();
+    const octokit = makeFakeOctokit();
+    const fe = new GitHubFrontend();
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: undefined,
+      run: { runId: 'r-3', repo: { owner: 'o', name: 'r' }, pr: 234, headSha: 'fff7777' },
+      octokit,
+    });
+
+    await bus.emit({ type: 'CheckScheduled', checkId: 'quality', scope: ['root'] });
+    await bus.emit({
+      type: 'CheckErrored',
+      checkId: 'quality',
+      scope: ['root'],
+      error: { message: 'boom' },
+    });
+
+    expect(octokit.rest.checks.update).toHaveBeenCalled();
+    const body = octokit.__state.comments[0]?.body as string;
+    expect(body).toContain('quality');
+    expect(body).toContain('Error: boom');
+  });
+
+  test('Partial section update preserves unrelated sections', async () => {
+    const bus = new EventBus();
+    const octokit = makeFakeOctokit();
+    const fe = new GitHubFrontend();
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: undefined,
+      run: { runId: 'r-4', repo: { owner: 'o', name: 'r' }, pr: 345, headSha: 'aaaa111' },
+      octokit,
+    });
+
+    // Schedule two checks
+    await bus.emit({ type: 'CheckScheduled', checkId: 'overview', scope: ['root'] });
+    await bus.emit({ type: 'CheckScheduled', checkId: 'security', scope: ['root'] });
+    const initialBody = octokit.__state.comments[0]?.body as string;
+    expect(initialBody).toContain('overview');
+    expect(initialBody).toContain('security');
+    // Capture exact 'security' block text
+    const secBlockBefore = extractSection(initialBody, 'security');
+
+    // Complete only 'overview'
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'overview',
+      scope: ['root'],
+      result: { issues: [] },
+    });
+
+    // Body should still contain 'security' section unchanged, plus updated 'overview'
+    const updated = octokit.__state.comments[0]?.body as string;
+    expect(updated).toContain('overview');
+    expect(updated).toContain('security');
+    const secBlockAfter = extractSection(updated, 'security');
+    expect(secBlockAfter).toBe(secBlockBefore);
+  });
+
+  function extractSection(body: string, id: string): string {
+    const startRe = /<!--\s*visor:section=(\{[\s\S]*?\})\s*-->/g;
+    const endRe = /<!--\s*visor:section-end\s+id=\"([^\"]+)\"\s*-->/g;
+    let cursor = 0;
+    while (true) {
+      const s = startRe.exec(body);
+      if (!s) break;
+      const meta = JSON.parse(s[1]);
+      const startIdx = startRe.lastIndex;
+      endRe.lastIndex = startIdx;
+      const e = endRe.exec(body);
+      if (!e) break;
+      const secId = String(meta.id || e[1]);
+      const full = `<!-- visor:section=${JSON.stringify(meta)} -->\n${body
+        .substring(startIdx, e.index)
+        .trim()}\n<!-- visor:section-end id="${secId}" -->`;
+      if (secId === id) return full;
+      cursor = endRe.lastIndex;
+      startRe.lastIndex = cursor;
+    }
+    return '';
+  }
+});
