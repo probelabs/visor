@@ -40,15 +40,16 @@ export class GitHubFrontend implements Frontend {
     const pr = ctx.run.pr;
     const headSha = ctx.run.headSha;
 
-    // If we cannot act (missing octokit or repo/pr), remain passive but keep logging
-    const canPost = !!(octokit && repo && pr && headSha);
+    // Determine capabilities separately for comments vs check runs
+    const canPostComments = !!(octokit && repo && pr);
+    const canPostChecks = !!(octokit && repo && pr && headSha);
 
     // Create helpers if possible
-    const svc = canPost
+    const svc = canPostChecks
       ? new (require('../github-check-service').GitHubCheckService)(octokit)
       : null;
     const CommentManager = require('../github-comments').CommentManager;
-    const comments = canPost ? new CommentManager(octokit) : null;
+    const comments = canPostComments ? new CommentManager(octokit) : null;
 
     const threadKey =
       repo && pr && headSha
@@ -61,7 +62,7 @@ export class GitHubFrontend implements Frontend {
       bus.on('CheckScheduled', async (env: any) => {
         const ev = (env && env.payload) || env;
         try {
-          if (!canPost || !svc) return;
+          if (!canPostChecks || !svc) return;
           if (this.checkRunIds.has(ev.checkId)) return; // already created
           // Update local model only (no comment yet; wait for content)
           const group = this.getGroupForCheck(ctx, ev.checkId);
@@ -95,8 +96,8 @@ export class GitHubFrontend implements Frontend {
       bus.on('CheckCompleted', async (env: any) => {
         const ev = (env && env.payload) || env;
         try {
-          // Complete check run
-          if (canPost && svc && this.checkRunIds.has(ev.checkId)) {
+          // Complete check run (only when we have headSha)
+          if (canPostChecks && svc && this.checkRunIds.has(ev.checkId)) {
             const id = this.checkRunIds.get(ev.checkId)!;
             const issues = Array.isArray(ev.result?.issues) ? ev.result.issues : [];
             // Evaluate failure conditions so GitHub conclusion reflects actual pass/fail
@@ -116,7 +117,7 @@ export class GitHubFrontend implements Frontend {
           }
 
           // Update grouped summary comment
-          if (canPost && comments) {
+          if (canPostComments && comments) {
             const count = Array.isArray(ev.result?.issues) ? ev.result.issues.length : 0;
             const failureResults = await this.evaluateFailureResults(ctx, ev.checkId, ev.result);
             const failed = Array.isArray(failureResults)
@@ -145,7 +146,7 @@ export class GitHubFrontend implements Frontend {
       bus.on('CheckErrored', async (env: any) => {
         const ev = (env && env.payload) || env;
         try {
-          if (canPost && svc && this.checkRunIds.has(ev.checkId)) {
+          if (canPostChecks && svc && this.checkRunIds.has(ev.checkId)) {
             const id = this.checkRunIds.get(ev.checkId)!;
             await svc.completeCheckRun(
               repo!.owner,
@@ -160,7 +161,7 @@ export class GitHubFrontend implements Frontend {
               headSha!
             );
           }
-          if (comments) {
+          if (canPostComments && comments) {
             const group = this.getGroupForCheck(ctx, ev.checkId);
             this.upsertSectionState(group, ev.checkId, {
               status: 'errored',
@@ -185,7 +186,7 @@ export class GitHubFrontend implements Frontend {
         const ev = (env && env.payload) || env;
         try {
           if (ev.to === 'Completed' || ev.to === 'Error') {
-            if (comments) {
+            if (canPostComments && comments) {
               for (const group of this.stepStatusByGroup.keys()) {
                 await this.updateGroupedComment(ctx, comments, group);
               }
