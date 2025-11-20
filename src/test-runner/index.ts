@@ -179,7 +179,6 @@ export async function runSuites(
     }>;
   }>;
 }> {
-  const runner = new VisorTestRunner();
   const perSuite: Array<{
     file: string;
     failures: number;
@@ -204,6 +203,7 @@ export async function runSuites(
       const fp = filesSorted[i];
       let suite: TestSuite | null = null;
       try {
+        const runner = new VisorTestRunner();
         suite = runner.loadSuite(fp);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -220,6 +220,7 @@ export async function runSuites(
         continue;
       }
       // expose relative path for suite header printing
+      const runner = new VisorTestRunner();
       (runner as any).__suiteRel = path.relative(process.cwd(), fp) || fp;
       const r = await runner.runCases(fp, suite as TestSuite, {
         only: options.only,
