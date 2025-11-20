@@ -18,9 +18,7 @@ export function parseVisorThreadMetadata(
 
   try {
     const metadata = JSON.parse(match[1]);
-    return metadata && typeof metadata === 'object' && !Array.isArray(metadata)
-      ? metadata
-      : null;
+    return metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : null;
   } catch {
     // If parsing fails, return null (graceful handling)
     return null;
