@@ -397,7 +397,9 @@ ${end}`);
   }
 
   private commentIdForGroup(ctx: FrontendContext, group: string): string {
-    const base = this.threadKeyFor(ctx);
+    // Stable per-PR per-group ID (does not include commit SHA)
+    const r = ctx.run;
+    const base = r.repo && r.pr ? `${r.repo.owner}/${r.repo.name}#${r.pr}` : r.runId;
     return `visor-thread-${group}-${base}`;
   }
 

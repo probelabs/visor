@@ -295,7 +295,8 @@ export class StateMachineExecutionEngine {
         await frontendsHost.startAll(() => ({
           eventBus: bus,
           logger,
-          config: undefined,
+          // Provide the active (possibly tag-filtered) config so frontends can read groups, etc.
+          config: configWithTagFilter,
           run: { runId: (context as any).sessionId, repo: repoObj, pr: prNum, headSha },
           octokit,
         }));
