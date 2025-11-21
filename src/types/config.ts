@@ -772,6 +772,8 @@ export interface DebugConfig {
  * PR comment output configuration
  */
 export interface PrCommentOutput {
+  /** Whether PR comments are enabled */
+  enabled?: boolean;
   /** Format of the output */
   format: ConfigOutputFormat;
   /** How to group the results */
