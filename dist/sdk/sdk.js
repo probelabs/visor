@@ -15104,7 +15104,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -15735,13 +15735,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>>": {
+        "Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>": {
+        "Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284>": {
           type: "object",
           additionalProperties: false
         },
@@ -15775,6 +15775,10 @@ var init_config_schema = __esm({
         PrCommentOutput: {
           type: "object",
           properties: {
+            enabled: {
+              type: "boolean",
+              description: "Whether PR comments are enabled"
+            },
             format: {
               $ref: "#/definitions/ConfigOutputFormat",
               description: "Format of the output"
@@ -21991,6 +21995,14 @@ ${end}`);
       async updateGroupedComment(ctx, comments, group, changedIds) {
         try {
           if (!ctx.run.repo || !ctx.run.pr) return;
+          const config = ctx.config;
+          const prCommentEnabled = config?.output?.pr_comment?.enabled !== false;
+          if (!prCommentEnabled) {
+            logger.debug(
+              `[github-frontend] PR comments disabled in config, skipping comment for group: ${group}`
+            );
+            return;
+          }
           this.revision++;
           const mergedBody = await this.mergeIntoExistingBody(ctx, comments, group, changedIds);
           await comments.updateOrCreateComment(
@@ -23026,100 +23038,6 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       }
     }
     return { valid, invalid };
-  }
-  /**
-   * Render check content using the appropriate template
-   *
-   * This method handles template rendering for check results, supporting:
-   * - Plain schema: returns raw content without template processing
-   * - Custom templates: from inline content or file
-   * - Built-in schema templates: from output/{schema}/template.liquid
-   */
-  async renderCheckContent(checkName, reviewSummary, checkConfig, _prInfo) {
-    const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs16 = await import("fs/promises");
-    const path17 = await import("path");
-    const schema = checkConfig.schema || "plain";
-    let templateContent;
-    if (checkConfig.template) {
-      if (checkConfig.template.content) {
-        templateContent = checkConfig.template.content;
-      } else if (checkConfig.template.file) {
-        const templateFile = checkConfig.template.file;
-        if (path17.isAbsolute(templateFile)) {
-          throw new Error("Template path must be relative to project directory");
-        }
-        if (templateFile.includes("..")) {
-          throw new Error('Template path cannot contain ".." segments');
-        }
-        if (templateFile.startsWith("~")) {
-          throw new Error("Template path cannot reference home directory");
-        }
-        if (templateFile.includes("\0")) {
-          throw new Error("Template path contains invalid characters");
-        }
-        if (templateFile.trim() === "") {
-          throw new Error("Template path must be a non-empty string");
-        }
-        if (!templateFile.endsWith(".liquid")) {
-          throw new Error("Template file must have .liquid extension");
-        }
-        const { GitRepositoryAnalyzer: GitRepositoryAnalyzer2 } = await Promise.resolve().then(() => (init_git_repository_analyzer(), git_repository_analyzer_exports));
-        const gitAnalyzer = new GitRepositoryAnalyzer2(this.workingDirectory);
-        const repoInfo = await gitAnalyzer.analyzeRepository();
-        const workingDir = repoInfo.workingDirectory;
-        const resolvedPath = path17.resolve(workingDir, templateFile);
-        templateContent = await fs16.readFile(resolvedPath, "utf-8");
-      } else {
-        throw new Error('Custom template must specify either "file" or "content"');
-      }
-    } else if (schema === "plain") {
-      return reviewSummary.issues?.[0]?.message || "";
-    } else {
-      const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, "");
-      if (!sanitizedSchema) {
-        throw new Error("Invalid schema name");
-      }
-      const candidatePaths = [
-        path17.join(__dirname, `output/${sanitizedSchema}/template.liquid`),
-        // bundled: dist/output/
-        path17.join(__dirname, "..", `output/${sanitizedSchema}/template.liquid`),
-        // source fallback
-        path17.join(process.cwd(), `output/${sanitizedSchema}/template.liquid`),
-        // cwd/output/
-        path17.join(process.cwd(), `dist/output/${sanitizedSchema}/template.liquid`)
-        // cwd/dist/output/
-      ];
-      for (const templatePath of candidatePaths) {
-        try {
-          const content = await fs16.readFile(templatePath, "utf-8");
-          if (content) {
-            templateContent = content;
-            break;
-          }
-        } catch {
-        }
-      }
-      if (!templateContent) {
-        throw new Error(`Template not found for schema: ${sanitizedSchema}`);
-      }
-    }
-    if (!templateContent) {
-      throw new Error("No template content available");
-    }
-    const liquid = createExtendedLiquid2({
-      trimTagLeft: false,
-      trimTagRight: false,
-      trimOutputLeft: false,
-      trimOutputRight: false,
-      greedy: false
-    });
-    const templateData = {
-      issues: reviewSummary.issues || [],
-      checkName
-    };
-    const rendered = await liquid.parseAndRender(templateContent, templateData);
-    return rendered.trim();
   }
   /**
    * Format the status column for execution statistics

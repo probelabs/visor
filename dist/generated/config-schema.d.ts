@@ -592,7 +592,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -1196,13 +1196,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>': {
+        readonly 'Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };
@@ -1236,6 +1236,10 @@ export declare const configSchema: {
         readonly PrCommentOutput: {
             readonly type: "object";
             readonly properties: {
+                readonly enabled: {
+                    readonly type: "boolean";
+                    readonly description: "Whether PR comments are enabled";
+                };
                 readonly format: {
                     readonly $ref: "#/definitions/ConfigOutputFormat";
                     readonly description: "Format of the output";

@@ -12,7 +12,7 @@ import {
   ConfigManager,
   config_exports,
   init_config
-} from "./chunk-PTL3K3PN.mjs";
+} from "./chunk-63PSX6PU.mjs";
 import "./chunk-O5EZDNYL.mjs";
 import {
   ExecutionJournal,
@@ -13121,7 +13121,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       logger.info("[StateMachine] Using state machine engine");
     }
     if (!config) {
-      const { ConfigManager: ConfigManager2 } = await import("./config-M4ZNO6NU.mjs");
+      const { ConfigManager: ConfigManager2 } = await import("./config-E3TRGHMT.mjs");
       const configManager = new ConfigManager2();
       config = await configManager.getDefaultConfig();
       logger.debug("[StateMachine] Using default configuration (no config provided)");
@@ -13145,7 +13145,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
     if (Array.isArray(configWithTagFilter.frontends) && configWithTagFilter.frontends.length > 0) {
       try {
         const { EventBus } = await import("./event-bus-5BEVPQ6T.mjs");
-        const { FrontendsHost } = await import("./host-7GBC3S7L.mjs");
+        const { FrontendsHost } = await import("./host-TQWSHVJT.mjs");
         const bus = new EventBus();
         context2.eventBus = bus;
         frontendsHost = new FrontendsHost(bus, logger);
@@ -13548,100 +13548,6 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       }
     }
     return { valid, invalid };
-  }
-  /**
-   * Render check content using the appropriate template
-   *
-   * This method handles template rendering for check results, supporting:
-   * - Plain schema: returns raw content without template processing
-   * - Custom templates: from inline content or file
-   * - Built-in schema templates: from output/{schema}/template.liquid
-   */
-  async renderCheckContent(checkName, reviewSummary, checkConfig, _prInfo) {
-    const { createExtendedLiquid: createExtendedLiquid2 } = await import("./liquid-extensions-C7EG3YKH.mjs");
-    const fs6 = await import("fs/promises");
-    const path7 = await import("path");
-    const schema = checkConfig.schema || "plain";
-    let templateContent;
-    if (checkConfig.template) {
-      if (checkConfig.template.content) {
-        templateContent = checkConfig.template.content;
-      } else if (checkConfig.template.file) {
-        const templateFile = checkConfig.template.file;
-        if (path7.isAbsolute(templateFile)) {
-          throw new Error("Template path must be relative to project directory");
-        }
-        if (templateFile.includes("..")) {
-          throw new Error('Template path cannot contain ".." segments');
-        }
-        if (templateFile.startsWith("~")) {
-          throw new Error("Template path cannot reference home directory");
-        }
-        if (templateFile.includes("\0")) {
-          throw new Error("Template path contains invalid characters");
-        }
-        if (templateFile.trim() === "") {
-          throw new Error("Template path must be a non-empty string");
-        }
-        if (!templateFile.endsWith(".liquid")) {
-          throw new Error("Template file must have .liquid extension");
-        }
-        const { GitRepositoryAnalyzer } = await import("./git-repository-analyzer-HJC4MYW4.mjs");
-        const gitAnalyzer = new GitRepositoryAnalyzer(this.workingDirectory);
-        const repoInfo = await gitAnalyzer.analyzeRepository();
-        const workingDir = repoInfo.workingDirectory;
-        const resolvedPath = path7.resolve(workingDir, templateFile);
-        templateContent = await fs6.readFile(resolvedPath, "utf-8");
-      } else {
-        throw new Error('Custom template must specify either "file" or "content"');
-      }
-    } else if (schema === "plain") {
-      return reviewSummary.issues?.[0]?.message || "";
-    } else {
-      const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, "");
-      if (!sanitizedSchema) {
-        throw new Error("Invalid schema name");
-      }
-      const candidatePaths = [
-        path7.join(__dirname, `output/${sanitizedSchema}/template.liquid`),
-        // bundled: dist/output/
-        path7.join(__dirname, "..", `output/${sanitizedSchema}/template.liquid`),
-        // source fallback
-        path7.join(process.cwd(), `output/${sanitizedSchema}/template.liquid`),
-        // cwd/output/
-        path7.join(process.cwd(), `dist/output/${sanitizedSchema}/template.liquid`)
-        // cwd/dist/output/
-      ];
-      for (const templatePath of candidatePaths) {
-        try {
-          const content = await fs6.readFile(templatePath, "utf-8");
-          if (content) {
-            templateContent = content;
-            break;
-          }
-        } catch {
-        }
-      }
-      if (!templateContent) {
-        throw new Error(`Template not found for schema: ${sanitizedSchema}`);
-      }
-    }
-    if (!templateContent) {
-      throw new Error("No template content available");
-    }
-    const liquid = createExtendedLiquid2({
-      trimTagLeft: false,
-      trimTagRight: false,
-      trimOutputLeft: false,
-      trimOutputRight: false,
-      greedy: false
-    });
-    const templateData = {
-      issues: reviewSummary.issues || [],
-      checkName
-    };
-    const rendered = await liquid.parseAndRender(templateContent, templateData);
-    return rendered.trim();
   }
   /**
    * Format the status column for execution statistics
