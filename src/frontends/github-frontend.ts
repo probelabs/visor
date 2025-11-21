@@ -258,6 +258,17 @@ ${end}`);
   ) {
     try {
       if (!ctx.run.repo || !ctx.run.pr) return;
+
+      // Check if PR comments are enabled (default to true if not specified)
+      const config = ctx.config as any;
+      const prCommentEnabled = config?.output?.pr_comment?.enabled !== false;
+      if (!prCommentEnabled) {
+        logger.debug(
+          `[github-frontend] PR comments disabled in config, skipping comment for group: ${group}`
+        );
+        return;
+      }
+
       this.revision++;
       const mergedBody = await this.mergeIntoExistingBody(ctx, comments, group, changedIds);
       await comments.updateOrCreateComment(

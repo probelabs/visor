@@ -640,7 +640,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1278,14 +1278,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>>':
+    'Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>': {
+    'Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284>': {
       type: 'object',
       additionalProperties: false,
     },
@@ -1320,6 +1320,10 @@ export const configSchema = {
     PrCommentOutput: {
       type: 'object',
       properties: {
+        enabled: {
+          type: 'boolean',
+          description: 'Whether PR comments are enabled',
+        },
         format: {
           $ref: '#/definitions/ConfigOutputFormat',
           description: 'Format of the output',
