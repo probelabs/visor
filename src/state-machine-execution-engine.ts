@@ -923,6 +923,7 @@ export class StateMachineExecutionEngine {
     const templateData = {
       issues: reviewSummary.issues || [],
       checkName: checkName,
+      output: (reviewSummary as any).output,
     };
 
     const rendered = await liquid.parseAndRender(templateContent, templateData);
