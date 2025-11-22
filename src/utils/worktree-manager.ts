@@ -121,11 +121,12 @@ export class WorktreeManager {
     }
 
     // Clone as bare repository
-    logger.info(
-      `Cloning bare repository: ${repository}${fetchDepth ? ` (depth: ${fetchDepth})` : ''}`
-    );
-
     const cloneUrl = this.buildAuthenticatedUrl(repoUrl, token);
+    const redactedUrl = this.redactUrl(cloneUrl);
+
+    logger.info(
+      `Cloning bare repository: ${redactedUrl}${fetchDepth ? ` (depth: ${fetchDepth})` : ''}`
+    );
 
     // Build clone command with optional depth
     let cloneCmd = `git clone --bare`;
@@ -141,7 +142,9 @@ export class WorktreeManager {
     const result = await this.executeGitCommand(cloneCmd, { timeout: 300000 }); // 5 minute timeout
 
     if (result.exitCode !== 0) {
-      throw new Error(`Failed to clone bare repository: ${result.stderr}`);
+      // Redact tokens from error messages
+      const redactedStderr = this.redactUrl(result.stderr);
+      throw new Error(`Failed to clone bare repository: ${redactedStderr}`);
     }
 
     logger.info(`Successfully cloned bare repository to ${bareRepoPath}`);
@@ -180,6 +183,9 @@ export class WorktreeManager {
       fetchDepth?: number;
     } = {}
   ): Promise<WorktreeInfo> {
+    // Validate ref to prevent command injection
+    this.validateRef(ref);
+
     // Get or create bare repository
     const bareRepoPath = await this.getOrCreateBareRepo(
       repository,
@@ -272,6 +278,9 @@ export class WorktreeManager {
    * Fetch a specific ref in bare repository
    */
   private async fetchRef(bareRepoPath: string, ref: string): Promise<void> {
+    // Validate ref (already validated in createWorktree, but double-check for safety)
+    this.validateRef(ref);
+
     logger.debug(`Fetching ref: ${ref}`);
 
     // Try to fetch the ref (might be a PR ref or branch)
@@ -509,6 +518,24 @@ export class WorktreeManager {
   }
 
   /**
+   * Validate git ref to prevent command injection
+   */
+  private validateRef(ref: string): void {
+    // Git refs can contain letters, numbers, dots, underscores, slashes, and hyphens
+    // Also allow colons for refspecs like "refs/pull/123/head"
+    const safeRefPattern = /^[a-zA-Z0-9._/:@^~-]+$/;
+
+    if (!safeRefPattern.test(ref)) {
+      throw new Error(`Invalid git ref: ${ref}. Refs must only contain alphanumeric characters, dots, underscores, slashes, colons, and hyphens.`);
+    }
+
+    // Additional checks for dangerous patterns
+    if (ref.includes('..') || ref.startsWith('-')) {
+      throw new Error(`Invalid git ref: ${ref}. Refs cannot contain '..' or start with '-'.`);
+    }
+  }
+
+  /**
    * Validate path to prevent directory traversal
    */
   private validatePath(userPath: string): string {
@@ -520,7 +547,33 @@ export class WorktreeManager {
       throw new Error('Path must be absolute');
     }
 
+    // Additional security: prevent access to sensitive system directories
+    const sensitivePatterns = [
+      '/etc',
+      '/root',
+      '/boot',
+      '/sys',
+      '/proc',
+      '/dev',
+      'C:\\Windows\\System32',
+      'C:\\Program Files',
+    ];
+
+    for (const pattern of sensitivePatterns) {
+      if (resolvedPath.startsWith(pattern)) {
+        throw new Error(`Access to system directory ${pattern} is not allowed`);
+      }
+    }
+
     return resolvedPath;
+  }
+
+  /**
+   * Redact sensitive tokens from URLs for logging
+   */
+  private redactUrl(url: string): string {
+    return url.replace(/x-access-token:[^@]+@/g, 'x-access-token:[REDACTED]@')
+              .replace(/:\/\/[^:]+:[^@]+@/g, '://[REDACTED]:[REDACTED]@');
   }
 
   /**
