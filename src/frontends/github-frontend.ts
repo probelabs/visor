@@ -268,7 +268,14 @@ ${end}`);
     // Wait for any existing update to complete for this group
     const existingLock = this.updateLocks.get(group);
     if (existingLock) {
-      await existingLock.catch(() => {}); // Wait but ignore errors
+      try {
+        await existingLock;
+      } catch (error) {
+        logger.warn(
+          `[github-frontend] Previous update for group ${group} failed: ${error instanceof Error ? error.message : error}`
+        );
+        // Continue with current update despite previous failure
+      }
     }
 
     // Create a new lock for this update
