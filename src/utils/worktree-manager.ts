@@ -511,9 +511,21 @@ export class WorktreeManager {
 
   /**
    * Escape shell argument to prevent command injection
+   *
+   * Uses POSIX-standard single-quote escaping which prevents ALL shell metacharacter
+   * interpretation (including $, `, \, ", ;, &, |, etc.)
+   *
+   * How it works:
+   * - Everything is wrapped in single quotes: 'arg'
+   * - Single quotes within are escaped as: ' → '\''
+   *   (close quote, literal escaped quote, open quote)
+   *
+   * This is safer than double quotes which still allow $expansion and `backticks`
+   *
+   * Example: "foo'bar" → 'foo'\''bar'
    */
   private escapeShellArg(arg: string): string {
-    // Replace single quotes with '\'' and wrap in single quotes
+    // POSIX shell escaping: wrap in single quotes, escape embedded single quotes
     return `'${arg.replace(/'/g, "'\\''")}'`;
   }
 
@@ -521,17 +533,28 @@ export class WorktreeManager {
    * Validate git ref to prevent command injection
    */
   private validateRef(ref: string): void {
-    // Git refs can contain letters, numbers, dots, underscores, slashes, and hyphens
-    // Also allow colons for refspecs like "refs/pull/123/head"
-    const safeRefPattern = /^[a-zA-Z0-9._/:@^~-]+$/;
+    // Restrictive pattern for git refs in our use case
+    // Allow: alphanumeric, dots, underscores, slashes, hyphens
+    // Allow: colons for refspecs like "refs/pull/123/head:pr-123"
+    // Disallow: @, ^, ~, and other special characters to minimize attack surface
+    const safeRefPattern = /^[a-zA-Z0-9._/:-]+$/;
 
     if (!safeRefPattern.test(ref)) {
-      throw new Error(`Invalid git ref: ${ref}. Refs must only contain alphanumeric characters, dots, underscores, slashes, colons, and hyphens.`);
+      throw new Error(
+        `Invalid git ref: ${ref}. Refs must only contain alphanumeric characters, dots, underscores, slashes, colons, and hyphens.`
+      );
     }
 
     // Additional checks for dangerous patterns
-    if (ref.includes('..') || ref.startsWith('-')) {
-      throw new Error(`Invalid git ref: ${ref}. Refs cannot contain '..' or start with '-'.`);
+    if (ref.includes('..') || ref.startsWith('-') || ref.endsWith('.lock')) {
+      throw new Error(
+        `Invalid git ref: ${ref}. Refs cannot contain '..', start with '-', or end with '.lock'.`
+      );
+    }
+
+    // Length check to prevent DoS
+    if (ref.length > 256) {
+      throw new Error(`Invalid git ref: ${ref}. Refs cannot exceed 256 characters.`);
     }
   }
 
