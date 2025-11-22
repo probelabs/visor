@@ -595,8 +595,9 @@ export class WorktreeManager {
    * Redact sensitive tokens from URLs for logging
    */
   private redactUrl(url: string): string {
-    return url.replace(/x-access-token:[^@]+@/g, 'x-access-token:[REDACTED]@')
-              .replace(/:\/\/[^:]+:[^@]+@/g, '://[REDACTED]:[REDACTED]@');
+    return url
+      .replace(/x-access-token:[^@]+@/g, 'x-access-token:[REDACTED]@')
+      .replace(/:\/\/[^:]+:[^@]+@/g, '://[REDACTED]:[REDACTED]@');
   }
 
   /**
