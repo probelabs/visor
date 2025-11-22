@@ -1,0 +1,32 @@
+# Basic Git Checkout Example
+#
+# This example demonstrates a simple workflow that:
+# 1. Checks out the PR head branch
+# 2. Runs tests
+# 3. Builds the project
+
+version: "1.0"
+
+steps:
+  # Checkout the PR head branch
+  checkout:
+    type: git-checkout
+    ref: "{{ pr.head }}"
+    criticality: internal
+
+  # Run tests on the checked out code
+  test:
+    type: command
+    depends_on: [checkout]
+    exec: npm test
+    working_directory: "{{ outputs.checkout.path }}"
+    assume: "outputs.checkout.success"
+    criticality: internal
+
+  # Build the project
+  build:
+    type: command
+    depends_on: [test]
+    exec: npm run build
+    working_directory: "{{ outputs.checkout.path }}"
+    criticality: internal
