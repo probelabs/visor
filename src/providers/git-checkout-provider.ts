@@ -61,7 +61,10 @@ export class GitCheckoutProvider extends CheckProvider {
       }
     }
 
-    if (checkoutConfig.sparse_checkout !== undefined && !Array.isArray(checkoutConfig.sparse_checkout)) {
+    if (
+      checkoutConfig.sparse_checkout !== undefined &&
+      !Array.isArray(checkoutConfig.sparse_checkout)
+    ) {
       logger.error('Invalid config: sparse_checkout must be an array');
       return false;
     }
@@ -80,14 +83,21 @@ export class GitCheckoutProvider extends CheckProvider {
 
     try {
       // Build template context
-      const templateContext = this.buildTemplateContext(prInfo, dependencyResults, context, checkoutConfig);
+      const templateContext = this.buildTemplateContext(
+        prInfo,
+        dependencyResults,
+        context,
+        checkoutConfig
+      );
 
       // Resolve dynamic variables
       const resolvedRef = await this.liquid.parseAndRender(checkoutConfig.ref, templateContext);
       const resolvedRepository = checkoutConfig.repository
         ? await this.liquid.parseAndRender(checkoutConfig.repository, templateContext)
         : process.env.GITHUB_REPOSITORY || 'unknown/unknown';
-      const resolvedToken = checkoutConfig.token ? await this.liquid.parseAndRender(checkoutConfig.token, templateContext) : undefined;
+      const resolvedToken = checkoutConfig.token
+        ? await this.liquid.parseAndRender(checkoutConfig.token, templateContext)
+        : undefined;
       const resolvedWorkingDirectory = checkoutConfig.working_directory
         ? await this.liquid.parseAndRender(checkoutConfig.working_directory, templateContext)
         : undefined;
@@ -98,13 +108,18 @@ export class GitCheckoutProvider extends CheckProvider {
       const repoUrl = worktreeManager.getRepositoryUrl(resolvedRepository, resolvedToken);
 
       // Create worktree
-      const worktree = await worktreeManager.createWorktree(resolvedRepository, repoUrl, resolvedRef, {
-        token: resolvedToken,
-        workingDirectory: resolvedWorkingDirectory,
-        clean: checkoutConfig.clean !== false, // Default: true
-        workflowId: (context as any)?.workflowId,
-        fetchDepth: checkoutConfig.fetch_depth,
-      });
+      const worktree = await worktreeManager.createWorktree(
+        resolvedRepository,
+        repoUrl,
+        resolvedRef,
+        {
+          token: resolvedToken,
+          workingDirectory: resolvedWorkingDirectory,
+          clean: checkoutConfig.clean !== false, // Default: true
+          workflowId: (context as any)?.workflowId,
+          fetchDepth: checkoutConfig.fetch_depth,
+        }
+      );
 
       // Build output
       const output: GitCheckoutOutput = {
@@ -117,7 +132,9 @@ export class GitCheckoutProvider extends CheckProvider {
         is_worktree: true,
       };
 
-      logger.info(`Successfully checked out ${resolvedRepository}@${resolvedRef} to ${worktree.path}`);
+      logger.info(
+        `Successfully checked out ${resolvedRepository}@${resolvedRef} to ${worktree.path}`
+      );
 
       return {
         issues,
@@ -163,7 +180,8 @@ export class GitCheckoutProvider extends CheckProvider {
     const outputsObj: Record<string, any> = {};
     if (dependencyResults) {
       for (const [checkName, result] of dependencyResults.entries()) {
-        outputsObj[checkName] = (result as any).output !== undefined ? (result as any).output : result;
+        outputsObj[checkName] =
+          (result as any).output !== undefined ? (result as any).output : result;
       }
     }
 
@@ -231,7 +249,7 @@ export class GitCheckoutProvider extends CheckProvider {
       const { commandExecutor } = await import('../utils/command-executor');
       const result = await commandExecutor.execute('git --version', { timeout: 5000 });
       return result.exitCode === 0;
-    } catch (error) {
+    } catch (_error) {
       return false;
     }
   }

@@ -58,7 +58,9 @@ export async function cleanupAllWorktrees(): Promise<void> {
   for (const worktree of worktrees) {
     // Skip locked worktrees (active processes)
     if (worktree.locked) {
-      logger.info(`Skipping locked worktree: ${worktree.id} (process ${worktree.metadata.pid} is alive)`);
+      logger.info(
+        `Skipping locked worktree: ${worktree.id} (process ${worktree.metadata.pid} is alive)`
+      );
       continue;
     }
 

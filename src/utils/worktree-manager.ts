@@ -7,14 +7,12 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import * as crypto from 'crypto';
 import { commandExecutor } from './command-executor';
 import { logger } from '../logger';
 import type {
   WorktreeMetadata,
   WorktreeCacheConfig,
-  BareRepositoryInfo,
   WorktreeInfo,
   GitCommandResult,
 } from '../types/git-checkout';
@@ -27,8 +25,8 @@ export class WorktreeManager {
 
   private constructor() {
     // Default configuration - use project-local .visor/worktrees/ by default
-    const defaultBasePath = process.env.VISOR_WORKTREE_PATH ||
-                           path.join(process.cwd(), '.visor', 'worktrees');
+    const defaultBasePath =
+      process.env.VISOR_WORKTREE_PATH || path.join(process.cwd(), '.visor', 'worktrees');
 
     this.config = {
       enabled: true,
@@ -92,7 +90,11 @@ export class WorktreeManager {
   private generateWorktreeId(repository: string, ref: string): string {
     const sanitizedRepo = repository.replace(/[^a-zA-Z0-9-]/g, '-');
     const sanitizedRef = ref.replace(/[^a-zA-Z0-9-]/g, '-');
-    const hash = crypto.createHash('md5').update(`${repository}:${ref}:${Date.now()}`).digest('hex').substring(0, 8);
+    const hash = crypto
+      .createHash('md5')
+      .update(`${repository}:${ref}:${Date.now()}`)
+      .digest('hex')
+      .substring(0, 8);
     return `${sanitizedRepo}-${sanitizedRef}-${hash}`;
   }
 
@@ -119,7 +121,9 @@ export class WorktreeManager {
     }
 
     // Clone as bare repository
-    logger.info(`Cloning bare repository: ${repository}${fetchDepth ? ` (depth: ${fetchDepth})` : ''}`);
+    logger.info(
+      `Cloning bare repository: ${repository}${fetchDepth ? ` (depth: ${fetchDepth})` : ''}`
+    );
 
     const cloneUrl = this.buildAuthenticatedUrl(repoUrl, token);
 
@@ -419,7 +423,9 @@ export class WorktreeManager {
 
       // Remove if too old
       if (ageMs > maxAgeMs) {
-        logger.info(`Removing stale worktree: ${worktree.id} (age: ${Math.round(ageMs / 1000 / 60)} minutes)`);
+        logger.info(
+          `Removing stale worktree: ${worktree.id} (age: ${Math.round(ageMs / 1000 / 60)} minutes)`
+        );
         await this.removeWorktree(worktree.id);
       }
     }
@@ -449,7 +455,7 @@ export class WorktreeManager {
     try {
       process.kill(pid, 0);
       return true;
-    } catch (error) {
+    } catch (_error) {
       return false;
     }
   }
@@ -484,7 +490,7 @@ export class WorktreeManager {
       });
 
       // Cleanup on uncaught exception
-      process.on('uncaughtException', async (error) => {
+      process.on('uncaughtException', async error => {
         logger.error(`Uncaught exception, cleaning up worktrees: ${error}`);
         await this.cleanupProcessWorktrees();
         process.exit(1);
@@ -507,11 +513,9 @@ export class WorktreeManager {
    */
   private validatePath(userPath: string): string {
     const resolvedPath = path.resolve(userPath);
-    const basePath = path.resolve(this.config.base_path);
 
-    // Ensure path is within allowed base path or is absolute user-specified path
+    // Ensure path is absolute and resolved
     // For working_directory, users can specify absolute paths outside base_path
-    // But we still validate it's a valid absolute path
     if (!path.isAbsolute(resolvedPath)) {
       throw new Error('Path must be absolute');
     }
@@ -565,9 +569,13 @@ export class WorktreeManager {
   /**
    * Get repository URL from repository identifier
    */
-  getRepositoryUrl(repository: string, token?: string): string {
+  getRepositoryUrl(repository: string, _token?: string): string {
     // If it looks like a URL, return as-is
-    if (repository.startsWith('http://') || repository.startsWith('https://') || repository.startsWith('git@')) {
+    if (
+      repository.startsWith('http://') ||
+      repository.startsWith('https://') ||
+      repository.startsWith('git@')
+    ) {
       return repository;
     }
 
