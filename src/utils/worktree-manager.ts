@@ -25,8 +25,10 @@ export class WorktreeManager {
 
   private constructor() {
     // Default configuration - use project-local .visor/worktrees/ by default
+    // Handle test environment where process.cwd() may be undefined
+    const cwd = process.cwd?.() || '/tmp';
     const defaultBasePath =
-      process.env.VISOR_WORKTREE_PATH || path.join(process.cwd(), '.visor', 'worktrees');
+      process.env.VISOR_WORKTREE_PATH || path.join(cwd, '.visor', 'worktrees');
 
     this.config = {
       enabled: true,
