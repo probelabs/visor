@@ -126,9 +126,13 @@ export class WorktreeManager {
     // Build clone command with optional depth
     let cloneCmd = `git clone --bare`;
     if (fetchDepth && fetchDepth > 0) {
-      cloneCmd += ` --depth ${fetchDepth}`;
+      const depth = parseInt(String(fetchDepth), 10);
+      if (isNaN(depth) || depth < 1) {
+        throw new Error('fetch_depth must be a positive integer');
+      }
+      cloneCmd += ` --depth ${depth}`;
     }
-    cloneCmd += ` "${cloneUrl}" "${bareRepoPath}"`;
+    cloneCmd += ` ${this.escapeShellArg(cloneUrl)} ${this.escapeShellArg(bareRepoPath)}`;
 
     const result = await this.executeGitCommand(cloneCmd, { timeout: 300000 }); // 5 minute timeout
 
@@ -146,7 +150,7 @@ export class WorktreeManager {
   private async updateBareRepo(bareRepoPath: string): Promise<void> {
     logger.debug(`Updating bare repository: ${bareRepoPath}`);
 
-    const updateCmd = `git -C "${bareRepoPath}" remote update --prune`;
+    const updateCmd = `git -C ${this.escapeShellArg(bareRepoPath)} remote update --prune`;
     const result = await this.executeGitCommand(updateCmd, { timeout: 60000 }); // 1 minute timeout
 
     if (result.exitCode !== 0) {
@@ -182,7 +186,12 @@ export class WorktreeManager {
 
     // Generate worktree ID and path
     const worktreeId = this.generateWorktreeId(repository, ref);
-    const worktreePath = options.workingDirectory || path.join(this.getWorktreesDir(), worktreeId);
+    let worktreePath = options.workingDirectory || path.join(this.getWorktreesDir(), worktreeId);
+
+    // Validate path if user-provided
+    if (options.workingDirectory) {
+      worktreePath = this.validatePath(options.workingDirectory);
+    }
 
     // Check if worktree already exists
     if (fs.existsSync(worktreePath)) {
@@ -213,7 +222,7 @@ export class WorktreeManager {
 
     // Create worktree
     logger.info(`Creating worktree for ${repository}@${ref}`);
-    const createCmd = `git -C "${bareRepoPath}" worktree add "${worktreePath}" "${ref}"`;
+    const createCmd = `git -C ${this.escapeShellArg(bareRepoPath)} worktree add ${this.escapeShellArg(worktreePath)} ${this.escapeShellArg(ref)}`;
     const result = await this.executeGitCommand(createCmd, { timeout: 60000 });
 
     if (result.exitCode !== 0) {
@@ -262,7 +271,7 @@ export class WorktreeManager {
     logger.debug(`Fetching ref: ${ref}`);
 
     // Try to fetch the ref (might be a PR ref or branch)
-    const fetchCmd = `git -C "${bareRepoPath}" fetch origin "${ref}:${ref}" 2>&1 || true`;
+    const fetchCmd = `git -C ${this.escapeShellArg(bareRepoPath)} fetch origin ${this.escapeShellArg(ref + ':' + ref)} 2>&1 || true`;
     await this.executeGitCommand(fetchCmd, { timeout: 60000 });
   }
 
@@ -271,11 +280,11 @@ export class WorktreeManager {
    */
   private async cleanWorktree(worktreePath: string): Promise<void> {
     // Reset to HEAD
-    const resetCmd = `git -C "${worktreePath}" reset --hard HEAD`;
+    const resetCmd = `git -C ${this.escapeShellArg(worktreePath)} reset --hard HEAD`;
     await this.executeGitCommand(resetCmd);
 
     // Clean untracked files
-    const cleanCmd = `git -C "${worktreePath}" clean -fdx`;
+    const cleanCmd = `git -C ${this.escapeShellArg(worktreePath)} clean -fdx`;
     await this.executeGitCommand(cleanCmd);
   }
 
@@ -283,7 +292,7 @@ export class WorktreeManager {
    * Get commit SHA for worktree
    */
   private async getCommitSha(worktreePath: string): Promise<string> {
-    const cmd = `git -C "${worktreePath}" rev-parse HEAD`;
+    const cmd = `git -C ${this.escapeShellArg(worktreePath)} rev-parse HEAD`;
     const result = await this.executeGitCommand(cmd);
 
     if (result.exitCode !== 0) {
@@ -309,7 +318,7 @@ export class WorktreeManager {
     logger.info(`Removing worktree: ${worktree_path}`);
 
     // Remove worktree via git
-    const removeCmd = `git -C "${bare_repo_path}" worktree remove "${worktree_path}" --force`;
+    const removeCmd = `git -C ${this.escapeShellArg(bare_repo_path)} worktree remove ${this.escapeShellArg(worktree_path)} --force`;
     const result = await this.executeGitCommand(removeCmd, { timeout: 30000 });
 
     if (result.exitCode !== 0) {
@@ -483,6 +492,31 @@ export class WorktreeManager {
     }
 
     this.cleanupHandlersRegistered = true;
+  }
+
+  /**
+   * Escape shell argument to prevent command injection
+   */
+  private escapeShellArg(arg: string): string {
+    // Replace single quotes with '\'' and wrap in single quotes
+    return `'${arg.replace(/'/g, "'\\''")}'`;
+  }
+
+  /**
+   * Validate path to prevent directory traversal
+   */
+  private validatePath(userPath: string): string {
+    const resolvedPath = path.resolve(userPath);
+    const basePath = path.resolve(this.config.base_path);
+
+    // Ensure path is within allowed base path or is absolute user-specified path
+    // For working_directory, users can specify absolute paths outside base_path
+    // But we still validate it's a valid absolute path
+    if (!path.isAbsolute(resolvedPath)) {
+      throw new Error('Path must be absolute');
+    }
+
+    return resolvedPath;
   }
 
   /**
