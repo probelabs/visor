@@ -13,6 +13,7 @@ import { McpCheckProvider } from './mcp-check-provider';
 import { HumanInputCheckProvider } from './human-input-check-provider';
 import { ScriptCheckProvider } from './script-check-provider';
 import { WorkflowCheckProvider } from './workflow-check-provider';
+import { GitCheckoutProvider } from './git-checkout-provider';
 import { CustomToolDefinition } from '../types/config';
 
 /**
@@ -55,6 +56,7 @@ export class CheckProviderRegistry {
     this.register(new GitHubOpsProvider());
     this.register(new HumanInputCheckProvider());
     this.register(new WorkflowCheckProvider());
+    this.register(new GitCheckoutProvider());
 
     // Try to register ClaudeCodeCheckProvider - it may fail if dependencies are missing
     try {

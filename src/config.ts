@@ -55,6 +55,7 @@ export class ConfigManager {
     'github',
     'human-input',
     'workflow',
+    'git-checkout',
   ];
   private validEventTriggers: EventTrigger[] = [...VALID_EVENT_TRIGGERS];
   private validOutputFormats: ConfigOutputFormat[] = ['table', 'json', 'markdown', 'sarif'];

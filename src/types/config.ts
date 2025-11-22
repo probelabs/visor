@@ -195,7 +195,8 @@ export type ConfigCheckType =
   | 'claude-code'
   | 'mcp'
   | 'human-input'
-  | 'workflow';
+  | 'workflow'
+  | 'git-checkout';
 
 /**
  * Valid event triggers for checks
