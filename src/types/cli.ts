@@ -59,6 +59,8 @@ export interface CliOptions {
   message?: string;
   /** Deprecated: GitHub integration v2 is always enabled in GitHub contexts */
   githubV2?: boolean;
+  /** Enable Slack Socket Mode runner */
+  slack?: boolean;
 }
 
 /**

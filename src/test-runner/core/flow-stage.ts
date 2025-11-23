@@ -3,6 +3,7 @@ import type { ExpectBlock } from '../assertions';
 import type { ExecutionStatistics } from '../../types/execution';
 import { StateMachineExecutionEngine } from '../../state-machine-execution-engine';
 import { RecordingOctokit } from '../recorders/github-recorder';
+import { RecordingSlack } from '../recorders/slack-recorder';
 import { EnvironmentManager } from './environment';
 import { MockManager } from './mocks';
 import { buildPrInfoFromFixture } from './fixture';
@@ -99,6 +100,9 @@ export class FlowStage {
     const promptBase: Record<string, number> = {};
     for (const [k, arr] of Object.entries(this.prompts)) promptBase[k] = arr.length;
     const callBase = this.recorder.calls.length;
+    // Slack recorder baseline will be captured after we inject frontends/slack into executionContext
+    let slackRecorder: any | undefined;
+    let slackBase = 0;
     // Baseline engine execution stats for stage-local deltas
     const statBase: Record<string, number> = {};
     try {
@@ -214,13 +218,25 @@ export class FlowStage {
             (stageConfig as any).frontends = norm;
             // Seed octokit for frontends that need it (e.g., GitHub)
             const prev: any = (this.engine as any).executionContext || {};
-            this.engine.setExecutionContext({ ...prev, octokit: this.recorder as unknown as any });
+            const wantsSlack = norm.some(f => (f && (f as any).name) === 'slack');
+            const ctxPatch: any = { ...prev, octokit: this.recorder as unknown as any };
+            if (wantsSlack) ctxPatch.slack = new RecordingSlack();
+            this.engine.setExecutionContext(ctxPatch);
+            // Capture Slack baseline now that we've injected it
+            try {
+              const ec: any = (this.engine as any).executionContext || {};
+              slackRecorder = ec.slack || ec.slackClient;
+              if (slackRecorder && Array.isArray(slackRecorder.calls))
+                slackBase = slackRecorder.calls.length;
+            } catch {}
           } else {
             // Remove GitHub frontend for issue events to satisfy no-comment expectations
             const curr = Array.isArray((stageConfig as any).frontends)
               ? ((stageConfig as any).frontends as any[])
               : [];
-            (stageConfig as any).frontends = curr.filter(f => f && f.name !== 'github');
+            (stageConfig as any).frontends = curr.filter(
+              f => f && f.name !== 'github' && f.name !== 'slack'
+            );
           }
         }
       } catch {}
@@ -479,12 +495,21 @@ export class FlowStage {
         stageName,
         stageStats,
         { calls: this.recorder.calls.slice(callBase) } as any,
+        slackRecorder ? { calls: (slackRecorder.calls || []).slice(slackBase) } : undefined,
         expect,
         strict,
         stagePrompts,
         res.results,
         stageHist
       );
+      try {
+        if (process.env.VISOR_DEBUG === 'true' && slackRecorder) {
+          // eslint-disable-next-line no-console
+          console.log(
+            `[debug] slack calls (stage delta) = ${(slackRecorder.calls || []).slice(slackBase).length}`
+          );
+        }
+      } catch {}
 
       // Warn about unmocked AI/command steps that executed
       try {

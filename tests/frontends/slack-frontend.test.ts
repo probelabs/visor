@@ -1,0 +1,96 @@
+import { EventBus } from '../../src/event-bus/event-bus';
+import { SlackFrontend } from '../../src/frontends/slack-frontend';
+
+function makeFakeSlack() {
+  const chat = {
+    // underscore unused param to satisfy lint
+    postMessage: jest.fn(async (_req: any) => ({ ts: '123.456', message: { ts: '123.456' } })),
+    update: jest.fn(async (_req: any) => ({})),
+  };
+  return { chat } as any;
+}
+
+describe('SlackFrontend (event-bus)', () => {
+  test('posts direct reply for AI checks with simple schemas', async () => {
+    const bus = new EventBus();
+    const slack = makeFakeSlack();
+    const fe = new SlackFrontend({ defaultChannel: 'C1', debounceMs: 0 });
+    const map = new Map<string, unknown>();
+    map.set('/bots/slack/support', {
+      event: { type: 'app_mention', channel: 'C1', ts: '123.456', text: 'hi' },
+    });
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: {
+        slack: { endpoint: '/bots/slack/support' },
+        checks: {
+          reply: { type: 'ai', group: 'chat', schema: 'plain' },
+        },
+      },
+      run: { runId: 'r1' },
+      webhookContext: { webhookData: map },
+    } as any);
+    (fe as any).getSlack = () => slack;
+
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'reply',
+      scope: [],
+      result: { issues: [], output: { text: 'Hello!' } },
+    });
+
+    expect(slack.chat.postMessage).toHaveBeenCalledTimes(1);
+    const [req] = slack.chat.postMessage.mock.calls[0];
+    expect(req.channel).toBe('C1');
+    expect(req.thread_ts).toBe('123.456');
+    expect(req.text).toBe('Hello!');
+  });
+
+  test('does not post for non-AI checks or structured schemas by default', async () => {
+    const bus = new EventBus();
+    const slack = makeFakeSlack();
+    const fe = new SlackFrontend({ defaultChannel: 'C1', debounceMs: 0 });
+    const map = new Map<string, unknown>();
+    map.set('/bots/slack/support', {
+      event: { type: 'app_mention', channel: 'C1', ts: '999.1', text: 'hi' },
+    });
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: {
+        slack: { endpoint: '/bots/slack/support' },
+        checks: {
+          jsonRouter: {
+            type: 'ai',
+            group: 'chat',
+            schema: {
+              type: 'object',
+              properties: { intent: { type: 'string' } },
+              required: ['intent'],
+            },
+          },
+          logStep: { type: 'log', group: 'other' },
+        },
+      },
+      run: { runId: 'r2' },
+      webhookContext: { webhookData: map },
+    } as any);
+    (fe as any).getSlack = () => slack;
+
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'jsonRouter',
+      scope: [],
+      result: { issues: [], output: { intent: 'chat' } },
+    });
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'logStep',
+      scope: [],
+      result: { issues: [], output: { text: 'log' } },
+    });
+
+    expect(slack.chat.postMessage).not.toHaveBeenCalled();
+  });
+});

@@ -120,7 +120,7 @@ interface FailureConditionResult {
 /**
  * Valid check types in configuration
  */
-type ConfigCheckType = 'ai' | 'command' | 'script' | 'http' | 'http_input' | 'http_client' | 'noop' | 'log' | 'memory' | 'github' | 'claude-code' | 'mcp' | 'human-input' | 'workflow' | 'git-checkout';
+type ConfigCheckType = 'ai' | 'command' | 'script' | 'http' | 'http_input' | 'http_client' | 'noop' | 'log' | 'memory' | 'github' | 'claude-code' | 'mcp' | 'human-input' | 'workflow';
 /**
  * Valid event triggers for checks
  */
@@ -654,8 +654,6 @@ interface DebugConfig {
  * PR comment output configuration
  */
 interface PrCommentOutput {
-    /** Whether PR comments are enabled */
-    enabled?: boolean;
     /** Format of the output */
     format: ConfigOutputFormat;
     /** How to group the results */

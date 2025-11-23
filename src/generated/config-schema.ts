@@ -640,7 +640,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -671,6 +671,7 @@ export const configSchema = {
         'mcp',
         'human-input',
         'workflow',
+        'git-checkout',
       ],
       description: 'Valid check types in configuration',
     },
@@ -728,6 +729,16 @@ export const configSchema = {
         skip_code_context: {
           type: 'boolean',
           description: 'Skip adding code context (diffs, files, PR info) to the prompt',
+        },
+        skip_slack_context: {
+          type: 'boolean',
+          description:
+            'Skip adding Slack conversation context to the prompt (when running under Slack)',
+        },
+        skip_transport_context: {
+          type: 'boolean',
+          description:
+            'Skip adding transport-specific context (e.g., GitHub PR/issue XML, Slack conversation XML) to the prompt. When true, this behaves like setting both skip_code_context and skip_slack_context to true, unless those are explicitly overridden.',
         },
         mcpServers: {
           $ref: '#/definitions/Record%3Cstring%2CMcpServerConfig%3E',
@@ -1278,14 +1289,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284>>':
+    'Record<string,Partial<interface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284>': {
+    'Partial<interface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730>': {
       type: 'object',
       additionalProperties: false,
     },

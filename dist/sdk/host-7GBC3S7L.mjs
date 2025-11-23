@@ -16,7 +16,7 @@ var FrontendsHost = class {
         const { NdjsonSink } = await import("./ndjson-sink-B4V4NTAQ.mjs");
         this.frontends.push(new NdjsonSink(spec.config));
       } else if (spec.name === "github") {
-        const { GitHubFrontend } = await import("./github-frontend-DEZY7NBD.mjs");
+        const { GitHubFrontend } = await import("./github-frontend-4AWRJT7D.mjs");
         this.frontends.push(new GitHubFrontend());
       } else {
         this.log.warn(`[FrontendsHost] Unknown frontend '${spec.name}', skipping`);
@@ -46,4 +46,4 @@ var FrontendsHost = class {
 export {
   FrontendsHost
 };
-//# sourceMappingURL=host-H7CMKK3U.mjs.map
+//# sourceMappingURL=host-7GBC3S7L.mjs.map

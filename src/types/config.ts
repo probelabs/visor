@@ -329,6 +329,15 @@ export interface AIProviderConfig {
   custom_prompt?: string;
   /** Skip adding code context (diffs, files, PR info) to the prompt */
   skip_code_context?: boolean;
+  /** Skip adding Slack conversation context to the prompt (when running under Slack) */
+  skip_slack_context?: boolean;
+  /**
+   * Skip adding transport-specific context (e.g., GitHub PR/issue XML, Slack
+   * conversation XML) to the prompt. When true, this behaves like setting both
+   * skip_code_context and skip_slack_context to true, unless those are
+   * explicitly overridden.
+   */
+  skip_transport_context?: boolean;
   /** MCP servers configuration */
   mcpServers?: Record<string, McpServerConfig>;
   /** Enable the delegate tool for task distribution to subagents */

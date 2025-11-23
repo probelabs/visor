@@ -1015,7 +1015,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10711-20798-src_types_config.ts-0-34303%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -1045,8 +1045,7 @@ var init_config_schema = __esm({
             "claude-code",
             "mcp",
             "human-input",
-            "workflow",
-            "git-checkout"
+            "workflow"
           ],
           description: "Valid check types in configuration"
         },
@@ -1647,13 +1646,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-10711-20798-src_types_config.ts-0-34303>>": {
+        "Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10711-20798-src_types_config.ts-0-34303%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-10711-20798-src_types_config.ts-0-34303>": {
+        "Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>": {
           type: "object",
           additionalProperties: false
         },
@@ -1687,10 +1686,6 @@ var init_config_schema = __esm({
         PrCommentOutput: {
           type: "object",
           properties: {
-            enabled: {
-              type: "boolean",
-              description: "Whether PR comments are enabled"
-            },
             format: {
               $ref: "#/definitions/ConfigOutputFormat",
               description: "Format of the output"
@@ -2078,8 +2073,7 @@ var init_config = __esm({
         "log",
         "github",
         "human-input",
-        "workflow",
-        "git-checkout"
+        "workflow"
       ];
       validEventTriggers = [...VALID_EVENT_TRIGGERS];
       validOutputFormats = ["table", "json", "markdown", "sarif"];
@@ -3131,4 +3125,4 @@ export {
   config_exports,
   init_config
 };
-//# sourceMappingURL=chunk-ZDK5EMAR.mjs.map
+//# sourceMappingURL=chunk-PTL3K3PN.mjs.map

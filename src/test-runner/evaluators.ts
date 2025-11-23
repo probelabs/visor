@@ -1,4 +1,5 @@
-import { RecordingOctokit } from './recorders/github-recorder';
+// Note: avoid importing concrete classes here to keep evaluator generic across runners
+import type { SlackRecordedCall } from './recorders/slack-recorder';
 import { validateCounts, type ExpectBlock, deepEqual, containsUnordered } from './assertions';
 import { deepGet } from './utils/selectors';
 
@@ -89,10 +90,12 @@ export function evaluateCalls(
 export function evaluateProviderCalls(
   errors: string[],
   expect: ExpectBlock,
-  recorder: RecordingOctokit
+  recorder: { calls: Array<{ provider: string; op: string; args: any; ts: number }> },
+  slackRecorder?: { calls: SlackRecordedCall[] }
 ): void {
   for (const call of expect.calls || []) {
-    if (call.provider && String(call.provider).toLowerCase() === 'github') {
+    const provider = (call.provider || '').toLowerCase();
+    if (provider === 'github') {
       validateCounts(call);
       const op = mapGithubOp(call.op || '');
       const matched = recorder.calls.filter(c => !op || c.op === op);
@@ -122,6 +125,37 @@ export function evaluateProviderCalls(
           );
         }
       }
+    } else if (provider === 'slack') {
+      validateCounts(call);
+      const op = String(call.op || '');
+      const calls = slackRecorder?.calls || [];
+      const matched = calls.filter(c => !op || c.op === op);
+      const actual = matched.length;
+      if (call.exactly !== undefined && actual !== call.exactly) {
+        errors.push(`Expected slack ${call.op} exactly ${call.exactly}, got ${actual}`);
+      }
+      if (call.at_least !== undefined && actual < call.at_least) {
+        errors.push(`Expected slack ${call.op} at_least ${call.at_least}, got ${actual}`);
+      }
+      if (call.at_most !== undefined && actual > call.at_most) {
+        errors.push(`Expected slack ${call.op} at_most ${call.at_most}, got ${actual}`);
+      }
+      if (call.args && (call.args as any).contains) {
+        const want = (call.args as any).contains as unknown[];
+        const ok = matched.some(m => {
+          const text = (m.args as any)?.text || '';
+          return want.every(w => String(text).includes(String(w)));
+        });
+        if (!ok) {
+          const last = matched[matched.length - 1];
+          const text = (last && (last.args as any)?.text) || '';
+          errors.push(
+            `Expected slack ${call.op} text to contain ${JSON.stringify(want)}; got ${JSON.stringify(
+              text
+            )}`
+          );
+        }
+      }
     }
   }
 }
@@ -130,14 +164,21 @@ export function evaluateNoCalls(
   errors: string[],
   expect: ExpectBlock,
   executed: Record<string, number>,
-  recorder: RecordingOctokit
+  recorder: { calls: Array<{ provider: string; op: string; args: any; ts: number }> },
+  slackRecorder?: { calls: SlackRecordedCall[] }
 ): void {
   for (const nc of expect.no_calls || []) {
-    if (nc.provider && String(nc.provider).toLowerCase() === 'github') {
+    const provider = (nc.provider || '').toLowerCase();
+    if (provider === 'github') {
       const op = mapGithubOp((nc as any).op || '');
       const matched = recorder.calls.filter(c => !op || c.op === op);
       if (matched.length > 0)
         errors.push(`Expected no github ${nc.op} calls, but found ${matched.length}`);
+    } else if (provider === 'slack') {
+      const op = String((nc as any).op || '');
+      const matched = (slackRecorder?.calls || []).filter(c => !op || c.op === op);
+      if (matched.length > 0)
+        errors.push(`Expected no slack ${nc.op} calls, but found ${matched.length}`);
     }
     if (nc.step && executed[nc.step] > 0) {
       errors.push(`Expected no step ${nc.step} calls, but executed ${executed[nc.step]}`);
@@ -285,7 +326,8 @@ export function evaluateOutputs(
 export function evaluateCase(
   caseName: string,
   stats: ExecStats,
-  recorder: RecordingOctokit,
+  recorder: { calls: Array<{ provider: string; op: string; args: any; ts: number }> },
+  slackRecorder: { calls: SlackRecordedCall[] } | undefined,
   expect: ExpectBlock,
   strict: boolean,
   promptsByStep: Record<string, string[]>,
@@ -304,8 +346,8 @@ export function evaluateCase(
   }
 
   evaluateCalls(errors, expect, executed);
-  evaluateProviderCalls(errors, expect, recorder);
-  evaluateNoCalls(errors, expect, executed, recorder);
+  evaluateProviderCalls(errors, expect, recorder, slackRecorder);
+  evaluateNoCalls(errors, expect, executed, recorder, slackRecorder);
   evaluatePrompts(errors, expect, promptsByStep);
   evaluateOutputs(errors, expect, outputHistory);
   return errors;

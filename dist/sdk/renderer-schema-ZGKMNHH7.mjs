@@ -14,14 +14,10 @@ async function loadRendererSchema(name) {
     const sanitized = String(name).replace(/[^a-zA-Z0-9-]/g, "");
     if (!sanitized) return void 0;
     const candidates = [
-      // When bundled with ncc, __dirname is dist/ and output/ is at dist/output/
-      path.join(__dirname, "output", sanitized, "schema.json"),
-      // When running from source, __dirname is src/state-machine/dispatch/ and output/ is at output/
+      // When running from dist
       path.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
       // When running from a checkout with output/ folder copied to CWD
-      path.join(process.cwd(), "output", sanitized, "schema.json"),
-      // Fallback: cwd/dist/output/
-      path.join(process.cwd(), "dist", "output", sanitized, "schema.json")
+      path.join(process.cwd(), "output", sanitized, "schema.json")
     ];
     for (const p of candidates) {
       try {
@@ -47,4 +43,4 @@ init_renderer_schema();
 export {
   loadRendererSchema
 };
-//# sourceMappingURL=renderer-schema-6RF26VUS.mjs.map
+//# sourceMappingURL=renderer-schema-ZGKMNHH7.mjs.map

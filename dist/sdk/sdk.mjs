@@ -3,10 +3,6 @@ import {
   init_liquid_extensions
 } from "./chunk-JEHPDJIF.mjs";
 import {
-  commandExecutor,
-  init_command_executor
-} from "./chunk-CT4CIIRV.mjs";
-import {
   DependencyResolver,
   WorkflowRegistry,
   init_dependency_resolver,
@@ -16,7 +12,7 @@ import {
   ConfigManager,
   config_exports,
   init_config
-} from "./chunk-ZDK5EMAR.mjs";
+} from "./chunk-PTL3K3PN.mjs";
 import "./chunk-O5EZDNYL.mjs";
 import {
   ExecutionJournal,
@@ -864,7 +860,7 @@ async function processDiffWithOutline(diffContent) {
   }
   try {
     const originalProbePath = process.env.PROBE_PATH;
-    const fs7 = __require("fs");
+    const fs6 = __require("fs");
     const possiblePaths = [
       // Relative to current working directory (most common in production)
       path2.join(process.cwd(), "node_modules/@probelabs/probe/bin/probe-binary"),
@@ -875,7 +871,7 @@ async function processDiffWithOutline(diffContent) {
     ];
     let probeBinaryPath;
     for (const candidatePath of possiblePaths) {
-      if (fs7.existsSync(candidatePath)) {
+      if (fs6.existsSync(candidatePath)) {
         probeBinaryPath = candidatePath;
         break;
       }
@@ -916,39 +912,6 @@ var init_diff_processor = __esm({
   }
 });
 
-// src/utils/comment-metadata.ts
-function parseVisorThreadMetadata(commentBody) {
-  const headerRe = /<!--\s*visor:thread=(\{[\s\S]*?\})\s*-->/m;
-  const match = headerRe.exec(commentBody);
-  if (!match) {
-    return null;
-  }
-  try {
-    const metadata = JSON.parse(match[1]);
-    return metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata : null;
-  } catch {
-    return null;
-  }
-}
-function shouldFilterVisorReviewComment(commentBody) {
-  if (!commentBody) {
-    return false;
-  }
-  if (commentBody.includes("visor-comment-id:pr-review-")) {
-    return true;
-  }
-  const metadata = parseVisorThreadMetadata(commentBody);
-  if (metadata && metadata.group === "review") {
-    return true;
-  }
-  return false;
-}
-var init_comment_metadata = __esm({
-  "src/utils/comment-metadata.ts"() {
-    "use strict";
-  }
-});
-
 // src/ai-review-service.ts
 import { ProbeAgent } from "@probelabs/probe";
 function log(...args) {
@@ -962,7 +925,6 @@ var init_ai_review_service = __esm({
     init_logger();
     init_tracer_init();
     init_diff_processor();
-    init_comment_metadata();
     AIReviewService = class {
       config;
       sessionRegistry;
@@ -1437,7 +1399,7 @@ ${this.escapeXml(prInfo.body)}
             let historicalComments = triggeringComment2 ? issueComments.filter((c) => c.id !== triggeringComment2.id) : issueComments;
             if (isCodeReviewSchema) {
               historicalComments = historicalComments.filter(
-                (c) => !shouldFilterVisorReviewComment(c.body)
+                (c) => !c.body || !c.body.includes("visor-comment-id:pr-review-")
               );
             }
             if (historicalComments.length > 0) {
@@ -1550,7 +1512,7 @@ ${this.escapeXml(processedFallbackDiff)}
           let historicalComments = triggeringComment ? prComments.filter((c) => c.id !== triggeringComment.id) : prComments;
           if (isCodeReviewSchema) {
             historicalComments = historicalComments.filter(
-              (c) => !shouldFilterVisorReviewComment(c.body)
+              (c) => !c.body || !c.body.includes("visor-comment-id:pr-review-")
             );
           }
           if (historicalComments.length > 0) {
@@ -1622,8 +1584,8 @@ ${schemaString}`);
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs7 = __require("fs");
-              const path8 = __require("path");
+              const fs6 = __require("fs");
+              const path7 = __require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const provider = this.config.provider || "auto";
               const model = this.config.model || "default";
@@ -1737,20 +1699,20 @@ ${"=".repeat(60)}
 `;
               readableVersion += `${"=".repeat(60)}
 `;
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path8.join(process.cwd(), "debug-artifacts");
-              if (!fs7.existsSync(debugArtifactsDir)) {
-                fs7.mkdirSync(debugArtifactsDir, { recursive: true });
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path7.join(process.cwd(), "debug-artifacts");
+              if (!fs6.existsSync(debugArtifactsDir)) {
+                fs6.mkdirSync(debugArtifactsDir, { recursive: true });
               }
-              const debugFile = path8.join(
+              const debugFile = path7.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.json`
               );
-              fs7.writeFileSync(debugFile, debugJson, "utf-8");
-              const readableFile = path8.join(
+              fs6.writeFileSync(debugFile, debugJson, "utf-8");
+              const readableFile = path7.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.txt`
               );
-              fs7.writeFileSync(readableFile, readableVersion, "utf-8");
+              fs6.writeFileSync(readableFile, readableVersion, "utf-8");
               log(`
 \u{1F4BE} Full debug info saved to:`);
               log(`   JSON: ${debugFile}`);
@@ -1782,8 +1744,8 @@ ${"=".repeat(60)}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs7 = __require("fs");
-              const path8 = __require("path");
+              const fs6 = __require("fs");
+              const path7 = __require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny2 = agent;
               let fullHistory = [];
@@ -1794,8 +1756,8 @@ ${"=".repeat(60)}
               } else if (agentAny2._messages) {
                 fullHistory = agentAny2._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path8.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path8.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path7.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path7.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -1807,7 +1769,7 @@ ${"=".repeat(60)}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs7.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs6.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -1834,7 +1796,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs7.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs6.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -1843,11 +1805,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs7 = __require("fs");
-              const path8 = __require("path");
+              const fs6 = __require("fs");
+              const path7 = __require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path8.join(process.cwd(), "debug-artifacts");
-              const responseFile = path8.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path7.join(process.cwd(), "debug-artifacts");
+              const responseFile = path7.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -1880,7 +1842,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs7.writeFileSync(responseFile, responseContent, "utf-8");
+              fs6.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -1896,9 +1858,9 @@ ${"=".repeat(60)}
                 await agentAny._telemetryConfig.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${agentAny._traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs7 = __require("fs");
-                  if (fs7.existsSync(agentAny._traceFilePath)) {
-                    const stats = fs7.statSync(agentAny._traceFilePath);
+                  const fs6 = __require("fs");
+                  if (fs6.existsSync(agentAny._traceFilePath)) {
+                    const stats = fs6.statSync(agentAny._traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::${agentAny._traceFilePath} (${stats.size} bytes)`
                     );
@@ -2051,8 +2013,8 @@ ${schemaString}`);
           const model = this.config.model || "default";
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs7 = __require("fs");
-              const path8 = __require("path");
+              const fs6 = __require("fs");
+              const path7 = __require("path");
               const os = __require("os");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const debugData = {
@@ -2126,18 +2088,18 @@ ${"=".repeat(60)}
               readableVersion += `${"=".repeat(60)}
 `;
               const tempDir = os.tmpdir();
-              const promptFile = path8.join(tempDir, `visor-prompt-${timestamp}.txt`);
-              fs7.writeFileSync(promptFile, prompt, "utf-8");
+              const promptFile = path7.join(tempDir, `visor-prompt-${timestamp}.txt`);
+              fs6.writeFileSync(promptFile, prompt, "utf-8");
               log(`
 \u{1F4BE} Prompt saved to: ${promptFile}`);
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path8.join(process.cwd(), "debug-artifacts");
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path7.join(process.cwd(), "debug-artifacts");
               try {
-                const base = path8.join(
+                const base = path7.join(
                   debugArtifactsDir,
                   `prompt-${_checkName || "unknown"}-${timestamp}`
                 );
-                fs7.writeFileSync(base + ".json", debugJson, "utf-8");
-                fs7.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
+                fs6.writeFileSync(base + ".json", debugJson, "utf-8");
+                fs6.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
                 log(`
 \u{1F4BE} Full debug info saved to directory: ${debugArtifactsDir}`);
               } catch {
@@ -2182,8 +2144,8 @@ $ ${cliCommand}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs7 = __require("fs");
-              const path8 = __require("path");
+              const fs6 = __require("fs");
+              const path7 = __require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny = agent;
               let fullHistory = [];
@@ -2194,8 +2156,8 @@ $ ${cliCommand}
               } else if (agentAny._messages) {
                 fullHistory = agentAny._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path8.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path8.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path7.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path7.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -2207,7 +2169,7 @@ $ ${cliCommand}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs7.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs6.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -2234,7 +2196,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs7.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs6.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -2243,11 +2205,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs7 = __require("fs");
-              const path8 = __require("path");
+              const fs6 = __require("fs");
+              const path7 = __require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path8.join(process.cwd(), "debug-artifacts");
-              const responseFile = path8.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path7.join(process.cwd(), "debug-artifacts");
+              const responseFile = path7.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -2280,7 +2242,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs7.writeFileSync(responseFile, responseContent, "utf-8");
+              fs6.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -2298,9 +2260,9 @@ ${"=".repeat(60)}
                 await telemetry.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs7 = __require("fs");
-                  if (fs7.existsSync(traceFilePath)) {
-                    const stats = fs7.statSync(traceFilePath);
+                  const fs6 = __require("fs");
+                  if (fs6.existsSync(traceFilePath)) {
+                    const stats = fs6.statSync(traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::OpenTelemetry trace file size: ${stats.size} bytes`
                     );
@@ -2338,8 +2300,8 @@ ${"=".repeat(60)}
        * Load schema content from schema files or inline definitions
        */
       async loadSchemaContent(schema) {
-        const fs7 = __require("fs").promises;
-        const path8 = __require("path");
+        const fs6 = __require("fs").promises;
+        const path7 = __require("path");
         if (typeof schema === "object" && schema !== null) {
           log("\u{1F4CB} Using inline schema object from configuration");
           return JSON.stringify(schema);
@@ -2352,14 +2314,14 @@ ${"=".repeat(60)}
           }
         } catch {
         }
-        if ((schema.startsWith("./") || schema.includes(".json")) && !path8.isAbsolute(schema)) {
+        if ((schema.startsWith("./") || schema.includes(".json")) && !path7.isAbsolute(schema)) {
           if (schema.includes("..") || schema.includes("\0")) {
             throw new Error("Invalid schema path: path traversal not allowed");
           }
           try {
-            const schemaPath = path8.resolve(process.cwd(), schema);
+            const schemaPath = path7.resolve(process.cwd(), schema);
             log(`\u{1F4CB} Loading custom schema from file: ${schemaPath}`);
-            const schemaContent = await fs7.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs6.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch (error) {
             throw new Error(
@@ -2373,22 +2335,22 @@ ${"=".repeat(60)}
         }
         const candidatePaths = [
           // GitHub Action bundle location
-          path8.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
+          path7.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
           // Historical fallback when src/output was inadvertently bundled as output1/
-          path8.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
+          path7.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
           // Local dev (repo root)
-          path8.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
+          path7.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
         ];
         for (const schemaPath of candidatePaths) {
           try {
-            const schemaContent = await fs7.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs6.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch {
           }
         }
-        const distPath = path8.join(__dirname, "output", sanitizedSchemaName, "schema.json");
-        const distAltPath = path8.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
-        const cwdPath = path8.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
+        const distPath = path7.join(__dirname, "output", sanitizedSchemaName, "schema.json");
+        const distAltPath = path7.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
+        const cwdPath = path7.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
         throw new Error(
           `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath}, ${distAltPath}, and ${cwdPath}. Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
         );
@@ -2678,7 +2640,7 @@ ${"=".repeat(60)}
        * Generate mock response for testing
        */
       async generateMockResponse(_prompt, _checkName, _schema) {
-        await new Promise((resolve3) => setTimeout(resolve3, 500));
+        await new Promise((resolve2) => setTimeout(resolve2, 500));
         const name = (_checkName || "").toLowerCase();
         if (name.includes("extract-facts")) {
           const arr = Array.from({ length: 6 }, (_, i) => ({
@@ -3309,9 +3271,9 @@ var init_ai_check_provider = __esm({
           } else {
             resolvedPath = path4.resolve(process.cwd(), str);
           }
-          const fs7 = __require("fs").promises;
+          const fs6 = __require("fs").promises;
           try {
-            const stat = await fs7.stat(resolvedPath);
+            const stat = await fs6.stat(resolvedPath);
             return stat.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
@@ -5568,6 +5530,132 @@ var init_claude_code_check_provider = __esm({
         ];
       }
     };
+  }
+});
+
+// src/utils/command-executor.ts
+import { exec } from "child_process";
+import { promisify } from "util";
+var CommandExecutor, commandExecutor;
+var init_command_executor = __esm({
+  "src/utils/command-executor.ts"() {
+    "use strict";
+    init_logger();
+    CommandExecutor = class _CommandExecutor {
+      static instance;
+      constructor() {
+      }
+      static getInstance() {
+        if (!_CommandExecutor.instance) {
+          _CommandExecutor.instance = new _CommandExecutor();
+        }
+        return _CommandExecutor.instance;
+      }
+      /**
+       * Execute a shell command with optional stdin, environment, and timeout
+       */
+      async execute(command, options = {}) {
+        const execAsync = promisify(exec);
+        const timeout = options.timeout || 3e4;
+        if (options.stdin) {
+          return this.executeWithStdin(command, options);
+        }
+        try {
+          const result = await execAsync(command, {
+            cwd: options.cwd,
+            env: options.env,
+            timeout
+          });
+          return {
+            stdout: result.stdout || "",
+            stderr: result.stderr || "",
+            exitCode: 0
+          };
+        } catch (error) {
+          return this.handleExecutionError(error, timeout);
+        }
+      }
+      /**
+       * Execute command with stdin input
+       */
+      executeWithStdin(command, options) {
+        return new Promise((resolve2, reject) => {
+          const childProcess = exec(
+            command,
+            {
+              cwd: options.cwd,
+              env: options.env,
+              timeout: options.timeout || 3e4
+            },
+            (error, stdout, stderr) => {
+              if (error && error.killed && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM")) {
+                reject(new Error(`Command timed out after ${options.timeout || 3e4}ms`));
+              } else {
+                resolve2({
+                  stdout: stdout || "",
+                  stderr: stderr || "",
+                  exitCode: error ? error.code || 1 : 0
+                });
+              }
+            }
+          );
+          if (options.stdin && childProcess.stdin) {
+            childProcess.stdin.write(options.stdin);
+            childProcess.stdin.end();
+          }
+        });
+      }
+      /**
+       * Handle execution errors consistently
+       */
+      handleExecutionError(error, timeout) {
+        const execError = error;
+        if (execError.killed && (execError.code === "ETIMEDOUT" || execError.signal === "SIGTERM")) {
+          throw new Error(`Command timed out after ${timeout}ms`);
+        }
+        let exitCode = 1;
+        if (execError.code) {
+          exitCode = typeof execError.code === "string" ? parseInt(execError.code, 10) : execError.code;
+        }
+        return {
+          stdout: execError.stdout || "",
+          stderr: execError.stderr || "",
+          exitCode
+        };
+      }
+      /**
+       * Build safe environment variables by merging process.env with custom env
+       * Ensures all values are strings (no undefined)
+       */
+      buildEnvironment(baseEnv = process.env, ...customEnvs) {
+        const result = {};
+        for (const [key, value] of Object.entries(baseEnv)) {
+          if (value !== void 0) {
+            result[key] = value;
+          }
+        }
+        for (const customEnv of customEnvs) {
+          if (customEnv) {
+            Object.assign(result, customEnv);
+          }
+        }
+        return result;
+      }
+      /**
+       * Log command execution for debugging
+       */
+      logExecution(command, options) {
+        const debugInfo = [
+          `Executing command: ${command}`,
+          options.cwd ? `cwd: ${options.cwd}` : null,
+          options.stdin ? "with stdin" : null,
+          options.timeout ? `timeout: ${options.timeout}ms` : null,
+          options.env ? `env vars: ${Object.keys(options.env).length}` : null
+        ].filter(Boolean).join(", ");
+        logger.debug(debugInfo);
+      }
+    };
+    commandExecutor = CommandExecutor.getInstance();
   }
 });
 
@@ -8208,7 +8296,7 @@ async function acquirePromptLock() {
     activePrompt = true;
     return;
   }
-  await new Promise((resolve3) => waiters.push(resolve3));
+  await new Promise((resolve2) => waiters.push(resolve2));
   activePrompt = true;
 }
 function releasePromptLock() {
@@ -8218,7 +8306,7 @@ function releasePromptLock() {
 }
 async function interactivePrompt(options) {
   await acquirePromptLock();
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve2, reject) => {
     const dbg = process.env.VISOR_DEBUG === "true";
     try {
       if (dbg) {
@@ -8305,12 +8393,12 @@ async function interactivePrompt(options) {
     };
     const finish = (value) => {
       cleanup();
-      resolve3(value);
+      resolve2(value);
     };
     if (options.timeout && options.timeout > 0) {
       timeoutId = setTimeout(() => {
         cleanup();
-        if (defaultValue !== void 0) return resolve3(defaultValue);
+        if (defaultValue !== void 0) return resolve2(defaultValue);
         return reject(new Error("Input timeout"));
       }, options.timeout);
     }
@@ -8442,7 +8530,7 @@ async function interactivePrompt(options) {
   });
 }
 async function simplePrompt(prompt) {
-  return new Promise((resolve3) => {
+  return new Promise((resolve2) => {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout
@@ -8458,7 +8546,7 @@ async function simplePrompt(prompt) {
     rl.question(`${prompt}
 > `, (answer) => {
       rl.close();
-      resolve3(answer.trim());
+      resolve2(answer.trim());
     });
   });
 }
@@ -8476,7 +8564,7 @@ function isStdinAvailable() {
   return !process.stdin.isTTY;
 }
 async function readStdin(timeout, maxSize = 1024 * 1024) {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve2, reject) => {
     let data = "";
     let timeoutId;
     if (timeout) {
@@ -8503,7 +8591,7 @@ async function readStdin(timeout, maxSize = 1024 * 1024) {
     };
     const onEnd = () => {
       cleanup();
-      resolve3(data.trim());
+      resolve2(data.trim());
     };
     const onError = (err) => {
       cleanup();
@@ -9945,10 +10033,10 @@ var init_workflow_check_provider = __esm({
        * so it can be executed by the state machine as a nested workflow.
        */
       async loadWorkflowFromConfigPath(sourcePath, baseDir) {
-        const path8 = __require("path");
-        const fs7 = __require("fs");
-        const resolved = path8.isAbsolute(sourcePath) ? sourcePath : path8.resolve(baseDir, sourcePath);
-        if (!fs7.existsSync(resolved)) {
+        const path7 = __require("path");
+        const fs6 = __require("fs");
+        const resolved = path7.isAbsolute(sourcePath) ? sourcePath : path7.resolve(baseDir, sourcePath);
+        if (!fs6.existsSync(resolved)) {
           throw new Error(`Workflow config not found at: ${resolved}`);
         }
         const { ConfigManager: ConfigManager2 } = (init_config(), __toCommonJS(config_exports));
@@ -9958,8 +10046,8 @@ var init_workflow_check_provider = __esm({
         if (!steps || Object.keys(steps).length === 0) {
           throw new Error(`Config '${resolved}' does not contain any steps to execute as a workflow`);
         }
-        const id = path8.basename(resolved).replace(/\.(ya?ml)$/i, "");
-        const name = loaded.name || `Workflow from ${path8.basename(resolved)}`;
+        const id = path7.basename(resolved).replace(/\.(ya?ml)$/i, "");
+        const name = loaded.name || `Workflow from ${path7.basename(resolved)}`;
         const workflowDef = {
           id,
           name,
@@ -9973,688 +10061,6 @@ var init_workflow_check_provider = __esm({
           outputs: loaded.outputs
         };
         return workflowDef;
-      }
-    };
-  }
-});
-
-// src/utils/worktree-manager.ts
-import * as fs6 from "fs";
-import * as path7 from "path";
-import * as crypto from "crypto";
-var WorktreeManager, worktreeManager;
-var init_worktree_manager = __esm({
-  "src/utils/worktree-manager.ts"() {
-    "use strict";
-    init_command_executor();
-    init_logger();
-    WorktreeManager = class _WorktreeManager {
-      static instance;
-      config;
-      activeWorktrees;
-      cleanupHandlersRegistered = false;
-      constructor() {
-        let cwd;
-        try {
-          cwd = process.cwd() || "/tmp";
-        } catch {
-          cwd = "/tmp";
-        }
-        const defaultBasePath = process.env.VISOR_WORKTREE_PATH || path7.join(cwd, ".visor", "worktrees");
-        this.config = {
-          enabled: true,
-          base_path: defaultBasePath,
-          cleanup_on_exit: true,
-          max_age_hours: 24
-        };
-        this.activeWorktrees = /* @__PURE__ */ new Map();
-        this.ensureDirectories();
-        this.registerCleanupHandlers();
-      }
-      static getInstance() {
-        if (!_WorktreeManager.instance) {
-          _WorktreeManager.instance = new _WorktreeManager();
-        }
-        return _WorktreeManager.instance;
-      }
-      /**
-       * Update configuration
-       */
-      configure(config) {
-        this.config = { ...this.config, ...config };
-        this.ensureDirectories();
-      }
-      getConfig() {
-        return { ...this.config };
-      }
-      /**
-       * Ensure base directories exist
-       */
-      ensureDirectories() {
-        if (!this.config.base_path) {
-          logger.debug("Skipping directory creation: base_path not initialized");
-          return;
-        }
-        const reposDir = this.getReposDir();
-        const worktreesDir = this.getWorktreesDir();
-        if (!fs6.existsSync(reposDir)) {
-          fs6.mkdirSync(reposDir, { recursive: true });
-          logger.debug(`Created repos directory: ${reposDir}`);
-        }
-        if (!fs6.existsSync(worktreesDir)) {
-          fs6.mkdirSync(worktreesDir, { recursive: true });
-          logger.debug(`Created worktrees directory: ${worktreesDir}`);
-        }
-      }
-      getReposDir() {
-        return path7.join(this.config.base_path, "repos");
-      }
-      getWorktreesDir() {
-        return path7.join(this.config.base_path, "worktrees");
-      }
-      /**
-       * Generate a unique worktree ID
-       */
-      generateWorktreeId(repository, ref) {
-        const sanitizedRepo = repository.replace(/[^a-zA-Z0-9-]/g, "-");
-        const sanitizedRef = ref.replace(/[^a-zA-Z0-9-]/g, "-");
-        const hash = crypto.createHash("md5").update(`${repository}:${ref}:${Date.now()}`).digest("hex").substring(0, 8);
-        return `${sanitizedRepo}-${sanitizedRef}-${hash}`;
-      }
-      /**
-       * Get or create bare repository
-       */
-      async getOrCreateBareRepo(repository, repoUrl, token, fetchDepth) {
-        const reposDir = this.getReposDir();
-        const repoName = repository.replace(/\//g, "-");
-        const bareRepoPath = path7.join(reposDir, `${repoName}.git`);
-        if (fs6.existsSync(bareRepoPath)) {
-          logger.debug(`Bare repository already exists: ${bareRepoPath}`);
-          await this.updateBareRepo(bareRepoPath);
-          return bareRepoPath;
-        }
-        const cloneUrl = this.buildAuthenticatedUrl(repoUrl, token);
-        const redactedUrl = this.redactUrl(cloneUrl);
-        logger.info(
-          `Cloning bare repository: ${redactedUrl}${fetchDepth ? ` (depth: ${fetchDepth})` : ""}`
-        );
-        let cloneCmd = `git clone --bare`;
-        if (fetchDepth && fetchDepth > 0) {
-          const depth = parseInt(String(fetchDepth), 10);
-          if (isNaN(depth) || depth < 1) {
-            throw new Error("fetch_depth must be a positive integer");
-          }
-          cloneCmd += ` --depth ${depth}`;
-        }
-        cloneCmd += ` ${this.escapeShellArg(cloneUrl)} ${this.escapeShellArg(bareRepoPath)}`;
-        const result = await this.executeGitCommand(cloneCmd, { timeout: 3e5 });
-        if (result.exitCode !== 0) {
-          const redactedStderr = this.redactUrl(result.stderr);
-          throw new Error(`Failed to clone bare repository: ${redactedStderr}`);
-        }
-        logger.info(`Successfully cloned bare repository to ${bareRepoPath}`);
-        return bareRepoPath;
-      }
-      /**
-       * Update bare repository refs
-       */
-      async updateBareRepo(bareRepoPath) {
-        logger.debug(`Updating bare repository: ${bareRepoPath}`);
-        const updateCmd = `git -C ${this.escapeShellArg(bareRepoPath)} remote update --prune`;
-        const result = await this.executeGitCommand(updateCmd, { timeout: 6e4 });
-        if (result.exitCode !== 0) {
-          logger.warn(`Failed to update bare repository: ${result.stderr}`);
-        } else {
-          logger.debug(`Successfully updated bare repository`);
-        }
-      }
-      /**
-       * Create a new worktree
-       */
-      async createWorktree(repository, repoUrl, ref, options = {}) {
-        this.validateRef(ref);
-        const bareRepoPath = await this.getOrCreateBareRepo(
-          repository,
-          repoUrl,
-          options.token,
-          options.fetchDepth
-        );
-        const worktreeId = this.generateWorktreeId(repository, ref);
-        let worktreePath = options.workingDirectory || path7.join(this.getWorktreesDir(), worktreeId);
-        if (options.workingDirectory) {
-          worktreePath = this.validatePath(options.workingDirectory);
-        }
-        if (fs6.existsSync(worktreePath)) {
-          logger.debug(`Worktree already exists: ${worktreePath}`);
-          if (options.clean) {
-            logger.debug(`Cleaning existing worktree`);
-            await this.cleanWorktree(worktreePath);
-          }
-          const metadata2 = await this.loadMetadata(worktreePath);
-          if (metadata2) {
-            this.activeWorktrees.set(worktreeId, metadata2);
-            return {
-              id: worktreeId,
-              path: worktreePath,
-              ref: metadata2.ref,
-              commit: metadata2.commit,
-              metadata: metadata2,
-              locked: false
-            };
-          }
-        }
-        await this.fetchRef(bareRepoPath, ref);
-        logger.info(`Creating worktree for ${repository}@${ref}`);
-        const createCmd = `git -C ${this.escapeShellArg(bareRepoPath)} worktree add ${this.escapeShellArg(worktreePath)} ${this.escapeShellArg(ref)}`;
-        const result = await this.executeGitCommand(createCmd, { timeout: 6e4 });
-        if (result.exitCode !== 0) {
-          throw new Error(`Failed to create worktree: ${result.stderr}`);
-        }
-        const commit = await this.getCommitSha(worktreePath);
-        const metadata = {
-          worktree_id: worktreeId,
-          created_at: (/* @__PURE__ */ new Date()).toISOString(),
-          workflow_id: options.workflowId,
-          ref,
-          commit,
-          repository,
-          pid: process.pid,
-          cleanup_on_exit: true,
-          bare_repo_path: bareRepoPath,
-          worktree_path: worktreePath
-        };
-        await this.saveMetadata(worktreePath, metadata);
-        this.activeWorktrees.set(worktreeId, metadata);
-        logger.info(`Successfully created worktree: ${worktreePath}`);
-        return {
-          id: worktreeId,
-          path: worktreePath,
-          ref,
-          commit,
-          metadata,
-          locked: false
-        };
-      }
-      /**
-       * Fetch a specific ref in bare repository
-       */
-      async fetchRef(bareRepoPath, ref) {
-        this.validateRef(ref);
-        logger.debug(`Fetching ref: ${ref}`);
-        const fetchCmd = `git -C ${this.escapeShellArg(bareRepoPath)} fetch origin ${this.escapeShellArg(ref + ":" + ref)} 2>&1 || true`;
-        await this.executeGitCommand(fetchCmd, { timeout: 6e4 });
-      }
-      /**
-       * Clean worktree (reset and remove untracked files)
-       */
-      async cleanWorktree(worktreePath) {
-        const resetCmd = `git -C ${this.escapeShellArg(worktreePath)} reset --hard HEAD`;
-        await this.executeGitCommand(resetCmd);
-        const cleanCmd = `git -C ${this.escapeShellArg(worktreePath)} clean -fdx`;
-        await this.executeGitCommand(cleanCmd);
-      }
-      /**
-       * Get commit SHA for worktree
-       */
-      async getCommitSha(worktreePath) {
-        const cmd = `git -C ${this.escapeShellArg(worktreePath)} rev-parse HEAD`;
-        const result = await this.executeGitCommand(cmd);
-        if (result.exitCode !== 0) {
-          throw new Error(`Failed to get commit SHA: ${result.stderr}`);
-        }
-        return result.stdout.trim();
-      }
-      /**
-       * Remove a worktree
-       */
-      async removeWorktree(worktreeId) {
-        const metadata = this.activeWorktrees.get(worktreeId);
-        if (!metadata) {
-          logger.warn(`Worktree not found in active list: ${worktreeId}`);
-          return;
-        }
-        const { bare_repo_path, worktree_path } = metadata;
-        logger.info(`Removing worktree: ${worktree_path}`);
-        const removeCmd = `git -C ${this.escapeShellArg(bare_repo_path)} worktree remove ${this.escapeShellArg(worktree_path)} --force`;
-        const result = await this.executeGitCommand(removeCmd, { timeout: 3e4 });
-        if (result.exitCode !== 0) {
-          logger.warn(`Failed to remove worktree via git: ${result.stderr}`);
-          if (fs6.existsSync(worktree_path)) {
-            logger.debug(`Manually removing worktree directory`);
-            fs6.rmSync(worktree_path, { recursive: true, force: true });
-          }
-        }
-        this.activeWorktrees.delete(worktreeId);
-        logger.info(`Successfully removed worktree: ${worktreeId}`);
-      }
-      /**
-       * Save worktree metadata
-       */
-      async saveMetadata(worktreePath, metadata) {
-        const metadataPath = path7.join(worktreePath, ".visor-metadata.json");
-        fs6.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
-      }
-      /**
-       * Load worktree metadata
-       */
-      async loadMetadata(worktreePath) {
-        const metadataPath = path7.join(worktreePath, ".visor-metadata.json");
-        if (!fs6.existsSync(metadataPath)) {
-          return null;
-        }
-        try {
-          const content = fs6.readFileSync(metadataPath, "utf8");
-          return JSON.parse(content);
-        } catch (error) {
-          logger.warn(`Failed to load metadata: ${error}`);
-          return null;
-        }
-      }
-      /**
-       * List all worktrees
-       */
-      async listWorktrees() {
-        const worktreesDir = this.getWorktreesDir();
-        if (!fs6.existsSync(worktreesDir)) {
-          return [];
-        }
-        const entries = fs6.readdirSync(worktreesDir, { withFileTypes: true });
-        const worktrees = [];
-        for (const entry of entries) {
-          if (!entry.isDirectory()) continue;
-          const worktreePath = path7.join(worktreesDir, entry.name);
-          const metadata = await this.loadMetadata(worktreePath);
-          if (metadata) {
-            worktrees.push({
-              id: metadata.worktree_id,
-              path: worktreePath,
-              ref: metadata.ref,
-              commit: metadata.commit,
-              metadata,
-              locked: this.isProcessAlive(metadata.pid)
-            });
-          }
-        }
-        return worktrees;
-      }
-      /**
-       * Cleanup stale worktrees
-       */
-      async cleanupStaleWorktrees() {
-        logger.debug("Cleaning up stale worktrees");
-        const worktrees = await this.listWorktrees();
-        const now = /* @__PURE__ */ new Date();
-        const maxAgeMs = this.config.max_age_hours * 60 * 60 * 1e3;
-        for (const worktree of worktrees) {
-          const createdAt = new Date(worktree.metadata.created_at);
-          const ageMs = now.getTime() - createdAt.getTime();
-          if (worktree.locked) {
-            continue;
-          }
-          if (ageMs > maxAgeMs) {
-            logger.info(
-              `Removing stale worktree: ${worktree.id} (age: ${Math.round(ageMs / 1e3 / 60)} minutes)`
-            );
-            await this.removeWorktree(worktree.id);
-          }
-        }
-      }
-      /**
-       * Cleanup all worktrees for current process
-       */
-      async cleanupProcessWorktrees() {
-        logger.debug("Cleaning up worktrees for current process");
-        const currentPid = process.pid;
-        const worktrees = await this.listWorktrees();
-        for (const worktree of worktrees) {
-          if (worktree.metadata.pid === currentPid && worktree.metadata.cleanup_on_exit) {
-            logger.info(`Cleaning up worktree: ${worktree.id}`);
-            await this.removeWorktree(worktree.id);
-          }
-        }
-      }
-      /**
-       * Check if a process is alive
-       */
-      isProcessAlive(pid) {
-        try {
-          process.kill(pid, 0);
-          return true;
-        } catch (_error) {
-          return false;
-        }
-      }
-      /**
-       * Register cleanup handlers
-       */
-      registerCleanupHandlers() {
-        if (this.cleanupHandlersRegistered) {
-          return;
-        }
-        if (this.config.cleanup_on_exit) {
-          process.on("exit", () => {
-            logger.debug("Process exiting, cleanup handler triggered");
-          });
-          process.on("SIGINT", async () => {
-            logger.info("SIGINT received, cleaning up worktrees");
-            await this.cleanupProcessWorktrees();
-            process.exit(130);
-          });
-          process.on("SIGTERM", async () => {
-            logger.info("SIGTERM received, cleaning up worktrees");
-            await this.cleanupProcessWorktrees();
-            process.exit(143);
-          });
-          process.on("uncaughtException", async (error) => {
-            logger.error(`Uncaught exception, cleaning up worktrees: ${error}`);
-            await this.cleanupProcessWorktrees();
-            process.exit(1);
-          });
-        }
-        this.cleanupHandlersRegistered = true;
-      }
-      /**
-       * Escape shell argument to prevent command injection
-       *
-       * Uses POSIX-standard single-quote escaping which prevents ALL shell metacharacter
-       * interpretation (including $, `, \, ", ;, &, |, etc.)
-       *
-       * How it works:
-       * - Everything is wrapped in single quotes: 'arg'
-       * - Single quotes within are escaped as: ' → '\''
-       *   (close quote, literal escaped quote, open quote)
-       *
-       * This is safer than double quotes which still allow $expansion and `backticks`
-       *
-       * Example: "foo'bar" → 'foo'\''bar'
-       */
-      escapeShellArg(arg) {
-        return `'${arg.replace(/'/g, "'\\''")}'`;
-      }
-      /**
-       * Validate git ref to prevent command injection
-       */
-      validateRef(ref) {
-        const safeRefPattern = /^[a-zA-Z0-9._/:-]+$/;
-        if (!safeRefPattern.test(ref)) {
-          throw new Error(
-            `Invalid git ref: ${ref}. Refs must only contain alphanumeric characters, dots, underscores, slashes, colons, and hyphens.`
-          );
-        }
-        if (ref.includes("..") || ref.startsWith("-") || ref.endsWith(".lock")) {
-          throw new Error(
-            `Invalid git ref: ${ref}. Refs cannot contain '..', start with '-', or end with '.lock'.`
-          );
-        }
-        if (ref.length > 256) {
-          throw new Error(`Invalid git ref: ${ref}. Refs cannot exceed 256 characters.`);
-        }
-      }
-      /**
-       * Validate path to prevent directory traversal
-       */
-      validatePath(userPath) {
-        const resolvedPath = path7.resolve(userPath);
-        if (!path7.isAbsolute(resolvedPath)) {
-          throw new Error("Path must be absolute");
-        }
-        const sensitivePatterns = [
-          "/etc",
-          "/root",
-          "/boot",
-          "/sys",
-          "/proc",
-          "/dev",
-          "C:\\Windows\\System32",
-          "C:\\Program Files"
-        ];
-        for (const pattern of sensitivePatterns) {
-          if (resolvedPath.startsWith(pattern)) {
-            throw new Error(`Access to system directory ${pattern} is not allowed`);
-          }
-        }
-        return resolvedPath;
-      }
-      /**
-       * Redact sensitive tokens from URLs for logging
-       */
-      redactUrl(url) {
-        return url.replace(/x-access-token:[^@]+@/g, "x-access-token:[REDACTED]@").replace(/:\/\/[^:]+:[^@]+@/g, "://[REDACTED]:[REDACTED]@");
-      }
-      /**
-       * Execute a git command
-       */
-      async executeGitCommand(command, options = {}) {
-        const result = await commandExecutor.execute(command, {
-          timeout: options.timeout || 3e4,
-          env: options.env || process.env
-        });
-        return {
-          stdout: result.stdout,
-          stderr: result.stderr,
-          exitCode: result.exitCode
-        };
-      }
-      /**
-       * Build authenticated URL with token
-       */
-      buildAuthenticatedUrl(repoUrl, token) {
-        if (!token) {
-          return repoUrl;
-        }
-        if (repoUrl.includes("github.com")) {
-          if (repoUrl.startsWith("git@github.com:")) {
-            repoUrl = repoUrl.replace("git@github.com:", "https://github.com/");
-          }
-          if (repoUrl.startsWith("https://")) {
-            return repoUrl.replace("https://", `https://x-access-token:${token}@`);
-          }
-        }
-        return repoUrl;
-      }
-      /**
-       * Get repository URL from repository identifier
-       */
-      getRepositoryUrl(repository, _token) {
-        if (repository.startsWith("http://") || repository.startsWith("https://") || repository.startsWith("git@")) {
-          return repository;
-        }
-        return `https://github.com/${repository}.git`;
-      }
-    };
-    worktreeManager = WorktreeManager.getInstance();
-  }
-});
-
-// src/providers/git-checkout-provider.ts
-var GitCheckoutProvider;
-var init_git_checkout_provider = __esm({
-  "src/providers/git-checkout-provider.ts"() {
-    "use strict";
-    init_check_provider_interface();
-    init_worktree_manager();
-    init_logger();
-    init_liquid_extensions();
-    init_env_exposure();
-    GitCheckoutProvider = class extends CheckProvider {
-      liquid = createExtendedLiquid();
-      getName() {
-        return "git-checkout";
-      }
-      getDescription() {
-        return "Checkout code from git repositories using worktrees for efficient multi-workflow execution";
-      }
-      async validateConfig(config) {
-        if (!config || typeof config !== "object") {
-          logger.error("Invalid config: must be an object");
-          return false;
-        }
-        const checkoutConfig = config;
-        if (!checkoutConfig.ref || typeof checkoutConfig.ref !== "string") {
-          logger.error("Invalid config: ref is required and must be a string");
-          return false;
-        }
-        if (checkoutConfig.fetch_depth !== void 0) {
-          if (typeof checkoutConfig.fetch_depth !== "number" || checkoutConfig.fetch_depth < 0) {
-            logger.error("Invalid config: fetch_depth must be a non-negative number");
-            return false;
-          }
-        }
-        if (checkoutConfig.fetch_tags !== void 0 && typeof checkoutConfig.fetch_tags !== "boolean") {
-          logger.error("Invalid config: fetch_tags must be a boolean");
-          return false;
-        }
-        if (checkoutConfig.submodules !== void 0) {
-          const validSubmoduleValues = [true, false, "recursive"];
-          if (!validSubmoduleValues.includes(checkoutConfig.submodules)) {
-            logger.error('Invalid config: submodules must be true, false, or "recursive"');
-            return false;
-          }
-        }
-        if (checkoutConfig.sparse_checkout !== void 0 && !Array.isArray(checkoutConfig.sparse_checkout)) {
-          logger.error("Invalid config: sparse_checkout must be an array");
-          return false;
-        }
-        return true;
-      }
-      async execute(prInfo, config, dependencyResults, context2) {
-        const checkoutConfig = config;
-        const issues = [];
-        try {
-          const templateContext = this.buildTemplateContext(
-            prInfo,
-            dependencyResults,
-            context2,
-            checkoutConfig
-          );
-          const resolvedRef = await this.liquid.parseAndRender(checkoutConfig.ref, templateContext);
-          const resolvedRepository = checkoutConfig.repository ? await this.liquid.parseAndRender(checkoutConfig.repository, templateContext) : process.env.GITHUB_REPOSITORY || "unknown/unknown";
-          const resolvedToken = checkoutConfig.token ? await this.liquid.parseAndRender(checkoutConfig.token, templateContext) : void 0;
-          const resolvedWorkingDirectory = checkoutConfig.working_directory ? await this.liquid.parseAndRender(checkoutConfig.working_directory, templateContext) : void 0;
-          logger.info(`Checking out repository: ${resolvedRepository}@${resolvedRef}`);
-          const repoUrl = worktreeManager.getRepositoryUrl(resolvedRepository, resolvedToken);
-          const worktree = await worktreeManager.createWorktree(
-            resolvedRepository,
-            repoUrl,
-            resolvedRef,
-            {
-              token: resolvedToken,
-              workingDirectory: resolvedWorkingDirectory,
-              clean: checkoutConfig.clean !== false,
-              // Default: true
-              workflowId: context2?.workflowId,
-              fetchDepth: checkoutConfig.fetch_depth
-            }
-          );
-          const output = {
-            success: true,
-            path: worktree.path,
-            ref: resolvedRef,
-            commit: worktree.commit,
-            worktree_id: worktree.id,
-            repository: resolvedRepository,
-            is_worktree: true
-          };
-          logger.info(
-            `Successfully checked out ${resolvedRepository}@${resolvedRef} to ${worktree.path}`
-          );
-          return {
-            issues,
-            output
-          };
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          logger.error(`Git checkout failed: ${errorMessage}`);
-          issues.push({
-            file: "git-checkout",
-            line: 0,
-            ruleId: "git-checkout/error",
-            message: `Failed to checkout code: ${errorMessage}`,
-            severity: "error",
-            category: "logic"
-          });
-          const output = {
-            success: false,
-            error: errorMessage
-          };
-          return {
-            issues,
-            output
-          };
-        }
-      }
-      /**
-       * Build template context for variable resolution
-       */
-      buildTemplateContext(prInfo, dependencyResults, context2, config) {
-        const outputsObj = {};
-        if (dependencyResults) {
-          for (const [checkName, result] of dependencyResults.entries()) {
-            outputsObj[checkName] = result.output !== void 0 ? result.output : result;
-          }
-        }
-        const outputHistory = config?.__outputHistory;
-        const historyObj = {};
-        if (outputHistory) {
-          for (const [checkName, history] of outputHistory.entries()) {
-            historyObj[checkName] = history;
-          }
-        }
-        const safeEnv = buildSandboxEnv(process.env);
-        return {
-          pr: {
-            number: prInfo.number,
-            title: prInfo.title,
-            author: prInfo.author,
-            head: prInfo.head,
-            base: prInfo.base,
-            repo: process.env.GITHUB_REPOSITORY || "",
-            files: prInfo.files
-          },
-          files: prInfo.files,
-          outputs: outputsObj,
-          outputs_history: historyObj,
-          env: safeEnv,
-          inputs: context2?.workflowInputs
-        };
-      }
-      getSupportedConfigKeys() {
-        return [
-          "type",
-          "ref",
-          "repository",
-          "token",
-          "fetch_depth",
-          "fetch_tags",
-          "submodules",
-          "working_directory",
-          "use_worktree",
-          "clean",
-          "sparse_checkout",
-          "lfs",
-          "timeout",
-          "criticality",
-          "assume",
-          "guarantee",
-          "cleanup_on_failure",
-          "persist_worktree",
-          "depends_on",
-          "if",
-          "fail_if",
-          "on"
-        ];
-      }
-      async isAvailable() {
-        try {
-          const { commandExecutor: commandExecutor2 } = await import("./command-executor-O25P36CH.mjs");
-          const result = await commandExecutor2.execute("git --version", { timeout: 5e3 });
-          return result.exitCode === 0;
-        } catch (_error) {
-          return false;
-        }
-      }
-      getRequirements() {
-        return ["git"];
       }
     };
   }
@@ -10683,7 +10089,6 @@ var init_check_provider_registry = __esm({
     init_human_input_check_provider();
     init_script_check_provider();
     init_workflow_check_provider();
-    init_git_checkout_provider();
     CheckProviderRegistry = class _CheckProviderRegistry {
       providers = /* @__PURE__ */ new Map();
       static instance;
@@ -10716,7 +10121,6 @@ var init_check_provider_registry = __esm({
         this.register(new GitHubOpsProvider());
         this.register(new HumanInputCheckProvider());
         this.register(new WorkflowCheckProvider());
-        this.register(new GitCheckoutProvider());
         try {
           this.register(new ClaudeCodeCheckProvider());
         } catch (error) {
@@ -11404,7 +10808,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
         let schemaObj = (typeof checkConfig.schema === "object" ? checkConfig.schema : void 0) || checkConfig.output_schema;
         if (!schemaObj && typeof checkConfig.schema === "string") {
           try {
-            const { loadRendererSchema } = await import("./renderer-schema-6RF26VUS.mjs");
+            const { loadRendererSchema } = await import("./renderer-schema-ZGKMNHH7.mjs");
             schemaObj = await loadRendererSchema(checkConfig.schema);
           } catch {
           }
@@ -12289,7 +11693,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       let schemaObj = (typeof checkConfig2.schema === "object" ? checkConfig2.schema : void 0) || checkConfig2.output_schema;
       if (!schemaObj && typeof checkConfig2.schema === "string") {
         try {
-          const { loadRendererSchema } = await import("./renderer-schema-6RF26VUS.mjs");
+          const { loadRendererSchema } = await import("./renderer-schema-ZGKMNHH7.mjs");
           schemaObj = await loadRendererSchema(checkConfig2.schema);
         } catch {
         }
@@ -12826,8 +12230,8 @@ function updateStats(results, state, isForEachIteration = false) {
 async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await import("./liquid-extensions-C7EG3YKH.mjs");
-    const fs7 = await import("fs/promises");
-    const path8 = await import("path");
+    const fs6 = await import("fs/promises");
+    const path7 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
@@ -12835,26 +12239,20 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
       templateContent = String(checkConfig.template.content);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path8.resolve(process.cwd(), file);
-      templateContent = await fs7.readFile(resolved, "utf-8");
+      const resolved = path7.resolve(process.cwd(), file);
+      templateContent = await fs6.readFile(resolved, "utf-8");
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path8.join(__dirname, "output", sanitized, "template.liquid"),
-          // bundled: dist/output/
-          path8.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
-          // source (from state-machine/states)
-          path8.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
-          // source (alternate)
-          path8.join(process.cwd(), "output", sanitized, "template.liquid"),
-          // fallback: cwd/output/
-          path8.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
-          // fallback: cwd/dist/output/
+          // When bundled (dist), __dirname points to dist/state-machine/states
+          path7.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          // Dev fallback
+          path7.join(process.cwd(), "output", sanitized, "template.liquid")
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs7.readFile(p, "utf-8");
+            templateContent = await fs6.readFile(p, "utf-8");
             if (templateContent) break;
           } catch {
           }
@@ -13683,7 +13081,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       logger.info("[StateMachine] Using state machine engine");
     }
     if (!config) {
-      const { ConfigManager: ConfigManager2 } = await import("./config-5P5YPOBP.mjs");
+      const { ConfigManager: ConfigManager2 } = await import("./config-M4ZNO6NU.mjs");
       const configManager = new ConfigManager2();
       config = await configManager.getDefaultConfig();
       logger.debug("[StateMachine] Using default configuration (no config provided)");
@@ -13707,7 +13105,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
     if (Array.isArray(configWithTagFilter.frontends) && configWithTagFilter.frontends.length > 0) {
       try {
         const { EventBus } = await import("./event-bus-5BEVPQ6T.mjs");
-        const { FrontendsHost } = await import("./host-H7CMKK3U.mjs");
+        const { FrontendsHost } = await import("./host-7GBC3S7L.mjs");
         const bus = new EventBus();
         context2.eventBus = bus;
         frontendsHost = new FrontendsHost(bus, logger);
@@ -13848,7 +13246,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
    * Does not include secrets. Intended for debugging and future resume support.
    */
   async saveSnapshotToFile(filePath) {
-    const fs7 = await import("fs/promises");
+    const fs6 = await import("fs/promises");
     const ctx = this._lastContext;
     const runner = this._lastRunner;
     if (!ctx || !runner) {
@@ -13868,14 +13266,14 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       journal: entries,
       requestedChecks: ctx.requestedChecks || []
     };
-    await fs7.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+    await fs6.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
   }
   /**
    * Load a snapshot JSON from file and return it. Resume support can build on this.
    */
   async loadSnapshotFromFile(filePath) {
-    const fs7 = await import("fs/promises");
-    const raw = await fs7.readFile(filePath, "utf8");
+    const fs6 = await import("fs/promises");
+    const raw = await fs6.readFile(filePath, "utf8");
     return JSON.parse(raw);
   }
   /**
@@ -14110,6 +13508,76 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       }
     }
     return { valid, invalid };
+  }
+  /**
+   * Render check content using the appropriate template
+   *
+   * This method handles template rendering for check results, supporting:
+   * - Plain schema: returns raw content without template processing
+   * - Custom templates: from inline content or file
+   * - Built-in schema templates: from output/{schema}/template.liquid
+   */
+  async renderCheckContent(checkName, reviewSummary, checkConfig, _prInfo) {
+    const { createExtendedLiquid: createExtendedLiquid2 } = await import("./liquid-extensions-C7EG3YKH.mjs");
+    const fs6 = await import("fs/promises");
+    const path7 = await import("path");
+    const schema = checkConfig.schema || "plain";
+    let templateContent;
+    if (checkConfig.template) {
+      if (checkConfig.template.content) {
+        templateContent = checkConfig.template.content;
+      } else if (checkConfig.template.file) {
+        const templateFile = checkConfig.template.file;
+        if (path7.isAbsolute(templateFile)) {
+          throw new Error("Template path must be relative to project directory");
+        }
+        if (templateFile.includes("..")) {
+          throw new Error('Template path cannot contain ".." segments');
+        }
+        if (templateFile.startsWith("~")) {
+          throw new Error("Template path cannot reference home directory");
+        }
+        if (templateFile.includes("\0")) {
+          throw new Error("Template path contains invalid characters");
+        }
+        if (templateFile.trim() === "") {
+          throw new Error("Template path must be a non-empty string");
+        }
+        if (!templateFile.endsWith(".liquid")) {
+          throw new Error("Template file must have .liquid extension");
+        }
+        const { GitRepositoryAnalyzer } = await import("./git-repository-analyzer-HJC4MYW4.mjs");
+        const gitAnalyzer = new GitRepositoryAnalyzer(this.workingDirectory);
+        const repoInfo = await gitAnalyzer.analyzeRepository();
+        const workingDir = repoInfo.workingDirectory;
+        const resolvedPath = path7.resolve(workingDir, templateFile);
+        templateContent = await fs6.readFile(resolvedPath, "utf-8");
+      } else {
+        throw new Error('Custom template must specify either "file" or "content"');
+      }
+    } else if (schema === "plain") {
+      return reviewSummary.issues?.[0]?.message || "";
+    } else {
+      const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, "");
+      if (!sanitizedSchema) {
+        throw new Error("Invalid schema name");
+      }
+      const templatePath = path7.join(__dirname, `output/${sanitizedSchema}/template.liquid`);
+      templateContent = await fs6.readFile(templatePath, "utf-8");
+    }
+    const liquid = createExtendedLiquid2({
+      trimTagLeft: false,
+      trimTagRight: false,
+      trimOutputLeft: false,
+      trimOutputRight: false,
+      greedy: false
+    });
+    const templateData = {
+      issues: reviewSummary.issues || [],
+      checkName
+    };
+    const rendered = await liquid.parseAndRender(templateContent, templateData);
+    return rendered.trim();
   }
   /**
    * Format the status column for execution statistics
