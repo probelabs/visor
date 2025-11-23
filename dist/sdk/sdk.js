@@ -21809,6 +21809,10 @@ var init_github_frontend = __esm({
       _timer = null;
       _lastFlush = 0;
       _pendingIds = /* @__PURE__ */ new Set();
+      // Mutex for serializing comment updates per group
+      updateLocks = /* @__PURE__ */ new Map();
+      minUpdateDelayMs = 1e3;
+      // Minimum delay between updates (public for testing)
       start(ctx) {
         const log2 = ctx.logger;
         const bus = ctx.eventBus;
@@ -21992,7 +21996,36 @@ ${end}`);
         }
         return lines.join("\\n\\n");
       }
+      /**
+       * Acquires a mutex lock for the given group and executes the update.
+       * This ensures only one comment update happens at a time per group,
+       * preventing race conditions where updates overwrite each other.
+       */
       async updateGroupedComment(ctx, comments, group, changedIds) {
+        const existingLock = this.updateLocks.get(group);
+        if (existingLock) {
+          try {
+            await existingLock;
+          } catch (error) {
+            logger.warn(
+              `[github-frontend] Previous update for group ${group} failed: ${error instanceof Error ? error.message : error}`
+            );
+          }
+        }
+        const updatePromise = this.performGroupedCommentUpdate(ctx, comments, group, changedIds);
+        this.updateLocks.set(group, updatePromise);
+        try {
+          await updatePromise;
+        } finally {
+          if (this.updateLocks.get(group) === updatePromise) {
+            this.updateLocks.delete(group);
+          }
+        }
+      }
+      /**
+       * Performs the actual comment update with delay enforcement.
+       */
+      async performGroupedCommentUpdate(ctx, comments, group, changedIds) {
         try {
           if (!ctx.run.repo || !ctx.run.pr) return;
           const config = ctx.config;
@@ -22002,6 +22035,14 @@ ${end}`);
               `[github-frontend] PR comments disabled in config, skipping comment for group: ${group}`
             );
             return;
+          }
+          const timeSinceLastFlush = Date.now() - this._lastFlush;
+          if (this._lastFlush > 0 && timeSinceLastFlush < this.minUpdateDelayMs) {
+            const delay = this.minUpdateDelayMs - timeSinceLastFlush;
+            logger.debug(
+              `[github-frontend] Waiting ${delay}ms before next update to prevent rate limiting`
+            );
+            await this.sleep(delay);
           }
           this.revision++;
           const mergedBody = await this.mergeIntoExistingBody(ctx, comments, group, changedIds);
@@ -22016,6 +22057,7 @@ ${end}`);
               commitSha: ctx.run.headSha
             }
           );
+          this._lastFlush = Date.now();
         } catch (e) {
           logger.debug(
             `[github-frontend] updateGroupedComment failed: ${e instanceof Error ? e.message : e}`
@@ -22256,6 +22298,12 @@ ${blocks}
         this._pendingIds.clear();
         await this.updateGroupedComment(ctx, comments, group, ids.length > 0 ? ids : void 0);
         this._lastFlush = Date.now();
+      }
+      /**
+       * Sleep utility for enforcing delays
+       */
+      sleep(ms) {
+        return new Promise((resolve7) => setTimeout(resolve7, ms));
       }
     };
   }
