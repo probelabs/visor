@@ -318,7 +318,9 @@ ${end}`);
       const timeSinceLastFlush = Date.now() - this._lastFlush;
       if (this._lastFlush > 0 && timeSinceLastFlush < this.minUpdateDelayMs) {
         const delay = this.minUpdateDelayMs - timeSinceLastFlush;
-        logger.debug(`[github-frontend] Waiting ${delay}ms before next update to prevent rate limiting`);
+        logger.debug(
+          `[github-frontend] Waiting ${delay}ms before next update to prevent rate limiting`
+        );
         await this.sleep(delay);
       }
 

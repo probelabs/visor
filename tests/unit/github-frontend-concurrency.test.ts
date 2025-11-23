@@ -6,36 +6,32 @@ describe('GitHubFrontend Concurrency', () => {
   let mockContext: FrontendContext;
   let mockComments: any;
   let updateCalls: Array<{ group: string; timestamp: number }> = [];
-  let mockOctokit: any;
 
   beforeEach(() => {
     updateCalls = [];
 
-    // Mock octokit
-    mockOctokit = {
-      rest: {
-        issues: {
-          listComments: jest.fn().mockResolvedValue({ data: [] }),
-          updateComment: jest.fn().mockResolvedValue({ data: { id: 1, body: 'test' } }),
-          createComment: jest.fn().mockResolvedValue({ data: { id: 1, body: 'test' } }),
-        },
-      },
-    };
-
     // Mock CommentManager
     mockComments = {
       findVisorComment: jest.fn().mockResolvedValue(null),
-      updateOrCreateComment: jest.fn().mockImplementation(async (owner: string, repo: string, pr: number, body: string) => {
-        // Record timestamp when update actually starts
-        const callTime = Date.now();
-        // Simulate network delay
-        await new Promise(resolve => setTimeout(resolve, 50));
-        updateCalls.push({
-          group: 'test-group',
-          timestamp: callTime
-        });
-        return { id: 1, body, user: { login: 'bot' }, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
-      }),
+      updateOrCreateComment: jest
+        .fn()
+        .mockImplementation(async (owner: string, repo: string, pr: number, body: string) => {
+          // Record timestamp when update actually starts
+          const callTime = Date.now();
+          // Simulate network delay
+          await new Promise(resolve => setTimeout(resolve, 50));
+          updateCalls.push({
+            group: 'test-group',
+            timestamp: callTime,
+          });
+          return {
+            id: 1,
+            body,
+            user: { login: 'bot' },
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+        }),
     };
 
     mockContext = {
