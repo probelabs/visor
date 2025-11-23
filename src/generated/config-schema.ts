@@ -369,6 +369,14 @@ export const configSchema = {
           $ref: '#/definitions/Record%3Cstring%2CMcpServerConfig%3E',
           description: 'MCP servers for this AI check - overrides global setting',
         },
+        ai_custom_tools: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description:
+            'List of custom tool names to expose to this AI check via ephemeral SSE MCP server',
+        },
         claude_code: {
           $ref: '#/definitions/ClaudeCodeConfig',
           description: 'Claude Code configuration (for claude-code type checks)',
@@ -640,7 +648,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10711-20919-src_types_config.ts-0-34424%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -671,6 +679,7 @@ export const configSchema = {
         'mcp',
         'human-input',
         'workflow',
+        'git-checkout',
       ],
       description: 'Valid check types in configuration',
     },
@@ -1278,14 +1287,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284>>':
+    'Record<string,Partial<interface-src_types_config.ts-10711-20919-src_types_config.ts-0-34424>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-10711-20919-src_types_config.ts-0-34424%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34284>': {
+    'Partial<interface-src_types_config.ts-10711-20919-src_types_config.ts-0-34424>': {
       type: 'object',
       additionalProperties: false,
     },

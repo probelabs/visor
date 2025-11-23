@@ -13,6 +13,9 @@ import {
   captureCheckOutput,
   captureProviderCall,
 } from '../telemetry/state-capture';
+import { CustomToolsSSEServer } from './mcp-custom-sse-server';
+import { CustomToolDefinition } from '../types/config';
+import { logger } from '../logger';
 
 /**
  * AI-powered check provider using probe agent
@@ -633,6 +636,62 @@ export class AICheckProvider extends CheckProvider {
       Object.assign(mcpServers, config.ai.mcpServers);
     }
 
+    // 4. Setup custom tools SSE server if MCP servers reference custom tools
+    // Check for both ai_custom_tools (new format) and tools: in MCP servers (reuse existing)
+    let customToolsServer: CustomToolsSSEServer | null = null;
+    let customToolsToLoad: string[] = [];
+    let customToolsServerName: string | null = null;
+
+    // Option 1: Check for ai_custom_tools (backward compatible)
+    const legacyCustomTools = this.getCustomToolsForAI(config);
+    if (legacyCustomTools.length > 0) {
+      customToolsToLoad = legacyCustomTools;
+      customToolsServerName = '__custom_tools__';
+    }
+
+    // Option 2: Check if any MCP server uses "tools:" format (preferred - reuses ai_mcp_servers)
+    for (const [serverName, serverConfig] of Object.entries(mcpServers)) {
+      if ((serverConfig as any).tools && Array.isArray((serverConfig as any).tools)) {
+        customToolsToLoad = (serverConfig as any).tools as string[];
+        customToolsServerName = serverName;
+        break; // Only support one custom tools server per check
+      }
+    }
+
+    if (customToolsToLoad.length > 0 && customToolsServerName && !config.ai?.disableTools) {
+      try {
+        // Load custom tools from global config
+        const customTools = this.loadCustomTools(customToolsToLoad, config);
+
+        if (customTools.size > 0) {
+          const sessionId = (config as any).checkName || `ai-check-${Date.now()}`;
+          const debug = aiConfig.debug || process.env.VISOR_DEBUG === 'true';
+
+          customToolsServer = new CustomToolsSSEServer(customTools, sessionId, debug);
+          const port = await customToolsServer.start();
+
+          if (debug) {
+            logger.debug(
+              `[AICheckProvider] Started custom tools SSE server '${customToolsServerName}' on port ${port} for ${customTools.size} tools`
+            );
+          }
+
+          // Update the server config to use the ephemeral SSE endpoint
+          mcpServers[customToolsServerName] = {
+            command: '',
+            args: [],
+            url: `http://localhost:${port}/sse`,
+            transport: 'sse',
+          } as any;
+        }
+      } catch (error) {
+        logger.error(
+          `[AICheckProvider] Failed to start custom tools SSE server '${customToolsServerName}': ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+        // Continue without custom tools
+      }
+    }
+
     // Pass MCP server config directly to AI service (unless tools are disabled)
     if (Object.keys(mcpServers).length > 0 && !config.ai?.disableTools) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -912,7 +971,78 @@ export class AICheckProvider extends CheckProvider {
 
       // Re-throw with more context
       throw new Error(`AI analysis failed: ${errorMessage}`);
+    } finally {
+      // Cleanup custom tools server
+      if (customToolsServer) {
+        try {
+          await customToolsServer.stop();
+          if (aiConfig.debug || process.env.VISOR_DEBUG === 'true') {
+            logger.debug('[AICheckProvider] Custom tools SSE server stopped');
+          }
+        } catch (error) {
+          logger.error(
+            `[AICheckProvider] Error stopping custom tools SSE server: ${error instanceof Error ? error.message : 'Unknown error'}`
+          );
+        }
+      }
     }
+  }
+
+  /**
+   * Get custom tool names from check configuration
+   */
+  private getCustomToolsForAI(config: CheckProviderConfig): string[] {
+    const aiCustomTools = (config as any).ai_custom_tools;
+
+    if (!aiCustomTools) {
+      return [];
+    }
+
+    if (Array.isArray(aiCustomTools)) {
+      return aiCustomTools.filter(name => typeof name === 'string');
+    }
+
+    if (typeof aiCustomTools === 'string') {
+      return [aiCustomTools];
+    }
+
+    return [];
+  }
+
+  /**
+   * Load custom tools from global configuration
+   */
+  private loadCustomTools(
+    toolNames: string[],
+    config: CheckProviderConfig
+  ): Map<string, CustomToolDefinition> {
+    const tools = new Map<string, CustomToolDefinition>();
+
+    // Get tools from global config (passed through check config)
+    const globalTools = (config as any).__globalTools as
+      | Record<string, CustomToolDefinition>
+      | undefined;
+
+    if (!globalTools) {
+      logger.warn(
+        `[AICheckProvider] ai_custom_tools specified but no global tools found in configuration`
+      );
+      return tools;
+    }
+
+    for (const toolName of toolNames) {
+      const tool = globalTools[toolName];
+      if (!tool) {
+        logger.warn(`[AICheckProvider] Custom tool not found: ${toolName}`);
+        continue;
+      }
+
+      // Ensure tool has a name
+      tool.name = tool.name || toolName;
+      tools.set(toolName, tool);
+    }
+
+    return tools;
   }
 
   getSupportedConfigKeys(): string[] {

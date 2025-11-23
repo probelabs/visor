@@ -351,6 +351,13 @@ export declare const configSchema: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E";
                     readonly description: "MCP servers for this AI check - overrides global setting";
                 };
+                readonly ai_custom_tools: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "List of custom tool names to expose to this AI check via ephemeral SSE MCP server";
+                };
                 readonly claude_code: {
                     readonly $ref: "#/definitions/ClaudeCodeConfig";
                     readonly description: "Claude Code configuration (for claude-code type checks)";
@@ -592,7 +599,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10711-20798-src_types_config.ts-0-34303%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10711-20919-src_types_config.ts-0-34424%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -1196,13 +1203,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-10711-20798-src_types_config.ts-0-34303>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-10711-20919-src_types_config.ts-0-34424>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10711-20798-src_types_config.ts-0-34303%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10711-20919-src_types_config.ts-0-34424%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-10711-20798-src_types_config.ts-0-34303>': {
+        readonly 'Partial<interface-src_types_config.ts-10711-20919-src_types_config.ts-0-34424>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };
