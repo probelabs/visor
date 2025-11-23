@@ -366,11 +366,11 @@ function getTracer() {
 }
 async function withActiveSpan(name, attrs, fn) {
   const tracer = getTracer();
-  return await new Promise((resolve7, reject) => {
+  return await new Promise((resolve9, reject) => {
     const callback = async (span) => {
       try {
         const res = await fn(span);
-        resolve7(res);
+        resolve9(res);
       } catch (err) {
         try {
           if (err instanceof Error) span.recordException(err);
@@ -430,19 +430,19 @@ function __getOrCreateNdjsonPath() {
   try {
     if (process.env.VISOR_TELEMETRY_SINK && process.env.VISOR_TELEMETRY_SINK !== "file")
       return null;
-    const path17 = require("path");
-    const fs16 = require("fs");
+    const path19 = require("path");
+    const fs18 = require("fs");
     if (process.env.VISOR_FALLBACK_TRACE_FILE) {
       __ndjsonPath = process.env.VISOR_FALLBACK_TRACE_FILE;
-      const dir = path17.dirname(__ndjsonPath);
-      if (!fs16.existsSync(dir)) fs16.mkdirSync(dir, { recursive: true });
+      const dir = path19.dirname(__ndjsonPath);
+      if (!fs18.existsSync(dir)) fs18.mkdirSync(dir, { recursive: true });
       return __ndjsonPath;
     }
-    const outDir = process.env.VISOR_TRACE_DIR || path17.join(process.cwd(), "output", "traces");
-    if (!fs16.existsSync(outDir)) fs16.mkdirSync(outDir, { recursive: true });
+    const outDir = process.env.VISOR_TRACE_DIR || path19.join(process.cwd(), "output", "traces");
+    if (!fs18.existsSync(outDir)) fs18.mkdirSync(outDir, { recursive: true });
     if (!__ndjsonPath) {
       const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      __ndjsonPath = path17.join(outDir, `${ts}.ndjson`);
+      __ndjsonPath = path19.join(outDir, `${ts}.ndjson`);
     }
     return __ndjsonPath;
   } catch {
@@ -451,11 +451,11 @@ function __getOrCreateNdjsonPath() {
 }
 function _appendRunMarker() {
   try {
-    const fs16 = require("fs");
+    const fs18 = require("fs");
     const p = __getOrCreateNdjsonPath();
     if (!p) return;
     const line = { name: "visor.run", attributes: { started: true } };
-    fs16.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
+    fs18.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
   } catch {
   }
 }
@@ -930,7 +930,8 @@ async function handlePlanReady(context2, state, transition) {
   };
   const finalChecks = {};
   for (const [checkId, checkConfig] of Object.entries(filteredChecks)) {
-    const dependencies = checkConfig.depends_on || [];
+    const depRaw = checkConfig.depends_on;
+    const dependencies = Array.isArray(depRaw) ? depRaw : typeof depRaw === "string" ? [depRaw] : [];
     if (dependencies.length > 0 && !tagFilter && !areDependenciesSatisfied(dependencies)) {
       if (context2.debug) {
         logger.info(
@@ -948,7 +949,9 @@ async function handlePlanReady(context2, state, transition) {
   }
   const checkDependencies = {};
   for (const [checkId, checkConfig] of Object.entries(finalChecks)) {
-    const dependencies = (checkConfig.depends_on || []).flatMap((d) => {
+    const depsRaw2 = checkConfig.depends_on;
+    const depList = Array.isArray(depsRaw2) ? depsRaw2 : typeof depsRaw2 === "string" ? [depsRaw2] : [];
+    const dependencies = depList.flatMap((d) => {
       if (typeof d === "string" && d.includes("|")) {
         const orOptions = d.split("|").map((s) => s.trim()).filter(Boolean).filter((opt) => finalChecks[opt] !== void 0);
         return orOptions;
@@ -1043,8 +1046,23 @@ async function handleWavePlanning(context2, state, transition) {
     state.flags.forwardRunActive = false;
   } catch {
   }
+  try {
+    const flags = state.flags || {};
+    if (flags.awaitingHumanInput) {
+      if (context2.debug) {
+        logger.info("[WavePlanning] Awaiting human input \u2013 finishing run without further waves");
+      }
+      state.levelQueue = [];
+      state.eventQueue = [];
+      transition("Completed");
+      return;
+    }
+  } catch {
+  }
   if (!context2.dependencyGraph) {
-    throw new Error("Dependency graph not available");
+    if (state.wave === 0 && state.levelQueue.length === 0) {
+      throw new Error("Dependency graph not available");
+    }
   }
   const bubbledEvents = context2._bubbledEvents || [];
   if (bubbledEvents.length > 0) {
@@ -1104,11 +1122,29 @@ async function handleWavePlanning(context2, state, transition) {
       }
       const dependencies = findTransitiveDependencies(target, context2);
       for (const dep of dependencies) {
-        checksToRun.add(dep);
+        const stats = state.stats.get(dep);
+        const hasSucceeded = !!stats && (stats.successfulRuns || 0) > 0;
+        if (!hasSucceeded) {
+          checksToRun.add(dep);
+        }
       }
-      const dependents = findTransitiveDependents(target, context2, gotoEvent);
-      for (const dep of dependents) {
-        checksToRun.add(dep);
+      let shouldIncludeDependents = true;
+      try {
+        const origin = request.origin;
+        const cfg = context2.config.checks?.[target];
+        const targetType = String(cfg?.type || "").toLowerCase();
+        const execCtx = context2.executionContext || {};
+        const hasWebhook = !!execCtx.webhookContext;
+        if (hasWebhook && (origin === "goto" || origin === "goto_js") && targetType === "human-input") {
+          shouldIncludeDependents = false;
+        }
+      } catch {
+      }
+      if (shouldIncludeDependents) {
+        const dependents = findTransitiveDependents(target, context2, gotoEvent);
+        for (const dep of dependents) {
+          checksToRun.add(dep);
+        }
       }
     }
     if (checksToRun.size > 0) {
@@ -1228,6 +1264,9 @@ async function handleWavePlanning(context2, state, transition) {
     return;
   }
   if (state.wave === 0 && state.levelQueue.length === 0) {
+    if (!context2.dependencyGraph) {
+      throw new Error("Dependency graph not available");
+    }
     state.levelQueue = [...context2.dependencyGraph.executionOrder];
     if (context2.debug) {
       logger.info(
@@ -4510,7 +4549,7 @@ async function processDiffWithOutline(diffContent) {
   }
   try {
     const originalProbePath = process.env.PROBE_PATH;
-    const fs16 = require("fs");
+    const fs18 = require("fs");
     const possiblePaths = [
       // Relative to current working directory (most common in production)
       path5.join(process.cwd(), "node_modules/@probelabs/probe/bin/probe-binary"),
@@ -4521,7 +4560,7 @@ async function processDiffWithOutline(diffContent) {
     ];
     let probeBinaryPath;
     for (const candidatePath of possiblePaths) {
-      if (fs16.existsSync(candidatePath)) {
+      if (fs18.existsSync(candidatePath)) {
         probeBinaryPath = candidatePath;
         break;
       }
@@ -4565,6 +4604,39 @@ var init_diff_processor = __esm({
   }
 });
 
+// src/utils/comment-metadata.ts
+function parseVisorThreadMetadata(commentBody) {
+  const headerRe = /<!--\s*visor:thread=(\{[\s\S]*?\})\s*-->/m;
+  const match = headerRe.exec(commentBody);
+  if (!match) {
+    return null;
+  }
+  try {
+    const metadata = JSON.parse(match[1]);
+    return metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata : null;
+  } catch {
+    return null;
+  }
+}
+function shouldFilterVisorReviewComment(commentBody) {
+  if (!commentBody) {
+    return false;
+  }
+  if (commentBody.includes("visor-comment-id:pr-review-")) {
+    return true;
+  }
+  const metadata = parseVisorThreadMetadata(commentBody);
+  if (metadata && metadata.group === "review") {
+    return true;
+  }
+  return false;
+}
+var init_comment_metadata = __esm({
+  "src/utils/comment-metadata.ts"() {
+    "use strict";
+  }
+});
+
 // src/ai-review-service.ts
 function log(...args) {
   logger.debug(args.join(" "));
@@ -4578,6 +4650,7 @@ var init_ai_review_service = __esm({
     init_logger();
     init_tracer_init();
     init_diff_processor();
+    init_comment_metadata();
     AIReviewService = class {
       config;
       sessionRegistry;
@@ -4631,8 +4704,13 @@ var init_ai_review_service = __esm({
       async executeReview(prInfo, customPrompt, schema, checkName, sessionId) {
         const startTime = Date.now();
         const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+        const cfgAny = this.config;
+        const skipTransport = cfgAny?.skip_transport_context === true;
+        const skipPRContext = cfgAny?.skip_code_context === true || skipTransport && cfgAny?.skip_code_context !== false;
+        const skipSlackContext = cfgAny?.skip_slack_context === true || skipTransport && cfgAny?.skip_slack_context !== false;
         const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema, {
-          skipPRContext: this.config?.skip_code_context === true
+          skipPRContext,
+          skipSlackContext
         });
         log(`Executing AI review with ${this.config.provider} provider...`);
         log(`\u{1F527} Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);
@@ -4746,8 +4824,13 @@ var init_ai_review_service = __esm({
             `Session not found for reuse: ${parentSessionId}. Ensure the parent check completed successfully.`
           );
         }
+        const cfgAny = this.config;
+        const skipTransport = cfgAny?.skip_transport_context === true;
+        const skipSlackContext = cfgAny?.skip_slack_context === true || skipTransport && cfgAny?.skip_slack_context !== false;
         const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema, {
-          skipPRContext: true
+          // When reusing sessions we always skip PR context, regardless of flags
+          skipPRContext: true,
+          skipSlackContext
         });
         let agentToUse;
         let currentSessionId;
@@ -4878,11 +4961,13 @@ var init_ai_review_service = __esm({
        */
       async buildCustomPrompt(prInfo, customInstructions, schema, options) {
         const skipPRContext = options?.skipPRContext === true;
+        const skipSlackContext = options?.skipSlackContext === true;
         const isCodeReviewSchema = schema === "code-review";
         const prContext = skipPRContext ? "" : await this.formatPRContext(prInfo, isCodeReviewSchema);
+        const slackContextXml = skipSlackContext === true ? "" : this.formatSlackContextFromPRInfo(prInfo);
         const isIssue = prInfo.isIssue === true;
         if (isIssue) {
-          if (skipPRContext) {
+          if (skipPRContext && !slackContextXml) {
             return `<instructions>
 ${customInstructions}
 </instructions>`;
@@ -4893,7 +4978,7 @@ ${customInstructions}
   </instructions>
 
   <context>
-${prContext}
+${prContext}${slackContextXml}
   </context>
 
   <rules>
@@ -4909,7 +4994,7 @@ ${prContext}
         }
         if (isCodeReviewSchema) {
           const analysisType = prInfo.isIncremental ? "INCREMENTAL" : "FULL";
-          if (skipPRContext) {
+          if (skipPRContext && !slackContextXml) {
             return `<instructions>
 ${customInstructions}
 </instructions>
@@ -4934,7 +5019,7 @@ ${customInstructions}
   </instructions>
 
   <context>
-${prContext}
+${prContext}${slackContextXml}
   </context>
 
   <rules>
@@ -4951,7 +5036,7 @@ ${prContext}
   </rules>
 </review_request>`;
         }
-        if (skipPRContext) {
+        if (skipPRContext && !slackContextXml) {
           return `<instructions>
 ${customInstructions}
 </instructions>`;
@@ -4961,7 +5046,7 @@ ${customInstructions}
 </instructions>
 
 <context>
-${prContext}
+${prContext}${slackContextXml}
 </context>`;
       }
       // REMOVED: Built-in prompts - only use custom prompts from .visor.yaml
@@ -5052,7 +5137,7 @@ ${this.escapeXml(prInfo.body)}
             let historicalComments = triggeringComment2 ? issueComments.filter((c) => c.id !== triggeringComment2.id) : issueComments;
             if (isCodeReviewSchema) {
               historicalComments = historicalComments.filter(
-                (c) => !c.body || !c.body.includes("visor-comment-id:pr-review-")
+                (c) => !shouldFilterVisorReviewComment(c.body)
               );
             }
             if (historicalComments.length > 0) {
@@ -5165,7 +5250,7 @@ ${this.escapeXml(processedFallbackDiff)}
           let historicalComments = triggeringComment ? prComments.filter((c) => c.id !== triggeringComment.id) : prComments;
           if (isCodeReviewSchema) {
             historicalComments = historicalComments.filter(
-              (c) => !c.body || !c.body.includes("visor-comment-id:pr-review-")
+              (c) => !shouldFilterVisorReviewComment(c.body)
             );
           }
           if (historicalComments.length > 0) {
@@ -5187,6 +5272,144 @@ ${this.escapeXml(processedFallbackDiff)}
         context2 += `
 </pull_request>`;
         return context2;
+      }
+      /**
+       * Format Slack conversation context (if attached to PRInfo) as XML
+       */
+      formatSlackContextFromPRInfo(prInfo) {
+        try {
+          const anyInfo = prInfo;
+          const conv = anyInfo.slackConversation;
+          if (!conv || typeof conv !== "object") return "";
+          const transport = conv.transport || "slack";
+          const thread = conv.thread || {};
+          const messages = Array.isArray(conv.messages) ? conv.messages : [];
+          const current = conv.current || {};
+          const attrs = conv.attributes || {};
+          let xml = `
+<slack_context>
+  <transport>${this.escapeXml(String(transport))}</transport>
+  <thread>
+    <id>${this.escapeXml(String(thread.id || ""))}</id>
+    <url>${this.escapeXml(String(thread.url || ""))}</url>
+  </thread>`;
+          const attrKeys = Object.keys(attrs);
+          if (attrKeys.length > 0) {
+            xml += `
+  <attributes>`;
+            for (const k of attrKeys) {
+              const v = attrs[k];
+              xml += `
+    <attribute>
+      <key>${this.escapeXml(String(k))}</key>
+      <value>${this.escapeXml(String(v ?? ""))}</value>
+    </attribute>`;
+            }
+            xml += `
+  </attributes>`;
+          }
+          if (messages.length > 0) {
+            xml += `
+  <messages>`;
+            for (const m of messages) {
+              xml += `
+    <message>
+      <role>${this.escapeXml(String(m.role || "user"))}</role>
+      <user>${this.escapeXml(String(m.user || ""))}</user>
+      <text>${this.escapeXml(String(m.text || ""))}</text>
+      <timestamp>${this.escapeXml(String(m.timestamp || ""))}</timestamp>
+      <origin>${this.escapeXml(String(m.origin || ""))}</origin>
+    </message>`;
+            }
+            xml += `
+  </messages>`;
+          }
+          xml += `
+  <current>
+    <role>${this.escapeXml(String(current.role || "user"))}</role>
+    <user>${this.escapeXml(String(current.user || ""))}</user>
+    <text>${this.escapeXml(String(current.text || ""))}</text>
+    <timestamp>${this.escapeXml(String(current.timestamp || ""))}</timestamp>
+    <origin>${this.escapeXml(String(current.origin || ""))}</origin>
+  </current>
+</slack_context>`;
+          return xml;
+        } catch {
+          return "";
+        }
+      }
+      /**
+       * Build a normalized ConversationContext for GitHub (PR/issue + comments)
+       * using the same contract as Slack's ConversationContext. This is exposed
+       * to templates via the unified `conversation` object.
+       */
+      buildGitHubConversationFromPRInfo(prInfo) {
+        try {
+          const anyInfo = prInfo;
+          const eventCtx = anyInfo.eventContext || {};
+          const comments = anyInfo.comments || [];
+          const repoOwner = eventCtx.repository?.owner?.login || process.env.GITHUB_REPOSITORY?.split("/")?.[0];
+          const repoName = eventCtx.repository?.name || process.env.GITHUB_REPOSITORY?.split("/")?.[1];
+          const number = prInfo.number;
+          const threadId = repoOwner && repoName ? `${repoOwner}/${repoName}#${number}` : `github#${number}`;
+          const threadUrl = eventCtx.issue?.html_url || eventCtx.pull_request?.html_url || (repoOwner && repoName ? `https://github.com/${repoOwner}/${repoName}/pull/${number}` : void 0);
+          const messages = [];
+          if (prInfo.body && prInfo.body.trim().length > 0) {
+            messages.push({
+              role: "user",
+              user: prInfo.author || "unknown",
+              text: prInfo.body,
+              timestamp: eventCtx.pull_request?.created_at || eventCtx.issue?.created_at || "",
+              origin: "github"
+            });
+          }
+          for (const c of comments) {
+            messages.push({
+              role: "user",
+              user: c.author || "unknown",
+              text: c.body || "",
+              timestamp: c.createdAt || "",
+              origin: "github"
+            });
+          }
+          const triggeringComment = eventCtx.comment;
+          let current;
+          if (triggeringComment) {
+            current = {
+              role: "user",
+              user: triggeringComment.user && triggeringComment.user.login || "unknown",
+              text: triggeringComment.body || "",
+              timestamp: triggeringComment.created_at || "",
+              origin: "github"
+            };
+          } else if (messages.length > 0) {
+            current = messages[messages.length - 1];
+          } else {
+            current = {
+              role: "user",
+              user: prInfo.author || "unknown",
+              text: prInfo.title || "",
+              timestamp: "",
+              origin: "github"
+            };
+          }
+          const attributes = {};
+          if (repoOwner) attributes.owner = repoOwner;
+          if (repoName) attributes.repo = repoName;
+          attributes.number = String(number);
+          if (eventCtx.event_name) attributes.event_name = String(eventCtx.event_name);
+          if (eventCtx.action) attributes.action = String(eventCtx.action);
+          const ctx = {
+            transport: "github",
+            thread: { id: threadId, url: threadUrl },
+            messages,
+            current,
+            attributes
+          };
+          return ctx;
+        } catch {
+          return void 0;
+        }
       }
       /**
        * No longer escaping XML - returning text as-is
@@ -5237,8 +5460,8 @@ ${schemaString}`);
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs16 = require("fs");
-              const path17 = require("path");
+              const fs18 = require("fs");
+              const path19 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const provider = this.config.provider || "auto";
               const model = this.config.model || "default";
@@ -5352,20 +5575,20 @@ ${"=".repeat(60)}
 `;
               readableVersion += `${"=".repeat(60)}
 `;
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
-              if (!fs16.existsSync(debugArtifactsDir)) {
-                fs16.mkdirSync(debugArtifactsDir, { recursive: true });
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
+              if (!fs18.existsSync(debugArtifactsDir)) {
+                fs18.mkdirSync(debugArtifactsDir, { recursive: true });
               }
-              const debugFile = path17.join(
+              const debugFile = path19.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.json`
               );
-              fs16.writeFileSync(debugFile, debugJson, "utf-8");
-              const readableFile = path17.join(
+              fs18.writeFileSync(debugFile, debugJson, "utf-8");
+              const readableFile = path19.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.txt`
               );
-              fs16.writeFileSync(readableFile, readableVersion, "utf-8");
+              fs18.writeFileSync(readableFile, readableVersion, "utf-8");
               log(`
 \u{1F4BE} Full debug info saved to:`);
               log(`   JSON: ${debugFile}`);
@@ -5397,8 +5620,8 @@ ${"=".repeat(60)}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs16 = require("fs");
-              const path17 = require("path");
+              const fs18 = require("fs");
+              const path19 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny2 = agent;
               let fullHistory = [];
@@ -5409,8 +5632,8 @@ ${"=".repeat(60)}
               } else if (agentAny2._messages) {
                 fullHistory = agentAny2._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path17.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path19.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -5422,7 +5645,7 @@ ${"=".repeat(60)}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs16.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs18.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -5449,7 +5672,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs16.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs18.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -5458,11 +5681,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs16 = require("fs");
-              const path17 = require("path");
+              const fs18 = require("fs");
+              const path19 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
-              const responseFile = path17.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
+              const responseFile = path19.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -5495,7 +5718,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs16.writeFileSync(responseFile, responseContent, "utf-8");
+              fs18.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -5511,9 +5734,9 @@ ${"=".repeat(60)}
                 await agentAny._telemetryConfig.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${agentAny._traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs16 = require("fs");
-                  if (fs16.existsSync(agentAny._traceFilePath)) {
-                    const stats = fs16.statSync(agentAny._traceFilePath);
+                  const fs18 = require("fs");
+                  if (fs18.existsSync(agentAny._traceFilePath)) {
+                    const stats = fs18.statSync(agentAny._traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::${agentAny._traceFilePath} (${stats.size} bytes)`
                     );
@@ -5576,6 +5799,10 @@ ${"=".repeat(60)}
           } else if (this.config.provider === "bedrock") {
           }
           const explicitPromptType = (process.env.VISOR_PROMPT_TYPE || "").trim();
+          let systemPrompt = this.config.systemPrompt;
+          if (!systemPrompt && schema !== "code-review") {
+            systemPrompt = "You are general assistant, follow user instructions.";
+          }
           const options = {
             sessionId,
             // Prefer config promptType, then env override, else fallback to code-review when schema is set
@@ -5583,8 +5810,8 @@ ${"=".repeat(60)}
             allowEdit: false,
             // We don't want the agent to modify files
             debug: this.config.debug || false,
-            // Map systemPrompt to Probe customPrompt until SDK exposes a first-class field
-            customPrompt: this.config.systemPrompt || this.config.customPrompt
+            // Use systemPrompt (native in rc168+) with fallback to customPrompt for backward compat
+            systemPrompt: systemPrompt || this.config.systemPrompt || this.config.customPrompt
           };
           let traceFilePath = "";
           let telemetryConfig = null;
@@ -5614,9 +5841,11 @@ ${"=".repeat(60)}
           }
           if (this.config.allowedTools !== void 0) {
             options.allowedTools = this.config.allowedTools;
+            log(`\u{1F527} Setting allowedTools: ${JSON.stringify(this.config.allowedTools)}`);
           }
           if (this.config.disableTools !== void 0) {
             options.disableTools = this.config.disableTools;
+            log(`\u{1F527} Setting disableTools: ${this.config.disableTools}`);
           }
           if (this.config.allowBash !== void 0) {
             options.allowBash = this.config.allowBash;
@@ -5666,8 +5895,8 @@ ${schemaString}`);
           const model = this.config.model || "default";
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs16 = require("fs");
-              const path17 = require("path");
+              const fs18 = require("fs");
+              const path19 = require("path");
               const os = require("os");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const debugData = {
@@ -5741,18 +5970,18 @@ ${"=".repeat(60)}
               readableVersion += `${"=".repeat(60)}
 `;
               const tempDir = os.tmpdir();
-              const promptFile = path17.join(tempDir, `visor-prompt-${timestamp}.txt`);
-              fs16.writeFileSync(promptFile, prompt, "utf-8");
+              const promptFile = path19.join(tempDir, `visor-prompt-${timestamp}.txt`);
+              fs18.writeFileSync(promptFile, prompt, "utf-8");
               log(`
 \u{1F4BE} Prompt saved to: ${promptFile}`);
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
               try {
-                const base = path17.join(
+                const base = path19.join(
                   debugArtifactsDir,
                   `prompt-${_checkName || "unknown"}-${timestamp}`
                 );
-                fs16.writeFileSync(base + ".json", debugJson, "utf-8");
-                fs16.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
+                fs18.writeFileSync(base + ".json", debugJson, "utf-8");
+                fs18.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
                 log(`
 \u{1F4BE} Full debug info saved to directory: ${debugArtifactsDir}`);
               } catch {
@@ -5797,8 +6026,8 @@ $ ${cliCommand}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs16 = require("fs");
-              const path17 = require("path");
+              const fs18 = require("fs");
+              const path19 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny = agent;
               let fullHistory = [];
@@ -5809,8 +6038,8 @@ $ ${cliCommand}
               } else if (agentAny._messages) {
                 fullHistory = agentAny._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path17.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path19.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -5822,7 +6051,7 @@ $ ${cliCommand}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs16.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs18.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -5849,7 +6078,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs16.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs18.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -5858,11 +6087,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs16 = require("fs");
-              const path17 = require("path");
+              const fs18 = require("fs");
+              const path19 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
-              const responseFile = path17.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
+              const responseFile = path19.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -5895,7 +6124,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs16.writeFileSync(responseFile, responseContent, "utf-8");
+              fs18.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -5913,9 +6142,9 @@ ${"=".repeat(60)}
                 await telemetry.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs16 = require("fs");
-                  if (fs16.existsSync(traceFilePath)) {
-                    const stats = fs16.statSync(traceFilePath);
+                  const fs18 = require("fs");
+                  if (fs18.existsSync(traceFilePath)) {
+                    const stats = fs18.statSync(traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::OpenTelemetry trace file size: ${stats.size} bytes`
                     );
@@ -5953,8 +6182,8 @@ ${"=".repeat(60)}
        * Load schema content from schema files or inline definitions
        */
       async loadSchemaContent(schema) {
-        const fs16 = require("fs").promises;
-        const path17 = require("path");
+        const fs18 = require("fs").promises;
+        const path19 = require("path");
         if (typeof schema === "object" && schema !== null) {
           log("\u{1F4CB} Using inline schema object from configuration");
           return JSON.stringify(schema);
@@ -5967,14 +6196,14 @@ ${"=".repeat(60)}
           }
         } catch {
         }
-        if ((schema.startsWith("./") || schema.includes(".json")) && !path17.isAbsolute(schema)) {
+        if ((schema.startsWith("./") || schema.includes(".json")) && !path19.isAbsolute(schema)) {
           if (schema.includes("..") || schema.includes("\0")) {
             throw new Error("Invalid schema path: path traversal not allowed");
           }
           try {
-            const schemaPath = path17.resolve(process.cwd(), schema);
+            const schemaPath = path19.resolve(process.cwd(), schema);
             log(`\u{1F4CB} Loading custom schema from file: ${schemaPath}`);
-            const schemaContent = await fs16.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs18.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch (error) {
             throw new Error(
@@ -5988,22 +6217,22 @@ ${"=".repeat(60)}
         }
         const candidatePaths = [
           // GitHub Action bundle location
-          path17.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
+          path19.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
           // Historical fallback when src/output was inadvertently bundled as output1/
-          path17.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
+          path19.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
           // Local dev (repo root)
-          path17.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
+          path19.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
         ];
         for (const schemaPath of candidatePaths) {
           try {
-            const schemaContent = await fs16.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs18.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch {
           }
         }
-        const distPath = path17.join(__dirname, "output", sanitizedSchemaName, "schema.json");
-        const distAltPath = path17.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
-        const cwdPath = path17.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
+        const distPath = path19.join(__dirname, "output", sanitizedSchemaName, "schema.json");
+        const distAltPath = path19.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
+        const cwdPath = path19.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
         throw new Error(
           `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath}, ${distAltPath}, and ${cwdPath}. Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
         );
@@ -6024,19 +6253,15 @@ ${"=".repeat(60)}
           let reviewData;
           if (_schema === "plain" || !_schema) {
             log(
-              `\u{1F4CB} ${_schema === "plain" ? "Plain" : "No"} schema detected - returning raw response without JSON parsing`
+              `\u{1F4CB} ${_schema === "plain" ? "Plain" : "No"} schema detected - treating raw response as text output`
             );
+            const trimmed = typeof response === "string" ? response.trim() : "";
+            const out = trimmed ? { text: trimmed } : {};
             return {
-              issues: [
-                {
-                  file: "AI_RESPONSE",
-                  line: 1,
-                  ruleId: "ai/raw_response",
-                  message: response,
-                  severity: "info",
-                  category: "documentation"
-                }
-              ],
+              issues: [],
+              // Expose assistant-style content via output.text so downstream formatters
+              // (Slack frontend, CLI "Assistant Response" section, templates) can render it.
+              output: out,
               debug: debugInfo
             };
           }
@@ -6293,7 +6518,7 @@ ${"=".repeat(60)}
        * Generate mock response for testing
        */
       async generateMockResponse(_prompt, _checkName, _schema) {
-        await new Promise((resolve7) => setTimeout(resolve7, 500));
+        await new Promise((resolve9) => setTimeout(resolve9, 500));
         const name = (_checkName || "").toLowerCase();
         if (name.includes("extract-facts")) {
           const arr = Array.from({ length: 6 }, (_, i) => ({
@@ -6704,9 +6929,9 @@ function configureLiquidWithExtensions(liquid) {
   });
   liquid.registerFilter("get", (obj, pathExpr) => {
     if (obj == null) return void 0;
-    const path17 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
-    if (!path17) return obj;
-    const parts = path17.split(".");
+    const path19 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
+    if (!path19) return obj;
+    const parts = path19.split(".");
     let cur = obj;
     for (const p of parts) {
       if (cur == null) return void 0;
@@ -6756,6 +6981,173 @@ function configureLiquidWithExtensions(liquid) {
       return [];
     }
   });
+  liquid.registerFilter(
+    "chat_history",
+    function(value, ...args) {
+      try {
+        const impl = this;
+        const ctx = impl?.context;
+        const allArgs = Array.isArray(args) ? args : [];
+        if (allArgs.length === 0) {
+          return [];
+        }
+        const positional = [];
+        const options = {};
+        for (const arg of allArgs) {
+          if (Array.isArray(arg) && arg.length === 2 && typeof arg[0] === "string" && arg[0].length > 0) {
+            options[arg[0]] = arg[1];
+          } else {
+            positional.push(arg);
+          }
+        }
+        const stepArgs = positional;
+        const steps = stepArgs.map((s) => String(s ?? "").trim()).filter((s) => s.length > 0);
+        if (steps.length === 0) return [];
+        const outputsHistoryVar = ctx?.get(["outputs_history"]) || {};
+        const outputsVar = ctx?.get(["outputs"]) || {};
+        const outputsHistory = outputsHistoryVar && Object.keys(outputsHistoryVar).length > 0 ? outputsHistoryVar : outputsVar?.history || {};
+        const checksMeta = ctx?.get(["checks_meta"]) || ctx?.get(["event"])?.payload?.__checksMeta || void 0;
+        const directionRaw = typeof options.direction === "string" ? options.direction.toLowerCase() : "";
+        const direction = directionRaw === "desc" ? "desc" : "asc";
+        const limit = typeof options.limit === "number" && options.limit > 0 ? Math.floor(options.limit) : void 0;
+        const textCfg = options.text && typeof options.text === "object" ? options.text : {};
+        const defaultField = typeof textCfg.default_field === "string" && textCfg.default_field.trim() ? textCfg.default_field.trim() : "text";
+        const byStepText = {};
+        if (textCfg.by_step && typeof textCfg.by_step === "object") {
+          for (const [k, v] of Object.entries(textCfg.by_step)) {
+            if (typeof v === "string" && v.trim()) {
+              byStepText[k] = v.trim();
+            }
+          }
+        }
+        const rolesCfg = options.roles && typeof options.roles === "object" ? options.roles : {};
+        const byTypeRole = {};
+        if (rolesCfg.by_type && typeof rolesCfg.by_type === "object") {
+          for (const [k, v] of Object.entries(rolesCfg.by_type)) {
+            if (typeof v === "string" && v.trim()) {
+              byTypeRole[k] = v.trim();
+            }
+          }
+        }
+        const byStepRole = {};
+        if (rolesCfg.by_step && typeof rolesCfg.by_step === "object") {
+          for (const [k, v] of Object.entries(rolesCfg.by_step)) {
+            if (typeof v === "string" && v.trim()) {
+              byStepRole[k] = v.trim();
+            }
+          }
+        }
+        if (typeof options.role_map === "string" && options.role_map.trim().length > 0) {
+          const parts = String(options.role_map).split(",").map((p) => p.trim()).filter(Boolean);
+          for (const part of parts) {
+            const eqIdx = part.indexOf("=");
+            if (eqIdx > 0) {
+              const k = part.slice(0, eqIdx).trim();
+              const v = part.slice(eqIdx + 1).trim();
+              if (k && v) {
+                byStepRole[k] = v;
+              }
+            }
+          }
+        }
+        const defaultRole = typeof rolesCfg.default === "string" && rolesCfg.default.trim() ? rolesCfg.default.trim() : void 0;
+        const getNested = (obj, path19) => {
+          if (!obj || !path19) return void 0;
+          const parts = path19.split(".");
+          let cur = obj;
+          for (const p of parts) {
+            if (cur == null) return void 0;
+            cur = cur[p];
+          }
+          return cur;
+        };
+        const normalizeText = (step, raw) => {
+          try {
+            const overrideField = byStepText[step];
+            if (overrideField) {
+              const val = getNested(raw, overrideField);
+              if (val !== void 0 && val !== null) {
+                const s = String(val);
+                if (s.trim().length > 0) return s;
+              }
+            }
+            if (raw && typeof raw === "object") {
+              if (typeof raw.text === "string" && raw.text.trim().length > 0) {
+                return raw.text;
+              }
+              if (typeof raw.content === "string" && raw.content.trim().length > 0) {
+                return raw.content;
+              }
+              const dfVal = raw[defaultField];
+              if (dfVal !== void 0 && dfVal !== null) {
+                const s = String(dfVal);
+                if (s.trim().length > 0) return s;
+              }
+            }
+            if (typeof raw === "string") return raw;
+            if (raw == null) return "";
+            try {
+              return JSON.stringify(raw);
+            } catch {
+              return String(raw);
+            }
+          } catch {
+            if (typeof raw === "string") return raw;
+            return "";
+          }
+        };
+        const normalizeRole = (step) => {
+          try {
+            if (byStepRole[step]) return byStepRole[step];
+            const meta = checksMeta ? checksMeta[step] : void 0;
+            const type = meta?.type;
+            if (type && byTypeRole[type]) return byTypeRole[type];
+            if (type === "human-input") return "user";
+            if (type === "ai") return "assistant";
+            if (defaultRole) return defaultRole;
+            if (type) {
+              if (type === "human-input") return "user";
+              if (type === "ai") return "assistant";
+            }
+          } catch {
+          }
+          return "assistant";
+        };
+        const messages = [];
+        const tsBase = Date.now();
+        let counter = 0;
+        for (const step of steps) {
+          const arr = outputsHistory?.[step];
+          if (!Array.isArray(arr)) continue;
+          for (const raw of arr) {
+            let ts;
+            if (raw && typeof raw === "object" && typeof raw.ts === "number") {
+              ts = raw.ts;
+            }
+            if (!Number.isFinite(ts)) {
+              ts = tsBase + counter++;
+            }
+            const text = normalizeText(step, raw);
+            const role = normalizeRole(step);
+            messages.push({ step, role, text, ts, raw });
+          }
+        }
+        messages.sort((a, b) => a.ts - b.ts);
+        if (direction === "desc") {
+          messages.reverse();
+        }
+        if (limit && limit > 0 && messages.length > limit) {
+          if (direction === "asc") {
+            return messages.slice(messages.length - limit);
+          }
+          return messages.slice(0, limit);
+        }
+        return messages;
+      } catch {
+        return [];
+      }
+    }
+  );
 }
 function createExtendedLiquid(options = {}) {
   const liquid = new import_liquidjs.Liquid({
@@ -7009,6 +7401,39 @@ var init_ai_check_provider = __esm({
       getDescription() {
         return "AI-powered code review using Google Gemini, Anthropic Claude, OpenAI GPT, or AWS Bedrock models";
       }
+      /** Lightweight debug helper to avoid importing logger here */
+      logDebug(msg) {
+        try {
+          if (process.env.VISOR_DEBUG === "true") {
+            console.debug(msg);
+          }
+        } catch {
+        }
+      }
+      /** Detect Slack webhook payload and build a lightweight slack context for templates */
+      buildSlackEventContext(context2, config, prInfo) {
+        try {
+          const aiCfg = config?.ai || {};
+          if (aiCfg.skip_slack_context === true) return {};
+          const webhook = context2?.webhookContext;
+          const map = webhook?.webhookData;
+          if (!map || !(map instanceof Map)) return {};
+          const first = Array.from(map.values())[0];
+          if (!first || typeof first !== "object") return {};
+          const ev = first.event;
+          const conv = first.slack_conversation;
+          if (!ev && !conv) return {};
+          if (conv && prInfo) {
+            try {
+              prInfo.slackConversation = conv;
+            } catch {
+            }
+          }
+          return { slack: { event: ev, conversation: conv } };
+        } catch {
+          return {};
+        }
+      }
       async validateConfig(config) {
         if (!config || typeof config !== "object") {
           return false;
@@ -7129,9 +7554,9 @@ var init_ai_check_provider = __esm({
           } else {
             resolvedPath = import_path3.default.resolve(process.cwd(), str);
           }
-          const fs16 = require("fs").promises;
+          const fs18 = require("fs").promises;
           try {
-            const stat = await fs16.stat(resolvedPath);
+            const stat = await fs18.stat(resolvedPath);
             return stat.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
@@ -7207,7 +7632,7 @@ var init_ai_check_provider = __esm({
           // File Details
           files: prInfo.files || [],
           description: prInfo.body || "",
-          // GitHub Event Context
+          // GitHub / webhook Event Context
           event: eventContext ? {
             name: eventContext.event_name || "unknown",
             action: eventContext.action,
@@ -7250,6 +7675,27 @@ var init_ai_check_provider = __esm({
             // Raw event payload for advanced use cases
             payload: eventContext
           } : void 0,
+          // Slack conversation context (if provided via eventContext.slack)
+          slack: (() => {
+            try {
+              const anyCtx = eventContext;
+              const slack = anyCtx?.slack;
+              if (slack && typeof slack === "object") return slack;
+            } catch {
+            }
+            return void 0;
+          })(),
+          // Unified conversation context across transports (Slack & GitHub)
+          conversation: (() => {
+            try {
+              const anyCtx = eventContext;
+              if (anyCtx?.slack?.conversation) return anyCtx.slack.conversation;
+              if (anyCtx?.github?.conversation) return anyCtx.github.conversation;
+              if (anyCtx?.conversation) return anyCtx.conversation;
+            } catch {
+            }
+            return void 0;
+          })(),
           // Utility data for templates
           utils: {
             // Date/time helpers
@@ -7266,6 +7712,14 @@ var init_ai_check_provider = __esm({
             hasLargeChanges: (prInfo.files || []).some((f) => f.changes > 50),
             totalFiles: (prInfo.files || []).length
           },
+          // Checks metadata for helpers like chat_history
+          checks_meta: (() => {
+            try {
+              return eventContext?.__checksMeta || void 0;
+            } catch {
+              return void 0;
+            }
+          })(),
           // Previous check outputs (dependency results)
           // Expose raw output directly if available, otherwise expose the result as-is
           outputs: dependencyResults ? Object.fromEntries(
@@ -7364,47 +7818,60 @@ var init_ai_check_provider = __esm({
         }
         const aiConfig = {};
         if (config.ai) {
-          if (config.ai.apiKey !== void 0) {
-            aiConfig.apiKey = config.ai.apiKey;
+          const aiAny2 = config.ai;
+          const skipTransport = aiAny2.skip_transport_context === true;
+          if (aiAny2.apiKey !== void 0) {
+            aiConfig.apiKey = aiAny2.apiKey;
           }
-          if (config.ai.model !== void 0) {
-            aiConfig.model = config.ai.model;
+          if (aiAny2.model !== void 0) {
+            aiConfig.model = aiAny2.model;
           }
-          if (config.ai.timeout !== void 0) {
-            aiConfig.timeout = config.ai.timeout;
+          if (aiAny2.timeout !== void 0) {
+            aiConfig.timeout = aiAny2.timeout;
           }
-          if (config.ai.provider !== void 0) {
-            aiConfig.provider = config.ai.provider;
+          if (aiAny2.provider !== void 0) {
+            aiConfig.provider = aiAny2.provider;
           }
-          if (config.ai.debug !== void 0) {
-            aiConfig.debug = config.ai.debug;
+          if (aiAny2.debug !== void 0) {
+            aiConfig.debug = aiAny2.debug;
           }
-          if (config.ai.enableDelegate !== void 0) {
-            aiConfig.enableDelegate = config.ai.enableDelegate;
+          if (aiAny2.enableDelegate !== void 0) {
+            aiConfig.enableDelegate = aiAny2.enableDelegate;
           }
-          if (config.ai.allowEdit !== void 0) {
-            aiConfig.allowEdit = config.ai.allowEdit;
+          if (aiAny2.allowEdit !== void 0) {
+            aiConfig.allowEdit = aiAny2.allowEdit;
           }
-          if (config.ai.allowedTools !== void 0) {
-            aiConfig.allowedTools = config.ai.allowedTools;
+          if (aiAny2.allowedTools !== void 0) {
+            aiConfig.allowedTools = aiAny2.allowedTools;
+            this.logDebug(
+              `[AI Provider] Read allowedTools from YAML: ${JSON.stringify(aiAny2.allowedTools)}`
+            );
           }
-          if (config.ai.disableTools !== void 0) {
-            aiConfig.disableTools = config.ai.disableTools;
+          if (aiAny2.disableTools !== void 0) {
+            aiConfig.disableTools = aiAny2.disableTools;
+            this.logDebug(`[AI Provider] Read disableTools from YAML: ${aiAny2.disableTools}`);
           }
-          if (config.ai.allowBash !== void 0) {
-            aiConfig.allowBash = config.ai.allowBash;
+          if (aiAny2.allowBash !== void 0) {
+            aiConfig.allowBash = aiAny2.allowBash;
           }
-          if (config.ai.bashConfig !== void 0) {
-            aiConfig.bashConfig = config.ai.bashConfig;
+          if (aiAny2.bashConfig !== void 0) {
+            aiConfig.bashConfig = aiAny2.bashConfig;
           }
-          if (config.ai.skip_code_context !== void 0) {
-            aiConfig.skip_code_context = config.ai.skip_code_context;
+          if (aiAny2.skip_code_context !== void 0) {
+            aiConfig.skip_code_context = aiAny2.skip_code_context;
+          } else if (skipTransport) {
+            aiConfig.skip_code_context = true;
           }
-          if (config.ai.retry !== void 0) {
-            aiConfig.retry = config.ai.retry;
+          if (aiAny2.skip_slack_context !== void 0) {
+            aiConfig.skip_slack_context = aiAny2.skip_slack_context;
+          } else if (skipTransport) {
+            aiConfig.skip_slack_context = true;
           }
-          if (config.ai.fallback !== void 0) {
-            aiConfig.fallback = config.ai.fallback;
+          if (aiAny2.retry !== void 0) {
+            aiConfig.retry = aiAny2.retry;
+          }
+          if (aiAny2.fallback !== void 0) {
+            aiConfig.fallback = aiAny2.fallback;
           }
         }
         if (config.ai_model !== void 0) {
@@ -7468,7 +7935,15 @@ var init_ai_check_provider = __esm({
           );
         } catch {
         }
-        const eventContext = config.eventContext || {};
+        const baseEventContext = config.eventContext || {};
+        const checksMeta = config.checksMeta;
+        const slackCtx = this.buildSlackEventContext(
+          sessionInfo,
+          config,
+          prInfo
+        );
+        const baseWithSlack = { ...baseEventContext, ...slackCtx };
+        const eventContext = checksMeta ? { ...baseWithSlack, __checksMeta: checksMeta } : baseWithSlack;
         const ctxWithStage = {
           ...eventContext || {},
           __stageHistoryBase: sessionInfo?.stageHistoryBase
@@ -9392,6 +9867,11 @@ var init_claude_code_check_provider = __esm({
 });
 
 // src/utils/command-executor.ts
+var command_executor_exports = {};
+__export(command_executor_exports, {
+  CommandExecutor: () => CommandExecutor,
+  commandExecutor: () => commandExecutor
+});
 var import_child_process, import_util, CommandExecutor, commandExecutor;
 var init_command_executor = __esm({
   "src/utils/command-executor.ts"() {
@@ -9437,7 +9917,7 @@ var init_command_executor = __esm({
        * Execute command with stdin input
        */
       executeWithStdin(command, options) {
-        return new Promise((resolve7, reject) => {
+        return new Promise((resolve9, reject) => {
           const childProcess = (0, import_child_process.exec)(
             command,
             {
@@ -9449,7 +9929,7 @@ var init_command_executor = __esm({
               if (error && error.killed && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM")) {
                 reject(new Error(`Command timed out after ${options.timeout || 3e4}ms`));
               } else {
-                resolve7({
+                resolve9({
                   stdout: stdout || "",
                   stderr: stderr || "",
                   exitCode: error ? error.code || 1 : 0
@@ -12153,7 +12633,7 @@ async function acquirePromptLock() {
     activePrompt = true;
     return;
   }
-  await new Promise((resolve7) => waiters.push(resolve7));
+  await new Promise((resolve9) => waiters.push(resolve9));
   activePrompt = true;
 }
 function releasePromptLock() {
@@ -12163,7 +12643,7 @@ function releasePromptLock() {
 }
 async function interactivePrompt(options) {
   await acquirePromptLock();
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve9, reject) => {
     const dbg = process.env.VISOR_DEBUG === "true";
     try {
       if (dbg) {
@@ -12250,12 +12730,12 @@ async function interactivePrompt(options) {
     };
     const finish = (value) => {
       cleanup();
-      resolve7(value);
+      resolve9(value);
     };
     if (options.timeout && options.timeout > 0) {
       timeoutId = setTimeout(() => {
         cleanup();
-        if (defaultValue !== void 0) return resolve7(defaultValue);
+        if (defaultValue !== void 0) return resolve9(defaultValue);
         return reject(new Error("Input timeout"));
       }, options.timeout);
     }
@@ -12387,7 +12867,7 @@ async function interactivePrompt(options) {
   });
 }
 async function simplePrompt(prompt) {
-  return new Promise((resolve7) => {
+  return new Promise((resolve9) => {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout
@@ -12403,7 +12883,7 @@ async function simplePrompt(prompt) {
     rl.question(`${prompt}
 > `, (answer) => {
       rl.close();
-      resolve7(answer.trim());
+      resolve9(answer.trim());
     });
   });
 }
@@ -12417,12 +12897,150 @@ var init_interactive_prompt = __esm({
   }
 });
 
+// src/slack/prompt-state.ts
+var prompt_state_exports = {};
+__export(prompt_state_exports, {
+  PromptStateManager: () => PromptStateManager,
+  getPromptStateManager: () => getPromptStateManager,
+  resetPromptStateManager: () => resetPromptStateManager
+});
+function getPromptStateManager(ttlMs) {
+  if (!__promptState) __promptState = new PromptStateManager(ttlMs);
+  return __promptState;
+}
+function resetPromptStateManager() {
+  __promptState = void 0;
+}
+var PromptStateManager, __promptState;
+var init_prompt_state = __esm({
+  "src/slack/prompt-state.ts"() {
+    "use strict";
+    init_logger();
+    PromptStateManager = class {
+      waiting = /* @__PURE__ */ new Map();
+      // key: `${channel}:${threadTs}`
+      ttlMs;
+      timer;
+      firstMessage = /* @__PURE__ */ new Map();
+      summaryTs = /* @__PURE__ */ new Map();
+      // key: threadKey -> group -> ts
+      constructor(ttlMs = 60 * 60 * 1e3) {
+        this.ttlMs = ttlMs;
+        this.startCleanup();
+      }
+      key(channel, threadTs) {
+        return `${channel}:${threadTs}`;
+      }
+      setWaiting(channel, threadTs, info) {
+        const key = this.key(channel, threadTs);
+        const value = { ...info, timestamp: Date.now(), channel, threadTs };
+        this.waiting.set(key, value);
+        try {
+          logger.info(
+            `[prompt-state] waiting set for ${key} (check=${info.checkName}, prompt="${info.prompt.substring(
+              0,
+              60
+            )}\u2026")`
+          );
+        } catch {
+        }
+      }
+      getWaiting(channel, threadTs) {
+        const key = this.key(channel, threadTs);
+        const info = this.waiting.get(key);
+        if (!info) return void 0;
+        const age = Date.now() - info.timestamp;
+        if (age > this.ttlMs) {
+          this.waiting.delete(key);
+          try {
+            logger.warn(`[prompt-state] expired ${key} (age=${Math.round(age / 1e3)}s)`);
+          } catch {
+          }
+          return void 0;
+        }
+        return info;
+      }
+      clear(channel, threadTs) {
+        const key = this.key(channel, threadTs);
+        const had = this.waiting.delete(key);
+        if (had) {
+          try {
+            logger.info(`[prompt-state] cleared ${key}`);
+          } catch {
+          }
+        }
+        return had;
+      }
+      /** Merge updates into an existing waiting entry */
+      update(channel, threadTs, patch) {
+        const key = this.key(channel, threadTs);
+        const prev = this.waiting.get(key);
+        if (!prev) return void 0;
+        const next = { ...prev, ...patch };
+        this.waiting.set(key, next);
+        try {
+          if (patch.snapshotPath) {
+            logger.info(`[prompt-state] snapshotPath set for ${key}`);
+          }
+        } catch {
+        }
+        return next;
+      }
+      // First message capture helpers
+      setFirstMessage(channel, threadTs, text) {
+        const key = this.key(channel, threadTs);
+        if (!text || !text.trim()) return;
+        if (!this.firstMessage.has(key)) {
+          this.firstMessage.set(key, { text, consumed: false });
+        }
+      }
+      consumeFirstMessage(channel, threadTs) {
+        const key = this.key(channel, threadTs);
+        const entry = this.firstMessage.get(key);
+        if (entry && !entry.consumed) {
+          entry.consumed = true;
+          this.firstMessage.set(key, entry);
+          return entry.text;
+        }
+        return void 0;
+      }
+      hasUnconsumedFirstMessage(channel, threadTs) {
+        const key = this.key(channel, threadTs);
+        const e = this.firstMessage.get(key);
+        return !!(e && !e.consumed && e.text && e.text.trim());
+      }
+      startCleanup(intervalMs = 5 * 60 * 1e3) {
+        if (this.timer) clearInterval(this.timer);
+        this.timer = setInterval(() => this.cleanup(), intervalMs);
+        if (this.timer.unref) this.timer.unref();
+      }
+      cleanup() {
+        const now = Date.now();
+        let removed = 0;
+        for (const [key, info] of this.waiting.entries()) {
+          if (now - info.timestamp > this.ttlMs) {
+            this.waiting.delete(key);
+            removed++;
+          }
+        }
+        if (removed) {
+          try {
+            logger.info(`[prompt-state] cleanup removed ${removed} entries`);
+          } catch {
+          }
+        }
+        return removed;
+      }
+    };
+  }
+});
+
 // src/utils/stdin-reader.ts
 function isStdinAvailable() {
   return !process.stdin.isTTY;
 }
 async function readStdin(timeout, maxSize = 1024 * 1024) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve9, reject) => {
     let data = "";
     let timeoutId;
     if (timeout) {
@@ -12449,7 +13067,7 @@ async function readStdin(timeout, maxSize = 1024 * 1024) {
     };
     const onEnd = () => {
       cleanup();
-      resolve7(data.trim());
+      resolve9(data.trim());
     };
     const onError = (err) => {
       cleanup();
@@ -12485,6 +13103,7 @@ var init_human_input_check_provider = __esm({
     "use strict";
     init_check_provider_interface();
     init_interactive_prompt();
+    init_prompt_state();
     init_liquid_extensions();
     init_stdin_reader();
     fs9 = __toESM(require("fs"));
@@ -12599,6 +13218,14 @@ var init_human_input_check_provider = __esm({
           for (const [k, v] of outputHistory.entries()) hist[k] = Array.isArray(v) ? v : [];
         }
         ctx.outputs_history = hist;
+        try {
+          const anyCtx = _context;
+          const checksMeta = anyCtx?.checksMeta;
+          if (checksMeta && typeof checksMeta === "object") {
+            ctx.checks_meta = checksMeta;
+          }
+        } catch {
+        }
         return ctx;
       }
       /**
@@ -12679,6 +13306,54 @@ var init_human_input_check_provider = __esm({
        * Get user input through various methods
        */
       async getUserInput(checkName, config, context2) {
+        try {
+          const payload = context2?.webhookContext?.webhookData?.get(
+            config?.endpoint || "/bots/slack/support"
+          );
+          const ev = payload && payload.event;
+          const channel = ev && String(ev.channel || "");
+          const threadTs = ev && String(ev.thread_ts || ev.ts || ev.event_ts || "");
+          const text = ev && String(ev.text || "");
+          if (channel && threadTs) {
+            const mgr = getPromptStateManager();
+            try {
+              const waiting2 = mgr.getWaiting(channel, threadTs);
+              const promptsPosted = waiting2?.promptsPosted || 0;
+              if (promptsPosted === 0 && mgr.hasUnconsumedFirstMessage(channel, threadTs)) {
+                const first = mgr.consumeFirstMessage(channel, threadTs);
+                if (first && first.trim().length > 0) {
+                  return first;
+                }
+              }
+            } catch {
+            }
+            const waiting = mgr.getWaiting(channel, threadTs);
+            if (waiting && waiting.checkName === checkName) {
+              const answer = text.replace(/<@[A-Z0-9]+>/gi, "").trim();
+              mgr.clear(channel, threadTs);
+              if (!answer && config.allow_empty !== true) {
+              } else {
+                return answer || config.default || "";
+              }
+            } else {
+              const prompt2 = String(config.prompt || "Please provide input:");
+              try {
+                await context2?.eventBus?.emit({
+                  type: "HumanInputRequested",
+                  checkId: checkName,
+                  prompt: prompt2,
+                  channel,
+                  threadTs,
+                  threadKey: `${channel}:${threadTs}`
+                });
+              } catch {
+              }
+              throw this.buildAwaitingError(checkName, prompt2);
+            }
+          }
+        } catch (e) {
+          if (e && e.issues) throw e;
+        }
         try {
           const mockVal = context2?.hooks?.mockForStep?.(checkName);
           if (mockVal !== void 0 && mockVal !== null) {
@@ -12763,6 +13438,21 @@ var init_human_input_check_provider = __esm({
           );
         }
       }
+      /** Build a deterministic, fatal error used to pause Slack-driven runs. */
+      buildAwaitingError(checkName, prompt) {
+        const err = new Error(`awaiting human input for ${checkName}`);
+        err.issues = [
+          {
+            file: "system",
+            line: 0,
+            ruleId: `${checkName}/execution_error`,
+            message: `Awaiting human input (Slack thread): ${prompt.slice(0, 80)}`,
+            severity: "error",
+            category: "logic"
+          }
+        ];
+        return err;
+      }
       async execute(_prInfo, config, _dependencyResults, context2) {
         const checkName = config.checkName || "human-input";
         try {
@@ -12838,6 +13528,13 @@ ${snippet}`
             output: { text: sanitizedInput, ts: Date.now() }
           };
         } catch (error) {
+          if (error && error.issues) {
+            const summary = {
+              issues: error.issues
+            };
+            summary.awaitingHumanInput = true;
+            return summary;
+          }
           return {
             issues: [
               {
@@ -15070,7 +15767,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -15100,7 +15797,8 @@ var init_config_schema = __esm({
             "claude-code",
             "mcp",
             "human-input",
-            "workflow"
+            "workflow",
+            "git-checkout"
           ],
           description: "Valid check types in configuration"
         },
@@ -15157,6 +15855,14 @@ var init_config_schema = __esm({
             skip_code_context: {
               type: "boolean",
               description: "Skip adding code context (diffs, files, PR info) to the prompt"
+            },
+            skip_slack_context: {
+              type: "boolean",
+              description: "Skip adding Slack conversation context to the prompt (when running under Slack)"
+            },
+            skip_transport_context: {
+              type: "boolean",
+              description: "Skip adding transport-specific context (e.g., GitHub PR/issue XML, Slack conversation XML) to the prompt. When true, this behaves like setting both skip_code_context and skip_slack_context to true, unless those are explicitly overridden."
             },
             mcpServers: {
               $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
@@ -15701,13 +16407,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>>": {
+        "Record<string,Partial<interface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>": {
+        "Partial<interface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730>": {
           type: "object",
           additionalProperties: false
         },
@@ -15741,6 +16447,10 @@ var init_config_schema = __esm({
         PrCommentOutput: {
           type: "object",
           properties: {
+            enabled: {
+              type: "boolean",
+              description: "Whether PR comments are enabled"
+            },
             format: {
               $ref: "#/definitions/ConfigOutputFormat",
               description: "Format of the output"
@@ -16129,7 +16839,8 @@ var init_config = __esm({
         "log",
         "github",
         "human-input",
-        "workflow"
+        "workflow",
+        "git-checkout"
       ];
       validEventTriggers = [...VALID_EVENT_TRIGGERS];
       validOutputFormats = ["table", "json", "markdown", "sarif"];
@@ -16979,6 +17690,9 @@ ${errors}`);
                 const addl = e.params && e.params.additionalProperty || "unknown";
                 const fullField = pathStr ? `${pathStr}.${addl}` : addl;
                 const topLevel = !pathStr;
+                if (topLevel && (addl === "tests" || addl === "slack")) {
+                  continue;
+                }
                 warnings.push({
                   field: fullField || "config",
                   message: topLevel ? `Unknown top-level key '${addl}' will be ignored.` : `Unknown key '${addl}' will be ignored`
@@ -17617,10 +18331,10 @@ var init_workflow_check_provider = __esm({
        * so it can be executed by the state machine as a nested workflow.
        */
       async loadWorkflowFromConfigPath(sourcePath, baseDir) {
-        const path17 = require("path");
-        const fs16 = require("fs");
-        const resolved = path17.isAbsolute(sourcePath) ? sourcePath : path17.resolve(baseDir, sourcePath);
-        if (!fs16.existsSync(resolved)) {
+        const path19 = require("path");
+        const fs18 = require("fs");
+        const resolved = path19.isAbsolute(sourcePath) ? sourcePath : path19.resolve(baseDir, sourcePath);
+        if (!fs18.existsSync(resolved)) {
           throw new Error(`Workflow config not found at: ${resolved}`);
         }
         const { ConfigManager: ConfigManager2 } = (init_config(), __toCommonJS(config_exports));
@@ -17630,8 +18344,8 @@ var init_workflow_check_provider = __esm({
         if (!steps || Object.keys(steps).length === 0) {
           throw new Error(`Config '${resolved}' does not contain any steps to execute as a workflow`);
         }
-        const id = path17.basename(resolved).replace(/\.(ya?ml)$/i, "");
-        const name = loaded.name || `Workflow from ${path17.basename(resolved)}`;
+        const id = path19.basename(resolved).replace(/\.(ya?ml)$/i, "");
+        const name = loaded.name || `Workflow from ${path19.basename(resolved)}`;
         const workflowDef = {
           id,
           name,
@@ -17645,6 +18359,688 @@ var init_workflow_check_provider = __esm({
           outputs: loaded.outputs
         };
         return workflowDef;
+      }
+    };
+  }
+});
+
+// src/utils/worktree-manager.ts
+var fs13, path14, crypto, WorktreeManager, worktreeManager;
+var init_worktree_manager = __esm({
+  "src/utils/worktree-manager.ts"() {
+    "use strict";
+    fs13 = __toESM(require("fs"));
+    path14 = __toESM(require("path"));
+    crypto = __toESM(require("crypto"));
+    init_command_executor();
+    init_logger();
+    WorktreeManager = class _WorktreeManager {
+      static instance;
+      config;
+      activeWorktrees;
+      cleanupHandlersRegistered = false;
+      constructor() {
+        let cwd;
+        try {
+          cwd = process.cwd() || "/tmp";
+        } catch {
+          cwd = "/tmp";
+        }
+        const defaultBasePath = process.env.VISOR_WORKTREE_PATH || path14.join(cwd, ".visor", "worktrees");
+        this.config = {
+          enabled: true,
+          base_path: defaultBasePath,
+          cleanup_on_exit: true,
+          max_age_hours: 24
+        };
+        this.activeWorktrees = /* @__PURE__ */ new Map();
+        this.ensureDirectories();
+        this.registerCleanupHandlers();
+      }
+      static getInstance() {
+        if (!_WorktreeManager.instance) {
+          _WorktreeManager.instance = new _WorktreeManager();
+        }
+        return _WorktreeManager.instance;
+      }
+      /**
+       * Update configuration
+       */
+      configure(config) {
+        this.config = { ...this.config, ...config };
+        this.ensureDirectories();
+      }
+      getConfig() {
+        return { ...this.config };
+      }
+      /**
+       * Ensure base directories exist
+       */
+      ensureDirectories() {
+        if (!this.config.base_path) {
+          logger.debug("Skipping directory creation: base_path not initialized");
+          return;
+        }
+        const reposDir = this.getReposDir();
+        const worktreesDir = this.getWorktreesDir();
+        if (!fs13.existsSync(reposDir)) {
+          fs13.mkdirSync(reposDir, { recursive: true });
+          logger.debug(`Created repos directory: ${reposDir}`);
+        }
+        if (!fs13.existsSync(worktreesDir)) {
+          fs13.mkdirSync(worktreesDir, { recursive: true });
+          logger.debug(`Created worktrees directory: ${worktreesDir}`);
+        }
+      }
+      getReposDir() {
+        return path14.join(this.config.base_path, "repos");
+      }
+      getWorktreesDir() {
+        return path14.join(this.config.base_path, "worktrees");
+      }
+      /**
+       * Generate a unique worktree ID
+       */
+      generateWorktreeId(repository, ref) {
+        const sanitizedRepo = repository.replace(/[^a-zA-Z0-9-]/g, "-");
+        const sanitizedRef = ref.replace(/[^a-zA-Z0-9-]/g, "-");
+        const hash = crypto.createHash("md5").update(`${repository}:${ref}:${Date.now()}`).digest("hex").substring(0, 8);
+        return `${sanitizedRepo}-${sanitizedRef}-${hash}`;
+      }
+      /**
+       * Get or create bare repository
+       */
+      async getOrCreateBareRepo(repository, repoUrl, token, fetchDepth) {
+        const reposDir = this.getReposDir();
+        const repoName = repository.replace(/\//g, "-");
+        const bareRepoPath = path14.join(reposDir, `${repoName}.git`);
+        if (fs13.existsSync(bareRepoPath)) {
+          logger.debug(`Bare repository already exists: ${bareRepoPath}`);
+          await this.updateBareRepo(bareRepoPath);
+          return bareRepoPath;
+        }
+        const cloneUrl = this.buildAuthenticatedUrl(repoUrl, token);
+        const redactedUrl = this.redactUrl(cloneUrl);
+        logger.info(
+          `Cloning bare repository: ${redactedUrl}${fetchDepth ? ` (depth: ${fetchDepth})` : ""}`
+        );
+        let cloneCmd = `git clone --bare`;
+        if (fetchDepth && fetchDepth > 0) {
+          const depth = parseInt(String(fetchDepth), 10);
+          if (isNaN(depth) || depth < 1) {
+            throw new Error("fetch_depth must be a positive integer");
+          }
+          cloneCmd += ` --depth ${depth}`;
+        }
+        cloneCmd += ` ${this.escapeShellArg(cloneUrl)} ${this.escapeShellArg(bareRepoPath)}`;
+        const result = await this.executeGitCommand(cloneCmd, { timeout: 3e5 });
+        if (result.exitCode !== 0) {
+          const redactedStderr = this.redactUrl(result.stderr);
+          throw new Error(`Failed to clone bare repository: ${redactedStderr}`);
+        }
+        logger.info(`Successfully cloned bare repository to ${bareRepoPath}`);
+        return bareRepoPath;
+      }
+      /**
+       * Update bare repository refs
+       */
+      async updateBareRepo(bareRepoPath) {
+        logger.debug(`Updating bare repository: ${bareRepoPath}`);
+        const updateCmd = `git -C ${this.escapeShellArg(bareRepoPath)} remote update --prune`;
+        const result = await this.executeGitCommand(updateCmd, { timeout: 6e4 });
+        if (result.exitCode !== 0) {
+          logger.warn(`Failed to update bare repository: ${result.stderr}`);
+        } else {
+          logger.debug(`Successfully updated bare repository`);
+        }
+      }
+      /**
+       * Create a new worktree
+       */
+      async createWorktree(repository, repoUrl, ref, options = {}) {
+        this.validateRef(ref);
+        const bareRepoPath = await this.getOrCreateBareRepo(
+          repository,
+          repoUrl,
+          options.token,
+          options.fetchDepth
+        );
+        const worktreeId = this.generateWorktreeId(repository, ref);
+        let worktreePath = options.workingDirectory || path14.join(this.getWorktreesDir(), worktreeId);
+        if (options.workingDirectory) {
+          worktreePath = this.validatePath(options.workingDirectory);
+        }
+        if (fs13.existsSync(worktreePath)) {
+          logger.debug(`Worktree already exists: ${worktreePath}`);
+          if (options.clean) {
+            logger.debug(`Cleaning existing worktree`);
+            await this.cleanWorktree(worktreePath);
+          }
+          const metadata2 = await this.loadMetadata(worktreePath);
+          if (metadata2) {
+            this.activeWorktrees.set(worktreeId, metadata2);
+            return {
+              id: worktreeId,
+              path: worktreePath,
+              ref: metadata2.ref,
+              commit: metadata2.commit,
+              metadata: metadata2,
+              locked: false
+            };
+          }
+        }
+        await this.fetchRef(bareRepoPath, ref);
+        logger.info(`Creating worktree for ${repository}@${ref}`);
+        const createCmd = `git -C ${this.escapeShellArg(bareRepoPath)} worktree add ${this.escapeShellArg(worktreePath)} ${this.escapeShellArg(ref)}`;
+        const result = await this.executeGitCommand(createCmd, { timeout: 6e4 });
+        if (result.exitCode !== 0) {
+          throw new Error(`Failed to create worktree: ${result.stderr}`);
+        }
+        const commit = await this.getCommitSha(worktreePath);
+        const metadata = {
+          worktree_id: worktreeId,
+          created_at: (/* @__PURE__ */ new Date()).toISOString(),
+          workflow_id: options.workflowId,
+          ref,
+          commit,
+          repository,
+          pid: process.pid,
+          cleanup_on_exit: true,
+          bare_repo_path: bareRepoPath,
+          worktree_path: worktreePath
+        };
+        await this.saveMetadata(worktreePath, metadata);
+        this.activeWorktrees.set(worktreeId, metadata);
+        logger.info(`Successfully created worktree: ${worktreePath}`);
+        return {
+          id: worktreeId,
+          path: worktreePath,
+          ref,
+          commit,
+          metadata,
+          locked: false
+        };
+      }
+      /**
+       * Fetch a specific ref in bare repository
+       */
+      async fetchRef(bareRepoPath, ref) {
+        this.validateRef(ref);
+        logger.debug(`Fetching ref: ${ref}`);
+        const fetchCmd = `git -C ${this.escapeShellArg(bareRepoPath)} fetch origin ${this.escapeShellArg(ref + ":" + ref)} 2>&1 || true`;
+        await this.executeGitCommand(fetchCmd, { timeout: 6e4 });
+      }
+      /**
+       * Clean worktree (reset and remove untracked files)
+       */
+      async cleanWorktree(worktreePath) {
+        const resetCmd = `git -C ${this.escapeShellArg(worktreePath)} reset --hard HEAD`;
+        await this.executeGitCommand(resetCmd);
+        const cleanCmd = `git -C ${this.escapeShellArg(worktreePath)} clean -fdx`;
+        await this.executeGitCommand(cleanCmd);
+      }
+      /**
+       * Get commit SHA for worktree
+       */
+      async getCommitSha(worktreePath) {
+        const cmd = `git -C ${this.escapeShellArg(worktreePath)} rev-parse HEAD`;
+        const result = await this.executeGitCommand(cmd);
+        if (result.exitCode !== 0) {
+          throw new Error(`Failed to get commit SHA: ${result.stderr}`);
+        }
+        return result.stdout.trim();
+      }
+      /**
+       * Remove a worktree
+       */
+      async removeWorktree(worktreeId) {
+        const metadata = this.activeWorktrees.get(worktreeId);
+        if (!metadata) {
+          logger.warn(`Worktree not found in active list: ${worktreeId}`);
+          return;
+        }
+        const { bare_repo_path, worktree_path } = metadata;
+        logger.info(`Removing worktree: ${worktree_path}`);
+        const removeCmd = `git -C ${this.escapeShellArg(bare_repo_path)} worktree remove ${this.escapeShellArg(worktree_path)} --force`;
+        const result = await this.executeGitCommand(removeCmd, { timeout: 3e4 });
+        if (result.exitCode !== 0) {
+          logger.warn(`Failed to remove worktree via git: ${result.stderr}`);
+          if (fs13.existsSync(worktree_path)) {
+            logger.debug(`Manually removing worktree directory`);
+            fs13.rmSync(worktree_path, { recursive: true, force: true });
+          }
+        }
+        this.activeWorktrees.delete(worktreeId);
+        logger.info(`Successfully removed worktree: ${worktreeId}`);
+      }
+      /**
+       * Save worktree metadata
+       */
+      async saveMetadata(worktreePath, metadata) {
+        const metadataPath = path14.join(worktreePath, ".visor-metadata.json");
+        fs13.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
+      }
+      /**
+       * Load worktree metadata
+       */
+      async loadMetadata(worktreePath) {
+        const metadataPath = path14.join(worktreePath, ".visor-metadata.json");
+        if (!fs13.existsSync(metadataPath)) {
+          return null;
+        }
+        try {
+          const content = fs13.readFileSync(metadataPath, "utf8");
+          return JSON.parse(content);
+        } catch (error) {
+          logger.warn(`Failed to load metadata: ${error}`);
+          return null;
+        }
+      }
+      /**
+       * List all worktrees
+       */
+      async listWorktrees() {
+        const worktreesDir = this.getWorktreesDir();
+        if (!fs13.existsSync(worktreesDir)) {
+          return [];
+        }
+        const entries = fs13.readdirSync(worktreesDir, { withFileTypes: true });
+        const worktrees = [];
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          const worktreePath = path14.join(worktreesDir, entry.name);
+          const metadata = await this.loadMetadata(worktreePath);
+          if (metadata) {
+            worktrees.push({
+              id: metadata.worktree_id,
+              path: worktreePath,
+              ref: metadata.ref,
+              commit: metadata.commit,
+              metadata,
+              locked: this.isProcessAlive(metadata.pid)
+            });
+          }
+        }
+        return worktrees;
+      }
+      /**
+       * Cleanup stale worktrees
+       */
+      async cleanupStaleWorktrees() {
+        logger.debug("Cleaning up stale worktrees");
+        const worktrees = await this.listWorktrees();
+        const now = /* @__PURE__ */ new Date();
+        const maxAgeMs = this.config.max_age_hours * 60 * 60 * 1e3;
+        for (const worktree of worktrees) {
+          const createdAt = new Date(worktree.metadata.created_at);
+          const ageMs = now.getTime() - createdAt.getTime();
+          if (worktree.locked) {
+            continue;
+          }
+          if (ageMs > maxAgeMs) {
+            logger.info(
+              `Removing stale worktree: ${worktree.id} (age: ${Math.round(ageMs / 1e3 / 60)} minutes)`
+            );
+            await this.removeWorktree(worktree.id);
+          }
+        }
+      }
+      /**
+       * Cleanup all worktrees for current process
+       */
+      async cleanupProcessWorktrees() {
+        logger.debug("Cleaning up worktrees for current process");
+        const currentPid = process.pid;
+        const worktrees = await this.listWorktrees();
+        for (const worktree of worktrees) {
+          if (worktree.metadata.pid === currentPid && worktree.metadata.cleanup_on_exit) {
+            logger.info(`Cleaning up worktree: ${worktree.id}`);
+            await this.removeWorktree(worktree.id);
+          }
+        }
+      }
+      /**
+       * Check if a process is alive
+       */
+      isProcessAlive(pid) {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch (_error) {
+          return false;
+        }
+      }
+      /**
+       * Register cleanup handlers
+       */
+      registerCleanupHandlers() {
+        if (this.cleanupHandlersRegistered) {
+          return;
+        }
+        if (this.config.cleanup_on_exit) {
+          process.on("exit", () => {
+            logger.debug("Process exiting, cleanup handler triggered");
+          });
+          process.on("SIGINT", async () => {
+            logger.info("SIGINT received, cleaning up worktrees");
+            await this.cleanupProcessWorktrees();
+            process.exit(130);
+          });
+          process.on("SIGTERM", async () => {
+            logger.info("SIGTERM received, cleaning up worktrees");
+            await this.cleanupProcessWorktrees();
+            process.exit(143);
+          });
+          process.on("uncaughtException", async (error) => {
+            logger.error(`Uncaught exception, cleaning up worktrees: ${error}`);
+            await this.cleanupProcessWorktrees();
+            process.exit(1);
+          });
+        }
+        this.cleanupHandlersRegistered = true;
+      }
+      /**
+       * Escape shell argument to prevent command injection
+       *
+       * Uses POSIX-standard single-quote escaping which prevents ALL shell metacharacter
+       * interpretation (including $, `, \, ", ;, &, |, etc.)
+       *
+       * How it works:
+       * - Everything is wrapped in single quotes: 'arg'
+       * - Single quotes within are escaped as: ' → '\''
+       *   (close quote, literal escaped quote, open quote)
+       *
+       * This is safer than double quotes which still allow $expansion and `backticks`
+       *
+       * Example: "foo'bar" → 'foo'\''bar'
+       */
+      escapeShellArg(arg) {
+        return `'${arg.replace(/'/g, "'\\''")}'`;
+      }
+      /**
+       * Validate git ref to prevent command injection
+       */
+      validateRef(ref) {
+        const safeRefPattern = /^[a-zA-Z0-9._/:-]+$/;
+        if (!safeRefPattern.test(ref)) {
+          throw new Error(
+            `Invalid git ref: ${ref}. Refs must only contain alphanumeric characters, dots, underscores, slashes, colons, and hyphens.`
+          );
+        }
+        if (ref.includes("..") || ref.startsWith("-") || ref.endsWith(".lock")) {
+          throw new Error(
+            `Invalid git ref: ${ref}. Refs cannot contain '..', start with '-', or end with '.lock'.`
+          );
+        }
+        if (ref.length > 256) {
+          throw new Error(`Invalid git ref: ${ref}. Refs cannot exceed 256 characters.`);
+        }
+      }
+      /**
+       * Validate path to prevent directory traversal
+       */
+      validatePath(userPath) {
+        const resolvedPath = path14.resolve(userPath);
+        if (!path14.isAbsolute(resolvedPath)) {
+          throw new Error("Path must be absolute");
+        }
+        const sensitivePatterns = [
+          "/etc",
+          "/root",
+          "/boot",
+          "/sys",
+          "/proc",
+          "/dev",
+          "C:\\Windows\\System32",
+          "C:\\Program Files"
+        ];
+        for (const pattern of sensitivePatterns) {
+          if (resolvedPath.startsWith(pattern)) {
+            throw new Error(`Access to system directory ${pattern} is not allowed`);
+          }
+        }
+        return resolvedPath;
+      }
+      /**
+       * Redact sensitive tokens from URLs for logging
+       */
+      redactUrl(url) {
+        return url.replace(/x-access-token:[^@]+@/g, "x-access-token:[REDACTED]@").replace(/:\/\/[^:]+:[^@]+@/g, "://[REDACTED]:[REDACTED]@");
+      }
+      /**
+       * Execute a git command
+       */
+      async executeGitCommand(command, options = {}) {
+        const result = await commandExecutor.execute(command, {
+          timeout: options.timeout || 3e4,
+          env: options.env || process.env
+        });
+        return {
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitCode: result.exitCode
+        };
+      }
+      /**
+       * Build authenticated URL with token
+       */
+      buildAuthenticatedUrl(repoUrl, token) {
+        if (!token) {
+          return repoUrl;
+        }
+        if (repoUrl.includes("github.com")) {
+          if (repoUrl.startsWith("git@github.com:")) {
+            repoUrl = repoUrl.replace("git@github.com:", "https://github.com/");
+          }
+          if (repoUrl.startsWith("https://")) {
+            return repoUrl.replace("https://", `https://x-access-token:${token}@`);
+          }
+        }
+        return repoUrl;
+      }
+      /**
+       * Get repository URL from repository identifier
+       */
+      getRepositoryUrl(repository, _token) {
+        if (repository.startsWith("http://") || repository.startsWith("https://") || repository.startsWith("git@")) {
+          return repository;
+        }
+        return `https://github.com/${repository}.git`;
+      }
+    };
+    worktreeManager = WorktreeManager.getInstance();
+  }
+});
+
+// src/providers/git-checkout-provider.ts
+var GitCheckoutProvider;
+var init_git_checkout_provider = __esm({
+  "src/providers/git-checkout-provider.ts"() {
+    "use strict";
+    init_check_provider_interface();
+    init_worktree_manager();
+    init_logger();
+    init_liquid_extensions();
+    init_env_exposure();
+    GitCheckoutProvider = class extends CheckProvider {
+      liquid = createExtendedLiquid();
+      getName() {
+        return "git-checkout";
+      }
+      getDescription() {
+        return "Checkout code from git repositories using worktrees for efficient multi-workflow execution";
+      }
+      async validateConfig(config) {
+        if (!config || typeof config !== "object") {
+          logger.error("Invalid config: must be an object");
+          return false;
+        }
+        const checkoutConfig = config;
+        if (!checkoutConfig.ref || typeof checkoutConfig.ref !== "string") {
+          logger.error("Invalid config: ref is required and must be a string");
+          return false;
+        }
+        if (checkoutConfig.fetch_depth !== void 0) {
+          if (typeof checkoutConfig.fetch_depth !== "number" || checkoutConfig.fetch_depth < 0) {
+            logger.error("Invalid config: fetch_depth must be a non-negative number");
+            return false;
+          }
+        }
+        if (checkoutConfig.fetch_tags !== void 0 && typeof checkoutConfig.fetch_tags !== "boolean") {
+          logger.error("Invalid config: fetch_tags must be a boolean");
+          return false;
+        }
+        if (checkoutConfig.submodules !== void 0) {
+          const validSubmoduleValues = [true, false, "recursive"];
+          if (!validSubmoduleValues.includes(checkoutConfig.submodules)) {
+            logger.error('Invalid config: submodules must be true, false, or "recursive"');
+            return false;
+          }
+        }
+        if (checkoutConfig.sparse_checkout !== void 0 && !Array.isArray(checkoutConfig.sparse_checkout)) {
+          logger.error("Invalid config: sparse_checkout must be an array");
+          return false;
+        }
+        return true;
+      }
+      async execute(prInfo, config, dependencyResults, context2) {
+        const checkoutConfig = config;
+        const issues = [];
+        try {
+          const templateContext = this.buildTemplateContext(
+            prInfo,
+            dependencyResults,
+            context2,
+            checkoutConfig
+          );
+          const resolvedRef = await this.liquid.parseAndRender(checkoutConfig.ref, templateContext);
+          const resolvedRepository = checkoutConfig.repository ? await this.liquid.parseAndRender(checkoutConfig.repository, templateContext) : process.env.GITHUB_REPOSITORY || "unknown/unknown";
+          const resolvedToken = checkoutConfig.token ? await this.liquid.parseAndRender(checkoutConfig.token, templateContext) : void 0;
+          const resolvedWorkingDirectory = checkoutConfig.working_directory ? await this.liquid.parseAndRender(checkoutConfig.working_directory, templateContext) : void 0;
+          logger.info(`Checking out repository: ${resolvedRepository}@${resolvedRef}`);
+          const repoUrl = worktreeManager.getRepositoryUrl(resolvedRepository, resolvedToken);
+          const worktree = await worktreeManager.createWorktree(
+            resolvedRepository,
+            repoUrl,
+            resolvedRef,
+            {
+              token: resolvedToken,
+              workingDirectory: resolvedWorkingDirectory,
+              clean: checkoutConfig.clean !== false,
+              // Default: true
+              workflowId: context2?.workflowId,
+              fetchDepth: checkoutConfig.fetch_depth
+            }
+          );
+          const output = {
+            success: true,
+            path: worktree.path,
+            ref: resolvedRef,
+            commit: worktree.commit,
+            worktree_id: worktree.id,
+            repository: resolvedRepository,
+            is_worktree: true
+          };
+          logger.info(
+            `Successfully checked out ${resolvedRepository}@${resolvedRef} to ${worktree.path}`
+          );
+          return {
+            issues,
+            output
+          };
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          logger.error(`Git checkout failed: ${errorMessage}`);
+          issues.push({
+            file: "git-checkout",
+            line: 0,
+            ruleId: "git-checkout/error",
+            message: `Failed to checkout code: ${errorMessage}`,
+            severity: "error",
+            category: "logic"
+          });
+          const output = {
+            success: false,
+            error: errorMessage
+          };
+          return {
+            issues,
+            output
+          };
+        }
+      }
+      /**
+       * Build template context for variable resolution
+       */
+      buildTemplateContext(prInfo, dependencyResults, context2, config) {
+        const outputsObj = {};
+        if (dependencyResults) {
+          for (const [checkName, result] of dependencyResults.entries()) {
+            outputsObj[checkName] = result.output !== void 0 ? result.output : result;
+          }
+        }
+        const outputHistory = config?.__outputHistory;
+        const historyObj = {};
+        if (outputHistory) {
+          for (const [checkName, history] of outputHistory.entries()) {
+            historyObj[checkName] = history;
+          }
+        }
+        const safeEnv = buildSandboxEnv(process.env);
+        return {
+          pr: {
+            number: prInfo.number,
+            title: prInfo.title,
+            author: prInfo.author,
+            head: prInfo.head,
+            base: prInfo.base,
+            repo: process.env.GITHUB_REPOSITORY || "",
+            files: prInfo.files
+          },
+          files: prInfo.files,
+          outputs: outputsObj,
+          outputs_history: historyObj,
+          env: safeEnv,
+          inputs: context2?.workflowInputs
+        };
+      }
+      getSupportedConfigKeys() {
+        return [
+          "type",
+          "ref",
+          "repository",
+          "token",
+          "fetch_depth",
+          "fetch_tags",
+          "submodules",
+          "working_directory",
+          "use_worktree",
+          "clean",
+          "sparse_checkout",
+          "lfs",
+          "timeout",
+          "criticality",
+          "assume",
+          "guarantee",
+          "cleanup_on_failure",
+          "persist_worktree",
+          "depends_on",
+          "if",
+          "fail_if",
+          "on"
+        ];
+      }
+      async isAvailable() {
+        try {
+          const { commandExecutor: commandExecutor2 } = await Promise.resolve().then(() => (init_command_executor(), command_executor_exports));
+          const result = await commandExecutor2.execute("git --version", { timeout: 5e3 });
+          return result.exitCode === 0;
+        } catch (_error) {
+          return false;
+        }
+      }
+      getRequirements() {
+        return ["git"];
       }
     };
   }
@@ -17673,6 +19069,7 @@ var init_check_provider_registry = __esm({
     init_human_input_check_provider();
     init_script_check_provider();
     init_workflow_check_provider();
+    init_git_checkout_provider();
     CheckProviderRegistry = class _CheckProviderRegistry {
       providers = /* @__PURE__ */ new Map();
       static instance;
@@ -17705,6 +19102,7 @@ var init_check_provider_registry = __esm({
         this.register(new GitHubOpsProvider());
         this.register(new HumanInputCheckProvider());
         this.register(new WorkflowCheckProvider());
+        this.register(new GitCheckoutProvider());
         try {
           this.register(new ClaudeCodeCheckProvider());
         } catch (error) {
@@ -17846,19 +19244,23 @@ __export(renderer_schema_exports, {
 });
 async function loadRendererSchema(name) {
   try {
-    const fs16 = await import("fs/promises");
-    const path17 = await import("path");
+    const fs18 = await import("fs/promises");
+    const path19 = await import("path");
     const sanitized = String(name).replace(/[^a-zA-Z0-9-]/g, "");
     if (!sanitized) return void 0;
     const candidates = [
-      // When running from dist
-      path17.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
+      // When bundled with ncc, __dirname is dist/ and output/ is at dist/output/
+      path19.join(__dirname, "output", sanitized, "schema.json"),
+      // When running from source, __dirname is src/state-machine/dispatch/ and output/ is at output/
+      path19.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
       // When running from a checkout with output/ folder copied to CWD
-      path17.join(process.cwd(), "output", sanitized, "schema.json")
+      path19.join(process.cwd(), "output", sanitized, "schema.json"),
+      // Fallback: cwd/dist/output/
+      path19.join(process.cwd(), "dist", "output", sanitized, "schema.json")
     ];
     for (const p of candidates) {
       try {
-        const raw = await fs16.readFile(p, "utf-8");
+        const raw = await fs18.readFile(p, "utf-8");
         return JSON.parse(raw);
       } catch {
       }
@@ -19178,6 +20580,15 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
     if (!checkConfig2) {
       throw new Error(`Check configuration not found: ${checkId}`);
     }
+    const checksMeta = {};
+    try {
+      const allChecks = context2.config.checks || {};
+      for (const [id, cfg] of Object.entries(allChecks)) {
+        const anyCfg = cfg;
+        checksMeta[id] = { type: anyCfg.type, group: anyCfg.group };
+      }
+    } catch {
+    }
     const providerType = checkConfig2.type || "ai";
     const providerRegistry = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports)).CheckProviderRegistry.getInstance();
     const provider = providerRegistry.getProviderOrThrow(providerType);
@@ -19196,7 +20607,9 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       forEach: checkConfig2.forEach,
       ...checkConfig2,
       eventContext: context2.prInfo?.eventContext || {},
+      // Expose history and checks metadata for template helpers
       __outputHistory: outputHistory,
+      checksMeta,
       ai: {
         ...checkConfig2.ai || {},
         timeout: checkConfig2.ai?.timeout || 6e5,
@@ -19227,7 +20640,9 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       ...context2.executionContext,
       _engineMode: context2.mode,
       _parentContext: context2,
-      _parentState: state
+      _parentState: state,
+      // Make checks metadata available to providers that want it
+      checksMeta
     };
     try {
       const assumeExpr = checkConfig2?.assume;
@@ -19299,6 +20714,14 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       { "visor.check.id": checkId, "visor.check.type": providerType },
       async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
     );
+    try {
+      const awaitingHumanInput = result?.awaitingHumanInput === true || result?.output && result.output.awaitingHumanInput === true;
+      if (awaitingHumanInput) {
+        state.flags = state.flags || {};
+        state.flags.awaitingHumanInput = true;
+      }
+    } catch {
+    }
     const enrichedIssues = (result.issues || []).map((issue) => ({
       ...issue,
       checkName: checkId,
@@ -19853,8 +21276,8 @@ function updateStats(results, state, isForEachIteration = false) {
 async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs16 = await import("fs/promises");
-    const path17 = await import("path");
+    const fs18 = await import("fs/promises");
+    const path19 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
@@ -19862,20 +21285,26 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
       templateContent = String(checkConfig.template.content);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path17.resolve(process.cwd(), file);
-      templateContent = await fs16.readFile(resolved, "utf-8");
+      const resolved = path19.resolve(process.cwd(), file);
+      templateContent = await fs18.readFile(resolved, "utf-8");
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          // When bundled (dist), __dirname points to dist/state-machine/states
-          path17.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
-          // Dev fallback
-          path17.join(process.cwd(), "output", sanitized, "template.liquid")
+          path19.join(__dirname, "output", sanitized, "template.liquid"),
+          // bundled: dist/output/
+          path19.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          // source (from state-machine/states)
+          path19.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
+          // source (alternate)
+          path19.join(process.cwd(), "output", sanitized, "template.liquid"),
+          // fallback: cwd/output/
+          path19.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs16.readFile(p, "utf-8");
+            templateContent = await fs18.readFile(p, "utf-8");
             if (templateContent) break;
           } catch {
           }
@@ -19993,6 +21422,7 @@ var init_runner = __esm({
       context;
       state;
       debugServer;
+      hasRun = false;
       constructor(context2, debugServer) {
         this.context = context2;
         this.state = this.initializeState();
@@ -20031,6 +21461,7 @@ var init_runner = __esm({
        * Execute the state machine
        */
       async run() {
+        this.hasRun = true;
         try {
           this.emitEvent({ type: "StateTransition", from: "Init", to: "Init" });
           while (!this.isTerminalState(this.state.currentState)) {
@@ -20400,6 +21831,16 @@ var init_runner = __esm({
         return this.state;
       }
       /**
+       * Hydrate the runner with a previously serialized state. Must be called
+       * before `run()` (i.e., when the runner has not started yet).
+       */
+      setState(state) {
+        if (this.hasRun) {
+          throw new Error("StateMachineRunner.setState: cannot set state after run() has started");
+        }
+        this.state = state;
+      }
+      /**
        * Bubble an event to parent context (nested workflows support)
        * This allows nested workflows to trigger re-runs in parent workflows
        */
@@ -20419,13 +21860,13 @@ var init_runner = __esm({
 });
 
 // src/utils/file-exclusion.ts
-var import_ignore, fs13, path14, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
+var import_ignore, fs14, path15, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
 var init_file_exclusion = __esm({
   "src/utils/file-exclusion.ts"() {
     "use strict";
     import_ignore = __toESM(require("ignore"));
-    fs13 = __toESM(require("fs"));
-    path14 = __toESM(require("path"));
+    fs14 = __toESM(require("fs"));
+    path15 = __toESM(require("path"));
     DEFAULT_EXCLUSION_PATTERNS = [
       "dist/",
       "build/",
@@ -20444,7 +21885,7 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to include (optional, defaults to common build artifacts)
        */
       constructor(workingDirectory = process.cwd(), additionalPatterns = DEFAULT_EXCLUSION_PATTERNS) {
-        const normalizedPath = path14.resolve(workingDirectory);
+        const normalizedPath = path15.resolve(workingDirectory);
         if (normalizedPath.includes("\0")) {
           throw new Error("Invalid workingDirectory: contains null bytes");
         }
@@ -20456,11 +21897,11 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to add to gitignore rules
        */
       loadGitignore(additionalPatterns) {
-        const gitignorePath = path14.resolve(this.workingDirectory, ".gitignore");
-        const resolvedWorkingDir = path14.resolve(this.workingDirectory);
+        const gitignorePath = path15.resolve(this.workingDirectory, ".gitignore");
+        const resolvedWorkingDir = path15.resolve(this.workingDirectory);
         try {
-          const relativePath = path14.relative(resolvedWorkingDir, gitignorePath);
-          if (relativePath.startsWith("..") || path14.isAbsolute(relativePath)) {
+          const relativePath = path15.relative(resolvedWorkingDir, gitignorePath);
+          if (relativePath.startsWith("..") || path15.isAbsolute(relativePath)) {
             throw new Error("Invalid gitignore path: path traversal detected");
           }
           if (relativePath !== ".gitignore") {
@@ -20470,8 +21911,8 @@ var init_file_exclusion = __esm({
           if (additionalPatterns && additionalPatterns.length > 0) {
             this.gitignore.add(additionalPatterns);
           }
-          if (fs13.existsSync(gitignorePath)) {
-            const rawContent = fs13.readFileSync(gitignorePath, "utf8");
+          if (fs14.existsSync(gitignorePath)) {
+            const rawContent = fs14.readFileSync(gitignorePath, "utf8");
             const gitignoreContent = rawContent.replace(/[\r\n]+/g, "\n").replace(/[\x00-\x09\x0B-\x1F\x7F]/g, "").split("\n").filter((line) => line.length < 1e3).join("\n").trim();
             this.gitignore.add(gitignoreContent);
             if (process.env.VISOR_DEBUG === "true") {
@@ -20503,13 +21944,13 @@ var git_repository_analyzer_exports = {};
 __export(git_repository_analyzer_exports, {
   GitRepositoryAnalyzer: () => GitRepositoryAnalyzer
 });
-var import_simple_git2, path15, fs14, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
+var import_simple_git2, path16, fs15, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
 var init_git_repository_analyzer = __esm({
   "src/git-repository-analyzer.ts"() {
     "use strict";
     import_simple_git2 = require("simple-git");
-    path15 = __toESM(require("path"));
-    fs14 = __toESM(require("fs"));
+    path16 = __toESM(require("path"));
+    fs15 = __toESM(require("fs"));
     init_file_exclusion();
     MAX_PATCH_SIZE = 50 * 1024;
     GitRepositoryAnalyzer = class {
@@ -20698,7 +22139,7 @@ ${file.patch}`).join("\n\n");
               console.error(`\u23ED\uFE0F  Skipping excluded file: ${file}`);
               continue;
             }
-            const filePath = path15.join(this.cwd, file);
+            const filePath = path16.join(this.cwd, file);
             const fileChange = await this.analyzeFileChange(file, status2, filePath, includeContext);
             changes.push(fileChange);
           }
@@ -20774,7 +22215,7 @@ ${file.patch}`).join("\n\n");
         let content;
         let truncated = false;
         try {
-          if (includeContext && status !== "added" && fs14.existsSync(filePath)) {
+          if (includeContext && status !== "added" && fs15.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const result = this.truncatePatch(diff, filename);
@@ -20784,7 +22225,7 @@ ${file.patch}`).join("\n\n");
               additions = lines.filter((line) => line.startsWith("+")).length;
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
-          } else if (status !== "added" && fs14.existsSync(filePath)) {
+          } else if (status !== "added" && fs15.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const lines = diff.split("\n");
@@ -20792,17 +22233,17 @@ ${file.patch}`).join("\n\n");
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
           }
-          if (status === "added" && fs14.existsSync(filePath)) {
+          if (status === "added" && fs15.existsSync(filePath)) {
             try {
-              const stats = fs14.statSync(filePath);
+              const stats = fs15.statSync(filePath);
               if (stats.isFile() && stats.size < 1024 * 1024) {
                 if (includeContext) {
-                  content = fs14.readFileSync(filePath, "utf8");
+                  content = fs15.readFileSync(filePath, "utf8");
                   const result = this.truncatePatch(content, filename);
                   patch = result.patch;
                   truncated = result.truncated;
                 }
-                const fileContent = includeContext ? content : fs14.readFileSync(filePath, "utf8");
+                const fileContent = includeContext ? content : fs15.readFileSync(filePath, "utf8");
                 additions = fileContent.split("\n").length;
               }
             } catch {
@@ -21690,8 +23131,8 @@ ${content}
        * Sleep utility
        */
       sleep(ms) {
-        return new Promise((resolve7) => {
-          const t = setTimeout(resolve7, ms);
+        return new Promise((resolve9) => {
+          const t = setTimeout(resolve9, ms);
           if (typeof t.unref === "function") {
             try {
               t.unref();
@@ -21761,6 +23202,10 @@ var init_github_frontend = __esm({
       _timer = null;
       _lastFlush = 0;
       _pendingIds = /* @__PURE__ */ new Set();
+      // Mutex for serializing comment updates per group
+      updateLocks = /* @__PURE__ */ new Map();
+      minUpdateDelayMs = 1e3;
+      // Minimum delay between updates (public for testing)
       start(ctx) {
         const log2 = ctx.logger;
         const bus = ctx.eventBus;
@@ -21944,9 +23389,54 @@ ${end}`);
         }
         return lines.join("\\n\\n");
       }
+      /**
+       * Acquires a mutex lock for the given group and executes the update.
+       * This ensures only one comment update happens at a time per group,
+       * preventing race conditions where updates overwrite each other.
+       */
       async updateGroupedComment(ctx, comments, group, changedIds) {
+        const existingLock = this.updateLocks.get(group);
+        if (existingLock) {
+          try {
+            await existingLock;
+          } catch (error) {
+            logger.warn(
+              `[github-frontend] Previous update for group ${group} failed: ${error instanceof Error ? error.message : error}`
+            );
+          }
+        }
+        const updatePromise = this.performGroupedCommentUpdate(ctx, comments, group, changedIds);
+        this.updateLocks.set(group, updatePromise);
+        try {
+          await updatePromise;
+        } finally {
+          if (this.updateLocks.get(group) === updatePromise) {
+            this.updateLocks.delete(group);
+          }
+        }
+      }
+      /**
+       * Performs the actual comment update with delay enforcement.
+       */
+      async performGroupedCommentUpdate(ctx, comments, group, changedIds) {
         try {
           if (!ctx.run.repo || !ctx.run.pr) return;
+          const config = ctx.config;
+          const prCommentEnabled = config?.output?.pr_comment?.enabled !== false;
+          if (!prCommentEnabled) {
+            logger.debug(
+              `[github-frontend] PR comments disabled in config, skipping comment for group: ${group}`
+            );
+            return;
+          }
+          const timeSinceLastFlush = Date.now() - this._lastFlush;
+          if (this._lastFlush > 0 && timeSinceLastFlush < this.minUpdateDelayMs) {
+            const delay = this.minUpdateDelayMs - timeSinceLastFlush;
+            logger.debug(
+              `[github-frontend] Waiting ${delay}ms before next update to prevent rate limiting`
+            );
+            await this.sleep(delay);
+          }
           this.revision++;
           const mergedBody = await this.mergeIntoExistingBody(ctx, comments, group, changedIds);
           await comments.updateOrCreateComment(
@@ -21960,6 +23450,7 @@ ${end}`);
               commitSha: ctx.run.headSha
             }
           );
+          this._lastFlush = Date.now();
         } catch (e) {
           logger.debug(
             `[github-frontend] updateGroupedComment failed: ${e instanceof Error ? e.message : e}`
@@ -22201,6 +23692,490 @@ ${blocks}
         await this.updateGroupedComment(ctx, comments, group, ids.length > 0 ? ids : void 0);
         this._lastFlush = Date.now();
       }
+      /**
+       * Sleep utility for enforcing delays
+       */
+      sleep(ms) {
+        return new Promise((resolve9) => setTimeout(resolve9, ms));
+      }
+    };
+  }
+});
+
+// src/slack/client.ts
+var SlackClient;
+var init_client = __esm({
+  "src/slack/client.ts"() {
+    "use strict";
+    SlackClient = class {
+      token;
+      constructor(botToken) {
+        if (!botToken || typeof botToken !== "string") {
+          throw new Error("SlackClient: botToken is required");
+        }
+        this.token = botToken;
+      }
+      reactions = {
+        add: async ({
+          channel,
+          timestamp,
+          name
+        }) => {
+          const resp = await this.api("reactions.add", { channel, timestamp, name });
+          if (!resp || resp.ok !== true) {
+            const err = resp && resp.error || "unknown_error";
+            console.warn(`Slack reactions.add failed (non-fatal): ${err}`);
+            return { ok: false };
+          }
+          return { ok: true };
+        },
+        remove: async ({
+          channel,
+          timestamp,
+          name
+        }) => {
+          const resp = await this.api("reactions.remove", { channel, timestamp, name });
+          if (!resp || resp.ok !== true) {
+            const err = resp && resp.error || "unknown_error";
+            console.warn(`Slack reactions.remove failed (non-fatal): ${err}`);
+            return { ok: false };
+          }
+          return { ok: true };
+        }
+      };
+      chat = {
+        postMessage: async ({
+          channel,
+          text,
+          thread_ts
+        }) => {
+          const resp = await this.api("chat.postMessage", { channel, text, thread_ts });
+          if (!resp || resp.ok !== true) {
+            const err = resp && resp.error || "unknown_error";
+            console.warn(`Slack chat.postMessage failed (non-fatal): ${err}`);
+            return {
+              ts: void 0,
+              message: void 0,
+              data: resp
+            };
+          }
+          return {
+            ts: resp.ts || resp.message && resp.message.ts || void 0,
+            message: resp.message,
+            data: resp
+          };
+        },
+        update: async ({ channel, ts, text }) => {
+          const resp = await this.api("chat.update", { channel, ts, text });
+          if (!resp || resp.ok !== true) {
+            const err = resp && resp.error || "unknown_error";
+            console.warn(`Slack chat.update failed (non-fatal): ${err}`);
+            return { ok: false, ts };
+          }
+          return { ok: true, ts: resp.ts || ts };
+        }
+      };
+      async getBotUserId() {
+        const resp = await this.api("auth.test", {});
+        if (!resp || resp.ok !== true || !resp.user_id) {
+          console.warn("Slack auth.test failed (non-fatal); bot user id unavailable");
+          return "UNKNOWN_BOT";
+        }
+        return String(resp.user_id);
+      }
+      async fetchThreadReplies(channel, thread_ts, limit = 40) {
+        try {
+          const params = new URLSearchParams({
+            channel,
+            ts: thread_ts,
+            limit: String(limit)
+          });
+          const res = await fetch(`https://slack.com/api/conversations.replies?${params.toString()}`, {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${this.token}`
+            }
+          });
+          const resp = await res.json();
+          if (!resp || resp.ok !== true || !Array.isArray(resp.messages)) {
+            const err = resp && resp.error || "unknown_error";
+            console.warn(
+              `Slack conversations.replies failed (non-fatal): ${err} (channel=${channel}, ts=${thread_ts}, limit=${limit})`
+            );
+            return [];
+          }
+          return resp.messages.map((m) => ({
+            ts: String(m.ts || ""),
+            user: m.user,
+            text: m.text,
+            bot_id: m.bot_id,
+            thread_ts: m.thread_ts
+          }));
+        } catch (e) {
+          console.warn(
+            `Slack conversations.replies failed (non-fatal): ${e instanceof Error ? e.message : String(e)} (channel=${channel}, ts=${thread_ts}, limit=${limit})`
+          );
+          return [];
+        }
+      }
+      getWebClient() {
+        return {
+          conversations: {
+            history: async ({ channel, limit }) => await this.api("conversations.history", { channel, limit }),
+            open: async ({ users }) => await this.api("conversations.open", { users }),
+            replies: async ({ channel, ts, limit }) => await this.api("conversations.replies", { channel, ts, limit })
+          }
+        };
+      }
+      async api(method, body) {
+        const res = await fetch(`https://slack.com/api/${method}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json; charset=utf-8",
+            Authorization: `Bearer ${this.token}`
+          },
+          body: JSON.stringify(body)
+        });
+        return await res.json();
+      }
+    };
+  }
+});
+
+// src/slack/markdown.ts
+function markdownToSlack(text) {
+  if (!text || typeof text !== "string") return "";
+  let out = text;
+  out = out.replace(
+    /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
+    (_m, alt, url) => `<${url}|${alt || "image"}>`
+  );
+  out = out.replace(
+    /\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
+    (_m, label, url) => `<${url}|${label}>`
+  );
+  out = out.replace(/\*\*([^*]+)\*\*/g, (_m, inner) => `*${inner}*`);
+  out = out.replace(/__([^_]+)__/g, (_m, inner) => `*${inner}*`);
+  const lines = out.split(/\r?\n/);
+  let inCodeBlock = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trimStart();
+    if (/^```/.test(trimmed)) {
+      inCodeBlock = !inCodeBlock;
+      continue;
+    }
+    if (inCodeBlock) continue;
+    const match = /^(\s*)([-*])\s+(.+)$/.exec(line);
+    if (match) {
+      const [, indent, , rest] = match;
+      lines[i] = `${indent}\u2022 ${rest}`;
+    }
+  }
+  out = lines.join("\n");
+  return out;
+}
+function formatSlackText(text) {
+  return markdownToSlack(text);
+}
+var init_markdown = __esm({
+  "src/slack/markdown.ts"() {
+    "use strict";
+  }
+});
+
+// src/frontends/slack-frontend.ts
+var slack_frontend_exports = {};
+__export(slack_frontend_exports, {
+  SlackFrontend: () => SlackFrontend
+});
+var SlackFrontend;
+var init_slack_frontend = __esm({
+  "src/frontends/slack-frontend.ts"() {
+    "use strict";
+    init_client();
+    init_markdown();
+    SlackFrontend = class {
+      name = "slack";
+      subs = [];
+      cfg;
+      // Reactions ack/done per run (inbound Slack events only)
+      acked = false;
+      ackRef = null;
+      ackName = "eyes";
+      doneName = "thumbsup";
+      constructor(config) {
+        this.cfg = config || {};
+      }
+      start(ctx) {
+        const bus = ctx.eventBus;
+        try {
+          const hasClient = !!(ctx.slack || ctx.slackClient || this.cfg?.botToken || process.env.SLACK_BOT_TOKEN);
+          ctx.logger.info(`[slack-frontend] started; hasClient=${hasClient} defaultChannel=unset`);
+        } catch {
+        }
+        try {
+          const payload = this.getInboundSlackPayload(ctx);
+          if (payload) {
+            const ev = payload.event || {};
+            const ch = String(ev.channel || "-");
+            const ts = String(ev.ts || ev.event_ts || "-");
+            const user = String(ev.user || ev.bot_id || "-");
+            const type = String(ev.type || "-");
+            const thread = String(ev.thread_ts || "");
+            ctx.logger.info(
+              `[slack-frontend] inbound event received: type=${type} channel=${ch} ts=${ts}` + (thread ? ` thread_ts=${thread}` : "") + ` user=${user}`
+            );
+          }
+        } catch {
+        }
+        this.subs.push(
+          bus.on("CheckCompleted", async (env) => {
+            const ev = env && env.payload || env;
+            await this.maybePostDirectReply(ctx, ev.checkId, ev.result).catch(() => {
+            });
+          })
+        );
+        this.subs.push(
+          bus.on("StateTransition", async (env) => {
+            const ev = env && env.payload || env;
+            if (ev && (ev.to === "Completed" || ev.to === "Error")) {
+              await this.finalizeReactions(ctx).catch(() => {
+              });
+            }
+          })
+        );
+        this.subs.push(
+          bus.on("CheckScheduled", async () => {
+            await this.ensureAcknowledgement(ctx).catch(() => {
+            });
+          })
+        );
+        this.subs.push(
+          bus.on("HumanInputRequested", async (env) => {
+            try {
+              const ev = env && env.payload || env;
+              if (!ev || typeof ev.prompt !== "string" || !ev.checkId) return;
+              let channel = ev.channel;
+              let threadTs = ev.threadTs;
+              if (!channel || !threadTs) {
+                const payload = this.getInboundSlackPayload(ctx);
+                const e = payload?.event;
+                const derivedTs = String(e?.thread_ts || e?.ts || e?.event_ts || "");
+                const derivedCh = String(e?.channel || "");
+                if (derivedCh && derivedTs) {
+                  channel = channel || derivedCh;
+                  threadTs = threadTs || derivedTs;
+                }
+              }
+              if (!channel || !threadTs) return;
+              const { getPromptStateManager: getPromptStateManager2 } = await Promise.resolve().then(() => (init_prompt_state(), prompt_state_exports));
+              const mgr = getPromptStateManager2();
+              const prev = mgr.getWaiting(channel, threadTs);
+              const text = String(ev.prompt);
+              mgr.setWaiting(channel, threadTs, {
+                checkName: String(ev.checkId),
+                prompt: text,
+                promptMessageTs: prev?.promptMessageTs,
+                promptsPosted: (prev?.promptsPosted || 0) + 1
+              });
+              try {
+                ctx.logger.info(
+                  `[slack-frontend] registered human-input waiting state for ${channel} thread=${threadTs}`
+                );
+              } catch {
+              }
+            } catch (e) {
+              try {
+                ctx.logger.warn(
+                  `[slack-frontend] HumanInputRequested handling failed: ${e instanceof Error ? e.message : String(e)}`
+                );
+              } catch {
+              }
+            }
+          })
+        );
+        this.subs.push(
+          bus.on("SnapshotSaved", async (env) => {
+            try {
+              const ev = env && env.payload || env;
+              const channel = String(ev?.channel || "");
+              const threadTs = String(ev?.threadTs || "");
+              const filePath = String(ev?.filePath || "");
+              if (!channel || !threadTs || !filePath) return;
+              const { getPromptStateManager: getPromptStateManager2 } = await Promise.resolve().then(() => (init_prompt_state(), prompt_state_exports));
+              const mgr = getPromptStateManager2();
+              mgr.update(channel, threadTs, { snapshotPath: filePath });
+              try {
+                ctx.logger.info(
+                  `[slack-frontend] snapshot path attached to waiting prompt: ${filePath}`
+                );
+              } catch {
+              }
+            } catch {
+            }
+          })
+        );
+      }
+      stop() {
+        for (const s of this.subs) s.unsubscribe();
+        this.subs = [];
+      }
+      getSlack(ctx) {
+        const injected = ctx.slack || ctx.slackClient;
+        if (injected) return injected;
+        try {
+          const token = this.cfg?.botToken || process.env.SLACK_BOT_TOKEN;
+          if (typeof token === "string" && token.trim()) {
+            return new SlackClient(token.trim());
+          }
+        } catch {
+        }
+        return void 0;
+      }
+      getInboundSlackPayload(ctx) {
+        try {
+          const anyCfg = ctx.config || {};
+          const slackCfg = anyCfg.slack || {};
+          const endpoint = slackCfg.endpoint || "/bots/slack/support";
+          const payload = ctx.webhookContext?.webhookData?.get(endpoint);
+          return payload || null;
+        } catch {
+          return null;
+        }
+      }
+      getInboundSlackEvent(ctx) {
+        try {
+          const payload = this.getInboundSlackPayload(ctx);
+          const ev = payload?.event;
+          const channel = String(ev?.channel || "");
+          const ts = String(ev?.ts || ev?.event_ts || "");
+          if (channel && ts) return { channel, ts };
+        } catch {
+        }
+        return null;
+      }
+      async ensureAcknowledgement(ctx) {
+        if (this.acked) return;
+        const ref = this.getInboundSlackEvent(ctx);
+        if (!ref) return;
+        const slack = this.getSlack(ctx);
+        if (!slack) return;
+        try {
+          const payload = this.getInboundSlackPayload(ctx);
+          const ev = payload?.event;
+          if (ev?.subtype === "bot_message") return;
+          try {
+            const botId = await slack.getBotUserId?.();
+            if (botId && ev?.user && String(ev.user) === String(botId)) return;
+          } catch {
+          }
+        } catch {
+        }
+        try {
+          const anyCfg = ctx.config || {};
+          const slackCfg = anyCfg.slack || {};
+          if (slackCfg?.reactions?.enabled === false) return;
+          this.ackName = slackCfg?.reactions?.ack || this.ackName;
+          this.doneName = slackCfg?.reactions?.done || this.doneName;
+        } catch {
+        }
+        await slack.reactions.add({ channel: ref.channel, timestamp: ref.ts, name: this.ackName });
+        try {
+          ctx.logger.info(
+            `[slack-frontend] added acknowledgement reaction :${this.ackName}: channel=${ref.channel} ts=${ref.ts}`
+          );
+        } catch {
+        }
+        this.acked = true;
+        this.ackRef = ref;
+      }
+      async finalizeReactions(ctx) {
+        if (!this.acked || !this.ackRef) return;
+        const slack = this.getSlack(ctx);
+        if (!slack) return;
+        try {
+          try {
+            await slack.reactions.remove({
+              channel: this.ackRef.channel,
+              timestamp: this.ackRef.ts,
+              name: this.ackName
+            });
+          } catch {
+          }
+          await slack.reactions.add({
+            channel: this.ackRef.channel,
+            timestamp: this.ackRef.ts,
+            name: this.doneName
+          });
+          try {
+            ctx.logger.info(
+              `[slack-frontend] replaced acknowledgement with completion reaction :${this.doneName}: channel=${this.ackRef.channel} ts=${this.ackRef.ts}`
+            );
+          } catch {
+          }
+        } finally {
+          this.acked = false;
+          this.ackRef = null;
+        }
+      }
+      /**
+       * Post direct replies into the originating Slack thread when appropriate.
+       * This is independent of summary messages and is intended for chat-style flows
+       * (e.g., AI answers and explicit chat/notify steps).
+       */
+      async maybePostDirectReply(ctx, checkId, result) {
+        try {
+          const cfg = ctx.config || {};
+          const checkCfg = cfg.checks?.[checkId];
+          if (!checkCfg) return;
+          const slackRoot = cfg.slack || {};
+          const showRawOutput = slackRoot.show_raw_output === true || this.cfg?.showRawOutput === true;
+          const providerType = checkCfg.type || "";
+          const isAi = providerType === "ai";
+          const isLogChat = providerType === "log" && checkCfg.group === "chat";
+          if (!isAi && !isLogChat) return;
+          if (isAi) {
+            const schema = checkCfg.schema;
+            if (typeof schema === "string") {
+              const simpleSchemas = ["code-review", "markdown", "text", "plain"];
+              if (!simpleSchemas.includes(schema)) return;
+            }
+          }
+          const slack = this.getSlack(ctx);
+          if (!slack) return;
+          const payload = this.getInboundSlackPayload(ctx);
+          const ev = payload?.event;
+          const channel = String(ev?.channel || "");
+          const threadTs = String(ev?.thread_ts || ev?.ts || ev?.event_ts || "");
+          if (!channel || !threadTs) return;
+          const out = result?.output;
+          let text;
+          if (out && typeof out.text === "string" && out.text.trim().length > 0) {
+            text = out.text.trim();
+          } else if (isAi && typeof checkCfg.schema === "string") {
+            if (typeof result?.content === "string" && result.content.trim().length > 0) {
+              text = result.content.trim();
+            }
+          } else if (isAi && showRawOutput && out !== void 0) {
+            try {
+              text = JSON.stringify(out, null, 2);
+            } catch {
+              text = String(out);
+            }
+          }
+          if (!text) return;
+          const formattedText = formatSlackText(text);
+          await slack.chat.postMessage({ channel, text: formattedText, thread_ts: threadTs });
+          try {
+            ctx.logger.info(
+              `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs}`
+            );
+          } catch {
+          }
+        } catch {
+        }
+      }
     };
   }
 });
@@ -22231,6 +24206,9 @@ var init_host = __esm({
           } else if (spec.name === "github") {
             const { GitHubFrontend: GitHubFrontend2 } = await Promise.resolve().then(() => (init_github_frontend(), github_frontend_exports));
             this.frontends.push(new GitHubFrontend2());
+          } else if (spec.name === "slack") {
+            const { SlackFrontend: SlackFrontend2 } = await Promise.resolve().then(() => (init_slack_frontend(), slack_frontend_exports));
+            this.frontends.push(new SlackFrontend2(spec.config));
           } else {
             this.log.warn(`[FrontendsHost] Unknown frontend '${spec.name}', skipping`);
           }
@@ -22392,6 +24370,8 @@ module.exports = __toCommonJS(sdk_exports);
 // src/state-machine-execution-engine.ts
 init_runner();
 init_logger();
+var path18 = __toESM(require("path"));
+var fs17 = __toESM(require("fs"));
 var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
   workingDirectory;
   executionContext;
@@ -22450,6 +24430,18 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
           timestamp,
           options.checks
         );
+      }
+      try {
+        const map = options?.webhookContext?.webhookData;
+        if (map) {
+          const { CheckProviderRegistry: CheckProviderRegistry2 } = await Promise.resolve().then(() => (init_check_provider_registry(), check_provider_registry_exports));
+          const reg = CheckProviderRegistry2.getInstance();
+          const p = reg.getProvider("http_input");
+          if (p && typeof p.setWebhookContext === "function") p.setWebhookContext(map);
+          const prev = this.executionContext || {};
+          this.setExecutionContext({ ...prev, webhookContext: { webhookData: map } });
+        }
+      } catch {
       }
       logger.info(`Executing checks: ${filteredChecks.join(", ")}`);
       const executionResult = await this.executeGroupedChecks(
@@ -22583,6 +24575,17 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
         const bus = new EventBus2();
         context2.eventBus = bus;
         frontendsHost = new FrontendsHost2(bus, logger);
+        if (process.env.VISOR_DEBUG === "true") {
+          try {
+            const fns = (configWithTagFilter.frontends || []).map((f) => ({
+              name: f?.name,
+              hasConfig: !!f?.config,
+              cfg: f?.config || void 0
+            }));
+            logger.info(`[Frontends] Loading specs: ${JSON.stringify(fns)}`);
+          } catch {
+          }
+        }
         await frontendsHost.load(configWithTagFilter.frontends);
         let owner;
         let name;
@@ -22609,6 +24612,15 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
           } catch {
           }
         }
+        try {
+          const prev = this.getExecutionContext() || {};
+          this.setExecutionContext({ ...prev, eventBus: bus });
+          try {
+            context2.executionContext = this.getExecutionContext();
+          } catch {
+          }
+        } catch {
+        }
         await frontendsHost.startAll(() => ({
           eventBus: bus,
           logger,
@@ -22622,8 +24634,60 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
             event: context2.event || prInfo?.eventType,
             actor: prInfo?.eventContext?.sender?.login || (typeof process.env.GITHUB_ACTOR === "string" ? process.env.GITHUB_ACTOR : void 0)
           },
-          octokit
+          octokit,
+          webhookContext: this.executionContext?.webhookContext,
+          // Surface any injected test doubles for Slack as well
+          slack: this.executionContext?.slack || this.executionContext?.slackClient
         }));
+        try {
+          bus.on("HumanInputRequested", async (envelope) => {
+            try {
+              const ev = envelope && envelope.payload || envelope;
+              let channel = ev?.channel;
+              let threadTs = ev?.threadTs;
+              if (!channel || !threadTs) {
+                try {
+                  const anyCfg = configWithTagFilter || {};
+                  const slackCfg = anyCfg.slack || {};
+                  const endpoint = slackCfg.endpoint || "/bots/slack/support";
+                  const map = this.executionContext?.webhookContext?.webhookData;
+                  const payload = map?.get(endpoint);
+                  const e = payload?.event;
+                  const derivedTs = String(e?.thread_ts || e?.ts || e?.event_ts || "");
+                  const derivedCh = String(e?.channel || "");
+                  if (derivedCh && derivedTs) {
+                    channel = channel || derivedCh;
+                    threadTs = threadTs || derivedTs;
+                  }
+                } catch {
+                }
+              }
+              const checkId = String(ev?.checkId || "unknown");
+              const threadKey = ev?.threadKey || (channel && threadTs ? `${channel}:${threadTs}` : "session");
+              const baseDir = process.env.VISOR_SNAPSHOT_DIR || path18.resolve(process.cwd(), ".visor", "snapshots");
+              fs17.mkdirSync(baseDir, { recursive: true });
+              const filePath = path18.join(baseDir, `${threadKey}-${checkId}.json`);
+              await this.saveSnapshotToFile(filePath);
+              logger.info(`[Snapshot] Saved run snapshot: ${filePath}`);
+              try {
+                await bus.emit({
+                  type: "SnapshotSaved",
+                  checkId: ev?.checkId || "unknown",
+                  channel,
+                  threadTs,
+                  threadKey,
+                  filePath
+                });
+              } catch {
+              }
+            } catch (e) {
+              logger.warn(
+                `[Snapshot] Failed to save snapshot on HumanInputRequested: ${e instanceof Error ? e.message : String(e)}`
+              );
+            }
+          });
+        } catch {
+        }
       } catch (err) {
         logger.warn(
           `[Frontends] Failed to initialize frontends: ${err instanceof Error ? err.message : String(err)}`
@@ -22720,7 +24784,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
    * Does not include secrets. Intended for debugging and future resume support.
    */
   async saveSnapshotToFile(filePath) {
-    const fs16 = await import("fs/promises");
+    const fs18 = await import("fs/promises");
     const ctx = this._lastContext;
     const runner = this._lastRunner;
     if (!ctx || !runner) {
@@ -22740,14 +24804,14 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       journal: entries,
       requestedChecks: ctx.requestedChecks || []
     };
-    await fs16.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+    await fs18.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
   }
   /**
    * Load a snapshot JSON from file and return it. Resume support can build on this.
    */
   async loadSnapshotFromFile(filePath) {
-    const fs16 = await import("fs/promises");
-    const raw = await fs16.readFile(filePath, "utf8");
+    const fs18 = await import("fs/promises");
+    const raw = await fs18.readFile(filePath, "utf8");
     return JSON.parse(raw);
   }
   /**
@@ -22984,76 +25048,6 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
     return { valid, invalid };
   }
   /**
-   * Render check content using the appropriate template
-   *
-   * This method handles template rendering for check results, supporting:
-   * - Plain schema: returns raw content without template processing
-   * - Custom templates: from inline content or file
-   * - Built-in schema templates: from output/{schema}/template.liquid
-   */
-  async renderCheckContent(checkName, reviewSummary, checkConfig, _prInfo) {
-    const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs16 = await import("fs/promises");
-    const path17 = await import("path");
-    const schema = checkConfig.schema || "plain";
-    let templateContent;
-    if (checkConfig.template) {
-      if (checkConfig.template.content) {
-        templateContent = checkConfig.template.content;
-      } else if (checkConfig.template.file) {
-        const templateFile = checkConfig.template.file;
-        if (path17.isAbsolute(templateFile)) {
-          throw new Error("Template path must be relative to project directory");
-        }
-        if (templateFile.includes("..")) {
-          throw new Error('Template path cannot contain ".." segments');
-        }
-        if (templateFile.startsWith("~")) {
-          throw new Error("Template path cannot reference home directory");
-        }
-        if (templateFile.includes("\0")) {
-          throw new Error("Template path contains invalid characters");
-        }
-        if (templateFile.trim() === "") {
-          throw new Error("Template path must be a non-empty string");
-        }
-        if (!templateFile.endsWith(".liquid")) {
-          throw new Error("Template file must have .liquid extension");
-        }
-        const { GitRepositoryAnalyzer: GitRepositoryAnalyzer2 } = await Promise.resolve().then(() => (init_git_repository_analyzer(), git_repository_analyzer_exports));
-        const gitAnalyzer = new GitRepositoryAnalyzer2(this.workingDirectory);
-        const repoInfo = await gitAnalyzer.analyzeRepository();
-        const workingDir = repoInfo.workingDirectory;
-        const resolvedPath = path17.resolve(workingDir, templateFile);
-        templateContent = await fs16.readFile(resolvedPath, "utf-8");
-      } else {
-        throw new Error('Custom template must specify either "file" or "content"');
-      }
-    } else if (schema === "plain") {
-      return reviewSummary.issues?.[0]?.message || "";
-    } else {
-      const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, "");
-      if (!sanitizedSchema) {
-        throw new Error("Invalid schema name");
-      }
-      const templatePath = path17.join(__dirname, `output/${sanitizedSchema}/template.liquid`);
-      templateContent = await fs16.readFile(templatePath, "utf-8");
-    }
-    const liquid = createExtendedLiquid2({
-      trimTagLeft: false,
-      trimTagRight: false,
-      trimOutputLeft: false,
-      trimOutputRight: false,
-      greedy: false
-    });
-    const templateData = {
-      issues: reviewSummary.issues || [],
-      checkName
-    };
-    const rendered = await liquid.parseAndRender(templateContent, templateData);
-    return rendered.trim();
-  }
-  /**
    * Format the status column for execution statistics
    * Used by execution-statistics-formatting tests
    */
@@ -23130,6 +25124,11 @@ function serializeRunState(state) {
     historyLog: state.historyLog,
     forwardRunGuards: Array.from(state.forwardRunGuards.values()),
     currentLevelChecks: Array.from(state.currentLevelChecks.values()),
+    currentWaveCompletions: Array.from(
+      state.currentWaveCompletions || []
+    ),
+    // failedChecks is an internal Set added by stats/dispatch layers; keep it if present
+    failedChecks: Array.from(state.failedChecks || []),
     pendingRunScopes: Array.from((state.pendingRunScopes || /* @__PURE__ */ new Map()).entries()).map(([k, v]) => [
       k,
       v

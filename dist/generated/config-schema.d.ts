@@ -592,7 +592,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -608,7 +608,7 @@ export declare const configSchema: {
         };
         readonly ConfigCheckType: {
             readonly type: "string";
-            readonly enum: readonly ["ai", "command", "script", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input", "workflow"];
+            readonly enum: readonly ["ai", "command", "script", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input", "workflow", "git-checkout"];
             readonly description: "Valid check types in configuration";
         };
         readonly EventTrigger: {
@@ -655,6 +655,14 @@ export declare const configSchema: {
                 readonly skip_code_context: {
                     readonly type: "boolean";
                     readonly description: "Skip adding code context (diffs, files, PR info) to the prompt";
+                };
+                readonly skip_slack_context: {
+                    readonly type: "boolean";
+                    readonly description: "Skip adding Slack conversation context to the prompt (when running under Slack)";
+                };
+                readonly skip_transport_context: {
+                    readonly type: "boolean";
+                    readonly description: "Skip adding transport-specific context (e.g., GitHub PR/issue XML, Slack conversation XML) to the prompt. When true, this behaves like setting both skip_code_context and skip_slack_context to true, unless those are explicitly overridden.";
                 };
                 readonly mcpServers: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E";
@@ -1196,13 +1204,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>': {
+        readonly 'Partial<interface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };
@@ -1236,6 +1244,10 @@ export declare const configSchema: {
         readonly PrCommentOutput: {
             readonly type: "object";
             readonly properties: {
+                readonly enabled: {
+                    readonly type: "boolean";
+                    readonly description: "Whether PR comments are enabled";
+                };
                 readonly format: {
                     readonly $ref: "#/definitions/ConfigOutputFormat";
                     readonly description: "Format of the output";

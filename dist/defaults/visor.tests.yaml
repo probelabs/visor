@@ -12,8 +12,13 @@ tests:
     strict: true
     ai_provider: mock
     fail_on_unexpected_calls: true
-    # Enable GitHub frontend for this suite (PR comment grouping & checks)
-    frontends: [github]
+    # Enable GitHub + Slack frontends for PR stages in this suite.
+    # Slack is disabled automatically for non‑PR events in tests.
+    frontends:
+      - name: github
+      - name: slack
+        config:
+          defaultChannel: C_TEST
     # Run GitHub-tagged checks in tests (e.g., label application)
     tags: "github"
     # Example: enable negative GitHub recorder for all tests
@@ -220,6 +225,10 @@ tests:
             no_calls:
               - provider: github
                 op: issues.createComment
+              - provider: slack
+                op: chat.postMessage
+              - provider: slack
+                op: chat.update
             calls:
               - step: comment-assistant
                 exactly: 1
