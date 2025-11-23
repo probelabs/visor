@@ -120,7 +120,7 @@ interface FailureConditionResult {
 /**
  * Valid check types in configuration
  */
-type ConfigCheckType = 'ai' | 'command' | 'script' | 'http' | 'http_input' | 'http_client' | 'noop' | 'log' | 'memory' | 'github' | 'claude-code' | 'mcp' | 'human-input' | 'workflow';
+type ConfigCheckType = 'ai' | 'command' | 'script' | 'http' | 'http_input' | 'http_client' | 'noop' | 'log' | 'memory' | 'github' | 'claude-code' | 'mcp' | 'human-input' | 'workflow' | 'git-checkout';
 /**
  * Valid event triggers for checks
  */
