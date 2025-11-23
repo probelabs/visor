@@ -32,6 +32,10 @@ export class GitHubFrontend implements Frontend {
   private _lastFlush: number = 0;
   private _pendingIds: Set<string> = new Set<string>();
 
+  // Mutex for serializing comment updates per group
+  private updateLocks: Map<string, Promise<void>> = new Map();
+  public minUpdateDelayMs: number = 1000; // Minimum delay between updates (public for testing)
+
   start(ctx: FrontendContext): void {
     const log = ctx.logger;
     const bus = ctx.eventBus;
@@ -250,7 +254,48 @@ ${end}`);
     return lines.join('\\n\\n');
   }
 
+  /**
+   * Acquires a mutex lock for the given group and executes the update.
+   * This ensures only one comment update happens at a time per group,
+   * preventing race conditions where updates overwrite each other.
+   */
   private async updateGroupedComment(
+    ctx: FrontendContext,
+    comments: any,
+    group: string,
+    changedIds?: string | string[]
+  ) {
+    // Wait for any existing update to complete for this group
+    const existingLock = this.updateLocks.get(group);
+    if (existingLock) {
+      try {
+        await existingLock;
+      } catch (error) {
+        logger.warn(
+          `[github-frontend] Previous update for group ${group} failed: ${error instanceof Error ? error.message : error}`
+        );
+        // Continue with current update despite previous failure
+      }
+    }
+
+    // Create a new lock for this update
+    const updatePromise = this.performGroupedCommentUpdate(ctx, comments, group, changedIds);
+    this.updateLocks.set(group, updatePromise);
+
+    try {
+      await updatePromise;
+    } finally {
+      // Clean up the lock if it's still ours
+      if (this.updateLocks.get(group) === updatePromise) {
+        this.updateLocks.delete(group);
+      }
+    }
+  }
+
+  /**
+   * Performs the actual comment update with delay enforcement.
+   */
+  private async performGroupedCommentUpdate(
     ctx: FrontendContext,
     comments: any,
     group: string,
@@ -269,6 +314,16 @@ ${end}`);
         return;
       }
 
+      // Enforce minimum delay between updates to prevent API rate limiting
+      const timeSinceLastFlush = Date.now() - this._lastFlush;
+      if (this._lastFlush > 0 && timeSinceLastFlush < this.minUpdateDelayMs) {
+        const delay = this.minUpdateDelayMs - timeSinceLastFlush;
+        logger.debug(
+          `[github-frontend] Waiting ${delay}ms before next update to prevent rate limiting`
+        );
+        await this.sleep(delay);
+      }
+
       this.revision++;
       const mergedBody = await this.mergeIntoExistingBody(ctx, comments, group, changedIds);
       await comments.updateOrCreateComment(
@@ -282,6 +337,8 @@ ${end}`);
           commitSha: ctx.run.headSha,
         }
       );
+
+      this._lastFlush = Date.now();
     } catch (e) {
       logger.debug(
         `[github-frontend] updateGroupedComment failed: ${e instanceof Error ? e.message : e}`
@@ -554,5 +611,12 @@ ${end}`);
     this._pendingIds.clear();
     await this.updateGroupedComment(ctx, comments, group, ids.length > 0 ? ids : undefined);
     this._lastFlush = Date.now();
+  }
+
+  /**
+   * Sleep utility for enforcing delays
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 }
