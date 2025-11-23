@@ -1,0 +1,59 @@
+# Git Checkout Compare Example
+#
+# This example demonstrates checking out multiple branches
+# and comparing them.
+
+version: "1.0"
+
+# Configure worktree cache
+worktree_cache:
+  enabled: true
+  base_path: /tmp/visor-compare
+  cleanup_on_exit: true
+
+steps:
+  # Checkout PR head branch
+  checkout-head:
+    type: git-checkout
+    ref: "{{ pr.head }}"
+    criticality: internal
+
+  # Checkout PR base branch
+  checkout-base:
+    type: git-checkout
+    ref: "{{ pr.base }}"
+    criticality: internal
+
+  # Run tests on head branch
+  test-head:
+    type: command
+    depends_on: [checkout-head]
+    exec: npm test
+    working_directory: "{{ outputs['checkout-head'].path }}"
+    continue_on_failure: true
+    criticality: internal
+
+  # Run tests on base branch
+  test-base:
+    type: command
+    depends_on: [checkout-base]
+    exec: npm test
+    working_directory: "{{ outputs['checkout-base'].path }}"
+    continue_on_failure: true
+    criticality: internal
+
+  # Compare results
+  compare:
+    type: command
+    depends_on: [test-head, test-base]
+    exec: |
+      echo "=== Comparison Results ==="
+      echo "Head branch: {{ pr.head }} ({{ outputs['checkout-head'].commit }})"
+      echo "Base branch: {{ pr.base }} ({{ outputs['checkout-base'].commit }})"
+      echo ""
+      echo "Head tests: {{ outputs['test-head'].exitCode == 0 ? 'PASSED' : 'FAILED' }}"
+      echo "Base tests: {{ outputs['test-base'].exitCode == 0 ? 'PASSED' : 'FAILED' }}"
+      echo ""
+      echo "File differences:"
+      diff -r "{{ outputs['checkout-head'].path }}/src" "{{ outputs['checkout-base'].path }}/src" || true
+    criticality: info

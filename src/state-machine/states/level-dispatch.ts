@@ -2781,11 +2781,14 @@ async function renderTemplateContent(
       // Built-in schema template fallback
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, '');
       if (sanitized) {
+        // When bundled with ncc, __dirname is dist/ and output/ is at dist/output/
+        // When running from source, __dirname is src/state-machine/states/ and output/ is at output/
         const candidatePaths = [
-          // When bundled (dist), __dirname points to dist/state-machine/states
-          path.join(__dirname, '..', '..', 'output', sanitized, 'template.liquid'),
-          // Dev fallback
-          path.join(process.cwd(), 'output', sanitized, 'template.liquid'),
+          path.join(__dirname, 'output', sanitized, 'template.liquid'), // bundled: dist/output/
+          path.join(__dirname, '..', '..', 'output', sanitized, 'template.liquid'), // source (from state-machine/states)
+          path.join(__dirname, '..', '..', '..', 'output', sanitized, 'template.liquid'), // source (alternate)
+          path.join(process.cwd(), 'output', sanitized, 'template.liquid'), // fallback: cwd/output/
+          path.join(process.cwd(), 'dist', 'output', sanitized, 'template.liquid'), // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
