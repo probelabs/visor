@@ -143,6 +143,14 @@ export class CustomToolExecutor {
       timeout: tool.timeout || 30000,
     });
 
+    // Check if command failed (non-zero exit code)
+    if (result.exitCode !== 0) {
+      const errorOutput = result.stderr || result.stdout || 'Command failed';
+      throw new Error(
+        `Tool '${toolName}' execution failed with exit code ${result.exitCode}: ${errorOutput}`
+      );
+    }
+
     // Parse JSON if requested
     let output: unknown = result.stdout;
     if (tool.parseJson) {

@@ -356,6 +356,8 @@ interface CheckConfig {
     ai_custom_prompt?: string;
     /** MCP servers for this AI check - overrides global setting */
     ai_mcp_servers?: Record<string, McpServerConfig>;
+    /** List of custom tool names to expose to this AI check via ephemeral SSE MCP server */
+    ai_custom_tools?: string[];
     /** Claude Code configuration (for claude-code type checks) */
     claude_code?: ClaudeCodeConfig;
     /** Environment variables for this check */

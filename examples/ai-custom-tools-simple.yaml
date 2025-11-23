@@ -1,0 +1,76 @@
+version: "1.0"
+
+# Example: Using Custom Tools with AI (Reusing ai_mcp_servers)
+# This shows the PREFERRED way to expose custom tools - no new config section needed!
+
+# Define custom tools
+tools:
+  grep-pattern:
+    name: grep-pattern
+    description: Search for specific patterns in TypeScript files
+    inputSchema:
+      type: object
+      properties:
+        pattern:
+          type: string
+          description: The pattern to search for (regex supported)
+      required: [pattern]
+    exec: 'grep -rn "{{ args.pattern }}" *.ts 2>/dev/null || echo "No matches"'
+    parseJson: false
+
+  check-secrets:
+    name: check-secrets
+    description: Scan for hardcoded secrets and API keys
+    inputSchema:
+      type: object
+      properties: {}
+    exec: |
+      grep -rn -E "(api[_-]?key|secret|password|token)\s*[:=]" . 2>/dev/null | head -10 || echo "No secrets found"
+    parseJson: false
+
+  count-todos:
+    name: count-todos
+    description: Count TODO comments in the codebase
+    inputSchema:
+      type: object
+      properties: {}
+    exec: 'grep -r "TODO" src/ 2>/dev/null | wc -l'
+    parseJson: false
+
+steps:
+  # PREFERRED: Use "tools:" in ai_mcp_servers
+  security-review:
+    type: ai
+    prompt: |
+      You have access to custom security scanning tools.
+      Use check-secrets to scan for hardcoded credentials.
+      Use grep-pattern to find dangerous function calls.
+    ai_mcp_servers:
+      # Use "tools:" to reference custom tools - they'll be served via ephemeral SSE!
+      custom-tools:
+        tools: [check-secrets, grep-pattern]  # ← Magic happens here!
+      # You can still combine with external MCP servers
+      filesystem:
+        command: npx
+        args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    ai:
+      provider: anthropic
+      model: claude-3-5-sonnet-20241022
+      debug: true
+
+  # ALSO WORKS: Legacy ai_custom_tools format (for backward compatibility)
+  code-quality:
+    type: ai
+    prompt: |
+      Use count-todos to analyze pending work items.
+    ai_custom_tools: [count-todos]  # ← Also works, but ai_mcp_servers is preferred
+    ai:
+      provider: anthropic
+      model: claude-3-5-sonnet-20241022
+
+output:
+  pr_comment:
+    enabled: true
+    format: markdown
+    group_by: check
+    collapse: false

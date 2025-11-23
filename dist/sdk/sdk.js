@@ -7373,6 +7373,666 @@ var init_state_capture = __esm({
   }
 });
 
+// src/utils/command-executor.ts
+var command_executor_exports = {};
+__export(command_executor_exports, {
+  CommandExecutor: () => CommandExecutor,
+  commandExecutor: () => commandExecutor
+});
+var import_child_process, import_util, CommandExecutor, commandExecutor;
+var init_command_executor = __esm({
+  "src/utils/command-executor.ts"() {
+    "use strict";
+    import_child_process = require("child_process");
+    import_util = require("util");
+    init_logger();
+    CommandExecutor = class _CommandExecutor {
+      static instance;
+      constructor() {
+      }
+      static getInstance() {
+        if (!_CommandExecutor.instance) {
+          _CommandExecutor.instance = new _CommandExecutor();
+        }
+        return _CommandExecutor.instance;
+      }
+      /**
+       * Execute a shell command with optional stdin, environment, and timeout
+       */
+      async execute(command, options = {}) {
+        const execAsync = (0, import_util.promisify)(import_child_process.exec);
+        const timeout = options.timeout || 3e4;
+        if (options.stdin) {
+          return this.executeWithStdin(command, options);
+        }
+        try {
+          const result = await execAsync(command, {
+            cwd: options.cwd,
+            env: options.env,
+            timeout
+          });
+          return {
+            stdout: result.stdout || "",
+            stderr: result.stderr || "",
+            exitCode: 0
+          };
+        } catch (error) {
+          return this.handleExecutionError(error, timeout);
+        }
+      }
+      /**
+       * Execute command with stdin input
+       */
+      executeWithStdin(command, options) {
+        return new Promise((resolve9, reject) => {
+          const childProcess = (0, import_child_process.exec)(
+            command,
+            {
+              cwd: options.cwd,
+              env: options.env,
+              timeout: options.timeout || 3e4
+            },
+            (error, stdout, stderr) => {
+              if (error && error.killed && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM")) {
+                reject(new Error(`Command timed out after ${options.timeout || 3e4}ms`));
+              } else {
+                resolve9({
+                  stdout: stdout || "",
+                  stderr: stderr || "",
+                  exitCode: error ? error.code || 1 : 0
+                });
+              }
+            }
+          );
+          if (options.stdin && childProcess.stdin) {
+            childProcess.stdin.write(options.stdin);
+            childProcess.stdin.end();
+          }
+        });
+      }
+      /**
+       * Handle execution errors consistently
+       */
+      handleExecutionError(error, timeout) {
+        const execError = error;
+        if (execError.killed && (execError.code === "ETIMEDOUT" || execError.signal === "SIGTERM")) {
+          throw new Error(`Command timed out after ${timeout}ms`);
+        }
+        let exitCode = 1;
+        if (execError.code) {
+          exitCode = typeof execError.code === "string" ? parseInt(execError.code, 10) : execError.code;
+        }
+        return {
+          stdout: execError.stdout || "",
+          stderr: execError.stderr || "",
+          exitCode
+        };
+      }
+      /**
+       * Build safe environment variables by merging process.env with custom env
+       * Ensures all values are strings (no undefined)
+       */
+      buildEnvironment(baseEnv = process.env, ...customEnvs) {
+        const result = {};
+        for (const [key, value] of Object.entries(baseEnv)) {
+          if (value !== void 0) {
+            result[key] = value;
+          }
+        }
+        for (const customEnv of customEnvs) {
+          if (customEnv) {
+            Object.assign(result, customEnv);
+          }
+        }
+        return result;
+      }
+      /**
+       * Log command execution for debugging
+       */
+      logExecution(command, options) {
+        const debugInfo = [
+          `Executing command: ${command}`,
+          options.cwd ? `cwd: ${options.cwd}` : null,
+          options.stdin ? "with stdin" : null,
+          options.timeout ? `timeout: ${options.timeout}ms` : null,
+          options.env ? `env vars: ${Object.keys(options.env).length}` : null
+        ].filter(Boolean).join(", ");
+        logger.debug(debugInfo);
+      }
+    };
+    commandExecutor = CommandExecutor.getInstance();
+  }
+});
+
+// src/providers/custom-tool-executor.ts
+var import_ajv, CustomToolExecutor;
+var init_custom_tool_executor = __esm({
+  "src/providers/custom-tool-executor.ts"() {
+    "use strict";
+    init_liquid_extensions();
+    init_sandbox();
+    init_logger();
+    init_command_executor();
+    import_ajv = __toESM(require("ajv"));
+    CustomToolExecutor = class {
+      liquid;
+      sandbox;
+      tools;
+      ajv;
+      constructor(tools) {
+        this.liquid = createExtendedLiquid({
+          cache: false,
+          strictFilters: false,
+          strictVariables: false
+        });
+        this.tools = new Map(Object.entries(tools || {}));
+        this.ajv = new import_ajv.default({ allErrors: true, verbose: true });
+      }
+      /**
+       * Register a custom tool
+       */
+      registerTool(tool) {
+        if (!tool.name) {
+          throw new Error("Tool must have a name");
+        }
+        this.tools.set(tool.name, tool);
+      }
+      /**
+       * Register multiple tools
+       */
+      registerTools(tools) {
+        for (const [name, tool] of Object.entries(tools)) {
+          tool.name = tool.name || name;
+          this.registerTool(tool);
+        }
+      }
+      /**
+       * Get all registered tools
+       */
+      getTools() {
+        return Array.from(this.tools.values());
+      }
+      /**
+       * Get a specific tool by name
+       */
+      getTool(name) {
+        return this.tools.get(name);
+      }
+      /**
+       * Validate tool input against schema using ajv
+       */
+      validateInput(tool, input) {
+        if (!tool.inputSchema) {
+          return;
+        }
+        const validate = this.ajv.compile(tool.inputSchema);
+        const valid = validate(input);
+        if (!valid) {
+          const errors = validate.errors?.map((err) => {
+            if (err.instancePath) {
+              return `${err.instancePath}: ${err.message}`;
+            }
+            return err.message;
+          }).join(", ");
+          throw new Error(`Input validation failed for tool '${tool.name}': ${errors}`);
+        }
+      }
+      /**
+       * Execute a custom tool
+       */
+      async execute(toolName, args, context2) {
+        const tool = this.tools.get(toolName);
+        if (!tool) {
+          throw new Error(`Tool not found: ${toolName}`);
+        }
+        this.validateInput(tool, args);
+        const templateContext = {
+          ...context2,
+          args,
+          input: args
+        };
+        const command = await this.liquid.parseAndRender(tool.exec, templateContext);
+        let stdin;
+        if (tool.stdin) {
+          stdin = await this.liquid.parseAndRender(tool.stdin, templateContext);
+        }
+        const env = commandExecutor.buildEnvironment(process.env, tool.env, context2?.env);
+        const result = await commandExecutor.execute(command, {
+          stdin,
+          cwd: tool.cwd,
+          env,
+          timeout: tool.timeout || 3e4
+        });
+        if (result.exitCode !== 0) {
+          const errorOutput = result.stderr || result.stdout || "Command failed";
+          throw new Error(
+            `Tool '${toolName}' execution failed with exit code ${result.exitCode}: ${errorOutput}`
+          );
+        }
+        let output = result.stdout;
+        if (tool.parseJson) {
+          try {
+            output = JSON.parse(result.stdout);
+          } catch (e) {
+            logger.warn(`Failed to parse tool output as JSON: ${e}`);
+          }
+        }
+        if (tool.transform) {
+          const transformContext = {
+            ...templateContext,
+            output,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode
+          };
+          const transformed = await this.liquid.parseAndRender(tool.transform, transformContext);
+          if (typeof transformed === "string" && transformed.trim().startsWith("{")) {
+            try {
+              output = JSON.parse(transformed);
+            } catch {
+              output = transformed;
+            }
+          } else {
+            output = transformed;
+          }
+        }
+        if (tool.transform_js) {
+          output = await this.applyJavaScriptTransform(tool.transform_js, output, {
+            ...templateContext,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode
+          });
+        }
+        return output;
+      }
+      /**
+       * Apply JavaScript transform to output
+       */
+      async applyJavaScriptTransform(transformJs, output, context2) {
+        if (!this.sandbox) {
+          this.sandbox = createSecureSandbox();
+        }
+        const code = `
+      const output = ${JSON.stringify(output)};
+      const context = ${JSON.stringify(context2)};
+      const args = context.args || {};
+      const pr = context.pr || {};
+      const files = context.files || [];
+      const outputs = context.outputs || {};
+      const env = context.env || {};
+
+      ${transformJs}
+    `;
+        try {
+          return await compileAndRun(this.sandbox, code, { timeout: 5e3 });
+        } catch (error) {
+          logger.error(`JavaScript transform error: ${error}`);
+          throw error;
+        }
+      }
+      /**
+       * Convert custom tools to MCP tool format
+       */
+      toMcpTools() {
+        return Array.from(this.tools.values()).map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          handler: async (args) => {
+            return this.execute(tool.name, args);
+          }
+        }));
+      }
+    };
+  }
+});
+
+// src/providers/mcp-custom-sse-server.ts
+var import_http, import_events, CustomToolsSSEServer;
+var init_mcp_custom_sse_server = __esm({
+  "src/providers/mcp-custom-sse-server.ts"() {
+    "use strict";
+    init_custom_tool_executor();
+    init_logger();
+    import_http = __toESM(require("http"));
+    import_events = require("events");
+    CustomToolsSSEServer = class {
+      server = null;
+      port = 0;
+      connections = /* @__PURE__ */ new Set();
+      toolExecutor;
+      sessionId;
+      debug;
+      eventBus;
+      messageQueue = /* @__PURE__ */ new Map();
+      constructor(tools, sessionId, debug = false) {
+        this.sessionId = sessionId;
+        this.debug = debug;
+        this.eventBus = new import_events.EventEmitter();
+        const toolsRecord = {};
+        for (const [name, tool] of tools.entries()) {
+          toolsRecord[name] = tool;
+        }
+        this.toolExecutor = new CustomToolExecutor(toolsRecord);
+        if (this.debug) {
+          logger.debug(`[CustomToolsSSEServer:${sessionId}] Initialized with ${tools.size} tools`);
+        }
+      }
+      /**
+       * Start the SSE server on an ephemeral port
+       * Returns the actual bound port number
+       */
+      async start() {
+        return new Promise((resolve9, reject) => {
+          try {
+            this.server = import_http.default.createServer((req, res) => {
+              this.handleRequest(req, res).catch((error) => {
+                logger.error(
+                  `[CustomToolsSSEServer:${this.sessionId}] Request handler error: ${error}`
+                );
+              });
+            });
+            this.server.on("error", (error) => {
+              if (error.code === "EADDRINUSE") {
+                if (this.debug) {
+                  logger.debug(
+                    `[CustomToolsSSEServer:${this.sessionId}] Port ${this.port} in use, retrying with new port`
+                  );
+                }
+                reject(new Error(`Port ${this.port} already in use`));
+              } else {
+                reject(error);
+              }
+            });
+            this.server.listen(0, "localhost", () => {
+              const address = this.server.address();
+              if (!address || typeof address === "string") {
+                reject(new Error("Failed to bind to port"));
+                return;
+              }
+              this.port = address.port;
+              if (this.debug) {
+                logger.debug(
+                  `[CustomToolsSSEServer:${this.sessionId}] Started on http://localhost:${this.port}/sse`
+                );
+              }
+              resolve9(this.port);
+            });
+          } catch (error) {
+            reject(error);
+          }
+        });
+      }
+      /**
+       * Stop the server and cleanup resources
+       */
+      async stop() {
+        if (this.debug) {
+          logger.debug(`[CustomToolsSSEServer:${this.sessionId}] Stopping server...`);
+        }
+        for (const connection of this.connections) {
+          try {
+            connection.response.end();
+          } catch (error) {
+            if (this.debug) {
+              logger.debug(
+                `[CustomToolsSSEServer:${this.sessionId}] Error closing connection: ${error}`
+              );
+            }
+          }
+        }
+        this.connections.clear();
+        if (this.server) {
+          await new Promise((resolve9, reject) => {
+            const timeout = setTimeout(() => {
+              if (this.debug) {
+                logger.debug(
+                  `[CustomToolsSSEServer:${this.sessionId}] Force closing server after timeout`
+                );
+              }
+              this.server?.close(() => resolve9());
+            }, 5e3);
+            this.server.close((error) => {
+              clearTimeout(timeout);
+              if (error) {
+                reject(error);
+              } else {
+                resolve9();
+              }
+            });
+          });
+          this.server = null;
+        }
+        if (this.debug) {
+          logger.debug(`[CustomToolsSSEServer:${this.sessionId}] Server stopped`);
+        }
+      }
+      /**
+       * Get the SSE endpoint URL
+       */
+      getUrl() {
+        if (!this.port) {
+          throw new Error("Server not started");
+        }
+        return `http://localhost:${this.port}/sse`;
+      }
+      /**
+       * Handle incoming HTTP requests
+       */
+      async handleRequest(req, res) {
+        if (req.method === "OPTIONS") {
+          this.handleCORS(res);
+          res.writeHead(204);
+          res.end();
+          return;
+        }
+        if (req.method !== "POST" || req.url !== "/sse") {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Not found" }));
+          return;
+        }
+        this.handleCORS(res);
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive"
+        });
+        const connectionId = `conn-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const connection = {
+          response: res,
+          id: connectionId
+        };
+        this.connections.add(connection);
+        if (this.debug) {
+          logger.debug(`[CustomToolsSSEServer:${this.sessionId}] New SSE connection: ${connectionId}`);
+        }
+        this.sendSSE(connection, "endpoint", `http://localhost:${this.port}/message`);
+        req.on("close", () => {
+          if (this.debug) {
+            logger.debug(`[CustomToolsSSEServer:${this.sessionId}] Connection closed: ${connectionId}`);
+          }
+          this.connections.delete(connection);
+        });
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        req.on("end", async () => {
+          try {
+            const message = JSON.parse(body);
+            await this.handleMCPMessage(connection, message);
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : "Unknown error";
+            if (this.debug) {
+              logger.error(
+                `[CustomToolsSSEServer:${this.sessionId}] Error parsing request: ${errorMsg}`
+              );
+            }
+            this.sendErrorResponse(connection, null, -32700, "Parse error", { error: errorMsg });
+          }
+        });
+      }
+      /**
+       * Handle CORS headers
+       */
+      handleCORS(res) {
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+      }
+      /**
+       * Send SSE message to client
+       */
+      sendSSE(connection, event, data) {
+        try {
+          const dataStr = typeof data === "string" ? data : JSON.stringify(data);
+          connection.response.write(`event: ${event}
+`);
+          connection.response.write(`data: ${dataStr}
+
+`);
+        } catch (error) {
+          if (this.debug) {
+            logger.error(`[CustomToolsSSEServer:${this.sessionId}] Error sending SSE: ${error}`);
+          }
+        }
+      }
+      /**
+       * Handle MCP protocol messages
+       */
+      async handleMCPMessage(connection, message) {
+        if (this.debug) {
+          logger.debug(
+            `[CustomToolsSSEServer:${this.sessionId}] Received MCP message: ${JSON.stringify(message)}`
+          );
+        }
+        if (message.method === "tools/list") {
+          const response = await this.handleToolsList(message.id);
+          this.sendSSE(connection, "message", response);
+          return;
+        }
+        if (message.method === "tools/call") {
+          const request = message;
+          const response = await this.handleToolCall(
+            request.id,
+            request.params.name,
+            request.params.arguments
+          );
+          this.sendSSE(connection, "message", response);
+          return;
+        }
+        if (message.method === "initialize") {
+          const response = {
+            jsonrpc: "2.0",
+            id: message.id,
+            result: {
+              protocolVersion: "2024-11-05",
+              capabilities: {
+                tools: {}
+              },
+              serverInfo: {
+                name: "visor-custom-tools",
+                version: "1.0.0"
+              }
+            }
+          };
+          this.sendSSE(connection, "message", response);
+          return;
+        }
+        if (message.method === "notifications/initialized") {
+          return;
+        }
+        this.sendErrorResponse(connection, message.id, -32601, "Method not found");
+      }
+      /**
+       * Handle tools/list MCP request
+       */
+      async handleToolsList(id) {
+        const tools = this.toolExecutor.getTools();
+        return {
+          jsonrpc: "2.0",
+          id,
+          result: {
+            tools: tools.map((tool) => ({
+              name: tool.name,
+              description: tool.description || `Execute ${tool.name}`,
+              inputSchema: tool.inputSchema || {
+                type: "object",
+                properties: {},
+                required: []
+              }
+            }))
+          }
+        };
+      }
+      /**
+       * Handle tools/call MCP request
+       */
+      async handleToolCall(id, toolName, args) {
+        try {
+          if (this.debug) {
+            logger.debug(
+              `[CustomToolsSSEServer:${this.sessionId}] Executing tool: ${toolName} with args: ${JSON.stringify(args)}`
+            );
+          }
+          const result = await this.toolExecutor.execute(toolName, args);
+          const resultText = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+          if (this.debug) {
+            logger.debug(
+              `[CustomToolsSSEServer:${this.sessionId}] Tool execution completed: ${toolName}`
+            );
+          }
+          return {
+            jsonrpc: "2.0",
+            id,
+            result: {
+              content: [
+                {
+                  type: "text",
+                  text: resultText
+                }
+              ]
+            }
+          };
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : "Unknown error";
+          logger.error(
+            `[CustomToolsSSEServer:${this.sessionId}] Tool execution failed: ${toolName} - ${errorMsg}`
+          );
+          return {
+            jsonrpc: "2.0",
+            id,
+            error: {
+              code: -32603,
+              message: "Internal error",
+              data: {
+                tool: toolName,
+                error: errorMsg
+              }
+            }
+          };
+        }
+      }
+      /**
+       * Send error response via SSE
+       */
+      sendErrorResponse(connection, id, code, message, data) {
+        const errorResponse = {
+          jsonrpc: "2.0",
+          id: id ?? "error",
+          error: {
+            code,
+            message,
+            data
+          }
+        };
+        this.sendSSE(connection, "message", errorResponse);
+      }
+    };
+  }
+});
+
 // src/providers/ai-check-provider.ts
 var import_promises3, import_path3, AICheckProvider;
 var init_ai_check_provider = __esm({
@@ -7387,6 +8047,8 @@ var init_ai_check_provider = __esm({
     import_path3 = __toESM(require("path"));
     init_lazy_otel();
     init_state_capture();
+    init_mcp_custom_sse_server();
+    init_logger();
     AICheckProvider = class extends CheckProvider {
       aiReviewService;
       liquidEngine;
@@ -7897,6 +8559,47 @@ var init_ai_check_provider = __esm({
         if (config.ai?.mcpServers) {
           Object.assign(mcpServers, config.ai.mcpServers);
         }
+        let customToolsServer = null;
+        let customToolsToLoad = [];
+        let customToolsServerName = null;
+        const legacyCustomTools = this.getCustomToolsForAI(config);
+        if (legacyCustomTools.length > 0) {
+          customToolsToLoad = legacyCustomTools;
+          customToolsServerName = "__custom_tools__";
+        }
+        for (const [serverName, serverConfig] of Object.entries(mcpServers)) {
+          if (serverConfig.tools && Array.isArray(serverConfig.tools)) {
+            customToolsToLoad = serverConfig.tools;
+            customToolsServerName = serverName;
+            break;
+          }
+        }
+        if (customToolsToLoad.length > 0 && customToolsServerName && !config.ai?.disableTools) {
+          try {
+            const customTools = this.loadCustomTools(customToolsToLoad, config);
+            if (customTools.size > 0) {
+              const sessionId = config.checkName || `ai-check-${Date.now()}`;
+              const debug = aiConfig.debug || process.env.VISOR_DEBUG === "true";
+              customToolsServer = new CustomToolsSSEServer(customTools, sessionId, debug);
+              const port = await customToolsServer.start();
+              if (debug) {
+                logger.debug(
+                  `[AICheckProvider] Started custom tools SSE server '${customToolsServerName}' on port ${port} for ${customTools.size} tools`
+                );
+              }
+              mcpServers[customToolsServerName] = {
+                command: "",
+                args: [],
+                url: `http://localhost:${port}/sse`,
+                transport: "sse"
+              };
+            }
+          } catch (error) {
+            logger.error(
+              `[AICheckProvider] Failed to start custom tools SSE server '${customToolsServerName}': ${error instanceof Error ? error.message : "Unknown error"}`
+            );
+          }
+        }
         if (Object.keys(mcpServers).length > 0 && !config.ai?.disableTools) {
           aiConfig.mcpServers = mcpServers;
         } else if (config.ai?.disableTools) {
@@ -8111,7 +8814,59 @@ ${processedPrompt}` : processedPrompt;
             console.error(`\u{1F6A8} This check cannot proceed without valid API credentials`);
           }
           throw new Error(`AI analysis failed: ${errorMessage}`);
+        } finally {
+          if (customToolsServer) {
+            try {
+              await customToolsServer.stop();
+              if (aiConfig.debug || process.env.VISOR_DEBUG === "true") {
+                logger.debug("[AICheckProvider] Custom tools SSE server stopped");
+              }
+            } catch (error) {
+              logger.error(
+                `[AICheckProvider] Error stopping custom tools SSE server: ${error instanceof Error ? error.message : "Unknown error"}`
+              );
+            }
+          }
         }
+      }
+      /**
+       * Get custom tool names from check configuration
+       */
+      getCustomToolsForAI(config) {
+        const aiCustomTools = config.ai_custom_tools;
+        if (!aiCustomTools) {
+          return [];
+        }
+        if (Array.isArray(aiCustomTools)) {
+          return aiCustomTools.filter((name) => typeof name === "string");
+        }
+        if (typeof aiCustomTools === "string") {
+          return [aiCustomTools];
+        }
+        return [];
+      }
+      /**
+       * Load custom tools from global configuration
+       */
+      loadCustomTools(toolNames, config) {
+        const tools = /* @__PURE__ */ new Map();
+        const globalTools = config.__globalTools;
+        if (!globalTools) {
+          logger.warn(
+            `[AICheckProvider] ai_custom_tools specified but no global tools found in configuration`
+          );
+          return tools;
+        }
+        for (const toolName of toolNames) {
+          const tool = globalTools[toolName];
+          if (!tool) {
+            logger.warn(`[AICheckProvider] Custom tool not found: ${toolName}`);
+            continue;
+          }
+          tool.name = tool.name || toolName;
+          tools.set(toolName, tool);
+        }
+        return tools;
       }
       getSupportedConfigKeys() {
         return [
@@ -9863,137 +10618,6 @@ var init_claude_code_check_provider = __esm({
         ];
       }
     };
-  }
-});
-
-// src/utils/command-executor.ts
-var command_executor_exports = {};
-__export(command_executor_exports, {
-  CommandExecutor: () => CommandExecutor,
-  commandExecutor: () => commandExecutor
-});
-var import_child_process, import_util, CommandExecutor, commandExecutor;
-var init_command_executor = __esm({
-  "src/utils/command-executor.ts"() {
-    "use strict";
-    import_child_process = require("child_process");
-    import_util = require("util");
-    init_logger();
-    CommandExecutor = class _CommandExecutor {
-      static instance;
-      constructor() {
-      }
-      static getInstance() {
-        if (!_CommandExecutor.instance) {
-          _CommandExecutor.instance = new _CommandExecutor();
-        }
-        return _CommandExecutor.instance;
-      }
-      /**
-       * Execute a shell command with optional stdin, environment, and timeout
-       */
-      async execute(command, options = {}) {
-        const execAsync = (0, import_util.promisify)(import_child_process.exec);
-        const timeout = options.timeout || 3e4;
-        if (options.stdin) {
-          return this.executeWithStdin(command, options);
-        }
-        try {
-          const result = await execAsync(command, {
-            cwd: options.cwd,
-            env: options.env,
-            timeout
-          });
-          return {
-            stdout: result.stdout || "",
-            stderr: result.stderr || "",
-            exitCode: 0
-          };
-        } catch (error) {
-          return this.handleExecutionError(error, timeout);
-        }
-      }
-      /**
-       * Execute command with stdin input
-       */
-      executeWithStdin(command, options) {
-        return new Promise((resolve9, reject) => {
-          const childProcess = (0, import_child_process.exec)(
-            command,
-            {
-              cwd: options.cwd,
-              env: options.env,
-              timeout: options.timeout || 3e4
-            },
-            (error, stdout, stderr) => {
-              if (error && error.killed && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM")) {
-                reject(new Error(`Command timed out after ${options.timeout || 3e4}ms`));
-              } else {
-                resolve9({
-                  stdout: stdout || "",
-                  stderr: stderr || "",
-                  exitCode: error ? error.code || 1 : 0
-                });
-              }
-            }
-          );
-          if (options.stdin && childProcess.stdin) {
-            childProcess.stdin.write(options.stdin);
-            childProcess.stdin.end();
-          }
-        });
-      }
-      /**
-       * Handle execution errors consistently
-       */
-      handleExecutionError(error, timeout) {
-        const execError = error;
-        if (execError.killed && (execError.code === "ETIMEDOUT" || execError.signal === "SIGTERM")) {
-          throw new Error(`Command timed out after ${timeout}ms`);
-        }
-        let exitCode = 1;
-        if (execError.code) {
-          exitCode = typeof execError.code === "string" ? parseInt(execError.code, 10) : execError.code;
-        }
-        return {
-          stdout: execError.stdout || "",
-          stderr: execError.stderr || "",
-          exitCode
-        };
-      }
-      /**
-       * Build safe environment variables by merging process.env with custom env
-       * Ensures all values are strings (no undefined)
-       */
-      buildEnvironment(baseEnv = process.env, ...customEnvs) {
-        const result = {};
-        for (const [key, value] of Object.entries(baseEnv)) {
-          if (value !== void 0) {
-            result[key] = value;
-          }
-        }
-        for (const customEnv of customEnvs) {
-          if (customEnv) {
-            Object.assign(result, customEnv);
-          }
-        }
-        return result;
-      }
-      /**
-       * Log command execution for debugging
-       */
-      logExecution(command, options) {
-        const debugInfo = [
-          `Executing command: ${command}`,
-          options.cwd ? `cwd: ${options.cwd}` : null,
-          options.stdin ? "with stdin" : null,
-          options.timeout ? `timeout: ${options.timeout}ms` : null,
-          options.env ? `env vars: ${Object.keys(options.env).length}` : null
-        ].filter(Boolean).join(", ");
-        logger.debug(debugInfo);
-      }
-    };
-    commandExecutor = CommandExecutor.getInstance();
   }
 });
 
@@ -11870,184 +12494,6 @@ var init_memory_check_provider = __esm({
           "No external dependencies required",
           "Used for state management and persistent storage across checks"
         ];
-      }
-    };
-  }
-});
-
-// src/providers/custom-tool-executor.ts
-var import_ajv, CustomToolExecutor;
-var init_custom_tool_executor = __esm({
-  "src/providers/custom-tool-executor.ts"() {
-    "use strict";
-    init_liquid_extensions();
-    init_sandbox();
-    init_logger();
-    init_command_executor();
-    import_ajv = __toESM(require("ajv"));
-    CustomToolExecutor = class {
-      liquid;
-      sandbox;
-      tools;
-      ajv;
-      constructor(tools) {
-        this.liquid = createExtendedLiquid({
-          cache: false,
-          strictFilters: false,
-          strictVariables: false
-        });
-        this.tools = new Map(Object.entries(tools || {}));
-        this.ajv = new import_ajv.default({ allErrors: true, verbose: true });
-      }
-      /**
-       * Register a custom tool
-       */
-      registerTool(tool) {
-        if (!tool.name) {
-          throw new Error("Tool must have a name");
-        }
-        this.tools.set(tool.name, tool);
-      }
-      /**
-       * Register multiple tools
-       */
-      registerTools(tools) {
-        for (const [name, tool] of Object.entries(tools)) {
-          tool.name = tool.name || name;
-          this.registerTool(tool);
-        }
-      }
-      /**
-       * Get all registered tools
-       */
-      getTools() {
-        return Array.from(this.tools.values());
-      }
-      /**
-       * Get a specific tool by name
-       */
-      getTool(name) {
-        return this.tools.get(name);
-      }
-      /**
-       * Validate tool input against schema using ajv
-       */
-      validateInput(tool, input) {
-        if (!tool.inputSchema) {
-          return;
-        }
-        const validate = this.ajv.compile(tool.inputSchema);
-        const valid = validate(input);
-        if (!valid) {
-          const errors = validate.errors?.map((err) => {
-            if (err.instancePath) {
-              return `${err.instancePath}: ${err.message}`;
-            }
-            return err.message;
-          }).join(", ");
-          throw new Error(`Input validation failed for tool '${tool.name}': ${errors}`);
-        }
-      }
-      /**
-       * Execute a custom tool
-       */
-      async execute(toolName, args, context2) {
-        const tool = this.tools.get(toolName);
-        if (!tool) {
-          throw new Error(`Tool not found: ${toolName}`);
-        }
-        this.validateInput(tool, args);
-        const templateContext = {
-          ...context2,
-          args,
-          input: args
-        };
-        const command = await this.liquid.parseAndRender(tool.exec, templateContext);
-        let stdin;
-        if (tool.stdin) {
-          stdin = await this.liquid.parseAndRender(tool.stdin, templateContext);
-        }
-        const env = commandExecutor.buildEnvironment(process.env, tool.env, context2?.env);
-        const result = await commandExecutor.execute(command, {
-          stdin,
-          cwd: tool.cwd,
-          env,
-          timeout: tool.timeout || 3e4
-        });
-        let output = result.stdout;
-        if (tool.parseJson) {
-          try {
-            output = JSON.parse(result.stdout);
-          } catch (e) {
-            logger.warn(`Failed to parse tool output as JSON: ${e}`);
-          }
-        }
-        if (tool.transform) {
-          const transformContext = {
-            ...templateContext,
-            output,
-            stdout: result.stdout,
-            stderr: result.stderr,
-            exitCode: result.exitCode
-          };
-          const transformed = await this.liquid.parseAndRender(tool.transform, transformContext);
-          if (typeof transformed === "string" && transformed.trim().startsWith("{")) {
-            try {
-              output = JSON.parse(transformed);
-            } catch {
-              output = transformed;
-            }
-          } else {
-            output = transformed;
-          }
-        }
-        if (tool.transform_js) {
-          output = await this.applyJavaScriptTransform(tool.transform_js, output, {
-            ...templateContext,
-            stdout: result.stdout,
-            stderr: result.stderr,
-            exitCode: result.exitCode
-          });
-        }
-        return output;
-      }
-      /**
-       * Apply JavaScript transform to output
-       */
-      async applyJavaScriptTransform(transformJs, output, context2) {
-        if (!this.sandbox) {
-          this.sandbox = createSecureSandbox();
-        }
-        const code = `
-      const output = ${JSON.stringify(output)};
-      const context = ${JSON.stringify(context2)};
-      const args = context.args || {};
-      const pr = context.pr || {};
-      const files = context.files || [];
-      const outputs = context.outputs || {};
-      const env = context.env || {};
-
-      ${transformJs}
-    `;
-        try {
-          return await compileAndRun(this.sandbox, code, { timeout: 5e3 });
-        } catch (error) {
-          logger.error(`JavaScript transform error: ${error}`);
-          throw error;
-        }
-      }
-      /**
-       * Convert custom tools to MCP tool format
-       */
-      toMcpTools() {
-        return Array.from(this.tools.values()).map((tool) => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-          handler: async (args) => {
-            return this.execute(tool.name, args);
-          }
-        }));
       }
     };
   }
@@ -15514,6 +15960,13 @@ var init_config_schema = __esm({
               $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
               description: "MCP servers for this AI check - overrides global setting"
             },
+            ai_custom_tools: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "List of custom tool names to expose to this AI check via ephemeral SSE MCP server"
+            },
             claude_code: {
               $ref: "#/definitions/ClaudeCodeConfig",
               description: "Claude Code configuration (for claude-code type checks)"
@@ -15767,7 +16220,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21346-src_types_config.ts-0-34851%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -16407,13 +16860,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730>>": {
+        "Record<string,Partial<interface-src_types_config.ts-11138-21346-src_types_config.ts-0-34851>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11138-21346-src_types_config.ts-0-34851%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730>": {
+        "Partial<interface-src_types_config.ts-11138-21346-src_types_config.ts-0-34851>": {
           type: "object",
           additionalProperties: false
         },
