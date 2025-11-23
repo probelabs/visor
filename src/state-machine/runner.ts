@@ -36,6 +36,7 @@ export class StateMachineRunner {
   private context: EngineContext;
   private state: RunState;
   private debugServer?: DebugVisualizerServer;
+  private hasRun = false;
 
   constructor(context: EngineContext, debugServer?: DebugVisualizerServer) {
     this.context = context;
@@ -80,6 +81,7 @@ export class StateMachineRunner {
    * Execute the state machine
    */
   async run(): Promise<ExecutionResult> {
+    this.hasRun = true;
     try {
       // Emit initial state transition event
       this.emitEvent({ type: 'StateTransition', from: 'Init', to: 'Init' });
@@ -528,6 +530,17 @@ export class StateMachineRunner {
    */
   getState(): RunState {
     return this.state;
+  }
+
+  /**
+   * Hydrate the runner with a previously serialized state. Must be called
+   * before `run()` (i.e., when the runner has not started yet).
+   */
+  setState(state: RunState): void {
+    if (this.hasRun) {
+      throw new Error('StateMachineRunner.setState: cannot set state after run() has started');
+    }
+    this.state = state;
   }
 
   /**

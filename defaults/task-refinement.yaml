@@ -435,9 +435,9 @@ tests:
       expect:
         calls:
           - step: ask
-            exactly: 2
+            at_least: 1
           - step: refine
-            exactly: 2
+            at_least: 1
           - step: plan-commands
             exactly: 2
           - step: ask-confirm

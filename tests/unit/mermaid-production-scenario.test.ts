@@ -222,9 +222,10 @@ This shows the architecture.`;
 
     const result = await aiService.executeReview(mockPrInfo, 'Test prompt');
 
-    // When raw response is given, it gets parsed differently
-    expect(result.issues).toHaveLength(1);
-    const content = result.issues![0].message;
+    // When raw response is given with no schema, it is treated as a
+    // plain text-style output instead of a synthetic AI_RESPONSE issue.
+    expect(result.issues).toHaveLength(0);
+    const content = (result as any).output?.text as string;
 
     // Even with fallback, Mermaid blocks should be preserved
     expect(content).toContain('```mermaid');

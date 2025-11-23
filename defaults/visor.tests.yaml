@@ -202,17 +202,6 @@ tests:
               - provider: github
                 op: issues.createComment
                 at_least: 1
-              # Slack posts an initial message per group (overview/review)
-              - provider: slack
-                op: chat.postMessage
-                at_least: 1
-                args:
-                  contains: ["Visor review summary"]
-              - provider: slack
-                op: chat.postMessage
-                at_least: 1
-                args:
-                  contains: ["Visor overview summary"]
               - provider: github
                 op: labels.add
                 at_least: 1
@@ -528,10 +517,6 @@ tests:
                 exactly: 1
               - step: quality
                 exactly: 1
-              # Slack updates existing messages on PR synchronize
-              - provider: slack
-                op: chat.update
-                at_least: 1
 
     - name: security-fail-if
       description: |

@@ -270,6 +270,261 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
     }
   });
 
+  // chat_history: merge outputs_history from multiple steps into a normalized,
+  // timestamp-sorted chat transcript.
+  //
+  // Usage:
+  //   {% assign history = '' | chat_history: 'ask', 'reply' %}
+  //   {% for m in history %}
+  //     {{ m.role }}: {{ m.text }}
+  //   {% endfor %}
+  //
+  // Advanced usage with options:
+  //   '' | chat_history: 'ask', 'reply',
+  //        direction: 'desc',
+  //        limit: 50,
+  //        roles: { by_type: { 'human-input': 'user', 'ai': 'assistant' } },
+  //        text: { default_field: 'text', by_step: { reply: 'text' } }
+  liquid.registerFilter(
+    'chat_history',
+    function (this: unknown, value: unknown, ...args: unknown[]): unknown {
+      try {
+        // Access Liquid rendering context to read globals like outputs_history
+        const impl = this as { context?: { get: (key: string[] | string) => unknown } } | undefined;
+        const ctx = impl?.context;
+
+        // Parse arguments: one or more step names, optional options hash as last arg
+        const allArgs = Array.isArray(args) ? args : [];
+
+        if (allArgs.length === 0) {
+          return [];
+        }
+
+        // Liquid passes keyword arguments as trailing ["key", value] pairs.
+        // Split positional step names from an optional options hash built from those pairs.
+        const positional: unknown[] = [];
+        const options: any = {};
+        for (const arg of allArgs) {
+          if (
+            Array.isArray(arg) &&
+            arg.length === 2 &&
+            typeof arg[0] === 'string' &&
+            arg[0].length > 0
+          ) {
+            options[arg[0]] = arg[1];
+          } else {
+            positional.push(arg);
+          }
+        }
+        const stepArgs: unknown[] = positional;
+
+        const steps = stepArgs.map(s => String(s ?? '').trim()).filter(s => s.length > 0);
+        if (steps.length === 0) return [];
+
+        // Resolve history source: prefer outputs_history, fall back to outputs.history
+        const outputsHistoryVar = (ctx?.get(['outputs_history']) || {}) as Record<
+          string,
+          unknown[]
+        >;
+        const outputsVar = (ctx?.get(['outputs']) || {}) as { history?: Record<string, unknown[]> };
+        const outputsHistory: Record<string, unknown[]> =
+          outputsHistoryVar && Object.keys(outputsHistoryVar).length > 0
+            ? outputsHistoryVar
+            : outputsVar?.history || {};
+
+        // Optional checks metadata: used to infer roles by check type
+        const checksMeta =
+          (ctx?.get(['checks_meta']) as Record<string, { type?: string; group?: string }>) ||
+          ((ctx?.get(['event']) as any)?.payload?.__checksMeta as Record<
+            string,
+            { type?: string; group?: string }
+          >) ||
+          undefined;
+
+        // Direction and limit
+        const directionRaw =
+          typeof options.direction === 'string' ? options.direction.toLowerCase() : '';
+        const direction: 'asc' | 'desc' = directionRaw === 'desc' ? 'desc' : 'asc';
+        const limit =
+          typeof options.limit === 'number' && options.limit > 0
+            ? Math.floor(options.limit)
+            : undefined;
+
+        // Text mapping configuration
+        const textCfg = options.text && typeof options.text === 'object' ? options.text : {};
+        const defaultField =
+          typeof textCfg.default_field === 'string' && textCfg.default_field.trim()
+            ? textCfg.default_field.trim()
+            : 'text';
+        const byStepText: Record<string, string> = {};
+        if (textCfg.by_step && typeof textCfg.by_step === 'object') {
+          for (const [k, v] of Object.entries(textCfg.by_step)) {
+            if (typeof v === 'string' && v.trim()) {
+              byStepText[k] = v.trim();
+            }
+          }
+        }
+
+        // Role mapping configuration
+        const rolesCfg = options.roles && typeof options.roles === 'object' ? options.roles : {};
+        const byTypeRole: Record<string, string> = {};
+        if (rolesCfg.by_type && typeof rolesCfg.by_type === 'object') {
+          for (const [k, v] of Object.entries(rolesCfg.by_type)) {
+            if (typeof v === 'string' && v.trim()) {
+              byTypeRole[k] = v.trim();
+            }
+          }
+        }
+        const byStepRole: Record<string, string> = {};
+        if (rolesCfg.by_step && typeof rolesCfg.by_step === 'object') {
+          for (const [k, v] of Object.entries(rolesCfg.by_step)) {
+            if (typeof v === 'string' && v.trim()) {
+              byStepRole[k] = v.trim();
+            }
+          }
+        }
+        // Optional: step-level role map provided as a compact string, e.g. "ask=user,reply=assistant"
+        if (typeof options.role_map === 'string' && options.role_map.trim().length > 0) {
+          const parts = String(options.role_map)
+            .split(',')
+            .map(p => p.trim())
+            .filter(Boolean);
+          for (const part of parts) {
+            const eqIdx = part.indexOf('=');
+            if (eqIdx > 0) {
+              const k = part.slice(0, eqIdx).trim();
+              const v = part.slice(eqIdx + 1).trim();
+              if (k && v) {
+                byStepRole[k] = v;
+              }
+            }
+          }
+        }
+        const defaultRole =
+          typeof rolesCfg.default === 'string' && rolesCfg.default.trim()
+            ? rolesCfg.default.trim()
+            : undefined;
+
+        const getNested = (obj: any, path: string): unknown => {
+          if (!obj || !path) return undefined;
+          const parts = path.split('.');
+          let cur = obj;
+          for (const p of parts) {
+            if (cur == null) return undefined;
+            cur = cur[p];
+          }
+          return cur;
+        };
+
+        const normalizeText = (step: string, raw: any): string => {
+          try {
+            const overrideField = byStepText[step];
+            if (overrideField) {
+              const val = getNested(raw, overrideField);
+              if (val !== undefined && val !== null) {
+                const s = String(val);
+                if (s.trim().length > 0) return s;
+              }
+            }
+
+            if (raw && typeof raw === 'object') {
+              if (typeof (raw as any).text === 'string' && (raw as any).text.trim().length > 0) {
+                return (raw as any).text;
+              }
+              if (
+                typeof (raw as any).content === 'string' &&
+                (raw as any).content.trim().length > 0
+              ) {
+                return (raw as any).content;
+              }
+              const dfVal = (raw as any)[defaultField];
+              if (dfVal !== undefined && dfVal !== null) {
+                const s = String(dfVal);
+                if (s.trim().length > 0) return s;
+              }
+            }
+
+            if (typeof raw === 'string') return raw;
+            if (raw == null) return '';
+            try {
+              return JSON.stringify(raw);
+            } catch {
+              return String(raw);
+            }
+          } catch {
+            if (typeof raw === 'string') return raw;
+            return '';
+          }
+        };
+
+        const normalizeRole = (step: string): string => {
+          try {
+            if (byStepRole[step]) return byStepRole[step];
+            const meta = checksMeta ? (checksMeta as any)[step] : undefined;
+            const type = meta?.type as string | undefined;
+            if (type && byTypeRole[type]) return byTypeRole[type];
+            if (type === 'human-input') return 'user';
+            if (type === 'ai') return 'assistant';
+            if (defaultRole) return defaultRole;
+            if (type) {
+              if (type === 'human-input') return 'user';
+              if (type === 'ai') return 'assistant';
+            }
+          } catch {
+            // fall through
+          }
+          return 'assistant';
+        };
+
+        type ChatMessage = {
+          step: string;
+          role: string;
+          text: string;
+          ts: number;
+          raw: unknown;
+        };
+
+        const messages: ChatMessage[] = [];
+        const tsBase = Date.now();
+        let counter = 0;
+
+        for (const step of steps) {
+          const arr = (outputsHistory as any)?.[step] as unknown[];
+          if (!Array.isArray(arr)) continue;
+          for (const raw of arr) {
+            let ts: number | undefined;
+            if (raw && typeof raw === 'object' && typeof (raw as any).ts === 'number') {
+              ts = (raw as any).ts;
+            }
+            if (!Number.isFinite(ts as number)) {
+              ts = tsBase + counter++;
+            }
+            const text = normalizeText(step, raw);
+            const role = normalizeRole(step);
+            messages.push({ step, role, text, ts: ts as number, raw });
+          }
+        }
+
+        // Sort by timestamp and apply direction/limit
+        messages.sort((a, b) => a.ts - b.ts);
+        if (direction === 'desc') {
+          messages.reverse();
+        }
+
+        if (limit && limit > 0 && messages.length > limit) {
+          if (direction === 'asc') {
+            return messages.slice(messages.length - limit);
+          }
+          return messages.slice(0, limit);
+        }
+
+        return messages;
+      } catch {
+        return [];
+      }
+    }
+  );
+
   // Removed: merge_sort_by filter (unused)
 }
 

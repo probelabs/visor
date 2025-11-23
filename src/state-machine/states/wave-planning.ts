@@ -30,9 +30,32 @@ export async function handleWavePlanning(
     (state as any).flags.forwardRunActive = false;
   } catch {}
 
+  // If a previous level hit an "awaiting human input" checkpoint (e.g. Slack
+  // human-input in pause mode), terminate execution cleanly instead of
+  // continuing to schedule downstream checks or forward-run waves.
+  try {
+    const flags = (state as any).flags || {};
+    if (flags.awaitingHumanInput) {
+      if (context.debug) {
+        logger.info('[WavePlanning] Awaiting human input – finishing run without further waves');
+      }
+      state.levelQueue = [];
+      state.eventQueue = [];
+      transition('Completed');
+      return;
+    }
+  } catch {}
+
   // Check if we have a dependency graph
+  // For fresh runs, PlanReady always initializes dependencyGraph before
+  // entering WavePlanning. However, resumed runs (from snapshots) may not
+  // hydrate this field. In that case, allow WavePlanning to proceed as long
+  // as we're not at the initial wave (wave > 0) where we would need the
+  // full graph to queue the first levels.
   if (!context.dependencyGraph) {
-    throw new Error('Dependency graph not available');
+    if (state.wave === 0 && state.levelQueue.length === 0) {
+      throw new Error('Dependency graph not available');
+    }
   }
 
   // M3: Process bubbled events from child workflows
@@ -132,16 +155,54 @@ export async function handleWavePlanning(
         eventOverrides.set(target, gotoEvent);
       }
 
-      // Find all transitive dependencies (parents) of target
+      // Find all transitive dependencies (parents) of target.
+      // Forward-run MUST NOT blindly re-run parent checks that already executed
+      // successfully in this run; `depends_on` is an ordering/data contract,
+      // not an instruction to re-run ancestors every time a child is targeted.
       const dependencies = findTransitiveDependencies(target, context);
       for (const dep of dependencies) {
-        checksToRun.add(dep);
+        const stats = state.stats.get(dep);
+        const hasSucceeded = !!stats && (stats.successfulRuns || 0) > 0;
+        if (!hasSucceeded) {
+          checksToRun.add(dep);
+        }
       }
 
-      // Find all transitive dependents (children) of target
-      const dependents = findTransitiveDependents(target, context, gotoEvent);
-      for (const dep of dependents) {
-        checksToRun.add(dep);
+      // Find all transitive dependents (children) of target.
+      // For goto/goto_js-originated forward runs targeting human-input checks
+      // (e.g., Slack ask loops), we deliberately DO NOT auto-schedule
+      // dependents. The expectation is that a human-input step resumes on the
+      // next external event (new Slack message / CLI input), and its
+      // dependents will be scheduled by the normal initial plan, not as part
+      // of the same forward-run wave.
+      let shouldIncludeDependents = true;
+      try {
+        const origin = (request as any).origin as string | undefined;
+        const cfg = context.config.checks?.[target] as any;
+        const targetType = String(cfg?.type || '').toLowerCase();
+        // Only treat goto→human-input as a pause boundary for event-driven
+        // runs (e.g., Slack SocketMode) where human-input is asynchronous and
+        // resumes on the next external message. CLI/manual flows (no
+        // webhookContext) should still immediately schedule dependents so
+        // on_fail.goto loops behave synchronously.
+        const execCtx: any = (context as any).executionContext || {};
+        const hasWebhook = !!execCtx.webhookContext;
+        if (
+          hasWebhook &&
+          (origin === 'goto' || origin === 'goto_js') &&
+          targetType === 'human-input'
+        ) {
+          shouldIncludeDependents = false;
+        }
+      } catch {
+        // best-effort; fall back to including dependents
+      }
+
+      if (shouldIncludeDependents) {
+        const dependents = findTransitiveDependents(target, context, gotoEvent);
+        for (const dep of dependents) {
+          checksToRun.add(dep);
+        }
       }
     }
 
@@ -329,6 +390,12 @@ export async function handleWavePlanning(
 
   // Initial wave: queue all execution levels
   if (state.wave === 0 && state.levelQueue.length === 0) {
+    // At this point we must have a dependency graph; if it's still missing,
+    // fail fast to avoid undefined behavior.
+    if (!context.dependencyGraph) {
+      throw new Error('Dependency graph not available');
+    }
+
     state.levelQueue = [...context.dependencyGraph.executionOrder];
 
     if (context.debug) {
@@ -396,8 +463,8 @@ function findTransitiveDependencies(target: string, context: EngineContext): Set
           .filter(Boolean);
         for (const opt of orOptions) {
           if (checks[opt]) {
-            // Exclude pure memory initializers from forward-run dependency subset
             const optCfg: any = checks[opt];
+            // Exclude pure memory initializers from forward-run dependency subset
             if (
               String(optCfg?.type || '').toLowerCase() === 'memory' &&
               String(optCfg?.operation || '').toLowerCase() === 'set'
@@ -410,8 +477,8 @@ function findTransitiveDependencies(target: string, context: EngineContext): Set
         }
       } else {
         if (checks[depId]) {
-          // Exclude pure memory initializers from forward-run dependency subset
           const dCfg: any = checks[depId];
+          // Exclude pure memory initializers from forward-run dependency subset
           if (
             String(dCfg?.type || '').toLowerCase() === 'memory' &&
             String(dCfg?.operation || '').toLowerCase() === 'set'

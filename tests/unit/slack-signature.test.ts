@@ -29,4 +29,3 @@ describe('verifySlackSignature', () => {
     expect(verifySlackSignature(headers, body, secret)).toBe(false);
   });
 });
-

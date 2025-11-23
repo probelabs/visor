@@ -18,6 +18,8 @@ export interface FrontendContext {
     actor?: string;
   };
   octokit?: any;
+  // Optional webhook context (e.g., Slack Events API payload injected by socket runner)
+  webhookContext?: { webhookData?: Map<string, unknown>; eventType?: string };
 }
 
 export interface Frontend {

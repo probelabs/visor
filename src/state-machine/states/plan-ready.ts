@@ -339,7 +339,12 @@ export async function handlePlanReady(
   // even if some dependencies are filtered out by tags. They just won't have those outputs.
   const finalChecks: Record<string, import('../../types/config').CheckConfig> = {};
   for (const [checkId, checkConfig] of Object.entries(filteredChecks)) {
-    const dependencies = checkConfig.depends_on || [];
+    const depRaw = (checkConfig as any).depends_on as unknown;
+    const dependencies: string[] = Array.isArray(depRaw)
+      ? (depRaw as string[])
+      : typeof depRaw === 'string'
+        ? [depRaw]
+        : [];
 
     // Only enforce dependency satisfaction when NO tag filter is active
     // When tag filtering is active, allow checks to run with partial dependencies (soft dependencies)
@@ -368,7 +373,13 @@ export async function handlePlanReady(
     // For OR groups, only include options that exist in finalChecks
     // e.g., "issue-assistant|comment-assistant" becomes ["comment-assistant"] if issue-assistant was filtered out
     // For regular dependencies, also filter to only include checks that exist (soft dependencies when tag filtering)
-    const dependencies = (checkConfig.depends_on || []).flatMap((d: string) => {
+    const depsRaw2 = (checkConfig as any).depends_on as unknown;
+    const depList: string[] = Array.isArray(depsRaw2)
+      ? (depsRaw2 as string[])
+      : typeof depsRaw2 === 'string'
+        ? [depsRaw2]
+        : [];
+    const dependencies = depList.flatMap((d: string) => {
       if (typeof d === 'string' && d.includes('|')) {
         // OR dependency - filter to only include available checks
         const orOptions = d

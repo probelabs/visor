@@ -204,8 +204,17 @@ export class AIReviewService {
 
     // Build prompt from custom instructions
     // Respect provider-level skip_code_context by skipping PR context wrapper when requested
+    const cfgAny: any = this.config as any;
+    const skipTransport = cfgAny?.skip_transport_context === true;
+    const skipPRContext =
+      cfgAny?.skip_code_context === true || (skipTransport && cfgAny?.skip_code_context !== false);
+    const skipSlackContext =
+      cfgAny?.skip_slack_context === true ||
+      (skipTransport && cfgAny?.skip_slack_context !== false);
+
     const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema, {
-      skipPRContext: (this.config as any)?.skip_code_context === true,
+      skipPRContext,
+      skipSlackContext,
     });
 
     log(`Executing AI review with ${this.config.provider} provider...`);
@@ -348,8 +357,16 @@ export class AIReviewService {
 
     // Build prompt from custom instructions
     // When reusing session, skip PR context since it's already in the conversation history
+    const cfgAny: any = this.config as any;
+    const skipTransport = cfgAny?.skip_transport_context === true;
+    const skipSlackContext =
+      cfgAny?.skip_slack_context === true ||
+      (skipTransport && cfgAny?.skip_slack_context !== false);
+
     const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema, {
+      // When reusing sessions we always skip PR context, regardless of flags
       skipPRContext: true,
+      skipSlackContext,
     });
 
     // Determine which agent to use based on session mode
@@ -506,21 +523,24 @@ export class AIReviewService {
     prInfo: PRInfo,
     customInstructions: string,
     schema?: string | Record<string, unknown>,
-    options?: { skipPRContext?: boolean; checkName?: string }
+    options?: { skipPRContext?: boolean; checkName?: string; skipSlackContext?: boolean }
   ): Promise<string> {
     // When reusing sessions, skip PR context to avoid sending duplicate diff data
     const skipPRContext = options?.skipPRContext === true;
+    const skipSlackContext = options?.skipSlackContext === true;
 
     // Check if we're using the code-review schema
     const isCodeReviewSchema = schema === 'code-review';
 
     const prContext = skipPRContext ? '' : await this.formatPRContext(prInfo, isCodeReviewSchema);
+    const slackContextXml =
+      skipSlackContext === true ? '' : this.formatSlackContextFromPRInfo(prInfo);
     const isIssue = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
 
     if (isIssue) {
       // Issue context - no code analysis needed
-      if (skipPRContext) {
-        // Session reuse: just send new instructions
+      if (skipPRContext && !slackContextXml) {
+        // Session reuse: just send new instructions (no context at all)
         return `<instructions>
 ${customInstructions}
 </instructions>`;
@@ -532,7 +552,7 @@ ${customInstructions}
   </instructions>
 
   <context>
-${prContext}
+${prContext}${slackContextXml}
   </context>
 
   <rules>
@@ -552,7 +572,7 @@ ${prContext}
       // PR context with code-review schema - structured XML format
       const analysisType = prInfo.isIncremental ? 'INCREMENTAL' : 'FULL';
 
-      if (skipPRContext) {
+      if (skipPRContext && !slackContextXml) {
         // Session reuse: just send new instructions without repeating the context
         return `<instructions>
 ${customInstructions}
@@ -583,7 +603,7 @@ ${customInstructions}
   </instructions>
 
   <context>
-${prContext}
+${prContext}${slackContextXml}
   </context>
 
   <rules>
@@ -602,8 +622,8 @@ ${prContext}
     }
 
     // For non-code-review schemas, just provide instructions and context without review-specific wrapper
-    if (skipPRContext) {
-      // Session reuse: just send new instructions
+    if (skipPRContext && !slackContextXml) {
+      // Session reuse: just send new instructions (no context)
       return `<instructions>
 ${customInstructions}
 </instructions>`;
@@ -614,7 +634,7 @@ ${customInstructions}
 </instructions>
 
 <context>
-${prContext}
+${prContext}${slackContextXml}
 </context>`;
   }
 
@@ -942,6 +962,184 @@ ${this.escapeXml(processedFallbackDiff)}
 </pull_request>`;
 
     return context;
+  }
+
+  /**
+   * Format Slack conversation context (if attached to PRInfo) as XML
+   */
+  private formatSlackContextFromPRInfo(prInfo: PRInfo): string {
+    try {
+      const anyInfo: any = prInfo as any;
+      const conv = anyInfo.slackConversation;
+      if (!conv || typeof conv !== 'object') return '';
+
+      const transport = conv.transport || 'slack';
+      const thread = conv.thread || {};
+      const messages = Array.isArray(conv.messages) ? conv.messages : [];
+      const current = conv.current || {};
+      const attrs = conv.attributes || {};
+
+      let xml = `
+<slack_context>
+  <transport>${this.escapeXml(String(transport))}</transport>
+  <thread>
+    <id>${this.escapeXml(String(thread.id || ''))}</id>
+    <url>${this.escapeXml(String(thread.url || ''))}</url>
+  </thread>`;
+
+      // Attributes (channel, user, thread_ts, etc.)
+      const attrKeys = Object.keys(attrs);
+      if (attrKeys.length > 0) {
+        xml += `
+  <attributes>`;
+        for (const k of attrKeys) {
+          const v = attrs[k];
+          xml += `
+    <attribute>
+      <key>${this.escapeXml(String(k))}</key>
+      <value>${this.escapeXml(String(v ?? ''))}</value>
+    </attribute>`;
+        }
+        xml += `
+  </attributes>`;
+      }
+
+      // Message history
+      if (messages.length > 0) {
+        xml += `
+  <messages>`;
+        for (const m of messages) {
+          xml += `
+    <message>
+      <role>${this.escapeXml(String(m.role || 'user'))}</role>
+      <user>${this.escapeXml(String((m as any).user || ''))}</user>
+      <text>${this.escapeXml(String(m.text || ''))}</text>
+      <timestamp>${this.escapeXml(String(m.timestamp || ''))}</timestamp>
+      <origin>${this.escapeXml(String(m.origin || ''))}</origin>
+    </message>`;
+        }
+        xml += `
+  </messages>`;
+      }
+
+      // Current message (the one that triggered this run)
+      xml += `
+  <current>
+    <role>${this.escapeXml(String(current.role || 'user'))}</role>
+    <user>${this.escapeXml(String((current as any).user || ''))}</user>
+    <text>${this.escapeXml(String(current.text || ''))}</text>
+    <timestamp>${this.escapeXml(String(current.timestamp || ''))}</timestamp>
+    <origin>${this.escapeXml(String(current.origin || ''))}</origin>
+  </current>
+</slack_context>`;
+
+      return xml;
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * Build a normalized ConversationContext for GitHub (PR/issue + comments)
+   * using the same contract as Slack's ConversationContext. This is exposed
+   * to templates via the unified `conversation` object.
+   */
+  private buildGitHubConversationFromPRInfo(
+    prInfo: PRInfo
+  ): import('./types/bot').ConversationContext | undefined {
+    try {
+      const anyInfo: any = prInfo as any;
+      const eventCtx: any = anyInfo.eventContext || {};
+      const comments: Array<import('./pr-analyzer').PRComment> = anyInfo.comments || [];
+
+      // Basic repo + thread identity from eventContext if available
+      const repoOwner: string | undefined =
+        eventCtx.repository?.owner?.login || process.env.GITHUB_REPOSITORY?.split('/')?.[0];
+      const repoName: string | undefined =
+        eventCtx.repository?.name || process.env.GITHUB_REPOSITORY?.split('/')?.[1];
+
+      const number = prInfo.number;
+      const threadId =
+        repoOwner && repoName ? `${repoOwner}/${repoName}#${number}` : `github#${number}`;
+      const threadUrl =
+        eventCtx.issue?.html_url ||
+        eventCtx.pull_request?.html_url ||
+        (repoOwner && repoName
+          ? `https://github.com/${repoOwner}/${repoName}/pull/${number}`
+          : undefined);
+
+      const messages: import('./types/bot').NormalizedMessage[] = [];
+
+      // Synthetic root message: PR/issue body
+      if (prInfo.body && prInfo.body.trim().length > 0) {
+        messages.push({
+          role: 'user',
+          user: prInfo.author || 'unknown',
+          text: prInfo.body,
+          timestamp: (eventCtx.pull_request?.created_at ||
+            eventCtx.issue?.created_at ||
+            '') as string,
+          origin: 'github',
+        });
+      }
+
+      // Historical comments in chronological order (already sorted by PRAnalyzer)
+      for (const c of comments) {
+        messages.push({
+          role: 'user',
+          user: c.author || 'unknown',
+          text: c.body || '',
+          timestamp: c.createdAt || '',
+          origin: 'github',
+        });
+      }
+
+      // Current / triggering comment, if present
+      const triggeringComment = eventCtx.comment as
+        | { user?: { login?: string }; created_at?: string; body?: string }
+        | undefined;
+
+      let current: import('./types/bot').NormalizedMessage;
+      if (triggeringComment) {
+        current = {
+          role: 'user',
+          user: (triggeringComment.user && triggeringComment.user.login) || 'unknown',
+          text: triggeringComment.body || '',
+          timestamp: triggeringComment.created_at || '',
+          origin: 'github',
+        };
+      } else if (messages.length > 0) {
+        current = messages[messages.length - 1];
+      } else {
+        // Fallback synthetic current message from title if body/comments are empty
+        current = {
+          role: 'user',
+          user: prInfo.author || 'unknown',
+          text: prInfo.title || '',
+          timestamp: '',
+          origin: 'github',
+        };
+      }
+
+      // Attributes: useful metadata for templates/tooling
+      const attributes: Record<string, string> = {};
+      if (repoOwner) attributes.owner = repoOwner;
+      if (repoName) attributes.repo = repoName;
+      attributes.number = String(number);
+      if (eventCtx.event_name) attributes.event_name = String(eventCtx.event_name);
+      if (eventCtx.action) attributes.action = String(eventCtx.action);
+
+      const ctx: import('./types/bot').ConversationContext = {
+        transport: 'github',
+        thread: { id: threadId, url: threadUrl },
+        messages,
+        current,
+        attributes,
+      };
+      return ctx;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -1390,6 +1588,14 @@ ${'='.repeat(60)}
         // ProbeAgent will check for AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, etc.
       }
       const explicitPromptType = (process.env.VISOR_PROMPT_TYPE || '').trim();
+
+      // Derive a default system prompt for non-code-review flows when none is configured.
+      // This keeps code-review schema using its specialized prompt template.
+      let systemPrompt = this.config.systemPrompt;
+      if (!systemPrompt && schema !== 'code-review') {
+        systemPrompt = 'You are general assistant, follow user instructions.';
+      }
+
       const options: TracedProbeAgentOptions = {
         sessionId: sessionId,
         // Prefer config promptType, then env override, else fallback to code-review when schema is set
@@ -1403,8 +1609,8 @@ ${'='.repeat(60)}
                 : undefined,
         allowEdit: false, // We don't want the agent to modify files
         debug: this.config.debug || false,
-        // Map systemPrompt to Probe customPrompt until SDK exposes a first-class field
-        customPrompt: this.config.systemPrompt || this.config.customPrompt,
+        // Use systemPrompt (native in rc168+) with fallback to customPrompt for backward compat
+        systemPrompt: systemPrompt || this.config.systemPrompt || this.config.customPrompt,
       };
 
       // Enable tracing in debug mode for better diagnostics
@@ -1446,12 +1652,14 @@ ${'='.repeat(60)}
         (options as any).allowEdit = this.config.allowEdit;
       }
 
-      // Pass tool filtering options to ProbeAgent
+      // Pass tool filtering options to ProbeAgent (native in rc168+)
       if (this.config.allowedTools !== undefined) {
-        (options as any).allowedTools = this.config.allowedTools;
+        options.allowedTools = this.config.allowedTools;
+        log(`🔧 Setting allowedTools: ${JSON.stringify(this.config.allowedTools)}`);
       }
       if (this.config.disableTools !== undefined) {
-        (options as any).disableTools = this.config.disableTools;
+        options.disableTools = this.config.disableTools;
+        log(`🔧 Setting disableTools: ${this.config.disableTools}`);
       }
 
       // Pass bash command execution configuration to ProbeAgent
@@ -1936,7 +2144,7 @@ ${'='.repeat(60)}
     response: string,
     debugInfo?: AIDebugInfo,
     _schema?: string
-  ): ReviewSummary {
+  ): ReviewSummary & { output?: unknown } {
     log('🔍 Parsing AI response...');
     log(`📊 Raw response length: ${response.length} characters`);
 
@@ -1955,25 +2163,23 @@ ${'='.repeat(60)}
       // Handle different schema types differently
       let reviewData: AIResponseFormat;
 
-      // Handle plain schema or no schema - no JSON parsing, return response as-is
+      // Handle plain schema or no schema - no JSON parsing, treat as assistant-style text output
       if (_schema === 'plain' || !_schema) {
         log(
-          `📋 ${_schema === 'plain' ? 'Plain' : 'No'} schema detected - returning raw response without JSON parsing`
+          `📋 ${_schema === 'plain' ? 'Plain' : 'No'} schema detected - treating raw response as text output`
         );
 
-        // For plain schema, return the raw response as an issue
+        // For plain schema / no schema, return the raw response as a text-like output
+        // instead of a synthetic AI_RESPONSE issue. This is more natural for chat-style
+        // integrations (Slack, GitHub comments, CLI assistant mode).
+        const trimmed = typeof response === 'string' ? response.trim() : '';
+        const out: any = trimmed ? { text: trimmed } : {};
 
         return {
-          issues: [
-            {
-              file: 'AI_RESPONSE',
-              line: 1,
-              ruleId: 'ai/raw_response',
-              message: response,
-              severity: 'info',
-              category: 'documentation',
-            },
-          ],
+          issues: [],
+          // Expose assistant-style content via output.text so downstream formatters
+          // (Slack frontend, CLI "Assistant Response" section, templates) can render it.
+          output: out,
           debug: debugInfo,
         };
       }

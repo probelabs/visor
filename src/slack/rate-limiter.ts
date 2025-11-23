@@ -36,7 +36,9 @@ export interface RateLimitRequest {
   timestamp?: number;
 }
 
-interface WindowEntry { timestamp: number }
+interface WindowEntry {
+  timestamp: number;
+}
 interface RateLimitState {
   windows: { minute: WindowEntry[]; hour: WindowEntry[] };
   concurrent: number;
@@ -80,12 +82,13 @@ export class RateLimiter {
   async check(req: RateLimitRequest): Promise<RateLimitResult> {
     if (!this.cfg.enabled) return { allowed: true };
     const now = req.timestamp ?? Date.now();
-    const dims: Array<{ type: RateLimitDimension; key: string; conf?: RateLimitDimensionConfig }> = [
-      { type: 'global', key: 'global', conf: this.cfg.global },
-      { type: 'bot', key: `bot:${req.botId}`, conf: this.cfg.bot },
-      { type: 'user', key: `user:${req.userId}`, conf: this.cfg.user },
-      { type: 'channel', key: `channel:${req.channelId}`, conf: this.cfg.channel },
-    ];
+    const dims: Array<{ type: RateLimitDimension; key: string; conf?: RateLimitDimensionConfig }> =
+      [
+        { type: 'global', key: 'global', conf: this.cfg.global },
+        { type: 'bot', key: `bot:${req.botId}`, conf: this.cfg.bot },
+        { type: 'user', key: `user:${req.userId}`, conf: this.cfg.user },
+        { type: 'channel', key: `channel:${req.channelId}`, conf: this.cfg.channel },
+      ];
     let mostRemaining: number | undefined;
     let mostLimit: number | undefined;
     for (const d of dims) {
@@ -107,7 +110,14 @@ export class RateLimiter {
         const threshold = this.cfg.actions.queue_threshold ?? 0.8;
         const limit = r.limit ?? 0;
         if (limit > 0 && r.remaining / limit < 1 - threshold)
-          return { allowed: false, blocked_by: d.type, remaining: r.remaining, limit: r.limit, reset: r.reset, should_queue: true };
+          return {
+            allowed: false,
+            blocked_by: d.type,
+            remaining: r.remaining,
+            limit: r.limit,
+            reset: r.reset,
+            should_queue: true,
+          };
       }
     }
     for (const d of dims) if (d.conf) await this.incConcurrent(d.key);
@@ -116,11 +126,20 @@ export class RateLimiter {
 
   async release(req: RateLimitRequest): Promise<void> {
     if (!this.cfg.enabled) return;
-    for (const key of ['global', `bot:${req.botId}`, `user:${req.userId}`, `channel:${req.channelId}`])
+    for (const key of [
+      'global',
+      `bot:${req.botId}`,
+      `user:${req.userId}`,
+      `channel:${req.channelId}`,
+    ])
       await this.decConcurrent(key);
   }
 
-  private async checkDim(key: string, conf: RateLimitDimensionConfig, now: number): Promise<RateLimitResult> {
+  private async checkDim(
+    key: string,
+    conf: RateLimitDimensionConfig,
+    now: number
+  ): Promise<RateLimitResult> {
     const st = await this.getState(key);
     if (conf.concurrent_requests && st.concurrent >= conf.concurrent_requests)
       return { allowed: false, remaining: 0, limit: conf.concurrent_requests, retry_after: 5 };
@@ -129,12 +148,24 @@ export class RateLimiter {
     if (conf.requests_per_minute && st.windows.minute.length >= conf.requests_per_minute) {
       const oldest = st.windows.minute[0];
       const reset = Math.ceil((oldest.timestamp + 60 * 1000) / 1000);
-      return { allowed: false, remaining: 0, limit: conf.requests_per_minute, reset, retry_after: Math.max(1, reset - Math.floor(now / 1000)) };
+      return {
+        allowed: false,
+        remaining: 0,
+        limit: conf.requests_per_minute,
+        reset,
+        retry_after: Math.max(1, reset - Math.floor(now / 1000)),
+      };
     }
     if (conf.requests_per_hour && st.windows.hour.length >= conf.requests_per_hour) {
       const oldest = st.windows.hour[0];
       const reset = Math.ceil((oldest.timestamp + 60 * 60 * 1000) / 1000);
-      return { allowed: false, remaining: 0, limit: conf.requests_per_hour, reset, retry_after: Math.max(1, reset - Math.floor(now / 1000)) };
+      return {
+        allowed: false,
+        remaining: 0,
+        limit: conf.requests_per_hour,
+        reset,
+        retry_after: Math.max(1, reset - Math.floor(now / 1000)),
+      };
     }
     let remaining: number | undefined;
     let limit: number | undefined;
@@ -194,4 +225,3 @@ export class RateLimiter {
     if (this.cleanupInterval) clearInterval(this.cleanupInterval);
   }
 }
-

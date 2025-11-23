@@ -352,10 +352,12 @@ describe('AIReviewService', () => {
 
       const result = (service as any).parseAIResponse(invalidResponse);
 
-      // Should return a structured fallback instead of throwing
+      // Should return a structured fallback instead of throwing.
+      // For no-schema / plain responses we now treat this as assistant-style
+      // text output rather than a synthetic AI_RESPONSE issue.
       expect(result).toHaveProperty('issues');
-      expect(result.issues).toHaveLength(1);
-      expect(result.issues![0].message).toBe('Not a JSON response');
+      expect(result.issues).toHaveLength(0);
+      expect((result as any).output).toMatchObject({ text: invalidResponse });
     });
   });
 

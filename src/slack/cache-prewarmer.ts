@@ -28,13 +28,22 @@ export class CachePrewarmer {
     };
   }
   async prewarm(): Promise<PrewarmingResult> {
-    if (!this.cfg.enabled) return { totalThreads: 0, durationMs: 0, channels: [], users: [], errors: [] };
+    if (!this.cfg.enabled)
+      return { totalThreads: 0, durationMs: 0, channels: [], users: [], errors: [] };
     const start = Date.now();
-    const out: PrewarmingResult = { totalThreads: 0, durationMs: 0, channels: [], users: [], errors: [] };
+    const out: PrewarmingResult = {
+      totalThreads: 0,
+      durationMs: 0,
+      channels: [],
+      users: [],
+      errors: [],
+    };
     try {
       if (this.cfg.channels.length) out.channels = await this.prewarmChannels();
       if (this.cfg.users.length) out.users = await this.prewarmUsers();
-      out.totalThreads = out.channels.reduce((a, r) => a + r.threadsPrewarmed, 0) + out.users.reduce((a, r) => a + r.threadsPrewarmed, 0);
+      out.totalThreads =
+        out.channels.reduce((a, r) => a + r.threadsPrewarmed, 0) +
+        out.users.reduce((a, r) => a + r.threadsPrewarmed, 0);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       logger.error(`[CachePrewarmer] failed: ${msg}`);
@@ -66,12 +75,19 @@ export class CachePrewarmer {
   private async prewarmChannel(channel: string) {
     const r = { channel, threadsPrewarmed: 0, errors: [] as string[] };
     try {
-      const resp: any = await this.client.getWebClient().conversations.history({ channel, limit: this.cfg.max_threads_per_channel });
+      const resp: any = await this.client
+        .getWebClient()
+        .conversations.history({ channel, limit: this.cfg.max_threads_per_channel });
       const msgs = (resp && resp.messages) || [];
       const threaded = msgs.filter((m: any) => m.thread_ts && m.thread_ts === m.ts);
       for (const m of threaded) {
         if (r.threadsPrewarmed > 0) await this.sleep(this.cfg.rate_limit_ms);
-        await this.adapter.fetchConversation(channel, String(m.thread_ts), { ts: String(m.ts), user: String(m.user || 'unknown'), text: String(m.text || ''), timestamp: Date.now() });
+        await this.adapter.fetchConversation(channel, String(m.thread_ts), {
+          ts: String(m.ts),
+          user: String(m.user || 'unknown'),
+          text: String(m.text || ''),
+          timestamp: Date.now(),
+        });
         r.threadsPrewarmed++;
       }
     } catch (e) {
@@ -86,12 +102,19 @@ export class CachePrewarmer {
       const open: any = await this.client.getWebClient().conversations.open({ users: user });
       if (!open || !open.ok || !open.channel?.id) return r;
       const channel = String(open.channel.id);
-      const resp: any = await this.client.getWebClient().conversations.history({ channel, limit: this.cfg.max_threads_per_channel });
+      const resp: any = await this.client
+        .getWebClient()
+        .conversations.history({ channel, limit: this.cfg.max_threads_per_channel });
       const msgs = (resp && resp.messages) || [];
       const threaded = msgs.filter((m: any) => m.thread_ts && m.thread_ts === m.ts);
       for (const m of threaded) {
         if (r.threadsPrewarmed > 0) await this.sleep(this.cfg.rate_limit_ms);
-        await this.adapter.fetchConversation(channel, String(m.thread_ts), { ts: String(m.ts), user: String(m.user || user), text: String(m.text || ''), timestamp: Date.now() });
+        await this.adapter.fetchConversation(channel, String(m.thread_ts), {
+          ts: String(m.ts),
+          user: String(m.user || user),
+          text: String(m.text || ''),
+          timestamp: Date.now(),
+        });
         r.threadsPrewarmed++;
       }
     } catch (e) {
@@ -100,6 +123,7 @@ export class CachePrewarmer {
     }
     return r;
   }
-  private sleep(ms: number) { return new Promise(res => setTimeout(res, ms)); }
+  private sleep(ms: number) {
+    return new Promise(res => setTimeout(res, ms));
+  }
 }
-

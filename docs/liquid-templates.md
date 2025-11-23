@@ -198,7 +198,150 @@ echo '{{ pr | json }}' | jq .
 {{ files | map: "filename" }}   # Array of filenames
 ```
 
+### Chat History Helper
+
+The `chat_history` filter turns one or more check histories into a linear, timestamp‑sorted chat transcript. This is especially useful for human‑input + AI chat flows (Slack, CLI, etc.).
+
+Basic usage:
+
+```liquid
+{% assign history = '' | chat_history: 'ask', 'reply' %}
+{% for m in history %}
+  {{ m.role | capitalize }}: {{ m.text }}
+{% endfor %}
+```
+
+Each `history` item has:
+
+- `m.step`  – originating check name (e.g. `"ask"`, `"reply"`)
+- `m.role`  – logical role (`"user"` or `"assistant"` by default)
+- `m.text`  – normalized text (from `.text` / `.content` / fallback field)
+- `m.ts`    – timestamp used for ordering
+- `m.raw`   – original `outputs_history[step][i]` object
+
+By default:
+
+- Human input checks (`type: human-input`) map to `role: "user"`.
+- AI checks (`type: ai`) map to `role: "assistant"`.
+- Messages are sorted by `ts` ascending across all steps.
+
+Advanced options (all optional, passed as keyword arguments):
+
+```liquid
+{% assign history = '' | chat_history:
+  'ask',
+  'reply',
+  direction: 'asc',          # or 'desc' (default: 'asc')
+  limit: 50,                 # keep at most N messages (after sorting)
+  text: {
+    default_field: 'text',   # which field to prefer when .text/.content missing
+    by_step: {
+      'summary': 'summary.text'  # use nested path for specific steps
+    }
+  },
+  roles: {
+    by_type: {
+      'human-input': 'user',
+      'ai': 'assistant'
+    },
+    by_step: {
+      'system-note': 'system'
+    },
+    default: 'assistant'
+  },
+  role_map: 'ask=user,reply=assistant'  # compact per-step override
+%}
+```
+
+Precedence for `role` resolution:
+
+1. `role_map` / `roles.by_step[step]` (explicit step override)
+2. `roles.by_type[checkType]` (e.g. `'human-input'`, `'ai'`)
+3. Built‑in defaults: `human-input → user`, `ai → assistant`
+4. `roles.default` if provided
+5. Fallback: `"assistant"`
+
+Examples:
+
+```liquid
+{%- assign history = '' | chat_history: 'ask', 'reply' -%}
+{%- for m in history -%}
+  {{ m.role }}: {{ m.text }}
+{%- endfor -%}
+```
+
+```liquid
+{%- assign history = '' | chat_history: 'ask', 'clarify', 'reply', direction: 'desc', limit: 5 -%}
+{%- for m in history -%}
+  [{{ m.step }}][{{ m.role }}] {{ m.text }}
+{%- endfor -%}
+```
+
 <!-- Removed merge_sort_by example: filter no longer provided -->
+
+### Conversation Context (Slack, GitHub, etc.)
+
+For transport‑aware prompts, Visor exposes a normalized `conversation` object in Liquid
+for AI checks:
+
+```liquid
+{% if conversation %}
+  Transport: {{ conversation.transport }}   {# 'slack', 'github', ... #}
+  Thread: {{ conversation.thread.id }}
+  {% if conversation.thread.url %}
+    Link: {{ conversation.thread.url }}
+  {% endif %}
+
+  {% for m in conversation.messages %}
+    {{ m.user }} ({{ m.role }} at {{ m.timestamp }}): {{ m.text }}
+  {% endfor %}
+
+  Latest:
+  {{ conversation.current.user }} ({{ conversation.current.role }}): {{ conversation.current.text }}
+{% endif %}
+```
+
+Contract:
+
+- `conversation.transport` – transport identifier (`'slack'`, `'github'`, etc.)
+- `conversation.thread.id` – stable thread key:
+  - Slack: `"channel:thread_ts"`
+  - GitHub: `"owner/repo#number"`
+- `conversation.thread.url` – optional deep link (Slack thread or GitHub PR/issue URL)
+- `conversation.messages[]` – full history as normalized messages:
+  - `role`: `'user' | 'bot'`
+  - `user`: Slack user id or GitHub login
+  - `text`: message body
+  - `timestamp`: message timestamp
+  - `origin`: e.g. `'visor'` for bot messages, `'github'` for GitHub messages
+- `conversation.current` – message that triggered the current run (same shape as above)
+- `conversation.attributes` – extra metadata (e.g. `channel`, `thread_ts`, `owner`, `repo`, `number`, `event_name`, `action`)
+
+Transport‑specific helpers:
+
+- Slack:
+  - `slack.event` – raw Slack event payload (channel, ts, text, etc.)
+  - `slack.conversation` – same structure as `conversation` for Slack runs
+- GitHub:
+  - `event` – GitHub event metadata and payload (unchanged)
+  - A normalized GitHub conversation is also attached so `conversation.transport == 'github'`
+    reflects the PR/issue body and comment history.
+
+You can combine `conversation` with `chat_history`:
+
+```liquid
+{% assign history = '' | chat_history: 'ask', 'reply' %}
+{% if conversation and conversation.transport == 'slack' %}
+  # Slack thread:
+  {% for m in conversation.messages %}
+    {{ m.user }}: {{ m.text }}
+  {% endfor %}
+{% endif %}
+
+{% for m in history %}
+  [{{ m.step }}][{{ m.role }}] {{ m.text }}
+{% endfor %}
+```
 
 ## Examples
 

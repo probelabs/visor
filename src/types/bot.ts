@@ -7,6 +7,8 @@ export interface NormalizedMessage {
   text: string;
   timestamp: string;
   origin?: string;
+  /** Optional user identifier (e.g., Slack user id, GitHub login) */
+  user?: string;
 }
 
 export interface ConversationContext {
@@ -117,4 +119,3 @@ export interface SlackConfig {
   rate_limiting?: SlackRateLimitConfig;
   workflow?: string;
 }
-

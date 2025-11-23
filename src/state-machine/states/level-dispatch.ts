@@ -1806,6 +1806,18 @@ async function executeSingleCheck(
       throw new Error(`Check configuration not found: ${checkId}`);
     }
 
+    // Build lightweight checks metadata for template helpers (e.g., chat_history)
+    const checksMeta: Record<string, { type?: string; group?: string }> = {};
+    try {
+      const allChecks = context.config.checks || {};
+      for (const [id, cfg] of Object.entries(allChecks)) {
+        const anyCfg = cfg as any;
+        checksMeta[id] = { type: anyCfg.type, group: anyCfg.group };
+      }
+    } catch {
+      // Best-effort only; helpers will fall back if this is missing
+    }
+
     // Get provider
     const providerType = checkConfig.type || 'ai';
     const providerRegistry =
@@ -1830,7 +1842,9 @@ async function executeSingleCheck(
       forEach: checkConfig.forEach,
       ...checkConfig,
       eventContext: (context.prInfo as any)?.eventContext || {},
+      // Expose history and checks metadata for template helpers
       __outputHistory: outputHistory,
+      checksMeta,
       ai: {
         ...(checkConfig.ai || {}),
         timeout: checkConfig.ai?.timeout || 600000,
@@ -1869,6 +1883,8 @@ async function executeSingleCheck(
       _engineMode: context.mode,
       _parentContext: context,
       _parentState: state,
+      // Make checks metadata available to providers that want it
+      checksMeta,
     };
 
     // Evaluate assume contract (design-by-contract) before executing
@@ -1943,6 +1959,20 @@ async function executeSingleCheck(
       { 'visor.check.id': checkId, 'visor.check.type': providerType },
       async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
     );
+
+    // Special case: human-input style checks that intentionally pause the run
+    // (e.g., Slack SocketMode awaiting a reply) surface a marker on the result.
+    // When we see this, mark the run state so WavePlanning can terminate cleanly
+    // after this level instead of continuing to downstream checks.
+    try {
+      const awaitingHumanInput =
+        (result as any)?.awaitingHumanInput === true ||
+        ((result as any)?.output && (result as any).output.awaitingHumanInput === true);
+      if (awaitingHumanInput) {
+        (state as any).flags = (state as any).flags || {};
+        (state as any).flags.awaitingHumanInput = true;
+      }
+    } catch {}
 
     // Enrich issues with metadata
     const enrichedIssues = (result.issues || []).map((issue: ReviewIssue) => ({

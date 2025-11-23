@@ -1,100 +1,152 @@
 import type { Frontend, FrontendContext } from './host';
 import { SlackClient } from '../slack/client';
 
-type SectionState = {
-  status: 'queued' | 'in_progress' | 'completed' | 'errored';
-  conclusion?: 'success' | 'failure' | 'neutral' | 'skipped';
-  issues?: number;
-  lastUpdated: string;
-  content?: string;
-  error?: string;
-};
-
 type SlackFrontendConfig = {
   defaultChannel?: string;
   groupChannels?: Record<string, string>;
   debounceMs?: number;
   maxWaitMs?: number;
+  showRawOutput?: boolean;
 };
 
 export class SlackFrontend implements Frontend {
   public readonly name = 'slack';
   private subs: Array<{ unsubscribe(): void }> = [];
-  private stepStatusByGroup: Map<string, Map<string, SectionState>> = new Map();
-  private messageTsByGroup: Map<string, string> = new Map();
   private cfg: SlackFrontendConfig;
-
-  // Debounce state (per frontend)
-  private debounceMs = 300;
-  private maxWaitMs = 1500;
-  private _timer: NodeJS.Timeout | null = null;
-  private _lastFlush = 0;
-  private _pendingGroups: Set<string> = new Set();
+  // Reactions ack/done per run (inbound Slack events only)
+  private acked: boolean = false;
+  private ackRef: { channel: string; ts: string } | null = null;
+  private ackName: string = 'eyes';
+  private doneName: string = 'thumbsup';
 
   constructor(config?: SlackFrontendConfig) {
     this.cfg = config || {};
-    if (typeof this.cfg.debounceMs === 'number') this.debounceMs = this.cfg.debounceMs!;
-    if (typeof this.cfg.maxWaitMs === 'number') this.maxWaitMs = this.cfg.maxWaitMs!;
   }
 
   start(ctx: FrontendContext): void {
     const bus = ctx.eventBus;
 
-    if (process.env.VISOR_DEBUG === 'true') {
-      try {
-        const ch =
-          this.getChannelForGroup('overview') || this.getChannelForGroup('review') || '(none)';
-        const hasSlack = !!(
-          (ctx as any).slack ||
-          (ctx as any).slackClient ||
-          (this.cfg as any)?.botToken ||
-          process.env.SLACK_BOT_TOKEN
+    // Info-level boot log
+    try {
+      const hasClient = !!(
+        (ctx as any).slack ||
+        (ctx as any).slackClient ||
+        (this.cfg as any)?.botToken ||
+        process.env.SLACK_BOT_TOKEN
+      );
+      ctx.logger.info(`[slack-frontend] started; hasClient=${hasClient} defaultChannel=unset`);
+    } catch {}
+
+    // If this run was triggered by a Slack event, log key attributes
+    try {
+      const payload = this.getInboundSlackPayload(ctx);
+      if (payload) {
+        const ev: any = payload.event || {};
+        const ch = String(ev.channel || '-');
+        const ts = String(ev.ts || ev.event_ts || '-');
+        const user = String(ev.user || ev.bot_id || '-');
+        const type = String(ev.type || '-');
+        const thread = String(ev.thread_ts || '');
+        ctx.logger.info(
+          `[slack-frontend] inbound event received: type=${type} channel=${ch} ts=${ts}` +
+            (thread ? ` thread_ts=${thread}` : '') +
+            ` user=${user}`
         );
-        // eslint-disable-next-line no-console
-        console.log(`[slack-frontend] start; hasClientHint=${hasSlack} anyChannel=${ch}`);
-      } catch {}
-    }
+      }
+    } catch {}
 
     // Listen to check lifecycle; we only post on completion/error (no queued placeholders)
     this.subs.push(
       bus.on('CheckCompleted', async (env: any) => {
         const ev = (env && env.payload) || env;
-        const group = this.getGroupForCheck(ctx, ev.checkId);
-        const issues = Array.isArray(ev.result?.issues) ? ev.result.issues.length : 0;
-        const content = typeof ev.result?.content === 'string' ? ev.result.content : undefined;
-        this.upsertSectionState(group, ev.checkId, {
-          status: 'completed',
-          conclusion: await this.mapConclusionFromFailIf(ctx, ev.checkId, ev.result),
-          issues,
-          lastUpdated: new Date().toISOString(),
-          content,
-        });
-        this.scheduleUpdate(ctx, group);
+        // For chat-style AI checks, post direct replies into the Slack thread
+        await this.maybePostDirectReply(ctx, ev.checkId, ev.result).catch(() => {});
       })
     );
 
-    this.subs.push(
-      bus.on('CheckErrored', async (env: any) => {
-        const ev = (env && env.payload) || env;
-        const group = this.getGroupForCheck(ctx, ev.checkId);
-        this.upsertSectionState(group, ev.checkId, {
-          status: 'errored',
-          conclusion: 'failure',
-          issues: 0,
-          lastUpdated: new Date().toISOString(),
-          error: ev.error?.message || 'Execution error',
-        });
-        this.scheduleUpdate(ctx, group);
-      })
-    );
-
-    // Flush on terminal state to avoid leaving pending updates
+    // On terminal state, replace 👀 with 👍 if we acked an inbound Slack message
     this.subs.push(
       bus.on('StateTransition', async (env: any) => {
         const ev = (env && env.payload) || env;
         if (ev && (ev.to === 'Completed' || ev.to === 'Error')) {
-          for (const g of this.stepStatusByGroup.keys()) await this.flushNow(ctx, g);
+          await this.finalizeReactions(ctx).catch(() => {});
         }
+      })
+    );
+    // Add 👀 acknowledgement as soon as first check is scheduled for Slack-driven runs
+    this.subs.push(
+      bus.on('CheckScheduled', async () => {
+        await this.ensureAcknowledgement(ctx).catch(() => {});
+      })
+    );
+
+    // Human-input requests: post prompt to Slack and mark waiting using prompt-state
+    this.subs.push(
+      bus.on('HumanInputRequested', async (env: any) => {
+        try {
+          const ev = (env && env.payload) || env;
+          if (!ev || typeof ev.prompt !== 'string' || !ev.checkId) return;
+          // Determine channel/thread (Slack SocketMode); if we can't, just ignore.
+          let channel = ev.channel as string | undefined;
+          let threadTs = ev.threadTs as string | undefined;
+          if (!channel || !threadTs) {
+            const payload = this.getInboundSlackPayload(ctx);
+            const e: any = payload?.event;
+            const derivedTs = String(e?.thread_ts || e?.ts || e?.event_ts || '');
+            const derivedCh = String(e?.channel || '');
+            if (derivedCh && derivedTs) {
+              channel = channel || derivedCh;
+              threadTs = threadTs || derivedTs;
+            }
+          }
+          if (!channel || !threadTs) return;
+
+          // Mark waiting in prompt-state without posting the prompt text to Slack.
+          const { getPromptStateManager } = await import('../slack/prompt-state');
+          const mgr = getPromptStateManager();
+          const prev = mgr.getWaiting(channel, threadTs);
+          const text = String(ev.prompt);
+          mgr.setWaiting(channel, threadTs, {
+            checkName: String(ev.checkId),
+            prompt: text,
+            promptMessageTs: prev?.promptMessageTs,
+            promptsPosted: ((prev?.promptsPosted || 0) + 1) as any,
+          });
+          try {
+            ctx.logger.info(
+              `[slack-frontend] registered human-input waiting state for ${channel} thread=${threadTs}`
+            );
+          } catch {}
+        } catch (e) {
+          try {
+            ctx.logger.warn(
+              `[slack-frontend] HumanInputRequested handling failed: ${
+                e instanceof Error ? e.message : String(e)
+              }`
+            );
+          } catch {}
+        }
+      })
+    );
+
+    // SnapshotSaved: attach snapshot path to waiting entry for this thread
+    this.subs.push(
+      bus.on('SnapshotSaved', async (env: any) => {
+        try {
+          const ev = (env && env.payload) || env;
+          const channel = String(ev?.channel || '');
+          const threadTs = String(ev?.threadTs || '');
+          const filePath = String(ev?.filePath || '');
+          if (!channel || !threadTs || !filePath) return;
+          const { getPromptStateManager } = await import('../slack/prompt-state');
+          const mgr = getPromptStateManager();
+          mgr.update(channel, threadTs, { snapshotPath: filePath });
+          try {
+            ctx.logger.info(
+              `[slack-frontend] snapshot path attached to waiting prompt: ${filePath}`
+            );
+          } catch {}
+        } catch {}
       })
     );
   }
@@ -102,9 +154,6 @@ export class SlackFrontend implements Frontend {
   stop(): void {
     for (const s of this.subs) s.unsubscribe();
     this.subs = [];
-    if (this._timer) clearTimeout(this._timer);
-    this._timer = null;
-    this._pendingGroups.clear();
   }
 
   private getSlack(ctx: FrontendContext): any | undefined {
@@ -121,144 +170,166 @@ export class SlackFrontend implements Frontend {
     return undefined;
   }
 
-  private getChannelForGroup(group: string): string | undefined {
-    return (this.cfg.groupChannels && this.cfg.groupChannels[group]) || this.cfg.defaultChannel;
-  }
-
-  private async updateGroupMessage(ctx: FrontendContext, group: string): Promise<void> {
-    const slack = this.getSlack(ctx);
-    const channel = this.getChannelForGroup(group);
-    if (!slack || !channel) {
-      try {
-        if (process.env.VISOR_DEBUG === 'true') {
-          // eslint-disable-next-line no-console
-          console.log(`[slack-frontend] skip update: slack=${!!slack} channel=${channel || ''}`);
-        }
-      } catch {}
-      return;
-    }
-
-    const text = this.renderGroupText(group);
-    const existingTs = this.messageTsByGroup.get(group);
-    if (!existingTs) {
-      if (process.env.VISOR_DEBUG === 'true') {
-        try {
-          console.log(`[slack-frontend] postMessage channel=${channel} len=${text.length}`);
-        } catch {}
-      }
-      const res = await slack.chat.postMessage({ channel, text });
-      const ts = res?.ts || res?.message?.ts || res?.data?.ts;
-      if (typeof ts === 'string') this.messageTsByGroup.set(group, ts);
-    } else {
-      if (process.env.VISOR_DEBUG === 'true') {
-        try {
-          console.log(
-            `[slack-frontend] update channel=${channel} ts=${existingTs} len=${text.length}`
-          );
-        } catch {}
-      }
-      await slack.chat.update({ channel, ts: existingTs, text });
-    }
-  }
-
-  private renderGroupText(group: string): string {
-    const sections = this.stepStatusByGroup.get(group) || new Map<string, SectionState>();
-    const lines: string[] = [];
-    lines.push(`Visor ${group} summary`);
-    for (const [checkId, st] of sections.entries()) {
-      const statusEmoji =
-        st.status === 'errored' ? '❌' : st.conclusion === 'failure' ? '❌' : '✅';
-      const title = `${statusEmoji} ${checkId}`;
-      const details = st.content && st.content.trim().length > 0 ? `\n${st.content.trim()}` : '';
-      lines.push(`${title}${details}`);
-    }
-    return lines.join('\n\n');
-  }
-
-  private getGroupForCheck(ctx: FrontendContext, checkId: string): string {
+  private getInboundSlackPayload(ctx: FrontendContext): any | null {
     try {
-      const cfg: any = ctx.config || {};
-      const g = cfg?.checks?.[checkId]?.group || cfg?.steps?.[checkId]?.group;
-      if (typeof g === 'string' && g.trim().length > 0) return g;
-    } catch {}
-    return 'review';
-  }
-
-  private upsertSectionState(group: string, checkId: string, patch: Partial<SectionState>): void {
-    let groupMap = this.stepStatusByGroup.get(group);
-    if (!groupMap) {
-      groupMap = new Map<string, SectionState>();
-      this.stepStatusByGroup.set(group, groupMap);
+      const anyCfg: any = ctx.config || {};
+      const slackCfg: any = anyCfg.slack || {};
+      const endpoint: string = slackCfg.endpoint || '/bots/slack/support';
+      const payload: any = (ctx as any).webhookContext?.webhookData?.get(endpoint);
+      return payload || null;
+    } catch {
+      return null;
     }
-    const prev =
-      groupMap.get(checkId) ||
-      ({ status: 'queued', lastUpdated: new Date().toISOString() } as SectionState);
-    groupMap.set(checkId, { ...prev, ...patch });
   }
 
-  private async mapConclusionFromFailIf(
+  private getInboundSlackEvent(ctx: FrontendContext): { channel: string; ts: string } | null {
+    try {
+      const payload = this.getInboundSlackPayload(ctx);
+      const ev: any = payload?.event;
+      const channel = String(ev?.channel || '');
+      const ts = String(ev?.ts || ev?.event_ts || '');
+      if (channel && ts) return { channel, ts };
+    } catch {}
+    return null;
+  }
+
+  private async ensureAcknowledgement(ctx: FrontendContext): Promise<void> {
+    if (this.acked) return;
+    const ref = this.getInboundSlackEvent(ctx);
+    if (!ref) return;
+    const slack = this.getSlack(ctx);
+    if (!slack) return;
+    // Skip ack for bot messages to avoid loops
+    try {
+      const payload = this.getInboundSlackPayload(ctx);
+      const ev: any = payload?.event;
+      if (ev?.subtype === 'bot_message') return;
+      // If we can resolve bot user id, skip if the sender is the bot
+      try {
+        const botId = await slack.getBotUserId?.();
+        if (botId && ev?.user && String(ev.user) === String(botId)) return;
+      } catch {}
+    } catch {}
+    // Allow overrides via config
+    try {
+      const anyCfg: any = ctx.config || {};
+      const slackCfg: any = anyCfg.slack || {};
+      if (slackCfg?.reactions?.enabled === false) return;
+      this.ackName = slackCfg?.reactions?.ack || this.ackName;
+      this.doneName = slackCfg?.reactions?.done || this.doneName;
+    } catch {}
+    await slack.reactions.add({ channel: ref.channel, timestamp: ref.ts, name: this.ackName });
+    try {
+      ctx.logger.info(
+        `[slack-frontend] added acknowledgement reaction :${this.ackName}: channel=${ref.channel} ts=${ref.ts}`
+      );
+    } catch {}
+    this.acked = true;
+    this.ackRef = ref;
+  }
+
+  private async finalizeReactions(ctx: FrontendContext): Promise<void> {
+    if (!this.acked || !this.ackRef) return;
+    const slack = this.getSlack(ctx);
+    if (!slack) return;
+    try {
+      try {
+        await slack.reactions.remove({
+          channel: this.ackRef.channel,
+          timestamp: this.ackRef.ts,
+          name: this.ackName,
+        });
+      } catch {}
+      await slack.reactions.add({
+        channel: this.ackRef.channel,
+        timestamp: this.ackRef.ts,
+        name: this.doneName,
+      });
+      try {
+        ctx.logger.info(
+          `[slack-frontend] replaced acknowledgement with completion reaction :${this.doneName}: channel=${this.ackRef.channel} ts=${this.ackRef.ts}`
+        );
+      } catch {}
+    } finally {
+      // Reset for safety
+      this.acked = false;
+      this.ackRef = null;
+    }
+  }
+
+  /**
+   * Post direct replies into the originating Slack thread when appropriate.
+   * This is independent of summary messages and is intended for chat-style flows
+   * (e.g., AI answers and explicit chat/notify steps).
+   */
+  private async maybePostDirectReply(
     ctx: FrontendContext,
     checkId: string,
-    result: { issues?: any[]; output?: unknown }
-  ): Promise<'success' | 'failure' | 'neutral' | 'skipped'> {
+    result: { output?: any; content?: string }
+  ): Promise<void> {
     try {
-      const { FailureConditionEvaluator } = await import('../failure-condition-evaluator');
-      const evaluator = new FailureConditionEvaluator();
-      const config: any = ctx.config || {};
-      const checks = (config && config.checks) || {};
-      const checkCfg = checks[checkId] || {};
-      const checkSchema = typeof checkCfg.schema === 'string' ? checkCfg.schema : 'code-review';
-      const checkGroup = checkCfg.group || 'default';
-      const reviewSummary = { issues: Array.isArray(result?.issues) ? result.issues : [] };
+      const cfg: any = ctx.config || {};
+      const checkCfg: any = cfg.checks?.[checkId];
+      if (!checkCfg) return;
 
-      const failures: any[] = [];
-      if (config.fail_if) {
-        const failed = await evaluator.evaluateSimpleCondition(
-          checkId,
-          checkSchema,
-          checkGroup,
-          reviewSummary,
-          config.fail_if
-        );
-        failures.push({ failed });
+      // Per-workflow / per-frontend flag to allow posting raw JSON
+      // outputs for AI steps (useful for debugging router outputs).
+      const slackRoot: any = (cfg as any).slack || {};
+      const showRawOutput =
+        slackRoot.show_raw_output === true || (this.cfg as any)?.showRawOutput === true;
+
+      const providerType = (checkCfg.type as string) || '';
+      const isAi = providerType === 'ai';
+      const isLogChat = providerType === 'log' && checkCfg.group === 'chat';
+      if (!isAi && !isLogChat) return;
+
+      // For AI checks, only post when using simple/unstructured schemas (or none).
+      if (isAi) {
+        const schema = checkCfg.schema;
+        // String schemas: allow only simple/plain ones
+        if (typeof schema === 'string') {
+          const simpleSchemas = ['code-review', 'markdown', 'text', 'plain'];
+          if (!simpleSchemas.includes(schema)) return;
+        }
+        // Object schemas (custom JSON): treat as structured; require output.text
       }
-      if (checkCfg.fail_if) {
-        const failed = await evaluator.evaluateSimpleCondition(
-          checkId,
-          checkSchema,
-          checkGroup,
-          reviewSummary,
-          checkCfg.fail_if
-        );
-        failures.push({ failed });
+
+      const slack = this.getSlack(ctx);
+      if (!slack) return;
+
+      const payload = this.getInboundSlackPayload(ctx);
+      const ev: any = payload?.event;
+      const channel = String(ev?.channel || '');
+      const threadTs = String(ev?.thread_ts || ev?.ts || ev?.event_ts || '');
+      if (!channel || !threadTs) return;
+
+      // Prefer output.text; fall back to content ONLY for string/simple schemas.
+      const out: any = (result as any)?.output;
+      let text: string | undefined;
+      if (out && typeof out.text === 'string' && out.text.trim().length > 0) {
+        text = out.text.trim();
+      } else if (isAi && typeof checkCfg.schema === 'string') {
+        if (
+          typeof (result as any)?.content === 'string' &&
+          (result as any).content.trim().length > 0
+        ) {
+          text = (result as any).content.trim();
+        }
+      } else if (isAi && showRawOutput && out !== undefined) {
+        try {
+          text = JSON.stringify(out, null, 2);
+        } catch {
+          text = String(out);
+        }
       }
-      const anyFailed = failures.some(f => f && f.failed);
-      return anyFailed ? 'failure' : 'success';
-    } catch {
-      return 'neutral';
-    }
-  }
+      if (!text) return;
 
-  // Debounce helpers (group-level)
-  private scheduleUpdate(ctx: FrontendContext, group: string) {
-    this._pendingGroups.add(group);
-    if (this.debounceMs === 0) return void this.flushNow(ctx, group);
-    const now = Date.now();
-    const since = now - this._lastFlush;
-    const remaining = this.maxWaitMs - since;
-    if (this._timer) clearTimeout(this._timer);
-    const wait = Math.max(0, Math.min(this.debounceMs, remaining));
-    this._timer = setTimeout(async () => {
-      const groups = Array.from(this._pendingGroups);
-      this._pendingGroups.clear();
-      this._timer = null;
-      for (const g of groups) await this.updateGroupMessage(ctx, g);
-      this._lastFlush = Date.now();
-    }, wait);
-  }
-
-  private async flushNow(ctx: FrontendContext, group: string) {
-    await this.updateGroupMessage(ctx, group);
-    this._lastFlush = Date.now();
+      await slack.chat.postMessage({ channel, text, thread_ts: threadTs });
+      try {
+        ctx.logger.info(
+          `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs}`
+        );
+      } catch {}
+    } catch {}
   }
 }

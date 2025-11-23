@@ -22,6 +22,23 @@ export type IntegrationEvent =
       error?: { message: string; stack?: string; name?: string };
     }
   | {
+      type: 'HumanInputRequested';
+      checkId: string;
+      prompt: string;
+      // Slack-centric routing hints (optional; frontends may also derive from inbound payload)
+      channel?: string;
+      threadTs?: string;
+      threadKey?: string;
+    }
+  | {
+      type: 'SnapshotSaved';
+      checkId: string;
+      channel?: string;
+      threadTs?: string;
+      threadKey?: string;
+      filePath: string;
+    }
+  | {
       type: 'CommentPosted';
       threadKey?: string;
       commentId: string;

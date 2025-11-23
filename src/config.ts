@@ -1194,6 +1194,16 @@ export class ConfigManager {
             const addl = (e.params && (e.params as any).additionalProperty) || 'unknown';
             const fullField = pathStr ? `${pathStr}.${addl}` : addl;
             const topLevel = !pathStr;
+            // Gracefully allow certain known top-level keys that may appear in
+            // specific execution contexts but are not part of the core schema.
+            // - 'tests' is used by the YAML test runner and can legitimately
+            //   be present when loading a suite file.
+            // - 'slack' holds inbound Slack settings (socket/webhook); older
+            //   schema snapshots may not include it yet.
+            if (topLevel && (addl === 'tests' || addl === 'slack')) {
+              // Do not warn for these keys.
+              continue;
+            }
             warnings.push({
               field: fullField || 'config',
               message: topLevel

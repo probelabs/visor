@@ -68,7 +68,11 @@ export class ThreadCache {
     return entry;
   }
 
-  set(threadId: string, messages: NormalizedMessage[], metadata?: { channel: string; threadTs: string }): void {
+  set(
+    threadId: string,
+    messages: NormalizedMessage[],
+    metadata?: { channel: string; threadTs: string }
+  ): void {
     const now = Date.now();
     const isUpdate = this.cache.has(threadId);
     if (!isUpdate && this.cache.size >= this.maxThreads) this.evictLRU();
@@ -195,9 +199,9 @@ export class ThreadCache {
       size += (m.text?.length || 0) * 2;
       size += (m.role?.length || 0) * 2;
       size += (m.timestamp?.length || 0) * 2;
+      size += (m.user?.length || 0) * 2;
       size += 64; // overhead
     }
     return size;
   }
 }
-

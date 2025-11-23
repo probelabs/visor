@@ -48,7 +48,11 @@ export class SlackAdapter {
       messages = await this.fetchThreadFromAPI(channel, threadTs);
       this.cache.set(threadId, messages, { channel, threadTs });
     }
-    const current = this.normalizeSlackMessage({ ts: currentMessage.ts, user: currentMessage.user, text: currentMessage.text });
+    const current = this.normalizeSlackMessage({
+      ts: currentMessage.ts,
+      user: currentMessage.user,
+      text: currentMessage.text,
+    });
     return this.buildConversationContext(
       channel,
       threadTs,
@@ -59,10 +63,16 @@ export class SlackAdapter {
     );
   }
 
-  private async fetchThreadFromAPI(channel: string, threadTs: string): Promise<NormalizedMessage[]> {
+  private async fetchThreadFromAPI(
+    channel: string,
+    threadTs: string
+  ): Promise<NormalizedMessage[]> {
     try {
       const maxMessages = this.config.fetch?.max_messages || 40;
       const slackMessages = await this.client.fetchThreadReplies(channel, threadTs, maxMessages);
+      logger.info(
+        `SlackAdapter: fetched ${slackMessages.length} messages for thread ${channel}:${threadTs}`
+      );
       return slackMessages.map(m => this.normalizeSlackMessage(m));
     } catch (e) {
       logger.error(`Failed to fetch thread replies: ${e instanceof Error ? e.message : String(e)}`);
@@ -73,7 +83,13 @@ export class SlackAdapter {
   normalizeSlackMessage(msg: SlackMessage): NormalizedMessage {
     const isBot = msg.bot_id !== undefined || (msg.user && msg.user === this.botUserId);
     const origin = isBot ? 'visor' : undefined;
-    return { role: isBot ? 'bot' : 'user', text: msg.text || '', timestamp: msg.ts, origin };
+    return {
+      role: isBot ? 'bot' : 'user',
+      text: msg.text || '',
+      timestamp: msg.ts,
+      origin,
+      user: msg.user ? String(msg.user) : undefined,
+    };
   }
 
   private buildConversationContext(
@@ -90,7 +106,12 @@ export class SlackAdapter {
       thread: { id: `${channel}:${threadTs}`, url: threadUrl },
       messages,
       current,
-      attributes: { channel, user: userId, thread_ts: threadTs, event_timestamp: String(eventTimestamp) },
+      attributes: {
+        channel,
+        user: userId,
+        thread_ts: threadTs,
+        event_timestamp: String(eventTimestamp),
+      },
     };
   }
 
@@ -106,9 +127,16 @@ export class SlackAdapter {
     if (this.cache.has(id)) this.cache.evict(id);
   }
 
-  getCacheStats() { return this.cache.getStats(); }
-  getCache(): ThreadCache { return this.cache; }
-  getClient(): SlackClient { return this.client; }
-  getConfig(): SlackBotConfig { return this.config; }
+  getCacheStats() {
+    return this.cache.getStats();
+  }
+  getCache(): ThreadCache {
+    return this.cache;
+  }
+  getClient(): SlackClient {
+    return this.client;
+  }
+  getConfig(): SlackBotConfig {
+    return this.config;
+  }
 }
-

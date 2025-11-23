@@ -76,6 +76,10 @@ export interface ExecutionContext {
     /** reset per-run guard state before grouped execution */
     resetPerRunState?: boolean;
   };
+  /** Optional event bus for emitting integration events (e.g., HumanInputRequested) */
+  eventBus?: import('../event-bus/event-bus').EventBus;
+  /** Optional webhook context (e.g., Slack Events API payload) */
+  webhookContext?: { webhookData?: Map<string, unknown>; eventType?: string };
 }
 
 /**

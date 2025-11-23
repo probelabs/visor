@@ -11,69 +11,86 @@ function makeFakeSlack() {
 }
 
 describe('SlackFrontend (event-bus)', () => {
-  test('posts a message on first CheckCompleted and updates on subsequent completions', async () => {
+  test('posts direct reply for AI checks with simple schemas', async () => {
     const bus = new EventBus();
     const slack = makeFakeSlack();
     const fe = new SlackFrontend({ defaultChannel: 'C1', debounceMs: 0 });
+    const map = new Map<string, unknown>();
+    map.set('/bots/slack/support', {
+      event: { type: 'app_mention', channel: 'C1', ts: '123.456', text: 'hi' },
+    });
     fe.start({
       eventBus: bus,
       logger: console as any,
-      config: { checks: { security: { group: 'review', schema: 'code-review' } } },
+      config: {
+        slack: { endpoint: '/bots/slack/support' },
+        checks: {
+          reply: { type: 'ai', group: 'chat', schema: 'plain' },
+        },
+      },
       run: { runId: 'r1' },
-      // Inject fake Slack client directly
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any as any);
-
-    // Inject slack after start (context is captured lexically)
-    // We rely on SlackFrontend.getSlack reading from ctx at call time
-    (fe as any).getSlack = () => slack;
-
-    await bus.emit({
-      type: 'CheckCompleted',
-      checkId: 'security',
-      scope: [],
-      result: { issues: [], content: 'Body 1' },
-    });
-    expect(slack.chat.postMessage).toHaveBeenCalledTimes(1);
-    expect(slack.chat.update).not.toHaveBeenCalled();
-
-    await bus.emit({
-      type: 'CheckCompleted',
-      checkId: 'security',
-      scope: [],
-      result: { issues: [], content: 'Body 2' },
-    });
-    expect(slack.chat.update).toHaveBeenCalledTimes(1);
-  });
-
-  test('separate groups render to the same channel by default', async () => {
-    const bus = new EventBus();
-    const slack = makeFakeSlack();
-    const fe = new SlackFrontend({ defaultChannel: 'C1', debounceMs: 0 });
-    fe.start({
-      eventBus: bus,
-      logger: console as any,
-      config: { checks: { overview: { group: 'overview' }, security: { group: 'review' } } },
-      run: { runId: 'r2' },
+      webhookContext: { webhookData: map },
     } as any);
     (fe as any).getSlack = () => slack;
 
     await bus.emit({
       type: 'CheckCompleted',
-      checkId: 'overview',
+      checkId: 'reply',
       scope: [],
-      result: { issues: [], content: 'OV' },
+      result: { issues: [], output: { text: 'Hello!' } },
+    });
+
+    expect(slack.chat.postMessage).toHaveBeenCalledTimes(1);
+    const [req] = slack.chat.postMessage.mock.calls[0];
+    expect(req.channel).toBe('C1');
+    expect(req.thread_ts).toBe('123.456');
+    expect(req.text).toBe('Hello!');
+  });
+
+  test('does not post for non-AI checks or structured schemas by default', async () => {
+    const bus = new EventBus();
+    const slack = makeFakeSlack();
+    const fe = new SlackFrontend({ defaultChannel: 'C1', debounceMs: 0 });
+    const map = new Map<string, unknown>();
+    map.set('/bots/slack/support', {
+      event: { type: 'app_mention', channel: 'C1', ts: '999.1', text: 'hi' },
+    });
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: {
+        slack: { endpoint: '/bots/slack/support' },
+        checks: {
+          jsonRouter: {
+            type: 'ai',
+            group: 'chat',
+            schema: {
+              type: 'object',
+              properties: { intent: { type: 'string' } },
+              required: ['intent'],
+            },
+          },
+          logStep: { type: 'log', group: 'other' },
+        },
+      },
+      run: { runId: 'r2' },
+      webhookContext: { webhookData: map },
+    } as any);
+    (fe as any).getSlack = () => slack;
+
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'jsonRouter',
+      scope: [],
+      result: { issues: [], output: { intent: 'chat' } },
     });
     await bus.emit({
       type: 'CheckCompleted',
-      checkId: 'security',
+      checkId: 'logStep',
       scope: [],
-      result: { issues: [], content: 'SEC' },
+      result: { issues: [], output: { text: 'log' } },
     });
 
-    // Two posts because two groups (overview, review). Both to C1
-    expect(slack.chat.postMessage).toHaveBeenCalledTimes(2);
-    const channels = slack.chat.postMessage.mock.calls.map((c: any[]) => c[0].channel);
-    expect(channels.sort()).toEqual(['C1', 'C1']);
+    expect(slack.chat.postMessage).not.toHaveBeenCalled();
   });
 });
