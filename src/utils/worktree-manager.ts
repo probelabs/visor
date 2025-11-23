@@ -69,6 +69,13 @@ export class WorktreeManager {
    * Ensure base directories exist
    */
   private ensureDirectories(): void {
+    // Skip directory creation if base_path is not properly initialized
+    // (can happen in test environments)
+    if (!this.config.base_path) {
+      logger.debug('Skipping directory creation: base_path not initialized');
+      return;
+    }
+
     const reposDir = this.getReposDir();
     const worktreesDir = this.getWorktreesDir();
 
