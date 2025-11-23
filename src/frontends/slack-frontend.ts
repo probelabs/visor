@@ -1,5 +1,6 @@
 import type { Frontend, FrontendContext } from './host';
 import { SlackClient } from '../slack/client';
+import { formatSlackText } from '../slack/markdown';
 
 type SlackFrontendConfig = {
   defaultChannel?: string;
@@ -324,7 +325,8 @@ export class SlackFrontend implements Frontend {
       }
       if (!text) return;
 
-      await slack.chat.postMessage({ channel, text, thread_ts: threadTs });
+      const formattedText = formatSlackText(text);
+      await slack.chat.postMessage({ channel, text: formattedText, thread_ts: threadTs });
       try {
         ctx.logger.info(
           `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs}`
