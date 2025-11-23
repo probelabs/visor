@@ -8,33 +8,23 @@ describe('AI Review Service - Plain Schema Handling', () => {
   });
 
   describe('parseAIResponse with plain schema', () => {
-    it('should return raw response as an issue for plain schema', () => {
+    it('should return raw response as text output for plain schema', () => {
       const response = '<result>This is the actual content we want to keep</result>';
       const result = (service as any).parseAIResponse(response, undefined, 'plain');
 
-      expect(result.issues).toHaveLength(1);
-      expect(result.issues[0]).toMatchObject({
-        file: 'AI_RESPONSE',
-        line: 1,
-        ruleId: 'ai/raw_response',
-        message: response,
-        severity: 'info',
-        category: 'documentation',
+      expect(result.issues).toHaveLength(0);
+      expect((result as any).output).toMatchObject({
+        text: response,
       });
     });
 
-    it('should return raw response as an issue for any plain text response', () => {
+    it('should return raw response as text output for any plain text response', () => {
       const response = 'This is plain text without any XML tags';
       const result = (service as any).parseAIResponse(response, undefined, 'plain');
 
-      expect(result.issues).toHaveLength(1);
-      expect(result.issues[0]).toMatchObject({
-        file: 'AI_RESPONSE',
-        line: 1,
-        ruleId: 'ai/raw_response',
-        message: response,
-        severity: 'info',
-        category: 'documentation',
+      expect(result.issues).toHaveLength(0);
+      expect((result as any).output).toMatchObject({
+        text: response,
       });
     });
 
@@ -49,14 +39,9 @@ The changes look good overall.`;
 
       const result = (service as any).parseAIResponse(response, undefined, 'plain');
 
-      expect(result.issues).toHaveLength(1);
-      expect(result.issues[0]).toMatchObject({
-        file: 'AI_RESPONSE',
-        line: 1,
-        ruleId: 'ai/raw_response',
-        message: response,
-        severity: 'info',
-        category: 'documentation',
+      expect(result.issues).toHaveLength(0);
+      expect((result as any).output).toMatchObject({
+        text: response,
       });
     });
 
@@ -65,8 +50,8 @@ The changes look good overall.`;
       const debugInfo = { rawResponse: response, responseLength: response.length };
       const result = (service as any).parseAIResponse(response, debugInfo, 'plain');
 
-      expect(result.issues).toHaveLength(1);
-      expect(result.issues[0].message).toBe(response);
+      expect(result.issues).toHaveLength(0);
+      expect((result as any).output.text).toBe(response);
       expect(result.debug).toBe(debugInfo);
     });
   });

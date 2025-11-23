@@ -3,7 +3,7 @@ import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { HumanInputRequest } from '../types/config';
 import { interactivePrompt, simplePrompt } from '../utils/interactive-prompt';
-import { Liquid } from 'liquidjs';
+import { getPromptStateManager } from '../slack/prompt-state';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { tryReadStdin } from '../utils/stdin-reader';
 import * as fs from 'fs';
@@ -29,7 +29,7 @@ import * as path from 'path';
  * ```
  */
 export class HumanInputCheckProvider extends CheckProvider {
-  private liquid?: Liquid;
+  private liquid?: ReturnType<typeof createExtendedLiquid>;
   /**
    * @deprecated Use ExecutionContext.cliMessage instead
    * Kept for backward compatibility
@@ -160,6 +160,17 @@ export class HumanInputCheckProvider extends CheckProvider {
       for (const [k, v] of outputHistory.entries()) hist[k] = Array.isArray(v) ? v : [];
     }
     (ctx as any).outputs_history = hist;
+
+    // Optional: expose checks metadata for helpers like chat_history
+    try {
+      const anyCtx = _context as any;
+      const checksMeta = anyCtx?.checksMeta;
+      if (checksMeta && typeof checksMeta === 'object') {
+        (ctx as any).checks_meta = checksMeta;
+      }
+    } catch {
+      // Best-effort only
+    }
     return ctx;
   }
 
@@ -273,6 +284,63 @@ export class HumanInputCheckProvider extends CheckProvider {
     config: CheckProviderConfig,
     context?: ExecutionContext
   ): Promise<string> {
+    // Slack event-bus path: if this run comes from a Slack event, support pause/resume via PromptState
+    try {
+      const payload = context?.webhookContext?.webhookData?.get(
+        ((config as any)?.endpoint as string) || '/bots/slack/support'
+      ) as any;
+      const ev: any = payload && payload.event;
+      const channel = ev && String(ev.channel || '');
+      const threadTs = ev && String(ev.thread_ts || ev.ts || ev.event_ts || '');
+      const text = ev && String(ev.text || '');
+      if (channel && threadTs) {
+        const mgr = getPromptStateManager();
+        // First-run optimization: consume the first message only if no prompts were posted yet
+        // and the thread has an unconsumed first message captured by the socket.
+        try {
+          const waiting = mgr.getWaiting(channel, threadTs);
+          const promptsPosted = waiting?.promptsPosted || 0;
+          if (promptsPosted === 0 && mgr.hasUnconsumedFirstMessage(channel, threadTs)) {
+            const first = mgr.consumeFirstMessage(channel, threadTs);
+            if (first && first.trim().length > 0) {
+              return first;
+            }
+          }
+        } catch {}
+        const waiting = mgr.getWaiting(channel, threadTs);
+        if (waiting && waiting.checkName === checkName) {
+          // Resume: consume current Slack message as the answer
+          const answer = text.replace(/<@[A-Z0-9]+>/gi, '').trim();
+          mgr.clear(channel, threadTs);
+          if (!answer && (config.allow_empty as boolean | undefined) !== true) {
+            // fall through to CLI path if empty not allowed
+          } else {
+            return answer || (config.default as string) || '';
+          }
+        } else {
+          // First time: request human input via event bus; Slack frontend will post and mark waiting
+          const prompt = String((config.prompt as string) || 'Please provide input:');
+          try {
+            await context?.eventBus?.emit({
+              type: 'HumanInputRequested',
+              checkId: checkName,
+              prompt,
+              channel,
+              threadTs,
+              threadKey: `${channel}:${threadTs}`,
+            });
+          } catch {}
+          // Return a fatal error so the run pauses and relies on snapshot/resume.
+          // This prevents the router from immediately looping back to `ask` while
+          // we wait for the next Slack message in the same thread.
+          throw this.buildAwaitingError(checkName, prompt);
+        }
+      }
+    } catch (e) {
+      // If we constructed an awaiting error, bubble it so the caller can treat it as fatal
+      if (e && (e as any).issues) throw e;
+      // Otherwise swallow and continue to CLI fallbacks
+    }
     // Test runner mock support: if a mock is provided for this step, use it
     try {
       const mockVal = context?.hooks?.mockForStep?.(checkName);
@@ -381,6 +449,22 @@ export class HumanInputCheckProvider extends CheckProvider {
     }
   }
 
+  /** Build a deterministic, fatal error used to pause Slack-driven runs. */
+  private buildAwaitingError(checkName: string, prompt: string): Error {
+    const err = new Error(`awaiting human input for ${checkName}`);
+    (err as any).issues = [
+      {
+        file: 'system',
+        line: 0,
+        ruleId: `${checkName}/execution_error`,
+        message: `Awaiting human input (Slack thread): ${prompt.slice(0, 80)}`,
+        severity: 'error',
+        category: 'logic',
+      },
+    ] as ReviewSummary['issues'];
+    return err;
+  }
+
   async execute(
     _prInfo: PRInfo,
     config: CheckProviderConfig,
@@ -470,7 +554,18 @@ export class HumanInputCheckProvider extends CheckProvider {
         output: { text: sanitizedInput, ts: Date.now() },
       } as ReviewSummary & { output: { text: string; ts: number } };
     } catch (error) {
-      // If there's an error getting input, return an error issue
+      // If slack pause/resume threw a fatal error with issues, surface as-is
+      if (error && (error as any).issues) {
+        // Mark this summary as "awaiting human input" so the engine can
+        // treat it as a pause point and avoid running downstream checks
+        // in the same wave (especially for Slack SocketMode flows).
+        const summary: ReviewSummary & { awaitingHumanInput?: boolean } = {
+          issues: (error as any).issues,
+        } as ReviewSummary & { awaitingHumanInput?: boolean };
+        (summary as any).awaitingHumanInput = true;
+        return summary;
+      }
+      // Otherwise, return a generic error issue
       return {
         issues: [
           {

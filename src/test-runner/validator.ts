@@ -7,7 +7,7 @@ const schema: any = {
   $id: 'https://visor/probe/tests-dsl.schema.json',
   type: 'object',
   // Allow co-locating a full Visor config in the same YAML by tolerating
-  // extra top-level keys like 'steps'/'checks'. We still validate only the
+  // extra top-level keys like 'steps'/'checks'/'slack'/'frontends'. We still validate only the
   // 'tests' block structure here.
   additionalProperties: false,
   properties: {
@@ -23,6 +23,8 @@ const schema: any = {
     checks: { type: 'object' },
     output: { type: 'object' },
     hooks: { type: 'object' },
+    slack: { type: 'object' },
+    frontends: { type: 'array' },
     tests: {
       type: 'object',
       additionalProperties: false,

@@ -202,6 +202,73 @@ output:
 
 ### Advanced AI Configuration
 
+#### Transport Context Controls (GitHub, Slack, etc.)
+
+By default, Visor automatically adds transport‑specific context to AI prompts:
+
+- **GitHub**: PR / issue metadata + diffs (as XML `<context>...</context>`).
+- **Slack**: Slack conversation context (as XML `<slack_context>...</slack_context>`).
+
+You can control this per step with three flags under `ai:`:
+
+```yaml
+steps:
+  slack-chat:
+    type: ai
+    prompt: "Chat with the user"
+    ai:
+      # Turn off ALL automatic transport context (GitHub + Slack)
+      skip_transport_context: true
+
+  github-only:
+    type: ai
+    prompt: "Review PR using GitHub context only"
+    ai:
+      skip_slack_context: true        # never add Slack context
+      # keep code context on (default)
+
+  slack-only:
+    type: ai
+    prompt: "Answer based on this Slack thread"
+    ai:
+      skip_code_context: true         # no PR/issue XML
+      # keep Slack context on (default)
+```
+
+Semantics:
+
+- `skip_code_context: true`
+  - Skip GitHub PR/issue XML context (diffs, metadata).
+- `skip_slack_context: true`
+  - Skip Slack `<slack_context>` XML.
+- `skip_transport_context: true`
+  - High‑level switch:
+    - Behaves like setting both `skip_code_context` and `skip_slack_context` to `true`,
+      **unless** those are explicitly overridden on the same step.
+
+Even when transport XML is disabled, the **structured conversation object** is still available
+in Liquid templates:
+
+```liquid
+{% if conversation %}
+  Transport: {{ conversation.transport }}  {# 'slack', 'github', ... #}
+  Thread: {{ conversation.thread.id }}
+  {% for m in conversation.messages %}
+    {{ m.user }} ({{ m.role }}): {{ m.text }}
+  {% endfor %}
+{% endif %}
+```
+
+- For Slack:
+  - `conversation.transport == 'slack'`
+  - Also available via `slack.conversation`.
+- For GitHub (PR/issue + comments):
+  - `conversation.transport == 'github'`
+  - Exposed via a normalized GitHub conversation builder.
+
+Use these flags when you want full manual control over context, or to keep prompts lean in
+chat‑style flows.
+
 #### File Editing (`allowEdit`)
 
 Enable Edit and Create tools to allow AI agents to modify files directly. This feature is disabled by default for security and requires explicit opt-in.

@@ -235,6 +235,15 @@ interface AIProviderConfig {
     custom_prompt?: string;
     /** Skip adding code context (diffs, files, PR info) to the prompt */
     skip_code_context?: boolean;
+    /** Skip adding Slack conversation context to the prompt (when running under Slack) */
+    skip_slack_context?: boolean;
+    /**
+     * Skip adding transport-specific context (e.g., GitHub PR/issue XML, Slack
+     * conversation XML) to the prompt. When true, this behaves like setting both
+     * skip_code_context and skip_slack_context to true, unless those are
+     * explicitly overridden.
+     */
+    skip_transport_context?: boolean;
     /** MCP servers configuration */
     mcpServers?: Record<string, McpServerConfig>;
     /** Enable the delegate tool for task distribution to subagents */
@@ -347,6 +356,8 @@ interface CheckConfig {
     ai_custom_prompt?: string;
     /** MCP servers for this AI check - overrides global setting */
     ai_mcp_servers?: Record<string, McpServerConfig>;
+    /** List of custom tool names to expose to this AI check via ephemeral SSE MCP server */
+    ai_custom_tools?: string[];
     /** Claude Code configuration (for claude-code type checks) */
     claude_code?: ClaudeCodeConfig;
     /** Environment variables for this check */
@@ -977,6 +988,36 @@ interface DebugInfo {
     }>;
 }
 
+interface EventEnvelope<T = any> {
+    id: string;
+    version: 1;
+    timestamp: string;
+    runId: string;
+    workflowId?: string;
+    caseId?: string;
+    wave?: number;
+    attempt?: number;
+    checkId?: string;
+    traceId?: string;
+    spanId?: string;
+    causationId?: string;
+    correlationId?: string;
+    payload: T;
+}
+type AnyEvent = any;
+
+type EventHandler<T = AnyEvent> = (event: T | EventEnvelope<T>) => void | Promise<void>;
+interface Subscription {
+    unsubscribe(): void;
+}
+declare class EventBus {
+    private handlers;
+    private anyHandlers;
+    on<T = AnyEvent>(eventType: string, handler: EventHandler<T>): Subscription;
+    onAny(handler: EventHandler): Subscription;
+    emit(event: AnyEvent | EventEnvelope): Promise<void>;
+}
+
 /**
  * Execution context passed to check providers
  */
@@ -1019,6 +1060,13 @@ interface ExecutionContext {
         postGroupedComments?: boolean;
         /** reset per-run guard state before grouped execution */
         resetPerRunState?: boolean;
+    };
+    /** Optional event bus for emitting integration events (e.g., HumanInputRequested) */
+    eventBus?: EventBus;
+    /** Optional webhook context (e.g., Slack Events API payload) */
+    webhookContext?: {
+        webhookData?: Map<string, unknown>;
+        eventType?: string;
     };
 }
 

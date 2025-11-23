@@ -164,6 +164,173 @@ function configureLiquidWithExtensions(liquid) {
       return [];
     }
   });
+  liquid.registerFilter(
+    "chat_history",
+    function(value, ...args) {
+      try {
+        const impl = this;
+        const ctx = impl?.context;
+        const allArgs = Array.isArray(args) ? args : [];
+        if (allArgs.length === 0) {
+          return [];
+        }
+        const positional = [];
+        const options = {};
+        for (const arg of allArgs) {
+          if (Array.isArray(arg) && arg.length === 2 && typeof arg[0] === "string" && arg[0].length > 0) {
+            options[arg[0]] = arg[1];
+          } else {
+            positional.push(arg);
+          }
+        }
+        const stepArgs = positional;
+        const steps = stepArgs.map((s) => String(s ?? "").trim()).filter((s) => s.length > 0);
+        if (steps.length === 0) return [];
+        const outputsHistoryVar = ctx?.get(["outputs_history"]) || {};
+        const outputsVar = ctx?.get(["outputs"]) || {};
+        const outputsHistory = outputsHistoryVar && Object.keys(outputsHistoryVar).length > 0 ? outputsHistoryVar : outputsVar?.history || {};
+        const checksMeta = ctx?.get(["checks_meta"]) || ctx?.get(["event"])?.payload?.__checksMeta || void 0;
+        const directionRaw = typeof options.direction === "string" ? options.direction.toLowerCase() : "";
+        const direction = directionRaw === "desc" ? "desc" : "asc";
+        const limit = typeof options.limit === "number" && options.limit > 0 ? Math.floor(options.limit) : void 0;
+        const textCfg = options.text && typeof options.text === "object" ? options.text : {};
+        const defaultField = typeof textCfg.default_field === "string" && textCfg.default_field.trim() ? textCfg.default_field.trim() : "text";
+        const byStepText = {};
+        if (textCfg.by_step && typeof textCfg.by_step === "object") {
+          for (const [k, v] of Object.entries(textCfg.by_step)) {
+            if (typeof v === "string" && v.trim()) {
+              byStepText[k] = v.trim();
+            }
+          }
+        }
+        const rolesCfg = options.roles && typeof options.roles === "object" ? options.roles : {};
+        const byTypeRole = {};
+        if (rolesCfg.by_type && typeof rolesCfg.by_type === "object") {
+          for (const [k, v] of Object.entries(rolesCfg.by_type)) {
+            if (typeof v === "string" && v.trim()) {
+              byTypeRole[k] = v.trim();
+            }
+          }
+        }
+        const byStepRole = {};
+        if (rolesCfg.by_step && typeof rolesCfg.by_step === "object") {
+          for (const [k, v] of Object.entries(rolesCfg.by_step)) {
+            if (typeof v === "string" && v.trim()) {
+              byStepRole[k] = v.trim();
+            }
+          }
+        }
+        if (typeof options.role_map === "string" && options.role_map.trim().length > 0) {
+          const parts = String(options.role_map).split(",").map((p) => p.trim()).filter(Boolean);
+          for (const part of parts) {
+            const eqIdx = part.indexOf("=");
+            if (eqIdx > 0) {
+              const k = part.slice(0, eqIdx).trim();
+              const v = part.slice(eqIdx + 1).trim();
+              if (k && v) {
+                byStepRole[k] = v;
+              }
+            }
+          }
+        }
+        const defaultRole = typeof rolesCfg.default === "string" && rolesCfg.default.trim() ? rolesCfg.default.trim() : void 0;
+        const getNested = (obj, path2) => {
+          if (!obj || !path2) return void 0;
+          const parts = path2.split(".");
+          let cur = obj;
+          for (const p of parts) {
+            if (cur == null) return void 0;
+            cur = cur[p];
+          }
+          return cur;
+        };
+        const normalizeText = (step, raw) => {
+          try {
+            const overrideField = byStepText[step];
+            if (overrideField) {
+              const val = getNested(raw, overrideField);
+              if (val !== void 0 && val !== null) {
+                const s = String(val);
+                if (s.trim().length > 0) return s;
+              }
+            }
+            if (raw && typeof raw === "object") {
+              if (typeof raw.text === "string" && raw.text.trim().length > 0) {
+                return raw.text;
+              }
+              if (typeof raw.content === "string" && raw.content.trim().length > 0) {
+                return raw.content;
+              }
+              const dfVal = raw[defaultField];
+              if (dfVal !== void 0 && dfVal !== null) {
+                const s = String(dfVal);
+                if (s.trim().length > 0) return s;
+              }
+            }
+            if (typeof raw === "string") return raw;
+            if (raw == null) return "";
+            try {
+              return JSON.stringify(raw);
+            } catch {
+              return String(raw);
+            }
+          } catch {
+            if (typeof raw === "string") return raw;
+            return "";
+          }
+        };
+        const normalizeRole = (step) => {
+          try {
+            if (byStepRole[step]) return byStepRole[step];
+            const meta = checksMeta ? checksMeta[step] : void 0;
+            const type = meta?.type;
+            if (type && byTypeRole[type]) return byTypeRole[type];
+            if (type === "human-input") return "user";
+            if (type === "ai") return "assistant";
+            if (defaultRole) return defaultRole;
+            if (type) {
+              if (type === "human-input") return "user";
+              if (type === "ai") return "assistant";
+            }
+          } catch {
+          }
+          return "assistant";
+        };
+        const messages = [];
+        const tsBase = Date.now();
+        let counter = 0;
+        for (const step of steps) {
+          const arr = outputsHistory?.[step];
+          if (!Array.isArray(arr)) continue;
+          for (const raw of arr) {
+            let ts;
+            if (raw && typeof raw === "object" && typeof raw.ts === "number") {
+              ts = raw.ts;
+            }
+            if (!Number.isFinite(ts)) {
+              ts = tsBase + counter++;
+            }
+            const text = normalizeText(step, raw);
+            const role = normalizeRole(step);
+            messages.push({ step, role, text, ts, raw });
+          }
+        }
+        messages.sort((a, b) => a.ts - b.ts);
+        if (direction === "desc") {
+          messages.reverse();
+        }
+        if (limit && limit > 0 && messages.length > limit) {
+          if (direction === "asc") {
+            return messages.slice(messages.length - limit);
+          }
+          return messages.slice(0, limit);
+        }
+        return messages;
+      } catch {
+        return [];
+      }
+    }
+  );
 }
 function createExtendedLiquid(options = {}) {
   const liquid = new Liquid({
@@ -220,4 +387,4 @@ export {
   createExtendedLiquid,
   init_liquid_extensions
 };
-//# sourceMappingURL=chunk-JEHPDJIF.mjs.map
+//# sourceMappingURL=chunk-Q3BHCJKN.mjs.map

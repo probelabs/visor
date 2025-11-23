@@ -33,6 +33,7 @@ export class CLI {
       .name('visor')
       .description('Visor - AI-powered code review tool')
       .version(this.getVersion())
+      .option('--slack', 'Enable Slack Socket Mode runner (uses SLACK_APP_TOKEN)')
       .option(
         '-c, --check <type>',
         'Specify check type (can be used multiple times)',
@@ -107,6 +108,7 @@ export class CLI {
         .name('visor')
         .description('Visor - AI-powered code review tool')
         .version(this.getVersion())
+        .option('--slack', 'Enable Slack Socket Mode runner (uses SLACK_APP_TOKEN)')
         .option(
           '-c, --check <type>',
           'Specify check type (can be used multiple times)',
@@ -221,6 +223,7 @@ export class CLI {
         event: options.event,
         message: options.message,
         githubV2: false,
+        slack: Boolean(options.slack),
       };
     } catch (error: unknown) {
       // Handle commander.js exit overrides for help/version ONLY

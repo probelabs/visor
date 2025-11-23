@@ -366,11 +366,11 @@ function getTracer() {
 }
 async function withActiveSpan(name, attrs, fn) {
   const tracer = getTracer();
-  return await new Promise((resolve8, reject) => {
+  return await new Promise((resolve9, reject) => {
     const callback = async (span) => {
       try {
         const res = await fn(span);
-        resolve8(res);
+        resolve9(res);
       } catch (err) {
         try {
           if (err instanceof Error) span.recordException(err);
@@ -430,19 +430,19 @@ function __getOrCreateNdjsonPath() {
   try {
     if (process.env.VISOR_TELEMETRY_SINK && process.env.VISOR_TELEMETRY_SINK !== "file")
       return null;
-    const path18 = require("path");
-    const fs17 = require("fs");
+    const path19 = require("path");
+    const fs18 = require("fs");
     if (process.env.VISOR_FALLBACK_TRACE_FILE) {
       __ndjsonPath = process.env.VISOR_FALLBACK_TRACE_FILE;
-      const dir = path18.dirname(__ndjsonPath);
-      if (!fs17.existsSync(dir)) fs17.mkdirSync(dir, { recursive: true });
+      const dir = path19.dirname(__ndjsonPath);
+      if (!fs18.existsSync(dir)) fs18.mkdirSync(dir, { recursive: true });
       return __ndjsonPath;
     }
-    const outDir = process.env.VISOR_TRACE_DIR || path18.join(process.cwd(), "output", "traces");
-    if (!fs17.existsSync(outDir)) fs17.mkdirSync(outDir, { recursive: true });
+    const outDir = process.env.VISOR_TRACE_DIR || path19.join(process.cwd(), "output", "traces");
+    if (!fs18.existsSync(outDir)) fs18.mkdirSync(outDir, { recursive: true });
     if (!__ndjsonPath) {
       const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      __ndjsonPath = path18.join(outDir, `${ts}.ndjson`);
+      __ndjsonPath = path19.join(outDir, `${ts}.ndjson`);
     }
     return __ndjsonPath;
   } catch {
@@ -451,11 +451,11 @@ function __getOrCreateNdjsonPath() {
 }
 function _appendRunMarker() {
   try {
-    const fs17 = require("fs");
+    const fs18 = require("fs");
     const p = __getOrCreateNdjsonPath();
     if (!p) return;
     const line = { name: "visor.run", attributes: { started: true } };
-    fs17.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
+    fs18.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
   } catch {
   }
 }
@@ -930,7 +930,8 @@ async function handlePlanReady(context2, state, transition) {
   };
   const finalChecks = {};
   for (const [checkId, checkConfig] of Object.entries(filteredChecks)) {
-    const dependencies = checkConfig.depends_on || [];
+    const depRaw = checkConfig.depends_on;
+    const dependencies = Array.isArray(depRaw) ? depRaw : typeof depRaw === "string" ? [depRaw] : [];
     if (dependencies.length > 0 && !tagFilter && !areDependenciesSatisfied(dependencies)) {
       if (context2.debug) {
         logger.info(
@@ -948,7 +949,9 @@ async function handlePlanReady(context2, state, transition) {
   }
   const checkDependencies = {};
   for (const [checkId, checkConfig] of Object.entries(finalChecks)) {
-    const dependencies = (checkConfig.depends_on || []).flatMap((d) => {
+    const depsRaw2 = checkConfig.depends_on;
+    const depList = Array.isArray(depsRaw2) ? depsRaw2 : typeof depsRaw2 === "string" ? [depsRaw2] : [];
+    const dependencies = depList.flatMap((d) => {
       if (typeof d === "string" && d.includes("|")) {
         const orOptions = d.split("|").map((s) => s.trim()).filter(Boolean).filter((opt) => finalChecks[opt] !== void 0);
         return orOptions;
@@ -1043,8 +1046,23 @@ async function handleWavePlanning(context2, state, transition) {
     state.flags.forwardRunActive = false;
   } catch {
   }
+  try {
+    const flags = state.flags || {};
+    if (flags.awaitingHumanInput) {
+      if (context2.debug) {
+        logger.info("[WavePlanning] Awaiting human input \u2013 finishing run without further waves");
+      }
+      state.levelQueue = [];
+      state.eventQueue = [];
+      transition("Completed");
+      return;
+    }
+  } catch {
+  }
   if (!context2.dependencyGraph) {
-    throw new Error("Dependency graph not available");
+    if (state.wave === 0 && state.levelQueue.length === 0) {
+      throw new Error("Dependency graph not available");
+    }
   }
   const bubbledEvents = context2._bubbledEvents || [];
   if (bubbledEvents.length > 0) {
@@ -1104,11 +1122,29 @@ async function handleWavePlanning(context2, state, transition) {
       }
       const dependencies = findTransitiveDependencies(target, context2);
       for (const dep of dependencies) {
-        checksToRun.add(dep);
+        const stats = state.stats.get(dep);
+        const hasSucceeded = !!stats && (stats.successfulRuns || 0) > 0;
+        if (!hasSucceeded) {
+          checksToRun.add(dep);
+        }
       }
-      const dependents = findTransitiveDependents(target, context2, gotoEvent);
-      for (const dep of dependents) {
-        checksToRun.add(dep);
+      let shouldIncludeDependents = true;
+      try {
+        const origin = request.origin;
+        const cfg = context2.config.checks?.[target];
+        const targetType = String(cfg?.type || "").toLowerCase();
+        const execCtx = context2.executionContext || {};
+        const hasWebhook = !!execCtx.webhookContext;
+        if (hasWebhook && (origin === "goto" || origin === "goto_js") && targetType === "human-input") {
+          shouldIncludeDependents = false;
+        }
+      } catch {
+      }
+      if (shouldIncludeDependents) {
+        const dependents = findTransitiveDependents(target, context2, gotoEvent);
+        for (const dep of dependents) {
+          checksToRun.add(dep);
+        }
       }
     }
     if (checksToRun.size > 0) {
@@ -1228,6 +1264,9 @@ async function handleWavePlanning(context2, state, transition) {
     return;
   }
   if (state.wave === 0 && state.levelQueue.length === 0) {
+    if (!context2.dependencyGraph) {
+      throw new Error("Dependency graph not available");
+    }
     state.levelQueue = [...context2.dependencyGraph.executionOrder];
     if (context2.debug) {
       logger.info(
@@ -4510,7 +4549,7 @@ async function processDiffWithOutline(diffContent) {
   }
   try {
     const originalProbePath = process.env.PROBE_PATH;
-    const fs17 = require("fs");
+    const fs18 = require("fs");
     const possiblePaths = [
       // Relative to current working directory (most common in production)
       path5.join(process.cwd(), "node_modules/@probelabs/probe/bin/probe-binary"),
@@ -4521,7 +4560,7 @@ async function processDiffWithOutline(diffContent) {
     ];
     let probeBinaryPath;
     for (const candidatePath of possiblePaths) {
-      if (fs17.existsSync(candidatePath)) {
+      if (fs18.existsSync(candidatePath)) {
         probeBinaryPath = candidatePath;
         break;
       }
@@ -4665,8 +4704,13 @@ var init_ai_review_service = __esm({
       async executeReview(prInfo, customPrompt, schema, checkName, sessionId) {
         const startTime = Date.now();
         const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+        const cfgAny = this.config;
+        const skipTransport = cfgAny?.skip_transport_context === true;
+        const skipPRContext = cfgAny?.skip_code_context === true || skipTransport && cfgAny?.skip_code_context !== false;
+        const skipSlackContext = cfgAny?.skip_slack_context === true || skipTransport && cfgAny?.skip_slack_context !== false;
         const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema, {
-          skipPRContext: this.config?.skip_code_context === true
+          skipPRContext,
+          skipSlackContext
         });
         log(`Executing AI review with ${this.config.provider} provider...`);
         log(`\u{1F527} Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);
@@ -4780,8 +4824,13 @@ var init_ai_review_service = __esm({
             `Session not found for reuse: ${parentSessionId}. Ensure the parent check completed successfully.`
           );
         }
+        const cfgAny = this.config;
+        const skipTransport = cfgAny?.skip_transport_context === true;
+        const skipSlackContext = cfgAny?.skip_slack_context === true || skipTransport && cfgAny?.skip_slack_context !== false;
         const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema, {
-          skipPRContext: true
+          // When reusing sessions we always skip PR context, regardless of flags
+          skipPRContext: true,
+          skipSlackContext
         });
         let agentToUse;
         let currentSessionId;
@@ -4912,11 +4961,13 @@ var init_ai_review_service = __esm({
        */
       async buildCustomPrompt(prInfo, customInstructions, schema, options) {
         const skipPRContext = options?.skipPRContext === true;
+        const skipSlackContext = options?.skipSlackContext === true;
         const isCodeReviewSchema = schema === "code-review";
         const prContext = skipPRContext ? "" : await this.formatPRContext(prInfo, isCodeReviewSchema);
+        const slackContextXml = skipSlackContext === true ? "" : this.formatSlackContextFromPRInfo(prInfo);
         const isIssue = prInfo.isIssue === true;
         if (isIssue) {
-          if (skipPRContext) {
+          if (skipPRContext && !slackContextXml) {
             return `<instructions>
 ${customInstructions}
 </instructions>`;
@@ -4927,7 +4978,7 @@ ${customInstructions}
   </instructions>
 
   <context>
-${prContext}
+${prContext}${slackContextXml}
   </context>
 
   <rules>
@@ -4943,7 +4994,7 @@ ${prContext}
         }
         if (isCodeReviewSchema) {
           const analysisType = prInfo.isIncremental ? "INCREMENTAL" : "FULL";
-          if (skipPRContext) {
+          if (skipPRContext && !slackContextXml) {
             return `<instructions>
 ${customInstructions}
 </instructions>
@@ -4968,7 +5019,7 @@ ${customInstructions}
   </instructions>
 
   <context>
-${prContext}
+${prContext}${slackContextXml}
   </context>
 
   <rules>
@@ -4985,7 +5036,7 @@ ${prContext}
   </rules>
 </review_request>`;
         }
-        if (skipPRContext) {
+        if (skipPRContext && !slackContextXml) {
           return `<instructions>
 ${customInstructions}
 </instructions>`;
@@ -4995,7 +5046,7 @@ ${customInstructions}
 </instructions>
 
 <context>
-${prContext}
+${prContext}${slackContextXml}
 </context>`;
       }
       // REMOVED: Built-in prompts - only use custom prompts from .visor.yaml
@@ -5223,6 +5274,144 @@ ${this.escapeXml(processedFallbackDiff)}
         return context2;
       }
       /**
+       * Format Slack conversation context (if attached to PRInfo) as XML
+       */
+      formatSlackContextFromPRInfo(prInfo) {
+        try {
+          const anyInfo = prInfo;
+          const conv = anyInfo.slackConversation;
+          if (!conv || typeof conv !== "object") return "";
+          const transport = conv.transport || "slack";
+          const thread = conv.thread || {};
+          const messages = Array.isArray(conv.messages) ? conv.messages : [];
+          const current = conv.current || {};
+          const attrs = conv.attributes || {};
+          let xml = `
+<slack_context>
+  <transport>${this.escapeXml(String(transport))}</transport>
+  <thread>
+    <id>${this.escapeXml(String(thread.id || ""))}</id>
+    <url>${this.escapeXml(String(thread.url || ""))}</url>
+  </thread>`;
+          const attrKeys = Object.keys(attrs);
+          if (attrKeys.length > 0) {
+            xml += `
+  <attributes>`;
+            for (const k of attrKeys) {
+              const v = attrs[k];
+              xml += `
+    <attribute>
+      <key>${this.escapeXml(String(k))}</key>
+      <value>${this.escapeXml(String(v ?? ""))}</value>
+    </attribute>`;
+            }
+            xml += `
+  </attributes>`;
+          }
+          if (messages.length > 0) {
+            xml += `
+  <messages>`;
+            for (const m of messages) {
+              xml += `
+    <message>
+      <role>${this.escapeXml(String(m.role || "user"))}</role>
+      <user>${this.escapeXml(String(m.user || ""))}</user>
+      <text>${this.escapeXml(String(m.text || ""))}</text>
+      <timestamp>${this.escapeXml(String(m.timestamp || ""))}</timestamp>
+      <origin>${this.escapeXml(String(m.origin || ""))}</origin>
+    </message>`;
+            }
+            xml += `
+  </messages>`;
+          }
+          xml += `
+  <current>
+    <role>${this.escapeXml(String(current.role || "user"))}</role>
+    <user>${this.escapeXml(String(current.user || ""))}</user>
+    <text>${this.escapeXml(String(current.text || ""))}</text>
+    <timestamp>${this.escapeXml(String(current.timestamp || ""))}</timestamp>
+    <origin>${this.escapeXml(String(current.origin || ""))}</origin>
+  </current>
+</slack_context>`;
+          return xml;
+        } catch {
+          return "";
+        }
+      }
+      /**
+       * Build a normalized ConversationContext for GitHub (PR/issue + comments)
+       * using the same contract as Slack's ConversationContext. This is exposed
+       * to templates via the unified `conversation` object.
+       */
+      buildGitHubConversationFromPRInfo(prInfo) {
+        try {
+          const anyInfo = prInfo;
+          const eventCtx = anyInfo.eventContext || {};
+          const comments = anyInfo.comments || [];
+          const repoOwner = eventCtx.repository?.owner?.login || process.env.GITHUB_REPOSITORY?.split("/")?.[0];
+          const repoName = eventCtx.repository?.name || process.env.GITHUB_REPOSITORY?.split("/")?.[1];
+          const number = prInfo.number;
+          const threadId = repoOwner && repoName ? `${repoOwner}/${repoName}#${number}` : `github#${number}`;
+          const threadUrl = eventCtx.issue?.html_url || eventCtx.pull_request?.html_url || (repoOwner && repoName ? `https://github.com/${repoOwner}/${repoName}/pull/${number}` : void 0);
+          const messages = [];
+          if (prInfo.body && prInfo.body.trim().length > 0) {
+            messages.push({
+              role: "user",
+              user: prInfo.author || "unknown",
+              text: prInfo.body,
+              timestamp: eventCtx.pull_request?.created_at || eventCtx.issue?.created_at || "",
+              origin: "github"
+            });
+          }
+          for (const c of comments) {
+            messages.push({
+              role: "user",
+              user: c.author || "unknown",
+              text: c.body || "",
+              timestamp: c.createdAt || "",
+              origin: "github"
+            });
+          }
+          const triggeringComment = eventCtx.comment;
+          let current;
+          if (triggeringComment) {
+            current = {
+              role: "user",
+              user: triggeringComment.user && triggeringComment.user.login || "unknown",
+              text: triggeringComment.body || "",
+              timestamp: triggeringComment.created_at || "",
+              origin: "github"
+            };
+          } else if (messages.length > 0) {
+            current = messages[messages.length - 1];
+          } else {
+            current = {
+              role: "user",
+              user: prInfo.author || "unknown",
+              text: prInfo.title || "",
+              timestamp: "",
+              origin: "github"
+            };
+          }
+          const attributes = {};
+          if (repoOwner) attributes.owner = repoOwner;
+          if (repoName) attributes.repo = repoName;
+          attributes.number = String(number);
+          if (eventCtx.event_name) attributes.event_name = String(eventCtx.event_name);
+          if (eventCtx.action) attributes.action = String(eventCtx.action);
+          const ctx = {
+            transport: "github",
+            thread: { id: threadId, url: threadUrl },
+            messages,
+            current,
+            attributes
+          };
+          return ctx;
+        } catch {
+          return void 0;
+        }
+      }
+      /**
        * No longer escaping XML - returning text as-is
        */
       escapeXml(text) {
@@ -5271,8 +5460,8 @@ ${schemaString}`);
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs17 = require("fs");
-              const path18 = require("path");
+              const fs18 = require("fs");
+              const path19 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const provider = this.config.provider || "auto";
               const model = this.config.model || "default";
@@ -5386,20 +5575,20 @@ ${"=".repeat(60)}
 `;
               readableVersion += `${"=".repeat(60)}
 `;
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path18.join(process.cwd(), "debug-artifacts");
-              if (!fs17.existsSync(debugArtifactsDir)) {
-                fs17.mkdirSync(debugArtifactsDir, { recursive: true });
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
+              if (!fs18.existsSync(debugArtifactsDir)) {
+                fs18.mkdirSync(debugArtifactsDir, { recursive: true });
               }
-              const debugFile = path18.join(
+              const debugFile = path19.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.json`
               );
-              fs17.writeFileSync(debugFile, debugJson, "utf-8");
-              const readableFile = path18.join(
+              fs18.writeFileSync(debugFile, debugJson, "utf-8");
+              const readableFile = path19.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.txt`
               );
-              fs17.writeFileSync(readableFile, readableVersion, "utf-8");
+              fs18.writeFileSync(readableFile, readableVersion, "utf-8");
               log(`
 \u{1F4BE} Full debug info saved to:`);
               log(`   JSON: ${debugFile}`);
@@ -5431,8 +5620,8 @@ ${"=".repeat(60)}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs17 = require("fs");
-              const path18 = require("path");
+              const fs18 = require("fs");
+              const path19 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny2 = agent;
               let fullHistory = [];
@@ -5443,8 +5632,8 @@ ${"=".repeat(60)}
               } else if (agentAny2._messages) {
                 fullHistory = agentAny2._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path18.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path18.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path19.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -5456,7 +5645,7 @@ ${"=".repeat(60)}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs17.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs18.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -5483,7 +5672,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs17.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs18.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -5492,11 +5681,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs17 = require("fs");
-              const path18 = require("path");
+              const fs18 = require("fs");
+              const path19 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path18.join(process.cwd(), "debug-artifacts");
-              const responseFile = path18.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
+              const responseFile = path19.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -5529,7 +5718,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs17.writeFileSync(responseFile, responseContent, "utf-8");
+              fs18.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -5545,9 +5734,9 @@ ${"=".repeat(60)}
                 await agentAny._telemetryConfig.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${agentAny._traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs17 = require("fs");
-                  if (fs17.existsSync(agentAny._traceFilePath)) {
-                    const stats = fs17.statSync(agentAny._traceFilePath);
+                  const fs18 = require("fs");
+                  if (fs18.existsSync(agentAny._traceFilePath)) {
+                    const stats = fs18.statSync(agentAny._traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::${agentAny._traceFilePath} (${stats.size} bytes)`
                     );
@@ -5610,6 +5799,10 @@ ${"=".repeat(60)}
           } else if (this.config.provider === "bedrock") {
           }
           const explicitPromptType = (process.env.VISOR_PROMPT_TYPE || "").trim();
+          let systemPrompt = this.config.systemPrompt;
+          if (!systemPrompt && schema !== "code-review") {
+            systemPrompt = "You are general assistant, follow user instructions.";
+          }
           const options = {
             sessionId,
             // Prefer config promptType, then env override, else fallback to code-review when schema is set
@@ -5617,8 +5810,8 @@ ${"=".repeat(60)}
             allowEdit: false,
             // We don't want the agent to modify files
             debug: this.config.debug || false,
-            // Map systemPrompt to Probe customPrompt until SDK exposes a first-class field
-            customPrompt: this.config.systemPrompt || this.config.customPrompt
+            // Use systemPrompt (native in rc168+) with fallback to customPrompt for backward compat
+            systemPrompt: systemPrompt || this.config.systemPrompt || this.config.customPrompt
           };
           let traceFilePath = "";
           let telemetryConfig = null;
@@ -5648,9 +5841,11 @@ ${"=".repeat(60)}
           }
           if (this.config.allowedTools !== void 0) {
             options.allowedTools = this.config.allowedTools;
+            log(`\u{1F527} Setting allowedTools: ${JSON.stringify(this.config.allowedTools)}`);
           }
           if (this.config.disableTools !== void 0) {
             options.disableTools = this.config.disableTools;
+            log(`\u{1F527} Setting disableTools: ${this.config.disableTools}`);
           }
           if (this.config.allowBash !== void 0) {
             options.allowBash = this.config.allowBash;
@@ -5700,8 +5895,8 @@ ${schemaString}`);
           const model = this.config.model || "default";
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs17 = require("fs");
-              const path18 = require("path");
+              const fs18 = require("fs");
+              const path19 = require("path");
               const os = require("os");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const debugData = {
@@ -5775,18 +5970,18 @@ ${"=".repeat(60)}
               readableVersion += `${"=".repeat(60)}
 `;
               const tempDir = os.tmpdir();
-              const promptFile = path18.join(tempDir, `visor-prompt-${timestamp}.txt`);
-              fs17.writeFileSync(promptFile, prompt, "utf-8");
+              const promptFile = path19.join(tempDir, `visor-prompt-${timestamp}.txt`);
+              fs18.writeFileSync(promptFile, prompt, "utf-8");
               log(`
 \u{1F4BE} Prompt saved to: ${promptFile}`);
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path18.join(process.cwd(), "debug-artifacts");
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
               try {
-                const base = path18.join(
+                const base = path19.join(
                   debugArtifactsDir,
                   `prompt-${_checkName || "unknown"}-${timestamp}`
                 );
-                fs17.writeFileSync(base + ".json", debugJson, "utf-8");
-                fs17.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
+                fs18.writeFileSync(base + ".json", debugJson, "utf-8");
+                fs18.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
                 log(`
 \u{1F4BE} Full debug info saved to directory: ${debugArtifactsDir}`);
               } catch {
@@ -5831,8 +6026,8 @@ $ ${cliCommand}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs17 = require("fs");
-              const path18 = require("path");
+              const fs18 = require("fs");
+              const path19 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny = agent;
               let fullHistory = [];
@@ -5843,8 +6038,8 @@ $ ${cliCommand}
               } else if (agentAny._messages) {
                 fullHistory = agentAny._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path18.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path18.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path19.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -5856,7 +6051,7 @@ $ ${cliCommand}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs17.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs18.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -5883,7 +6078,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs17.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs18.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -5892,11 +6087,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs17 = require("fs");
-              const path18 = require("path");
+              const fs18 = require("fs");
+              const path19 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path18.join(process.cwd(), "debug-artifacts");
-              const responseFile = path18.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
+              const responseFile = path19.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -5929,7 +6124,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs17.writeFileSync(responseFile, responseContent, "utf-8");
+              fs18.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -5947,9 +6142,9 @@ ${"=".repeat(60)}
                 await telemetry.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs17 = require("fs");
-                  if (fs17.existsSync(traceFilePath)) {
-                    const stats = fs17.statSync(traceFilePath);
+                  const fs18 = require("fs");
+                  if (fs18.existsSync(traceFilePath)) {
+                    const stats = fs18.statSync(traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::OpenTelemetry trace file size: ${stats.size} bytes`
                     );
@@ -5987,8 +6182,8 @@ ${"=".repeat(60)}
        * Load schema content from schema files or inline definitions
        */
       async loadSchemaContent(schema) {
-        const fs17 = require("fs").promises;
-        const path18 = require("path");
+        const fs18 = require("fs").promises;
+        const path19 = require("path");
         if (typeof schema === "object" && schema !== null) {
           log("\u{1F4CB} Using inline schema object from configuration");
           return JSON.stringify(schema);
@@ -6001,14 +6196,14 @@ ${"=".repeat(60)}
           }
         } catch {
         }
-        if ((schema.startsWith("./") || schema.includes(".json")) && !path18.isAbsolute(schema)) {
+        if ((schema.startsWith("./") || schema.includes(".json")) && !path19.isAbsolute(schema)) {
           if (schema.includes("..") || schema.includes("\0")) {
             throw new Error("Invalid schema path: path traversal not allowed");
           }
           try {
-            const schemaPath = path18.resolve(process.cwd(), schema);
+            const schemaPath = path19.resolve(process.cwd(), schema);
             log(`\u{1F4CB} Loading custom schema from file: ${schemaPath}`);
-            const schemaContent = await fs17.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs18.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch (error) {
             throw new Error(
@@ -6022,22 +6217,22 @@ ${"=".repeat(60)}
         }
         const candidatePaths = [
           // GitHub Action bundle location
-          path18.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
+          path19.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
           // Historical fallback when src/output was inadvertently bundled as output1/
-          path18.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
+          path19.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
           // Local dev (repo root)
-          path18.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
+          path19.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
         ];
         for (const schemaPath of candidatePaths) {
           try {
-            const schemaContent = await fs17.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs18.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch {
           }
         }
-        const distPath = path18.join(__dirname, "output", sanitizedSchemaName, "schema.json");
-        const distAltPath = path18.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
-        const cwdPath = path18.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
+        const distPath = path19.join(__dirname, "output", sanitizedSchemaName, "schema.json");
+        const distAltPath = path19.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
+        const cwdPath = path19.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
         throw new Error(
           `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath}, ${distAltPath}, and ${cwdPath}. Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
         );
@@ -6058,19 +6253,15 @@ ${"=".repeat(60)}
           let reviewData;
           if (_schema === "plain" || !_schema) {
             log(
-              `\u{1F4CB} ${_schema === "plain" ? "Plain" : "No"} schema detected - returning raw response without JSON parsing`
+              `\u{1F4CB} ${_schema === "plain" ? "Plain" : "No"} schema detected - treating raw response as text output`
             );
+            const trimmed = typeof response === "string" ? response.trim() : "";
+            const out = trimmed ? { text: trimmed } : {};
             return {
-              issues: [
-                {
-                  file: "AI_RESPONSE",
-                  line: 1,
-                  ruleId: "ai/raw_response",
-                  message: response,
-                  severity: "info",
-                  category: "documentation"
-                }
-              ],
+              issues: [],
+              // Expose assistant-style content via output.text so downstream formatters
+              // (Slack frontend, CLI "Assistant Response" section, templates) can render it.
+              output: out,
               debug: debugInfo
             };
           }
@@ -6327,7 +6518,7 @@ ${"=".repeat(60)}
        * Generate mock response for testing
        */
       async generateMockResponse(_prompt, _checkName, _schema) {
-        await new Promise((resolve8) => setTimeout(resolve8, 500));
+        await new Promise((resolve9) => setTimeout(resolve9, 500));
         const name = (_checkName || "").toLowerCase();
         if (name.includes("extract-facts")) {
           const arr = Array.from({ length: 6 }, (_, i) => ({
@@ -6738,9 +6929,9 @@ function configureLiquidWithExtensions(liquid) {
   });
   liquid.registerFilter("get", (obj, pathExpr) => {
     if (obj == null) return void 0;
-    const path18 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
-    if (!path18) return obj;
-    const parts = path18.split(".");
+    const path19 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
+    if (!path19) return obj;
+    const parts = path19.split(".");
     let cur = obj;
     for (const p of parts) {
       if (cur == null) return void 0;
@@ -6790,6 +6981,173 @@ function configureLiquidWithExtensions(liquid) {
       return [];
     }
   });
+  liquid.registerFilter(
+    "chat_history",
+    function(value, ...args) {
+      try {
+        const impl = this;
+        const ctx = impl?.context;
+        const allArgs = Array.isArray(args) ? args : [];
+        if (allArgs.length === 0) {
+          return [];
+        }
+        const positional = [];
+        const options = {};
+        for (const arg of allArgs) {
+          if (Array.isArray(arg) && arg.length === 2 && typeof arg[0] === "string" && arg[0].length > 0) {
+            options[arg[0]] = arg[1];
+          } else {
+            positional.push(arg);
+          }
+        }
+        const stepArgs = positional;
+        const steps = stepArgs.map((s) => String(s ?? "").trim()).filter((s) => s.length > 0);
+        if (steps.length === 0) return [];
+        const outputsHistoryVar = ctx?.get(["outputs_history"]) || {};
+        const outputsVar = ctx?.get(["outputs"]) || {};
+        const outputsHistory = outputsHistoryVar && Object.keys(outputsHistoryVar).length > 0 ? outputsHistoryVar : outputsVar?.history || {};
+        const checksMeta = ctx?.get(["checks_meta"]) || ctx?.get(["event"])?.payload?.__checksMeta || void 0;
+        const directionRaw = typeof options.direction === "string" ? options.direction.toLowerCase() : "";
+        const direction = directionRaw === "desc" ? "desc" : "asc";
+        const limit = typeof options.limit === "number" && options.limit > 0 ? Math.floor(options.limit) : void 0;
+        const textCfg = options.text && typeof options.text === "object" ? options.text : {};
+        const defaultField = typeof textCfg.default_field === "string" && textCfg.default_field.trim() ? textCfg.default_field.trim() : "text";
+        const byStepText = {};
+        if (textCfg.by_step && typeof textCfg.by_step === "object") {
+          for (const [k, v] of Object.entries(textCfg.by_step)) {
+            if (typeof v === "string" && v.trim()) {
+              byStepText[k] = v.trim();
+            }
+          }
+        }
+        const rolesCfg = options.roles && typeof options.roles === "object" ? options.roles : {};
+        const byTypeRole = {};
+        if (rolesCfg.by_type && typeof rolesCfg.by_type === "object") {
+          for (const [k, v] of Object.entries(rolesCfg.by_type)) {
+            if (typeof v === "string" && v.trim()) {
+              byTypeRole[k] = v.trim();
+            }
+          }
+        }
+        const byStepRole = {};
+        if (rolesCfg.by_step && typeof rolesCfg.by_step === "object") {
+          for (const [k, v] of Object.entries(rolesCfg.by_step)) {
+            if (typeof v === "string" && v.trim()) {
+              byStepRole[k] = v.trim();
+            }
+          }
+        }
+        if (typeof options.role_map === "string" && options.role_map.trim().length > 0) {
+          const parts = String(options.role_map).split(",").map((p) => p.trim()).filter(Boolean);
+          for (const part of parts) {
+            const eqIdx = part.indexOf("=");
+            if (eqIdx > 0) {
+              const k = part.slice(0, eqIdx).trim();
+              const v = part.slice(eqIdx + 1).trim();
+              if (k && v) {
+                byStepRole[k] = v;
+              }
+            }
+          }
+        }
+        const defaultRole = typeof rolesCfg.default === "string" && rolesCfg.default.trim() ? rolesCfg.default.trim() : void 0;
+        const getNested = (obj, path19) => {
+          if (!obj || !path19) return void 0;
+          const parts = path19.split(".");
+          let cur = obj;
+          for (const p of parts) {
+            if (cur == null) return void 0;
+            cur = cur[p];
+          }
+          return cur;
+        };
+        const normalizeText = (step, raw) => {
+          try {
+            const overrideField = byStepText[step];
+            if (overrideField) {
+              const val = getNested(raw, overrideField);
+              if (val !== void 0 && val !== null) {
+                const s = String(val);
+                if (s.trim().length > 0) return s;
+              }
+            }
+            if (raw && typeof raw === "object") {
+              if (typeof raw.text === "string" && raw.text.trim().length > 0) {
+                return raw.text;
+              }
+              if (typeof raw.content === "string" && raw.content.trim().length > 0) {
+                return raw.content;
+              }
+              const dfVal = raw[defaultField];
+              if (dfVal !== void 0 && dfVal !== null) {
+                const s = String(dfVal);
+                if (s.trim().length > 0) return s;
+              }
+            }
+            if (typeof raw === "string") return raw;
+            if (raw == null) return "";
+            try {
+              return JSON.stringify(raw);
+            } catch {
+              return String(raw);
+            }
+          } catch {
+            if (typeof raw === "string") return raw;
+            return "";
+          }
+        };
+        const normalizeRole = (step) => {
+          try {
+            if (byStepRole[step]) return byStepRole[step];
+            const meta = checksMeta ? checksMeta[step] : void 0;
+            const type = meta?.type;
+            if (type && byTypeRole[type]) return byTypeRole[type];
+            if (type === "human-input") return "user";
+            if (type === "ai") return "assistant";
+            if (defaultRole) return defaultRole;
+            if (type) {
+              if (type === "human-input") return "user";
+              if (type === "ai") return "assistant";
+            }
+          } catch {
+          }
+          return "assistant";
+        };
+        const messages = [];
+        const tsBase = Date.now();
+        let counter = 0;
+        for (const step of steps) {
+          const arr = outputsHistory?.[step];
+          if (!Array.isArray(arr)) continue;
+          for (const raw of arr) {
+            let ts;
+            if (raw && typeof raw === "object" && typeof raw.ts === "number") {
+              ts = raw.ts;
+            }
+            if (!Number.isFinite(ts)) {
+              ts = tsBase + counter++;
+            }
+            const text = normalizeText(step, raw);
+            const role = normalizeRole(step);
+            messages.push({ step, role, text, ts, raw });
+          }
+        }
+        messages.sort((a, b) => a.ts - b.ts);
+        if (direction === "desc") {
+          messages.reverse();
+        }
+        if (limit && limit > 0 && messages.length > limit) {
+          if (direction === "asc") {
+            return messages.slice(messages.length - limit);
+          }
+          return messages.slice(0, limit);
+        }
+        return messages;
+      } catch {
+        return [];
+      }
+    }
+  );
 }
 function createExtendedLiquid(options = {}) {
   const liquid = new import_liquidjs.Liquid({
@@ -7015,6 +7373,666 @@ var init_state_capture = __esm({
   }
 });
 
+// src/utils/command-executor.ts
+var command_executor_exports = {};
+__export(command_executor_exports, {
+  CommandExecutor: () => CommandExecutor,
+  commandExecutor: () => commandExecutor
+});
+var import_child_process, import_util, CommandExecutor, commandExecutor;
+var init_command_executor = __esm({
+  "src/utils/command-executor.ts"() {
+    "use strict";
+    import_child_process = require("child_process");
+    import_util = require("util");
+    init_logger();
+    CommandExecutor = class _CommandExecutor {
+      static instance;
+      constructor() {
+      }
+      static getInstance() {
+        if (!_CommandExecutor.instance) {
+          _CommandExecutor.instance = new _CommandExecutor();
+        }
+        return _CommandExecutor.instance;
+      }
+      /**
+       * Execute a shell command with optional stdin, environment, and timeout
+       */
+      async execute(command, options = {}) {
+        const execAsync = (0, import_util.promisify)(import_child_process.exec);
+        const timeout = options.timeout || 3e4;
+        if (options.stdin) {
+          return this.executeWithStdin(command, options);
+        }
+        try {
+          const result = await execAsync(command, {
+            cwd: options.cwd,
+            env: options.env,
+            timeout
+          });
+          return {
+            stdout: result.stdout || "",
+            stderr: result.stderr || "",
+            exitCode: 0
+          };
+        } catch (error) {
+          return this.handleExecutionError(error, timeout);
+        }
+      }
+      /**
+       * Execute command with stdin input
+       */
+      executeWithStdin(command, options) {
+        return new Promise((resolve9, reject) => {
+          const childProcess = (0, import_child_process.exec)(
+            command,
+            {
+              cwd: options.cwd,
+              env: options.env,
+              timeout: options.timeout || 3e4
+            },
+            (error, stdout, stderr) => {
+              if (error && error.killed && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM")) {
+                reject(new Error(`Command timed out after ${options.timeout || 3e4}ms`));
+              } else {
+                resolve9({
+                  stdout: stdout || "",
+                  stderr: stderr || "",
+                  exitCode: error ? error.code || 1 : 0
+                });
+              }
+            }
+          );
+          if (options.stdin && childProcess.stdin) {
+            childProcess.stdin.write(options.stdin);
+            childProcess.stdin.end();
+          }
+        });
+      }
+      /**
+       * Handle execution errors consistently
+       */
+      handleExecutionError(error, timeout) {
+        const execError = error;
+        if (execError.killed && (execError.code === "ETIMEDOUT" || execError.signal === "SIGTERM")) {
+          throw new Error(`Command timed out after ${timeout}ms`);
+        }
+        let exitCode = 1;
+        if (execError.code) {
+          exitCode = typeof execError.code === "string" ? parseInt(execError.code, 10) : execError.code;
+        }
+        return {
+          stdout: execError.stdout || "",
+          stderr: execError.stderr || "",
+          exitCode
+        };
+      }
+      /**
+       * Build safe environment variables by merging process.env with custom env
+       * Ensures all values are strings (no undefined)
+       */
+      buildEnvironment(baseEnv = process.env, ...customEnvs) {
+        const result = {};
+        for (const [key, value] of Object.entries(baseEnv)) {
+          if (value !== void 0) {
+            result[key] = value;
+          }
+        }
+        for (const customEnv of customEnvs) {
+          if (customEnv) {
+            Object.assign(result, customEnv);
+          }
+        }
+        return result;
+      }
+      /**
+       * Log command execution for debugging
+       */
+      logExecution(command, options) {
+        const debugInfo = [
+          `Executing command: ${command}`,
+          options.cwd ? `cwd: ${options.cwd}` : null,
+          options.stdin ? "with stdin" : null,
+          options.timeout ? `timeout: ${options.timeout}ms` : null,
+          options.env ? `env vars: ${Object.keys(options.env).length}` : null
+        ].filter(Boolean).join(", ");
+        logger.debug(debugInfo);
+      }
+    };
+    commandExecutor = CommandExecutor.getInstance();
+  }
+});
+
+// src/providers/custom-tool-executor.ts
+var import_ajv, CustomToolExecutor;
+var init_custom_tool_executor = __esm({
+  "src/providers/custom-tool-executor.ts"() {
+    "use strict";
+    init_liquid_extensions();
+    init_sandbox();
+    init_logger();
+    init_command_executor();
+    import_ajv = __toESM(require("ajv"));
+    CustomToolExecutor = class {
+      liquid;
+      sandbox;
+      tools;
+      ajv;
+      constructor(tools) {
+        this.liquid = createExtendedLiquid({
+          cache: false,
+          strictFilters: false,
+          strictVariables: false
+        });
+        this.tools = new Map(Object.entries(tools || {}));
+        this.ajv = new import_ajv.default({ allErrors: true, verbose: true });
+      }
+      /**
+       * Register a custom tool
+       */
+      registerTool(tool) {
+        if (!tool.name) {
+          throw new Error("Tool must have a name");
+        }
+        this.tools.set(tool.name, tool);
+      }
+      /**
+       * Register multiple tools
+       */
+      registerTools(tools) {
+        for (const [name, tool] of Object.entries(tools)) {
+          tool.name = tool.name || name;
+          this.registerTool(tool);
+        }
+      }
+      /**
+       * Get all registered tools
+       */
+      getTools() {
+        return Array.from(this.tools.values());
+      }
+      /**
+       * Get a specific tool by name
+       */
+      getTool(name) {
+        return this.tools.get(name);
+      }
+      /**
+       * Validate tool input against schema using ajv
+       */
+      validateInput(tool, input) {
+        if (!tool.inputSchema) {
+          return;
+        }
+        const validate = this.ajv.compile(tool.inputSchema);
+        const valid = validate(input);
+        if (!valid) {
+          const errors = validate.errors?.map((err) => {
+            if (err.instancePath) {
+              return `${err.instancePath}: ${err.message}`;
+            }
+            return err.message;
+          }).join(", ");
+          throw new Error(`Input validation failed for tool '${tool.name}': ${errors}`);
+        }
+      }
+      /**
+       * Execute a custom tool
+       */
+      async execute(toolName, args, context2) {
+        const tool = this.tools.get(toolName);
+        if (!tool) {
+          throw new Error(`Tool not found: ${toolName}`);
+        }
+        this.validateInput(tool, args);
+        const templateContext = {
+          ...context2,
+          args,
+          input: args
+        };
+        const command = await this.liquid.parseAndRender(tool.exec, templateContext);
+        let stdin;
+        if (tool.stdin) {
+          stdin = await this.liquid.parseAndRender(tool.stdin, templateContext);
+        }
+        const env = commandExecutor.buildEnvironment(process.env, tool.env, context2?.env);
+        const result = await commandExecutor.execute(command, {
+          stdin,
+          cwd: tool.cwd,
+          env,
+          timeout: tool.timeout || 3e4
+        });
+        if (result.exitCode !== 0) {
+          const errorOutput = result.stderr || result.stdout || "Command failed";
+          throw new Error(
+            `Tool '${toolName}' execution failed with exit code ${result.exitCode}: ${errorOutput}`
+          );
+        }
+        let output = result.stdout;
+        if (tool.parseJson) {
+          try {
+            output = JSON.parse(result.stdout);
+          } catch (e) {
+            logger.warn(`Failed to parse tool output as JSON: ${e}`);
+          }
+        }
+        if (tool.transform) {
+          const transformContext = {
+            ...templateContext,
+            output,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode
+          };
+          const transformed = await this.liquid.parseAndRender(tool.transform, transformContext);
+          if (typeof transformed === "string" && transformed.trim().startsWith("{")) {
+            try {
+              output = JSON.parse(transformed);
+            } catch {
+              output = transformed;
+            }
+          } else {
+            output = transformed;
+          }
+        }
+        if (tool.transform_js) {
+          output = await this.applyJavaScriptTransform(tool.transform_js, output, {
+            ...templateContext,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode
+          });
+        }
+        return output;
+      }
+      /**
+       * Apply JavaScript transform to output
+       */
+      async applyJavaScriptTransform(transformJs, output, context2) {
+        if (!this.sandbox) {
+          this.sandbox = createSecureSandbox();
+        }
+        const code = `
+      const output = ${JSON.stringify(output)};
+      const context = ${JSON.stringify(context2)};
+      const args = context.args || {};
+      const pr = context.pr || {};
+      const files = context.files || [];
+      const outputs = context.outputs || {};
+      const env = context.env || {};
+
+      ${transformJs}
+    `;
+        try {
+          return await compileAndRun(this.sandbox, code, { timeout: 5e3 });
+        } catch (error) {
+          logger.error(`JavaScript transform error: ${error}`);
+          throw error;
+        }
+      }
+      /**
+       * Convert custom tools to MCP tool format
+       */
+      toMcpTools() {
+        return Array.from(this.tools.values()).map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          handler: async (args) => {
+            return this.execute(tool.name, args);
+          }
+        }));
+      }
+    };
+  }
+});
+
+// src/providers/mcp-custom-sse-server.ts
+var import_http, import_events, CustomToolsSSEServer;
+var init_mcp_custom_sse_server = __esm({
+  "src/providers/mcp-custom-sse-server.ts"() {
+    "use strict";
+    init_custom_tool_executor();
+    init_logger();
+    import_http = __toESM(require("http"));
+    import_events = require("events");
+    CustomToolsSSEServer = class {
+      server = null;
+      port = 0;
+      connections = /* @__PURE__ */ new Set();
+      toolExecutor;
+      sessionId;
+      debug;
+      eventBus;
+      messageQueue = /* @__PURE__ */ new Map();
+      constructor(tools, sessionId, debug = false) {
+        this.sessionId = sessionId;
+        this.debug = debug;
+        this.eventBus = new import_events.EventEmitter();
+        const toolsRecord = {};
+        for (const [name, tool] of tools.entries()) {
+          toolsRecord[name] = tool;
+        }
+        this.toolExecutor = new CustomToolExecutor(toolsRecord);
+        if (this.debug) {
+          logger.debug(`[CustomToolsSSEServer:${sessionId}] Initialized with ${tools.size} tools`);
+        }
+      }
+      /**
+       * Start the SSE server on an ephemeral port
+       * Returns the actual bound port number
+       */
+      async start() {
+        return new Promise((resolve9, reject) => {
+          try {
+            this.server = import_http.default.createServer((req, res) => {
+              this.handleRequest(req, res).catch((error) => {
+                logger.error(
+                  `[CustomToolsSSEServer:${this.sessionId}] Request handler error: ${error}`
+                );
+              });
+            });
+            this.server.on("error", (error) => {
+              if (error.code === "EADDRINUSE") {
+                if (this.debug) {
+                  logger.debug(
+                    `[CustomToolsSSEServer:${this.sessionId}] Port ${this.port} in use, retrying with new port`
+                  );
+                }
+                reject(new Error(`Port ${this.port} already in use`));
+              } else {
+                reject(error);
+              }
+            });
+            this.server.listen(0, "localhost", () => {
+              const address = this.server.address();
+              if (!address || typeof address === "string") {
+                reject(new Error("Failed to bind to port"));
+                return;
+              }
+              this.port = address.port;
+              if (this.debug) {
+                logger.debug(
+                  `[CustomToolsSSEServer:${this.sessionId}] Started on http://localhost:${this.port}/sse`
+                );
+              }
+              resolve9(this.port);
+            });
+          } catch (error) {
+            reject(error);
+          }
+        });
+      }
+      /**
+       * Stop the server and cleanup resources
+       */
+      async stop() {
+        if (this.debug) {
+          logger.debug(`[CustomToolsSSEServer:${this.sessionId}] Stopping server...`);
+        }
+        for (const connection of this.connections) {
+          try {
+            connection.response.end();
+          } catch (error) {
+            if (this.debug) {
+              logger.debug(
+                `[CustomToolsSSEServer:${this.sessionId}] Error closing connection: ${error}`
+              );
+            }
+          }
+        }
+        this.connections.clear();
+        if (this.server) {
+          await new Promise((resolve9, reject) => {
+            const timeout = setTimeout(() => {
+              if (this.debug) {
+                logger.debug(
+                  `[CustomToolsSSEServer:${this.sessionId}] Force closing server after timeout`
+                );
+              }
+              this.server?.close(() => resolve9());
+            }, 5e3);
+            this.server.close((error) => {
+              clearTimeout(timeout);
+              if (error) {
+                reject(error);
+              } else {
+                resolve9();
+              }
+            });
+          });
+          this.server = null;
+        }
+        if (this.debug) {
+          logger.debug(`[CustomToolsSSEServer:${this.sessionId}] Server stopped`);
+        }
+      }
+      /**
+       * Get the SSE endpoint URL
+       */
+      getUrl() {
+        if (!this.port) {
+          throw new Error("Server not started");
+        }
+        return `http://localhost:${this.port}/sse`;
+      }
+      /**
+       * Handle incoming HTTP requests
+       */
+      async handleRequest(req, res) {
+        if (req.method === "OPTIONS") {
+          this.handleCORS(res);
+          res.writeHead(204);
+          res.end();
+          return;
+        }
+        if (req.method !== "POST" || req.url !== "/sse") {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Not found" }));
+          return;
+        }
+        this.handleCORS(res);
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive"
+        });
+        const connectionId = `conn-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const connection = {
+          response: res,
+          id: connectionId
+        };
+        this.connections.add(connection);
+        if (this.debug) {
+          logger.debug(`[CustomToolsSSEServer:${this.sessionId}] New SSE connection: ${connectionId}`);
+        }
+        this.sendSSE(connection, "endpoint", `http://localhost:${this.port}/message`);
+        req.on("close", () => {
+          if (this.debug) {
+            logger.debug(`[CustomToolsSSEServer:${this.sessionId}] Connection closed: ${connectionId}`);
+          }
+          this.connections.delete(connection);
+        });
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        req.on("end", async () => {
+          try {
+            const message = JSON.parse(body);
+            await this.handleMCPMessage(connection, message);
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : "Unknown error";
+            if (this.debug) {
+              logger.error(
+                `[CustomToolsSSEServer:${this.sessionId}] Error parsing request: ${errorMsg}`
+              );
+            }
+            this.sendErrorResponse(connection, null, -32700, "Parse error", { error: errorMsg });
+          }
+        });
+      }
+      /**
+       * Handle CORS headers
+       */
+      handleCORS(res) {
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+      }
+      /**
+       * Send SSE message to client
+       */
+      sendSSE(connection, event, data) {
+        try {
+          const dataStr = typeof data === "string" ? data : JSON.stringify(data);
+          connection.response.write(`event: ${event}
+`);
+          connection.response.write(`data: ${dataStr}
+
+`);
+        } catch (error) {
+          if (this.debug) {
+            logger.error(`[CustomToolsSSEServer:${this.sessionId}] Error sending SSE: ${error}`);
+          }
+        }
+      }
+      /**
+       * Handle MCP protocol messages
+       */
+      async handleMCPMessage(connection, message) {
+        if (this.debug) {
+          logger.debug(
+            `[CustomToolsSSEServer:${this.sessionId}] Received MCP message: ${JSON.stringify(message)}`
+          );
+        }
+        if (message.method === "tools/list") {
+          const response = await this.handleToolsList(message.id);
+          this.sendSSE(connection, "message", response);
+          return;
+        }
+        if (message.method === "tools/call") {
+          const request = message;
+          const response = await this.handleToolCall(
+            request.id,
+            request.params.name,
+            request.params.arguments
+          );
+          this.sendSSE(connection, "message", response);
+          return;
+        }
+        if (message.method === "initialize") {
+          const response = {
+            jsonrpc: "2.0",
+            id: message.id,
+            result: {
+              protocolVersion: "2024-11-05",
+              capabilities: {
+                tools: {}
+              },
+              serverInfo: {
+                name: "visor-custom-tools",
+                version: "1.0.0"
+              }
+            }
+          };
+          this.sendSSE(connection, "message", response);
+          return;
+        }
+        if (message.method === "notifications/initialized") {
+          return;
+        }
+        this.sendErrorResponse(connection, message.id, -32601, "Method not found");
+      }
+      /**
+       * Handle tools/list MCP request
+       */
+      async handleToolsList(id) {
+        const tools = this.toolExecutor.getTools();
+        return {
+          jsonrpc: "2.0",
+          id,
+          result: {
+            tools: tools.map((tool) => ({
+              name: tool.name,
+              description: tool.description || `Execute ${tool.name}`,
+              inputSchema: tool.inputSchema || {
+                type: "object",
+                properties: {},
+                required: []
+              }
+            }))
+          }
+        };
+      }
+      /**
+       * Handle tools/call MCP request
+       */
+      async handleToolCall(id, toolName, args) {
+        try {
+          if (this.debug) {
+            logger.debug(
+              `[CustomToolsSSEServer:${this.sessionId}] Executing tool: ${toolName} with args: ${JSON.stringify(args)}`
+            );
+          }
+          const result = await this.toolExecutor.execute(toolName, args);
+          const resultText = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+          if (this.debug) {
+            logger.debug(
+              `[CustomToolsSSEServer:${this.sessionId}] Tool execution completed: ${toolName}`
+            );
+          }
+          return {
+            jsonrpc: "2.0",
+            id,
+            result: {
+              content: [
+                {
+                  type: "text",
+                  text: resultText
+                }
+              ]
+            }
+          };
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : "Unknown error";
+          logger.error(
+            `[CustomToolsSSEServer:${this.sessionId}] Tool execution failed: ${toolName} - ${errorMsg}`
+          );
+          return {
+            jsonrpc: "2.0",
+            id,
+            error: {
+              code: -32603,
+              message: "Internal error",
+              data: {
+                tool: toolName,
+                error: errorMsg
+              }
+            }
+          };
+        }
+      }
+      /**
+       * Send error response via SSE
+       */
+      sendErrorResponse(connection, id, code, message, data) {
+        const errorResponse = {
+          jsonrpc: "2.0",
+          id: id ?? "error",
+          error: {
+            code,
+            message,
+            data
+          }
+        };
+        this.sendSSE(connection, "message", errorResponse);
+      }
+    };
+  }
+});
+
 // src/providers/ai-check-provider.ts
 var import_promises3, import_path3, AICheckProvider;
 var init_ai_check_provider = __esm({
@@ -7029,6 +8047,8 @@ var init_ai_check_provider = __esm({
     import_path3 = __toESM(require("path"));
     init_lazy_otel();
     init_state_capture();
+    init_mcp_custom_sse_server();
+    init_logger();
     AICheckProvider = class extends CheckProvider {
       aiReviewService;
       liquidEngine;
@@ -7042,6 +8062,39 @@ var init_ai_check_provider = __esm({
       }
       getDescription() {
         return "AI-powered code review using Google Gemini, Anthropic Claude, OpenAI GPT, or AWS Bedrock models";
+      }
+      /** Lightweight debug helper to avoid importing logger here */
+      logDebug(msg) {
+        try {
+          if (process.env.VISOR_DEBUG === "true") {
+            console.debug(msg);
+          }
+        } catch {
+        }
+      }
+      /** Detect Slack webhook payload and build a lightweight slack context for templates */
+      buildSlackEventContext(context2, config, prInfo) {
+        try {
+          const aiCfg = config?.ai || {};
+          if (aiCfg.skip_slack_context === true) return {};
+          const webhook = context2?.webhookContext;
+          const map = webhook?.webhookData;
+          if (!map || !(map instanceof Map)) return {};
+          const first = Array.from(map.values())[0];
+          if (!first || typeof first !== "object") return {};
+          const ev = first.event;
+          const conv = first.slack_conversation;
+          if (!ev && !conv) return {};
+          if (conv && prInfo) {
+            try {
+              prInfo.slackConversation = conv;
+            } catch {
+            }
+          }
+          return { slack: { event: ev, conversation: conv } };
+        } catch {
+          return {};
+        }
       }
       async validateConfig(config) {
         if (!config || typeof config !== "object") {
@@ -7163,9 +8216,9 @@ var init_ai_check_provider = __esm({
           } else {
             resolvedPath = import_path3.default.resolve(process.cwd(), str);
           }
-          const fs17 = require("fs").promises;
+          const fs18 = require("fs").promises;
           try {
-            const stat = await fs17.stat(resolvedPath);
+            const stat = await fs18.stat(resolvedPath);
             return stat.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
@@ -7241,7 +8294,7 @@ var init_ai_check_provider = __esm({
           // File Details
           files: prInfo.files || [],
           description: prInfo.body || "",
-          // GitHub Event Context
+          // GitHub / webhook Event Context
           event: eventContext ? {
             name: eventContext.event_name || "unknown",
             action: eventContext.action,
@@ -7284,6 +8337,27 @@ var init_ai_check_provider = __esm({
             // Raw event payload for advanced use cases
             payload: eventContext
           } : void 0,
+          // Slack conversation context (if provided via eventContext.slack)
+          slack: (() => {
+            try {
+              const anyCtx = eventContext;
+              const slack = anyCtx?.slack;
+              if (slack && typeof slack === "object") return slack;
+            } catch {
+            }
+            return void 0;
+          })(),
+          // Unified conversation context across transports (Slack & GitHub)
+          conversation: (() => {
+            try {
+              const anyCtx = eventContext;
+              if (anyCtx?.slack?.conversation) return anyCtx.slack.conversation;
+              if (anyCtx?.github?.conversation) return anyCtx.github.conversation;
+              if (anyCtx?.conversation) return anyCtx.conversation;
+            } catch {
+            }
+            return void 0;
+          })(),
           // Utility data for templates
           utils: {
             // Date/time helpers
@@ -7300,6 +8374,14 @@ var init_ai_check_provider = __esm({
             hasLargeChanges: (prInfo.files || []).some((f) => f.changes > 50),
             totalFiles: (prInfo.files || []).length
           },
+          // Checks metadata for helpers like chat_history
+          checks_meta: (() => {
+            try {
+              return eventContext?.__checksMeta || void 0;
+            } catch {
+              return void 0;
+            }
+          })(),
           // Previous check outputs (dependency results)
           // Expose raw output directly if available, otherwise expose the result as-is
           outputs: dependencyResults ? Object.fromEntries(
@@ -7398,47 +8480,60 @@ var init_ai_check_provider = __esm({
         }
         const aiConfig = {};
         if (config.ai) {
-          if (config.ai.apiKey !== void 0) {
-            aiConfig.apiKey = config.ai.apiKey;
+          const aiAny2 = config.ai;
+          const skipTransport = aiAny2.skip_transport_context === true;
+          if (aiAny2.apiKey !== void 0) {
+            aiConfig.apiKey = aiAny2.apiKey;
           }
-          if (config.ai.model !== void 0) {
-            aiConfig.model = config.ai.model;
+          if (aiAny2.model !== void 0) {
+            aiConfig.model = aiAny2.model;
           }
-          if (config.ai.timeout !== void 0) {
-            aiConfig.timeout = config.ai.timeout;
+          if (aiAny2.timeout !== void 0) {
+            aiConfig.timeout = aiAny2.timeout;
           }
-          if (config.ai.provider !== void 0) {
-            aiConfig.provider = config.ai.provider;
+          if (aiAny2.provider !== void 0) {
+            aiConfig.provider = aiAny2.provider;
           }
-          if (config.ai.debug !== void 0) {
-            aiConfig.debug = config.ai.debug;
+          if (aiAny2.debug !== void 0) {
+            aiConfig.debug = aiAny2.debug;
           }
-          if (config.ai.enableDelegate !== void 0) {
-            aiConfig.enableDelegate = config.ai.enableDelegate;
+          if (aiAny2.enableDelegate !== void 0) {
+            aiConfig.enableDelegate = aiAny2.enableDelegate;
           }
-          if (config.ai.allowEdit !== void 0) {
-            aiConfig.allowEdit = config.ai.allowEdit;
+          if (aiAny2.allowEdit !== void 0) {
+            aiConfig.allowEdit = aiAny2.allowEdit;
           }
-          if (config.ai.allowedTools !== void 0) {
-            aiConfig.allowedTools = config.ai.allowedTools;
+          if (aiAny2.allowedTools !== void 0) {
+            aiConfig.allowedTools = aiAny2.allowedTools;
+            this.logDebug(
+              `[AI Provider] Read allowedTools from YAML: ${JSON.stringify(aiAny2.allowedTools)}`
+            );
           }
-          if (config.ai.disableTools !== void 0) {
-            aiConfig.disableTools = config.ai.disableTools;
+          if (aiAny2.disableTools !== void 0) {
+            aiConfig.disableTools = aiAny2.disableTools;
+            this.logDebug(`[AI Provider] Read disableTools from YAML: ${aiAny2.disableTools}`);
           }
-          if (config.ai.allowBash !== void 0) {
-            aiConfig.allowBash = config.ai.allowBash;
+          if (aiAny2.allowBash !== void 0) {
+            aiConfig.allowBash = aiAny2.allowBash;
           }
-          if (config.ai.bashConfig !== void 0) {
-            aiConfig.bashConfig = config.ai.bashConfig;
+          if (aiAny2.bashConfig !== void 0) {
+            aiConfig.bashConfig = aiAny2.bashConfig;
           }
-          if (config.ai.skip_code_context !== void 0) {
-            aiConfig.skip_code_context = config.ai.skip_code_context;
+          if (aiAny2.skip_code_context !== void 0) {
+            aiConfig.skip_code_context = aiAny2.skip_code_context;
+          } else if (skipTransport) {
+            aiConfig.skip_code_context = true;
           }
-          if (config.ai.retry !== void 0) {
-            aiConfig.retry = config.ai.retry;
+          if (aiAny2.skip_slack_context !== void 0) {
+            aiConfig.skip_slack_context = aiAny2.skip_slack_context;
+          } else if (skipTransport) {
+            aiConfig.skip_slack_context = true;
           }
-          if (config.ai.fallback !== void 0) {
-            aiConfig.fallback = config.ai.fallback;
+          if (aiAny2.retry !== void 0) {
+            aiConfig.retry = aiAny2.retry;
+          }
+          if (aiAny2.fallback !== void 0) {
+            aiConfig.fallback = aiAny2.fallback;
           }
         }
         if (config.ai_model !== void 0) {
@@ -7463,6 +8558,47 @@ var init_ai_check_provider = __esm({
         }
         if (config.ai?.mcpServers) {
           Object.assign(mcpServers, config.ai.mcpServers);
+        }
+        let customToolsServer = null;
+        let customToolsToLoad = [];
+        let customToolsServerName = null;
+        const legacyCustomTools = this.getCustomToolsForAI(config);
+        if (legacyCustomTools.length > 0) {
+          customToolsToLoad = legacyCustomTools;
+          customToolsServerName = "__custom_tools__";
+        }
+        for (const [serverName, serverConfig] of Object.entries(mcpServers)) {
+          if (serverConfig.tools && Array.isArray(serverConfig.tools)) {
+            customToolsToLoad = serverConfig.tools;
+            customToolsServerName = serverName;
+            break;
+          }
+        }
+        if (customToolsToLoad.length > 0 && customToolsServerName && !config.ai?.disableTools) {
+          try {
+            const customTools = this.loadCustomTools(customToolsToLoad, config);
+            if (customTools.size > 0) {
+              const sessionId = config.checkName || `ai-check-${Date.now()}`;
+              const debug = aiConfig.debug || process.env.VISOR_DEBUG === "true";
+              customToolsServer = new CustomToolsSSEServer(customTools, sessionId, debug);
+              const port = await customToolsServer.start();
+              if (debug) {
+                logger.debug(
+                  `[AICheckProvider] Started custom tools SSE server '${customToolsServerName}' on port ${port} for ${customTools.size} tools`
+                );
+              }
+              mcpServers[customToolsServerName] = {
+                command: "",
+                args: [],
+                url: `http://localhost:${port}/sse`,
+                transport: "sse"
+              };
+            }
+          } catch (error) {
+            logger.error(
+              `[AICheckProvider] Failed to start custom tools SSE server '${customToolsServerName}': ${error instanceof Error ? error.message : "Unknown error"}`
+            );
+          }
         }
         if (Object.keys(mcpServers).length > 0 && !config.ai?.disableTools) {
           aiConfig.mcpServers = mcpServers;
@@ -7502,7 +8638,15 @@ var init_ai_check_provider = __esm({
           );
         } catch {
         }
-        const eventContext = config.eventContext || {};
+        const baseEventContext = config.eventContext || {};
+        const checksMeta = config.checksMeta;
+        const slackCtx = this.buildSlackEventContext(
+          sessionInfo,
+          config,
+          prInfo
+        );
+        const baseWithSlack = { ...baseEventContext, ...slackCtx };
+        const eventContext = checksMeta ? { ...baseWithSlack, __checksMeta: checksMeta } : baseWithSlack;
         const ctxWithStage = {
           ...eventContext || {},
           __stageHistoryBase: sessionInfo?.stageHistoryBase
@@ -7670,7 +8814,59 @@ ${processedPrompt}` : processedPrompt;
             console.error(`\u{1F6A8} This check cannot proceed without valid API credentials`);
           }
           throw new Error(`AI analysis failed: ${errorMessage}`);
+        } finally {
+          if (customToolsServer) {
+            try {
+              await customToolsServer.stop();
+              if (aiConfig.debug || process.env.VISOR_DEBUG === "true") {
+                logger.debug("[AICheckProvider] Custom tools SSE server stopped");
+              }
+            } catch (error) {
+              logger.error(
+                `[AICheckProvider] Error stopping custom tools SSE server: ${error instanceof Error ? error.message : "Unknown error"}`
+              );
+            }
+          }
         }
+      }
+      /**
+       * Get custom tool names from check configuration
+       */
+      getCustomToolsForAI(config) {
+        const aiCustomTools = config.ai_custom_tools;
+        if (!aiCustomTools) {
+          return [];
+        }
+        if (Array.isArray(aiCustomTools)) {
+          return aiCustomTools.filter((name) => typeof name === "string");
+        }
+        if (typeof aiCustomTools === "string") {
+          return [aiCustomTools];
+        }
+        return [];
+      }
+      /**
+       * Load custom tools from global configuration
+       */
+      loadCustomTools(toolNames, config) {
+        const tools = /* @__PURE__ */ new Map();
+        const globalTools = config.__globalTools;
+        if (!globalTools) {
+          logger.warn(
+            `[AICheckProvider] ai_custom_tools specified but no global tools found in configuration`
+          );
+          return tools;
+        }
+        for (const toolName of toolNames) {
+          const tool = globalTools[toolName];
+          if (!tool) {
+            logger.warn(`[AICheckProvider] Custom tool not found: ${toolName}`);
+            continue;
+          }
+          tool.name = tool.name || toolName;
+          tools.set(toolName, tool);
+        }
+        return tools;
       }
       getSupportedConfigKeys() {
         return [
@@ -9422,137 +10618,6 @@ var init_claude_code_check_provider = __esm({
         ];
       }
     };
-  }
-});
-
-// src/utils/command-executor.ts
-var command_executor_exports = {};
-__export(command_executor_exports, {
-  CommandExecutor: () => CommandExecutor,
-  commandExecutor: () => commandExecutor
-});
-var import_child_process, import_util, CommandExecutor, commandExecutor;
-var init_command_executor = __esm({
-  "src/utils/command-executor.ts"() {
-    "use strict";
-    import_child_process = require("child_process");
-    import_util = require("util");
-    init_logger();
-    CommandExecutor = class _CommandExecutor {
-      static instance;
-      constructor() {
-      }
-      static getInstance() {
-        if (!_CommandExecutor.instance) {
-          _CommandExecutor.instance = new _CommandExecutor();
-        }
-        return _CommandExecutor.instance;
-      }
-      /**
-       * Execute a shell command with optional stdin, environment, and timeout
-       */
-      async execute(command, options = {}) {
-        const execAsync = (0, import_util.promisify)(import_child_process.exec);
-        const timeout = options.timeout || 3e4;
-        if (options.stdin) {
-          return this.executeWithStdin(command, options);
-        }
-        try {
-          const result = await execAsync(command, {
-            cwd: options.cwd,
-            env: options.env,
-            timeout
-          });
-          return {
-            stdout: result.stdout || "",
-            stderr: result.stderr || "",
-            exitCode: 0
-          };
-        } catch (error) {
-          return this.handleExecutionError(error, timeout);
-        }
-      }
-      /**
-       * Execute command with stdin input
-       */
-      executeWithStdin(command, options) {
-        return new Promise((resolve8, reject) => {
-          const childProcess = (0, import_child_process.exec)(
-            command,
-            {
-              cwd: options.cwd,
-              env: options.env,
-              timeout: options.timeout || 3e4
-            },
-            (error, stdout, stderr) => {
-              if (error && error.killed && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM")) {
-                reject(new Error(`Command timed out after ${options.timeout || 3e4}ms`));
-              } else {
-                resolve8({
-                  stdout: stdout || "",
-                  stderr: stderr || "",
-                  exitCode: error ? error.code || 1 : 0
-                });
-              }
-            }
-          );
-          if (options.stdin && childProcess.stdin) {
-            childProcess.stdin.write(options.stdin);
-            childProcess.stdin.end();
-          }
-        });
-      }
-      /**
-       * Handle execution errors consistently
-       */
-      handleExecutionError(error, timeout) {
-        const execError = error;
-        if (execError.killed && (execError.code === "ETIMEDOUT" || execError.signal === "SIGTERM")) {
-          throw new Error(`Command timed out after ${timeout}ms`);
-        }
-        let exitCode = 1;
-        if (execError.code) {
-          exitCode = typeof execError.code === "string" ? parseInt(execError.code, 10) : execError.code;
-        }
-        return {
-          stdout: execError.stdout || "",
-          stderr: execError.stderr || "",
-          exitCode
-        };
-      }
-      /**
-       * Build safe environment variables by merging process.env with custom env
-       * Ensures all values are strings (no undefined)
-       */
-      buildEnvironment(baseEnv = process.env, ...customEnvs) {
-        const result = {};
-        for (const [key, value] of Object.entries(baseEnv)) {
-          if (value !== void 0) {
-            result[key] = value;
-          }
-        }
-        for (const customEnv of customEnvs) {
-          if (customEnv) {
-            Object.assign(result, customEnv);
-          }
-        }
-        return result;
-      }
-      /**
-       * Log command execution for debugging
-       */
-      logExecution(command, options) {
-        const debugInfo = [
-          `Executing command: ${command}`,
-          options.cwd ? `cwd: ${options.cwd}` : null,
-          options.stdin ? "with stdin" : null,
-          options.timeout ? `timeout: ${options.timeout}ms` : null,
-          options.env ? `env vars: ${Object.keys(options.env).length}` : null
-        ].filter(Boolean).join(", ");
-        logger.debug(debugInfo);
-      }
-    };
-    commandExecutor = CommandExecutor.getInstance();
   }
 });
 
@@ -11434,184 +12499,6 @@ var init_memory_check_provider = __esm({
   }
 });
 
-// src/providers/custom-tool-executor.ts
-var import_ajv, CustomToolExecutor;
-var init_custom_tool_executor = __esm({
-  "src/providers/custom-tool-executor.ts"() {
-    "use strict";
-    init_liquid_extensions();
-    init_sandbox();
-    init_logger();
-    init_command_executor();
-    import_ajv = __toESM(require("ajv"));
-    CustomToolExecutor = class {
-      liquid;
-      sandbox;
-      tools;
-      ajv;
-      constructor(tools) {
-        this.liquid = createExtendedLiquid({
-          cache: false,
-          strictFilters: false,
-          strictVariables: false
-        });
-        this.tools = new Map(Object.entries(tools || {}));
-        this.ajv = new import_ajv.default({ allErrors: true, verbose: true });
-      }
-      /**
-       * Register a custom tool
-       */
-      registerTool(tool) {
-        if (!tool.name) {
-          throw new Error("Tool must have a name");
-        }
-        this.tools.set(tool.name, tool);
-      }
-      /**
-       * Register multiple tools
-       */
-      registerTools(tools) {
-        for (const [name, tool] of Object.entries(tools)) {
-          tool.name = tool.name || name;
-          this.registerTool(tool);
-        }
-      }
-      /**
-       * Get all registered tools
-       */
-      getTools() {
-        return Array.from(this.tools.values());
-      }
-      /**
-       * Get a specific tool by name
-       */
-      getTool(name) {
-        return this.tools.get(name);
-      }
-      /**
-       * Validate tool input against schema using ajv
-       */
-      validateInput(tool, input) {
-        if (!tool.inputSchema) {
-          return;
-        }
-        const validate = this.ajv.compile(tool.inputSchema);
-        const valid = validate(input);
-        if (!valid) {
-          const errors = validate.errors?.map((err) => {
-            if (err.instancePath) {
-              return `${err.instancePath}: ${err.message}`;
-            }
-            return err.message;
-          }).join(", ");
-          throw new Error(`Input validation failed for tool '${tool.name}': ${errors}`);
-        }
-      }
-      /**
-       * Execute a custom tool
-       */
-      async execute(toolName, args, context2) {
-        const tool = this.tools.get(toolName);
-        if (!tool) {
-          throw new Error(`Tool not found: ${toolName}`);
-        }
-        this.validateInput(tool, args);
-        const templateContext = {
-          ...context2,
-          args,
-          input: args
-        };
-        const command = await this.liquid.parseAndRender(tool.exec, templateContext);
-        let stdin;
-        if (tool.stdin) {
-          stdin = await this.liquid.parseAndRender(tool.stdin, templateContext);
-        }
-        const env = commandExecutor.buildEnvironment(process.env, tool.env, context2?.env);
-        const result = await commandExecutor.execute(command, {
-          stdin,
-          cwd: tool.cwd,
-          env,
-          timeout: tool.timeout || 3e4
-        });
-        let output = result.stdout;
-        if (tool.parseJson) {
-          try {
-            output = JSON.parse(result.stdout);
-          } catch (e) {
-            logger.warn(`Failed to parse tool output as JSON: ${e}`);
-          }
-        }
-        if (tool.transform) {
-          const transformContext = {
-            ...templateContext,
-            output,
-            stdout: result.stdout,
-            stderr: result.stderr,
-            exitCode: result.exitCode
-          };
-          const transformed = await this.liquid.parseAndRender(tool.transform, transformContext);
-          if (typeof transformed === "string" && transformed.trim().startsWith("{")) {
-            try {
-              output = JSON.parse(transformed);
-            } catch {
-              output = transformed;
-            }
-          } else {
-            output = transformed;
-          }
-        }
-        if (tool.transform_js) {
-          output = await this.applyJavaScriptTransform(tool.transform_js, output, {
-            ...templateContext,
-            stdout: result.stdout,
-            stderr: result.stderr,
-            exitCode: result.exitCode
-          });
-        }
-        return output;
-      }
-      /**
-       * Apply JavaScript transform to output
-       */
-      async applyJavaScriptTransform(transformJs, output, context2) {
-        if (!this.sandbox) {
-          this.sandbox = createSecureSandbox();
-        }
-        const code = `
-      const output = ${JSON.stringify(output)};
-      const context = ${JSON.stringify(context2)};
-      const args = context.args || {};
-      const pr = context.pr || {};
-      const files = context.files || [];
-      const outputs = context.outputs || {};
-      const env = context.env || {};
-
-      ${transformJs}
-    `;
-        try {
-          return await compileAndRun(this.sandbox, code, { timeout: 5e3 });
-        } catch (error) {
-          logger.error(`JavaScript transform error: ${error}`);
-          throw error;
-        }
-      }
-      /**
-       * Convert custom tools to MCP tool format
-       */
-      toMcpTools() {
-        return Array.from(this.tools.values()).map((tool) => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-          handler: async (args) => {
-            return this.execute(tool.name, args);
-          }
-        }));
-      }
-    };
-  }
-});
-
 // src/providers/mcp-check-provider.ts
 var import_client, import_stdio, import_sse, import_streamableHttp, McpCheckProvider;
 var init_mcp_check_provider = __esm({
@@ -12192,7 +13079,7 @@ async function acquirePromptLock() {
     activePrompt = true;
     return;
   }
-  await new Promise((resolve8) => waiters.push(resolve8));
+  await new Promise((resolve9) => waiters.push(resolve9));
   activePrompt = true;
 }
 function releasePromptLock() {
@@ -12202,7 +13089,7 @@ function releasePromptLock() {
 }
 async function interactivePrompt(options) {
   await acquirePromptLock();
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const dbg = process.env.VISOR_DEBUG === "true";
     try {
       if (dbg) {
@@ -12289,12 +13176,12 @@ async function interactivePrompt(options) {
     };
     const finish = (value) => {
       cleanup();
-      resolve8(value);
+      resolve9(value);
     };
     if (options.timeout && options.timeout > 0) {
       timeoutId = setTimeout(() => {
         cleanup();
-        if (defaultValue !== void 0) return resolve8(defaultValue);
+        if (defaultValue !== void 0) return resolve9(defaultValue);
         return reject(new Error("Input timeout"));
       }, options.timeout);
     }
@@ -12426,7 +13313,7 @@ async function interactivePrompt(options) {
   });
 }
 async function simplePrompt(prompt) {
-  return new Promise((resolve8) => {
+  return new Promise((resolve9) => {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout
@@ -12442,7 +13329,7 @@ async function simplePrompt(prompt) {
     rl.question(`${prompt}
 > `, (answer) => {
       rl.close();
-      resolve8(answer.trim());
+      resolve9(answer.trim());
     });
   });
 }
@@ -12456,12 +13343,150 @@ var init_interactive_prompt = __esm({
   }
 });
 
+// src/slack/prompt-state.ts
+var prompt_state_exports = {};
+__export(prompt_state_exports, {
+  PromptStateManager: () => PromptStateManager,
+  getPromptStateManager: () => getPromptStateManager,
+  resetPromptStateManager: () => resetPromptStateManager
+});
+function getPromptStateManager(ttlMs) {
+  if (!__promptState) __promptState = new PromptStateManager(ttlMs);
+  return __promptState;
+}
+function resetPromptStateManager() {
+  __promptState = void 0;
+}
+var PromptStateManager, __promptState;
+var init_prompt_state = __esm({
+  "src/slack/prompt-state.ts"() {
+    "use strict";
+    init_logger();
+    PromptStateManager = class {
+      waiting = /* @__PURE__ */ new Map();
+      // key: `${channel}:${threadTs}`
+      ttlMs;
+      timer;
+      firstMessage = /* @__PURE__ */ new Map();
+      summaryTs = /* @__PURE__ */ new Map();
+      // key: threadKey -> group -> ts
+      constructor(ttlMs = 60 * 60 * 1e3) {
+        this.ttlMs = ttlMs;
+        this.startCleanup();
+      }
+      key(channel, threadTs) {
+        return `${channel}:${threadTs}`;
+      }
+      setWaiting(channel, threadTs, info) {
+        const key = this.key(channel, threadTs);
+        const value = { ...info, timestamp: Date.now(), channel, threadTs };
+        this.waiting.set(key, value);
+        try {
+          logger.info(
+            `[prompt-state] waiting set for ${key} (check=${info.checkName}, prompt="${info.prompt.substring(
+              0,
+              60
+            )}\u2026")`
+          );
+        } catch {
+        }
+      }
+      getWaiting(channel, threadTs) {
+        const key = this.key(channel, threadTs);
+        const info = this.waiting.get(key);
+        if (!info) return void 0;
+        const age = Date.now() - info.timestamp;
+        if (age > this.ttlMs) {
+          this.waiting.delete(key);
+          try {
+            logger.warn(`[prompt-state] expired ${key} (age=${Math.round(age / 1e3)}s)`);
+          } catch {
+          }
+          return void 0;
+        }
+        return info;
+      }
+      clear(channel, threadTs) {
+        const key = this.key(channel, threadTs);
+        const had = this.waiting.delete(key);
+        if (had) {
+          try {
+            logger.info(`[prompt-state] cleared ${key}`);
+          } catch {
+          }
+        }
+        return had;
+      }
+      /** Merge updates into an existing waiting entry */
+      update(channel, threadTs, patch) {
+        const key = this.key(channel, threadTs);
+        const prev = this.waiting.get(key);
+        if (!prev) return void 0;
+        const next = { ...prev, ...patch };
+        this.waiting.set(key, next);
+        try {
+          if (patch.snapshotPath) {
+            logger.info(`[prompt-state] snapshotPath set for ${key}`);
+          }
+        } catch {
+        }
+        return next;
+      }
+      // First message capture helpers
+      setFirstMessage(channel, threadTs, text) {
+        const key = this.key(channel, threadTs);
+        if (!text || !text.trim()) return;
+        if (!this.firstMessage.has(key)) {
+          this.firstMessage.set(key, { text, consumed: false });
+        }
+      }
+      consumeFirstMessage(channel, threadTs) {
+        const key = this.key(channel, threadTs);
+        const entry = this.firstMessage.get(key);
+        if (entry && !entry.consumed) {
+          entry.consumed = true;
+          this.firstMessage.set(key, entry);
+          return entry.text;
+        }
+        return void 0;
+      }
+      hasUnconsumedFirstMessage(channel, threadTs) {
+        const key = this.key(channel, threadTs);
+        const e = this.firstMessage.get(key);
+        return !!(e && !e.consumed && e.text && e.text.trim());
+      }
+      startCleanup(intervalMs = 5 * 60 * 1e3) {
+        if (this.timer) clearInterval(this.timer);
+        this.timer = setInterval(() => this.cleanup(), intervalMs);
+        if (this.timer.unref) this.timer.unref();
+      }
+      cleanup() {
+        const now = Date.now();
+        let removed = 0;
+        for (const [key, info] of this.waiting.entries()) {
+          if (now - info.timestamp > this.ttlMs) {
+            this.waiting.delete(key);
+            removed++;
+          }
+        }
+        if (removed) {
+          try {
+            logger.info(`[prompt-state] cleanup removed ${removed} entries`);
+          } catch {
+          }
+        }
+        return removed;
+      }
+    };
+  }
+});
+
 // src/utils/stdin-reader.ts
 function isStdinAvailable() {
   return !process.stdin.isTTY;
 }
 async function readStdin(timeout, maxSize = 1024 * 1024) {
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     let data = "";
     let timeoutId;
     if (timeout) {
@@ -12488,7 +13513,7 @@ async function readStdin(timeout, maxSize = 1024 * 1024) {
     };
     const onEnd = () => {
       cleanup();
-      resolve8(data.trim());
+      resolve9(data.trim());
     };
     const onError = (err) => {
       cleanup();
@@ -12524,6 +13549,7 @@ var init_human_input_check_provider = __esm({
     "use strict";
     init_check_provider_interface();
     init_interactive_prompt();
+    init_prompt_state();
     init_liquid_extensions();
     init_stdin_reader();
     fs9 = __toESM(require("fs"));
@@ -12638,6 +13664,14 @@ var init_human_input_check_provider = __esm({
           for (const [k, v] of outputHistory.entries()) hist[k] = Array.isArray(v) ? v : [];
         }
         ctx.outputs_history = hist;
+        try {
+          const anyCtx = _context;
+          const checksMeta = anyCtx?.checksMeta;
+          if (checksMeta && typeof checksMeta === "object") {
+            ctx.checks_meta = checksMeta;
+          }
+        } catch {
+        }
         return ctx;
       }
       /**
@@ -12718,6 +13752,54 @@ var init_human_input_check_provider = __esm({
        * Get user input through various methods
        */
       async getUserInput(checkName, config, context2) {
+        try {
+          const payload = context2?.webhookContext?.webhookData?.get(
+            config?.endpoint || "/bots/slack/support"
+          );
+          const ev = payload && payload.event;
+          const channel = ev && String(ev.channel || "");
+          const threadTs = ev && String(ev.thread_ts || ev.ts || ev.event_ts || "");
+          const text = ev && String(ev.text || "");
+          if (channel && threadTs) {
+            const mgr = getPromptStateManager();
+            try {
+              const waiting2 = mgr.getWaiting(channel, threadTs);
+              const promptsPosted = waiting2?.promptsPosted || 0;
+              if (promptsPosted === 0 && mgr.hasUnconsumedFirstMessage(channel, threadTs)) {
+                const first = mgr.consumeFirstMessage(channel, threadTs);
+                if (first && first.trim().length > 0) {
+                  return first;
+                }
+              }
+            } catch {
+            }
+            const waiting = mgr.getWaiting(channel, threadTs);
+            if (waiting && waiting.checkName === checkName) {
+              const answer = text.replace(/<@[A-Z0-9]+>/gi, "").trim();
+              mgr.clear(channel, threadTs);
+              if (!answer && config.allow_empty !== true) {
+              } else {
+                return answer || config.default || "";
+              }
+            } else {
+              const prompt2 = String(config.prompt || "Please provide input:");
+              try {
+                await context2?.eventBus?.emit({
+                  type: "HumanInputRequested",
+                  checkId: checkName,
+                  prompt: prompt2,
+                  channel,
+                  threadTs,
+                  threadKey: `${channel}:${threadTs}`
+                });
+              } catch {
+              }
+              throw this.buildAwaitingError(checkName, prompt2);
+            }
+          }
+        } catch (e) {
+          if (e && e.issues) throw e;
+        }
         try {
           const mockVal = context2?.hooks?.mockForStep?.(checkName);
           if (mockVal !== void 0 && mockVal !== null) {
@@ -12802,6 +13884,21 @@ var init_human_input_check_provider = __esm({
           );
         }
       }
+      /** Build a deterministic, fatal error used to pause Slack-driven runs. */
+      buildAwaitingError(checkName, prompt) {
+        const err = new Error(`awaiting human input for ${checkName}`);
+        err.issues = [
+          {
+            file: "system",
+            line: 0,
+            ruleId: `${checkName}/execution_error`,
+            message: `Awaiting human input (Slack thread): ${prompt.slice(0, 80)}`,
+            severity: "error",
+            category: "logic"
+          }
+        ];
+        return err;
+      }
       async execute(_prInfo, config, _dependencyResults, context2) {
         const checkName = config.checkName || "human-input";
         try {
@@ -12877,6 +13974,13 @@ ${snippet}`
             output: { text: sanitizedInput, ts: Date.now() }
           };
         } catch (error) {
+          if (error && error.issues) {
+            const summary = {
+              issues: error.issues
+            };
+            summary.awaitingHumanInput = true;
+            return summary;
+          }
           return {
             issues: [
               {
@@ -14856,6 +15960,13 @@ var init_config_schema = __esm({
               $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
               description: "MCP servers for this AI check - overrides global setting"
             },
+            ai_custom_tools: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "List of custom tool names to expose to this AI check via ephemeral SSE MCP server"
+            },
             claude_code: {
               $ref: "#/definitions/ClaudeCodeConfig",
               description: "Claude Code configuration (for claude-code type checks)"
@@ -15109,7 +16220,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10711-20798-src_types_config.ts-0-34303%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21346-src_types_config.ts-0-34851%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -15197,6 +16308,14 @@ var init_config_schema = __esm({
             skip_code_context: {
               type: "boolean",
               description: "Skip adding code context (diffs, files, PR info) to the prompt"
+            },
+            skip_slack_context: {
+              type: "boolean",
+              description: "Skip adding Slack conversation context to the prompt (when running under Slack)"
+            },
+            skip_transport_context: {
+              type: "boolean",
+              description: "Skip adding transport-specific context (e.g., GitHub PR/issue XML, Slack conversation XML) to the prompt. When true, this behaves like setting both skip_code_context and skip_slack_context to true, unless those are explicitly overridden."
             },
             mcpServers: {
               $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
@@ -15741,13 +16860,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-10711-20798-src_types_config.ts-0-34303>>": {
+        "Record<string,Partial<interface-src_types_config.ts-11138-21346-src_types_config.ts-0-34851>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10711-20798-src_types_config.ts-0-34303%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11138-21346-src_types_config.ts-0-34851%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-10711-20798-src_types_config.ts-0-34303>": {
+        "Partial<interface-src_types_config.ts-11138-21346-src_types_config.ts-0-34851>": {
           type: "object",
           additionalProperties: false
         },
@@ -17024,6 +18143,9 @@ ${errors}`);
                 const addl = e.params && e.params.additionalProperty || "unknown";
                 const fullField = pathStr ? `${pathStr}.${addl}` : addl;
                 const topLevel = !pathStr;
+                if (topLevel && (addl === "tests" || addl === "slack")) {
+                  continue;
+                }
                 warnings.push({
                   field: fullField || "config",
                   message: topLevel ? `Unknown top-level key '${addl}' will be ignored.` : `Unknown key '${addl}' will be ignored`
@@ -17662,10 +18784,10 @@ var init_workflow_check_provider = __esm({
        * so it can be executed by the state machine as a nested workflow.
        */
       async loadWorkflowFromConfigPath(sourcePath, baseDir) {
-        const path18 = require("path");
-        const fs17 = require("fs");
-        const resolved = path18.isAbsolute(sourcePath) ? sourcePath : path18.resolve(baseDir, sourcePath);
-        if (!fs17.existsSync(resolved)) {
+        const path19 = require("path");
+        const fs18 = require("fs");
+        const resolved = path19.isAbsolute(sourcePath) ? sourcePath : path19.resolve(baseDir, sourcePath);
+        if (!fs18.existsSync(resolved)) {
           throw new Error(`Workflow config not found at: ${resolved}`);
         }
         const { ConfigManager: ConfigManager2 } = (init_config(), __toCommonJS(config_exports));
@@ -17675,8 +18797,8 @@ var init_workflow_check_provider = __esm({
         if (!steps || Object.keys(steps).length === 0) {
           throw new Error(`Config '${resolved}' does not contain any steps to execute as a workflow`);
         }
-        const id = path18.basename(resolved).replace(/\.(ya?ml)$/i, "");
-        const name = loaded.name || `Workflow from ${path18.basename(resolved)}`;
+        const id = path19.basename(resolved).replace(/\.(ya?ml)$/i, "");
+        const name = loaded.name || `Workflow from ${path19.basename(resolved)}`;
         const workflowDef = {
           id,
           name,
@@ -18575,23 +19697,23 @@ __export(renderer_schema_exports, {
 });
 async function loadRendererSchema(name) {
   try {
-    const fs17 = await import("fs/promises");
-    const path18 = await import("path");
+    const fs18 = await import("fs/promises");
+    const path19 = await import("path");
     const sanitized = String(name).replace(/[^a-zA-Z0-9-]/g, "");
     if (!sanitized) return void 0;
     const candidates = [
       // When bundled with ncc, __dirname is dist/ and output/ is at dist/output/
-      path18.join(__dirname, "output", sanitized, "schema.json"),
+      path19.join(__dirname, "output", sanitized, "schema.json"),
       // When running from source, __dirname is src/state-machine/dispatch/ and output/ is at output/
-      path18.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
+      path19.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
       // When running from a checkout with output/ folder copied to CWD
-      path18.join(process.cwd(), "output", sanitized, "schema.json"),
+      path19.join(process.cwd(), "output", sanitized, "schema.json"),
       // Fallback: cwd/dist/output/
-      path18.join(process.cwd(), "dist", "output", sanitized, "schema.json")
+      path19.join(process.cwd(), "dist", "output", sanitized, "schema.json")
     ];
     for (const p of candidates) {
       try {
-        const raw = await fs17.readFile(p, "utf-8");
+        const raw = await fs18.readFile(p, "utf-8");
         return JSON.parse(raw);
       } catch {
       }
@@ -19911,6 +21033,15 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
     if (!checkConfig2) {
       throw new Error(`Check configuration not found: ${checkId}`);
     }
+    const checksMeta = {};
+    try {
+      const allChecks = context2.config.checks || {};
+      for (const [id, cfg] of Object.entries(allChecks)) {
+        const anyCfg = cfg;
+        checksMeta[id] = { type: anyCfg.type, group: anyCfg.group };
+      }
+    } catch {
+    }
     const providerType = checkConfig2.type || "ai";
     const providerRegistry = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports)).CheckProviderRegistry.getInstance();
     const provider = providerRegistry.getProviderOrThrow(providerType);
@@ -19929,7 +21060,9 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       forEach: checkConfig2.forEach,
       ...checkConfig2,
       eventContext: context2.prInfo?.eventContext || {},
+      // Expose history and checks metadata for template helpers
       __outputHistory: outputHistory,
+      checksMeta,
       ai: {
         ...checkConfig2.ai || {},
         timeout: checkConfig2.ai?.timeout || 6e5,
@@ -19960,7 +21093,9 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       ...context2.executionContext,
       _engineMode: context2.mode,
       _parentContext: context2,
-      _parentState: state
+      _parentState: state,
+      // Make checks metadata available to providers that want it
+      checksMeta
     };
     try {
       const assumeExpr = checkConfig2?.assume;
@@ -20032,6 +21167,14 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       { "visor.check.id": checkId, "visor.check.type": providerType },
       async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
     );
+    try {
+      const awaitingHumanInput = result?.awaitingHumanInput === true || result?.output && result.output.awaitingHumanInput === true;
+      if (awaitingHumanInput) {
+        state.flags = state.flags || {};
+        state.flags.awaitingHumanInput = true;
+      }
+    } catch {
+    }
     const enrichedIssues = (result.issues || []).map((issue) => ({
       ...issue,
       checkName: checkId,
@@ -20586,8 +21729,8 @@ function updateStats(results, state, isForEachIteration = false) {
 async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs17 = await import("fs/promises");
-    const path18 = await import("path");
+    const fs18 = await import("fs/promises");
+    const path19 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
@@ -20595,26 +21738,26 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
       templateContent = String(checkConfig.template.content);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path18.resolve(process.cwd(), file);
-      templateContent = await fs17.readFile(resolved, "utf-8");
+      const resolved = path19.resolve(process.cwd(), file);
+      templateContent = await fs18.readFile(resolved, "utf-8");
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path18.join(__dirname, "output", sanitized, "template.liquid"),
+          path19.join(__dirname, "output", sanitized, "template.liquid"),
           // bundled: dist/output/
-          path18.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path19.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // source (from state-machine/states)
-          path18.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
+          path19.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
           // source (alternate)
-          path18.join(process.cwd(), "output", sanitized, "template.liquid"),
+          path19.join(process.cwd(), "output", sanitized, "template.liquid"),
           // fallback: cwd/output/
-          path18.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          path19.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
           // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs17.readFile(p, "utf-8");
+            templateContent = await fs18.readFile(p, "utf-8");
             if (templateContent) break;
           } catch {
           }
@@ -20732,6 +21875,7 @@ var init_runner = __esm({
       context;
       state;
       debugServer;
+      hasRun = false;
       constructor(context2, debugServer) {
         this.context = context2;
         this.state = this.initializeState();
@@ -20770,6 +21914,7 @@ var init_runner = __esm({
        * Execute the state machine
        */
       async run() {
+        this.hasRun = true;
         try {
           this.emitEvent({ type: "StateTransition", from: "Init", to: "Init" });
           while (!this.isTerminalState(this.state.currentState)) {
@@ -21137,6 +22282,16 @@ var init_runner = __esm({
        */
       getState() {
         return this.state;
+      }
+      /**
+       * Hydrate the runner with a previously serialized state. Must be called
+       * before `run()` (i.e., when the runner has not started yet).
+       */
+      setState(state) {
+        if (this.hasRun) {
+          throw new Error("StateMachineRunner.setState: cannot set state after run() has started");
+        }
+        this.state = state;
       }
       /**
        * Bubble an event to parent context (nested workflows support)
@@ -22429,8 +23584,8 @@ ${content}
        * Sleep utility
        */
       sleep(ms) {
-        return new Promise((resolve8) => {
-          const t = setTimeout(resolve8, ms);
+        return new Promise((resolve9) => {
+          const t = setTimeout(resolve9, ms);
           if (typeof t.unref === "function") {
             try {
               t.unref();
@@ -22994,7 +24149,485 @@ ${blocks}
        * Sleep utility for enforcing delays
        */
       sleep(ms) {
-        return new Promise((resolve8) => setTimeout(resolve8, ms));
+        return new Promise((resolve9) => setTimeout(resolve9, ms));
+      }
+    };
+  }
+});
+
+// src/slack/client.ts
+var SlackClient;
+var init_client = __esm({
+  "src/slack/client.ts"() {
+    "use strict";
+    SlackClient = class {
+      token;
+      constructor(botToken) {
+        if (!botToken || typeof botToken !== "string") {
+          throw new Error("SlackClient: botToken is required");
+        }
+        this.token = botToken;
+      }
+      reactions = {
+        add: async ({
+          channel,
+          timestamp,
+          name
+        }) => {
+          const resp = await this.api("reactions.add", { channel, timestamp, name });
+          if (!resp || resp.ok !== true) {
+            const err = resp && resp.error || "unknown_error";
+            console.warn(`Slack reactions.add failed (non-fatal): ${err}`);
+            return { ok: false };
+          }
+          return { ok: true };
+        },
+        remove: async ({
+          channel,
+          timestamp,
+          name
+        }) => {
+          const resp = await this.api("reactions.remove", { channel, timestamp, name });
+          if (!resp || resp.ok !== true) {
+            const err = resp && resp.error || "unknown_error";
+            console.warn(`Slack reactions.remove failed (non-fatal): ${err}`);
+            return { ok: false };
+          }
+          return { ok: true };
+        }
+      };
+      chat = {
+        postMessage: async ({
+          channel,
+          text,
+          thread_ts
+        }) => {
+          const resp = await this.api("chat.postMessage", { channel, text, thread_ts });
+          if (!resp || resp.ok !== true) {
+            const err = resp && resp.error || "unknown_error";
+            console.warn(`Slack chat.postMessage failed (non-fatal): ${err}`);
+            return {
+              ts: void 0,
+              message: void 0,
+              data: resp
+            };
+          }
+          return {
+            ts: resp.ts || resp.message && resp.message.ts || void 0,
+            message: resp.message,
+            data: resp
+          };
+        },
+        update: async ({ channel, ts, text }) => {
+          const resp = await this.api("chat.update", { channel, ts, text });
+          if (!resp || resp.ok !== true) {
+            const err = resp && resp.error || "unknown_error";
+            console.warn(`Slack chat.update failed (non-fatal): ${err}`);
+            return { ok: false, ts };
+          }
+          return { ok: true, ts: resp.ts || ts };
+        }
+      };
+      async getBotUserId() {
+        const resp = await this.api("auth.test", {});
+        if (!resp || resp.ok !== true || !resp.user_id) {
+          console.warn("Slack auth.test failed (non-fatal); bot user id unavailable");
+          return "UNKNOWN_BOT";
+        }
+        return String(resp.user_id);
+      }
+      async fetchThreadReplies(channel, thread_ts, limit = 40) {
+        try {
+          const params = new URLSearchParams({
+            channel,
+            ts: thread_ts,
+            limit: String(limit)
+          });
+          const res = await fetch(`https://slack.com/api/conversations.replies?${params.toString()}`, {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${this.token}`
+            }
+          });
+          const resp = await res.json();
+          if (!resp || resp.ok !== true || !Array.isArray(resp.messages)) {
+            const err = resp && resp.error || "unknown_error";
+            console.warn(
+              `Slack conversations.replies failed (non-fatal): ${err} (channel=${channel}, ts=${thread_ts}, limit=${limit})`
+            );
+            return [];
+          }
+          return resp.messages.map((m) => ({
+            ts: String(m.ts || ""),
+            user: m.user,
+            text: m.text,
+            bot_id: m.bot_id,
+            thread_ts: m.thread_ts
+          }));
+        } catch (e) {
+          console.warn(
+            `Slack conversations.replies failed (non-fatal): ${e instanceof Error ? e.message : String(e)} (channel=${channel}, ts=${thread_ts}, limit=${limit})`
+          );
+          return [];
+        }
+      }
+      getWebClient() {
+        return {
+          conversations: {
+            history: async ({ channel, limit }) => await this.api("conversations.history", { channel, limit }),
+            open: async ({ users }) => await this.api("conversations.open", { users }),
+            replies: async ({ channel, ts, limit }) => await this.api("conversations.replies", { channel, ts, limit })
+          }
+        };
+      }
+      async api(method, body) {
+        const res = await fetch(`https://slack.com/api/${method}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json; charset=utf-8",
+            Authorization: `Bearer ${this.token}`
+          },
+          body: JSON.stringify(body)
+        });
+        return await res.json();
+      }
+    };
+  }
+});
+
+// src/slack/markdown.ts
+function markdownToSlack(text) {
+  if (!text || typeof text !== "string") return "";
+  let out = text;
+  out = out.replace(
+    /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
+    (_m, alt, url) => `<${url}|${alt || "image"}>`
+  );
+  out = out.replace(
+    /\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
+    (_m, label, url) => `<${url}|${label}>`
+  );
+  out = out.replace(/\*\*([^*]+)\*\*/g, (_m, inner) => `*${inner}*`);
+  out = out.replace(/__([^_]+)__/g, (_m, inner) => `*${inner}*`);
+  const lines = out.split(/\r?\n/);
+  let inCodeBlock = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trimStart();
+    if (/^```/.test(trimmed)) {
+      inCodeBlock = !inCodeBlock;
+      continue;
+    }
+    if (inCodeBlock) continue;
+    const match = /^(\s*)([-*])\s+(.+)$/.exec(line);
+    if (match) {
+      const [, indent, , rest] = match;
+      lines[i] = `${indent}\u2022 ${rest}`;
+    }
+  }
+  out = lines.join("\n");
+  return out;
+}
+function formatSlackText(text) {
+  return markdownToSlack(text);
+}
+var init_markdown = __esm({
+  "src/slack/markdown.ts"() {
+    "use strict";
+  }
+});
+
+// src/frontends/slack-frontend.ts
+var slack_frontend_exports = {};
+__export(slack_frontend_exports, {
+  SlackFrontend: () => SlackFrontend
+});
+var SlackFrontend;
+var init_slack_frontend = __esm({
+  "src/frontends/slack-frontend.ts"() {
+    "use strict";
+    init_client();
+    init_markdown();
+    SlackFrontend = class {
+      name = "slack";
+      subs = [];
+      cfg;
+      // Reactions ack/done per run (inbound Slack events only)
+      acked = false;
+      ackRef = null;
+      ackName = "eyes";
+      doneName = "thumbsup";
+      constructor(config) {
+        this.cfg = config || {};
+      }
+      start(ctx) {
+        const bus = ctx.eventBus;
+        try {
+          const hasClient = !!(ctx.slack || ctx.slackClient || this.cfg?.botToken || process.env.SLACK_BOT_TOKEN);
+          ctx.logger.info(`[slack-frontend] started; hasClient=${hasClient} defaultChannel=unset`);
+        } catch {
+        }
+        try {
+          const payload = this.getInboundSlackPayload(ctx);
+          if (payload) {
+            const ev = payload.event || {};
+            const ch = String(ev.channel || "-");
+            const ts = String(ev.ts || ev.event_ts || "-");
+            const user = String(ev.user || ev.bot_id || "-");
+            const type = String(ev.type || "-");
+            const thread = String(ev.thread_ts || "");
+            ctx.logger.info(
+              `[slack-frontend] inbound event received: type=${type} channel=${ch} ts=${ts}` + (thread ? ` thread_ts=${thread}` : "") + ` user=${user}`
+            );
+          }
+        } catch {
+        }
+        this.subs.push(
+          bus.on("CheckCompleted", async (env) => {
+            const ev = env && env.payload || env;
+            await this.maybePostDirectReply(ctx, ev.checkId, ev.result).catch(() => {
+            });
+          })
+        );
+        this.subs.push(
+          bus.on("StateTransition", async (env) => {
+            const ev = env && env.payload || env;
+            if (ev && (ev.to === "Completed" || ev.to === "Error")) {
+              await this.finalizeReactions(ctx).catch(() => {
+              });
+            }
+          })
+        );
+        this.subs.push(
+          bus.on("CheckScheduled", async () => {
+            await this.ensureAcknowledgement(ctx).catch(() => {
+            });
+          })
+        );
+        this.subs.push(
+          bus.on("HumanInputRequested", async (env) => {
+            try {
+              const ev = env && env.payload || env;
+              if (!ev || typeof ev.prompt !== "string" || !ev.checkId) return;
+              let channel = ev.channel;
+              let threadTs = ev.threadTs;
+              if (!channel || !threadTs) {
+                const payload = this.getInboundSlackPayload(ctx);
+                const e = payload?.event;
+                const derivedTs = String(e?.thread_ts || e?.ts || e?.event_ts || "");
+                const derivedCh = String(e?.channel || "");
+                if (derivedCh && derivedTs) {
+                  channel = channel || derivedCh;
+                  threadTs = threadTs || derivedTs;
+                }
+              }
+              if (!channel || !threadTs) return;
+              const { getPromptStateManager: getPromptStateManager2 } = await Promise.resolve().then(() => (init_prompt_state(), prompt_state_exports));
+              const mgr = getPromptStateManager2();
+              const prev = mgr.getWaiting(channel, threadTs);
+              const text = String(ev.prompt);
+              mgr.setWaiting(channel, threadTs, {
+                checkName: String(ev.checkId),
+                prompt: text,
+                promptMessageTs: prev?.promptMessageTs,
+                promptsPosted: (prev?.promptsPosted || 0) + 1
+              });
+              try {
+                ctx.logger.info(
+                  `[slack-frontend] registered human-input waiting state for ${channel} thread=${threadTs}`
+                );
+              } catch {
+              }
+            } catch (e) {
+              try {
+                ctx.logger.warn(
+                  `[slack-frontend] HumanInputRequested handling failed: ${e instanceof Error ? e.message : String(e)}`
+                );
+              } catch {
+              }
+            }
+          })
+        );
+        this.subs.push(
+          bus.on("SnapshotSaved", async (env) => {
+            try {
+              const ev = env && env.payload || env;
+              const channel = String(ev?.channel || "");
+              const threadTs = String(ev?.threadTs || "");
+              const filePath = String(ev?.filePath || "");
+              if (!channel || !threadTs || !filePath) return;
+              const { getPromptStateManager: getPromptStateManager2 } = await Promise.resolve().then(() => (init_prompt_state(), prompt_state_exports));
+              const mgr = getPromptStateManager2();
+              mgr.update(channel, threadTs, { snapshotPath: filePath });
+              try {
+                ctx.logger.info(
+                  `[slack-frontend] snapshot path attached to waiting prompt: ${filePath}`
+                );
+              } catch {
+              }
+            } catch {
+            }
+          })
+        );
+      }
+      stop() {
+        for (const s of this.subs) s.unsubscribe();
+        this.subs = [];
+      }
+      getSlack(ctx) {
+        const injected = ctx.slack || ctx.slackClient;
+        if (injected) return injected;
+        try {
+          const token = this.cfg?.botToken || process.env.SLACK_BOT_TOKEN;
+          if (typeof token === "string" && token.trim()) {
+            return new SlackClient(token.trim());
+          }
+        } catch {
+        }
+        return void 0;
+      }
+      getInboundSlackPayload(ctx) {
+        try {
+          const anyCfg = ctx.config || {};
+          const slackCfg = anyCfg.slack || {};
+          const endpoint = slackCfg.endpoint || "/bots/slack/support";
+          const payload = ctx.webhookContext?.webhookData?.get(endpoint);
+          return payload || null;
+        } catch {
+          return null;
+        }
+      }
+      getInboundSlackEvent(ctx) {
+        try {
+          const payload = this.getInboundSlackPayload(ctx);
+          const ev = payload?.event;
+          const channel = String(ev?.channel || "");
+          const ts = String(ev?.ts || ev?.event_ts || "");
+          if (channel && ts) return { channel, ts };
+        } catch {
+        }
+        return null;
+      }
+      async ensureAcknowledgement(ctx) {
+        if (this.acked) return;
+        const ref = this.getInboundSlackEvent(ctx);
+        if (!ref) return;
+        const slack = this.getSlack(ctx);
+        if (!slack) return;
+        try {
+          const payload = this.getInboundSlackPayload(ctx);
+          const ev = payload?.event;
+          if (ev?.subtype === "bot_message") return;
+          try {
+            const botId = await slack.getBotUserId?.();
+            if (botId && ev?.user && String(ev.user) === String(botId)) return;
+          } catch {
+          }
+        } catch {
+        }
+        try {
+          const anyCfg = ctx.config || {};
+          const slackCfg = anyCfg.slack || {};
+          if (slackCfg?.reactions?.enabled === false) return;
+          this.ackName = slackCfg?.reactions?.ack || this.ackName;
+          this.doneName = slackCfg?.reactions?.done || this.doneName;
+        } catch {
+        }
+        await slack.reactions.add({ channel: ref.channel, timestamp: ref.ts, name: this.ackName });
+        try {
+          ctx.logger.info(
+            `[slack-frontend] added acknowledgement reaction :${this.ackName}: channel=${ref.channel} ts=${ref.ts}`
+          );
+        } catch {
+        }
+        this.acked = true;
+        this.ackRef = ref;
+      }
+      async finalizeReactions(ctx) {
+        if (!this.acked || !this.ackRef) return;
+        const slack = this.getSlack(ctx);
+        if (!slack) return;
+        try {
+          try {
+            await slack.reactions.remove({
+              channel: this.ackRef.channel,
+              timestamp: this.ackRef.ts,
+              name: this.ackName
+            });
+          } catch {
+          }
+          await slack.reactions.add({
+            channel: this.ackRef.channel,
+            timestamp: this.ackRef.ts,
+            name: this.doneName
+          });
+          try {
+            ctx.logger.info(
+              `[slack-frontend] replaced acknowledgement with completion reaction :${this.doneName}: channel=${this.ackRef.channel} ts=${this.ackRef.ts}`
+            );
+          } catch {
+          }
+        } finally {
+          this.acked = false;
+          this.ackRef = null;
+        }
+      }
+      /**
+       * Post direct replies into the originating Slack thread when appropriate.
+       * This is independent of summary messages and is intended for chat-style flows
+       * (e.g., AI answers and explicit chat/notify steps).
+       */
+      async maybePostDirectReply(ctx, checkId, result) {
+        try {
+          const cfg = ctx.config || {};
+          const checkCfg = cfg.checks?.[checkId];
+          if (!checkCfg) return;
+          const slackRoot = cfg.slack || {};
+          const showRawOutput = slackRoot.show_raw_output === true || this.cfg?.showRawOutput === true;
+          const providerType = checkCfg.type || "";
+          const isAi = providerType === "ai";
+          const isLogChat = providerType === "log" && checkCfg.group === "chat";
+          if (!isAi && !isLogChat) return;
+          if (isAi) {
+            const schema = checkCfg.schema;
+            if (typeof schema === "string") {
+              const simpleSchemas = ["code-review", "markdown", "text", "plain"];
+              if (!simpleSchemas.includes(schema)) return;
+            }
+          }
+          const slack = this.getSlack(ctx);
+          if (!slack) return;
+          const payload = this.getInboundSlackPayload(ctx);
+          const ev = payload?.event;
+          const channel = String(ev?.channel || "");
+          const threadTs = String(ev?.thread_ts || ev?.ts || ev?.event_ts || "");
+          if (!channel || !threadTs) return;
+          const out = result?.output;
+          let text;
+          if (out && typeof out.text === "string" && out.text.trim().length > 0) {
+            text = out.text.trim();
+          } else if (isAi && typeof checkCfg.schema === "string") {
+            if (typeof result?.content === "string" && result.content.trim().length > 0) {
+              text = result.content.trim();
+            }
+          } else if (isAi && showRawOutput && out !== void 0) {
+            try {
+              text = JSON.stringify(out, null, 2);
+            } catch {
+              text = String(out);
+            }
+          }
+          if (!text) return;
+          const formattedText = formatSlackText(text);
+          await slack.chat.postMessage({ channel, text: formattedText, thread_ts: threadTs });
+          try {
+            ctx.logger.info(
+              `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs}`
+            );
+          } catch {
+          }
+        } catch {
+        }
       }
     };
   }
@@ -23026,6 +24659,9 @@ var init_host = __esm({
           } else if (spec.name === "github") {
             const { GitHubFrontend: GitHubFrontend2 } = await Promise.resolve().then(() => (init_github_frontend(), github_frontend_exports));
             this.frontends.push(new GitHubFrontend2());
+          } else if (spec.name === "slack") {
+            const { SlackFrontend: SlackFrontend2 } = await Promise.resolve().then(() => (init_slack_frontend(), slack_frontend_exports));
+            this.frontends.push(new SlackFrontend2(spec.config));
           } else {
             this.log.warn(`[FrontendsHost] Unknown frontend '${spec.name}', skipping`);
           }
@@ -23187,6 +24823,8 @@ module.exports = __toCommonJS(sdk_exports);
 // src/state-machine-execution-engine.ts
 init_runner();
 init_logger();
+var path18 = __toESM(require("path"));
+var fs17 = __toESM(require("fs"));
 var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
   workingDirectory;
   executionContext;
@@ -23245,6 +24883,18 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
           timestamp,
           options.checks
         );
+      }
+      try {
+        const map = options?.webhookContext?.webhookData;
+        if (map) {
+          const { CheckProviderRegistry: CheckProviderRegistry2 } = await Promise.resolve().then(() => (init_check_provider_registry(), check_provider_registry_exports));
+          const reg = CheckProviderRegistry2.getInstance();
+          const p = reg.getProvider("http_input");
+          if (p && typeof p.setWebhookContext === "function") p.setWebhookContext(map);
+          const prev = this.executionContext || {};
+          this.setExecutionContext({ ...prev, webhookContext: { webhookData: map } });
+        }
+      } catch {
       }
       logger.info(`Executing checks: ${filteredChecks.join(", ")}`);
       const executionResult = await this.executeGroupedChecks(
@@ -23378,6 +25028,17 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
         const bus = new EventBus2();
         context2.eventBus = bus;
         frontendsHost = new FrontendsHost2(bus, logger);
+        if (process.env.VISOR_DEBUG === "true") {
+          try {
+            const fns = (configWithTagFilter.frontends || []).map((f) => ({
+              name: f?.name,
+              hasConfig: !!f?.config,
+              cfg: f?.config || void 0
+            }));
+            logger.info(`[Frontends] Loading specs: ${JSON.stringify(fns)}`);
+          } catch {
+          }
+        }
         await frontendsHost.load(configWithTagFilter.frontends);
         let owner;
         let name;
@@ -23404,6 +25065,15 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
           } catch {
           }
         }
+        try {
+          const prev = this.getExecutionContext() || {};
+          this.setExecutionContext({ ...prev, eventBus: bus });
+          try {
+            context2.executionContext = this.getExecutionContext();
+          } catch {
+          }
+        } catch {
+        }
         await frontendsHost.startAll(() => ({
           eventBus: bus,
           logger,
@@ -23417,8 +25087,60 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
             event: context2.event || prInfo?.eventType,
             actor: prInfo?.eventContext?.sender?.login || (typeof process.env.GITHUB_ACTOR === "string" ? process.env.GITHUB_ACTOR : void 0)
           },
-          octokit
+          octokit,
+          webhookContext: this.executionContext?.webhookContext,
+          // Surface any injected test doubles for Slack as well
+          slack: this.executionContext?.slack || this.executionContext?.slackClient
         }));
+        try {
+          bus.on("HumanInputRequested", async (envelope) => {
+            try {
+              const ev = envelope && envelope.payload || envelope;
+              let channel = ev?.channel;
+              let threadTs = ev?.threadTs;
+              if (!channel || !threadTs) {
+                try {
+                  const anyCfg = configWithTagFilter || {};
+                  const slackCfg = anyCfg.slack || {};
+                  const endpoint = slackCfg.endpoint || "/bots/slack/support";
+                  const map = this.executionContext?.webhookContext?.webhookData;
+                  const payload = map?.get(endpoint);
+                  const e = payload?.event;
+                  const derivedTs = String(e?.thread_ts || e?.ts || e?.event_ts || "");
+                  const derivedCh = String(e?.channel || "");
+                  if (derivedCh && derivedTs) {
+                    channel = channel || derivedCh;
+                    threadTs = threadTs || derivedTs;
+                  }
+                } catch {
+                }
+              }
+              const checkId = String(ev?.checkId || "unknown");
+              const threadKey = ev?.threadKey || (channel && threadTs ? `${channel}:${threadTs}` : "session");
+              const baseDir = process.env.VISOR_SNAPSHOT_DIR || path18.resolve(process.cwd(), ".visor", "snapshots");
+              fs17.mkdirSync(baseDir, { recursive: true });
+              const filePath = path18.join(baseDir, `${threadKey}-${checkId}.json`);
+              await this.saveSnapshotToFile(filePath);
+              logger.info(`[Snapshot] Saved run snapshot: ${filePath}`);
+              try {
+                await bus.emit({
+                  type: "SnapshotSaved",
+                  checkId: ev?.checkId || "unknown",
+                  channel,
+                  threadTs,
+                  threadKey,
+                  filePath
+                });
+              } catch {
+              }
+            } catch (e) {
+              logger.warn(
+                `[Snapshot] Failed to save snapshot on HumanInputRequested: ${e instanceof Error ? e.message : String(e)}`
+              );
+            }
+          });
+        } catch {
+        }
       } catch (err) {
         logger.warn(
           `[Frontends] Failed to initialize frontends: ${err instanceof Error ? err.message : String(err)}`
@@ -23515,7 +25237,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
    * Does not include secrets. Intended for debugging and future resume support.
    */
   async saveSnapshotToFile(filePath) {
-    const fs17 = await import("fs/promises");
+    const fs18 = await import("fs/promises");
     const ctx = this._lastContext;
     const runner = this._lastRunner;
     if (!ctx || !runner) {
@@ -23535,14 +25257,14 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       journal: entries,
       requestedChecks: ctx.requestedChecks || []
     };
-    await fs17.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+    await fs18.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
   }
   /**
    * Load a snapshot JSON from file and return it. Resume support can build on this.
    */
   async loadSnapshotFromFile(filePath) {
-    const fs17 = await import("fs/promises");
-    const raw = await fs17.readFile(filePath, "utf8");
+    const fs18 = await import("fs/promises");
+    const raw = await fs18.readFile(filePath, "utf8");
     return JSON.parse(raw);
   }
   /**
@@ -23855,6 +25577,11 @@ function serializeRunState(state) {
     historyLog: state.historyLog,
     forwardRunGuards: Array.from(state.forwardRunGuards.values()),
     currentLevelChecks: Array.from(state.currentLevelChecks.values()),
+    currentWaveCompletions: Array.from(
+      state.currentWaveCompletions || []
+    ),
+    // failedChecks is an internal Set added by stats/dispatch layers; keep it if present
+    failedChecks: Array.from(state.failedChecks || []),
     pendingRunScopes: Array.from((state.pendingRunScopes || /* @__PURE__ */ new Map()).entries()).map(([k, v]) => [
       k,
       v

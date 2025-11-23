@@ -6,7 +6,7 @@ import {
   sanitizeLabel,
   sanitizeLabelList,
   withPermissionsContext
-} from "./chunk-JEHPDJIF.mjs";
+} from "./chunk-Q3BHCJKN.mjs";
 import "./chunk-CNX7V5JK.mjs";
 import "./chunk-37ZSCMFC.mjs";
 import "./chunk-VMPLF6FT.mjs";
@@ -20,4 +20,4 @@ export {
   sanitizeLabelList,
   withPermissionsContext
 };
-//# sourceMappingURL=liquid-extensions-C7EG3YKH.mjs.map
+//# sourceMappingURL=liquid-extensions-2JO5ND2K.mjs.map

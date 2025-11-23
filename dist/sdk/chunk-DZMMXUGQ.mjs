@@ -1015,7 +1015,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10711-20798-src_types_config.ts-0-34303%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -1103,6 +1103,14 @@ var init_config_schema = __esm({
             skip_code_context: {
               type: "boolean",
               description: "Skip adding code context (diffs, files, PR info) to the prompt"
+            },
+            skip_slack_context: {
+              type: "boolean",
+              description: "Skip adding Slack conversation context to the prompt (when running under Slack)"
+            },
+            skip_transport_context: {
+              type: "boolean",
+              description: "Skip adding transport-specific context (e.g., GitHub PR/issue XML, Slack conversation XML) to the prompt. When true, this behaves like setting both skip_code_context and skip_slack_context to true, unless those are explicitly overridden."
             },
             mcpServers: {
               $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
@@ -1647,13 +1655,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-10711-20798-src_types_config.ts-0-34303>>": {
+        "Record<string,Partial<interface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10711-20798-src_types_config.ts-0-34303%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-10711-20798-src_types_config.ts-0-34303>": {
+        "Partial<interface-src_types_config.ts-11138-21225-src_types_config.ts-0-34730>": {
           type: "object",
           additionalProperties: false
         },
@@ -2929,6 +2937,9 @@ ${errors}`);
                 const addl = e.params && e.params.additionalProperty || "unknown";
                 const fullField = pathStr ? `${pathStr}.${addl}` : addl;
                 const topLevel = !pathStr;
+                if (topLevel && (addl === "tests" || addl === "slack")) {
+                  continue;
+                }
                 warnings.push({
                   field: fullField || "config",
                   message: topLevel ? `Unknown top-level key '${addl}' will be ignored.` : `Unknown key '${addl}' will be ignored`
@@ -3131,4 +3142,4 @@ export {
   config_exports,
   init_config
 };
-//# sourceMappingURL=chunk-ZDK5EMAR.mjs.map
+//# sourceMappingURL=chunk-DZMMXUGQ.mjs.map

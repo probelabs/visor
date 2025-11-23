@@ -18,6 +18,8 @@ export interface FrontendContext {
     actor?: string;
   };
   octokit?: any;
+  // Optional webhook context (e.g., Slack Events API payload injected by socket runner)
+  webhookContext?: { webhookData?: Map<string, unknown>; eventType?: string };
 }
 
 export interface Frontend {
@@ -51,6 +53,9 @@ export class FrontendsHost {
       } else if (spec.name === 'github') {
         const { GitHubFrontend } = await import('./github-frontend');
         this.frontends.push(new GitHubFrontend());
+      } else if (spec.name === 'slack') {
+        const { SlackFrontend } = await import('./slack-frontend');
+        this.frontends.push(new SlackFrontend(spec.config as any));
       } else {
         this.log.warn(`[FrontendsHost] Unknown frontend '${spec.name}', skipping`);
       }

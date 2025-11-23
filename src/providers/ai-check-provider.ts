@@ -38,6 +38,51 @@ export class AICheckProvider extends CheckProvider {
     return 'AI-powered code review using Google Gemini, Anthropic Claude, OpenAI GPT, or AWS Bedrock models';
   }
 
+  /** Lightweight debug helper to avoid importing logger here */
+  private logDebug(msg: string): void {
+    try {
+      if (process.env.VISOR_DEBUG === 'true') {
+        // eslint-disable-next-line no-console
+        console.debug(msg);
+      }
+    } catch {
+      // Best-effort only
+    }
+  }
+
+  /** Detect Slack webhook payload and build a lightweight slack context for templates */
+  private buildSlackEventContext(
+    context?: import('./check-provider.interface').ExecutionContext,
+    config?: CheckProviderConfig,
+    prInfo?: PRInfo
+  ): Record<string, unknown> {
+    try {
+      const aiCfg: any = config?.ai || {};
+      if (aiCfg.skip_slack_context === true) return {};
+      const webhook = context?.webhookContext;
+      const map = webhook?.webhookData;
+      if (!map || !(map instanceof Map)) return {};
+      // In Slack socket mode we store the payload under the configured endpoint key.
+      // For template purposes, it is sufficient to inspect the first payload.
+      const first = Array.from(map.values())[0] as any;
+      if (!first || typeof first !== 'object') return {};
+      const ev = first.event;
+      const conv = first.slack_conversation;
+      if (!ev && !conv) return {};
+      // Attach conversation to prInfo so downstream helpers (XML context) can use it
+      if (conv && prInfo) {
+        try {
+          (prInfo as any).slackConversation = conv;
+        } catch {
+          // best-effort only
+        }
+      }
+      return { slack: { event: ev, conversation: conv } };
+    } catch {
+      return {};
+    }
+  }
+
   async validateConfig(config: unknown): Promise<boolean> {
     if (!config || typeof config !== 'object') {
       return false;
@@ -329,7 +374,7 @@ export class AICheckProvider extends CheckProvider {
       files: prInfo.files || [],
       description: prInfo.body || '',
 
-      // GitHub Event Context
+      // GitHub / webhook Event Context
       event: eventContext
         ? {
             name: eventContext.event_name || 'unknown',
@@ -392,6 +437,31 @@ export class AICheckProvider extends CheckProvider {
           }
         : undefined,
 
+      // Slack conversation context (if provided via eventContext.slack)
+      slack: (() => {
+        try {
+          const anyCtx = eventContext as any;
+          const slack = anyCtx?.slack;
+          if (slack && typeof slack === 'object') return slack;
+        } catch {
+          // ignore
+        }
+        return undefined;
+      })(),
+
+      // Unified conversation context across transports (Slack & GitHub)
+      conversation: (() => {
+        try {
+          const anyCtx = eventContext as any;
+          if (anyCtx?.slack?.conversation) return anyCtx.slack.conversation;
+          if (anyCtx?.github?.conversation) return anyCtx.github.conversation;
+          if (anyCtx?.conversation) return anyCtx.conversation;
+        } catch {
+          // ignore
+        }
+        return undefined;
+      })(),
+
       // Utility data for templates
       utils: {
         // Date/time helpers
@@ -411,6 +481,15 @@ export class AICheckProvider extends CheckProvider {
         hasLargeChanges: (prInfo.files || []).some(f => f.changes > 50),
         totalFiles: (prInfo.files || []).length,
       },
+
+      // Checks metadata for helpers like chat_history
+      checks_meta: (() => {
+        try {
+          return (eventContext as any)?.__checksMeta || undefined;
+        } catch {
+          return undefined;
+        }
+      })(),
 
       // Previous check outputs (dependency results)
       // Expose raw output directly if available, otherwise expose the result as-is
@@ -542,54 +621,68 @@ export class AICheckProvider extends CheckProvider {
 
     // Check-level AI configuration (ai object)
     if (config.ai) {
+      const aiAny: any = config.ai;
+      const skipTransport: boolean = aiAny.skip_transport_context === true;
       // Only set properties that are actually defined to avoid overriding env vars
-      if (config.ai.apiKey !== undefined) {
-        aiConfig.apiKey = config.ai.apiKey as string;
+      if (aiAny.apiKey !== undefined) {
+        aiConfig.apiKey = aiAny.apiKey as string;
       }
-      if (config.ai.model !== undefined) {
-        aiConfig.model = config.ai.model as string;
+      if (aiAny.model !== undefined) {
+        aiConfig.model = aiAny.model as string;
       }
-      if (config.ai.timeout !== undefined) {
-        aiConfig.timeout = config.ai.timeout as number;
+      if (aiAny.timeout !== undefined) {
+        aiConfig.timeout = aiAny.timeout as number;
       }
-      if (config.ai.provider !== undefined) {
-        aiConfig.provider = config.ai.provider as
+      if (aiAny.provider !== undefined) {
+        aiConfig.provider = aiAny.provider as
           | 'google'
           | 'anthropic'
           | 'openai'
           | 'bedrock'
           | 'mock';
       }
-      if (config.ai.debug !== undefined) {
-        aiConfig.debug = config.ai.debug as boolean;
+      if (aiAny.debug !== undefined) {
+        aiConfig.debug = aiAny.debug as boolean;
       }
-      if (config.ai.enableDelegate !== undefined) {
-        aiConfig.enableDelegate = config.ai.enableDelegate as boolean;
+      if (aiAny.enableDelegate !== undefined) {
+        aiConfig.enableDelegate = aiAny.enableDelegate as boolean;
       }
-      if (config.ai.allowEdit !== undefined) {
-        aiConfig.allowEdit = config.ai.allowEdit as boolean;
+      if (aiAny.allowEdit !== undefined) {
+        aiConfig.allowEdit = aiAny.allowEdit as boolean;
       }
-      if (config.ai.allowedTools !== undefined) {
-        aiConfig.allowedTools = config.ai.allowedTools as string[];
+      if (aiAny.allowedTools !== undefined) {
+        aiConfig.allowedTools = aiAny.allowedTools as string[];
+        this.logDebug(
+          `[AI Provider] Read allowedTools from YAML: ${JSON.stringify(aiAny.allowedTools)}`
+        );
       }
-      if (config.ai.disableTools !== undefined) {
-        aiConfig.disableTools = config.ai.disableTools as boolean;
+      if (aiAny.disableTools !== undefined) {
+        aiConfig.disableTools = aiAny.disableTools as boolean;
+        this.logDebug(`[AI Provider] Read disableTools from YAML: ${aiAny.disableTools}`);
       }
-      if (config.ai.allowBash !== undefined) {
-        aiConfig.allowBash = config.ai.allowBash as boolean;
+      if (aiAny.allowBash !== undefined) {
+        aiConfig.allowBash = aiAny.allowBash as boolean;
       }
-      if (config.ai.bashConfig !== undefined) {
-        aiConfig.bashConfig = config.ai.bashConfig as import('../types/config').BashConfig;
+      if (aiAny.bashConfig !== undefined) {
+        aiConfig.bashConfig = aiAny.bashConfig as import('../types/config').BashConfig;
       }
-      if (config.ai.skip_code_context !== undefined) {
+      if (aiAny.skip_code_context !== undefined) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (aiConfig as any).skip_code_context = config.ai.skip_code_context as boolean;
+        (aiConfig as any).skip_code_context = aiAny.skip_code_context as boolean;
+      } else if (skipTransport) {
+        (aiConfig as any).skip_code_context = true;
       }
-      if (config.ai.retry !== undefined) {
-        aiConfig.retry = config.ai.retry as import('../types/config').AIRetryConfig;
+      // Optional: allow disabling Slack context separately from PR/code context
+      if (aiAny.skip_slack_context !== undefined) {
+        (aiConfig as any).skip_slack_context = aiAny.skip_slack_context as boolean;
+      } else if (skipTransport) {
+        (aiConfig as any).skip_slack_context = true;
       }
-      if (config.ai.fallback !== undefined) {
-        aiConfig.fallback = config.ai.fallback as import('../types/config').AIFallbackConfig;
+      if (aiAny.retry !== undefined) {
+        aiConfig.retry = aiAny.retry as import('../types/config').AIRetryConfig;
+      }
+      if (aiAny.fallback !== undefined) {
+        aiConfig.fallback = aiAny.fallback as import('../types/config').AIFallbackConfig;
       }
     }
 
@@ -746,7 +839,22 @@ export class AICheckProvider extends CheckProvider {
     // Do NOT strip event context on skip_code_context — that flag only controls
     // whether we embed PR diffs/large code context later in AIReviewService.
     // Keep repository/comment metadata available for prompts and tests.
-    const eventContext = config.eventContext || {};
+    const baseEventContext = (config.eventContext || {}) as Record<string, unknown>;
+    const checksMeta = (config as any).checksMeta as
+      | Record<string, { type?: string; group?: string }>
+      | undefined;
+    // Inject Slack context into eventContext when running under Slack (best-effort)
+    const slackCtx = this.buildSlackEventContext(
+      sessionInfo as
+        | (typeof sessionInfo & import('./check-provider.interface').ExecutionContext)
+        | undefined,
+      config,
+      prInfo
+    );
+    const baseWithSlack = { ...baseEventContext, ...slackCtx };
+    const eventContext = checksMeta
+      ? { ...baseWithSlack, __checksMeta: checksMeta }
+      : baseWithSlack;
     // Thread stageHistoryBase via eventContext for prompt rendering so
     // Liquid templates can get outputs_history_stage (computed from baseline).
     const ctxWithStage = {

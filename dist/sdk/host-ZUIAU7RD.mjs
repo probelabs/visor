@@ -18,6 +18,9 @@ var FrontendsHost = class {
       } else if (spec.name === "github") {
         const { GitHubFrontend } = await import("./github-frontend-DEZY7NBD.mjs");
         this.frontends.push(new GitHubFrontend());
+      } else if (spec.name === "slack") {
+        const { SlackFrontend } = await import("./slack-frontend-4AOQY4AL.mjs");
+        this.frontends.push(new SlackFrontend(spec.config));
       } else {
         this.log.warn(`[FrontendsHost] Unknown frontend '${spec.name}', skipping`);
       }
@@ -46,4 +49,4 @@ var FrontendsHost = class {
 export {
   FrontendsHost
 };
-//# sourceMappingURL=host-H7CMKK3U.mjs.map
+//# sourceMappingURL=host-ZUIAU7RD.mjs.map

@@ -706,6 +706,29 @@ export async function main(): Promise<void> {
         .catch(() => configManager.getDefaultConfig());
     }
 
+    // Socket Mode runner: visor --slack [--config file]
+    if ((options as any).slack === true) {
+      const { SlackSocketRunner } = await import('./slack/socket-runner');
+      const engine = new StateMachineExecutionEngine();
+      const slackAny: any = (config as any).slack || {};
+      const endpoint = slackAny.endpoint || '/bots/slack/support';
+      const mentions = slackAny.mentions || 'direct';
+      const threads = slackAny.threads || 'any';
+      const allow = Array.isArray(slackAny.channel_allowlist) ? slackAny.channel_allowlist : [];
+      const appToken = slackAny.app_token || process.env.SLACK_APP_TOKEN;
+      const runner = new SlackSocketRunner(engine, config, {
+        appToken,
+        endpoint,
+        mentions,
+        threads,
+        channel_allowlist: allow,
+      });
+      await runner.start();
+      console.log('✅ Slack Socket Mode is running. Press Ctrl+C to exit.');
+      process.stdin.resume();
+      return;
+    }
+
     // Start debug server if requested (AFTER config is loaded)
     if (options.debugServer) {
       const requestedPort = options.debugPort || 3456;
