@@ -157,7 +157,14 @@ export class CustomToolExecutor {
       try {
         output = JSON.parse(result.stdout);
       } catch (e) {
-        logger.warn(`Failed to parse tool output as JSON: ${e}`);
+        const err = e instanceof Error ? e : new Error(String(e));
+        logger.warn(`Failed to parse tool output as JSON: ${err.message}`);
+        // Only throw if there's no transform that might fix it
+        if (!tool.transform && !tool.transform_js) {
+          throw new Error(
+            `Tool '${toolName}' output could not be parsed as JSON: ${err.message}`
+          );
+        }
       }
     }
 

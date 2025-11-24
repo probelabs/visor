@@ -114,7 +114,8 @@ describe('on_init Lifecycle Hook Integration', () => {
             const escape = (str) => String(str || '')
               .replace(/&/g, '&amp;')
               .replace(/</g, '&lt;')
-              .replace(/>/g, '&gt;');
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;');
             return '<text>' + escape(output.text) + '</text>';
           `,
           timeout: 1000,
