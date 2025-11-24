@@ -199,17 +199,30 @@ To prevent infinite loops and excessive preprocessing:
 - **No nested execution**: `on_init` hooks within `on_init` items are skipped
 - **Separate from routing loops**: `on_init` loop protection is independent of `on_success`/`on_fail` routing
 
-### Known Limitations
+### forEach Integration
 
-**forEach Scope Integration**: Currently, `on_init` hooks are not fully integrated with `forEach` loops:
+**How on_init works with forEach**: When a check uses `forEach`, the `on_init` hook runs **once before the forEach loop starts**, not once per item:
 
-- `on_init` is only called for checks executed via the standard execution path (execution-invoker.ts)
-- Checks executed within `forEach` loops (level-dispatch.ts) do not trigger `on_init` hooks
-- Tools/steps/workflows invoked from `on_init` reuse the parent's dependency results and don't independently resolve dependencies with `forEach` scope context
+```yaml
+steps:
+  analyze-files:
+    type: ai
+    forEach: file-list
+    on_init:  # Runs ONCE before processing all files
+      run:
+        - tool: fetch-project-config
+          as: config
+    prompt: |
+      Analyze {{ item }} using config: {{ outputs.config }}
+      # outputs.config is available to ALL forEach iterations
+```
 
-If you need preprocessing for forEach items, consider using the forEach item data directly in your check logic rather than relying on `on_init`.
+This design allows you to:
+- Fetch shared data once that all iterations can use
+- Avoid redundant preprocessing for each item
+- Keep forEach loops efficient
 
-This limitation is tracked for future improvement. See the TODO comments in `src/state-machine/dispatch/on-init-handlers.ts` for implementation details.
+If you need per-item preprocessing, add `on_init` to child steps that depend on the forEach check.
 
 ### Examples
 

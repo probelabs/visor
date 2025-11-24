@@ -8,16 +8,10 @@
  * - Handle argument passing via 'with' directive
  * - Store outputs with custom names via 'as' directive
  *
- * KNOWN LIMITATIONS:
- * - forEach scope integration: on_init is not called within forEach loops in level-dispatch.ts
- * - Dependency resolution: Invoked items reuse parent's dependencyResults instead of using
- *   buildDependencyResultsWithScope, which means dependencies won't be properly resolved
- *   with forEach scope context if the invoked items have their own depends_on declarations.
- *
- * TODO: Full forEach integration requires:
- * 1. Add on_init handling in level-dispatch.ts forEach loop (before provider.execute)
- * 2. Update these handlers to use buildDependencyResultsWithScope for proper scope handling
- * 3. Add on_init handling in level-dispatch.ts non-forEach path as well
+ * forEach Integration:
+ * - on_init is called ONCE before forEach loops start (in level-dispatch.ts)
+ * - Outputs from on_init are shared across all forEach iterations
+ * - This allows efficient preprocessing without redundant work per item
  */
 
 import type { EngineContext } from '../../types/engine';
@@ -40,10 +34,6 @@ export type Scope = Array<{ check: string; index: number }>;
  *
  * Creates a temporary MCP check and executes it via the MCP provider.
  * Arguments from 'with' are passed as tool args.
- *
- * NOTE: Tools invoked from on_init currently reuse the parent's dependencyResults.
- * If the tool itself has dependencies, those won't be resolved with forEach scope.
- * TODO: Use buildDependencyResultsWithScope for proper forEach scope handling.
  *
  * @param item - Tool invocation configuration
  * @param context - Engine context
@@ -125,10 +115,6 @@ export async function executeToolInvocation(
  *
  * Executes a regular check (from steps: section) with custom arguments.
  * Arguments from 'with' are injected into the execution context as 'args'.
- *
- * NOTE: Steps invoked from on_init currently reuse the parent's dependencyResults.
- * If the step has depends_on, those dependencies won't be resolved with forEach scope.
- * TODO: Use buildDependencyResultsWithScope for proper forEach scope handling.
  *
  * @param item - Step invocation configuration
  * @param context - Engine context
@@ -234,10 +220,6 @@ export async function executeStepInvocation(
  *
  * Executes a reusable workflow with custom inputs.
  * Arguments from 'with' are passed as workflow inputs.
- *
- * NOTE: Workflows invoked from on_init currently reuse the parent's dependencyResults.
- * If the workflow's steps have dependencies, those won't be resolved with forEach scope.
- * TODO: Use buildDependencyResultsWithScope for proper forEach scope handling.
  *
  * @param item - Workflow invocation configuration
  * @param context - Engine context
