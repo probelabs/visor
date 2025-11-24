@@ -199,6 +199,18 @@ To prevent infinite loops and excessive preprocessing:
 - **No nested execution**: `on_init` hooks within `on_init` items are skipped
 - **Separate from routing loops**: `on_init` loop protection is independent of `on_success`/`on_fail` routing
 
+### Known Limitations
+
+**forEach Scope Integration**: Currently, `on_init` hooks are not fully integrated with `forEach` loops:
+
+- `on_init` is only called for checks executed via the standard execution path (execution-invoker.ts)
+- Checks executed within `forEach` loops (level-dispatch.ts) do not trigger `on_init` hooks
+- Tools/steps/workflows invoked from `on_init` reuse the parent's dependency results and don't independently resolve dependencies with `forEach` scope context
+
+If you need preprocessing for forEach items, consider using the forEach item data directly in your check logic rather than relying on `on_init`.
+
+This limitation is tracked for future improvement. See the TODO comments in `src/state-machine/dispatch/on-init-handlers.ts` for implementation details.
+
 ### Examples
 
 See the `examples/` directory for comprehensive examples:
