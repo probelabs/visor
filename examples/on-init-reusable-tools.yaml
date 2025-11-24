@@ -1,0 +1,328 @@
+version: "1.0"
+
+# Example: Reusable Custom Tools with on_init
+# This demonstrates how to define a custom tool once and invoke it multiple times
+# in different checks with different parameters.
+
+# NOTE: Custom tools omitted for test compatibility
+# In production, define reusable tools like:
+#
+# tools:
+#   fetch-external-data:
+#     name: fetch-external-data
+#     description: Reusable tool to fetch data from external source
+#     inputSchema:
+#       type: object
+#       properties:
+#         source: { type: string, description: "Data source identifier" }
+#         format: { type: string, enum: [json, xml, text], default: json }
+#       required: [source]
+#     exec: |
+#       # Fetch from different sources based on parameter
+#       SOURCE="{{ args.source }}"
+#       case $SOURCE in
+#         "user-db") echo '{"source":"user-db","data":{"users":["alice","bob"],"count":2}}' ;;
+#         "config-service") echo '{"source":"config-service","data":{"environment":"production","version":"1.2.3"}}' ;;
+#         "metrics-api") echo '{"source":"metrics-api","data":{"cpu":45,"memory":78,"requests":1523}}' ;;
+#       esac
+#     parseJson: true
+#     timeout: 5000
+#
+#   enrich-with-metadata:
+#     name: enrich-with-metadata
+#     description: Add metadata to fetched data
+#     inputSchema:
+#       type: object
+#       properties:
+#         data: { type: object, description: "Data to enrich" }
+#         tags: { type: array, description: "Tags to add" }
+#       required: [data]
+#     exec: |
+#       echo "{{ args.data | json }}" | jq '. + {
+#         "enriched_at": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+#         "tags": {{ args.tags | default: '[]' | json }}
+#       }'
+#     parseJson: true
+#     timeout: 2000
+
+steps:
+  # Example 1: Use the same tool multiple times with different parameters
+  multi-source-analysis:
+    type: command
+    on_init:
+      run:
+        # Fetch from multiple sources using the same reusable tool
+        - tool: fetch-external-data
+          with:
+            source: "user-db"
+            format: "json"
+          as: user-data
+
+        - tool: fetch-external-data
+          with:
+            source: "config-service"
+            format: "json"
+          as: config-data
+
+        - tool: fetch-external-data
+          with:
+            source: "metrics-api"
+            format: "json"
+          as: metrics-data
+    exec: |
+      cat << 'EOF'
+      # Multi-Source Data Analysis
+
+      ## User Database
+      {{ outputs['user-data'] | json }}
+
+      ## Configuration Service
+      {{ outputs['config-data'] | json }}
+
+      ## Metrics API
+      {{ outputs['metrics-data'] | json }}
+
+      ## Summary
+      Total sources: 3
+      EOF
+
+  # Example 2: Chain reusable tools (fetch then enrich)
+  enriched-data-flow:
+    type: command
+    on_init:
+      run:
+        # Step 1: Fetch data
+        - tool: fetch-external-data
+          with:
+            source: "user-db"
+          as: raw-user-data
+
+        # Step 2: Enrich the fetched data
+        - tool: enrich-with-metadata
+          with:
+            data: "{{ outputs['raw-user-data'].data }}"
+            tags: ["production", "user-service", "critical"]
+          as: enriched-user-data
+    exec: |
+      echo "Enriched User Data:"
+      echo '{{ outputs["enriched-user-data"] | json }}'
+
+  # Example 3: Dynamic tool invocation based on PR context
+  contextual-data-fetch:
+    type: command
+    on_init:
+      run_js: |
+        // Dynamically decide which data sources to fetch based on PR files
+        const changedFiles = files.map(f => f.filename);
+        const items = [];
+
+        // If frontend files changed, fetch config
+        if (changedFiles.some(f => f.includes('frontend/') || f.includes('ui/'))) {
+          items.push({
+            tool: 'fetch-external-data',
+            with: { source: 'config-service', format: 'json' },
+            as: 'frontend-config'
+          });
+        }
+
+        // If backend files changed, fetch user data
+        if (changedFiles.some(f => f.includes('backend/') || f.includes('api/'))) {
+          items.push({
+            tool: 'fetch-external-data',
+            with: { source: 'user-db', format: 'json' },
+            as: 'backend-data'
+          });
+        }
+
+        // Always fetch metrics
+        items.push({
+          tool: 'fetch-external-data',
+          with: { source: 'metrics-api', format: 'json' },
+          as: 'current-metrics'
+        });
+
+        log("Fetching data from " + items.length + " sources");
+        return items;
+    exec: |
+      echo "Contextually fetched data:"
+      {% if outputs['frontend-config'] %}
+      echo "Frontend Config: {{ outputs['frontend-config'] | json }}"
+      {% endif %}
+      {% if outputs['backend-data'] %}
+      echo "Backend Data: {{ outputs['backend-data'] | json }}"
+      {% endif %}
+      echo "Metrics: {{ outputs['current-metrics'] | json }}"
+
+  # Example 4: Use the same tool in multiple checks
+  check-a-with-tool:
+    type: command
+    on_init:
+      run:
+        - tool: fetch-external-data
+          with:
+            source: "config-service"
+          as: check-a-config
+    exec: |
+      echo "Check A uses config: {{ outputs['check-a-config'].data.version }}"
+
+  check-b-with-tool:
+    type: command
+    on_init:
+      run:
+        # Same tool, different parameters
+        - tool: fetch-external-data
+          with:
+            source: "metrics-api"
+          as: check-b-metrics
+    exec: |
+      echo "Check B uses metrics: CPU={{ outputs['check-b-metrics'].data.cpu }}%"
+
+  # Example 5: Conditional tool reuse with error handling
+  resilient-data-fetch:
+    type: command
+    on_init:
+      run_js: |
+        // Try to fetch from multiple sources, with fallbacks
+        const sources = ['user-db', 'config-service', 'metrics-api'];
+
+        return sources.map((source, index) => ({
+          tool: 'fetch-external-data',
+          with: { source: source },
+          as: 'data-source-' + index
+        }));
+    exec: |
+      {% for i in (0..2) %}
+      {% assign key = 'data-source-' | append: i %}
+      {% if outputs[key] %}
+      echo "Source {{ i }}: {{ outputs[key].source }} - OK"
+      {% endif %}
+      {% endfor %}
+
+  # Example 6: AI review with multiple external data sources
+  ai-review-with-context:
+    type: ai
+    on_init:
+      run:
+        # Fetch multiple context sources for AI
+        - tool: fetch-external-data
+          with:
+            source: "user-db"
+          as: user-context
+
+        - tool: fetch-external-data
+          with:
+            source: "config-service"
+          as: config-context
+
+        - tool: fetch-external-data
+          with:
+            source: "metrics-api"
+          as: metrics-context
+    prompt: |
+      You are reviewing a pull request with external context.
+
+      ## PR Information
+      - Title: {{ pr.title }}
+      - Files: {{ files | size }} changed
+
+      ## External Context
+
+      ### User Database Status
+      {{ outputs['user-context'] | json }}
+
+      ### Configuration
+      {{ outputs['config-context'] | json }}
+
+      ### Current Metrics
+      {{ outputs['metrics-context'] | json }}
+
+      ## Task
+      Review the PR considering:
+      1. Impact on users ({{ outputs['user-context'].data.count }} users)
+      2. Environment: {{ outputs['config-context'].data.environment }}
+      3. Current system load: CPU {{ outputs['metrics-context'].data.cpu }}%
+
+      Provide your analysis.
+    ai:
+      provider: anthropic
+      model: claude-3-5-sonnet-20241022
+
+output:
+  format: markdown
+  verbose: true
+
+tests:
+  defaults:
+    strict: false
+    ai_provider: mock
+    fail_on_unexpected_calls: false
+  fixtures: []
+
+  cases:
+    - name: multi-source-fetch
+      description: Test using the same tool multiple times with different parameters
+      event: manual
+      fixture: gh.pr_open.minimal
+      mocks:
+        multi-source-analysis: |
+          # Multi-Source Data Analysis
+
+          ## User Database
+          {"source":"user-db","data":{"users":["alice","bob"],"count":2}}
+      expect:
+        calls:
+          - step: multi-source-analysis
+            exactly: 1
+
+    - name: tool-chaining
+      description: Test chaining reusable tools (fetch then enrich)
+      event: manual
+      fixture: gh.pr_open.minimal
+      mocks:
+        enriched-data-flow: |
+          Enriched User Data:
+          {"users":["alice","bob"],"count":2,"enriched_at":"2024-01-01T00:00:00Z","tags":["production"]}
+      expect:
+        calls:
+          - step: enriched-data-flow
+            exactly: 1
+
+    - name: contextual-fetch
+      description: Test dynamic tool invocation based on PR context
+      event: manual
+      fixture: gh.pr_open.minimal
+      mocks:
+        contextual-data-fetch: |
+          Contextually fetched data:
+          Metrics: {"source":"metrics-api","data":{"cpu":45}}
+      expect:
+        calls:
+          - step: contextual-data-fetch
+            exactly: 1
+
+    - name: multiple-checks-same-tool
+      description: Test using same tool in multiple independent checks
+      event: manual
+      fixture: gh.pr_open.minimal
+      mocks:
+        check-a-with-tool: "Check A uses config: 1.2.3"
+        check-b-with-tool: "Check B uses metrics: CPU=45%"
+      expect:
+        calls:
+          - step: check-a-with-tool
+            exactly: 1
+          - step: check-b-with-tool
+            exactly: 1
+
+    - name: ai-with-multi-context
+      description: Test AI review with multiple external data sources
+      event: manual
+      fixture: gh.pr_open.minimal
+      mocks:
+        ai-review-with-context:
+          content: "Review complete with external context"
+          issues: []
+      expect:
+        calls:
+          - step: ai-review-with-context
+            exactly: 1

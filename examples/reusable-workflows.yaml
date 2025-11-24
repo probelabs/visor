@@ -1,0 +1,88 @@
+version: "1.0"
+
+# Reusable Workflows Library
+# This file defines workflows that can be imported and reused across multiple configurations.
+
+workflows:
+  data-enrichment:
+    name: data-enrichment
+    description: Fetch and enrich data from multiple sources
+    steps:
+      - id: fetch-primary
+        type: command
+        exec: |
+          echo '{"primary":"data","value":42}'
+
+      - id: fetch-secondary
+        type: command
+        exec: |
+          echo '{"secondary":"metadata","timestamp":"2024-01-01"}'
+
+      - id: merge-results
+        type: command
+        exec: |
+          echo '{"enriched":true,"primary":{{ outputs["fetch-primary"] | json }},"secondary":{{ outputs["fetch-secondary"] | json }}}'
+        parseJson: true
+
+    output_mapping:
+      enriched_data: "{{ outputs['merge-results'] }}"
+
+  issue-triage:
+    name: issue-triage
+    description: Triage and categorize issues
+    steps:
+      - id: analyze-issue
+        type: command
+        exec: |
+          echo '{"category":"bug","priority":"high","labels":["security","urgent"]}'
+        parseJson: true
+
+      - id: assign-owner
+        type: command
+        exec: |
+          PRIORITY='{{ outputs["analyze-issue"].priority }}'
+          if [ "$PRIORITY" = "high" ]; then
+            echo '{"owner":"senior-dev","team":"security"}'
+          else
+            echo '{"owner":"junior-dev","team":"support"}'
+          fi
+        parseJson: true
+
+    output_mapping:
+      triage_result: "{{ outputs['analyze-issue'] }}"
+      assignment: "{{ outputs['assign-owner'] }}"
+
+  multi-step-validation:
+    name: multi-step-validation
+    description: Validate data through multiple steps
+    steps:
+      - id: schema-check
+        type: command
+        exec: |
+          echo '{"schema_valid":true,"errors":[]}'
+        parseJson: true
+
+      - id: business-rules
+        type: command
+        exec: |
+          echo '{"rules_passed":true,"warnings":["minor-issue"]}'
+        parseJson: true
+
+      - id: final-verdict
+        type: command
+        exec: |
+          SCHEMA_VALID='{{ outputs["schema-check"].schema_valid }}'
+          RULES_PASSED='{{ outputs["business-rules"].rules_passed }}'
+          if [ "$SCHEMA_VALID" = "true" ] && [ "$RULES_PASSED" = "true" ]; then
+            echo '{"valid":true,"status":"approved"}'
+          else
+            echo '{"valid":false,"status":"rejected"}'
+          fi
+        parseJson: true
+
+    output_mapping:
+      validation_result: "{{ outputs['final-verdict'] }}"
+
+# This file is meant to be imported via "extends:" in other configurations.
+# No steps are defined here - only reusable workflows.
+steps: {}
