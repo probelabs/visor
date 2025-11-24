@@ -234,6 +234,10 @@ export async function executeWorkflowInvocation(
 ): Promise<unknown> {
   const workflowName = item.workflow;
 
+  if (!workflowName) {
+    throw new Error('Workflow name is required in on_init workflow invocation');
+  }
+
   logger.info(`[OnInit] Executing workflow: ${workflowName}`);
 
   // Render template expressions in 'with' arguments
