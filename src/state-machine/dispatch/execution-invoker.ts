@@ -40,8 +40,10 @@ function detectInvocationType(item: OnInitRunItem): 'tool' | 'step' | 'workflow'
   if ('tool' in item) return 'tool';
   if ('workflow' in item) return 'workflow';
   if ('step' in item) return 'step';
-  // Fallback to step for unknown types
-  return 'step';
+  // Throw error for unknown types instead of silently falling back
+  throw new Error(
+    `Invalid on_init item type: ${JSON.stringify(item)}. Must specify tool, step, or workflow.`
+  );
 }
 
 /**
@@ -189,8 +191,12 @@ async function handleOnInit(
         logger.warn(`[OnInit] run_js for ${checkId} did not return an array, got ${typeof result}`);
       }
     } catch (error) {
-      logger.error(`[OnInit] Error evaluating run_js for ${checkId}: ${error}`);
-      throw new Error(`on_init.run_js evaluation failed: ${error}`);
+      const err = error instanceof Error ? error : new Error(String(error));
+      logger.error(`[OnInit] Error evaluating run_js for ${checkId}: ${err.message}`);
+      // Preserve original error with context
+      const wrappedError = new Error(`on_init.run_js evaluation failed: ${err.message}`);
+      wrappedError.stack = err.stack;
+      throw wrappedError;
     }
   } else if (onInit.run) {
     // Use static run items
@@ -251,7 +257,10 @@ async function handleOnInit(
         logger.error(
           `[OnInit] Error executing ${itemType} ${itemName} for ${checkId}: ${err.message}`
         );
-        throw new Error(`on_init ${itemType} '${itemName}' failed: ${err.message}`);
+        // Preserve original error with context
+        const wrappedError = new Error(`on_init ${itemType} '${itemName}' failed: ${err.message}`);
+        wrappedError.stack = err.stack;
+        throw wrappedError;
       }
     }
 
