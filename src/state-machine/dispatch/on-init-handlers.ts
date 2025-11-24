@@ -128,7 +128,12 @@ async function executeInvocation(
     };
 
     const provider = providerRegistry.getProviderOrThrow('mcp');
-    const result = await provider.execute(prInfo, tempCheckConfig, dependencyResults, executionContext);
+    const result = await provider.execute(
+      prInfo,
+      tempCheckConfig,
+      dependencyResults,
+      executionContext
+    );
     const output = (result as any).output;
 
     logger.info(`[OnInit] Tool ${toolName} completed`);
@@ -208,7 +213,12 @@ async function executeInvocation(
     };
 
     const provider = providerRegistry.getProviderOrThrow('workflow');
-    const result = await provider.execute(prInfo, tempCheckConfig, dependencyResults, executionContext);
+    const result = await provider.execute(
+      prInfo,
+      tempCheckConfig,
+      dependencyResults,
+      executionContext
+    );
     const output = (result as any).output;
 
     logger.info(`[OnInit] Workflow ${workflowName} completed`);
