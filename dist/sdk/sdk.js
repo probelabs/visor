@@ -21363,7 +21363,12 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
     try {
       renderedContent = await renderTemplateContent(checkId, checkConfig2, enrichedResult);
       if (renderedContent) {
+        logger.debug(
+          `[LevelDispatch] Template rendered for ${checkId}: ${renderedContent.length} chars`
+        );
         emitMermaidFromMarkdown(checkId, renderedContent, "content");
+      } else {
+        logger.debug(`[LevelDispatch] No template content rendered for ${checkId}`);
       }
     } catch (error) {
       logger.warn(`[LevelDispatch] Failed to render template for ${checkId}: ${error}`);
@@ -21736,10 +21741,12 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
     let templateContent;
     if (checkConfig.template && checkConfig.template.content) {
       templateContent = String(checkConfig.template.content);
+      logger.debug(`[LevelDispatch] Using inline template for ${checkId}`);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
       const resolved = path19.resolve(process.cwd(), file);
       templateContent = await fs18.readFile(resolved, "utf-8");
+      logger.debug(`[LevelDispatch] Using template file for ${checkId}: ${resolved}`);
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
@@ -21758,13 +21765,22 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
         for (const p of candidatePaths) {
           try {
             templateContent = await fs18.readFile(p, "utf-8");
-            if (templateContent) break;
+            if (templateContent) {
+              logger.debug(`[LevelDispatch] Using schema template for ${checkId}: ${p}`);
+              break;
+            }
           } catch {
           }
+        }
+        if (!templateContent) {
+          logger.debug(
+            `[LevelDispatch] No template found for schema '${sanitized}' (tried ${candidatePaths.length} paths)`
+          );
         }
       }
     }
     if (!templateContent) {
+      logger.debug(`[LevelDispatch] No template content found for ${checkId}`);
       return void 0;
     }
     const liquid = createExtendedLiquid2({
@@ -21779,7 +21795,13 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
       checkName: checkId,
       output: reviewSummary.output
     };
+    logger.debug(
+      `[LevelDispatch] Rendering template for ${checkId} with output keys: ${reviewSummary.output ? Object.keys(reviewSummary.output).join(", ") : "none"}`
+    );
     const rendered = await liquid.parseAndRender(templateContent, templateData);
+    logger.debug(
+      `[LevelDispatch] Template rendered successfully for ${checkId}: ${rendered.length} chars, trimmed: ${rendered.trim().length} chars`
+    );
     return rendered.trim();
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
