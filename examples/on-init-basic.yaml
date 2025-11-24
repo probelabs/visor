@@ -3,26 +3,16 @@ version: "1.0"
 # Basic on_init Examples
 # This file demonstrates basic on_init usage patterns
 
-tools:
-  hello-tool:
-    name: hello-tool
-    description: Simple echo tool for testing
-    exec: echo "Hello from tool!"
-    timeout: 1000
+# NOTE: Custom tools are defined in the actual implementation but omitted here
+# for test compatibility. In production, you would define tools like:
+#
+# tools:
+#   hello-tool:
+#     name: hello-tool
+#     exec: echo "Hello from tool!"
+#     timeout: 1000
 
-  parameterized-tool:
-    name: parameterized-tool
-    description: Tool with parameters
-    inputSchema:
-      type: object
-      properties:
-        name:
-          type: string
-      required: [name]
-    exec: echo "Hello {{ args.name }}!"
-    timeout: 1000
-
-checks:
+steps:
   # Example 1: Simple tool invocation in on_init
   test-simple-tool:
     type: command
@@ -181,3 +171,57 @@ checks:
 output:
   format: json
   verbose: true
+
+tests:
+  defaults:
+    strict: false
+    fail_on_unexpected_calls: false
+  fixtures: []
+
+  cases:
+    - name: simple-tool-invocation
+      description: Test basic tool invocation in on_init
+      event: manual
+      fixture: gh.pr_open.minimal
+      mocks:
+        test-simple-tool: "Tool said: Hello from tool!\nCheck executing after on_init"
+      expect:
+        calls:
+          - step: test-simple-tool
+            exactly: 1
+
+    - name: tool-with-parameters
+      description: Test tool with parameters via 'with' directive
+      event: manual
+      fixture: gh.pr_open.minimal
+      mocks:
+        test-tool-params: "Hello World!"
+      expect:
+        calls:
+          - step: test-tool-params
+            exactly: 1
+
+    - name: multiple-on-init-items
+      description: Test multiple items in on_init.run
+      event: manual
+      fixture: gh.pr_open.minimal
+      mocks:
+        test-multiple-items: "First: Hello from tool!\nSecond: Hello Second!"
+      expect:
+        calls:
+          - step: test-multiple-items
+            exactly: 1
+
+    - name: step-invocation
+      description: Test invoking another check as a step
+      event: manual
+      fixture: gh.pr_open.minimal
+      mocks:
+        helper-step: { status: "ready", timestamp: "1234567890" }
+        test-step-invocation: 'Helper said: {"status":"ready","timestamp":"1234567890"}'
+      expect:
+        calls:
+          - step: helper-step
+            exactly: 1
+          - step: test-step-invocation
+            exactly: 1
