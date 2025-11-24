@@ -1,0 +1,212 @@
+version: "1.0"
+
+# Example: on_init Hook with JIRA Preprocessor Pattern
+# This demonstrates the new on_init hook to automatically enrich AI prompts
+# with JIRA ticket data BEFORE the main check executes.
+
+# Custom tool to fetch JIRA ticket details
+tools:
+  fetch-jira-ticket:
+    name: fetch-jira-ticket
+    description: Fetch JIRA issue details and convert to structured XML format
+    inputSchema:
+      type: object
+      properties:
+        issue_key:
+          type: string
+          description: JIRA issue key (e.g., PROJ-123)
+      required: [issue_key]
+    # For demo purposes, use echo. In production, use curl to JIRA REST API
+    exec: |
+      echo '{"key":"{{ args.issue_key }}","fields":{"summary":"Example Issue","description":"Test description","status":{"name":"In Progress"},"priority":{"name":"High"},"assignee":{"displayName":"John Doe"}}}'
+    parseJson: true
+    timeout: 5000
+    transform_js: |
+      // Transform JIRA JSON to XML for AI
+      if (!output || !output.key) {
+        return '<jira-error>Failed to fetch JIRA issue</jira-error>';
+      }
+
+      const escape = (str) => String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+      const fields = output.fields || {};
+
+      return `<jira-issue>
+  <key>${escape(output.key)}</key>
+  <summary>${escape(fields.summary)}</summary>
+  <description>${escape(fields.description || 'N/A')}</description>
+  <status>${escape(fields.status?.name)}</status>
+  <priority>${escape(fields.priority?.name || 'N/A')}</priority>
+  <assignee>${escape(fields.assignee?.displayName || 'Unassigned')}</assignee>
+</jira-issue>`;
+
+  extract-jira-keys:
+    name: extract-jira-keys
+    description: Extract JIRA issue keys from text
+    inputSchema:
+      type: object
+      properties:
+        text:
+          type: string
+      required: [text]
+    exec: |
+      echo "{{ args.text }}" | grep -oE '[A-Z]+-[0-9]+' | head -1
+    timeout: 1000
+
+# Checks demonstrating on_init pattern
+checks:
+  # Example 1: Single tool invocation
+  ai-review-with-jira:
+    type: ai
+    on_init:
+      run:
+        # Invoke custom tool to fetch JIRA data
+        - tool: fetch-jira-ticket
+          with:
+            issue_key: "PROJ-123"
+          as: jira-context
+    prompt: |
+      JIRA Context:
+      {{ outputs["jira-context"] }}
+
+      Review this PR:
+      Title: {{ pr.title }}
+      Files: {{ files | map: 'filename' | join: ', ' }}
+    ai:
+      provider: anthropic
+      model: claude-3-5-sonnet-20241022
+
+  # Example 2: Multi-step preprocessing
+  advanced-review:
+    type: ai
+    on_init:
+      run:
+        # Step 1: Extract JIRA key from PR description
+        - tool: extract-jira-keys
+          with:
+            text: "{{ pr.title }} {{ pr.body }}"
+          as: jira-key
+
+        # Step 2: Fetch JIRA details using extracted key
+        - tool: fetch-jira-ticket
+          with:
+            issue_key: "{{ outputs['jira-key'] }}"
+          as: jira-data
+    prompt: |
+      JIRA Issue {{ outputs["jira-key"] }}:
+      {{ outputs["jira-data"] }}
+
+      Verify this PR aligns with the JIRA ticket requirements.
+
+      PR Title: {{ pr.title }}
+    ai:
+      provider: anthropic
+      model: claude-3-5-sonnet-20241022
+
+  # Example 3: Dynamic preprocessing with run_js
+  smart-review:
+    type: ai
+    on_init:
+      run_js: |
+        // Dynamically decide what to fetch based on PR content
+        const prText = pr.title + ' ' + pr.body;
+        const hasJira = prText.match(/[A-Z]+-[0-9]+/);
+
+        if (hasJira) {
+          return [
+            { tool: 'extract-jira-keys', with: { text: prText }, as: 'jira-key' },
+            { tool: 'fetch-jira-ticket', with: { issue_key: hasJira[0] }, as: 'jira-context' }
+          ];
+        }
+
+        // No JIRA found, skip preprocessing
+        return [];
+    prompt: |
+      {% if outputs["jira-context"] %}
+      JIRA Context:
+      {{ outputs["jira-context"] }}
+      {% else %}
+      No JIRA ticket referenced.
+      {% endif %}
+
+      Review this PR:
+      {{ pr.title }}
+    ai:
+      provider: anthropic
+      model: claude-3-5-sonnet-20241022
+
+  # Example 4: Helper step invocation
+  review-with-helper:
+    type: ai
+    on_init:
+      run:
+        # Invoke another check as a helper step
+        - step: extract-pr-metadata
+          as: metadata
+    prompt: |
+      PR Metadata:
+      {{ outputs["metadata"] | json }}
+
+      Review this PR based on the extracted metadata.
+    ai:
+      provider: anthropic
+      model: claude-3-5-sonnet-20241022
+
+  # Helper step for metadata extraction
+  extract-pr-metadata:
+    type: command
+    exec: |
+      echo "{
+        \"complexity_score\": {{ files | size }},
+        \"has_tests\": {% if files | map: 'filename' | where_contains: 'test' | size > 0 %}true{% else %}false{% endif %},
+        \"file_types\": {{ files | map: 'filename' | map: 'split', '.' | map: 'last' | uniq | json }}
+      }"
+    parseJson: true
+
+  # Example 5: Workflow invocation
+  review-with-workflow:
+    type: ai
+    on_init:
+      run:
+        - workflow: jira-enrichment-workflow
+          with:
+            pr_text: "{{ pr.title }} {{ pr.body }}"
+          as: enriched-context
+    prompt: |
+      Context: {{ outputs["enriched-context"] }}
+
+      Review the PR.
+    ai:
+      provider: anthropic
+      model: claude-3-5-sonnet-20241022
+
+# Reusable workflows
+workflows:
+  jira-enrichment-workflow:
+    inputs:
+      pr_text:
+        type: string
+        required: true
+    checks:
+      extract:
+        type: command
+        exec: |
+          echo "{{ inputs.pr_text }}" | grep -oE '[A-Z]+-[0-9]+' | head -1
+
+      fetch:
+        type: mcp
+        method: fetch-jira-ticket
+        transport: custom
+        depends_on: [extract]
+        args:
+          issue_key: "{{ outputs.extract }}"
+    output_mapping:
+      result: fetch
+
+output:
+  pr_comment:
+    enabled: true
+    format: markdown

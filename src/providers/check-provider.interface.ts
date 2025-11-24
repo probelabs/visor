@@ -56,6 +56,8 @@ export interface ExecutionContext {
   stageHistoryBase?: Record<string, number>;
   /** Workflow inputs - available when executing within a workflow */
   workflowInputs?: Record<string, unknown>;
+  /** Custom arguments passed from on_init 'with' directive */
+  args?: Record<string, unknown>;
   /** SDK hooks for human input */
   hooks?: {
     onHumanInput?: (request: HumanInputRequest) => Promise<string>;

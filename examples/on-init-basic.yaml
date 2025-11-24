@@ -1,0 +1,183 @@
+version: "1.0"
+
+# Basic on_init Examples
+# This file demonstrates basic on_init usage patterns
+
+tools:
+  hello-tool:
+    name: hello-tool
+    description: Simple echo tool for testing
+    exec: echo "Hello from tool!"
+    timeout: 1000
+
+  parameterized-tool:
+    name: parameterized-tool
+    description: Tool with parameters
+    inputSchema:
+      type: object
+      properties:
+        name:
+          type: string
+      required: [name]
+    exec: echo "Hello {{ args.name }}!"
+    timeout: 1000
+
+checks:
+  # Example 1: Simple tool invocation in on_init
+  test-simple-tool:
+    type: command
+    on_init:
+      run:
+        - tool: hello-tool
+          as: greeting
+    exec: |
+      echo "Tool said: {{ outputs.greeting }}"
+      echo "Check executing after on_init"
+
+  # Example 2: Tool with parameters
+  test-tool-params:
+    type: command
+    on_init:
+      run:
+        - tool: parameterized-tool
+          with:
+            name: "World"
+          as: custom-greeting
+    exec: |
+      echo "{{ outputs['custom-greeting'] }}"
+
+  # Example 3: Multiple on_init items
+  test-multiple-items:
+    type: command
+    on_init:
+      run:
+        - tool: hello-tool
+          as: first
+        - tool: parameterized-tool
+          with:
+            name: "Second"
+          as: second
+    exec: |
+      echo "First: {{ outputs.first }}"
+      echo "Second: {{ outputs.second }}"
+
+  # Example 4: Dynamic items with run_js
+  test-run-js:
+    type: command
+    on_init:
+      run_js: |
+        // Dynamically generate on_init items
+        const items = [];
+
+        // Always add hello-tool
+        items.push({ tool: 'hello-tool', as: 'dynamic-hello' });
+
+        // Conditionally add parameterized-tool
+        if (pr.title && pr.title.length > 0) {
+          items.push({
+            tool: 'parameterized-tool',
+            with: { name: pr.title.substring(0, 10) },
+            as: 'title-greeting'
+          });
+        }
+
+        return items;
+    exec: |
+      echo "Dynamic hello: {{ outputs['dynamic-hello'] }}"
+      echo "Title greeting: {{ outputs['title-greeting'] }}"
+
+  # Example 5: Step invocation (invoke another check)
+  helper-step:
+    type: command
+    exec: |
+      echo '{"status": "ready", "timestamp": "'$(date +%s)'"}'
+    parseJson: true
+
+  test-step-invocation:
+    type: command
+    on_init:
+      run:
+        - step: helper-step
+          as: helper-output
+    exec: |
+      echo "Helper said: {{ outputs['helper-output'] | json }}"
+
+  # Example 6: Chaining on_init items (output from one feeds into next)
+  test-chaining:
+    type: command
+    on_init:
+      run:
+        - tool: hello-tool
+          as: step1
+        - tool: parameterized-tool
+          with:
+            # Use output from previous on_init item
+            name: "{{ outputs.step1 }}"
+          as: step2
+    exec: |
+      echo "Final result: {{ outputs.step2 }}"
+
+  # Example 7: Template expressions in on_init parameters
+  test-template-params:
+    type: command
+    on_init:
+      run:
+        - tool: parameterized-tool
+          with:
+            # Access PR context
+            name: "PR#{{ pr.number }} by {{ pr.author }}"
+          as: pr-greeting
+    exec: |
+      echo "{{ outputs['pr-greeting'] }}"
+
+  # Example 8: Conditional execution with run_js
+  test-conditional:
+    type: command
+    on_init:
+      run_js: |
+        // Only run on_init if PR has specific files
+        const hasTests = (files || []).some(f => f.filename.includes('test'));
+
+        if (hasTests) {
+          return [{ tool: 'hello-tool', as: 'test-greeting' }];
+        }
+
+        return []; // Skip on_init
+    exec: |
+      {% if outputs['test-greeting'] %}
+      echo "Tests found: {{ outputs['test-greeting'] }}"
+      {% else %}
+      echo "No tests found, on_init skipped"
+      {% endif %}
+
+  # Example 9: Error handling
+  test-error-handling:
+    type: command
+    on_init:
+      run:
+        - tool: hello-tool
+          as: success-tool
+        # Note: If a tool fails, the whole check fails
+    exec: |
+      echo "This only runs if all on_init items succeed"
+    on_fail:
+      run:
+        - logger
+      message: "Check failed (possibly due to on_init error)"
+
+  # Example 10: Access args in main check
+  test-args-access:
+    type: command
+    on_init:
+      run:
+        - step: helper-step
+          with:
+            custom_param: "test-value"
+          as: helper-with-args
+    exec: |
+      # Helper step can access {{ args.custom_param }} in its template context
+      echo "Helper output: {{ outputs['helper-with-args'] | json }}"
+
+output:
+  format: json
+  verbose: true

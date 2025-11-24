@@ -110,7 +110,8 @@ export class MemoryCheckProvider extends CheckProvider {
       dependencyResults,
       memoryStore,
       config.__outputHistory as Map<string, unknown[]> | undefined,
-      (_sessionInfo as any)?.stageHistoryBase as Record<string, number> | undefined
+      (_sessionInfo as any)?.stageHistoryBase as Record<string, number> | undefined,
+      _sessionInfo?.args
     );
 
     let result: unknown;
@@ -320,14 +321,16 @@ export class MemoryCheckProvider extends CheckProvider {
     dependencyResults?: Map<string, ReviewSummary>,
     memoryStore?: MemoryStore,
     outputHistory?: Map<string, unknown[]>,
-    stageHistoryBase?: Record<string, number>
+    stageHistoryBase?: Record<string, number>,
+    args?: Record<string, unknown>
   ): Record<string, unknown> {
     const base = buildProviderTemplateContext(
       prInfo,
       dependencyResults,
       memoryStore,
       outputHistory as Map<string, unknown[]> | undefined,
-      stageHistoryBase
+      stageHistoryBase,
+      { attachMemoryReadHelpers: true, args }
     );
     if (memoryStore) {
       const { ops } = createSyncMemoryOps(memoryStore);
