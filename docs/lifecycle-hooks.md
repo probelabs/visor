@@ -203,12 +203,14 @@ To prevent infinite loops and excessive preprocessing:
 
 See the `examples/` directory for comprehensive examples:
 
-- **examples/on-init-basic.yaml** - Basic tool invocation and parameters
-- **examples/on-init-workflows.yaml** - Workflow invocation patterns
-- **examples/on-init-jira-preprocessor.yaml** - Real-world JIRA preprocessing
-- **examples/on-init-import-demo.yaml** - Using imported tools/workflows
-- **examples/reusable-tools.yaml** - Reusable tool library
-- **examples/reusable-workflows.yaml** - Reusable workflow library
+- **examples/reusable-tools.yaml** - Reusable tool library with 3 custom tools (fetch-jira-issue, fetch-external-data, validate-data)
+- **examples/reusable-workflows.yaml** - Reusable workflow library with 3 workflows (data-enrichment, issue-triage, multi-step-validation)
+- **examples/on-init-import-demo.yaml** - Complete demonstration showing:
+  - Using multiple imported tools in on_init
+  - Invoking imported workflows
+  - Chaining tools and workflows together
+  - Reusing the same tool multiple times with different parameters
+  - Includes 4 passing test cases
 
 ### Best Practices
 
