@@ -4277,6 +4277,664 @@ var init_mermaid_telemetry = __esm({
   }
 });
 
+// src/state-machine/dispatch/history-snapshot.ts
+var history_snapshot_exports = {};
+__export(history_snapshot_exports, {
+  buildOutputHistoryFromJournal: () => buildOutputHistoryFromJournal
+});
+function buildOutputHistoryFromJournal(context2) {
+  const outputHistory = /* @__PURE__ */ new Map();
+  try {
+    const snapshot = context2.journal.beginSnapshot();
+    const allEntries = context2.journal.readVisible(context2.sessionId, snapshot, void 0);
+    for (const entry of allEntries) {
+      const checkId = entry.checkId;
+      if (!outputHistory.has(checkId)) {
+        outputHistory.set(checkId, []);
+      }
+      try {
+        if (entry && typeof entry.result === "object" && entry.result.__skipped) {
+          continue;
+        }
+      } catch {
+      }
+      const payload = entry.result.output !== void 0 ? entry.result.output : entry.result;
+      try {
+        if (payload && typeof payload === "object" && payload.forEachItems && Array.isArray(payload.forEachItems)) {
+          continue;
+        }
+      } catch {
+      }
+      if (payload !== void 0) outputHistory.get(checkId).push(payload);
+    }
+  } catch (error) {
+    logger.debug(`[LevelDispatch] Error building output history: ${error}`);
+  }
+  return outputHistory;
+}
+var init_history_snapshot = __esm({
+  "src/state-machine/dispatch/history-snapshot.ts"() {
+    "use strict";
+    init_logger();
+  }
+});
+
+// src/state-machine/dispatch/dependency-gating.ts
+function buildDependencyResultsWithScope(checkId, checkConfig, context2, scope) {
+  const dependencyResults = /* @__PURE__ */ new Map();
+  const dependencies = checkConfig.depends_on || [];
+  const depList = Array.isArray(dependencies) ? dependencies : [dependencies];
+  const currentIndex = scope.length > 0 ? scope[scope.length - 1].index : void 0;
+  for (const depId of depList) {
+    if (!depId) continue;
+    try {
+      const snapshotId = context2.journal.beginSnapshot();
+      const visible = context2.journal.readVisible(
+        context2.sessionId,
+        snapshotId,
+        context2.event
+      );
+      const sameScope = (a, b) => {
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++)
+          if (a[i].check !== b[i].check || a[i].index !== b[i].index) return false;
+        return true;
+      };
+      const matches = visible.filter((e) => e.checkId === depId && sameScope(e.scope, scope));
+      let journalResult = matches.length > 0 ? matches[matches.length - 1].result : void 0;
+      if (journalResult && Array.isArray(journalResult.forEachItems) && currentIndex !== void 0) {
+        const perItemSummary = journalResult.forEachItemResults && journalResult.forEachItemResults[currentIndex] || { issues: [] };
+        const perItemOutput = journalResult.forEachItems[currentIndex];
+        const combined = { ...perItemSummary, output: perItemOutput };
+        dependencyResults.set(depId, combined);
+        continue;
+      }
+      if (!journalResult) {
+        try {
+          const { ContextView: ContextView2 } = (init_snapshot_store(), __toCommonJS(snapshot_store_exports));
+          const rawContextView = new ContextView2(
+            context2.journal,
+            context2.sessionId,
+            snapshotId,
+            [],
+            context2.event
+          );
+          const raw = rawContextView.get(depId);
+          if (raw && Array.isArray(raw.forEachItems) && currentIndex !== void 0) {
+            const perItemSummary = raw.forEachItemResults && raw.forEachItemResults[currentIndex] || { issues: [] };
+            const perItemOutput = raw.forEachItems[currentIndex];
+            journalResult = { ...perItemSummary, output: perItemOutput };
+          }
+        } catch {
+        }
+      }
+      if (journalResult) {
+        dependencyResults.set(depId, journalResult);
+      }
+    } catch {
+    }
+  }
+  try {
+    const snapshotId = context2.journal.beginSnapshot();
+    const allEntries = context2.journal.readVisible(
+      context2.sessionId,
+      snapshotId,
+      context2.event
+    );
+    const allCheckNames = Array.from(new Set(allEntries.map((e) => e.checkId)));
+    for (const checkName of allCheckNames) {
+      try {
+        const { ContextView: ContextView2 } = (init_snapshot_store(), __toCommonJS(snapshot_store_exports));
+        const rawContextView = new ContextView2(
+          context2.journal,
+          context2.sessionId,
+          snapshotId,
+          scope,
+          context2.event
+        );
+        const jr = rawContextView.get(checkName);
+        if (jr) dependencyResults.set(checkName, jr);
+      } catch {
+      }
+    }
+    for (const checkName of allCheckNames) {
+      const checkCfg = context2.config.checks?.[checkName];
+      if (checkCfg?.forEach) {
+        try {
+          const { ContextView: ContextView2 } = (init_snapshot_store(), __toCommonJS(snapshot_store_exports));
+          const rawContextView = new ContextView2(
+            context2.journal,
+            context2.sessionId,
+            snapshotId,
+            [],
+            context2.event
+          );
+          const rawResult = rawContextView.get(checkName);
+          if (rawResult && rawResult.forEachItems) {
+            const rawKey = `${checkName}-raw`;
+            dependencyResults.set(rawKey, {
+              issues: [],
+              output: rawResult.forEachItems
+            });
+          }
+        } catch {
+        }
+      }
+    }
+  } catch {
+  }
+  return dependencyResults;
+}
+var init_dependency_gating = __esm({
+  "src/state-machine/dispatch/dependency-gating.ts"() {
+    "use strict";
+  }
+});
+
+// src/liquid-extensions.ts
+var liquid_extensions_exports = {};
+__export(liquid_extensions_exports, {
+  ReadFileTag: () => ReadFileTag,
+  configureLiquidWithExtensions: () => configureLiquidWithExtensions,
+  createExtendedLiquid: () => createExtendedLiquid,
+  sanitizeLabel: () => sanitizeLabel,
+  sanitizeLabelList: () => sanitizeLabelList,
+  withPermissionsContext: () => withPermissionsContext
+});
+function sanitizeLabel(value) {
+  if (value == null) return "";
+  const s = String(value);
+  return s.replace(/[^A-Za-z0-9:\/\- ]/g, "").replace(/\/{2,}/g, "/").trim();
+}
+function sanitizeLabelList(labels) {
+  if (!Array.isArray(labels)) return [];
+  return labels.map((v) => sanitizeLabel(v)).filter((s) => s.length > 0);
+}
+async function withPermissionsContext(ctx, fn) {
+  return await permissionsALS.run(ctx, fn);
+}
+function configureLiquidWithExtensions(liquid) {
+  liquid.registerTag("readfile", ReadFileTag);
+  liquid.registerFilter("parse_json", (value) => {
+    if (typeof value !== "string") {
+      return value;
+    }
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  });
+  liquid.registerFilter("to_json", (value) => {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "[Error: Unable to serialize to JSON]";
+    }
+  });
+  liquid.registerFilter("safe_label", (value) => sanitizeLabel(value));
+  liquid.registerFilter("safe_label_list", (value) => sanitizeLabelList(value));
+  liquid.registerFilter("unescape_newlines", (value) => {
+    if (value == null) return "";
+    const s = String(value);
+    return s.replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\t/g, "	");
+  });
+  const isLocal = detectLocalMode();
+  const resolveAssoc = (val) => {
+    if (typeof val === "string" && val.length > 0) return val;
+    const store = permissionsALS.getStore();
+    return store?.authorAssociation;
+  };
+  liquid.registerFilter("has_min_permission", (authorAssociation, level) => {
+    return hasMinPermission(resolveAssoc(authorAssociation), level, isLocal);
+  });
+  liquid.registerFilter("is_owner", (authorAssociation) => {
+    return isOwner(resolveAssoc(authorAssociation), isLocal);
+  });
+  liquid.registerFilter("is_member", (authorAssociation) => {
+    return isMember(resolveAssoc(authorAssociation), isLocal);
+  });
+  liquid.registerFilter("is_collaborator", (authorAssociation) => {
+    return isCollaborator(resolveAssoc(authorAssociation), isLocal);
+  });
+  liquid.registerFilter("is_contributor", (authorAssociation) => {
+    return isContributor(resolveAssoc(authorAssociation), isLocal);
+  });
+  liquid.registerFilter("is_first_timer", (authorAssociation) => {
+    return isFirstTimer(resolveAssoc(authorAssociation), isLocal);
+  });
+  const memoryStore = MemoryStore.getInstance();
+  liquid.registerFilter("memory_get", (key, namespace) => {
+    if (typeof key !== "string") {
+      return void 0;
+    }
+    return memoryStore.get(key, namespace);
+  });
+  liquid.registerFilter("memory_has", (key, namespace) => {
+    if (typeof key !== "string") {
+      return false;
+    }
+    const has = memoryStore.has(key, namespace);
+    try {
+      if (process.env.VISOR_DEBUG === "true" && key === "fact_validation_issues") {
+        console.error(
+          `[liquid] memory_has('${key}', ns='${namespace || memoryStore.getDefaultNamespace()}') => ${String(
+            has
+          )}`
+        );
+      }
+    } catch {
+    }
+    return has;
+  });
+  liquid.registerFilter("memory_list", (namespace) => {
+    return memoryStore.list(namespace);
+  });
+  liquid.registerFilter("get", (obj, pathExpr) => {
+    if (obj == null) return void 0;
+    const path19 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
+    if (!path19) return obj;
+    const parts = path19.split(".");
+    let cur = obj;
+    for (const p of parts) {
+      if (cur == null) return void 0;
+      cur = cur[p];
+    }
+    return cur;
+  });
+  liquid.registerFilter("not_empty", (v) => {
+    if (Array.isArray(v)) return v.length > 0;
+    if (typeof v === "string") return v.length > 0;
+    if (v && typeof v === "object") return Object.keys(v).length > 0;
+    return false;
+  });
+  liquid.registerFilter("coalesce", (first, ...rest) => {
+    const all = [first, ...rest];
+    for (const v of all) {
+      if (Array.isArray(v) && v.length > 0) return v;
+      if (typeof v === "string" && v.length > 0) return v;
+      if (v && typeof v === "object" && Object.keys(v).length > 0) return v;
+    }
+    return Array.isArray(first) ? [] : first ?? void 0;
+  });
+  liquid.registerFilter("where_exp", (items, varName, expr) => {
+    const arr = Array.isArray(items) ? items : [];
+    const name = typeof varName === "string" && varName.trim() ? varName.trim() : "i";
+    const body = String(expr || "");
+    try {
+      const fn = new Function(
+        name,
+        "idx",
+        "arr",
+        `try { return (${body}); } catch { return false; }`
+      );
+      const out = [];
+      for (let idx = 0; idx < arr.length; idx++) {
+        const i = arr[idx];
+        let ok = false;
+        try {
+          ok = !!fn(i, idx, arr);
+        } catch {
+          ok = false;
+        }
+        if (ok) out.push(i);
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  });
+  liquid.registerFilter(
+    "chat_history",
+    function(value, ...args) {
+      try {
+        const impl = this;
+        const ctx = impl?.context;
+        const allArgs = Array.isArray(args) ? args : [];
+        if (allArgs.length === 0) {
+          return [];
+        }
+        const positional = [];
+        const options = {};
+        for (const arg of allArgs) {
+          if (Array.isArray(arg) && arg.length === 2 && typeof arg[0] === "string" && arg[0].length > 0) {
+            options[arg[0]] = arg[1];
+          } else {
+            positional.push(arg);
+          }
+        }
+        const stepArgs = positional;
+        const steps = stepArgs.map((s) => String(s ?? "").trim()).filter((s) => s.length > 0);
+        if (steps.length === 0) return [];
+        const outputsHistoryVar = ctx?.get(["outputs_history"]) || {};
+        const outputsVar = ctx?.get(["outputs"]) || {};
+        const outputsHistory = outputsHistoryVar && Object.keys(outputsHistoryVar).length > 0 ? outputsHistoryVar : outputsVar?.history || {};
+        const checksMeta = ctx?.get(["checks_meta"]) || ctx?.get(["event"])?.payload?.__checksMeta || void 0;
+        const directionRaw = typeof options.direction === "string" ? options.direction.toLowerCase() : "";
+        const direction = directionRaw === "desc" ? "desc" : "asc";
+        const limit = typeof options.limit === "number" && options.limit > 0 ? Math.floor(options.limit) : void 0;
+        const textCfg = options.text && typeof options.text === "object" ? options.text : {};
+        const defaultField = typeof textCfg.default_field === "string" && textCfg.default_field.trim() ? textCfg.default_field.trim() : "text";
+        const byStepText = {};
+        if (textCfg.by_step && typeof textCfg.by_step === "object") {
+          for (const [k, v] of Object.entries(textCfg.by_step)) {
+            if (typeof v === "string" && v.trim()) {
+              byStepText[k] = v.trim();
+            }
+          }
+        }
+        const rolesCfg = options.roles && typeof options.roles === "object" ? options.roles : {};
+        const byTypeRole = {};
+        if (rolesCfg.by_type && typeof rolesCfg.by_type === "object") {
+          for (const [k, v] of Object.entries(rolesCfg.by_type)) {
+            if (typeof v === "string" && v.trim()) {
+              byTypeRole[k] = v.trim();
+            }
+          }
+        }
+        const byStepRole = {};
+        if (rolesCfg.by_step && typeof rolesCfg.by_step === "object") {
+          for (const [k, v] of Object.entries(rolesCfg.by_step)) {
+            if (typeof v === "string" && v.trim()) {
+              byStepRole[k] = v.trim();
+            }
+          }
+        }
+        if (typeof options.role_map === "string" && options.role_map.trim().length > 0) {
+          const parts = String(options.role_map).split(",").map((p) => p.trim()).filter(Boolean);
+          for (const part of parts) {
+            const eqIdx = part.indexOf("=");
+            if (eqIdx > 0) {
+              const k = part.slice(0, eqIdx).trim();
+              const v = part.slice(eqIdx + 1).trim();
+              if (k && v) {
+                byStepRole[k] = v;
+              }
+            }
+          }
+        }
+        const defaultRole = typeof rolesCfg.default === "string" && rolesCfg.default.trim() ? rolesCfg.default.trim() : void 0;
+        const getNested = (obj, path19) => {
+          if (!obj || !path19) return void 0;
+          const parts = path19.split(".");
+          let cur = obj;
+          for (const p of parts) {
+            if (cur == null) return void 0;
+            cur = cur[p];
+          }
+          return cur;
+        };
+        const normalizeText = (step, raw) => {
+          try {
+            const overrideField = byStepText[step];
+            if (overrideField) {
+              const val = getNested(raw, overrideField);
+              if (val !== void 0 && val !== null) {
+                const s = String(val);
+                if (s.trim().length > 0) return s;
+              }
+            }
+            if (raw && typeof raw === "object") {
+              if (typeof raw.text === "string" && raw.text.trim().length > 0) {
+                return raw.text;
+              }
+              if (typeof raw.content === "string" && raw.content.trim().length > 0) {
+                return raw.content;
+              }
+              const dfVal = raw[defaultField];
+              if (dfVal !== void 0 && dfVal !== null) {
+                const s = String(dfVal);
+                if (s.trim().length > 0) return s;
+              }
+            }
+            if (typeof raw === "string") return raw;
+            if (raw == null) return "";
+            try {
+              return JSON.stringify(raw);
+            } catch {
+              return String(raw);
+            }
+          } catch {
+            if (typeof raw === "string") return raw;
+            return "";
+          }
+        };
+        const normalizeRole = (step) => {
+          try {
+            if (byStepRole[step]) return byStepRole[step];
+            const meta = checksMeta ? checksMeta[step] : void 0;
+            const type = meta?.type;
+            if (type && byTypeRole[type]) return byTypeRole[type];
+            if (type === "human-input") return "user";
+            if (type === "ai") return "assistant";
+            if (defaultRole) return defaultRole;
+            if (type) {
+              if (type === "human-input") return "user";
+              if (type === "ai") return "assistant";
+            }
+          } catch {
+          }
+          return "assistant";
+        };
+        const messages = [];
+        const tsBase = Date.now();
+        let counter = 0;
+        for (const step of steps) {
+          const arr = outputsHistory?.[step];
+          if (!Array.isArray(arr)) continue;
+          for (const raw of arr) {
+            let ts;
+            if (raw && typeof raw === "object" && typeof raw.ts === "number") {
+              ts = raw.ts;
+            }
+            if (!Number.isFinite(ts)) {
+              ts = tsBase + counter++;
+            }
+            const text = normalizeText(step, raw);
+            const role = normalizeRole(step);
+            messages.push({ step, role, text, ts, raw });
+          }
+        }
+        messages.sort((a, b) => a.ts - b.ts);
+        if (direction === "desc") {
+          messages.reverse();
+        }
+        if (limit && limit > 0 && messages.length > limit) {
+          if (direction === "asc") {
+            return messages.slice(messages.length - limit);
+          }
+          return messages.slice(0, limit);
+        }
+        return messages;
+      } catch {
+        return [];
+      }
+    }
+  );
+}
+function createExtendedLiquid(options = {}) {
+  const liquid = new import_liquidjs.Liquid({
+    cache: false,
+    strictFilters: false,
+    strictVariables: false,
+    ...options
+  });
+  configureLiquidWithExtensions(liquid);
+  return liquid;
+}
+var import_liquidjs, import_async_hooks, import_promises2, import_path2, ReadFileTag, permissionsALS;
+var init_liquid_extensions = __esm({
+  "src/liquid-extensions.ts"() {
+    "use strict";
+    import_liquidjs = require("liquidjs");
+    import_async_hooks = require("async_hooks");
+    import_promises2 = __toESM(require("fs/promises"));
+    import_path2 = __toESM(require("path"));
+    init_author_permissions();
+    init_memory_store();
+    ReadFileTag = class extends import_liquidjs.Tag {
+      filepath;
+      constructor(token, remainTokens, liquid) {
+        super(token, remainTokens, liquid);
+        this.filepath = new import_liquidjs.Value(token.args, liquid);
+      }
+      *render(ctx, emitter) {
+        const filePath = yield this.filepath.value(ctx, false);
+        if (!filePath || typeof filePath !== "string") {
+          emitter.write("[Error: Invalid file path]");
+          return;
+        }
+        const projectRoot = process.cwd();
+        const resolvedPath = import_path2.default.resolve(projectRoot, filePath.toString());
+        if (!resolvedPath.startsWith(projectRoot)) {
+          emitter.write("[Error: File path escapes project directory]");
+          return;
+        }
+        try {
+          const content = yield import_promises2.default.readFile(resolvedPath, "utf-8");
+          emitter.write(content);
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : error?.code || "Unknown error";
+          emitter.write(`[Error reading file: ${errorMessage}]`);
+        }
+      }
+    };
+    permissionsALS = new import_async_hooks.AsyncLocalStorage();
+  }
+});
+
+// src/state-machine/dispatch/template-renderer.ts
+async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
+  try {
+    const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
+    const fs18 = await import("fs/promises");
+    const path19 = await import("path");
+    const schemaRaw = checkConfig.schema || "plain";
+    const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
+    let templateContent;
+    if (checkConfig.template && checkConfig.template.content) {
+      templateContent = String(checkConfig.template.content);
+    } else if (checkConfig.template && checkConfig.template.file) {
+      const file = String(checkConfig.template.file);
+      const resolved = path19.resolve(process.cwd(), file);
+      templateContent = await fs18.readFile(resolved, "utf-8");
+    } else if (schema && schema !== "plain") {
+      const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
+      if (sanitized) {
+        const candidatePaths = [
+          path19.join(__dirname, "output", sanitized, "template.liquid"),
+          // bundled: dist/output/
+          path19.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          // source: output/
+          path19.join(process.cwd(), "output", sanitized, "template.liquid"),
+          // fallback: cwd/output/
+          path19.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          // fallback: cwd/dist/output/
+        ];
+        for (const p of candidatePaths) {
+          try {
+            templateContent = await fs18.readFile(p, "utf-8");
+            if (templateContent) break;
+          } catch {
+          }
+        }
+      }
+    }
+    if (!templateContent) return void 0;
+    const liquid = createExtendedLiquid2({
+      trimTagLeft: false,
+      trimTagRight: false,
+      trimOutputLeft: false,
+      trimOutputRight: false,
+      greedy: false
+    });
+    const templateData = {
+      issues: reviewSummary.issues || [],
+      checkName: checkId,
+      output: reviewSummary.output
+    };
+    const rendered = await liquid.parseAndRender(templateContent, templateData);
+    return rendered.trim();
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.error(`[LevelDispatch] Failed to render template for ${checkId}: ${msg}`);
+    return void 0;
+  }
+}
+var init_template_renderer = __esm({
+  "src/state-machine/dispatch/template-renderer.ts"() {
+    "use strict";
+    init_logger();
+  }
+});
+
+// src/state-machine/dispatch/stats-manager.ts
+function hasFatalIssues(result) {
+  if (!result.issues) return false;
+  return result.issues.some((issue) => {
+    const ruleId = issue.ruleId || "";
+    return ruleId.endsWith("/error") || ruleId.includes("/execution_error") || ruleId.endsWith("_fail_if");
+  });
+}
+function updateStats(results, state, isForEachIteration = false) {
+  for (const { checkId, result, error, duration } of results) {
+    const existing = state.stats.get(checkId);
+    const stats = existing || {
+      checkName: checkId,
+      totalRuns: 0,
+      successfulRuns: 0,
+      failedRuns: 0,
+      skippedRuns: 0,
+      skipped: false,
+      totalDuration: 0,
+      issuesFound: 0,
+      issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 }
+    };
+    if (stats.skipped) {
+      stats.skipped = false;
+      stats.skippedRuns = 0;
+      stats.skipReason = void 0;
+      stats.skipCondition = void 0;
+    }
+    stats.totalRuns++;
+    if (typeof duration === "number" && Number.isFinite(duration)) {
+      stats.totalDuration += duration;
+    }
+    const hasExecutionFailure = !!error || hasFatalIssues(result);
+    if (error) {
+      stats.failedRuns++;
+    } else if (hasExecutionFailure) {
+      stats.failedRuns++;
+      if (!isForEachIteration) {
+        state.failedChecks = state.failedChecks || /* @__PURE__ */ new Set();
+        state.failedChecks.add(checkId);
+      }
+    } else {
+      stats.successfulRuns++;
+    }
+    if (result.issues) {
+      stats.issuesFound += result.issues.length;
+      for (const issue of result.issues) {
+        if (issue.severity === "critical") stats.issuesBySeverity.critical++;
+        else if (issue.severity === "error") stats.issuesBySeverity.error++;
+        else if (issue.severity === "warning") stats.issuesBySeverity.warning++;
+        else if (issue.severity === "info") stats.issuesBySeverity.info++;
+      }
+    }
+    if (stats.outputsProduced === void 0) {
+      const forEachItems = result.forEachItems;
+      if (Array.isArray(forEachItems)) stats.outputsProduced = forEachItems.length;
+      else if (result.output !== void 0) stats.outputsProduced = 1;
+    }
+    state.stats.set(checkId, stats);
+  }
+}
+var init_stats_manager = __esm({
+  "src/state-machine/dispatch/stats-manager.ts"() {
+    "use strict";
+  }
+});
+
 // src/providers/check-provider.interface.ts
 var CheckProvider;
 var init_check_provider_interface = __esm({
@@ -4307,15 +4965,15 @@ async function initializeTracer(sessionId, checkName) {
     const SimpleTelemetry = ProbeLib?.SimpleTelemetry;
     const SimpleAppTracer = ProbeLib?.SimpleAppTracer;
     if (SimpleTelemetry && SimpleAppTracer) {
-      const sanitizedCheckName = checkName ? path4.basename(checkName) : "check";
+      const sanitizedCheckName = checkName ? path5.basename(checkName) : "check";
       const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      const traceDir = process.env.GITHUB_WORKSPACE ? path4.join(process.env.GITHUB_WORKSPACE, "debug-artifacts") : path4.join(process.cwd(), "debug-artifacts");
-      if (!fs4.existsSync(traceDir)) {
-        fs4.mkdirSync(traceDir, { recursive: true });
+      const traceDir = process.env.GITHUB_WORKSPACE ? path5.join(process.env.GITHUB_WORKSPACE, "debug-artifacts") : path5.join(process.cwd(), "debug-artifacts");
+      if (!fs5.existsSync(traceDir)) {
+        fs5.mkdirSync(traceDir, { recursive: true });
       }
-      const traceFilePath = path4.join(traceDir, `trace-${sanitizedCheckName}-${timestamp}.jsonl`);
-      const resolvedTracePath = path4.resolve(traceFilePath);
-      const resolvedTraceDir = path4.resolve(traceDir);
+      const traceFilePath = path5.join(traceDir, `trace-${sanitizedCheckName}-${timestamp}.jsonl`);
+      const resolvedTracePath = path5.resolve(traceFilePath);
+      const resolvedTraceDir = path5.resolve(traceDir);
       if (!resolvedTracePath.startsWith(resolvedTraceDir)) {
         console.error(
           `\u26A0\uFE0F Security: Attempted path traversal detected. Check name: ${checkName}, resolved path: ${resolvedTracePath}`
@@ -4346,12 +5004,12 @@ async function initializeTracer(sessionId, checkName) {
     return null;
   }
 }
-var path4, fs4;
+var path5, fs5;
 var init_tracer_init = __esm({
   "src/utils/tracer-init.ts"() {
     "use strict";
-    path4 = __toESM(require("path"));
-    fs4 = __toESM(require("fs"));
+    path5 = __toESM(require("path"));
+    fs5 = __toESM(require("fs"));
   }
 });
 
@@ -4552,11 +5210,11 @@ async function processDiffWithOutline(diffContent) {
     const fs18 = require("fs");
     const possiblePaths = [
       // Relative to current working directory (most common in production)
-      path5.join(process.cwd(), "node_modules/@probelabs/probe/bin/probe-binary"),
+      path6.join(process.cwd(), "node_modules/@probelabs/probe/bin/probe-binary"),
       // Relative to __dirname (for unbundled development)
-      path5.join(__dirname, "../..", "node_modules/@probelabs/probe/bin/probe-binary"),
+      path6.join(__dirname, "../..", "node_modules/@probelabs/probe/bin/probe-binary"),
       // Relative to dist directory (for bundled CLI)
-      path5.join(__dirname, "node_modules/@probelabs/probe/bin/probe-binary")
+      path6.join(__dirname, "node_modules/@probelabs/probe/bin/probe-binary")
     ];
     let probeBinaryPath;
     for (const candidatePath of possiblePaths) {
@@ -4595,12 +5253,12 @@ async function processDiffWithOutline(diffContent) {
     return diffContent;
   }
 }
-var import_probe, path5;
+var import_probe, path6;
 var init_diff_processor = __esm({
   "src/utils/diff-processor.ts"() {
     "use strict";
     import_probe = require("@probelabs/probe");
-    path5 = __toESM(require("path"));
+    path6 = __toESM(require("path"));
   }
 });
 
@@ -6727,12 +7385,12 @@ var issue_filter_exports = {};
 __export(issue_filter_exports, {
   IssueFilter: () => IssueFilter
 });
-var fs5, path6, IssueFilter;
+var fs6, path7, IssueFilter;
 var init_issue_filter = __esm({
   "src/issue-filter.ts"() {
     "use strict";
-    fs5 = __toESM(require("fs"));
-    path6 = __toESM(require("path"));
+    fs6 = __toESM(require("fs"));
+    path7 = __toESM(require("path"));
     IssueFilter = class {
       fileCache = /* @__PURE__ */ new Map();
       suppressionEnabled;
@@ -6800,17 +7458,17 @@ var init_issue_filter = __esm({
           return this.fileCache.get(filePath);
         }
         try {
-          const resolvedPath = path6.isAbsolute(filePath) ? filePath : path6.join(workingDir, filePath);
-          if (!fs5.existsSync(resolvedPath)) {
-            if (fs5.existsSync(filePath)) {
-              const content2 = fs5.readFileSync(filePath, "utf8");
+          const resolvedPath = path7.isAbsolute(filePath) ? filePath : path7.join(workingDir, filePath);
+          if (!fs6.existsSync(resolvedPath)) {
+            if (fs6.existsSync(filePath)) {
+              const content2 = fs6.readFileSync(filePath, "utf8");
               const lines2 = content2.split("\n");
               this.fileCache.set(filePath, lines2);
               return lines2;
             }
             return null;
           }
-          const content = fs5.readFileSync(resolvedPath, "utf8");
+          const content = fs6.readFileSync(resolvedPath, "utf8");
           const lines = content.split("\n");
           this.fileCache.set(filePath, lines);
           return lines;
@@ -6825,378 +7483,6 @@ var init_issue_filter = __esm({
         this.fileCache.clear();
       }
     };
-  }
-});
-
-// src/liquid-extensions.ts
-var liquid_extensions_exports = {};
-__export(liquid_extensions_exports, {
-  ReadFileTag: () => ReadFileTag,
-  configureLiquidWithExtensions: () => configureLiquidWithExtensions,
-  createExtendedLiquid: () => createExtendedLiquid,
-  sanitizeLabel: () => sanitizeLabel,
-  sanitizeLabelList: () => sanitizeLabelList,
-  withPermissionsContext: () => withPermissionsContext
-});
-function sanitizeLabel(value) {
-  if (value == null) return "";
-  const s = String(value);
-  return s.replace(/[^A-Za-z0-9:\/\- ]/g, "").replace(/\/{2,}/g, "/").trim();
-}
-function sanitizeLabelList(labels) {
-  if (!Array.isArray(labels)) return [];
-  return labels.map((v) => sanitizeLabel(v)).filter((s) => s.length > 0);
-}
-async function withPermissionsContext(ctx, fn) {
-  return await permissionsALS.run(ctx, fn);
-}
-function configureLiquidWithExtensions(liquid) {
-  liquid.registerTag("readfile", ReadFileTag);
-  liquid.registerFilter("parse_json", (value) => {
-    if (typeof value !== "string") {
-      return value;
-    }
-    try {
-      return JSON.parse(value);
-    } catch {
-      return value;
-    }
-  });
-  liquid.registerFilter("to_json", (value) => {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return "[Error: Unable to serialize to JSON]";
-    }
-  });
-  liquid.registerFilter("safe_label", (value) => sanitizeLabel(value));
-  liquid.registerFilter("safe_label_list", (value) => sanitizeLabelList(value));
-  liquid.registerFilter("unescape_newlines", (value) => {
-    if (value == null) return "";
-    const s = String(value);
-    return s.replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\t/g, "	");
-  });
-  const isLocal = detectLocalMode();
-  const resolveAssoc = (val) => {
-    if (typeof val === "string" && val.length > 0) return val;
-    const store = permissionsALS.getStore();
-    return store?.authorAssociation;
-  };
-  liquid.registerFilter("has_min_permission", (authorAssociation, level) => {
-    return hasMinPermission(resolveAssoc(authorAssociation), level, isLocal);
-  });
-  liquid.registerFilter("is_owner", (authorAssociation) => {
-    return isOwner(resolveAssoc(authorAssociation), isLocal);
-  });
-  liquid.registerFilter("is_member", (authorAssociation) => {
-    return isMember(resolveAssoc(authorAssociation), isLocal);
-  });
-  liquid.registerFilter("is_collaborator", (authorAssociation) => {
-    return isCollaborator(resolveAssoc(authorAssociation), isLocal);
-  });
-  liquid.registerFilter("is_contributor", (authorAssociation) => {
-    return isContributor(resolveAssoc(authorAssociation), isLocal);
-  });
-  liquid.registerFilter("is_first_timer", (authorAssociation) => {
-    return isFirstTimer(resolveAssoc(authorAssociation), isLocal);
-  });
-  const memoryStore = MemoryStore.getInstance();
-  liquid.registerFilter("memory_get", (key, namespace) => {
-    if (typeof key !== "string") {
-      return void 0;
-    }
-    return memoryStore.get(key, namespace);
-  });
-  liquid.registerFilter("memory_has", (key, namespace) => {
-    if (typeof key !== "string") {
-      return false;
-    }
-    const has = memoryStore.has(key, namespace);
-    try {
-      if (process.env.VISOR_DEBUG === "true" && key === "fact_validation_issues") {
-        console.error(
-          `[liquid] memory_has('${key}', ns='${namespace || memoryStore.getDefaultNamespace()}') => ${String(
-            has
-          )}`
-        );
-      }
-    } catch {
-    }
-    return has;
-  });
-  liquid.registerFilter("memory_list", (namespace) => {
-    return memoryStore.list(namespace);
-  });
-  liquid.registerFilter("get", (obj, pathExpr) => {
-    if (obj == null) return void 0;
-    const path19 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
-    if (!path19) return obj;
-    const parts = path19.split(".");
-    let cur = obj;
-    for (const p of parts) {
-      if (cur == null) return void 0;
-      cur = cur[p];
-    }
-    return cur;
-  });
-  liquid.registerFilter("not_empty", (v) => {
-    if (Array.isArray(v)) return v.length > 0;
-    if (typeof v === "string") return v.length > 0;
-    if (v && typeof v === "object") return Object.keys(v).length > 0;
-    return false;
-  });
-  liquid.registerFilter("coalesce", (first, ...rest) => {
-    const all = [first, ...rest];
-    for (const v of all) {
-      if (Array.isArray(v) && v.length > 0) return v;
-      if (typeof v === "string" && v.length > 0) return v;
-      if (v && typeof v === "object" && Object.keys(v).length > 0) return v;
-    }
-    return Array.isArray(first) ? [] : first ?? void 0;
-  });
-  liquid.registerFilter("where_exp", (items, varName, expr) => {
-    const arr = Array.isArray(items) ? items : [];
-    const name = typeof varName === "string" && varName.trim() ? varName.trim() : "i";
-    const body = String(expr || "");
-    try {
-      const fn = new Function(
-        name,
-        "idx",
-        "arr",
-        `try { return (${body}); } catch { return false; }`
-      );
-      const out = [];
-      for (let idx = 0; idx < arr.length; idx++) {
-        const i = arr[idx];
-        let ok = false;
-        try {
-          ok = !!fn(i, idx, arr);
-        } catch {
-          ok = false;
-        }
-        if (ok) out.push(i);
-      }
-      return out;
-    } catch {
-      return [];
-    }
-  });
-  liquid.registerFilter(
-    "chat_history",
-    function(value, ...args) {
-      try {
-        const impl = this;
-        const ctx = impl?.context;
-        const allArgs = Array.isArray(args) ? args : [];
-        if (allArgs.length === 0) {
-          return [];
-        }
-        const positional = [];
-        const options = {};
-        for (const arg of allArgs) {
-          if (Array.isArray(arg) && arg.length === 2 && typeof arg[0] === "string" && arg[0].length > 0) {
-            options[arg[0]] = arg[1];
-          } else {
-            positional.push(arg);
-          }
-        }
-        const stepArgs = positional;
-        const steps = stepArgs.map((s) => String(s ?? "").trim()).filter((s) => s.length > 0);
-        if (steps.length === 0) return [];
-        const outputsHistoryVar = ctx?.get(["outputs_history"]) || {};
-        const outputsVar = ctx?.get(["outputs"]) || {};
-        const outputsHistory = outputsHistoryVar && Object.keys(outputsHistoryVar).length > 0 ? outputsHistoryVar : outputsVar?.history || {};
-        const checksMeta = ctx?.get(["checks_meta"]) || ctx?.get(["event"])?.payload?.__checksMeta || void 0;
-        const directionRaw = typeof options.direction === "string" ? options.direction.toLowerCase() : "";
-        const direction = directionRaw === "desc" ? "desc" : "asc";
-        const limit = typeof options.limit === "number" && options.limit > 0 ? Math.floor(options.limit) : void 0;
-        const textCfg = options.text && typeof options.text === "object" ? options.text : {};
-        const defaultField = typeof textCfg.default_field === "string" && textCfg.default_field.trim() ? textCfg.default_field.trim() : "text";
-        const byStepText = {};
-        if (textCfg.by_step && typeof textCfg.by_step === "object") {
-          for (const [k, v] of Object.entries(textCfg.by_step)) {
-            if (typeof v === "string" && v.trim()) {
-              byStepText[k] = v.trim();
-            }
-          }
-        }
-        const rolesCfg = options.roles && typeof options.roles === "object" ? options.roles : {};
-        const byTypeRole = {};
-        if (rolesCfg.by_type && typeof rolesCfg.by_type === "object") {
-          for (const [k, v] of Object.entries(rolesCfg.by_type)) {
-            if (typeof v === "string" && v.trim()) {
-              byTypeRole[k] = v.trim();
-            }
-          }
-        }
-        const byStepRole = {};
-        if (rolesCfg.by_step && typeof rolesCfg.by_step === "object") {
-          for (const [k, v] of Object.entries(rolesCfg.by_step)) {
-            if (typeof v === "string" && v.trim()) {
-              byStepRole[k] = v.trim();
-            }
-          }
-        }
-        if (typeof options.role_map === "string" && options.role_map.trim().length > 0) {
-          const parts = String(options.role_map).split(",").map((p) => p.trim()).filter(Boolean);
-          for (const part of parts) {
-            const eqIdx = part.indexOf("=");
-            if (eqIdx > 0) {
-              const k = part.slice(0, eqIdx).trim();
-              const v = part.slice(eqIdx + 1).trim();
-              if (k && v) {
-                byStepRole[k] = v;
-              }
-            }
-          }
-        }
-        const defaultRole = typeof rolesCfg.default === "string" && rolesCfg.default.trim() ? rolesCfg.default.trim() : void 0;
-        const getNested = (obj, path19) => {
-          if (!obj || !path19) return void 0;
-          const parts = path19.split(".");
-          let cur = obj;
-          for (const p of parts) {
-            if (cur == null) return void 0;
-            cur = cur[p];
-          }
-          return cur;
-        };
-        const normalizeText = (step, raw) => {
-          try {
-            const overrideField = byStepText[step];
-            if (overrideField) {
-              const val = getNested(raw, overrideField);
-              if (val !== void 0 && val !== null) {
-                const s = String(val);
-                if (s.trim().length > 0) return s;
-              }
-            }
-            if (raw && typeof raw === "object") {
-              if (typeof raw.text === "string" && raw.text.trim().length > 0) {
-                return raw.text;
-              }
-              if (typeof raw.content === "string" && raw.content.trim().length > 0) {
-                return raw.content;
-              }
-              const dfVal = raw[defaultField];
-              if (dfVal !== void 0 && dfVal !== null) {
-                const s = String(dfVal);
-                if (s.trim().length > 0) return s;
-              }
-            }
-            if (typeof raw === "string") return raw;
-            if (raw == null) return "";
-            try {
-              return JSON.stringify(raw);
-            } catch {
-              return String(raw);
-            }
-          } catch {
-            if (typeof raw === "string") return raw;
-            return "";
-          }
-        };
-        const normalizeRole = (step) => {
-          try {
-            if (byStepRole[step]) return byStepRole[step];
-            const meta = checksMeta ? checksMeta[step] : void 0;
-            const type = meta?.type;
-            if (type && byTypeRole[type]) return byTypeRole[type];
-            if (type === "human-input") return "user";
-            if (type === "ai") return "assistant";
-            if (defaultRole) return defaultRole;
-            if (type) {
-              if (type === "human-input") return "user";
-              if (type === "ai") return "assistant";
-            }
-          } catch {
-          }
-          return "assistant";
-        };
-        const messages = [];
-        const tsBase = Date.now();
-        let counter = 0;
-        for (const step of steps) {
-          const arr = outputsHistory?.[step];
-          if (!Array.isArray(arr)) continue;
-          for (const raw of arr) {
-            let ts;
-            if (raw && typeof raw === "object" && typeof raw.ts === "number") {
-              ts = raw.ts;
-            }
-            if (!Number.isFinite(ts)) {
-              ts = tsBase + counter++;
-            }
-            const text = normalizeText(step, raw);
-            const role = normalizeRole(step);
-            messages.push({ step, role, text, ts, raw });
-          }
-        }
-        messages.sort((a, b) => a.ts - b.ts);
-        if (direction === "desc") {
-          messages.reverse();
-        }
-        if (limit && limit > 0 && messages.length > limit) {
-          if (direction === "asc") {
-            return messages.slice(messages.length - limit);
-          }
-          return messages.slice(0, limit);
-        }
-        return messages;
-      } catch {
-        return [];
-      }
-    }
-  );
-}
-function createExtendedLiquid(options = {}) {
-  const liquid = new import_liquidjs.Liquid({
-    cache: false,
-    strictFilters: false,
-    strictVariables: false,
-    ...options
-  });
-  configureLiquidWithExtensions(liquid);
-  return liquid;
-}
-var import_liquidjs, import_async_hooks, import_promises2, import_path2, ReadFileTag, permissionsALS;
-var init_liquid_extensions = __esm({
-  "src/liquid-extensions.ts"() {
-    "use strict";
-    import_liquidjs = require("liquidjs");
-    import_async_hooks = require("async_hooks");
-    import_promises2 = __toESM(require("fs/promises"));
-    import_path2 = __toESM(require("path"));
-    init_author_permissions();
-    init_memory_store();
-    ReadFileTag = class extends import_liquidjs.Tag {
-      filepath;
-      constructor(token, remainTokens, liquid) {
-        super(token, remainTokens, liquid);
-        this.filepath = new import_liquidjs.Value(token.args, liquid);
-      }
-      *render(ctx, emitter) {
-        const filePath = yield this.filepath.value(ctx, false);
-        if (!filePath || typeof filePath !== "string") {
-          emitter.write("[Error: Invalid file path]");
-          return;
-        }
-        const projectRoot = process.cwd();
-        const resolvedPath = import_path2.default.resolve(projectRoot, filePath.toString());
-        if (!resolvedPath.startsWith(projectRoot)) {
-          emitter.write("[Error: File path escapes project directory]");
-          return;
-        }
-        try {
-          const content = yield import_promises2.default.readFile(resolvedPath, "utf-8");
-          emitter.write(content);
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : error?.code || "Unknown error";
-          emitter.write(`[Error reading file: ${errorMessage}]`);
-        }
-      }
-    };
-    permissionsALS = new import_async_hooks.AsyncLocalStorage();
   }
 });
 
@@ -7614,7 +7900,11 @@ var init_custom_tool_executor = __esm({
           try {
             output = JSON.parse(result.stdout);
           } catch (e) {
-            logger.warn(`Failed to parse tool output as JSON: ${e}`);
+            const err = e instanceof Error ? e : new Error(String(e));
+            logger.warn(`Failed to parse tool output as JSON: ${err.message}`);
+            if (!tool.transform && !tool.transform_js) {
+              throw new Error(`Tool '${toolName}' output could not be parsed as JSON: ${err.message}`);
+            }
           }
         }
         if (tool.transform) {
@@ -8165,7 +8455,7 @@ var init_ai_check_provider = __esm({
       /**
        * Process prompt configuration to resolve final prompt string
        */
-      async processPrompt(promptConfig, prInfo, eventContext, dependencyResults, outputHistory) {
+      async processPrompt(promptConfig, prInfo, eventContext, dependencyResults, outputHistory, args) {
         let promptContent;
         if (await this.isFilePath(promptConfig)) {
           promptContent = await this.loadPromptFromFile(promptConfig);
@@ -8177,7 +8467,8 @@ var init_ai_check_provider = __esm({
           prInfo,
           eventContext,
           dependencyResults,
-          outputHistory
+          outputHistory,
+          args
         );
       }
       /**
@@ -8262,7 +8553,7 @@ var init_ai_check_provider = __esm({
       /**
        * Render Liquid template in prompt with comprehensive event context
        */
-      async renderPromptTemplate(promptContent, prInfo, eventContext, dependencyResults, outputHistory) {
+      async renderPromptTemplate(promptContent, prInfo, eventContext, dependencyResults, outputHistory, args) {
         const outputsRaw = {};
         if (dependencyResults) {
           for (const [k, v] of dependencyResults.entries()) {
@@ -8417,7 +8708,9 @@ var init_ai_check_provider = __esm({
             return stage;
           })(),
           // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
-          outputs_raw: outputsRaw
+          outputs_raw: outputsRaw,
+          // Custom arguments from on_init 'with' directive
+          args: args || {}
         };
         try {
           if (process.env.VISOR_DEBUG === "true") {
@@ -8618,7 +8911,8 @@ var init_ai_check_provider = __esm({
               checkName,
               result.output !== void 0 ? result.output : result
             ])
-          ) : {}
+          ) : {},
+          args: sessionInfo?.args || {}
         };
         try {
           const span = trace.getSpan(context.active());
@@ -8656,7 +8950,8 @@ var init_ai_check_provider = __esm({
           prInfo,
           ctxWithStage,
           _dependencyResults,
-          config.__outputHistory
+          config.__outputHistory,
+          sessionInfo?.args
         );
         const aiAny = config.ai || {};
         const persona = (aiAny?.ai_persona || config.ai_persona || "").toString().trim();
@@ -10784,6 +11079,8 @@ var init_command_check_provider = __esm({
           outputs_raw: outputsRaw,
           // Workflow inputs (when executing within a workflow)
           inputs: context2?.workflowInputs || {},
+          // Custom arguments from on_init 'with' directive
+          args: context2?.args || {},
           env: this.getSafeEnvironmentVariables()
         };
         logger.debug(
@@ -12070,7 +12367,9 @@ function prCacheKey(pr) {
   for (const f of pr.files) sum += (f.additions || 0) + (f.deletions || 0) + (f.changes || 0);
   return [pr.number, pr.title, pr.author, pr.base, pr.head, pr.files.length, sum].join("|");
 }
-function buildProviderTemplateContext(prInfo, dependencyResults, memoryStore, outputHistory, stageHistoryBase, opts = { attachMemoryReadHelpers: true }) {
+function buildProviderTemplateContext(prInfo, dependencyResults, memoryStore, outputHistory, stageHistoryBase, opts = {
+  attachMemoryReadHelpers: true
+}) {
   const context2 = {};
   const key = prCacheKey(prInfo);
   let prObj = prCache.get(key);
@@ -12155,6 +12454,9 @@ function buildProviderTemplateContext(prInfo, dependencyResults, memoryStore, ou
       list: (ns) => memoryStore.list(ns),
       getAll: (ns) => memoryStore.getAll(ns)
     };
+  }
+  if (opts.args) {
+    context2.args = opts.args;
   }
   return context2;
 }
@@ -12301,7 +12603,8 @@ var init_memory_check_provider = __esm({
           dependencyResults,
           memoryStore,
           config.__outputHistory,
-          _sessionInfo?.stageHistoryBase
+          _sessionInfo?.stageHistoryBase,
+          _sessionInfo?.args
         );
         let result;
         try {
@@ -12452,13 +12755,14 @@ var init_memory_check_provider = __esm({
       /**
        * Build template context for Liquid and JS evaluation
        */
-      buildTemplateContext(prInfo, dependencyResults, memoryStore, outputHistory, stageHistoryBase) {
+      buildTemplateContext(prInfo, dependencyResults, memoryStore, outputHistory, stageHistoryBase, args) {
         const base = buildProviderTemplateContext(
           prInfo,
           dependencyResults,
           memoryStore,
           outputHistory,
-          stageHistoryBase
+          stageHistoryBase,
+          { attachMemoryReadHelpers: true, args }
         );
         if (memoryStore) {
           const { ops } = createSyncMemoryOps(memoryStore);
@@ -12597,7 +12901,7 @@ var init_mcp_check_provider = __esm({
         }
         return true;
       }
-      async execute(prInfo, config, dependencyResults) {
+      async execute(prInfo, config, dependencyResults, sessionInfo) {
         const cfg = config;
         try {
           const templateContext = {
@@ -12611,6 +12915,7 @@ var init_mcp_check_provider = __esm({
             files: prInfo.files,
             fileCount: prInfo.files.length,
             outputs: this.buildOutputContext(dependencyResults),
+            args: sessionInfo?.args || {},
             env: this.getSafeEnvironmentVariables()
           };
           let methodArgs = cfg.methodArgs || {};
@@ -14077,7 +14382,7 @@ var init_script_check_provider = __esm({
           memoryStore,
           config.__outputHistory,
           _sessionInfo?.stageHistoryBase,
-          { attachMemoryReadHelpers: false }
+          { attachMemoryReadHelpers: false, args: _sessionInfo?.args }
         );
         const { ops, needsSave } = createSyncMemoryOps(memoryStore);
         ctx.memory = ops;
@@ -16059,6 +16364,10 @@ var init_config_schema = __esm({
               type: "boolean",
               description: "Alias for fanout: 'reduce'"
             },
+            on_init: {
+              $ref: "#/definitions/OnInitConfig",
+              description: "Init routing configuration for this check (runs before execution/preprocessing)"
+            },
             on_fail: {
               $ref: "#/definitions/OnFailConfig",
               description: "Failure routing configuration for this check (retry/goto/run)"
@@ -16220,7 +16529,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21346-src_types_config.ts-0-34851%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -16676,6 +16985,161 @@ var init_config_schema = __esm({
           enum: ["error", "warning", "info"],
           description: "Failure condition severity levels"
         },
+        OnInitConfig: {
+          type: "object",
+          properties: {
+            run: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/OnInitRunItem"
+              },
+              description: "Items to run before this check executes"
+            },
+            run_js: {
+              type: "string",
+              description: "Dynamic init items: JS expression returning OnInitRunItem[]"
+            },
+            transitions: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/TransitionRule"
+              },
+              description: "Declarative transitions (optional, for advanced use cases)"
+            }
+          },
+          additionalProperties: false,
+          description: "Init routing configuration per check Runs BEFORE the check executes (preprocessing/setup)",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        OnInitRunItem: {
+          anyOf: [
+            {
+              $ref: "#/definitions/OnInitToolInvocation"
+            },
+            {
+              $ref: "#/definitions/OnInitStepInvocation"
+            },
+            {
+              $ref: "#/definitions/OnInitWorkflowInvocation"
+            },
+            {
+              type: "string"
+            }
+          ],
+          description: "Unified on_init run item - can be tool, step, workflow, or plain string"
+        },
+        OnInitToolInvocation: {
+          type: "object",
+          properties: {
+            tool: {
+              type: "string",
+              description: "Tool name (must exist in tools: section)"
+            },
+            with: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Arguments to pass to the tool (Liquid templates supported)"
+            },
+            as: {
+              type: "string",
+              description: "Custom output name (defaults to tool name)"
+            }
+          },
+          required: ["tool"],
+          additionalProperties: false,
+          description: "Invoke a custom tool (from tools: section)",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        OnInitStepInvocation: {
+          type: "object",
+          properties: {
+            step: {
+              type: "string",
+              description: "Step name (must exist in steps: section)"
+            },
+            with: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Arguments to pass to the step (Liquid templates supported)"
+            },
+            as: {
+              type: "string",
+              description: "Custom output name (defaults to step name)"
+            }
+          },
+          required: ["step"],
+          additionalProperties: false,
+          description: "Invoke a helper step (regular check)",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        OnInitWorkflowInvocation: {
+          type: "object",
+          properties: {
+            workflow: {
+              type: "string",
+              description: "Workflow ID or path"
+            },
+            with: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Workflow inputs (Liquid templates supported)"
+            },
+            as: {
+              type: "string",
+              description: "Custom output name (defaults to workflow name)"
+            },
+            overrides: {
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E%3E",
+              description: "Step overrides"
+            },
+            output_mapping: {
+              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
+              description: "Output mapping"
+            }
+          },
+          required: ["workflow"],
+          additionalProperties: false,
+          description: "Invoke a reusable workflow",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        "Record<string,Partial<interface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706>>": {
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E"
+          }
+        },
+        "Partial<interface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706>": {
+          type: "object",
+          additionalProperties: false
+        },
+        TransitionRule: {
+          type: "object",
+          properties: {
+            when: {
+              type: "string",
+              description: "JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule."
+            },
+            to: {
+              type: ["string", "null"],
+              description: "Target step ID, or null to explicitly prevent goto."
+            },
+            goto_event: {
+              $ref: "#/definitions/EventTrigger",
+              description: "Optional event override when performing goto."
+            }
+          },
+          required: ["when"],
+          additionalProperties: false,
+          description: "Declarative transition rule for on_* blocks.",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
         OnFailConfig: {
           type: "object",
           properties: {
@@ -16753,29 +17217,6 @@ var init_config_schema = __esm({
           },
           additionalProperties: false,
           description: "Backoff policy for retries",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        TransitionRule: {
-          type: "object",
-          properties: {
-            when: {
-              type: "string",
-              description: "JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule."
-            },
-            to: {
-              type: ["string", "null"],
-              description: "Target step ID, or null to explicitly prevent goto."
-            },
-            goto_event: {
-              $ref: "#/definitions/EventTrigger",
-              description: "Optional event override when performing goto."
-            }
-          },
-          required: ["when"],
-          additionalProperties: false,
-          description: "Declarative transition rule for on_* blocks.",
           patternProperties: {
             "^x-": {}
           }
@@ -16859,16 +17300,6 @@ var init_config_schema = __esm({
           patternProperties: {
             "^x-": {}
           }
-        },
-        "Record<string,Partial<interface-src_types_config.ts-11138-21346-src_types_config.ts-0-34851>>": {
-          type: "object",
-          additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11138-21346-src_types_config.ts-0-34851%3E"
-          }
-        },
-        "Partial<interface-src_types_config.ts-11138-21346-src_types_config.ts-0-34851>": {
-          type: "object",
-          additionalProperties: false
         },
         OutputConfig: {
           type: "object",
@@ -19690,6 +20121,1311 @@ var init_check_provider_registry = __esm({
   }
 });
 
+// src/state-machine/dispatch/foreach-processor.ts
+async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems, context2, state, emitEvent, transition) {
+  try {
+    const snapId = context2.journal.beginSnapshot();
+    const visible = context2.journal.readVisible(context2.sessionId, snapId, context2.event);
+    let latestItems;
+    for (let i = visible.length - 1; i >= 0; i--) {
+      const e = visible[i];
+      if (e.checkId === forEachParent && Array.isArray(e.scope) && e.scope.length === 0) {
+        const r = e.result;
+        if (r && Array.isArray(r.forEachItems)) {
+          latestItems = r.forEachItems;
+          break;
+        }
+      }
+    }
+    if (Array.isArray(latestItems)) {
+      if (context2.debug) {
+        try {
+          const prevLen = Array.isArray(forEachItems) ? forEachItems.length : 0;
+          const newLen = latestItems.length;
+          if (prevLen !== newLen) {
+            logger.info(
+              `[LevelDispatch] Refreshing forEachItems for ${checkId}: from parent '${forEachParent}' latestItems=${newLen} (was ${prevLen})`
+            );
+          }
+        } catch {
+        }
+      }
+      forEachItems = latestItems;
+    }
+  } catch (e) {
+    if (context2.debug) {
+      logger.warn(
+        `[LevelDispatch] Failed to refresh forEachItems from journal for ${forEachParent}: ${e}`
+      );
+    }
+  }
+  const checkConfig = context2.config.checks?.[checkId];
+  if (!checkConfig) {
+    throw new Error(`Check configuration not found: ${checkId}`);
+  }
+  logger.info(
+    `[LevelDispatch][DEBUG] executeCheckWithForEachItems: checkId=${checkId}, forEachParent=${forEachParent}, items=${forEachItems.length}`
+  );
+  logger.info(
+    `[LevelDispatch][DEBUG] forEachItems: ${JSON.stringify(forEachItems).substring(0, 200)}`
+  );
+  const allIssues = [];
+  const perItemResults = [];
+  const allOutputs = [];
+  const allContents = [];
+  const perIterationDurations = [];
+  for (let itemIndex = 0; itemIndex < forEachItems.length; itemIndex++) {
+    const iterationStartMs = Date.now();
+    const scope = [
+      { check: forEachParent, index: itemIndex }
+    ];
+    const forEachItem = forEachItems[itemIndex];
+    logger.info(
+      `[LevelDispatch][DEBUG] Starting iteration ${itemIndex} of ${checkId}, parent=${forEachParent}, item=${JSON.stringify(forEachItem)?.substring(0, 100)}`
+    );
+    const shouldSkipDueToParentFailure = forEachItem?.__failed === true || forEachItem?.__skip === true;
+    if (shouldSkipDueToParentFailure) {
+      logger.info(
+        `\u23ED  Skipped ${checkId} iteration ${itemIndex} (forEach parent "${forEachParent}" iteration ${itemIndex} marked as failed)`
+      );
+      const iterationDurationMs = Date.now() - iterationStartMs;
+      perIterationDurations.push(iterationDurationMs);
+      perItemResults.push({ issues: [] });
+      allOutputs.push({ __skip: true });
+      continue;
+    }
+    try {
+      emitNdjsonSpanWithEvents(
+        "visor.foreach.item",
+        {
+          "visor.check.id": checkId,
+          "visor.foreach.index": itemIndex,
+          "visor.foreach.total": forEachItems.length
+        },
+        []
+      );
+    } catch (error) {
+      logger.warn(`[LevelDispatch] Failed to emit foreach.item span: ${error}`);
+    }
+    emitEvent({ type: "CheckScheduled", checkId, scope });
+    const dispatch = {
+      id: `${checkId}-${itemIndex}-${Date.now()}`,
+      checkId,
+      scope,
+      provider: context2.checks[checkId]?.providerType || "unknown",
+      startMs: Date.now(),
+      attempts: 1,
+      foreachIndex: itemIndex
+    };
+    state.activeDispatches.set(`${checkId}-${itemIndex}`, dispatch);
+    try {
+      const providerType = checkConfig.type || "ai";
+      const providerRegistry = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports)).CheckProviderRegistry.getInstance();
+      const provider = providerRegistry.getProviderOrThrow(providerType);
+      const outputHistory = buildOutputHistoryFromJournal(context2);
+      const providerConfig = {
+        type: providerType,
+        checkName: checkId,
+        prompt: checkConfig.prompt,
+        exec: checkConfig.exec,
+        schema: checkConfig.schema,
+        group: checkConfig.group,
+        focus: checkConfig.focus || (() => {
+          const focusMap = {
+            security: "security",
+            performance: "performance",
+            style: "style",
+            architecture: "architecture"
+          };
+          return focusMap[checkId] || "all";
+        })(),
+        transform: checkConfig.transform,
+        transform_js: checkConfig.transform_js,
+        env: checkConfig.env,
+        forEach: checkConfig.forEach,
+        ...checkConfig,
+        eventContext: context2.prInfo?.eventContext || {},
+        __outputHistory: outputHistory,
+        ai: {
+          ...checkConfig.ai || {},
+          timeout: checkConfig.ai?.timeout || 6e5,
+          debug: !!context2.debug
+        }
+      };
+      const dependencyResults = buildDependencyResultsWithScope(
+        checkId,
+        checkConfig,
+        context2,
+        scope
+      );
+      try {
+        const rawDeps = checkConfig?.depends_on || [];
+        const depList = Array.isArray(rawDeps) ? rawDeps : [rawDeps];
+        if (depList.length > 0) {
+          const groupSatisfied = (token) => {
+            if (typeof token !== "string") return true;
+            const orOptions = token.includes("|") ? token.split("|").map((s) => s.trim()).filter(Boolean) : [token];
+            for (const opt of orOptions) {
+              const dr = dependencyResults.get(opt);
+              const depCfg = context2.config.checks?.[opt];
+              const cont = !!(depCfg && depCfg.continue_on_failure === true);
+              let failed = false;
+              let skipped = false;
+              if (!dr) failed = true;
+              else {
+                const out = dr.output;
+                const fatal = hasFatalIssues(dr);
+                failed = fatal || !!out && typeof out === "object" && out.__failed === true;
+                skipped = !!(out && typeof out === "object" && out.__skip === true);
+              }
+              const satisfied = !skipped && (!failed || cont);
+              if (satisfied) return true;
+            }
+            return false;
+          };
+          let allSatisfied = true;
+          for (const token of depList) {
+            if (!groupSatisfied(token)) {
+              allSatisfied = false;
+              break;
+            }
+          }
+          if (!allSatisfied) {
+            if (context2.debug) {
+              logger.info(
+                `[LevelDispatch] Skipping ${checkId} iteration ${itemIndex} due to unsatisfied dependency group(s)`
+              );
+            }
+            const iterationDurationMs2 = Date.now() - iterationStartMs;
+            perIterationDurations.push(iterationDurationMs2);
+            perItemResults.push({ issues: [] });
+            allOutputs.push({ __skip: true });
+            continue;
+          }
+        }
+      } catch {
+      }
+      const prInfo = context2.prInfo || {
+        number: 1,
+        title: "State Machine Execution",
+        author: "system",
+        eventType: context2.event || "manual",
+        eventContext: {},
+        files: [],
+        commits: []
+      };
+      const executionContext = {
+        ...context2.executionContext,
+        _engineMode: context2.mode,
+        _parentContext: context2,
+        _parentState: state
+      };
+      const result = await withActiveSpan(
+        `visor.check.${checkId}`,
+        { "visor.check.id": checkId, "visor.check.type": providerType },
+        async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+      );
+      const enrichedIssues = (result.issues || []).map((issue) => ({
+        ...issue,
+        checkName: checkId,
+        ruleId: `${checkId}/${issue.ruleId || "unknown"}`,
+        group: checkConfig.group,
+        schema: typeof checkConfig.schema === "object" ? "custom" : checkConfig.schema,
+        template: checkConfig.template,
+        timestamp: Date.now()
+      }));
+      const enrichedResult = { ...result, issues: enrichedIssues };
+      const iterationDurationMs = Date.now() - iterationStartMs;
+      perIterationDurations.push(iterationDurationMs);
+      updateStats(
+        [{ checkId, result: enrichedResult, duration: iterationDurationMs }],
+        state,
+        true
+      );
+      try {
+        context2.journal.commitEntry({
+          sessionId: context2.sessionId,
+          checkId,
+          result: enrichedResult,
+          event: context2.event || "manual",
+          scope
+        });
+        logger.info(
+          `[LevelDispatch][DEBUG] Committing to journal: checkId=${checkId}, scope=${JSON.stringify(scope)}, hasOutput=${enrichedResult.output !== void 0}`
+        );
+      } catch (error) {
+        logger.warn(`[LevelDispatch] Failed to commit per-iteration result to journal: ${error}`);
+      }
+      perItemResults.push(enrichedResult);
+      if (enrichedResult.content)
+        allContents.push(String(enrichedResult.content));
+      if (enrichedResult.output !== void 0)
+        allOutputs.push(enrichedResult.output);
+      allIssues.push(...enrichedResult.issues || []);
+      emitEvent({ type: "CheckCompleted", checkId, scope, result: enrichedResult });
+    } catch (error) {
+      const iterationDurationMs = Date.now() - iterationStartMs;
+      perIterationDurations.push(iterationDurationMs);
+      const err = error instanceof Error ? error : new Error(String(error));
+      logger.error(
+        `[LevelDispatch] Error executing ${checkId} iteration ${itemIndex}: ${err.message}`
+      );
+      updateStats(
+        [
+          {
+            checkId,
+            result: {
+              issues: [
+                {
+                  severity: "error",
+                  category: "logic",
+                  ruleId: `${checkId}/error`,
+                  file: "system",
+                  line: 0,
+                  message: err.message,
+                  timestamp: Date.now()
+                }
+              ]
+            },
+            error: err,
+            duration: iterationDurationMs
+          }
+        ],
+        state,
+        true
+      );
+      allOutputs.push({ __failed: true });
+      perItemResults.push({
+        issues: [
+          {
+            severity: "error",
+            category: "logic",
+            ruleId: `${checkId}/error`,
+            file: "system",
+            line: 0,
+            message: err.message,
+            timestamp: Date.now()
+          }
+        ]
+      });
+      emitEvent({
+        type: "CheckErrored",
+        checkId,
+        scope,
+        error: { message: err.message, stack: err.stack, name: err.name }
+      });
+    } finally {
+      state.activeDispatches.delete(`${checkId}-${itemIndex}`);
+    }
+  }
+  const checkStats = state.stats.get(checkId);
+  if (checkStats) {
+    checkStats.outputsProduced = allOutputs.length;
+    checkStats.perIterationDuration = perIterationDurations;
+    const previewItems = allOutputs.slice(0, 3).map((item) => {
+      const str = typeof item === "string" ? item : JSON.stringify(item) ?? "undefined";
+      return str.length > 50 ? str.substring(0, 50) + "..." : str;
+    });
+    checkStats.forEachPreview = allOutputs.length > 3 ? [...previewItems, `...${allOutputs.length - 3} more`] : previewItems;
+    state.stats.set(checkId, checkStats);
+    if (checkStats.totalRuns > 0 && checkStats.failedRuns === checkStats.totalRuns) {
+      logger.info(
+        `[LevelDispatch] forEach check ${checkId} failed completely (${checkStats.failedRuns}/${checkStats.totalRuns} iterations failed)`
+      );
+      state.failedChecks = state.failedChecks || /* @__PURE__ */ new Set();
+      state.failedChecks.add(checkId);
+    }
+  }
+  const aggregatedResult = {
+    issues: allIssues,
+    isForEach: true,
+    forEachItems: allOutputs,
+    forEachItemResults: perItemResults,
+    ...allContents.length > 0 ? { content: allContents.join("\n") } : {}
+  };
+  logger.info(
+    `[LevelDispatch][DEBUG] Aggregated result for ${checkId}: forEachItems.length=${allOutputs.length}, results=${perItemResults.length}`
+  );
+  logger.info(`[LevelDispatch][DEBUG] allOutputs: ${JSON.stringify(allOutputs).substring(0, 200)}`);
+  try {
+    logger.info(`[LevelDispatch] Calling handleRouting for ${checkId}`);
+  } catch {
+  }
+  try {
+    state.completedChecks.add(checkId);
+    const currentWaveCompletions = state.currentWaveCompletions;
+    if (currentWaveCompletions) currentWaveCompletions.add(checkId);
+    await handleRouting(context2, state, transition, emitEvent, {
+      checkId,
+      scope: [],
+      result: aggregatedResult,
+      checkConfig,
+      success: !hasFatalIssues(aggregatedResult)
+    });
+  } catch (error) {
+    logger.warn(`[LevelDispatch] Routing error for aggregated forEach ${checkId}: ${error}`);
+  }
+  try {
+    context2.journal.commitEntry({
+      sessionId: context2.sessionId,
+      checkId,
+      result: aggregatedResult,
+      event: context2.event || "manual",
+      scope: []
+    });
+    logger.info(`[LevelDispatch][DEBUG] Committed aggregated result to journal with scope=[]`);
+  } catch (error) {
+    logger.warn(`[LevelDispatch] Failed to commit aggregated forEach result to journal: ${error}`);
+  }
+  emitEvent({ type: "CheckCompleted", checkId, scope: [], result: aggregatedResult });
+  const parentCheckConfig = context2.config.checks?.[forEachParent];
+  logger.info(
+    `[LevelDispatch][DEBUG] Checking on_finish for forEach parent ${forEachParent}: has_on_finish=${!!parentCheckConfig?.on_finish}, is_forEach=${!!parentCheckConfig?.forEach}`
+  );
+  if (parentCheckConfig?.on_finish && parentCheckConfig.forEach) {
+    logger.info(
+      `[LevelDispatch] Processing on_finish for forEach parent ${forEachParent} after children complete`
+    );
+    try {
+      const snapshotId = context2.journal.beginSnapshot();
+      const { ContextView: ContextView2 } = (init_snapshot_store(), __toCommonJS(snapshot_store_exports));
+      const contextView = new ContextView2(
+        context2.journal,
+        context2.sessionId,
+        snapshotId,
+        [],
+        context2.event
+      );
+      const parentResult = contextView.get(forEachParent);
+      if (parentResult) {
+        logger.info(
+          `[LevelDispatch] Found parent result for ${forEachParent}, evaluating on_finish`
+        );
+        const onFinish = parentCheckConfig.on_finish;
+        let queuedForward = false;
+        logger.info(
+          `[LevelDispatch] on_finish.run: ${onFinish.run?.length || 0} targets, targets=${JSON.stringify(onFinish.run || [])}`
+        );
+        if (onFinish.run && onFinish.run.length > 0) {
+          for (const targetCheck of onFinish.run) {
+            logger.info(`[LevelDispatch] Processing on_finish.run target: ${targetCheck}`);
+            logger.info(
+              `[LevelDispatch] Loop budget check: routingLoopCount=${state.routingLoopCount}, max_loops=${context2.config.routing?.max_loops ?? 10}`
+            );
+            if (checkLoopBudget(context2, state, "on_finish", "run")) {
+              const errorIssue = {
+                file: "system",
+                line: 0,
+                ruleId: `${forEachParent}/routing/loop_budget_exceeded`,
+                message: `Routing loop budget exceeded (max_loops=${context2.config.routing?.max_loops ?? 10}) during on_finish run`,
+                severity: "error",
+                category: "logic"
+              };
+              parentResult.issues = [...parentResult.issues || [], errorIssue];
+              try {
+                context2.journal.commitEntry({
+                  sessionId: context2.sessionId,
+                  checkId: forEachParent,
+                  result: parentResult,
+                  event: context2.event || "manual",
+                  scope: []
+                });
+              } catch (err) {
+                logger.warn(
+                  `[LevelDispatch] Failed to commit parent result with loop budget error: ${err}`
+                );
+              }
+              return aggregatedResult;
+            }
+            state.routingLoopCount++;
+            emitEvent({
+              type: "ForwardRunRequested",
+              target: targetCheck,
+              scope: [],
+              origin: "run"
+            });
+            queuedForward = true;
+          }
+        }
+        if (context2.debug) {
+          logger.info(
+            `[LevelDispatch] Evaluating on_finish.goto_js for forEach parent: ${forEachParent}`
+          );
+          if (onFinish.goto_js)
+            logger.info(`[LevelDispatch] goto_js code: ${onFinish.goto_js.substring(0, 200)}`);
+          try {
+            const snapshotId2 = context2.journal.beginSnapshot();
+            const all = context2.journal.readVisible(context2.sessionId, snapshotId2, void 0);
+            const keys = Array.from(new Set(all.map((e) => e.checkId)));
+            logger.info(`[LevelDispatch] history keys: ${keys.join(", ")}`);
+          } catch {
+          }
+        }
+        const gotoTarget = await evaluateGoto(
+          onFinish.goto_js,
+          onFinish.goto,
+          forEachParent,
+          parentCheckConfig,
+          parentResult,
+          context2,
+          state
+        );
+        if (context2.debug)
+          logger.info(`[LevelDispatch] goto_js evaluation result: ${gotoTarget || "null"}`);
+        if (gotoTarget) {
+          if (queuedForward && gotoTarget === forEachParent) {
+            logger.info(
+              `[LevelDispatch] on_finish.goto to self (${gotoTarget}) deferred, will process after WaveRetry`
+            );
+            emitEvent({ type: "WaveRetry", reason: "on_finish" });
+          } else {
+            if (checkLoopBudget(context2, state, "on_finish", "goto")) {
+              const errorIssue = {
+                file: "system",
+                line: 0,
+                ruleId: `${forEachParent}/routing/loop_budget_exceeded`,
+                message: `Routing loop budget exceeded (max_loops=${context2.config.routing?.max_loops ?? 10}) during on_finish goto`,
+                severity: "error",
+                category: "logic"
+              };
+              parentResult.issues = [...parentResult.issues || [], errorIssue];
+              try {
+                context2.journal.commitEntry({
+                  sessionId: context2.sessionId,
+                  checkId: forEachParent,
+                  result: parentResult,
+                  event: context2.event || "manual",
+                  scope: []
+                });
+              } catch {
+              }
+              return aggregatedResult;
+            }
+            state.routingLoopCount++;
+            emitEvent({ type: "ForwardRunRequested", target: gotoTarget, origin: "goto" });
+          }
+        }
+        if (queuedForward) {
+          const guardKey = `waveRetry:on_finish:${forEachParent}:wave:${state.wave}`;
+          logger.info(
+            `[LevelDispatch] Checking WaveRetry guard: ${guardKey}, has=${!!state.forwardRunGuards?.has(guardKey)}`
+          );
+          if (!state.forwardRunGuards?.has(guardKey)) {
+            state.forwardRunGuards?.add(guardKey);
+            logger.info(`[LevelDispatch] Emitting WaveRetry event for on_finish.run targets`);
+            emitEvent({ type: "WaveRetry", reason: "on_finish" });
+          }
+        }
+      }
+    } catch {
+    }
+  }
+  return aggregatedResult;
+}
+var init_foreach_processor = __esm({
+  "src/state-machine/dispatch/foreach-processor.ts"() {
+    "use strict";
+    init_logger();
+    init_fallback_ndjson();
+    init_trace_helpers();
+    init_history_snapshot();
+    init_dependency_gating();
+    init_stats_manager();
+    init_routing();
+  }
+});
+
+// src/state-machine/dispatch/on-init-handlers.ts
+async function renderTemplateArguments(args, prInfo, dependencyResults, executionContext) {
+  const renderedArgs = {};
+  if (!args) {
+    return renderedArgs;
+  }
+  const liquid = createExtendedLiquid();
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === "string") {
+      try {
+        renderedArgs[key] = await liquid.parseAndRender(value, {
+          pr: prInfo,
+          outputs: dependencyResults,
+          env: process.env,
+          args: executionContext.args || {}
+        });
+      } catch (error) {
+        logger.warn(`[OnInit] Failed to render template for ${key}: ${error}`);
+        renderedArgs[key] = value;
+      }
+    } else {
+      renderedArgs[key] = value;
+    }
+  }
+  return renderedArgs;
+}
+async function executeInvocation(item, context2, scope, prInfo, dependencyResults, executionContext) {
+  const CheckProviderRegistry2 = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports)).CheckProviderRegistry;
+  const providerRegistry = CheckProviderRegistry2.getInstance();
+  const renderedArgs = await renderTemplateArguments(
+    item.with,
+    prInfo,
+    dependencyResults,
+    executionContext
+  );
+  if ("tool" in item) {
+    const toolName = item.tool;
+    const toolDef = context2.config.tools?.[toolName];
+    if (!toolDef) {
+      throw new Error(`Tool '${toolName}' not found in tools: section`);
+    }
+    logger.info(`[OnInit] Executing tool: ${toolName}`);
+    const tempCheckConfig = {
+      type: "mcp",
+      method: toolName,
+      transport: "custom",
+      args: renderedArgs
+    };
+    const provider = providerRegistry.getProviderOrThrow("mcp");
+    const result = await provider.execute(
+      prInfo,
+      tempCheckConfig,
+      dependencyResults,
+      executionContext
+    );
+    const output = result.output;
+    logger.info(`[OnInit] Tool ${toolName} completed`);
+    return output;
+  } else if ("step" in item) {
+    const stepName = item.step;
+    const stepConfig = context2.config.checks?.[stepName];
+    if (!stepConfig) {
+      throw new Error(`Step '${stepName}' not found in checks: section`);
+    }
+    logger.info(`[OnInit] Executing step: ${stepName}`);
+    const enrichedExecutionContext = {
+      ...executionContext,
+      args: renderedArgs
+    };
+    const providerType = stepConfig.type || "ai";
+    const provider = providerRegistry.getProviderOrThrow(providerType);
+    const { buildOutputHistoryFromJournal: buildOutputHistoryFromJournal3 } = (init_history_snapshot(), __toCommonJS(history_snapshot_exports));
+    const outputHistory = buildOutputHistoryFromJournal3(context2);
+    const providerConfig = {
+      type: providerType,
+      checkName: stepName,
+      prompt: stepConfig.prompt,
+      exec: stepConfig.exec,
+      schema: stepConfig.schema,
+      group: stepConfig.group,
+      transform: stepConfig.transform,
+      transform_js: stepConfig.transform_js,
+      env: stepConfig.env,
+      ...stepConfig,
+      eventContext: prInfo?.eventContext || {},
+      __outputHistory: outputHistory,
+      ai: {
+        ...stepConfig.ai || {},
+        timeout: stepConfig.ai?.timeout || 6e5,
+        debug: !!context2.debug
+      }
+    };
+    const result = await provider.execute(
+      prInfo,
+      providerConfig,
+      dependencyResults,
+      enrichedExecutionContext
+    );
+    const output = result.output;
+    logger.info(`[OnInit] Step ${stepName} completed`);
+    return output;
+  } else if ("workflow" in item) {
+    const workflowName = item.workflow;
+    if (!workflowName) {
+      throw new Error("Workflow name is required in on_init workflow invocation");
+    }
+    logger.info(`[OnInit] Executing workflow: ${workflowName}`);
+    const tempCheckConfig = {
+      type: "workflow",
+      workflow: workflowName,
+      args: renderedArgs,
+      overrides: item.overrides,
+      output_mapping: item.output_mapping
+    };
+    const provider = providerRegistry.getProviderOrThrow("workflow");
+    const result = await provider.execute(
+      prInfo,
+      tempCheckConfig,
+      dependencyResults,
+      executionContext
+    );
+    const output = result.output;
+    logger.info(`[OnInit] Workflow ${workflowName} completed`);
+    return output;
+  }
+  throw new Error("Invalid on_init invocation: must specify tool, step, or workflow");
+}
+async function executeToolInvocation(item, context2, scope, prInfo, dependencyResults, executionContext) {
+  return executeInvocation(item, context2, scope, prInfo, dependencyResults, executionContext);
+}
+async function executeStepInvocation(item, context2, scope, prInfo, dependencyResults, executionContext) {
+  return executeInvocation(item, context2, scope, prInfo, dependencyResults, executionContext);
+}
+async function executeWorkflowInvocation(item, context2, scope, prInfo, dependencyResults, executionContext) {
+  return executeInvocation(item, context2, scope, prInfo, dependencyResults, executionContext);
+}
+var init_on_init_handlers = __esm({
+  "src/state-machine/dispatch/on-init-handlers.ts"() {
+    "use strict";
+    init_logger();
+    init_liquid_extensions();
+  }
+});
+
+// src/state-machine/dispatch/execution-invoker.ts
+var execution_invoker_exports = {};
+__export(execution_invoker_exports, {
+  executeSingleCheck: () => executeSingleCheck
+});
+function normalizeRunItems(run) {
+  if (!Array.isArray(run)) return [];
+  return run.filter(Boolean);
+}
+function detectInvocationType(item) {
+  if (typeof item === "string") return "step";
+  if ("tool" in item) return "tool";
+  if ("workflow" in item) return "workflow";
+  if ("step" in item) return "step";
+  throw new Error(
+    `Invalid on_init item type: ${JSON.stringify(item)}. Must specify tool, step, or workflow.`
+  );
+}
+async function executeOnInitItem(item, context2, scope, prInfo, dependencyResults, executionContext) {
+  const itemType = detectInvocationType(item);
+  let output;
+  let outputName;
+  switch (itemType) {
+    case "tool": {
+      const toolItem = item;
+      output = await executeToolInvocation(
+        toolItem,
+        context2,
+        scope,
+        prInfo,
+        dependencyResults,
+        executionContext
+      );
+      outputName = toolItem.as || toolItem.tool;
+      break;
+    }
+    case "step": {
+      if (typeof item === "string") {
+        const stepItem = { step: item, with: void 0, as: item };
+        output = await executeStepInvocation(
+          stepItem,
+          context2,
+          scope,
+          prInfo,
+          dependencyResults,
+          executionContext
+        );
+        outputName = item;
+      } else {
+        const stepItem = item;
+        output = await executeStepInvocation(
+          stepItem,
+          context2,
+          scope,
+          prInfo,
+          dependencyResults,
+          executionContext
+        );
+        outputName = stepItem.as || stepItem.step;
+      }
+      break;
+    }
+    case "workflow": {
+      const workflowItem = item;
+      output = await executeWorkflowInvocation(
+        workflowItem,
+        context2,
+        scope,
+        prInfo,
+        dependencyResults,
+        executionContext
+      );
+      outputName = workflowItem.as || workflowItem.workflow;
+      break;
+    }
+    default:
+      throw new Error(`Unknown on_init item type: ${itemType}`);
+  }
+  return { output, outputName };
+}
+async function handleOnInit(checkId, onInit, context2, scope, prInfo, dependencyResults, executionContext) {
+  logger.info(`[OnInit] Processing on_init for check: ${checkId}`);
+  if (executionContext.__onInitDepth && executionContext.__onInitDepth > 0) {
+    logger.warn(
+      `[OnInit] Skipping nested on_init for ${checkId} (depth: ${executionContext.__onInitDepth})`
+    );
+    return;
+  }
+  let runItems = [];
+  if (onInit.run_js) {
+    logger.info(`[OnInit] Evaluating run_js for ${checkId}`);
+    try {
+      const sandbox = createSecureSandbox();
+      const result = await compileAndRun(
+        sandbox,
+        onInit.run_js,
+        {
+          pr: prInfo,
+          outputs: dependencyResults,
+          env: process.env,
+          args: executionContext.args || {}
+        },
+        { injectLog: true, wrapFunction: false }
+      );
+      if (Array.isArray(result)) {
+        runItems = result;
+      } else {
+        logger.warn(`[OnInit] run_js for ${checkId} did not return an array, got ${typeof result}`);
+      }
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      logger.error(`[OnInit] Error evaluating run_js for ${checkId}: ${err.message}`);
+      const wrappedError = new Error(`on_init.run_js evaluation failed: ${err.message}`);
+      wrappedError.stack = err.stack;
+      throw wrappedError;
+    }
+  } else if (onInit.run) {
+    runItems = normalizeRunItems(onInit.run);
+  }
+  if (runItems.length === 0) {
+    logger.info(`[OnInit] No items to run for ${checkId}`);
+    return;
+  }
+  if (runItems.length > MAX_ON_INIT_ITEMS) {
+    const msg = `on_init for ${checkId} has ${runItems.length} items, exceeding maximum of ${MAX_ON_INIT_ITEMS}`;
+    logger.error(`[OnInit] ${msg}`);
+    throw new Error(msg);
+  }
+  logger.info(`[OnInit] Running ${runItems.length} items for ${checkId}`);
+  const originalDepth = executionContext.__onInitDepth || 0;
+  executionContext.__onInitDepth = originalDepth + 1;
+  try {
+    for (let i = 0; i < runItems.length; i++) {
+      const item = runItems[i];
+      const itemType = detectInvocationType(item);
+      const itemName = typeof item === "string" ? item : "tool" in item ? item.tool : "step" in item ? item.step : "workflow" in item ? item.workflow : "unknown";
+      logger.info(`[OnInit] [${i + 1}/${runItems.length}] Executing ${itemType}: ${itemName}`);
+      try {
+        const { output, outputName } = await executeOnInitItem(
+          item,
+          context2,
+          scope,
+          prInfo,
+          dependencyResults,
+          executionContext
+        );
+        dependencyResults[outputName] = output;
+        logger.info(`[OnInit] Stored output as: ${outputName}`);
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        logger.error(
+          `[OnInit] Error executing ${itemType} ${itemName} for ${checkId}: ${err.message}`
+        );
+        const wrappedError = new Error(`on_init ${itemType} '${itemName}' failed: ${err.message}`);
+        wrappedError.stack = err.stack;
+        throw wrappedError;
+      }
+    }
+    logger.info(`[OnInit] Completed all on_init items for ${checkId}`);
+  } finally {
+    executionContext.__onInitDepth = originalDepth;
+  }
+}
+async function executeSingleCheck(checkId, context2, state, emitEvent, transition, evaluateIf, scopeOverride) {
+  const checkConfig = context2.config.checks?.[checkId];
+  if (checkConfig?.if) {
+    const shouldRun = await evaluateIf(checkId, checkConfig, context2, state);
+    if (!shouldRun) {
+      logger.info(
+        `\u23ED  Skipped (if: ${checkConfig.if.substring(0, 40)}${checkConfig.if.length > 40 ? "..." : ""})`
+      );
+      const emptyResult = { issues: [] };
+      try {
+        Object.defineProperty(emptyResult, "__skipped", {
+          value: "if_condition",
+          enumerable: false
+        });
+      } catch {
+      }
+      state.completedChecks.add(checkId);
+      const stats = {
+        checkName: checkId,
+        totalRuns: 0,
+        successfulRuns: 0,
+        failedRuns: 0,
+        skippedRuns: 0,
+        skipped: true,
+        skipReason: "if_condition",
+        skipCondition: checkConfig.if,
+        totalDuration: 0,
+        issuesFound: 0,
+        issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 }
+      };
+      state.stats.set(checkId, stats);
+      logger.info(`[LevelDispatch] Recorded skip stats for ${checkId}: skipReason=if_condition`);
+      try {
+        context2.journal.commitEntry({
+          sessionId: context2.sessionId,
+          checkId,
+          result: emptyResult,
+          event: context2.event || "manual",
+          scope: []
+        });
+      } catch (error) {
+        logger.warn(`[LevelDispatch] Failed to commit skipped result to journal: ${error}`);
+      }
+      emitEvent({ type: "CheckCompleted", checkId, scope: [], result: emptyResult });
+      return emptyResult;
+    }
+  }
+  const dependencies = checkConfig?.depends_on || [];
+  const depList = Array.isArray(dependencies) ? dependencies : [dependencies];
+  const failedChecks = state.failedChecks;
+  const tokens = depList.filter(Boolean);
+  const groupSatisfied = (token) => {
+    const options = token.includes("|") ? token.split("|").map((s) => s.trim()).filter(Boolean) : [token];
+    for (const opt of options) {
+      const depCfg = context2.config.checks?.[opt];
+      const cont = !!(depCfg && depCfg.continue_on_failure === true);
+      const st = state.stats.get(opt);
+      const wasMarkedFailed = !!(failedChecks && failedChecks.has(opt));
+      const skipped = !!(st && st.skipped === true);
+      const failedOnly = !!(st && (st.failedRuns || 0) > 0 && (st.successfulRuns || 0) === 0);
+      const satisfied = !skipped && (!failedOnly && !wasMarkedFailed || cont);
+      if (satisfied) return true;
+    }
+    return false;
+  };
+  if (tokens.length > 0) {
+    let allOk = true;
+    for (const t of tokens) {
+      if (!groupSatisfied(t)) {
+        allOk = false;
+        break;
+      }
+    }
+    if (!allOk) {
+      const emptyResult = { issues: [] };
+      try {
+        Object.defineProperty(emptyResult, "__skipped", {
+          value: "dependency_failed",
+          enumerable: false
+        });
+      } catch {
+      }
+      state.completedChecks.add(checkId);
+      state.failedChecks = state.failedChecks || /* @__PURE__ */ new Set();
+      state.failedChecks.add(checkId);
+      const stats = {
+        checkName: checkId,
+        totalRuns: 0,
+        successfulRuns: 0,
+        failedRuns: 0,
+        skippedRuns: 0,
+        skipped: true,
+        skipReason: "dependency_failed",
+        totalDuration: 0,
+        issuesFound: 0,
+        issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 }
+      };
+      state.stats.set(checkId, stats);
+      try {
+        context2.journal.commitEntry({
+          sessionId: context2.sessionId,
+          checkId,
+          result: emptyResult,
+          event: context2.event || "manual",
+          scope: []
+        });
+      } catch (error) {
+        logger.warn(`[LevelDispatch] Failed to commit empty result to journal: ${error}`);
+      }
+      emitEvent({ type: "CheckCompleted", checkId, scope: [], result: emptyResult });
+      return emptyResult;
+    }
+  }
+  let forEachParent;
+  let forEachItems;
+  for (const depId of depList) {
+    if (!depId) continue;
+    try {
+      const snapshotId = context2.journal.beginSnapshot();
+      const { ContextView: ContextView2 } = (init_snapshot_store(), __toCommonJS(snapshot_store_exports));
+      const contextView = new ContextView2(
+        context2.journal,
+        context2.sessionId,
+        snapshotId,
+        [],
+        context2.event
+      );
+      const depResult = contextView.get(depId);
+      if (depResult?.forEachItems && Array.isArray(depResult.forEachItems)) {
+        forEachParent = depId;
+        forEachItems = depResult.forEachItems;
+        break;
+      }
+    } catch {
+    }
+  }
+  if (forEachParent && forEachItems !== void 0) {
+    let fanoutMode = "reduce";
+    const explicit = checkConfig?.fanout;
+    if (explicit === "map" || explicit === "reduce") fanoutMode = explicit;
+    else {
+      const providerType = context2.checks[checkId]?.providerType || "";
+      const reduceProviders = /* @__PURE__ */ new Set(["log", "memory", "script", "workflow", "noop"]);
+      fanoutMode = reduceProviders.has(providerType) ? "reduce" : "map";
+    }
+    if (fanoutMode === "map") {
+      if (forEachItems.length === 0) {
+        logger.info(`\u23ED  Skipped (forEach parent "${forEachParent}" has 0 items)`);
+        const emptyResult = { issues: [] };
+        try {
+          Object.defineProperty(emptyResult, "__skipped", {
+            value: "forEach_empty",
+            enumerable: false
+          });
+        } catch {
+        }
+        state.completedChecks.add(checkId);
+        let derivedSkipReason = "forEach_empty";
+        try {
+          const parentFailed = !!(state.failedChecks && state.failedChecks.has(forEachParent)) || (() => {
+            const s = state.stats.get(forEachParent);
+            return !!(s && (s.failedRuns || 0) > 0);
+          })();
+          if (parentFailed) derivedSkipReason = "dependency_failed";
+        } catch {
+        }
+        const stats = {
+          checkName: checkId,
+          totalRuns: 0,
+          successfulRuns: 0,
+          failedRuns: 0,
+          skippedRuns: 0,
+          skipped: true,
+          skipReason: derivedSkipReason,
+          totalDuration: 0,
+          issuesFound: 0,
+          issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 }
+        };
+        state.stats.set(checkId, stats);
+        try {
+          context2.journal.commitEntry({
+            sessionId: context2.sessionId,
+            checkId,
+            result: emptyResult,
+            event: context2.event || "manual",
+            scope: []
+          });
+        } catch (error) {
+          logger.warn(`[LevelDispatch] Failed to commit empty result to journal: ${error}`);
+        }
+        emitEvent({ type: "CheckCompleted", checkId, scope: [], result: emptyResult });
+        return emptyResult;
+      }
+      return await executeCheckWithForEachItems(
+        checkId,
+        forEachParent,
+        forEachItems,
+        context2,
+        state,
+        emitEvent,
+        transition
+      );
+    }
+  }
+  const scope = scopeOverride || [];
+  emitEvent({ type: "CheckScheduled", checkId, scope });
+  const startTime = Date.now();
+  const dispatch = {
+    id: `${checkId}-${Date.now()}`,
+    checkId,
+    scope,
+    provider: context2.checks[checkId]?.providerType || "unknown",
+    startMs: startTime,
+    attempts: 1
+  };
+  state.activeDispatches.set(checkId, dispatch);
+  try {
+    if (!checkConfig) throw new Error(`Check configuration not found: ${checkId}`);
+    const providerType = checkConfig.type || "ai";
+    const providerRegistry = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports)).CheckProviderRegistry.getInstance();
+    const provider = providerRegistry.getProviderOrThrow(providerType);
+    const outputHistory = buildOutputHistoryFromJournal(context2);
+    const providerConfig = {
+      type: providerType,
+      checkName: checkId,
+      prompt: checkConfig.prompt,
+      exec: checkConfig.exec,
+      schema: checkConfig.schema,
+      group: checkConfig.group,
+      focus: checkConfig.focus || mapCheckNameToFocus(checkId),
+      transform: checkConfig.transform,
+      transform_js: checkConfig.transform_js,
+      env: checkConfig.env,
+      forEach: checkConfig.forEach,
+      ...checkConfig,
+      eventContext: context2.prInfo?.eventContext || {},
+      __outputHistory: outputHistory,
+      ai: {
+        ...checkConfig.ai || {},
+        timeout: checkConfig.ai?.timeout || 6e5,
+        debug: !!context2.debug
+      }
+    };
+    const dependencyResults = buildDependencyResultsWithScope(checkId, checkConfig, context2, scope);
+    const prInfo = context2.prInfo || {
+      number: 1,
+      title: "State Machine Execution",
+      author: "system",
+      eventType: context2.event || "manual",
+      eventContext: {},
+      files: [],
+      commits: []
+    };
+    const executionContext = {
+      ...context2.executionContext,
+      _engineMode: context2.mode,
+      _parentContext: context2,
+      _parentState: state
+    };
+    if (checkConfig.on_init) {
+      try {
+        const dependencyResultsMap = {};
+        for (const [key, value] of dependencyResults.entries()) {
+          dependencyResultsMap[key] = value;
+        }
+        await handleOnInit(
+          checkId,
+          checkConfig.on_init,
+          context2,
+          scope,
+          prInfo,
+          dependencyResultsMap,
+          executionContext
+        );
+        for (const [key, value] of Object.entries(dependencyResultsMap)) {
+          if (!dependencyResults.has(key)) {
+            dependencyResults.set(key, value);
+          }
+        }
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        logger.error(`[LevelDispatch] on_init failed for ${checkId}: ${err.message}`);
+        throw err;
+      }
+    }
+    try {
+      emitNdjsonFallback("visor.provider", {
+        "visor.check.id": checkId,
+        "visor.provider.type": providerType
+      });
+    } catch {
+    }
+    const result = await withActiveSpan(
+      `visor.check.${checkId}`,
+      { "visor.check.id": checkId, "visor.check.type": providerType },
+      async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+    );
+    const enrichedIssues = (result.issues || []).map((issue) => ({
+      ...issue,
+      checkName: checkId,
+      ruleId: `${checkId}/${issue.ruleId || "unknown"}`,
+      group: checkConfig.group,
+      schema: typeof checkConfig.schema === "object" ? "custom" : checkConfig.schema,
+      template: checkConfig.template,
+      timestamp: Date.now()
+    }));
+    const enrichedResult = { ...result, issues: enrichedIssues };
+    let isForEach = false;
+    let forEachItemsLocal;
+    if (checkConfig.forEach) {
+      const output = result.output;
+      if (Array.isArray(output)) {
+        isForEach = true;
+        forEachItemsLocal = output;
+        enrichedResult.isForEach = true;
+        enrichedResult.forEachItems = output;
+      } else {
+        if (context2.debug)
+          logger.warn(
+            `[LevelDispatch] Check ${checkId} has forEach:true but output is not an array: ${typeof output}, converting to single-item array`
+          );
+        isForEach = true;
+        forEachItemsLocal = [output];
+        enrichedResult.isForEach = true;
+        enrichedResult.forEachItems = [output];
+      }
+    }
+    if (result.isForEach) enrichedResult.isForEach = true;
+    if (result.forEachItems) enrichedResult.forEachItems = result.forEachItems;
+    if (result.forEachItemResults)
+      enrichedResult.forEachItemResults = result.forEachItemResults;
+    if (result.forEachFatalMask)
+      enrichedResult.forEachFatalMask = result.forEachFatalMask;
+    let renderedContent;
+    try {
+      renderedContent = await renderTemplateContent(checkId, checkConfig, enrichedResult);
+      if (renderedContent) emitMermaidFromMarkdown(checkId, renderedContent, "content");
+    } catch (error) {
+      logger.warn(`[LevelDispatch] Failed to render template for ${checkId}: ${error}`);
+    }
+    let outputWithTimestamp = void 0;
+    if (result.output !== void 0) {
+      const output = result.output;
+      if (output !== null && typeof output === "object" && !Array.isArray(output))
+        outputWithTimestamp = { ...output, ts: Date.now() };
+      else outputWithTimestamp = output;
+    }
+    const enrichedResultWithContent = renderedContent ? { ...enrichedResult, content: renderedContent } : enrichedResult;
+    const enrichedResultWithTimestamp = outputWithTimestamp !== void 0 ? { ...enrichedResultWithContent, output: outputWithTimestamp } : enrichedResultWithContent;
+    state.completedChecks.add(checkId);
+    const currentWaveCompletions = state.currentWaveCompletions;
+    if (currentWaveCompletions) currentWaveCompletions.add(checkId);
+    try {
+      logger.info(`[LevelDispatch] Calling handleRouting for ${checkId}`);
+    } catch {
+    }
+    await handleRouting(context2, state, transition, emitEvent, {
+      checkId,
+      scope,
+      result: enrichedResult,
+      checkConfig,
+      success: !hasFatalIssues(enrichedResult)
+    });
+    try {
+      const commitResult = {
+        ...enrichedResult,
+        ...renderedContent ? { content: renderedContent } : {},
+        ...result.output !== void 0 ? outputWithTimestamp !== void 0 ? { output: outputWithTimestamp } : { output: result.output } : {}
+      };
+      context2.journal.commitEntry({
+        sessionId: context2.sessionId,
+        checkId,
+        result: commitResult,
+        event: context2.event || "manual",
+        scope
+      });
+    } catch (error) {
+      logger.warn(`[LevelDispatch] Failed to commit to journal: ${error}`);
+    }
+    try {
+      const duration = Date.now() - startTime;
+      updateStats([{ checkId, result: enrichedResult, duration }], state, false);
+    } catch {
+    }
+    if (isForEach) {
+      try {
+        const existing = state.stats.get(checkId);
+        const aggStats = existing || {
+          checkName: checkId,
+          totalRuns: 0,
+          successfulRuns: 0,
+          failedRuns: 0,
+          skippedRuns: 0,
+          skipped: false,
+          totalDuration: 0,
+          issuesFound: 0,
+          issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 }
+        };
+        aggStats.totalRuns++;
+        const hasFatal = hasFatalIssues(enrichedResultWithTimestamp);
+        if (hasFatal) aggStats.failedRuns++;
+        else aggStats.successfulRuns++;
+        const items = enrichedResultWithTimestamp.forEachItems;
+        if (Array.isArray(items)) aggStats.outputsProduced = items.length;
+        state.stats.set(checkId, aggStats);
+      } catch {
+      }
+    }
+    if (isForEach && forEachItemsLocal && Array.isArray(forEachItemsLocal)) {
+      for (let itemIndex = 0; itemIndex < forEachItemsLocal.length; itemIndex++) {
+        const itemScope = [
+          { check: checkId, index: itemIndex }
+        ];
+        const item = forEachItemsLocal[itemIndex];
+        try {
+          context2.journal.commitEntry({
+            sessionId: context2.sessionId,
+            checkId,
+            result: { issues: [], output: item },
+            event: context2.event || "manual",
+            scope: itemScope
+          });
+        } catch (error) {
+          logger.warn(
+            `[LevelDispatch] Failed to commit per-item journal for ${checkId} item ${itemIndex}: ${error}`
+          );
+        }
+      }
+    }
+    state.activeDispatches.delete(checkId);
+    emitEvent({
+      type: "CheckCompleted",
+      checkId,
+      scope,
+      result: {
+        ...enrichedResult,
+        output: result.output,
+        content: renderedContent || result.content
+      }
+    });
+    return enrichedResult;
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    logger.error(`[LevelDispatch] Error executing check ${checkId}: ${err.message}`);
+    state.activeDispatches.delete(checkId);
+    emitEvent({
+      type: "CheckErrored",
+      checkId,
+      scope,
+      error: { message: err.message, stack: err.stack, name: err.name }
+    });
+    throw err;
+  }
+}
+function mapCheckNameToFocus(checkName) {
+  const focusMap = {
+    security: "security",
+    performance: "performance",
+    style: "style",
+    architecture: "architecture"
+  };
+  return focusMap[checkName] || "all";
+}
+var MAX_ON_INIT_ITEMS;
+var init_execution_invoker = __esm({
+  "src/state-machine/dispatch/execution-invoker.ts"() {
+    "use strict";
+    init_logger();
+    init_trace_helpers();
+    init_mermaid_telemetry();
+    init_fallback_ndjson();
+    init_history_snapshot();
+    init_dependency_gating();
+    init_template_renderer();
+    init_stats_manager();
+    init_routing();
+    init_foreach_processor();
+    init_stats_manager();
+    init_on_init_handlers();
+    init_sandbox();
+    MAX_ON_INIT_ITEMS = 50;
+  }
+});
+
 // src/state-machine/dispatch/renderer-schema.ts
 var renderer_schema_exports = {};
 __export(renderer_schema_exports, {
@@ -19734,7 +21470,7 @@ var init_renderer_schema = __esm({
 });
 
 // src/state-machine/states/level-dispatch.ts
-function mapCheckNameToFocus(checkName) {
+function mapCheckNameToFocus2(checkName) {
   const focusMap = {
     security: "security",
     performance: "performance",
@@ -19743,7 +21479,7 @@ function mapCheckNameToFocus(checkName) {
   };
   return focusMap[checkName] || "all";
 }
-function buildOutputHistoryFromJournal(context2) {
+function buildOutputHistoryFromJournal2(context2) {
   const outputHistory = /* @__PURE__ */ new Map();
   try {
     const snapshot = context2.journal.beginSnapshot();
@@ -19891,7 +21627,7 @@ async function handleLevelDispatch(context2, state, transition, emitEvent) {
     if (r.result.__skipped) return false;
     return true;
   });
-  updateStats(nonForEachResults, state);
+  updateStats2(nonForEachResults, state);
   if (state.flags.failFastTriggered) {
     state.levelQueue = [];
     if (context2.debug) {
@@ -19961,7 +21697,7 @@ async function executeCheckGroup(checks, context2, state, maxParallelism, emitEv
     const runOnce = async (scopeOverride) => {
       const startTime = Date.now();
       try {
-        const result = await executeSingleCheck(
+        const result = await executeSingleCheck2(
           checkId,
           context2,
           state,
@@ -20001,7 +21737,7 @@ async function executeCheckGroup(checks, context2, state, maxParallelism, emitEv
   await Promise.all(pool);
   return results;
 }
-async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems, context2, state, emitEvent, transition) {
+async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItems, context2, state, emitEvent, transition) {
   try {
     const snapId = context2.journal.beginSnapshot();
     const visible = context2.journal.readVisible(context2.sessionId, snapId, context2.event);
@@ -20053,9 +21789,51 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
   const allOutputs = [];
   const allContents = [];
   const perIterationDurations = [];
+  const scope = [];
+  const sharedDependencyResults = buildDependencyResultsWithScope2(
+    checkId,
+    checkConfig,
+    context2,
+    scope
+  );
+  if (checkConfig.on_init) {
+    try {
+      const { handleOnInit: handleOnInit2 } = (init_execution_invoker(), __toCommonJS(execution_invoker_exports));
+      const dependencyResultsMap = {};
+      for (const [key, value] of sharedDependencyResults.entries()) {
+        dependencyResultsMap[key] = value;
+      }
+      const prInfo = context2.prInfo;
+      const executionContext = {
+        sessionId: context2.sessionId,
+        checkId,
+        event: context2.event,
+        _parentContext: context2
+      };
+      await handleOnInit2(
+        checkId,
+        checkConfig.on_init,
+        context2,
+        scope,
+        prInfo,
+        dependencyResultsMap,
+        executionContext
+      );
+      for (const [key, value] of Object.entries(dependencyResultsMap)) {
+        if (!sharedDependencyResults.has(key)) {
+          sharedDependencyResults.set(key, value);
+        }
+      }
+      logger.info(`[LevelDispatch] on_init completed for ${checkId} before forEach loop`);
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      logger.error(`[LevelDispatch] on_init failed for ${checkId}: ${err.message}`);
+      throw err;
+    }
+  }
   for (let itemIndex = 0; itemIndex < forEachItems.length; itemIndex++) {
     const iterationStartMs = Date.now();
-    const scope = [
+    const scope2 = [
       { check: forEachParent, index: itemIndex }
     ];
     const forEachItem = forEachItems[itemIndex];
@@ -20086,11 +21864,11 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
     } catch (error) {
       logger.warn(`[LevelDispatch] Failed to emit foreach.item span: ${error}`);
     }
-    emitEvent({ type: "CheckScheduled", checkId, scope });
+    emitEvent({ type: "CheckScheduled", checkId, scope: scope2 });
     const dispatch = {
       id: `${checkId}-${itemIndex}-${Date.now()}`,
       checkId,
-      scope,
+      scope: scope2,
       provider: context2.checks[checkId]?.providerType || "unknown",
       startMs: Date.now(),
       attempts: 1,
@@ -20101,7 +21879,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
       const providerType = checkConfig.type || "ai";
       const providerRegistry = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports)).CheckProviderRegistry.getInstance();
       const provider = providerRegistry.getProviderOrThrow(providerType);
-      const outputHistory = buildOutputHistoryFromJournal(context2);
+      const outputHistory = buildOutputHistoryFromJournal2(context2);
       const providerConfig = {
         type: providerType,
         checkName: checkId,
@@ -20109,7 +21887,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
         exec: checkConfig.exec,
         schema: checkConfig.schema,
         group: checkConfig.group,
-        focus: checkConfig.focus || mapCheckNameToFocus(checkId),
+        focus: checkConfig.focus || mapCheckNameToFocus2(checkId),
         transform: checkConfig.transform,
         transform_js: checkConfig.transform_js,
         env: checkConfig.env,
@@ -20133,12 +21911,17 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
         }
       } catch {
       }
-      const dependencyResults = buildDependencyResultsWithScope(
+      const dependencyResults = buildDependencyResultsWithScope2(
         checkId,
         checkConfig,
         context2,
-        scope
+        scope2
       );
+      for (const [key, value] of sharedDependencyResults.entries()) {
+        if (!dependencyResults.has(key)) {
+          dependencyResults.set(key, value);
+        }
+      }
       try {
         const rawDeps = checkConfig?.depends_on || [];
         const depList = Array.isArray(rawDeps) ? rawDeps : [rawDeps];
@@ -20156,7 +21939,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
                 failed = true;
               } else {
                 const out = dr.output;
-                const fatal = hasFatalIssues(dr);
+                const fatal = hasFatalIssues2(dr);
                 failed = fatal || !!out && typeof out === "object" && out.__failed === true;
                 skipped = !!(out && typeof out === "object" && out.__skip === true);
               }
@@ -20407,10 +22190,10 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
           checkId,
           result: { ...enrichedResult, output },
           event: context2.event || "manual",
-          scope
+          scope: scope2
         };
         logger.info(
-          `[LevelDispatch][DEBUG] Committing to journal: checkId=${checkId}, scope=${JSON.stringify(scope)}, hasOutput=${output !== void 0}`
+          `[LevelDispatch][DEBUG] Committing to journal: checkId=${checkId}, scope=${JSON.stringify(scope2)}, hasOutput=${output !== void 0}`
         );
         context2.journal.commitEntry(journalEntry);
       } catch (error) {
@@ -20420,7 +22203,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
       emitEvent({
         type: "CheckCompleted",
         checkId,
-        scope,
+        scope: scope2,
         result: {
           ...enrichedResult,
           output
@@ -20428,7 +22211,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
       });
       const iterationDurationMs = Date.now() - iterationStartMs;
       perIterationDurations.push(iterationDurationMs);
-      updateStats(
+      updateStats2(
         [{ checkId, result: enrichedResult, duration: iterationDurationMs }],
         state,
         true
@@ -20444,7 +22227,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
       emitEvent({
         type: "CheckErrored",
         checkId,
-        scope,
+        scope: scope2,
         error: {
           message: err.message,
           stack: err.stack,
@@ -20461,7 +22244,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
       };
       allIssues.push(errorIssue);
       perItemResults.push({ issues: [errorIssue] });
-      updateStats(
+      updateStats2(
         [{ checkId, result: { issues: [errorIssue] }, error: err, duration: iterationDurationMs }],
         state,
         true
@@ -20518,7 +22301,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
       scope: [],
       result: aggregatedResult,
       checkConfig,
-      success: !hasFatalIssues(aggregatedResult)
+      success: !hasFatalIssues2(aggregatedResult)
     });
   } catch (error) {
     logger.warn(`[LevelDispatch] Routing error for aggregated forEach ${checkId}: ${error}`);
@@ -20765,7 +22548,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
   }
   return aggregatedResult;
 }
-async function executeSingleCheck(checkId, context2, state, emitEvent, transition, scopeOverride) {
+async function executeSingleCheck2(checkId, context2, state, emitEvent, transition, scopeOverride) {
   const checkConfig = context2.config.checks?.[checkId];
   if (checkConfig?.if) {
     const shouldRun = await evaluateIfCondition(checkId, checkConfig, context2, state);
@@ -21005,7 +22788,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
         });
         return emptyResult;
       }
-      return await executeCheckWithForEachItems(
+      return await executeCheckWithForEachItems2(
         checkId,
         forEachParent,
         forEachItems,
@@ -21045,7 +22828,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
     const providerType = checkConfig2.type || "ai";
     const providerRegistry = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports)).CheckProviderRegistry.getInstance();
     const provider = providerRegistry.getProviderOrThrow(providerType);
-    const outputHistory = buildOutputHistoryFromJournal(context2);
+    const outputHistory = buildOutputHistoryFromJournal2(context2);
     const providerConfig = {
       type: providerType,
       checkName: checkId,
@@ -21053,7 +22836,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       exec: checkConfig2.exec,
       schema: checkConfig2.schema,
       group: checkConfig2.group,
-      focus: checkConfig2.focus || mapCheckNameToFocus(checkId),
+      focus: checkConfig2.focus || mapCheckNameToFocus2(checkId),
       transform: checkConfig2.transform,
       transform_js: checkConfig2.transform_js,
       env: checkConfig2.env,
@@ -21361,7 +23144,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
     }
     let renderedContent;
     try {
-      renderedContent = await renderTemplateContent(checkId, checkConfig2, enrichedResult);
+      renderedContent = await renderTemplateContent2(checkId, checkConfig2, enrichedResult);
       if (renderedContent) {
         logger.debug(
           `[LevelDispatch] Template rendered for ${checkId}: ${renderedContent.length} chars`
@@ -21403,7 +23186,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       scope,
       result: enrichedResult,
       checkConfig: checkConfig2,
-      success: !hasFatalIssues(enrichedResult)
+      success: !hasFatalIssues2(enrichedResult)
     });
     try {
       const commitResult = {
@@ -21436,7 +23219,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
           issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 }
         };
         aggStats.totalRuns++;
-        const hasFatal = hasFatalIssues(enrichedResultWithTimestamp);
+        const hasFatal = hasFatalIssues2(enrichedResultWithTimestamp);
         if (hasFatal) aggStats.failedRuns++;
         else aggStats.successfulRuns++;
         const items = enrichedResultWithTimestamp.forEachItems;
@@ -21495,7 +23278,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
     throw err;
   }
 }
-function buildDependencyResultsWithScope(checkId, checkConfig, context2, scope) {
+function buildDependencyResultsWithScope2(checkId, checkConfig, context2, scope) {
   const dependencyResults = /* @__PURE__ */ new Map();
   const dependencies = checkConfig.depends_on || [];
   const depList = Array.isArray(dependencies) ? dependencies : [dependencies];
@@ -21627,18 +23410,18 @@ function buildDependencyResultsWithScope(checkId, checkConfig, context2, scope) 
   return dependencyResults;
 }
 function buildDependencyResults(checkId, checkConfig, context2, _state) {
-  return buildDependencyResultsWithScope(checkId, checkConfig, context2, []);
+  return buildDependencyResultsWithScope2(checkId, checkConfig, context2, []);
 }
 function shouldFailFast(results) {
   for (const { result } of results) {
     if (!result || !result.issues) continue;
-    if (hasFatalIssues(result)) {
+    if (hasFatalIssues2(result)) {
       return true;
     }
   }
   return false;
 }
-function hasFatalIssues(result) {
+function hasFatalIssues2(result) {
   if (!result.issues) {
     return false;
   }
@@ -21649,7 +23432,7 @@ function hasFatalIssues(result) {
     ruleId.endsWith("_fail_if") && ruleId !== "global_fail_if";
   });
 }
-function updateStats(results, state, isForEachIteration = false) {
+function updateStats2(results, state, isForEachIteration = false) {
   for (const { checkId, result, error, duration } of results) {
     const existing = state.stats.get(checkId);
     const stats = existing || {
@@ -21731,7 +23514,7 @@ function updateStats(results, state, isForEachIteration = false) {
     state.stats.set(checkId, stats);
   }
 }
-async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
+async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
     const fs18 = await import("fs/promises");

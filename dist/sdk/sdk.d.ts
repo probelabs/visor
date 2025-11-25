@@ -420,6 +420,8 @@ interface CheckConfig {
     fanout?: 'map' | 'reduce';
     /** Alias for fanout: 'reduce' */
     reduce?: boolean;
+    /** Init routing configuration for this check (runs before execution/preprocessing) */
+    on_init?: OnInitConfig;
     /** Failure routing configuration for this check (retry/goto/run) */
     on_fail?: OnFailConfig;
     /** Success routing configuration for this check (post-actions and optional goto) */
@@ -597,6 +599,59 @@ interface OnFinishConfig {
     run_js?: string;
     /** Declarative transitions (see OnFailConfig.transitions). */
     transitions?: TransitionRule[];
+}
+/**
+ * Init routing configuration per check
+ * Runs BEFORE the check executes (preprocessing/setup)
+ */
+interface OnInitConfig {
+    /** Items to run before this check executes */
+    run?: OnInitRunItem[];
+    /** Dynamic init items: JS expression returning OnInitRunItem[] */
+    run_js?: string;
+    /** Declarative transitions (optional, for advanced use cases) */
+    transitions?: TransitionRule[];
+}
+/**
+ * Unified on_init run item - can be tool, step, workflow, or plain string
+ */
+type OnInitRunItem = OnInitToolInvocation | OnInitStepInvocation | OnInitWorkflowInvocation | string;
+/**
+ * Invoke a custom tool (from tools: section)
+ */
+interface OnInitToolInvocation {
+    /** Tool name (must exist in tools: section) */
+    tool: string;
+    /** Arguments to pass to the tool (Liquid templates supported) */
+    with?: Record<string, unknown>;
+    /** Custom output name (defaults to tool name) */
+    as?: string;
+}
+/**
+ * Invoke a helper step (regular check)
+ */
+interface OnInitStepInvocation {
+    /** Step name (must exist in steps: section) */
+    step: string;
+    /** Arguments to pass to the step (Liquid templates supported) */
+    with?: Record<string, unknown>;
+    /** Custom output name (defaults to step name) */
+    as?: string;
+}
+/**
+ * Invoke a reusable workflow
+ */
+interface OnInitWorkflowInvocation {
+    /** Workflow ID or path */
+    workflow: string;
+    /** Workflow inputs (Liquid templates supported) */
+    with?: Record<string, unknown>;
+    /** Custom output name (defaults to workflow name) */
+    as?: string;
+    /** Step overrides */
+    overrides?: Record<string, Partial<CheckConfig>>;
+    /** Output mapping */
+    output_mapping?: Record<string, string>;
 }
 /**
  * Declarative transition rule for on_* blocks.
@@ -1037,6 +1092,8 @@ interface ExecutionContext {
     stageHistoryBase?: Record<string, number>;
     /** Workflow inputs - available when executing within a workflow */
     workflowInputs?: Record<string, unknown>;
+    /** Custom arguments passed from on_init 'with' directive */
+    args?: Record<string, unknown>;
     /** SDK hooks for human input */
     hooks?: {
         onHumanInput?: (request: HumanInputRequest) => Promise<string>;
