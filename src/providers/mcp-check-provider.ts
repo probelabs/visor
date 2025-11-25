@@ -161,7 +161,8 @@ export class McpCheckProvider extends CheckProvider {
   async execute(
     prInfo: PRInfo,
     config: CheckProviderConfig,
-    dependencyResults?: Map<string, ReviewSummary>
+    dependencyResults?: Map<string, ReviewSummary>,
+    sessionInfo?: any
   ): Promise<ReviewSummary> {
     const cfg = config as McpCheckConfig;
 
@@ -178,6 +179,7 @@ export class McpCheckProvider extends CheckProvider {
         files: prInfo.files,
         fileCount: prInfo.files.length,
         outputs: this.buildOutputContext(dependencyResults),
+        args: sessionInfo?.args || {},
         env: this.getSafeEnvironmentVariables(),
       };
 

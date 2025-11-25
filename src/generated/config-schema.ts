@@ -479,6 +479,11 @@ export const configSchema = {
           type: 'boolean',
           description: "Alias for fanout: 'reduce'",
         },
+        on_init: {
+          $ref: '#/definitions/OnInitConfig',
+          description:
+            'Init routing configuration for this check (runs before execution/preprocessing)',
+        },
         on_fail: {
           $ref: '#/definitions/OnFailConfig',
           description: 'Failure routing configuration for this check (retry/goto/run)',
@@ -648,7 +653,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21346-src_types_config.ts-0-34851%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1110,6 +1115,164 @@ export const configSchema = {
       enum: ['error', 'warning', 'info'],
       description: 'Failure condition severity levels',
     },
+    OnInitConfig: {
+      type: 'object',
+      properties: {
+        run: {
+          type: 'array',
+          items: {
+            $ref: '#/definitions/OnInitRunItem',
+          },
+          description: 'Items to run before this check executes',
+        },
+        run_js: {
+          type: 'string',
+          description: 'Dynamic init items: JS expression returning OnInitRunItem[]',
+        },
+        transitions: {
+          type: 'array',
+          items: {
+            $ref: '#/definitions/TransitionRule',
+          },
+          description: 'Declarative transitions (optional, for advanced use cases)',
+        },
+      },
+      additionalProperties: false,
+      description:
+        'Init routing configuration per check Runs BEFORE the check executes (preprocessing/setup)',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    OnInitRunItem: {
+      anyOf: [
+        {
+          $ref: '#/definitions/OnInitToolInvocation',
+        },
+        {
+          $ref: '#/definitions/OnInitStepInvocation',
+        },
+        {
+          $ref: '#/definitions/OnInitWorkflowInvocation',
+        },
+        {
+          type: 'string',
+        },
+      ],
+      description: 'Unified on_init run item - can be tool, step, workflow, or plain string',
+    },
+    OnInitToolInvocation: {
+      type: 'object',
+      properties: {
+        tool: {
+          type: 'string',
+          description: 'Tool name (must exist in tools: section)',
+        },
+        with: {
+          $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+          description: 'Arguments to pass to the tool (Liquid templates supported)',
+        },
+        as: {
+          type: 'string',
+          description: 'Custom output name (defaults to tool name)',
+        },
+      },
+      required: ['tool'],
+      additionalProperties: false,
+      description: 'Invoke a custom tool (from tools: section)',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    OnInitStepInvocation: {
+      type: 'object',
+      properties: {
+        step: {
+          type: 'string',
+          description: 'Step name (must exist in steps: section)',
+        },
+        with: {
+          $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+          description: 'Arguments to pass to the step (Liquid templates supported)',
+        },
+        as: {
+          type: 'string',
+          description: 'Custom output name (defaults to step name)',
+        },
+      },
+      required: ['step'],
+      additionalProperties: false,
+      description: 'Invoke a helper step (regular check)',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    OnInitWorkflowInvocation: {
+      type: 'object',
+      properties: {
+        workflow: {
+          type: 'string',
+          description: 'Workflow ID or path',
+        },
+        with: {
+          $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+          description: 'Workflow inputs (Liquid templates supported)',
+        },
+        as: {
+          type: 'string',
+          description: 'Custom output name (defaults to workflow name)',
+        },
+        overrides: {
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E%3E',
+          description: 'Step overrides',
+        },
+        output_mapping: {
+          $ref: '#/definitions/Record%3Cstring%2Cstring%3E',
+          description: 'Output mapping',
+        },
+      },
+      required: ['workflow'],
+      additionalProperties: false,
+      description: 'Invoke a reusable workflow',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    'Record<string,Partial<interface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706>>':
+      {
+        type: 'object',
+        additionalProperties: {
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E',
+        },
+      },
+    'Partial<interface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706>': {
+      type: 'object',
+      additionalProperties: false,
+    },
+    TransitionRule: {
+      type: 'object',
+      properties: {
+        when: {
+          type: 'string',
+          description:
+            'JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule.',
+        },
+        to: {
+          type: ['string', 'null'],
+          description: 'Target step ID, or null to explicitly prevent goto.',
+        },
+        goto_event: {
+          $ref: '#/definitions/EventTrigger',
+          description: 'Optional event override when performing goto.',
+        },
+      },
+      required: ['when'],
+      additionalProperties: false,
+      description: 'Declarative transition rule for on_* blocks.',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
     OnFailConfig: {
       type: 'object',
       properties: {
@@ -1188,30 +1351,6 @@ export const configSchema = {
       },
       additionalProperties: false,
       description: 'Backoff policy for retries',
-      patternProperties: {
-        '^x-': {},
-      },
-    },
-    TransitionRule: {
-      type: 'object',
-      properties: {
-        when: {
-          type: 'string',
-          description:
-            'JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule.',
-        },
-        to: {
-          type: ['string', 'null'],
-          description: 'Target step ID, or null to explicitly prevent goto.',
-        },
-        goto_event: {
-          $ref: '#/definitions/EventTrigger',
-          description: 'Optional event override when performing goto.',
-        },
-      },
-      required: ['when'],
-      additionalProperties: false,
-      description: 'Declarative transition rule for on_* blocks.',
       patternProperties: {
         '^x-': {},
       },
@@ -1296,17 +1435,6 @@ export const configSchema = {
       patternProperties: {
         '^x-': {},
       },
-    },
-    'Record<string,Partial<interface-src_types_config.ts-11138-21346-src_types_config.ts-0-34851>>':
-      {
-        type: 'object',
-        additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-11138-21346-src_types_config.ts-0-34851%3E',
-        },
-      },
-    'Partial<interface-src_types_config.ts-11138-21346-src_types_config.ts-0-34851>': {
-      type: 'object',
-      additionalProperties: false,
     },
     OutputConfig: {
       type: 'object',

@@ -24,7 +24,9 @@ export function buildProviderTemplateContext(
   memoryStore?: MemoryStore,
   outputHistory?: Map<string, unknown[]>,
   stageHistoryBase?: Record<string, number>,
-  opts: { attachMemoryReadHelpers?: boolean } = { attachMemoryReadHelpers: true }
+  opts: { attachMemoryReadHelpers?: boolean; args?: Record<string, unknown> } = {
+    attachMemoryReadHelpers: true,
+  }
 ): Record<string, unknown> {
   const context: Record<string, unknown> = {};
 
@@ -121,6 +123,11 @@ export function buildProviderTemplateContext(
       list: (ns?: string) => memoryStore.list(ns),
       getAll: (ns?: string) => memoryStore.getAll(ns),
     } as Record<string, unknown>;
+  }
+
+  // Add args from on_init 'with' directive
+  if (opts.args) {
+    context.args = opts.args;
   }
 
   return context;

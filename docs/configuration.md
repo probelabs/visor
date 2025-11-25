@@ -81,6 +81,27 @@ steps:
     prompt: "Analyze code for security vulnerabilities"
 ```
 
+### Lifecycle Hooks
+
+Use `on_init` to run preprocessing tasks before a step executes:
+
+```yaml
+steps:
+  ai-review:
+    type: ai
+    on_init:
+      run:
+        - tool: fetch-jira-issue
+          with:
+            issue_key: "{{ pr.title | regex_search: '[A-Z]+-[0-9]+' }}"
+          as: jira-data
+    prompt: |
+      Review this PR considering JIRA issue context:
+      {{ outputs['jira-data'] | json }}
+```
+
+See [Lifecycle Hooks](./lifecycle-hooks.md) for complete documentation.
+
 ### Environment Variables
 
 Inject environment variables globally or per-check via `env`:

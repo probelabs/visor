@@ -132,6 +132,8 @@ export class CommandCheckProvider extends CheckProvider {
       outputs_raw: outputsRaw,
       // Workflow inputs (when executing within a workflow)
       inputs: context?.workflowInputs || {},
+      // Custom arguments from on_init 'with' directive
+      args: context?.args || {},
       env: this.getSafeEnvironmentVariables(),
     };
 

@@ -185,7 +185,8 @@ export class AICheckProvider extends CheckProvider {
     prInfo: PRInfo,
     eventContext?: Record<string, unknown>,
     dependencyResults?: Map<string, ReviewSummary>,
-    outputHistory?: Map<string, unknown[]>
+    outputHistory?: Map<string, unknown[]>,
+    args?: Record<string, unknown>
   ): Promise<string> {
     let promptContent: string;
 
@@ -202,7 +203,8 @@ export class AICheckProvider extends CheckProvider {
       prInfo,
       eventContext,
       dependencyResults,
-      outputHistory
+      outputHistory,
+      args
     );
   }
 
@@ -332,7 +334,8 @@ export class AICheckProvider extends CheckProvider {
     prInfo: PRInfo,
     eventContext?: Record<string, unknown>,
     dependencyResults?: Map<string, ReviewSummary>,
-    outputHistory?: Map<string, unknown[]>
+    outputHistory?: Map<string, unknown[]>,
+    args?: Record<string, unknown>
   ): Promise<string> {
     // Build outputs_raw from -raw keys (aggregate parent values)
     const outputsRaw: Record<string, unknown> = {};
@@ -530,6 +533,8 @@ export class AICheckProvider extends CheckProvider {
       })(),
       // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
       outputs_raw: outputsRaw,
+      // Custom arguments from on_init 'with' directive
+      args: args || {},
     };
 
     try {
@@ -812,6 +817,7 @@ export class AICheckProvider extends CheckProvider {
             ])
           )
         : {},
+      args: (sessionInfo as any)?.args || {},
     };
 
     // Capture input context in active OTEL span
@@ -869,7 +875,8 @@ export class AICheckProvider extends CheckProvider {
       prInfo,
       ctxWithStage,
       _dependencyResults,
-      (config as any).__outputHistory as Map<string, unknown[]> | undefined
+      (config as any).__outputHistory as Map<string, unknown[]> | undefined,
+      (sessionInfo as any)?.args
     );
 
     // Optional persona (vendor extension): ai.ai_persona or ai_persona.

@@ -67,7 +67,7 @@ export class ScriptCheckProvider extends CheckProvider {
       memoryStore,
       (config as any).__outputHistory as Map<string, unknown[]> | undefined,
       (_sessionInfo as any)?.stageHistoryBase as Record<string, number> | undefined,
-      { attachMemoryReadHelpers: false }
+      { attachMemoryReadHelpers: false, args: _sessionInfo?.args }
     );
     // Keep provider quiet by default; no step-specific debug
     // (historical ad-hoc logs removed to avoid hardcoding step names).
