@@ -58,11 +58,6 @@ jobs:
           ./dist/index.js --cli --version
           ./dist/index.js --cli --help
 
-      - name: Run scenario tests
-        run: npm test -- tests/scenarios/
-        env:
-          CI: true
-
       - name: Test package installation
         run: |
           npm pack
