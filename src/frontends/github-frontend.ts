@@ -35,6 +35,8 @@ export class GitHubFrontend implements Frontend {
   // Mutex for serializing comment updates per group
   private updateLocks: Map<string, Promise<void>> = new Map();
   public minUpdateDelayMs: number = 1000; // Minimum delay between updates (public for testing)
+  // Cache of created GitHub comment IDs per group to handle API eventual consistency
+  private createdCommentGithubIds: Map<string, number> = new Map();
 
   start(ctx: FrontendContext): void {
     const log = ctx.logger;
@@ -258,6 +260,10 @@ ${end}`);
    * Acquires a mutex lock for the given group and executes the update.
    * This ensures only one comment update happens at a time per group,
    * preventing race conditions where updates overwrite each other.
+   *
+   * Uses a proper queue-based mutex: each new caller chains onto the previous
+   * lock, ensuring strict serialization even when multiple callers wait
+   * simultaneously.
    */
   private async updateGroupedComment(
     ctx: FrontendContext,
@@ -265,30 +271,43 @@ ${end}`);
     group: string,
     changedIds?: string | string[]
   ) {
-    // Wait for any existing update to complete for this group
+    // Get the current lock (if any) - we'll wait for it before proceeding
     const existingLock = this.updateLocks.get(group);
-    if (existingLock) {
-      try {
-        await existingLock;
-      } catch (error) {
-        logger.warn(
-          `[github-frontend] Previous update for group ${group} failed: ${error instanceof Error ? error.message : error}`
-        );
-        // Continue with current update despite previous failure
-      }
-    }
 
-    // Create a new lock for this update
-    const updatePromise = this.performGroupedCommentUpdate(ctx, comments, group, changedIds);
-    this.updateLocks.set(group, updatePromise);
+    // Create our own lock promise that we'll resolve when done
+    // This must be created BEFORE awaiting existingLock to ensure proper chaining
+    let resolveLock: () => void;
+    const ourLock = new Promise<void>(resolve => {
+      resolveLock = resolve;
+    });
+
+    // Immediately set our lock so subsequent callers will wait for us
+    this.updateLocks.set(group, ourLock);
 
     try {
-      await updatePromise;
+      // Wait for the previous lock to complete (if any)
+      if (existingLock) {
+        try {
+          await existingLock;
+        } catch (error) {
+          logger.warn(
+            `[github-frontend] Previous update for group ${group} failed: ${error instanceof Error ? error.message : error}`
+          );
+          // Continue with current update despite previous failure
+        }
+      }
+
+      // Now perform our update
+      await this.performGroupedCommentUpdate(ctx, comments, group, changedIds);
     } finally {
-      // Clean up the lock if it's still ours
-      if (this.updateLocks.get(group) === updatePromise) {
+      // Clean up the lock from the map if it's still ours (no one else is waiting)
+      if (this.updateLocks.get(group) === ourLock) {
         this.updateLocks.delete(group);
       }
+      // Always resolve our lock - this allows the next waiter (if any) to proceed.
+      // Even if another caller replaced our lock in the map, they're waiting on
+      // our lock promise, so we must resolve it.
+      resolveLock!();
     }
   }
 
@@ -325,18 +344,32 @@ ${end}`);
       }
 
       this.revision++;
+      const commentId = this.commentIdForGroup(ctx, group);
       const mergedBody = await this.mergeIntoExistingBody(ctx, comments, group, changedIds);
-      await comments.updateOrCreateComment(
+
+      // Check if we have a cached GitHub comment ID from a previous creation
+      // This handles GitHub API eventual consistency where listComments may not
+      // immediately return a newly created comment
+      const cachedGithubId = this.createdCommentGithubIds.get(commentId);
+
+      const result = await comments.updateOrCreateComment(
         ctx.run.repo.owner,
         ctx.run.repo.name,
         ctx.run.pr,
         mergedBody,
         {
-          commentId: this.commentIdForGroup(ctx, group),
+          commentId,
           triggeredBy: this.deriveTriggeredBy(ctx),
           commitSha: ctx.run.headSha,
+          // Pass the cached GitHub comment ID if available
+          cachedGithubCommentId: cachedGithubId,
         }
       );
+
+      // Cache the GitHub comment ID for future updates
+      if (result && result.id) {
+        this.createdCommentGithubIds.set(commentId, result.id);
+      }
 
       this._lastFlush = Date.now();
     } catch (e) {

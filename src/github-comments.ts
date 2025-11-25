@@ -105,6 +105,8 @@ export class CommentManager {
       triggeredBy?: string;
       allowConcurrentUpdates?: boolean;
       commitSha?: string;
+      /** Cached GitHub comment ID to use for updates when listComments may not return it yet (eventual consistency) */
+      cachedGithubCommentId?: number;
     } = {}
   ): Promise<Comment> {
     const {
@@ -112,10 +114,36 @@ export class CommentManager {
       triggeredBy = 'unknown',
       allowConcurrentUpdates = false,
       commitSha,
+      cachedGithubCommentId,
     } = options;
 
     return this.withRetry(async () => {
-      const existingComment = await this.findVisorComment(owner, repo, prNumber, commentId);
+      // First try to find the comment via listComments API
+      let existingComment = await this.findVisorComment(owner, repo, prNumber, commentId);
+
+      // If not found but we have a cached GitHub ID, try to fetch it directly
+      // This handles GitHub API eventual consistency where newly created comments
+      // may not appear in listComments immediately
+      if (!existingComment && cachedGithubCommentId) {
+        try {
+          const cachedComment = await this.octokit.rest.issues.getComment({
+            owner,
+            repo,
+            comment_id: cachedGithubCommentId,
+          });
+          if (cachedComment.data && this.isVisorComment(cachedComment.data.body || '', commentId)) {
+            existingComment = cachedComment.data as Comment;
+            logger.debug(
+              `[github-comments] Found comment via cached ID ${cachedGithubCommentId} (not visible in listComments yet)`
+            );
+          }
+        } catch (_e) {
+          // Comment may have been deleted, continue with create flow
+          logger.debug(
+            `[github-comments] Cached comment ${cachedGithubCommentId} not found, will create new`
+          );
+        }
+      }
 
       const formattedContent = this.formatCommentWithMetadata(content, {
         commentId,
