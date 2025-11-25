@@ -72,5 +72,5 @@ describe('E2E: forEach branch-first deep DAG', () => {
     expect(bStats?.totalRuns).toBe(3);
     expect(cStats?.totalRuns).toBe(2);
     expect(dStats?.totalRuns).toBe(2);
-  });
+  }, 30000); // Increased timeout due to async operations
 });

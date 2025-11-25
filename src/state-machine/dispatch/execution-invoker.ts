@@ -174,7 +174,7 @@ async function handleOnInit(
     try {
       const sandbox = createSecureSandbox();
 
-      const result = compileAndRun<OnInitRunItem[]>(
+      const result = await compileAndRun<OnInitRunItem[]>(
         sandbox,
         onInit.run_js,
         {
