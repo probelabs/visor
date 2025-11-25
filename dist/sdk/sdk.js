@@ -25206,10 +25206,30 @@ var init_github_comments = __esm({
           commentId = this.generateCommentId(),
           triggeredBy = "unknown",
           allowConcurrentUpdates = false,
-          commitSha
+          commitSha,
+          cachedGithubCommentId
         } = options;
         return this.withRetry(async () => {
-          const existingComment = await this.findVisorComment(owner, repo, prNumber, commentId);
+          let existingComment = await this.findVisorComment(owner, repo, prNumber, commentId);
+          if (!existingComment && cachedGithubCommentId) {
+            try {
+              const cachedComment = await this.octokit.rest.issues.getComment({
+                owner,
+                repo,
+                comment_id: cachedGithubCommentId
+              });
+              if (cachedComment.data && this.isVisorComment(cachedComment.data.body || "", commentId)) {
+                existingComment = cachedComment.data;
+                logger.debug(
+                  `[github-comments] Found comment via cached ID ${cachedGithubCommentId} (not visible in listComments yet)`
+                );
+              }
+            } catch (_e) {
+              logger.debug(
+                `[github-comments] Cached comment ${cachedGithubCommentId} not found, will create new`
+              );
+            }
+          }
           const formattedContent = this.formatCommentWithMetadata(content, {
             commentId,
             lastUpdated: (/* @__PURE__ */ new Date()).toISOString(),
@@ -25464,6 +25484,8 @@ var init_github_frontend = __esm({
       updateLocks = /* @__PURE__ */ new Map();
       minUpdateDelayMs = 1e3;
       // Minimum delay between updates (public for testing)
+      // Cache of created GitHub comment IDs per group to handle API eventual consistency
+      createdCommentGithubIds = /* @__PURE__ */ new Map();
       start(ctx) {
         const log2 = ctx.logger;
         const bus = ctx.eventBus;
@@ -25651,26 +25673,34 @@ ${end}`);
        * Acquires a mutex lock for the given group and executes the update.
        * This ensures only one comment update happens at a time per group,
        * preventing race conditions where updates overwrite each other.
+       *
+       * Uses a proper queue-based mutex: each new caller chains onto the previous
+       * lock, ensuring strict serialization even when multiple callers wait
+       * simultaneously.
        */
       async updateGroupedComment(ctx, comments, group, changedIds) {
         const existingLock = this.updateLocks.get(group);
-        if (existingLock) {
-          try {
-            await existingLock;
-          } catch (error) {
-            logger.warn(
-              `[github-frontend] Previous update for group ${group} failed: ${error instanceof Error ? error.message : error}`
-            );
-          }
-        }
-        const updatePromise = this.performGroupedCommentUpdate(ctx, comments, group, changedIds);
-        this.updateLocks.set(group, updatePromise);
+        let resolveLock;
+        const ourLock = new Promise((resolve9) => {
+          resolveLock = resolve9;
+        });
+        this.updateLocks.set(group, ourLock);
         try {
-          await updatePromise;
+          if (existingLock) {
+            try {
+              await existingLock;
+            } catch (error) {
+              logger.warn(
+                `[github-frontend] Previous update for group ${group} failed: ${error instanceof Error ? error.message : error}`
+              );
+            }
+          }
+          await this.performGroupedCommentUpdate(ctx, comments, group, changedIds);
         } finally {
-          if (this.updateLocks.get(group) === updatePromise) {
+          if (this.updateLocks.get(group) === ourLock) {
             this.updateLocks.delete(group);
           }
+          resolveLock();
         }
       }
       /**
@@ -25696,18 +25726,25 @@ ${end}`);
             await this.sleep(delay);
           }
           this.revision++;
+          const commentId = this.commentIdForGroup(ctx, group);
           const mergedBody = await this.mergeIntoExistingBody(ctx, comments, group, changedIds);
-          await comments.updateOrCreateComment(
+          const cachedGithubId = this.createdCommentGithubIds.get(commentId);
+          const result = await comments.updateOrCreateComment(
             ctx.run.repo.owner,
             ctx.run.repo.name,
             ctx.run.pr,
             mergedBody,
             {
-              commentId: this.commentIdForGroup(ctx, group),
+              commentId,
               triggeredBy: this.deriveTriggeredBy(ctx),
-              commitSha: ctx.run.headSha
+              commitSha: ctx.run.headSha,
+              // Pass the cached GitHub comment ID if available
+              cachedGithubCommentId: cachedGithubId
             }
           );
+          if (result && result.id) {
+            this.createdCommentGithubIds.set(commentId, result.id);
+          }
           this._lastFlush = Date.now();
         } catch (e) {
           logger.debug(

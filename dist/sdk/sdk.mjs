@@ -362,7 +362,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
     if (Array.isArray(configWithTagFilter.frontends) && configWithTagFilter.frontends.length > 0) {
       try {
         const { EventBus } = await import("./event-bus-5BEVPQ6T.mjs");
-        const { FrontendsHost } = await import("./host-IR62SUKB.mjs");
+        const { FrontendsHost } = await import("./host-X6CYL7P6.mjs");
         const bus = new EventBus();
         context.eventBus = bus;
         frontendsHost = new FrontendsHost(bus, logger);
