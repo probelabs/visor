@@ -10,6 +10,16 @@ import * as path from 'path';
 import { commandExecutor } from './command-executor';
 import { logger } from '../logger';
 
+/**
+ * Escape a string for safe use in shell commands.
+ * Uses single quotes and escapes any embedded single quotes.
+ */
+function shellEscape(str: string): string {
+  // Replace single quotes with '\'' (end quote, escaped quote, start quote)
+  // Then wrap the whole thing in single quotes
+  return "'" + str.replace(/'/g, "'\\''") + "'";
+}
+
 export interface WorkspaceConfig {
   enabled: boolean;
   basePath: string;
@@ -153,7 +163,11 @@ export class WorkspaceManager {
     } else {
       // If not a git repo, create a symlink instead
       logger.debug(`Original path is not a git repo, creating symlink`);
-      fs.symlinkSync(this.originalPath, mainProjectPath);
+      try {
+        fs.symlinkSync(this.originalPath, mainProjectPath);
+      } catch (error) {
+        throw new Error(`Failed to create symlink for main project: ${error}`);
+      }
     }
 
     // Register cleanup handlers
@@ -200,7 +214,11 @@ export class WorkspaceManager {
       fs.rmSync(workspacePath, { recursive: true, force: true });
     }
 
-    fs.symlinkSync(worktreePath, workspacePath);
+    try {
+      fs.symlinkSync(worktreePath, workspacePath);
+    } catch (error) {
+      throw new Error(`Failed to create symlink for project ${projectName}: ${error}`);
+    }
 
     // Track project
     this.projects.set(projectName, {
@@ -233,10 +251,12 @@ export class WorkspaceManager {
       if (this.mainProjectInfo) {
         const mainProjectPath = this.mainProjectInfo.mainProjectPath;
 
-        // Check if it's a worktree (not a symlink)
-        const stats = fs.lstatSync(mainProjectPath);
-        if (!stats.isSymbolicLink()) {
-          await this.removeMainProjectWorktree(mainProjectPath);
+        // Check if path exists and if it's a worktree (not a symlink)
+        if (fs.existsSync(mainProjectPath)) {
+          const stats = fs.lstatSync(mainProjectPath);
+          if (!stats.isSymbolicLink()) {
+            await this.removeMainProjectWorktree(mainProjectPath);
+          }
         }
       }
 
@@ -268,7 +288,7 @@ export class WorkspaceManager {
 
     // Get current HEAD
     const headResult = await commandExecutor.execute(
-      `git -C '${this.originalPath}' rev-parse HEAD`,
+      `git -C ${shellEscape(this.originalPath)} rev-parse HEAD`,
       {
         timeout: 10000,
       }
@@ -281,7 +301,7 @@ export class WorkspaceManager {
     const headRef = headResult.stdout.trim();
 
     // Create worktree using detached HEAD to avoid branch conflicts
-    const createCmd = `git -C '${this.originalPath}' worktree add --detach '${targetPath}' ${headRef}`;
+    const createCmd = `git -C ${shellEscape(this.originalPath)} worktree add --detach ${shellEscape(targetPath)} ${shellEscape(headRef)}`;
     const result = await commandExecutor.execute(createCmd, { timeout: 60000 });
 
     if (result.exitCode !== 0) {
@@ -297,7 +317,7 @@ export class WorkspaceManager {
   private async removeMainProjectWorktree(worktreePath: string): Promise<void> {
     logger.debug(`Removing main project worktree: ${worktreePath}`);
 
-    const removeCmd = `git -C '${this.originalPath}' worktree remove '${worktreePath}' --force`;
+    const removeCmd = `git -C ${shellEscape(this.originalPath)} worktree remove ${shellEscape(worktreePath)} --force`;
     const result = await commandExecutor.execute(removeCmd, { timeout: 30000 });
 
     if (result.exitCode !== 0) {
@@ -311,9 +331,12 @@ export class WorkspaceManager {
    */
   private async isGitRepository(dirPath: string): Promise<boolean> {
     try {
-      const result = await commandExecutor.execute(`git -C '${dirPath}' rev-parse --git-dir`, {
-        timeout: 5000,
-      });
+      const result = await commandExecutor.execute(
+        `git -C ${shellEscape(dirPath)} rev-parse --git-dir`,
+        {
+          timeout: 5000,
+        }
+      );
       return result.exitCode === 0;
     } catch {
       return false;
