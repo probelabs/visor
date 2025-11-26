@@ -278,6 +278,13 @@ export class WorkspaceManager {
 
   /**
    * Create worktree for the main project
+   *
+   * visor-disable: architecture - Not using WorktreeManager here because:
+   * 1. WorktreeManager expects remote URLs and clones to bare repos first
+   * 2. This operates on the LOCAL repo we're already in (no cloning needed)
+   * 3. Adding a "local mode" to WorktreeManager would add complexity for minimal benefit
+   * The git commands here are simpler (just rev-parse + worktree add) vs WorktreeManager's
+   * full clone/bare-repo/fetch/worktree pipeline.
    */
   private async createMainProjectWorktree(targetPath: string): Promise<void> {
     logger.debug(`Creating main project worktree: ${targetPath}`);
