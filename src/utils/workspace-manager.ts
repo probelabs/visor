@@ -5,7 +5,7 @@
  * Each run gets its own workspace in /tmp containing worktrees for all projects.
  */
 
-import * as fs from 'fs';
+import * as fsp from 'fs/promises';
 import * as path from 'path';
 import { commandExecutor } from './command-executor';
 import { logger } from '../logger';
@@ -141,11 +141,9 @@ export class WorkspaceManager {
 
     logger.info(`Initializing workspace: ${this.workspacePath}`);
 
-    // Create workspace directory
-    if (!fs.existsSync(this.workspacePath)) {
-      fs.mkdirSync(this.workspacePath, { recursive: true });
-      logger.debug(`Created workspace directory: ${this.workspacePath}`);
-    }
+    // Create workspace directory (mkdir with recursive handles existing dirs)
+    await fsp.mkdir(this.workspacePath, { recursive: true });
+    logger.debug(`Created workspace directory: ${this.workspacePath}`);
 
     // Extract main project name from original path
     const mainProjectName = this.extractProjectName(this.originalPath);
@@ -164,7 +162,7 @@ export class WorkspaceManager {
       // If not a git repo, create a symlink instead
       logger.debug(`Original path is not a git repo, creating symlink`);
       try {
-        fs.symlinkSync(this.originalPath, mainProjectPath);
+        await fsp.symlink(this.originalPath, mainProjectPath);
       } catch (error) {
         throw new Error(`Failed to create symlink for main project: ${error}`);
       }
@@ -209,13 +207,11 @@ export class WorkspaceManager {
     // Create symlink in workspace
     const workspacePath = path.join(this.workspacePath, projectName);
 
-    if (fs.existsSync(workspacePath)) {
-      // Remove existing symlink/directory
-      fs.rmSync(workspacePath, { recursive: true, force: true });
-    }
+    // Remove existing symlink/directory if present (rm with force handles non-existent)
+    await fsp.rm(workspacePath, { recursive: true, force: true });
 
     try {
-      fs.symlinkSync(worktreePath, workspacePath);
+      await fsp.symlink(worktreePath, workspacePath);
     } catch (error) {
       throw new Error(`Failed to create symlink for project ${projectName}: ${error}`);
     }
@@ -252,19 +248,19 @@ export class WorkspaceManager {
         const mainProjectPath = this.mainProjectInfo.mainProjectPath;
 
         // Check if path exists and if it's a worktree (not a symlink)
-        if (fs.existsSync(mainProjectPath)) {
-          const stats = fs.lstatSync(mainProjectPath);
+        try {
+          const stats = await fsp.lstat(mainProjectPath);
           if (!stats.isSymbolicLink()) {
             await this.removeMainProjectWorktree(mainProjectPath);
           }
+        } catch {
+          // Path doesn't exist, nothing to clean up
         }
       }
 
       // Remove workspace directory
-      if (fs.existsSync(this.workspacePath)) {
-        fs.rmSync(this.workspacePath, { recursive: true, force: true });
-        logger.debug(`Removed workspace directory: ${this.workspacePath}`);
-      }
+      await fsp.rm(this.workspacePath, { recursive: true, force: true });
+      logger.debug(`Removed workspace directory: ${this.workspacePath}`);
 
       // Remove from instances
       WorkspaceManager.instances.delete(this.sessionId);
