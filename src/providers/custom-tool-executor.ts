@@ -143,13 +143,26 @@ export class CustomToolExecutor {
       timeout: tool.timeout || 30000,
     });
 
+    // Check if command failed (non-zero exit code)
+    if (result.exitCode !== 0) {
+      const errorOutput = result.stderr || result.stdout || 'Command failed';
+      throw new Error(
+        `Tool '${toolName}' execution failed with exit code ${result.exitCode}: ${errorOutput}`
+      );
+    }
+
     // Parse JSON if requested
     let output: unknown = result.stdout;
     if (tool.parseJson) {
       try {
         output = JSON.parse(result.stdout);
       } catch (e) {
-        logger.warn(`Failed to parse tool output as JSON: ${e}`);
+        const err = e instanceof Error ? e : new Error(String(e));
+        logger.warn(`Failed to parse tool output as JSON: ${err.message}`);
+        // Only throw if there's no transform that might fix it
+        if (!tool.transform && !tool.transform_js) {
+          throw new Error(`Tool '${toolName}' output could not be parsed as JSON: ${err.message}`);
+        }
       }
     }
 

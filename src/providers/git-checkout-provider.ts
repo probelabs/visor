@@ -132,6 +132,22 @@ export class GitCheckoutProvider extends CheckProvider {
         is_worktree: true,
       };
 
+      // Add project to workspace if workspace isolation is enabled
+      const workspace = (context as any)?._parentContext?.workspace;
+      if (workspace?.isEnabled()) {
+        try {
+          const workspacePath = await workspace.addProject(
+            resolvedRepository,
+            worktree.path,
+            checkoutConfig.checkName
+          );
+          output.workspace_path = workspacePath;
+          logger.debug(`Added project to workspace: ${workspacePath}`);
+        } catch (error) {
+          logger.warn(`Failed to add project to workspace: ${error}`);
+        }
+      }
+
       logger.info(
         `Successfully checked out ${resolvedRepository}@${resolvedRef} to ${worktree.path}`
       );

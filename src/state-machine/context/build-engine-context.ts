@@ -6,6 +6,7 @@ import { MemoryStore } from '../../memory-store';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../../logger';
 import type { VisorConfig as VCfg, CheckConfig as CfgCheck } from '../../types/config';
+import { WorkspaceManager } from '../../utils/workspace-manager';
 
 /**
  * Apply minimal criticality defaults in-place.
@@ -100,6 +101,7 @@ export function buildEngineContextForRun(
     journal,
     memory,
     workingDirectory,
+    originalWorkingDirectory: workingDirectory,
     sessionId: uuidv4(),
     event: prInfo.eventType,
     debug,
@@ -109,4 +111,52 @@ export function buildEngineContextForRun(
     // Store prInfo for later access (e.g., in getOutputHistorySnapshot)
     prInfo,
   };
+}
+
+/**
+ * Initialize workspace isolation for an engine context.
+ * Creates an isolated workspace with the main project worktree.
+ *
+ * @param context - Engine context to update with workspace
+ * @returns Updated context (same object, mutated)
+ */
+export async function initializeWorkspace(context: EngineContext): Promise<EngineContext> {
+  // Check if workspace isolation is enabled via config or env
+  const workspaceConfig = (context.config as any).workspace;
+  const isEnabled =
+    workspaceConfig?.enabled !== false && process.env.VISOR_WORKSPACE_ENABLED !== 'false';
+
+  if (!isEnabled) {
+    logger.debug('[Workspace] Workspace isolation is disabled');
+    return context;
+  }
+
+  const originalPath = context.workingDirectory || process.cwd();
+
+  try {
+    // Create workspace manager
+    const workspace = WorkspaceManager.getInstance(context.sessionId, originalPath, {
+      enabled: true,
+      basePath: workspaceConfig?.base_path || process.env.VISOR_WORKSPACE_PATH,
+      cleanupOnExit: workspaceConfig?.cleanup_on_exit !== false,
+    });
+
+    // Initialize workspace (creates main project worktree)
+    const info = await workspace.initialize();
+
+    // Update context with workspace info
+    context.workspace = workspace;
+    context.workingDirectory = info.mainProjectPath;
+    context.originalWorkingDirectory = originalPath;
+
+    logger.info(`[Workspace] Initialized workspace: ${info.workspacePath}`);
+    logger.debug(`[Workspace] Main project at: ${info.mainProjectPath}`);
+
+    return context;
+  } catch (error) {
+    // Log warning but continue without workspace isolation
+    logger.warn(`[Workspace] Failed to initialize workspace: ${error}`);
+    logger.debug('[Workspace] Continuing without workspace isolation');
+    return context;
+  }
 }

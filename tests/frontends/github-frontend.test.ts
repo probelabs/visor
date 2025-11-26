@@ -368,4 +368,232 @@ describe('GitHubFrontend (event-bus v2)', () => {
       return null;
     }
   }
+
+  /**
+   * Regression test for duplicate comment posting issue.
+   *
+   * Bug: When multiple checks complete at nearly the same time, each check's
+   * completion triggers a comment update. Due to GitHub API eventual consistency,
+   * newly created comments may not immediately appear in listComments, causing
+   * concurrent updates to each create a new comment instead of updating the existing one.
+   *
+   * Expected: Multiple concurrent updates should be serialized via mutex, and the
+   * cached GitHub comment ID should be used to find the comment even when listComments
+   * doesn't return it.
+   */
+  test('Dynamic group creates separate comments per run (not updated across runs)', async () => {
+    // Test that the "dynamic" group creates a new comment for each run
+    // This is used for issue comment assistants where each response should be a separate comment
+    const octokit1 = makeFakeOctokit();
+    const octokit2 = makeFakeOctokit();
+
+    // First run
+    const bus1 = new EventBus();
+    const fe1 = new GitHubFrontend();
+    fe1.start({
+      eventBus: bus1,
+      logger: console as any,
+      config: {
+        checks: {
+          'comment-assistant': { group: 'dynamic', schema: 'issue-assistant' },
+        },
+      },
+      run: { runId: 'run-1', repo: { owner: 'o', name: 'r' }, pr: 253, headSha: 'abc1111' },
+      octokit: octokit1,
+    });
+
+    await bus1.emit({ type: 'CheckScheduled', checkId: 'comment-assistant', scope: ['root'] });
+    await bus1.emit({
+      type: 'CheckCompleted',
+      checkId: 'comment-assistant',
+      scope: ['root'],
+      result: { issues: [], content: 'Response 1' },
+    });
+
+    // First run creates a comment
+    expect(octokit1.rest.issues.createComment).toHaveBeenCalledTimes(1);
+    const firstBody = octokit1.__state.comments[0]?.body as string;
+    expect(firstBody).toContain('Response 1');
+    // Verify the comment ID contains the runId
+    expect(firstBody).toContain('visor-thread-dynamic-run-1');
+
+    // Second run (simulating a new issue_comment trigger)
+    const bus2 = new EventBus();
+    const fe2 = new GitHubFrontend();
+    fe2.start({
+      eventBus: bus2,
+      logger: console as any,
+      config: {
+        checks: {
+          'comment-assistant': { group: 'dynamic', schema: 'issue-assistant' },
+        },
+      },
+      // Same PR but different runId (new event trigger)
+      run: { runId: 'run-2', repo: { owner: 'o', name: 'r' }, pr: 253, headSha: 'abc1111' },
+      octokit: octokit2,
+    });
+
+    await bus2.emit({ type: 'CheckScheduled', checkId: 'comment-assistant', scope: ['root'] });
+    await bus2.emit({
+      type: 'CheckCompleted',
+      checkId: 'comment-assistant',
+      scope: ['root'],
+      result: { issues: [], content: 'Response 2' },
+    });
+
+    // Second run also creates a NEW comment (not updating the first one)
+    expect(octokit2.rest.issues.createComment).toHaveBeenCalledTimes(1);
+    const secondBody = octokit2.__state.comments[0]?.body as string;
+    expect(secondBody).toContain('Response 2');
+    // Verify the comment ID contains the different runId
+    expect(secondBody).toContain('visor-thread-dynamic-run-2');
+  });
+
+  test('Concurrent CheckCompleted events should not create duplicate comments (race condition fix)', async () => {
+    const bus = new EventBus();
+
+    // Track created comments with eventual consistency simulation
+    let commentIdSeq = 1000;
+    const comments: any[] = [];
+    const commentCreationTimestamps: Map<number, number> = new Map();
+    const createCallCount = { count: 0 };
+    const updateCallCount = { count: 0 };
+
+    const octokit = {
+      rest: {
+        checks: {
+          create: jest.fn(async (_req: any) => {
+            return {
+              data: { id: 5000 + Math.random(), html_url: 'https://example/check/1' },
+            } as any;
+          }),
+          update: jest.fn(async (_req: any) => ({ data: {} }) as any),
+          listForRef: jest.fn(async (_req: any) => ({ data: { check_runs: [] } }) as any),
+        },
+        issues: {
+          listComments: jest.fn(async (_req: any) => {
+            // Simulate API delay
+            await new Promise(r => setTimeout(r, 30));
+            // Simulate eventual consistency: comments created within the last 200ms
+            // may not be visible yet in listComments (like real GitHub API behavior)
+            const now = Date.now();
+            const visibleComments = comments.filter(c => {
+              const createdAt = commentCreationTimestamps.get(c.id);
+              // Comment is visible if it was created more than 200ms ago
+              return createdAt && now - createdAt > 200;
+            });
+            return { data: visibleComments.slice() } as any;
+          }),
+          getComment: jest.fn(async (req: any) => {
+            // getComment returns the comment directly without eventual consistency delay
+            // This simulates the real GitHub API behavior where getComment by ID works immediately
+            const found = comments.find(c => c.id === req.comment_id);
+            if (!found) {
+              const err: any = new Error('Not Found');
+              err.status = 404;
+              throw err;
+            }
+            return { data: found } as any;
+          }),
+          updateComment: jest.fn(async (req: any) => {
+            updateCallCount.count++;
+            const found = comments.find(c => c.id === req.comment_id);
+            if (found) {
+              found.body = req.body;
+              found.updated_at = new Date().toISOString();
+            }
+            return { data: found } as any;
+          }),
+          createComment: jest.fn(async (req: any) => {
+            // Simulate API delay for creation
+            await new Promise(r => setTimeout(r, 20));
+            createCallCount.count++;
+            const id = commentIdSeq++;
+            const c = {
+              id,
+              body: req.body,
+              user: { login: 'bot' },
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            };
+            comments.push(c);
+            commentCreationTimestamps.set(id, Date.now());
+            return { data: c } as any;
+          }),
+        },
+      },
+    } as any;
+
+    const fe = new GitHubFrontend();
+    // Reduce minimum update delay to speed up test
+    fe.minUpdateDelayMs = 50;
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: {
+        checks: {
+          security: { group: 'review', schema: 'code-review' },
+          quality: { group: 'review', schema: 'code-review' },
+          performance: { group: 'review', schema: 'code-review' },
+          style: { group: 'review', schema: 'code-review' },
+        },
+      },
+      run: { runId: 'race-test', repo: { owner: 'o', name: 'r' }, pr: 999, headSha: 'abc1234' },
+      octokit,
+    });
+
+    // Schedule all checks
+    await bus.emit({ type: 'CheckScheduled', checkId: 'security', scope: ['root'] });
+    await bus.emit({ type: 'CheckScheduled', checkId: 'quality', scope: ['root'] });
+    await bus.emit({ type: 'CheckScheduled', checkId: 'performance', scope: ['root'] });
+    await bus.emit({ type: 'CheckScheduled', checkId: 'style', scope: ['root'] });
+
+    // Fire all CheckCompleted events concurrently (simulating real-world race condition)
+    await Promise.all([
+      bus.emit({
+        type: 'CheckCompleted',
+        checkId: 'security',
+        scope: ['root'],
+        result: { issues: [], content: 'Security check passed' },
+      }),
+      bus.emit({
+        type: 'CheckCompleted',
+        checkId: 'quality',
+        scope: ['root'],
+        result: { issues: [], content: 'Quality check passed' },
+      }),
+      bus.emit({
+        type: 'CheckCompleted',
+        checkId: 'performance',
+        scope: ['root'],
+        result: { issues: [], content: 'Performance check passed' },
+      }),
+      bus.emit({
+        type: 'CheckCompleted',
+        checkId: 'style',
+        scope: ['root'],
+        result: { issues: [], content: 'Style check passed' },
+      }),
+    ]);
+
+    // Wait for all async operations to complete
+    await new Promise(r => setTimeout(r, 500));
+
+    // With the fix, we should have exactly ONE comment created, then updates for subsequent checks
+    // The mutex ensures serialization, and the cached GitHub ID ensures we find the comment
+    // even when listComments doesn't return it due to eventual consistency
+    expect(createCallCount.count).toBe(1);
+    // The remaining 3 checks should update the existing comment
+    expect(updateCallCount.count).toBe(3);
+
+    // Verify only one comment exists
+    expect(comments.length).toBe(1);
+
+    // Verify the final comment contains all sections
+    const body = comments[0].body;
+    expect(body).toContain('security');
+    expect(body).toContain('quality');
+    expect(body).toContain('performance');
+    expect(body).toContain('style');
+  });
 });
