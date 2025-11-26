@@ -548,6 +548,13 @@ ${end}`);
   }
 
   private commentIdForGroup(ctx: FrontendContext, group: string): string {
+    // For "dynamic" group, each run creates a new comment (not updated across runs)
+    // This is used for assistants that respond to issue comments where each
+    // response should be a separate comment rather than updating a previous one.
+    // Within a single run, the comment ID stays stable so updates work correctly.
+    if (group === 'dynamic') {
+      return `visor-thread-dynamic-${ctx.run.runId}`;
+    }
     // Stable per-PR per-group ID (does not include commit SHA)
     const r = ctx.run;
     const base = r.repo && r.pr ? `${r.repo.owner}/${r.repo.name}#${r.pr}` : r.runId;

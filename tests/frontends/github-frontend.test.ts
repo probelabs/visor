@@ -381,6 +381,74 @@ describe('GitHubFrontend (event-bus v2)', () => {
    * cached GitHub comment ID should be used to find the comment even when listComments
    * doesn't return it.
    */
+  test('Dynamic group creates separate comments per run (not updated across runs)', async () => {
+    // Test that the "dynamic" group creates a new comment for each run
+    // This is used for issue comment assistants where each response should be a separate comment
+    const octokit1 = makeFakeOctokit();
+    const octokit2 = makeFakeOctokit();
+
+    // First run
+    const bus1 = new EventBus();
+    const fe1 = new GitHubFrontend();
+    fe1.start({
+      eventBus: bus1,
+      logger: console as any,
+      config: {
+        checks: {
+          'comment-assistant': { group: 'dynamic', schema: 'issue-assistant' },
+        },
+      },
+      run: { runId: 'run-1', repo: { owner: 'o', name: 'r' }, pr: 253, headSha: 'abc1111' },
+      octokit: octokit1,
+    });
+
+    await bus1.emit({ type: 'CheckScheduled', checkId: 'comment-assistant', scope: ['root'] });
+    await bus1.emit({
+      type: 'CheckCompleted',
+      checkId: 'comment-assistant',
+      scope: ['root'],
+      result: { issues: [], content: 'Response 1' },
+    });
+
+    // First run creates a comment
+    expect(octokit1.rest.issues.createComment).toHaveBeenCalledTimes(1);
+    const firstBody = octokit1.__state.comments[0]?.body as string;
+    expect(firstBody).toContain('Response 1');
+    // Verify the comment ID contains the runId
+    expect(firstBody).toContain('visor-thread-dynamic-run-1');
+
+    // Second run (simulating a new issue_comment trigger)
+    const bus2 = new EventBus();
+    const fe2 = new GitHubFrontend();
+    fe2.start({
+      eventBus: bus2,
+      logger: console as any,
+      config: {
+        checks: {
+          'comment-assistant': { group: 'dynamic', schema: 'issue-assistant' },
+        },
+      },
+      // Same PR but different runId (new event trigger)
+      run: { runId: 'run-2', repo: { owner: 'o', name: 'r' }, pr: 253, headSha: 'abc1111' },
+      octokit: octokit2,
+    });
+
+    await bus2.emit({ type: 'CheckScheduled', checkId: 'comment-assistant', scope: ['root'] });
+    await bus2.emit({
+      type: 'CheckCompleted',
+      checkId: 'comment-assistant',
+      scope: ['root'],
+      result: { issues: [], content: 'Response 2' },
+    });
+
+    // Second run also creates a NEW comment (not updating the first one)
+    expect(octokit2.rest.issues.createComment).toHaveBeenCalledTimes(1);
+    const secondBody = octokit2.__state.comments[0]?.body as string;
+    expect(secondBody).toContain('Response 2');
+    // Verify the comment ID contains the different runId
+    expect(secondBody).toContain('visor-thread-dynamic-run-2');
+  });
+
   test('Concurrent CheckCompleted events should not create duplicate comments (race condition fix)', async () => {
     const bus = new EventBus();
 
