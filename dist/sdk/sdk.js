@@ -26314,6 +26314,9 @@ ${blocks}
         groupMap.set(checkId, { ...prev, ...patch });
       }
       commentIdForGroup(ctx, group) {
+        if (group === "dynamic") {
+          return `visor-thread-dynamic-${ctx.run.runId}`;
+        }
         const r = ctx.run;
         const base = r.repo && r.pr ? `${r.repo.owner}/${r.repo.name}#${r.pr}` : r.runId;
         return `visor-thread-${group}-${base}`;
