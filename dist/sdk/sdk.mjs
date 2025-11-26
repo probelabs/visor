@@ -3,9 +3,12 @@ import {
   check_provider_registry_exports,
   init_check_provider_registry,
   init_runner
-} from "./chunk-A73S66Z5.mjs";
+} from "./chunk-XXW5T2MK.mjs";
 import "./chunk-6Y4YTKCF.mjs";
-import "./chunk-CT4CIIRV.mjs";
+import {
+  commandExecutor,
+  init_command_executor
+} from "./chunk-CT4CIIRV.mjs";
 import "./chunk-F2O6TQAF.mjs";
 import "./chunk-OWUVOILT.mjs";
 import {
@@ -38,10 +41,296 @@ import {
   __toCommonJS
 } from "./chunk-WMJKH4XE.mjs";
 
+// src/utils/workspace-manager.ts
+import * as fsp from "fs/promises";
+import * as path from "path";
+function shellEscape(str) {
+  return "'" + str.replace(/'/g, "'\\''") + "'";
+}
+function sanitizePathComponent(name) {
+  return name.replace(/\.\./g, "").replace(/[\/\\]/g, "-").replace(/^\.+/, "").trim() || "unnamed";
+}
+var WorkspaceManager;
+var init_workspace_manager = __esm({
+  "src/utils/workspace-manager.ts"() {
+    "use strict";
+    init_command_executor();
+    init_logger();
+    WorkspaceManager = class _WorkspaceManager {
+      static instances = /* @__PURE__ */ new Map();
+      sessionId;
+      basePath;
+      workspacePath;
+      originalPath;
+      config;
+      initialized = false;
+      mainProjectInfo = null;
+      projects = /* @__PURE__ */ new Map();
+      cleanupHandlersRegistered = false;
+      usedNames = /* @__PURE__ */ new Set();
+      constructor(sessionId, originalPath, config) {
+        this.sessionId = sessionId;
+        this.originalPath = originalPath;
+        this.config = {
+          enabled: true,
+          basePath: process.env.VISOR_WORKSPACE_PATH || "/tmp/visor-workspaces",
+          cleanupOnExit: true,
+          ...config
+        };
+        this.basePath = this.config.basePath;
+        this.workspacePath = path.join(this.basePath, sanitizePathComponent(this.sessionId));
+      }
+      /**
+       * Get or create a WorkspaceManager instance for a session
+       */
+      static getInstance(sessionId, originalPath, config) {
+        if (!_WorkspaceManager.instances.has(sessionId)) {
+          _WorkspaceManager.instances.set(
+            sessionId,
+            new _WorkspaceManager(sessionId, originalPath, config)
+          );
+        }
+        return _WorkspaceManager.instances.get(sessionId);
+      }
+      /**
+       * Clear all instances (for testing)
+       */
+      static clearInstances() {
+        _WorkspaceManager.instances.clear();
+      }
+      /**
+       * Check if workspace isolation is enabled
+       */
+      isEnabled() {
+        return this.config.enabled;
+      }
+      /**
+       * Get the workspace path
+       */
+      getWorkspacePath() {
+        return this.workspacePath;
+      }
+      /**
+       * Get the original working directory
+       */
+      getOriginalPath() {
+        return this.originalPath;
+      }
+      /**
+       * Get workspace info (only available after initialize)
+       */
+      getWorkspaceInfo() {
+        return this.mainProjectInfo;
+      }
+      /**
+       * Initialize the workspace - creates workspace directory and main project worktree
+       */
+      async initialize() {
+        if (!this.config.enabled) {
+          throw new Error("Workspace isolation is not enabled");
+        }
+        if (this.initialized && this.mainProjectInfo) {
+          return this.mainProjectInfo;
+        }
+        logger.info(`Initializing workspace: ${this.workspacePath}`);
+        await fsp.mkdir(this.workspacePath, { recursive: true });
+        logger.debug(`Created workspace directory: ${this.workspacePath}`);
+        const mainProjectName = sanitizePathComponent(this.extractProjectName(this.originalPath));
+        this.usedNames.add(mainProjectName);
+        const mainProjectPath = path.join(this.workspacePath, mainProjectName);
+        const isGitRepo = await this.isGitRepository(this.originalPath);
+        if (isGitRepo) {
+          await this.createMainProjectWorktree(mainProjectPath);
+        } else {
+          logger.debug(`Original path is not a git repo, creating symlink`);
+          try {
+            await fsp.symlink(this.originalPath, mainProjectPath);
+          } catch (error) {
+            throw new Error(`Failed to create symlink for main project: ${error}`);
+          }
+        }
+        this.registerCleanupHandlers();
+        this.mainProjectInfo = {
+          sessionId: this.sessionId,
+          workspacePath: this.workspacePath,
+          mainProjectPath,
+          mainProjectName,
+          originalPath: this.originalPath
+        };
+        this.initialized = true;
+        logger.info(`Workspace initialized: ${this.workspacePath}`);
+        return this.mainProjectInfo;
+      }
+      /**
+       * Add a project to the workspace (creates symlink to worktree)
+       */
+      async addProject(repository, worktreePath, description) {
+        if (!this.initialized) {
+          throw new Error("Workspace not initialized. Call initialize() first.");
+        }
+        let projectName = sanitizePathComponent(description || this.extractRepoName(repository));
+        projectName = this.getUniqueName(projectName);
+        this.usedNames.add(projectName);
+        const workspacePath = path.join(this.workspacePath, projectName);
+        await fsp.rm(workspacePath, { recursive: true, force: true });
+        try {
+          await fsp.symlink(worktreePath, workspacePath);
+        } catch (error) {
+          throw new Error(`Failed to create symlink for project ${projectName}: ${error}`);
+        }
+        this.projects.set(projectName, {
+          name: projectName,
+          path: workspacePath,
+          worktreePath,
+          repository
+        });
+        logger.info(`Added project to workspace: ${projectName} -> ${worktreePath}`);
+        return workspacePath;
+      }
+      /**
+       * List all projects in the workspace
+       */
+      listProjects() {
+        return Array.from(this.projects.values());
+      }
+      /**
+       * Cleanup the workspace
+       */
+      async cleanup() {
+        logger.info(`Cleaning up workspace: ${this.workspacePath}`);
+        try {
+          if (this.mainProjectInfo) {
+            const mainProjectPath = this.mainProjectInfo.mainProjectPath;
+            try {
+              const stats = await fsp.lstat(mainProjectPath);
+              if (!stats.isSymbolicLink()) {
+                await this.removeMainProjectWorktree(mainProjectPath);
+              }
+            } catch {
+            }
+          }
+          await fsp.rm(this.workspacePath, { recursive: true, force: true });
+          logger.debug(`Removed workspace directory: ${this.workspacePath}`);
+          _WorkspaceManager.instances.delete(this.sessionId);
+          this.initialized = false;
+          this.mainProjectInfo = null;
+          this.projects.clear();
+          this.usedNames.clear();
+          logger.info(`Workspace cleanup completed: ${this.sessionId}`);
+        } catch (error) {
+          logger.warn(`Failed to cleanup workspace: ${error}`);
+        }
+      }
+      /**
+       * Create worktree for the main project
+       *
+       * visor-disable: architecture - Not using WorktreeManager here because:
+       * 1. WorktreeManager expects remote URLs and clones to bare repos first
+       * 2. This operates on the LOCAL repo we're already in (no cloning needed)
+       * 3. Adding a "local mode" to WorktreeManager would add complexity for minimal benefit
+       * The git commands here are simpler (just rev-parse + worktree add) vs WorktreeManager's
+       * full clone/bare-repo/fetch/worktree pipeline.
+       */
+      async createMainProjectWorktree(targetPath) {
+        logger.debug(`Creating main project worktree: ${targetPath}`);
+        const headResult = await commandExecutor.execute(
+          `git -C ${shellEscape(this.originalPath)} rev-parse HEAD`,
+          {
+            timeout: 1e4
+          }
+        );
+        if (headResult.exitCode !== 0) {
+          throw new Error(`Failed to get HEAD: ${headResult.stderr}`);
+        }
+        const headRef = headResult.stdout.trim();
+        const createCmd = `git -C ${shellEscape(this.originalPath)} worktree add --detach ${shellEscape(targetPath)} ${shellEscape(headRef)}`;
+        const result = await commandExecutor.execute(createCmd, { timeout: 6e4 });
+        if (result.exitCode !== 0) {
+          throw new Error(`Failed to create main project worktree: ${result.stderr}`);
+        }
+        logger.debug(`Created main project worktree at ${targetPath}`);
+      }
+      /**
+       * Remove main project worktree
+       */
+      async removeMainProjectWorktree(worktreePath) {
+        logger.debug(`Removing main project worktree: ${worktreePath}`);
+        const removeCmd = `git -C ${shellEscape(this.originalPath)} worktree remove ${shellEscape(worktreePath)} --force`;
+        const result = await commandExecutor.execute(removeCmd, { timeout: 3e4 });
+        if (result.exitCode !== 0) {
+          logger.warn(`Failed to remove worktree via git: ${result.stderr}`);
+        }
+      }
+      /**
+       * Check if a path is a git repository
+       */
+      async isGitRepository(dirPath) {
+        try {
+          const result = await commandExecutor.execute(
+            `git -C ${shellEscape(dirPath)} rev-parse --git-dir`,
+            {
+              timeout: 5e3
+            }
+          );
+          return result.exitCode === 0;
+        } catch {
+          return false;
+        }
+      }
+      /**
+       * Extract project name from path
+       */
+      extractProjectName(dirPath) {
+        return path.basename(dirPath);
+      }
+      /**
+       * Extract repository name from owner/repo format
+       */
+      extractRepoName(repository) {
+        if (repository.includes("://") || repository.startsWith("git@")) {
+          const match = repository.match(/[/:]([^/:]+\/[^/:]+?)(?:\.git)?$/);
+          if (match) {
+            return match[1].split("/").pop() || repository;
+          }
+        }
+        if (repository.includes("/")) {
+          return repository.split("/").pop() || repository;
+        }
+        return repository;
+      }
+      /**
+       * Get a unique name by appending a number if needed
+       */
+      getUniqueName(baseName) {
+        if (!this.usedNames.has(baseName)) {
+          return baseName;
+        }
+        let counter = 2;
+        let uniqueName = `${baseName}-${counter}`;
+        while (this.usedNames.has(uniqueName)) {
+          counter++;
+          uniqueName = `${baseName}-${counter}`;
+        }
+        return uniqueName;
+      }
+      /**
+       * Register cleanup handlers for process exit
+       */
+      registerCleanupHandlers() {
+        if (this.cleanupHandlersRegistered || !this.config.cleanupOnExit) {
+          return;
+        }
+        this.cleanupHandlersRegistered = true;
+      }
+    };
+  }
+});
+
 // src/state-machine/context/build-engine-context.ts
 var build_engine_context_exports = {};
 __export(build_engine_context_exports, {
-  buildEngineContextForRun: () => buildEngineContextForRun
+  buildEngineContextForRun: () => buildEngineContextForRun,
+  initializeWorkspace: () => initializeWorkspace
 });
 import { v4 as uuidv4 } from "uuid";
 function applyCriticalityDefaults(cfg) {
@@ -98,6 +387,7 @@ function buildEngineContextForRun(workingDirectory, config, prInfo, debug, maxPa
     journal,
     memory,
     workingDirectory,
+    originalWorkingDirectory: workingDirectory,
     sessionId: uuidv4(),
     event: prInfo.eventType,
     debug,
@@ -108,12 +398,40 @@ function buildEngineContextForRun(workingDirectory, config, prInfo, debug, maxPa
     prInfo
   };
 }
+async function initializeWorkspace(context) {
+  const workspaceConfig = context.config.workspace;
+  const isEnabled = workspaceConfig?.enabled !== false && process.env.VISOR_WORKSPACE_ENABLED !== "false";
+  if (!isEnabled) {
+    logger.debug("[Workspace] Workspace isolation is disabled");
+    return context;
+  }
+  const originalPath = context.workingDirectory || process.cwd();
+  try {
+    const workspace = WorkspaceManager.getInstance(context.sessionId, originalPath, {
+      enabled: true,
+      basePath: workspaceConfig?.base_path || process.env.VISOR_WORKSPACE_PATH,
+      cleanupOnExit: workspaceConfig?.cleanup_on_exit !== false
+    });
+    const info = await workspace.initialize();
+    context.workspace = workspace;
+    context.workingDirectory = info.mainProjectPath;
+    context.originalWorkingDirectory = originalPath;
+    logger.info(`[Workspace] Initialized workspace: ${info.workspacePath}`);
+    logger.debug(`[Workspace] Main project at: ${info.mainProjectPath}`);
+    return context;
+  } catch (error) {
+    logger.warn(`[Workspace] Failed to initialize workspace: ${error}`);
+    logger.debug("[Workspace] Continuing without workspace isolation");
+    return context;
+  }
+}
 var init_build_engine_context = __esm({
   "src/state-machine/context/build-engine-context.ts"() {
     "use strict";
     init_snapshot_store();
     init_memory_store();
     init_logger();
+    init_workspace_manager();
   }
 });
 
@@ -161,7 +479,7 @@ var init_summary = __esm({
 // src/state-machine-execution-engine.ts
 init_runner();
 init_logger();
-import * as path from "path";
+import * as path2 from "path";
 import * as fs from "fs";
 var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
   workingDirectory;
@@ -225,7 +543,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       try {
         const map = options?.webhookContext?.webhookData;
         if (map) {
-          const { CheckProviderRegistry } = await import("./check-provider-registry-BOWQ6EVQ.mjs");
+          const { CheckProviderRegistry } = await import("./check-provider-registry-7YJZYPUX.mjs");
           const reg = CheckProviderRegistry.getInstance();
           const p = reg.getProvider("http_input");
           if (p && typeof p.setWebhookContext === "function") p.setWebhookContext(map);
@@ -356,6 +674,8 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       checks
       // Pass the explicit checks list
     );
+    const { initializeWorkspace: initializeWorkspace2 } = (init_build_engine_context(), __toCommonJS(build_engine_context_exports));
+    await initializeWorkspace2(context);
     context.executionContext = this.getExecutionContext();
     this._lastContext = context;
     let frontendsHost;
@@ -455,9 +775,9 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
               }
               const checkId = String(ev?.checkId || "unknown");
               const threadKey = ev?.threadKey || (channel && threadTs ? `${channel}:${threadTs}` : "session");
-              const baseDir = process.env.VISOR_SNAPSHOT_DIR || path.resolve(process.cwd(), ".visor", "snapshots");
+              const baseDir = process.env.VISOR_SNAPSHOT_DIR || path2.resolve(process.cwd(), ".visor", "snapshots");
               fs.mkdirSync(baseDir, { recursive: true });
-              const filePath = path.join(baseDir, `${threadKey}-${checkId}.json`);
+              const filePath = path2.join(baseDir, `${threadKey}-${checkId}.json`);
               await this.saveSnapshotToFile(filePath);
               logger.info(`[Snapshot] Saved run snapshot: ${filePath}`);
               try {
@@ -503,6 +823,13 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       sessionRegistry.clearAllSessions();
     } catch (error) {
       logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
+    }
+    if (context.workspace) {
+      try {
+        await context.workspace.cleanup();
+      } catch (error) {
+        logger.debug(`[StateMachine] Failed to cleanup workspace: ${error}`);
+      }
     }
     return result;
   }

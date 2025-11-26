@@ -430,19 +430,19 @@ function __getOrCreateNdjsonPath() {
   try {
     if (process.env.VISOR_TELEMETRY_SINK && process.env.VISOR_TELEMETRY_SINK !== "file")
       return null;
-    const path19 = require("path");
+    const path20 = require("path");
     const fs18 = require("fs");
     if (process.env.VISOR_FALLBACK_TRACE_FILE) {
       __ndjsonPath = process.env.VISOR_FALLBACK_TRACE_FILE;
-      const dir = path19.dirname(__ndjsonPath);
+      const dir = path20.dirname(__ndjsonPath);
       if (!fs18.existsSync(dir)) fs18.mkdirSync(dir, { recursive: true });
       return __ndjsonPath;
     }
-    const outDir = process.env.VISOR_TRACE_DIR || path19.join(process.cwd(), "output", "traces");
+    const outDir = process.env.VISOR_TRACE_DIR || path20.join(process.cwd(), "output", "traces");
     if (!fs18.existsSync(outDir)) fs18.mkdirSync(outDir, { recursive: true });
     if (!__ndjsonPath) {
       const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      __ndjsonPath = path19.join(outDir, `${ts}.ndjson`);
+      __ndjsonPath = path20.join(outDir, `${ts}.ndjson`);
     }
     return __ndjsonPath;
   } catch {
@@ -4532,9 +4532,9 @@ function configureLiquidWithExtensions(liquid) {
   });
   liquid.registerFilter("get", (obj, pathExpr) => {
     if (obj == null) return void 0;
-    const path19 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
-    if (!path19) return obj;
-    const parts = path19.split(".");
+    const path20 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
+    if (!path20) return obj;
+    const parts = path20.split(".");
     let cur = obj;
     for (const p of parts) {
       if (cur == null) return void 0;
@@ -4654,9 +4654,9 @@ function configureLiquidWithExtensions(liquid) {
           }
         }
         const defaultRole = typeof rolesCfg.default === "string" && rolesCfg.default.trim() ? rolesCfg.default.trim() : void 0;
-        const getNested = (obj, path19) => {
-          if (!obj || !path19) return void 0;
-          const parts = path19.split(".");
+        const getNested = (obj, path20) => {
+          if (!obj || !path20) return void 0;
+          const parts = path20.split(".");
           let cur = obj;
           for (const p of parts) {
             if (cur == null) return void 0;
@@ -4808,7 +4808,7 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
     const fs18 = await import("fs/promises");
-    const path19 = await import("path");
+    const path20 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
@@ -4816,19 +4816,19 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
       templateContent = String(checkConfig.template.content);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path19.resolve(process.cwd(), file);
+      const resolved = path20.resolve(process.cwd(), file);
       templateContent = await fs18.readFile(resolved, "utf-8");
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path19.join(__dirname, "output", sanitized, "template.liquid"),
+          path20.join(__dirname, "output", sanitized, "template.liquid"),
           // bundled: dist/output/
-          path19.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path20.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // source: output/
-          path19.join(process.cwd(), "output", sanitized, "template.liquid"),
+          path20.join(process.cwd(), "output", sanitized, "template.liquid"),
           // fallback: cwd/output/
-          path19.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          path20.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
           // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
@@ -6119,7 +6119,7 @@ ${schemaString}`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
               const fs18 = require("fs");
-              const path19 = require("path");
+              const path20 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const provider = this.config.provider || "auto";
               const model = this.config.model || "default";
@@ -6233,16 +6233,16 @@ ${"=".repeat(60)}
 `;
               readableVersion += `${"=".repeat(60)}
 `;
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
               if (!fs18.existsSync(debugArtifactsDir)) {
                 fs18.mkdirSync(debugArtifactsDir, { recursive: true });
               }
-              const debugFile = path19.join(
+              const debugFile = path20.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.json`
               );
               fs18.writeFileSync(debugFile, debugJson, "utf-8");
-              const readableFile = path19.join(
+              const readableFile = path20.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -6279,7 +6279,7 @@ ${"=".repeat(60)}
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
               const fs18 = require("fs");
-              const path19 = require("path");
+              const path20 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny2 = agent;
               let fullHistory = [];
@@ -6290,8 +6290,8 @@ ${"=".repeat(60)}
               } else if (agentAny2._messages) {
                 fullHistory = agentAny2._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path19.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path20.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -6340,10 +6340,10 @@ ${"=".repeat(60)}
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
               const fs18 = require("fs");
-              const path19 = require("path");
+              const path20 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
-              const responseFile = path19.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
+              const responseFile = path20.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -6554,7 +6554,7 @@ ${schemaString}`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
               const fs18 = require("fs");
-              const path19 = require("path");
+              const path20 = require("path");
               const os = require("os");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const debugData = {
@@ -6628,13 +6628,13 @@ ${"=".repeat(60)}
               readableVersion += `${"=".repeat(60)}
 `;
               const tempDir = os.tmpdir();
-              const promptFile = path19.join(tempDir, `visor-prompt-${timestamp}.txt`);
+              const promptFile = path20.join(tempDir, `visor-prompt-${timestamp}.txt`);
               fs18.writeFileSync(promptFile, prompt, "utf-8");
               log(`
 \u{1F4BE} Prompt saved to: ${promptFile}`);
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
               try {
-                const base = path19.join(
+                const base = path20.join(
                   debugArtifactsDir,
                   `prompt-${_checkName || "unknown"}-${timestamp}`
                 );
@@ -6685,7 +6685,7 @@ $ ${cliCommand}
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
               const fs18 = require("fs");
-              const path19 = require("path");
+              const path20 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny = agent;
               let fullHistory = [];
@@ -6696,8 +6696,8 @@ $ ${cliCommand}
               } else if (agentAny._messages) {
                 fullHistory = agentAny._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path19.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path20.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -6746,10 +6746,10 @@ ${"=".repeat(60)}
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
               const fs18 = require("fs");
-              const path19 = require("path");
+              const path20 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path19.join(process.cwd(), "debug-artifacts");
-              const responseFile = path19.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
+              const responseFile = path20.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -6841,7 +6841,7 @@ ${"=".repeat(60)}
        */
       async loadSchemaContent(schema) {
         const fs18 = require("fs").promises;
-        const path19 = require("path");
+        const path20 = require("path");
         if (typeof schema === "object" && schema !== null) {
           log("\u{1F4CB} Using inline schema object from configuration");
           return JSON.stringify(schema);
@@ -6854,12 +6854,12 @@ ${"=".repeat(60)}
           }
         } catch {
         }
-        if ((schema.startsWith("./") || schema.includes(".json")) && !path19.isAbsolute(schema)) {
+        if ((schema.startsWith("./") || schema.includes(".json")) && !path20.isAbsolute(schema)) {
           if (schema.includes("..") || schema.includes("\0")) {
             throw new Error("Invalid schema path: path traversal not allowed");
           }
           try {
-            const schemaPath = path19.resolve(process.cwd(), schema);
+            const schemaPath = path20.resolve(process.cwd(), schema);
             log(`\u{1F4CB} Loading custom schema from file: ${schemaPath}`);
             const schemaContent = await fs18.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
@@ -6875,11 +6875,11 @@ ${"=".repeat(60)}
         }
         const candidatePaths = [
           // GitHub Action bundle location
-          path19.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
+          path20.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
           // Historical fallback when src/output was inadvertently bundled as output1/
-          path19.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
+          path20.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
           // Local dev (repo root)
-          path19.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
+          path20.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
         ];
         for (const schemaPath of candidatePaths) {
           try {
@@ -6888,9 +6888,9 @@ ${"=".repeat(60)}
           } catch {
           }
         }
-        const distPath = path19.join(__dirname, "output", sanitizedSchemaName, "schema.json");
-        const distAltPath = path19.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
-        const cwdPath = path19.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
+        const distPath = path20.join(__dirname, "output", sanitizedSchemaName, "schema.json");
+        const distAltPath = path20.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
+        const cwdPath = path20.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
         throw new Error(
           `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath}, ${distAltPath}, and ${cwdPath}. Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
         );
@@ -19215,9 +19215,9 @@ var init_workflow_check_provider = __esm({
        * so it can be executed by the state machine as a nested workflow.
        */
       async loadWorkflowFromConfigPath(sourcePath, baseDir) {
-        const path19 = require("path");
+        const path20 = require("path");
         const fs18 = require("fs");
-        const resolved = path19.isAbsolute(sourcePath) ? sourcePath : path19.resolve(baseDir, sourcePath);
+        const resolved = path20.isAbsolute(sourcePath) ? sourcePath : path20.resolve(baseDir, sourcePath);
         if (!fs18.existsSync(resolved)) {
           throw new Error(`Workflow config not found at: ${resolved}`);
         }
@@ -19228,8 +19228,8 @@ var init_workflow_check_provider = __esm({
         if (!steps || Object.keys(steps).length === 0) {
           throw new Error(`Config '${resolved}' does not contain any steps to execute as a workflow`);
         }
-        const id = path19.basename(resolved).replace(/\.(ya?ml)$/i, "");
-        const name = loaded.name || `Workflow from ${path19.basename(resolved)}`;
+        const id = path20.basename(resolved).replace(/\.(ya?ml)$/i, "");
+        const name = loaded.name || `Workflow from ${path20.basename(resolved)}`;
         const workflowDef = {
           id,
           name,
@@ -19825,6 +19825,20 @@ var init_git_checkout_provider = __esm({
             repository: resolvedRepository,
             is_worktree: true
           };
+          const workspace = context2?._parentContext?.workspace;
+          if (workspace?.isEnabled()) {
+            try {
+              const workspacePath = await workspace.addProject(
+                resolvedRepository,
+                worktree.path,
+                checkoutConfig.checkName
+              );
+              output.workspace_path = workspacePath;
+              logger.debug(`Added project to workspace: ${workspacePath}`);
+            } catch (error) {
+              logger.warn(`Failed to add project to workspace: ${error}`);
+            }
+          }
           logger.info(
             `Successfully checked out ${resolvedRepository}@${resolvedRef} to ${worktree.path}`
           );
@@ -21434,18 +21448,18 @@ __export(renderer_schema_exports, {
 async function loadRendererSchema(name) {
   try {
     const fs18 = await import("fs/promises");
-    const path19 = await import("path");
+    const path20 = await import("path");
     const sanitized = String(name).replace(/[^a-zA-Z0-9-]/g, "");
     if (!sanitized) return void 0;
     const candidates = [
       // When bundled with ncc, __dirname is dist/ and output/ is at dist/output/
-      path19.join(__dirname, "output", sanitized, "schema.json"),
+      path20.join(__dirname, "output", sanitized, "schema.json"),
       // When running from source, __dirname is src/state-machine/dispatch/ and output/ is at output/
-      path19.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
+      path20.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
       // When running from a checkout with output/ folder copied to CWD
-      path19.join(process.cwd(), "output", sanitized, "schema.json"),
+      path20.join(process.cwd(), "output", sanitized, "schema.json"),
       // Fallback: cwd/dist/output/
-      path19.join(process.cwd(), "dist", "output", sanitized, "schema.json")
+      path20.join(process.cwd(), "dist", "output", sanitized, "schema.json")
     ];
     for (const p of candidates) {
       try {
@@ -23518,7 +23532,7 @@ async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
     const fs18 = await import("fs/promises");
-    const path19 = await import("path");
+    const path20 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
@@ -23527,22 +23541,22 @@ async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
       logger.debug(`[LevelDispatch] Using inline template for ${checkId}`);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path19.resolve(process.cwd(), file);
+      const resolved = path20.resolve(process.cwd(), file);
       templateContent = await fs18.readFile(resolved, "utf-8");
       logger.debug(`[LevelDispatch] Using template file for ${checkId}: ${resolved}`);
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path19.join(__dirname, "output", sanitized, "template.liquid"),
+          path20.join(__dirname, "output", sanitized, "template.liquid"),
           // bundled: dist/output/
-          path19.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path20.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // source (from state-machine/states)
-          path19.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
+          path20.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
           // source (alternate)
-          path19.join(process.cwd(), "output", sanitized, "template.liquid"),
+          path20.join(process.cwd(), "output", sanitized, "template.liquid"),
           // fallback: cwd/output/
-          path19.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          path20.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
           // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
@@ -24585,6 +24599,401 @@ ${file.patch}`).join("\n\n");
   }
 });
 
+// src/utils/workspace-manager.ts
+function shellEscape(str) {
+  return "'" + str.replace(/'/g, "'\\''") + "'";
+}
+function sanitizePathComponent(name) {
+  return name.replace(/\.\./g, "").replace(/[\/\\]/g, "-").replace(/^\.+/, "").trim() || "unnamed";
+}
+var fsp, path17, WorkspaceManager;
+var init_workspace_manager = __esm({
+  "src/utils/workspace-manager.ts"() {
+    "use strict";
+    fsp = __toESM(require("fs/promises"));
+    path17 = __toESM(require("path"));
+    init_command_executor();
+    init_logger();
+    WorkspaceManager = class _WorkspaceManager {
+      static instances = /* @__PURE__ */ new Map();
+      sessionId;
+      basePath;
+      workspacePath;
+      originalPath;
+      config;
+      initialized = false;
+      mainProjectInfo = null;
+      projects = /* @__PURE__ */ new Map();
+      cleanupHandlersRegistered = false;
+      usedNames = /* @__PURE__ */ new Set();
+      constructor(sessionId, originalPath, config) {
+        this.sessionId = sessionId;
+        this.originalPath = originalPath;
+        this.config = {
+          enabled: true,
+          basePath: process.env.VISOR_WORKSPACE_PATH || "/tmp/visor-workspaces",
+          cleanupOnExit: true,
+          ...config
+        };
+        this.basePath = this.config.basePath;
+        this.workspacePath = path17.join(this.basePath, sanitizePathComponent(this.sessionId));
+      }
+      /**
+       * Get or create a WorkspaceManager instance for a session
+       */
+      static getInstance(sessionId, originalPath, config) {
+        if (!_WorkspaceManager.instances.has(sessionId)) {
+          _WorkspaceManager.instances.set(
+            sessionId,
+            new _WorkspaceManager(sessionId, originalPath, config)
+          );
+        }
+        return _WorkspaceManager.instances.get(sessionId);
+      }
+      /**
+       * Clear all instances (for testing)
+       */
+      static clearInstances() {
+        _WorkspaceManager.instances.clear();
+      }
+      /**
+       * Check if workspace isolation is enabled
+       */
+      isEnabled() {
+        return this.config.enabled;
+      }
+      /**
+       * Get the workspace path
+       */
+      getWorkspacePath() {
+        return this.workspacePath;
+      }
+      /**
+       * Get the original working directory
+       */
+      getOriginalPath() {
+        return this.originalPath;
+      }
+      /**
+       * Get workspace info (only available after initialize)
+       */
+      getWorkspaceInfo() {
+        return this.mainProjectInfo;
+      }
+      /**
+       * Initialize the workspace - creates workspace directory and main project worktree
+       */
+      async initialize() {
+        if (!this.config.enabled) {
+          throw new Error("Workspace isolation is not enabled");
+        }
+        if (this.initialized && this.mainProjectInfo) {
+          return this.mainProjectInfo;
+        }
+        logger.info(`Initializing workspace: ${this.workspacePath}`);
+        await fsp.mkdir(this.workspacePath, { recursive: true });
+        logger.debug(`Created workspace directory: ${this.workspacePath}`);
+        const mainProjectName = sanitizePathComponent(this.extractProjectName(this.originalPath));
+        this.usedNames.add(mainProjectName);
+        const mainProjectPath = path17.join(this.workspacePath, mainProjectName);
+        const isGitRepo = await this.isGitRepository(this.originalPath);
+        if (isGitRepo) {
+          await this.createMainProjectWorktree(mainProjectPath);
+        } else {
+          logger.debug(`Original path is not a git repo, creating symlink`);
+          try {
+            await fsp.symlink(this.originalPath, mainProjectPath);
+          } catch (error) {
+            throw new Error(`Failed to create symlink for main project: ${error}`);
+          }
+        }
+        this.registerCleanupHandlers();
+        this.mainProjectInfo = {
+          sessionId: this.sessionId,
+          workspacePath: this.workspacePath,
+          mainProjectPath,
+          mainProjectName,
+          originalPath: this.originalPath
+        };
+        this.initialized = true;
+        logger.info(`Workspace initialized: ${this.workspacePath}`);
+        return this.mainProjectInfo;
+      }
+      /**
+       * Add a project to the workspace (creates symlink to worktree)
+       */
+      async addProject(repository, worktreePath, description) {
+        if (!this.initialized) {
+          throw new Error("Workspace not initialized. Call initialize() first.");
+        }
+        let projectName = sanitizePathComponent(description || this.extractRepoName(repository));
+        projectName = this.getUniqueName(projectName);
+        this.usedNames.add(projectName);
+        const workspacePath = path17.join(this.workspacePath, projectName);
+        await fsp.rm(workspacePath, { recursive: true, force: true });
+        try {
+          await fsp.symlink(worktreePath, workspacePath);
+        } catch (error) {
+          throw new Error(`Failed to create symlink for project ${projectName}: ${error}`);
+        }
+        this.projects.set(projectName, {
+          name: projectName,
+          path: workspacePath,
+          worktreePath,
+          repository
+        });
+        logger.info(`Added project to workspace: ${projectName} -> ${worktreePath}`);
+        return workspacePath;
+      }
+      /**
+       * List all projects in the workspace
+       */
+      listProjects() {
+        return Array.from(this.projects.values());
+      }
+      /**
+       * Cleanup the workspace
+       */
+      async cleanup() {
+        logger.info(`Cleaning up workspace: ${this.workspacePath}`);
+        try {
+          if (this.mainProjectInfo) {
+            const mainProjectPath = this.mainProjectInfo.mainProjectPath;
+            try {
+              const stats = await fsp.lstat(mainProjectPath);
+              if (!stats.isSymbolicLink()) {
+                await this.removeMainProjectWorktree(mainProjectPath);
+              }
+            } catch {
+            }
+          }
+          await fsp.rm(this.workspacePath, { recursive: true, force: true });
+          logger.debug(`Removed workspace directory: ${this.workspacePath}`);
+          _WorkspaceManager.instances.delete(this.sessionId);
+          this.initialized = false;
+          this.mainProjectInfo = null;
+          this.projects.clear();
+          this.usedNames.clear();
+          logger.info(`Workspace cleanup completed: ${this.sessionId}`);
+        } catch (error) {
+          logger.warn(`Failed to cleanup workspace: ${error}`);
+        }
+      }
+      /**
+       * Create worktree for the main project
+       *
+       * visor-disable: architecture - Not using WorktreeManager here because:
+       * 1. WorktreeManager expects remote URLs and clones to bare repos first
+       * 2. This operates on the LOCAL repo we're already in (no cloning needed)
+       * 3. Adding a "local mode" to WorktreeManager would add complexity for minimal benefit
+       * The git commands here are simpler (just rev-parse + worktree add) vs WorktreeManager's
+       * full clone/bare-repo/fetch/worktree pipeline.
+       */
+      async createMainProjectWorktree(targetPath) {
+        logger.debug(`Creating main project worktree: ${targetPath}`);
+        const headResult = await commandExecutor.execute(
+          `git -C ${shellEscape(this.originalPath)} rev-parse HEAD`,
+          {
+            timeout: 1e4
+          }
+        );
+        if (headResult.exitCode !== 0) {
+          throw new Error(`Failed to get HEAD: ${headResult.stderr}`);
+        }
+        const headRef = headResult.stdout.trim();
+        const createCmd = `git -C ${shellEscape(this.originalPath)} worktree add --detach ${shellEscape(targetPath)} ${shellEscape(headRef)}`;
+        const result = await commandExecutor.execute(createCmd, { timeout: 6e4 });
+        if (result.exitCode !== 0) {
+          throw new Error(`Failed to create main project worktree: ${result.stderr}`);
+        }
+        logger.debug(`Created main project worktree at ${targetPath}`);
+      }
+      /**
+       * Remove main project worktree
+       */
+      async removeMainProjectWorktree(worktreePath) {
+        logger.debug(`Removing main project worktree: ${worktreePath}`);
+        const removeCmd = `git -C ${shellEscape(this.originalPath)} worktree remove ${shellEscape(worktreePath)} --force`;
+        const result = await commandExecutor.execute(removeCmd, { timeout: 3e4 });
+        if (result.exitCode !== 0) {
+          logger.warn(`Failed to remove worktree via git: ${result.stderr}`);
+        }
+      }
+      /**
+       * Check if a path is a git repository
+       */
+      async isGitRepository(dirPath) {
+        try {
+          const result = await commandExecutor.execute(
+            `git -C ${shellEscape(dirPath)} rev-parse --git-dir`,
+            {
+              timeout: 5e3
+            }
+          );
+          return result.exitCode === 0;
+        } catch {
+          return false;
+        }
+      }
+      /**
+       * Extract project name from path
+       */
+      extractProjectName(dirPath) {
+        return path17.basename(dirPath);
+      }
+      /**
+       * Extract repository name from owner/repo format
+       */
+      extractRepoName(repository) {
+        if (repository.includes("://") || repository.startsWith("git@")) {
+          const match = repository.match(/[/:]([^/:]+\/[^/:]+?)(?:\.git)?$/);
+          if (match) {
+            return match[1].split("/").pop() || repository;
+          }
+        }
+        if (repository.includes("/")) {
+          return repository.split("/").pop() || repository;
+        }
+        return repository;
+      }
+      /**
+       * Get a unique name by appending a number if needed
+       */
+      getUniqueName(baseName) {
+        if (!this.usedNames.has(baseName)) {
+          return baseName;
+        }
+        let counter = 2;
+        let uniqueName = `${baseName}-${counter}`;
+        while (this.usedNames.has(uniqueName)) {
+          counter++;
+          uniqueName = `${baseName}-${counter}`;
+        }
+        return uniqueName;
+      }
+      /**
+       * Register cleanup handlers for process exit
+       */
+      registerCleanupHandlers() {
+        if (this.cleanupHandlersRegistered || !this.config.cleanupOnExit) {
+          return;
+        }
+        this.cleanupHandlersRegistered = true;
+      }
+    };
+  }
+});
+
+// src/state-machine/context/build-engine-context.ts
+var build_engine_context_exports = {};
+__export(build_engine_context_exports, {
+  buildEngineContextForRun: () => buildEngineContextForRun,
+  initializeWorkspace: () => initializeWorkspace
+});
+function applyCriticalityDefaults(cfg) {
+  const checks = cfg.checks || {};
+  for (const id of Object.keys(checks)) {
+    const c = checks[id];
+    if (!c.criticality) c.criticality = "policy";
+    if (c.criticality === "info" && typeof c.continue_on_failure === "undefined")
+      c.continue_on_failure = true;
+  }
+}
+function buildEngineContextForRun(workingDirectory, config, prInfo, debug, maxParallelism, failFast, requestedChecks) {
+  const clonedConfig = JSON.parse(JSON.stringify(config));
+  const checks = {};
+  applyCriticalityDefaults(clonedConfig);
+  for (const [checkId, checkConfig] of Object.entries(clonedConfig.checks || {})) {
+    checks[checkId] = {
+      tags: checkConfig.tags || [],
+      triggers: (Array.isArray(checkConfig.on) ? checkConfig.on : [checkConfig.on]).filter(
+        Boolean
+      ),
+      group: checkConfig.group,
+      providerType: checkConfig.type || "ai",
+      dependencies: checkConfig.depends_on || []
+    };
+  }
+  if (requestedChecks && requestedChecks.length > 0) {
+    for (const checkName of requestedChecks) {
+      if (!checks[checkName] && !clonedConfig.checks?.[checkName]) {
+        logger.debug(`[StateMachine] Synthesizing minimal config for legacy check: ${checkName}`);
+        if (!clonedConfig.checks) {
+          clonedConfig.checks = {};
+        }
+        clonedConfig.checks[checkName] = {
+          type: "ai",
+          prompt: `Perform ${checkName} analysis`
+        };
+        checks[checkName] = {
+          tags: [],
+          triggers: [],
+          group: "default",
+          providerType: "ai",
+          dependencies: []
+        };
+      }
+    }
+  }
+  const journal = new ExecutionJournal();
+  const memory = MemoryStore.getInstance(clonedConfig.memory);
+  return {
+    mode: "state-machine",
+    config: clonedConfig,
+    checks,
+    journal,
+    memory,
+    workingDirectory,
+    originalWorkingDirectory: workingDirectory,
+    sessionId: (0, import_uuid2.v4)(),
+    event: prInfo.eventType,
+    debug,
+    maxParallelism,
+    failFast,
+    requestedChecks: requestedChecks && requestedChecks.length > 0 ? requestedChecks : void 0,
+    // Store prInfo for later access (e.g., in getOutputHistorySnapshot)
+    prInfo
+  };
+}
+async function initializeWorkspace(context2) {
+  const workspaceConfig = context2.config.workspace;
+  const isEnabled2 = workspaceConfig?.enabled !== false && process.env.VISOR_WORKSPACE_ENABLED !== "false";
+  if (!isEnabled2) {
+    logger.debug("[Workspace] Workspace isolation is disabled");
+    return context2;
+  }
+  const originalPath = context2.workingDirectory || process.cwd();
+  try {
+    const workspace = WorkspaceManager.getInstance(context2.sessionId, originalPath, {
+      enabled: true,
+      basePath: workspaceConfig?.base_path || process.env.VISOR_WORKSPACE_PATH,
+      cleanupOnExit: workspaceConfig?.cleanup_on_exit !== false
+    });
+    const info = await workspace.initialize();
+    context2.workspace = workspace;
+    context2.workingDirectory = info.mainProjectPath;
+    context2.originalWorkingDirectory = originalPath;
+    logger.info(`[Workspace] Initialized workspace: ${info.workspacePath}`);
+    logger.debug(`[Workspace] Main project at: ${info.mainProjectPath}`);
+    return context2;
+  } catch (error) {
+    logger.warn(`[Workspace] Failed to initialize workspace: ${error}`);
+    logger.debug("[Workspace] Continuing without workspace isolation");
+    return context2;
+  }
+}
+var import_uuid2;
+var init_build_engine_context = __esm({
+  "src/state-machine/context/build-engine-context.ts"() {
+    "use strict";
+    init_snapshot_store();
+    init_memory_store();
+    import_uuid2 = require("uuid");
+    init_logger();
+    init_workspace_manager();
+  }
+});
+
 // src/event-bus/event-bus.ts
 var event_bus_exports = {};
 __export(event_bus_exports, {
@@ -25150,11 +25559,11 @@ var github_comments_exports = {};
 __export(github_comments_exports, {
   CommentManager: () => CommentManager
 });
-var import_uuid2, CommentManager;
+var import_uuid3, CommentManager;
 var init_github_comments = __esm({
   "src/github-comments.ts"() {
     "use strict";
-    import_uuid2 = require("uuid");
+    import_uuid3 = require("uuid");
     init_logger();
     init_footer();
     CommentManager = class {
@@ -25322,7 +25731,7 @@ ${content}
        * Generate unique comment ID
        */
       generateCommentId() {
-        return (0, import_uuid2.v4)().substring(0, 8);
+        return (0, import_uuid3.v4)().substring(0, 8);
       }
       /**
        * Check if comment is a Visor comment
@@ -26532,86 +26941,6 @@ var init_host = __esm({
   }
 });
 
-// src/state-machine/context/build-engine-context.ts
-var build_engine_context_exports = {};
-__export(build_engine_context_exports, {
-  buildEngineContextForRun: () => buildEngineContextForRun
-});
-function applyCriticalityDefaults(cfg) {
-  const checks = cfg.checks || {};
-  for (const id of Object.keys(checks)) {
-    const c = checks[id];
-    if (!c.criticality) c.criticality = "policy";
-    if (c.criticality === "info" && typeof c.continue_on_failure === "undefined")
-      c.continue_on_failure = true;
-  }
-}
-function buildEngineContextForRun(workingDirectory, config, prInfo, debug, maxParallelism, failFast, requestedChecks) {
-  const clonedConfig = JSON.parse(JSON.stringify(config));
-  const checks = {};
-  applyCriticalityDefaults(clonedConfig);
-  for (const [checkId, checkConfig] of Object.entries(clonedConfig.checks || {})) {
-    checks[checkId] = {
-      tags: checkConfig.tags || [],
-      triggers: (Array.isArray(checkConfig.on) ? checkConfig.on : [checkConfig.on]).filter(
-        Boolean
-      ),
-      group: checkConfig.group,
-      providerType: checkConfig.type || "ai",
-      dependencies: checkConfig.depends_on || []
-    };
-  }
-  if (requestedChecks && requestedChecks.length > 0) {
-    for (const checkName of requestedChecks) {
-      if (!checks[checkName] && !clonedConfig.checks?.[checkName]) {
-        logger.debug(`[StateMachine] Synthesizing minimal config for legacy check: ${checkName}`);
-        if (!clonedConfig.checks) {
-          clonedConfig.checks = {};
-        }
-        clonedConfig.checks[checkName] = {
-          type: "ai",
-          prompt: `Perform ${checkName} analysis`
-        };
-        checks[checkName] = {
-          tags: [],
-          triggers: [],
-          group: "default",
-          providerType: "ai",
-          dependencies: []
-        };
-      }
-    }
-  }
-  const journal = new ExecutionJournal();
-  const memory = MemoryStore.getInstance(clonedConfig.memory);
-  return {
-    mode: "state-machine",
-    config: clonedConfig,
-    checks,
-    journal,
-    memory,
-    workingDirectory,
-    sessionId: (0, import_uuid3.v4)(),
-    event: prInfo.eventType,
-    debug,
-    maxParallelism,
-    failFast,
-    requestedChecks: requestedChecks && requestedChecks.length > 0 ? requestedChecks : void 0,
-    // Store prInfo for later access (e.g., in getOutputHistorySnapshot)
-    prInfo
-  };
-}
-var import_uuid3;
-var init_build_engine_context = __esm({
-  "src/state-machine/context/build-engine-context.ts"() {
-    "use strict";
-    init_snapshot_store();
-    init_memory_store();
-    import_uuid3 = require("uuid");
-    init_logger();
-  }
-});
-
 // src/state-machine/execution/summary.ts
 var summary_exports = {};
 __export(summary_exports, {
@@ -26665,7 +26994,7 @@ module.exports = __toCommonJS(sdk_exports);
 // src/state-machine-execution-engine.ts
 init_runner();
 init_logger();
-var path18 = __toESM(require("path"));
+var path19 = __toESM(require("path"));
 var fs17 = __toESM(require("fs"));
 var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
   workingDirectory;
@@ -26860,6 +27189,8 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       checks
       // Pass the explicit checks list
     );
+    const { initializeWorkspace: initializeWorkspace2 } = (init_build_engine_context(), __toCommonJS(build_engine_context_exports));
+    await initializeWorkspace2(context2);
     context2.executionContext = this.getExecutionContext();
     this._lastContext = context2;
     let frontendsHost;
@@ -26959,9 +27290,9 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
               }
               const checkId = String(ev?.checkId || "unknown");
               const threadKey = ev?.threadKey || (channel && threadTs ? `${channel}:${threadTs}` : "session");
-              const baseDir = process.env.VISOR_SNAPSHOT_DIR || path18.resolve(process.cwd(), ".visor", "snapshots");
+              const baseDir = process.env.VISOR_SNAPSHOT_DIR || path19.resolve(process.cwd(), ".visor", "snapshots");
               fs17.mkdirSync(baseDir, { recursive: true });
-              const filePath = path18.join(baseDir, `${threadKey}-${checkId}.json`);
+              const filePath = path19.join(baseDir, `${threadKey}-${checkId}.json`);
               await this.saveSnapshotToFile(filePath);
               logger.info(`[Snapshot] Saved run snapshot: ${filePath}`);
               try {
@@ -27007,6 +27338,13 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       sessionRegistry.clearAllSessions();
     } catch (error) {
       logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
+    }
+    if (context2.workspace) {
+      try {
+        await context2.workspace.cleanup();
+      } catch (error) {
+        logger.debug(`[StateMachine] Failed to cleanup workspace: ${error}`);
+      }
     }
     return result;
   }
