@@ -49,6 +49,8 @@ export interface GitCheckoutOutput {
   worktree_id?: string;
   repository?: string;
   is_worktree?: boolean;
+  /** Human-readable path within the workspace (when workspace isolation is enabled) */
+  workspace_path?: string;
   error?: string;
 }
 
