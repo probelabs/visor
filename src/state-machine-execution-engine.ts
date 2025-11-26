@@ -273,6 +273,10 @@ export class StateMachineExecutionEngine {
       checks // Pass the explicit checks list
     );
 
+    // Initialize workspace isolation (if enabled)
+    const { initializeWorkspace } = require('./state-machine/context/build-engine-context');
+    await initializeWorkspace(context);
+
     // Copy execution context (hooks, etc.) from legacy engine
     context.executionContext = this.getExecutionContext();
 
@@ -459,6 +463,15 @@ export class StateMachineExecutionEngine {
       sessionRegistry.clearAllSessions();
     } catch (error) {
       logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
+    }
+
+    // Cleanup workspace if enabled
+    if (context.workspace) {
+      try {
+        await context.workspace.cleanup();
+      } catch (error) {
+        logger.debug(`[StateMachine] Failed to cleanup workspace: ${error}`);
+      }
     }
 
     return result;

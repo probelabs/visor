@@ -5,6 +5,7 @@ import type { MemoryStore } from '../memory-store';
 import type { GitHubCheckService } from '../github-check-service';
 import type { ReviewSummary } from '../reviewer';
 import type { CheckExecutionStats } from './execution';
+import type { WorkspaceManager } from '../utils/workspace-manager';
 
 /**
  * Engine execution modes
@@ -110,6 +111,10 @@ export interface EngineContext {
   memory: MemoryStore;
   gitHubChecks?: GitHubCheckService;
   workingDirectory?: string;
+  /** Original working directory where visor was invoked (before workspace isolation) */
+  originalWorkingDirectory?: string;
+  /** Workspace manager for isolated execution */
+  workspace?: WorkspaceManager;
   sessionId: string;
   event?: EventTrigger;
   debug?: boolean;
