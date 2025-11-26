@@ -20,6 +20,20 @@ function shellEscape(str: string): string {
   return "'" + str.replace(/'/g, "'\\''") + "'";
 }
 
+/**
+ * Sanitize a path component to prevent path traversal attacks.
+ * Removes directory separators and parent directory references.
+ */
+function sanitizePathComponent(name: string): string {
+  return (
+    name
+      .replace(/\.\./g, '') // Remove parent directory references
+      .replace(/[\/\\]/g, '-') // Replace path separators with dashes
+      .replace(/^\.+/, '') // Remove leading dots
+      .trim() || 'unnamed'
+  ); // Ensure non-empty result
+}
+
 export interface WorkspaceConfig {
   enabled: boolean;
   basePath: string;
@@ -72,7 +86,7 @@ export class WorkspaceManager {
     };
 
     this.basePath = this.config.basePath;
-    this.workspacePath = path.join(this.basePath, this.sessionId);
+    this.workspacePath = path.join(this.basePath, sanitizePathComponent(this.sessionId));
   }
 
   /**
@@ -145,8 +159,8 @@ export class WorkspaceManager {
     await fsp.mkdir(this.workspacePath, { recursive: true });
     logger.debug(`Created workspace directory: ${this.workspacePath}`);
 
-    // Extract main project name from original path
-    const mainProjectName = this.extractProjectName(this.originalPath);
+    // Extract main project name from original path (sanitize for defense in depth)
+    const mainProjectName = sanitizePathComponent(this.extractProjectName(this.originalPath));
     this.usedNames.add(mainProjectName);
 
     // Create worktree for main project
@@ -197,8 +211,8 @@ export class WorkspaceManager {
       throw new Error('Workspace not initialized. Call initialize() first.');
     }
 
-    // Extract project name
-    let projectName = description || this.extractRepoName(repository);
+    // Extract project name and sanitize to prevent path traversal
+    let projectName = sanitizePathComponent(description || this.extractRepoName(repository));
 
     // Handle duplicate names
     projectName = this.getUniqueName(projectName);
