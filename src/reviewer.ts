@@ -2,6 +2,7 @@ import { Octokit } from '@octokit/rest';
 import { PRInfo } from './pr-analyzer';
 import { CommentManager } from './github-comments';
 import { AIReviewService, AIDebugInfo } from './ai-review-service';
+import { extractTextFromJson } from './utils/json-text-extractor';
 
 export interface ReviewIssue {
   // Location
@@ -355,41 +356,12 @@ export class PRReviewer {
     // Concatenate all check outputs in this group; fall back to structured output fields
     const normalize = (s: string) => s.replace(/\\n/g, '\n');
 
-    // Helper to extract text from a JSON-like object (handles both object and JSON string)
-    const extractTextFromObject = (obj: unknown): string | undefined => {
-      if (!obj) return undefined;
-      let parsed = obj;
-      // If it's a string that looks like JSON, try to parse it
-      if (typeof obj === 'string') {
-        const trimmed = obj.trim();
-        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-          try {
-            parsed = JSON.parse(trimmed);
-          } catch {
-            // Not valid JSON, return undefined to use other fallbacks
-            return undefined;
-          }
-        } else {
-          // Plain string, not JSON-like
-          return undefined;
-        }
-      }
-      // Extract text field from parsed object
-      if (parsed && typeof parsed === 'object') {
-        const txt = (parsed as any).text || (parsed as any).response || (parsed as any).message;
-        if (typeof txt === 'string' && txt.trim()) {
-          return txt.trim();
-        }
-      }
-      return undefined;
-    };
-
     const checkContents = checkResults
       .map(result => {
         const trimmed = result.content?.trim();
         if (trimmed) {
           // Check if content looks like JSON with a text field that wasn't unwrapped
-          const extractedText = extractTextFromObject(trimmed);
+          const extractedText = extractTextFromJson(trimmed);
           if (extractedText) {
             return normalize(extractedText);
           }
@@ -402,7 +374,7 @@ export class PRReviewer {
         if (out) {
           if (typeof out === 'string' && out.trim()) {
             // Check if string output is JSON with text field
-            const extractedText = extractTextFromObject(out.trim());
+            const extractedText = extractTextFromJson(out.trim());
             if (extractedText) return normalize(extractedText);
             return normalize(out.trim());
           }

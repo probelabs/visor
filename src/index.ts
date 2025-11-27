@@ -17,6 +17,7 @@ import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
 import { ReactionManager } from './github-reactions';
 import { generateFooter, hasVisorFooter } from './footer';
+import { extractTextFromJson } from './utils/json-text-extractor';
 
 /**
  * Create an authenticated Octokit instance using either GitHub App || token authentication
@@ -810,26 +811,6 @@ async function handleIssueEvent(
           error instanceof Error ? error.message : String(error)
         );
       }
-
-      // Helper to extract text from JSON-like content
-      const extractTextFromJson = (str: string): string | undefined => {
-        const trimmed = str.trim();
-        if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
-          return undefined; // Not JSON-like
-        }
-        try {
-          const parsed = JSON.parse(trimmed);
-          if (parsed && typeof parsed === 'object') {
-            const txt = parsed.text || parsed.response || parsed.message;
-            if (typeof txt === 'string' && txt.trim()) {
-              return txt.trim();
-            }
-          }
-        } catch {
-          // Not valid JSON
-        }
-        return undefined;
-      };
 
       // Directly use check content without adding extra headers
       for (const checks of Object.values(resultsToUse)) {
