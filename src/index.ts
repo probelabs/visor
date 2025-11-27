@@ -17,6 +17,7 @@ import { GitHubActionInputs, GitHubContext } from './action-cli-bridge';
 import { ConfigManager } from './config';
 import { ReactionManager } from './github-reactions';
 import { generateFooter, hasVisorFooter } from './footer';
+import { extractTextFromJson } from './utils/json-text-extractor';
 
 /**
  * Create an authenticated Octokit instance using either GitHub App || token authentication
@@ -816,10 +817,19 @@ async function handleIssueEvent(
         for (const check of checks) {
           // Try to get content, with fallback to output.text (for custom schemas like issue-assistant)
           let content = check.content?.trim();
+          // If content looks like JSON with a text field, extract it
+          if (content) {
+            const extracted = extractTextFromJson(content);
+            if (extracted) {
+              content = extracted;
+            }
+          }
           if (!content && check.output) {
             const out = check.output as any;
             if (typeof out === 'string' && out.trim()) {
-              content = out.trim();
+              // Check if string output is JSON with text field
+              const extracted = extractTextFromJson(out.trim());
+              content = extracted || out.trim();
             } else if (typeof out === 'object') {
               const txt = out.text || out.response || out.message;
               if (typeof txt === 'string' && txt.trim()) {

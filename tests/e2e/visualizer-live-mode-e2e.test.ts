@@ -28,22 +28,24 @@ describe('Debug Visualizer Live Mode — pause/resume/stop gate', () => {
 
   beforeAll(async () => {
     fs.mkdirSync(tempDir, { recursive: true });
-    // Slow but deterministic commands (about 800ms each)
+    // Use 'tail -f /dev/null' which blocks indefinitely until killed.
+    // This ensures commands stay "running" so we can test pause/resume/stop.
+    // The workflow is stopped via /api/stop which kills these processes.
     const cfg = `
 version: '1.0'
 max_parallelism: 1
 checks:
   alpha:
     type: command
-    exec: node -e "setTimeout(()=>console.log('A'), 800)"
+    exec: tail -f /dev/null
   beta:
     type: command
     depends_on: [alpha]
-    exec: node -e "setTimeout(()=>console.log('B'), 800)"
+    exec: tail -f /dev/null
   gamma:
     type: command
     depends_on: [beta]
-    exec: node -e "setTimeout(()=>console.log('C'), 800)"
+    exec: tail -f /dev/null
 `;
     await fsp.writeFile(configPath, cfg, 'utf8');
   });
