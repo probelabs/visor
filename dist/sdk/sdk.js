@@ -25083,6 +25083,39 @@ var init_ndjson_sink = __esm({
   }
 });
 
+// src/utils/json-text-extractor.ts
+function extractTextFromJson(content) {
+  if (content === void 0 || content === null) return void 0;
+  let parsed = content;
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+      return trimmed.length > 0 ? trimmed : void 0;
+    }
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return trimmed.length > 0 ? trimmed : void 0;
+    }
+  }
+  if (parsed && typeof parsed === "object") {
+    const txt = parsed.text || parsed.response || parsed.message;
+    if (typeof txt === "string" && txt.trim()) {
+      return txt.trim();
+    }
+  }
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    return trimmed.length > 0 ? trimmed : void 0;
+  }
+  return void 0;
+}
+var init_json_text_extractor = __esm({
+  "src/utils/json-text-extractor.ts"() {
+    "use strict";
+  }
+});
+
 // src/footer.ts
 function generateFooter(options = {}) {
   const { includeMetadata, includeSeparator = true } = options;
@@ -25874,6 +25907,7 @@ var init_github_frontend = __esm({
   "src/frontends/github-frontend.ts"() {
     "use strict";
     init_logger();
+    init_json_text_extractor();
     GitHubFrontend = class {
       name = "github";
       subs = [];
@@ -25965,12 +25999,14 @@ var init_github_frontend = __esm({
                 const failureResults = await this.evaluateFailureResults(ctx, ev.checkId, ev.result);
                 const failed = Array.isArray(failureResults) ? failureResults.some((r) => r && r.failed) : false;
                 const group = this.getGroupForCheck(ctx, ev.checkId);
+                const rawContent = ev?.result?.content;
+                const extractedContent = extractTextFromJson(rawContent);
                 this.upsertSectionState(group, ev.checkId, {
                   status: "completed",
                   conclusion: failed ? "failure" : "success",
                   issues: count,
                   lastUpdated: (/* @__PURE__ */ new Date()).toISOString(),
-                  content: ev?.result?.content
+                  content: extractedContent
                 });
                 await this.updateGroupedComment(ctx, comments, group, ev.checkId);
               }
