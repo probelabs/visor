@@ -29,22 +29,23 @@ describe('Debug Visualizer Live Mode — pause/resume/stop gate', () => {
   beforeAll(async () => {
     fs.mkdirSync(tempDir, { recursive: true });
     // Use sleep command which blocks synchronously (works on Linux CI and macOS)
-    // Each command takes 3 seconds to allow time for pause/resume tests
+    // Each command takes 10 seconds to allow plenty of time for pause/resume tests
+    // even on slow CI runners
     const cfg = `
 version: '1.0'
 max_parallelism: 1
 checks:
   alpha:
     type: command
-    exec: sleep 3 && echo A
+    exec: sleep 10 && echo A
   beta:
     type: command
     depends_on: [alpha]
-    exec: sleep 3 && echo B
+    exec: sleep 10 && echo B
   gamma:
     type: command
     depends_on: [beta]
-    exec: sleep 3 && echo C
+    exec: sleep 10 && echo C
 `;
     await fsp.writeFile(configPath, cfg, 'utf8');
   });
