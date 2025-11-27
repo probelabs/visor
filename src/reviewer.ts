@@ -358,30 +358,18 @@ export class PRReviewer {
 
     const checkContents = checkResults
       .map(result => {
+        // Try content first
         const trimmed = result.content?.trim();
         if (trimmed) {
-          // Check if content looks like JSON with a text field that wasn't unwrapped
           const extractedText = extractTextFromJson(trimmed);
-          if (extractedText) {
-            return normalize(extractedText);
-          }
-          // Content is not JSON or doesn't have text field, use as-is
-          return normalize(trimmed);
+          if (extractedText) return normalize(extractedText);
         }
-        // Fallback: if provider returned structured output with a common text field
+        // Fallback: try structured output field
         const out = (result as unknown as { debug?: unknown; issues?: unknown; output?: any })
           .output;
         if (out) {
-          if (typeof out === 'string' && out.trim()) {
-            // Check if string output is JSON with text field
-            const extractedText = extractTextFromJson(out.trim());
-            if (extractedText) return normalize(extractedText);
-            return normalize(out.trim());
-          }
-          if (typeof out === 'object') {
-            const txt = (out.text || out.response || out.message) as unknown;
-            if (typeof txt === 'string' && txt.trim()) return normalize(txt.trim());
-          }
+          const extractedText = extractTextFromJson(out);
+          if (extractedText) return normalize(extractedText);
         }
         return '';
       })

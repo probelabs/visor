@@ -9,6 +9,7 @@ import {
 } from './reviewer';
 import { GitRepositoryInfo } from './git-repository-analyzer';
 import { FailureConditionResult } from './types/config';
+import { extractTextFromJson } from './utils/json-text-extractor';
 
 export interface AnalysisResult {
   repositoryInfo: GitRepositoryInfo;
@@ -298,14 +299,7 @@ export class OutputFormatters {
     summary: ReviewSummary & { output?: unknown }
   ): string | undefined {
     const anySummary = summary as ReviewSummary & { output?: any };
-    const out = anySummary.output;
-    if (!out) return undefined;
-    if (typeof out === 'string') return out;
-    if (typeof out === 'object') {
-      const txt = out.text || out.response || out.message;
-      if (typeof txt === 'string') return txt;
-    }
-    return undefined;
+    return extractTextFromJson(anySummary.output);
   }
 
   /**

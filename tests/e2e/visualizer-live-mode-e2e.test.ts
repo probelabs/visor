@@ -28,24 +28,24 @@ describe('Debug Visualizer Live Mode — pause/resume/stop gate', () => {
 
   beforeAll(async () => {
     fs.mkdirSync(tempDir, { recursive: true });
-    // Use sleep command which blocks synchronously (works on Linux CI and macOS)
-    // Each command takes 10 seconds to allow plenty of time for pause/resume tests
-    // even on slow CI runners
+    // Use 'tail -f /dev/null' which blocks indefinitely until killed.
+    // This ensures commands stay "running" so we can test pause/resume/stop.
+    // The workflow is stopped via /api/stop which kills these processes.
     const cfg = `
 version: '1.0'
 max_parallelism: 1
 checks:
   alpha:
     type: command
-    exec: sleep 10 && echo A
+    exec: tail -f /dev/null
   beta:
     type: command
     depends_on: [alpha]
-    exec: sleep 10 && echo B
+    exec: tail -f /dev/null
   gamma:
     type: command
     depends_on: [beta]
-    exec: sleep 10 && echo C
+    exec: tail -f /dev/null
 `;
     await fsp.writeFile(configPath, cfg, 'utf8');
   });
