@@ -811,15 +811,44 @@ async function handleIssueEvent(
         );
       }
 
+      // Helper to extract text from JSON-like content
+      const extractTextFromJson = (str: string): string | undefined => {
+        const trimmed = str.trim();
+        if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+          return undefined; // Not JSON-like
+        }
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (parsed && typeof parsed === 'object') {
+            const txt = parsed.text || parsed.response || parsed.message;
+            if (typeof txt === 'string' && txt.trim()) {
+              return txt.trim();
+            }
+          }
+        } catch {
+          // Not valid JSON
+        }
+        return undefined;
+      };
+
       // Directly use check content without adding extra headers
       for (const checks of Object.values(resultsToUse)) {
         for (const check of checks) {
           // Try to get content, with fallback to output.text (for custom schemas like issue-assistant)
           let content = check.content?.trim();
+          // If content looks like JSON with a text field, extract it
+          if (content) {
+            const extracted = extractTextFromJson(content);
+            if (extracted) {
+              content = extracted;
+            }
+          }
           if (!content && check.output) {
             const out = check.output as any;
             if (typeof out === 'string' && out.trim()) {
-              content = out.trim();
+              // Check if string output is JSON with text field
+              const extracted = extractTextFromJson(out.trim());
+              content = extracted || out.trim();
             } else if (typeof out === 'object') {
               const txt = out.text || out.response || out.message;
               if (typeof txt === 'string' && txt.trim()) {

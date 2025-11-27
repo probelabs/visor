@@ -354,15 +354,58 @@ export class PRReviewer {
   ): Promise<string> {
     // Concatenate all check outputs in this group; fall back to structured output fields
     const normalize = (s: string) => s.replace(/\\n/g, '\n');
+
+    // Helper to extract text from a JSON-like object (handles both object and JSON string)
+    const extractTextFromObject = (obj: unknown): string | undefined => {
+      if (!obj) return undefined;
+      let parsed = obj;
+      // If it's a string that looks like JSON, try to parse it
+      if (typeof obj === 'string') {
+        const trimmed = obj.trim();
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+          try {
+            parsed = JSON.parse(trimmed);
+          } catch {
+            // Not valid JSON, return undefined to use other fallbacks
+            return undefined;
+          }
+        } else {
+          // Plain string, not JSON-like
+          return undefined;
+        }
+      }
+      // Extract text field from parsed object
+      if (parsed && typeof parsed === 'object') {
+        const txt = (parsed as any).text || (parsed as any).response || (parsed as any).message;
+        if (typeof txt === 'string' && txt.trim()) {
+          return txt.trim();
+        }
+      }
+      return undefined;
+    };
+
     const checkContents = checkResults
       .map(result => {
         const trimmed = result.content?.trim();
-        if (trimmed) return normalize(trimmed);
+        if (trimmed) {
+          // Check if content looks like JSON with a text field that wasn't unwrapped
+          const extractedText = extractTextFromObject(trimmed);
+          if (extractedText) {
+            return normalize(extractedText);
+          }
+          // Content is not JSON or doesn't have text field, use as-is
+          return normalize(trimmed);
+        }
         // Fallback: if provider returned structured output with a common text field
         const out = (result as unknown as { debug?: unknown; issues?: unknown; output?: any })
           .output;
         if (out) {
-          if (typeof out === 'string' && out.trim()) return normalize(out.trim());
+          if (typeof out === 'string' && out.trim()) {
+            // Check if string output is JSON with text field
+            const extractedText = extractTextFromObject(out.trim());
+            if (extractedText) return normalize(extractedText);
+            return normalize(out.trim());
+          }
           if (typeof out === 'object') {
             const txt = (out.text || out.response || out.message) as unknown;
             if (typeof txt === 'string' && txt.trim()) return normalize(txt.trim());

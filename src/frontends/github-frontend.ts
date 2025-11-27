@@ -2,6 +2,38 @@ import type { Frontend, FrontendContext } from './host';
 import { logger } from '../logger';
 
 /**
+ * Helper to extract text from a JSON-like object or JSON string.
+ * If the input is a string that looks like JSON with a text/response/message field,
+ * extracts and returns that field. Otherwise returns the original content.
+ */
+function extractTextFromJsonContent(content: unknown): string | undefined {
+  if (content === undefined || content === null) return undefined;
+
+  const contentStr = String(content);
+  const trimmed = contentStr.trim();
+
+  // If it doesn't look like JSON, return as-is
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  // Try to parse as JSON and extract text field
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object') {
+      const txt = parsed.text || parsed.response || parsed.message;
+      if (typeof txt === 'string' && txt.trim()) {
+        return txt.trim();
+      }
+    }
+  } catch {
+    // Not valid JSON, return as-is
+  }
+
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
  * Skeleton GitHub frontend.
  * - Subscribes to engine events via EventBus when present
  * - Maps key events to debug logs for now (no side effects)
@@ -130,12 +162,15 @@ export class GitHubFrontend implements Frontend {
               ? failureResults.some((r: any) => r && r.failed)
               : false;
             const group = this.getGroupForCheck(ctx, ev.checkId);
+            // Extract text from JSON-like content if template didn't unwrap it properly
+            const rawContent = (ev?.result as any)?.content;
+            const extractedContent = extractTextFromJsonContent(rawContent);
             this.upsertSectionState(group, ev.checkId, {
               status: 'completed',
               conclusion: failed ? 'failure' : 'success',
               issues: count,
               lastUpdated: new Date().toISOString(),
-              content: (ev?.result as any)?.content,
+              content: extractedContent,
             });
             await this.updateGroupedComment(ctx, comments, group, ev.checkId);
           }
