@@ -3,7 +3,7 @@ import {
   check_provider_registry_exports,
   init_check_provider_registry,
   init_runner
-} from "./chunk-XXW5T2MK.mjs";
+} from "./chunk-ZRBNTUJA.mjs";
 import "./chunk-6Y4YTKCF.mjs";
 import {
   commandExecutor,
@@ -543,7 +543,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       try {
         const map = options?.webhookContext?.webhookData;
         if (map) {
-          const { CheckProviderRegistry } = await import("./check-provider-registry-7YJZYPUX.mjs");
+          const { CheckProviderRegistry } = await import("./check-provider-registry-CRVI2WPG.mjs");
           const reg = CheckProviderRegistry.getInstance();
           const p = reg.getProvider("http_input");
           if (p && typeof p.setWebhookContext === "function") p.setWebhookContext(map);
@@ -682,7 +682,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
     if (Array.isArray(configWithTagFilter.frontends) && configWithTagFilter.frontends.length > 0) {
       try {
         const { EventBus } = await import("./event-bus-5BEVPQ6T.mjs");
-        const { FrontendsHost } = await import("./host-RW3IUZSG.mjs");
+        const { FrontendsHost } = await import("./host-BVPANNPE.mjs");
         const bus = new EventBus();
         context.eventBus = bus;
         frontendsHost = new FrontendsHost(bus, logger);

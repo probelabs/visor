@@ -4848,10 +4848,20 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
       trimOutputRight: false,
       greedy: false
     });
+    let output = reviewSummary.output;
+    if (typeof output === "string") {
+      const trimmed = output.trim();
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        try {
+          output = JSON.parse(trimmed);
+        } catch {
+        }
+      }
+    }
     const templateData = {
       issues: reviewSummary.issues || [],
       checkName: checkId,
-      output: reviewSummary.output
+      output
     };
     const rendered = await liquid.parseAndRender(templateContent, templateData);
     return rendered.trim();
@@ -23587,13 +23597,23 @@ async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
       trimOutputRight: false,
       greedy: false
     });
+    let output = reviewSummary.output;
+    if (typeof output === "string") {
+      const trimmed = output.trim();
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        try {
+          output = JSON.parse(trimmed);
+        } catch {
+        }
+      }
+    }
     const templateData = {
       issues: reviewSummary.issues || [],
       checkName: checkId,
-      output: reviewSummary.output
+      output
     };
     logger.debug(
-      `[LevelDispatch] Rendering template for ${checkId} with output keys: ${reviewSummary.output ? Object.keys(reviewSummary.output).join(", ") : "none"}`
+      `[LevelDispatch] Rendering template for ${checkId} with output keys: ${output && typeof output === "object" ? Object.keys(output).join(", ") : "none"}`
     );
     const rendered = await liquid.parseAndRender(templateContent, templateData);
     logger.debug(
@@ -25084,6 +25104,51 @@ var init_ndjson_sink = __esm({
 });
 
 // src/utils/json-text-extractor.ts
+function extractTextFieldFromMalformedJson(content) {
+  const fieldPatterns = [
+    /^\s*\{\s*"text"\s*:\s*"/i,
+    /^\s*\{\s*"response"\s*:\s*"/i,
+    /^\s*\{\s*"message"\s*:\s*"/i
+  ];
+  for (const pattern of fieldPatterns) {
+    const match = pattern.exec(content);
+    if (match) {
+      const valueStart = match[0].length;
+      const remaining = content.substring(valueStart);
+      let value = "";
+      let i = 0;
+      while (i < remaining.length) {
+        const char = remaining[i];
+        if (char === "\\" && i + 1 < remaining.length) {
+          const nextChar = remaining[i + 1];
+          if (nextChar === "n") {
+            value += "\n";
+          } else if (nextChar === "r") {
+            value += "\r";
+          } else if (nextChar === "t") {
+            value += "	";
+          } else if (nextChar === '"') {
+            value += '"';
+          } else if (nextChar === "\\") {
+            value += "\\";
+          } else {
+            value += char + nextChar;
+          }
+          i += 2;
+        } else if (char === '"') {
+          break;
+        } else {
+          value += char;
+          i++;
+        }
+      }
+      if (value.trim().length > 0) {
+        return value.trim();
+      }
+    }
+  }
+  return void 0;
+}
 function extractTextFromJson(content) {
   if (content === void 0 || content === null) return void 0;
   let parsed = content;
@@ -25095,6 +25160,10 @@ function extractTextFromJson(content) {
     try {
       parsed = JSON.parse(trimmed);
     } catch {
+      const extracted = extractTextFieldFromMalformedJson(trimmed);
+      if (extracted) {
+        return extracted;
+      }
       return trimmed.length > 0 ? trimmed : void 0;
     }
   }
