@@ -28,23 +28,16 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+        uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
-          # cache: 'npm' # Disabled due to rollup optional dependency bug
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
-        run: |
-          # Workaround for npm bug with rollup optional dependencies
-          # https://github.com/npm/cli/issues/4828
-          rm -rf node_modules package-lock.json
-          npm install
-          # Explicitly install rollup platform-specific binary
-          npm install --no-save @rollup/rollup-linux-x64-gnu
+        run: npm install
 
       - name: Run tests
         run: npm test
@@ -104,24 +97,18 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Need full history for git log
 
       - name: Setup Node.js
-        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+        uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          # cache: 'npm' # Disabled due to rollup optional dependency bug
+          node-version: "24"
 
       - name: Install dependencies and build
         run: |
-          # Workaround for npm bug with rollup optional dependencies
-          # https://github.com/npm/cli/issues/4828
-          rm -rf node_modules package-lock.json
           npm install
-          # Explicitly install rollup platform-specific binary
-          npm install --no-save @rollup/rollup-linux-x64-gnu
           npm run build
 
       - name: Set version variables
@@ -249,23 +236,16 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+        uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
-          # cache: 'npm' # Disabled due to rollup optional dependency bug
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
-        run: |
-          # Workaround for npm bug with rollup optional dependencies
-          # https://github.com/npm/cli/issues/4828
-          rm -rf node_modules package-lock.json
-          npm install
-          # Explicitly install rollup platform-specific binary
-          npm install --no-save @rollup/rollup-linux-x64-gnu
+        run: npm install
 
       - name: Build package
         run: npm run build
