@@ -48,7 +48,7 @@
     "pretest": "node scripts/generate-config-schema.js && npm run build:cli",
     "test:with-build": "npm run build:cli && jest",
     "test:yaml": "node dist/index.js test --progress compact",
-    "postinstall": "patch-package",
+    "postinstall": "[ -f node_modules/.bin/patch-package ] && patch-package || true",
     "prepare": "husky",
     "pre-commit": "lint-staged",
     "deploy:site": "cd site && npx wrangler pages deploy . --project-name=visor-site --commit-dirty=true",
