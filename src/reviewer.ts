@@ -2,6 +2,7 @@ import { Octokit } from '@octokit/rest';
 import { PRInfo } from './pr-analyzer';
 import { CommentManager } from './github-comments';
 import { AIReviewService, AIDebugInfo } from './ai-review-service';
+import { extractTextFromJson } from './utils/json-text-extractor';
 
 export interface ReviewIssue {
   // Location
@@ -354,19 +355,21 @@ export class PRReviewer {
   ): Promise<string> {
     // Concatenate all check outputs in this group; fall back to structured output fields
     const normalize = (s: string) => s.replace(/\\n/g, '\n');
+
     const checkContents = checkResults
       .map(result => {
+        // Try content first
         const trimmed = result.content?.trim();
-        if (trimmed) return normalize(trimmed);
-        // Fallback: if provider returned structured output with a common text field
+        if (trimmed) {
+          const extractedText = extractTextFromJson(trimmed);
+          if (extractedText) return normalize(extractedText);
+        }
+        // Fallback: try structured output field
         const out = (result as unknown as { debug?: unknown; issues?: unknown; output?: any })
           .output;
         if (out) {
-          if (typeof out === 'string' && out.trim()) return normalize(out.trim());
-          if (typeof out === 'object') {
-            const txt = (out.text || out.response || out.message) as unknown;
-            if (typeof txt === 'string' && txt.trim()) return normalize(txt.trim());
-          }
+          const extractedText = extractTextFromJson(out);
+          if (extractedText) return normalize(extractedText);
         }
         return '';
       })

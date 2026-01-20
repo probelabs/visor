@@ -29,11 +29,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # Workaround for npm bug with rollup optional dependencies
-          # https://github.com/npm/cli/issues/4828
-          rm -rf node_modules package-lock.json
-          npm install
-          # Explicitly install rollup platform-specific binary
+          # Use npm ci for reproducible builds from package-lock.json
+          rm -rf node_modules
+          npm ci
+          # Explicitly install rollup platform-specific binary for Linux
           npm install --no-save @rollup/rollup-linux-x64-gnu
 
       - name: Build package

@@ -164,10 +164,30 @@ export class DebugVisualizerServer {
   }
 
   /**
-   * Clear spans for a new run (but keep server alive)
+   * Clear spans for a new run (but keep server alive).
+   * Note: Does NOT reset executionState - that's managed by waitForStartSignal/api/start.
    */
   clearSpans(): void {
     console.log('[debug-server] Clearing spans for new run');
+    this.spans = [];
+    this.results = null;
+    // Don't reset executionState here - it was already set to 'running' by waitForStartSignal
+    // Clear any pause gate
+    if (this.pauseResolver) {
+      try {
+        this.pauseResolver();
+      } catch {}
+      this.pauseResolver = null;
+      this.pausePromise = null;
+    }
+  }
+
+  /**
+   * Full reset - clear spans AND reset execution state to idle.
+   * Called by /api/reset when user wants to start fresh.
+   */
+  reset(): void {
+    console.log('[debug-server] Full reset - clearing spans and resetting state to idle');
     this.spans = [];
     this.results = null;
     this.executionState = 'idle';
@@ -393,9 +413,9 @@ export class DebugVisualizerServer {
       return;
     }
 
-    // API endpoint: Reset execution (clear spans and results)
+    // API endpoint: Reset execution (clear spans, results, and state)
     if (url === '/api/reset' && req.method === 'POST') {
-      this.clearSpans();
+      this.reset();
       res.writeHead(200, {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',

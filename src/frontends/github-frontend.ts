@@ -1,5 +1,6 @@
 import type { Frontend, FrontendContext } from './host';
 import { logger } from '../logger';
+import { extractTextFromJson } from '../utils/json-text-extractor';
 
 /**
  * Skeleton GitHub frontend.
@@ -130,12 +131,15 @@ export class GitHubFrontend implements Frontend {
               ? failureResults.some((r: any) => r && r.failed)
               : false;
             const group = this.getGroupForCheck(ctx, ev.checkId);
+            // Extract text from JSON-like content if template didn't unwrap it properly
+            const rawContent = (ev?.result as any)?.content;
+            const extractedContent = extractTextFromJson(rawContent);
             this.upsertSectionState(group, ev.checkId, {
               status: 'completed',
               conclusion: failed ? 'failure' : 'success',
               issues: count,
               lastUpdated: new Date().toISOString(),
-              content: (ev?.result as any)?.content,
+              content: extractedContent,
             });
             await this.updateGroupedComment(ctx, comments, group, ev.checkId);
           }

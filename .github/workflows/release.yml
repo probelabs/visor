@@ -156,19 +156,23 @@ jobs:
           echo "$VISOR_OUTPUT"
 
           # Extract release notes from JSON output
-          RELEASE_NOTES=$(echo "$VISOR_OUTPUT" | jq -r '.checks[]? | select(.checkName == "release-notes") | .suggestions[]? // empty' 2>/dev/null || echo "")
+          # The JSON structure is grouped by group name (e.g., "release": [...])
+          # We need to flatten all groups and find the release-notes check
+          RELEASE_NOTES=$(echo "$VISOR_OUTPUT" | jq -r '
+            to_entries[]
+            | .value[]
+            | select(.checkName == "release-notes")
+            | .output // .content // empty
+          ' 2>/dev/null | head -1 || echo "")
+
+          # Track if we need GitHub to auto-generate notes
+          USE_GITHUB_NOTES="false"
 
           # Fallback if AI generation fails
           if [ -z "$RELEASE_NOTES" ] || [ "$RELEASE_NOTES" = "null" ]; then
-            echo "⚠️ AI release notes generation failed, creating fallback notes"
-            RELEASE_NOTES="## 🚀 What's New in ${{ env.TAG_NAME }}
-
-            ### 📝 Changes
-            $(echo "$GIT_LOG" | sed 's/^/- /')
-
-            ### 📊 Statistics
-            - $(echo "$GIT_LOG" | wc -l) commits since ${PREV_TAG:-start}
-            - Generated automatically from git history"
+            echo "⚠️ AI release notes generation failed, using GitHub auto-generated notes"
+            RELEASE_NOTES=""
+            USE_GITHUB_NOTES="true"
           else
             echo "✅ Successfully generated AI release notes"
           fi
@@ -177,6 +181,7 @@ jobs:
           echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
           echo "$RELEASE_NOTES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+          echo "USE_GITHUB_NOTES=$USE_GITHUB_NOTES" >> $GITHUB_OUTPUT
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -187,7 +192,8 @@ jobs:
         with:
           tag_name: ${{ env.TAG_NAME }}
           name: Release ${{ env.TAG_NAME }}
-          generate_release_notes: true
+          # Only use GitHub auto-generated notes when AI generation failed
+          generate_release_notes: ${{ steps.release-notes.outputs.USE_GITHUB_NOTES == 'true' }}
           draft: false
           prerelease: ${{ github.event.inputs.prerelease || contains(env.VERSION, '-beta') || contains(env.VERSION, '-alpha') || contains(env.VERSION, '-rc') }}
           body: |

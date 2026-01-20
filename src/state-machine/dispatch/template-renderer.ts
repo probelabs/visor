@@ -58,10 +58,24 @@ export async function renderTemplateContent(
       greedy: false,
     });
 
+    // Ensure output is an object, not a JSON string
+    // If output is a string that looks like JSON, parse it
+    let output = (reviewSummary as any).output;
+    if (typeof output === 'string') {
+      const trimmed = output.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          output = JSON.parse(trimmed);
+        } catch {
+          // Not valid JSON, keep as string
+        }
+      }
+    }
+
     const templateData: Record<string, unknown> = {
       issues: reviewSummary.issues || [],
       checkName: checkId,
-      output: (reviewSummary as any).output,
+      output,
     };
 
     const rendered = await liquid.parseAndRender(templateContent, templateData);
