@@ -1,6 +1,7 @@
 import { CheckProvider, CheckProviderConfig, ExecutionContext } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
+// eslint-disable-next-line no-restricted-imports -- needed for Liquid type
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { logger } from '../logger';
@@ -78,7 +79,8 @@ export class LogCheckProvider extends CheckProvider {
       includeDependencies,
       includeMetadata,
       config.__outputHistory as Map<string, unknown[]> | undefined,
-      context
+      context,
+      config
     );
 
     // Render the log message template
@@ -100,12 +102,20 @@ export class LogCheckProvider extends CheckProvider {
     else if (level === 'debug') logger.debug(logOutput);
     else logger.info(logOutput);
 
-    // Return with the log content as custom data for dependent checks
-    return {
+    // Return with the log content as custom data for dependent checks.
+    // For chat-style logs (group: chat), also expose a structured
+    // `output.text` field so frontends like Slack can post a clean
+    // human-facing message without the level prefix.
+    const summary: ReviewSummary & { logOutput: string; output?: unknown } = {
       issues: [],
-      // Add log output as custom field
       logOutput,
-    } as ReviewSummary & { logOutput: string };
+    };
+
+    if ((config as any).group === 'chat') {
+      (summary as any).output = { text: renderedMessage };
+    }
+
+    return summary;
   }
 
   private buildTemplateContext(
@@ -115,7 +125,8 @@ export class LogCheckProvider extends CheckProvider {
     _includeDependencies: boolean = true,
     includeMetadata: boolean = true,
     outputHistory?: Map<string, unknown[]>,
-    executionContext?: ExecutionContext
+    executionContext?: ExecutionContext,
+    config?: CheckProviderConfig
   ): Record<string, unknown> {
     const context: Record<string, unknown> = {};
 
@@ -197,7 +208,9 @@ export class LogCheckProvider extends CheckProvider {
     }
 
     // Add workflow inputs if available
-    const workflowInputs = executionContext?.workflowInputs || {};
+    // Check config first (set by projectWorkflowToGraph), then fall back to executionContext
+    const workflowInputs =
+      (config as any)?.workflowInputs || executionContext?.workflowInputs || {};
     logger.debug(
       `[LogProvider] Adding ${Object.keys(workflowInputs).length} workflow inputs to context`
     );

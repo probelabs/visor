@@ -1,6 +1,7 @@
 import { HttpClientProvider } from '../../../src/providers/http-client-provider';
 import { PRInfo } from '../../../src/pr-analyzer';
 import { ReviewSummary } from '../../../src/reviewer';
+// eslint-disable-next-line no-restricted-imports -- needed for type in test mock
 import { Liquid } from 'liquidjs';
 import { EnvironmentResolver } from '../../../src/utils/env-resolver';
 
@@ -120,15 +121,17 @@ describe('HttpClientProvider', () => {
         })
       );
 
-      expect(result).toEqual<ReviewSummary & { data: unknown }>({
+      // The provider returns data in the 'output' property (consistent with other providers)
+      expect(result).toEqual({
         issues: [],
-        data: responseData,
+        output: { status: 'ok', data: { value: 123 } },
       });
     });
 
     it('should handle POST request with body', async () => {
       mockConfig.method = 'POST';
-      mockConfig.body = '{"request": "data"}';
+      // Use a body with Liquid template to trigger parseAndRender
+      mockConfig.body = '{"request": "{{ pr.title }}"}';
 
       const responseData = { result: 'success' };
       const mockResponse = {
@@ -143,15 +146,16 @@ describe('HttpClientProvider', () => {
       };
 
       mockFetch.mockResolvedValue(mockResponse);
-      mockLiquid.parseAndRender.mockResolvedValue('{"request": "data"}');
+      mockLiquid.parseAndRender.mockResolvedValue('{"request": "Test PR"}');
 
       const result = await provider.execute(mockPRInfo, mockConfig, new Map());
 
+      // Verify the body template was parsed by Liquid with the correct template
       expect(mockLiquid.parseAndRender).toHaveBeenCalledWith(
-        '{"request": "data"}',
+        '{"request": "{{ pr.title }}"}',
         expect.objectContaining({
           pr: expect.any(Object),
-          outputs: {},
+          outputs: expect.any(Object),
         })
       );
 
@@ -159,7 +163,7 @@ describe('HttpClientProvider', () => {
         'https://api.example.com/data',
         expect.objectContaining({
           method: 'POST',
-          body: '{"request": "data"}',
+          body: '{"request": "Test PR"}',
           headers: expect.objectContaining({
             Authorization: 'Bearer token',
             'Content-Type': 'application/json',
@@ -167,7 +171,10 @@ describe('HttpClientProvider', () => {
         })
       );
 
-      expect((result as ReviewSummary & { data: unknown }).data).toEqual(responseData);
+      // The provider returns data in the 'output' property
+      expect((result as ReviewSummary & { output: { result: string } }).output.result).toEqual(
+        'success'
+      );
     });
 
     it('should handle HTTP errors', async () => {
@@ -235,7 +242,10 @@ describe('HttpClientProvider', () => {
         })
       );
 
-      expect((result as ReviewSummary & { data: unknown }).data).toEqual(transformedData);
+      // The provider returns data in the 'output' property
+      expect(
+        (result as ReviewSummary & { output: { transformed: string } }).output.transformed
+      ).toEqual('result');
     });
   });
 

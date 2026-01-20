@@ -150,4 +150,17 @@ Configuration supports:
    - Safe JSON parsing: `try { JSON.parse(output) } catch(e) { log("Error:", e) }`
    - Validate structure: `log("Is array?", Array.isArray(outputs["check-name"]));`
 
+6. **Tracing with OTel/Jaeger**:
+   - Enable telemetry: `VISOR_TELEMETRY_ENABLED=true`, `VISOR_TELEMETRY_SINK=otlp`,
+     `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces`
+   - Root span: `visor.run` (one per CLI/Slack execution)
+   - State spans: `engine.state.*` with `wave`, `wave_kind`, `session_id`
+   - Check spans: `visor.check.<checkId>` with `visor.check.id`, `visor.check.type`,
+     `visor.foreach.index` (for map fanout)
+   - Routing decisions: `visor.routing` events attached to the active state span; fields
+     include `trigger`, `action`, `source`, `target`, `scope`, `goto_event` (repeats
+     across waves show routing loops)
+   - Wave visibility: `engine.state.level_dispatch` includes `level_size` and
+     `level_checks_preview` for the planned wave
+
 See `docs/debugging.md` for comprehensive debugging guide.

@@ -137,6 +137,8 @@ export class FailureConditionEvaluator {
       previousResults?: Map<string, ReviewSummary>;
       authorAssociation?: string;
       workflowInputs?: Record<string, unknown>;
+      /** Current step's output for guarantee evaluation */
+      output?: unknown;
     }
   ): Promise<boolean> {
     // Build context for if evaluation
@@ -177,10 +179,13 @@ export class FailureConditionEvaluator {
       // Workflow inputs (for workflows)
       inputs: contextData?.workflowInputs || {},
 
-      // Required output property (empty for if conditions)
-      output: {
-        issues: [],
-      },
+      // Output property: use provided output for guarantee evaluation, or empty for if conditions
+      output:
+        contextData?.output !== undefined &&
+        contextData.output !== null &&
+        typeof contextData.output === 'object'
+          ? (contextData.output as Record<string, unknown>)
+          : { issues: [] },
       // Author association (used by permission helpers)
       authorAssociation: contextData?.authorAssociation,
 
@@ -204,19 +209,10 @@ export class FailureConditionEvaluator {
       const res = this.evaluateExpression(expression, context);
       try {
         if (process.env.VISOR_DEBUG === 'true') {
-          const envMap = context.env || {};
-          let memStr = '';
-          try {
-            // best-effort peek for common flag
-            const m = (context as any).memory;
-            const v =
-              m && typeof m.get === 'function' ? m.get('all_valid', 'fact-validation') : undefined;
-            memStr = ` mem.fact-validation.all_valid=${String(v)}`;
-          } catch {}
+          // Debug if-eval output (only when VISOR_DEBUG enabled)
+          const outputKeys = Object.keys(context.outputs || {});
           console.error(
-            `[if-eval] check=${checkName} expr="${expression}" env.ENABLE_FACT_VALIDATION=${String(
-              (envMap as any).ENABLE_FACT_VALIDATION
-            )} event=${context.event?.event_name} result=${String(res)}${memStr}`
+            `[if-eval] check=${checkName} expr="${expression}" result=${String(res)} outputKeys=[${outputKeys.join(',')}]`
           );
         }
       } catch {}
@@ -480,7 +476,18 @@ export class FailureConditionEvaluator {
 
       // Extract context variables
       const output = context.output || {};
-      const issues = output.issues || [];
+      // Ensure issues is an array - it might be a JSON string from workflow outputs
+      let issues = output.issues || [];
+      if (typeof issues === 'string') {
+        try {
+          issues = JSON.parse(issues);
+        } catch {
+          issues = [];
+        }
+      }
+      if (!Array.isArray(issues)) {
+        issues = [];
+      }
 
       // Backward compatibility: provide metadata for transition period
       // TODO: Remove after all configurations are updated
@@ -518,6 +525,7 @@ export class FailureConditionEvaluator {
       const event = context.event || 'manual';
       const env = context.env || {};
       const outputs = context.outputs || {};
+      const inputs = context.inputs || {};
       const debugData = context.debug || null;
 
       // Get memory store and create accessor for fail_if expressions
@@ -555,6 +563,7 @@ export class FailureConditionEvaluator {
         filesCount,
         event,
         env,
+        inputs,
         // Helper functions
         contains,
         startsWith,
@@ -621,6 +630,7 @@ export class FailureConditionEvaluator {
             filesCount,
             event,
             env,
+            inputs,
             // Helpers
             contains,
             startsWith,

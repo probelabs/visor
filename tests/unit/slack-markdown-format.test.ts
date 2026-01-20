@@ -39,4 +39,28 @@ describe('markdownToSlack', () => {
       ['• parent', '  • child', '```', '- not-a-bullet inside code', '```', '• after'].join('\n')
     );
   });
+
+  it('converts markdown headers to bold text', () => {
+    const input = '# Main Title\n## Subtitle\n### Section';
+    const out = markdownToSlack(input);
+    expect(out).toBe('*Main Title*\n*Subtitle*\n*Section*');
+  });
+
+  it('adds newline before h1/h2 headers when preceded by content', () => {
+    const input = 'Some content\n## New Section\nMore content';
+    const out = markdownToSlack(input);
+    expect(out).toBe('Some content\n\n*New Section*\nMore content');
+  });
+
+  it('does not add newline before h1 if it is the first line', () => {
+    const input = '# First Header\nContent here';
+    const out = markdownToSlack(input);
+    expect(out).toBe('*First Header*\nContent here');
+  });
+
+  it('ignores headers inside code blocks', () => {
+    const input = '```\n# This is a comment\n```\n# Real Header';
+    const out = markdownToSlack(input);
+    expect(out).toBe('```\n# This is a comment\n```\n*Real Header*');
+  });
 });

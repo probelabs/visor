@@ -179,18 +179,27 @@ export function captureProviderCall(
 ): void {
   try {
     span.setAttribute('visor.provider.type', providerType);
+    const fullCapture =
+      process.env.VISOR_TELEMETRY_FULL_CAPTURE === 'true' ||
+      process.env.VISOR_TELEMETRY_FULL_CAPTURE === '1';
 
     // Request summary
     if (request.model) span.setAttribute('visor.provider.request.model', String(request.model));
     if (request.prompt) {
       span.setAttribute('visor.provider.request.prompt.length', request.prompt.length);
       span.setAttribute('visor.provider.request.prompt.preview', request.prompt.substring(0, 500));
+      if (fullCapture) {
+        span.setAttribute('visor.provider.request.prompt', safeSerialize(request.prompt));
+      }
     }
 
     // Response summary
     if (response.content) {
       span.setAttribute('visor.provider.response.length', response.content.length);
       span.setAttribute('visor.provider.response.preview', response.content.substring(0, 500));
+      if (fullCapture) {
+        span.setAttribute('visor.provider.response.content', safeSerialize(response.content));
+      }
     }
     if (response.tokens) {
       span.setAttribute('visor.provider.response.tokens', response.tokens);

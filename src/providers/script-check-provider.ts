@@ -59,6 +59,16 @@ export class ScriptCheckProvider extends CheckProvider {
       reuseSession?: boolean;
     } & import('./check-provider.interface').ExecutionContext
   ): Promise<ReviewSummary> {
+    // Test hook: mock output for this step (short-circuit execution)
+    try {
+      const stepName = (config as any).checkName || 'unknown';
+      const mock = _sessionInfo?.hooks?.mockForStep?.(String(stepName));
+      if (mock !== undefined) {
+        // Return mock directly as step output
+        return { issues: [], output: mock } as ReviewSummary & { output: unknown };
+      }
+    } catch {}
+
     const script = String(config.content || '');
     const memoryStore = MemoryStore.getInstance();
     const ctx = buildProviderTemplateContext(
@@ -72,9 +82,35 @@ export class ScriptCheckProvider extends CheckProvider {
     // Keep provider quiet by default; no step-specific debug
     // (historical ad-hoc logs removed to avoid hardcoding step names).
 
+    // Add workflow inputs to the context
+    const inputs = (config as any).workflowInputs || _sessionInfo?.workflowInputs || {};
+    (ctx as any).inputs = inputs;
+
+    // Add environment variables to context (consistent with http-client-provider)
+    (ctx as any).env = process.env;
+
     // Attach synchronous memory ops consistent with memory provider
     const { ops, needsSave } = createSyncMemoryOps(memoryStore);
     (ctx as any).memory = ops as unknown as Record<string, unknown>;
+
+    // Add helper functions to the context
+    (ctx as any).escapeXml = (str: unknown): string => {
+      if (str == null) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+    };
+
+    // Add btoa/atob for base64 encoding/decoding (browser API polyfill)
+    (ctx as any).btoa = (str: unknown): string => {
+      return Buffer.from(String(str), 'binary').toString('base64');
+    };
+    (ctx as any).atob = (str: unknown): string => {
+      return Buffer.from(String(str), 'base64').toString('binary');
+    };
 
     // Evaluate the script in a secure sandbox (per-execution instance)
     const sandbox = this.createSecureSandbox();

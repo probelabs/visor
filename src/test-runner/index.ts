@@ -159,6 +159,7 @@ export async function runSuites(
   options: {
     only?: string;
     bail?: boolean;
+    noMocks?: boolean;
     maxParallelSuites?: number;
     maxParallel?: number;
     promptMaxChars?: number;
@@ -225,6 +226,7 @@ export async function runSuites(
       const r = await runner.runCases(fp, suite as TestSuite, {
         only: options.only,
         bail: options.bail,
+        noMocks: options.noMocks,
         maxParallel: options.maxParallel,
         promptMaxChars: options.promptMaxChars,
       });
@@ -285,7 +287,8 @@ export class VisorTestRunner {
     defaultPromptCap?: number,
     ghRec?: { error_code?: number; timeout_ms?: number },
     defaultIncludeTags?: string[] | undefined,
-    defaultExcludeTags?: string[] | undefined
+    defaultExcludeTags?: string[] | undefined,
+    noMocks?: boolean
   ): {
     name: string;
     strict: boolean;
@@ -399,9 +402,11 @@ export class VisorTestRunner {
               : info.prompt;
           prompts[k].push(p);
         },
-        mockForStep: (step: string) => mockMgr.get(step),
+        // In noMocks mode, always return undefined to let real providers execute
+        mockForStep: (step: string) => (noMocks ? undefined : mockMgr.get(step)),
         // Ensure human-input never blocks tests: prefer case mock, then default value
         onHumanInput: async (req: { checkId: string; default?: string }) => {
+          if (noMocks) return (req.default ?? '').toString();
           const m = mockMgr.get(req.checkId);
           if (m !== undefined && m !== null) return String(m);
           return (req.default ?? '').toString();
@@ -480,6 +485,65 @@ export class VisorTestRunner {
   private printSelectedChecks(checks: string[]): void {
     if (!checks || checks.length === 0) return;
     console.log(`  checks: ${checks.join(', ')}`);
+  }
+  /**
+   * Compute workflow outputs from output definitions and step results.
+   * Evaluates value_js and value (Liquid) expressions to produce output values.
+   */
+  private computeWorkflowOutputs(
+    outputDefs: Array<{ name: string; value?: string; value_js?: string }>,
+    outputHistory: Record<string, unknown[]>,
+    results: any[]
+  ): Record<string, unknown> {
+    const computed: Record<string, unknown> = {};
+    // Build a steps map from outputHistory (last output for each step)
+    const steps: Record<string, unknown> = {};
+    for (const [stepId, hist] of Object.entries(outputHistory)) {
+      if (Array.isArray(hist) && hist.length > 0) {
+        steps[stepId] = hist[hist.length - 1];
+      }
+    }
+    // Build outputs map from history (for {{ outputs["step"] }} syntax)
+    const outputs: Record<string, unknown> = { ...steps };
+
+    for (const outputDef of outputDefs) {
+      if (!outputDef.name) continue;
+      try {
+        if (outputDef.value_js) {
+          // Evaluate JavaScript expression
+          const fn = new Function(
+            'steps',
+            'outputs',
+            'results',
+            `
+            try {
+              ${outputDef.value_js}
+            } catch (e) {
+              return undefined;
+            }
+          `
+          );
+          computed[outputDef.name] = fn(steps, outputs, results);
+        } else if (outputDef.value) {
+          // Evaluate Liquid template
+          const { Liquid } = require('liquidjs');
+          const engine = new Liquid();
+          const rendered = engine.parseAndRenderSync(outputDef.value, { steps, outputs, results });
+          // Try to parse as JSON, otherwise keep as string
+          try {
+            computed[outputDef.name] = JSON.parse(rendered);
+          } catch {
+            computed[outputDef.name] = rendered.trim();
+          }
+        }
+      } catch (e) {
+        // Skip outputs that fail to compute
+        if (process.env.VISOR_DEBUG === 'true') {
+          console.log(`  ⚠️ Failed to compute output '${outputDef.name}': ${e}`);
+        }
+      }
+    }
+    return computed;
   }
   /**
    * Locate a tests file: explicit path > ./.visor.tests.yaml > defaults/visor.tests.yaml
@@ -606,7 +670,13 @@ export class VisorTestRunner {
   public async runCases(
     testsPath: string,
     suite: TestSuite,
-    options: { only?: string; bail?: boolean; maxParallel?: number; promptMaxChars?: number }
+    options: {
+      only?: string;
+      bail?: boolean;
+      noMocks?: boolean;
+      maxParallel?: number;
+      promptMaxChars?: number;
+    }
   ): Promise<{
     failures: number;
     results: Array<{
@@ -748,9 +818,16 @@ export class VisorTestRunner {
     const __keepAlive = setInterval(() => {}, 1000);
     // Header: show suite path for clarity
     let __suiteRel = testsPath;
+    const noMocksMode = options.noMocks || false;
     try {
       __suiteRel = path.relative(this.cwd, testsPath) || testsPath;
       console.log(`Suite: ${__suiteRel}`);
+      if (noMocksMode) {
+        console.log(
+          this.color('🔴 NO-MOCKS MODE: Running with real providers (no mock injection)', '33')
+        );
+        console.log(this.gray('   Step outputs will be captured and printed as suggested mocks\n'));
+      }
     } catch {}
     const runOne = async (_case: any): Promise<{ name: string; failed: number }> => {
       // Case header for clarity
@@ -805,6 +882,11 @@ export class VisorTestRunner {
           cfgLocal.checks[name] = chk;
         }
       }
+      // Workflow testing: inject workflow_input into config for template access
+      const workflowInput = (_case as any).workflow_input;
+      if (workflowInput && typeof workflowInput === 'object') {
+        (cfgLocal as any).workflow_inputs = workflowInput;
+      }
       const setup = this.setupTestCase(
         _case,
         cfgLocal,
@@ -812,7 +894,8 @@ export class VisorTestRunner {
         defaultPromptCap,
         ghRec,
         defaultIncludeTags,
-        defaultExcludeTags
+        defaultExcludeTags,
+        noMocksMode
       );
       try {
         this.printSelectedChecks(setup.checksToRun);
@@ -826,6 +909,30 @@ export class VisorTestRunner {
         } catch {}
         const exec = await this.executeTestCase(setup, cfgLocal);
         const res = exec.res;
+
+        // In no-mocks mode, print captured outputs as suggested mocks
+        if (noMocksMode && Object.keys(exec.outHistory).length > 0) {
+          console.log(this.color('\n📋 Suggested mocks (copy to your test case):', '36'));
+          console.log(this.gray('mocks:'));
+          for (const [stepName, outputs] of Object.entries(exec.outHistory)) {
+            if (!Array.isArray(outputs) || outputs.length === 0) continue;
+            // Use the last output for the step
+            const lastOutput = outputs[outputs.length - 1];
+            // Format as YAML with proper indentation
+            const yamlOutput = yaml.dump(
+              { [stepName]: lastOutput },
+              { indent: 2, lineWidth: 120, noRefs: true }
+            );
+            // Indent the YAML output for proper nesting under 'mocks:'
+            const indented = yamlOutput
+              .split('\n')
+              .map(line => '  ' + line)
+              .join('\n');
+            console.log(indented);
+          }
+          console.log('');
+        }
+
         if (process.env.VISOR_DEBUG === 'true') {
           try {
             const names = (res.statistics.checks || []).map(
@@ -836,6 +943,21 @@ export class VisorTestRunner {
         }
         // avoid printing raw history keys each case
         // (fallback for on_finish static targets handled inside executeTestCase)
+        // Workflow testing: compute workflow outputs if workflow has outputs defined
+        let workflowOutputs: Record<string, unknown> | undefined;
+        if (Array.isArray((cfgLocal as any).outputs)) {
+          try {
+            workflowOutputs = this.computeWorkflowOutputs(
+              (cfgLocal as any).outputs,
+              exec.outHistory,
+              res.results
+            );
+          } catch (e) {
+            if (process.env.VISOR_DEBUG === 'true') {
+              console.log(`  ⚠️ Error computing workflow outputs: ${e}`);
+            }
+          }
+        }
         const caseFailures = require('./evaluators').evaluateCase(
           _case.name,
           res.statistics,
@@ -845,7 +967,8 @@ export class VisorTestRunner {
           setup.strict,
           setup.prompts,
           res.results,
-          exec.outHistory
+          exec.outHistory,
+          workflowOutputs
         );
         // Warn about unmocked AI/command steps that executed
         try {
@@ -1280,7 +1403,8 @@ export class VisorTestRunner {
   ): void {
     const executed: Record<string, number> = {};
     for (const s of stats.checks) {
-      if (!s.skipped && (s.totalRuns || 0) > 0) executed[s.checkName] = s.totalRuns || 0;
+      const skipped = (s as any).skipped === true || !!(s as any).skipReason;
+      if (!skipped && (s.totalRuns || 0) > 0) executed[s.checkName] = s.totalRuns || 0;
     }
     const expCalls = (expect.calls || []).filter(c => c.step);
     const expectedSteps = new Map<

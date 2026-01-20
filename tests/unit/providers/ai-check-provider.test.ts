@@ -399,6 +399,66 @@ describe('AICheckProvider', () => {
         },
       });
     });
+
+    it('derives allowedFolders and path from workspace when present on parent context', async () => {
+      const mockReview = {
+        overallScore: 90,
+        totalIssues: 0,
+        criticalIssues: 0,
+        comments: [],
+      };
+
+      const mockService = {
+        executeReview: jest.fn().mockResolvedValue(mockReview),
+      };
+
+      let capturedConfig: any;
+      (AIReviewService as any).AIReviewService = jest.fn().mockImplementation(config => {
+        capturedConfig = config;
+        return mockService;
+      });
+
+      const workspace = {
+        isEnabled: () => true,
+        getWorkspaceInfo: () => ({
+          workspacePath: '/tmp/ws-123',
+          mainProjectPath: '/tmp/ws-123/main-project',
+        }),
+        listProjects: () => [
+          { name: 'tyk', path: '/tmp/ws-123/tyk' },
+          { name: 'tyk-docs', path: '/tmp/ws-123/tyk-docs' },
+        ],
+      };
+
+      const execContext: any = {
+        _parentContext: {
+          workspace,
+        },
+      };
+
+      const config: CheckProviderConfig = {
+        type: 'ai',
+        prompt: 'code_help',
+        ai: {
+          provider: 'google',
+          model: 'gemini-2.5-pro',
+        },
+      };
+
+      await provider.execute(mockPRInfo, config, undefined, execContext);
+
+      expect(capturedConfig).toMatchObject({
+        provider: 'google',
+        model: 'gemini-2.5-pro',
+        // Workspace root should be used as primary working directory for tools
+        path: '/tmp/ws-123',
+      });
+
+      // allowedFolders should contain the workspace plus all project paths, de-duped
+      expect(capturedConfig.allowedFolders).toEqual(
+        expect.arrayContaining(['/tmp/ws-123', '/tmp/ws-123/tyk', '/tmp/ws-123/tyk-docs'])
+      );
+    });
   });
 
   describe('getSupportedConfigKeys', () => {

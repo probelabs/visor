@@ -534,6 +534,12 @@ steps:
     session_mode: append    # Shares history for full conversation
 ```
 
+You can also reuse the **same check’s** session when it loops back to itself, using:
+
+- `reuse_ai_session: "self"` with `session_mode: append`
+
+See the standalone example at `examples/session-reuse-self.yaml` and the detailed guide in [docs/advanced-ai.md](docs/advanced-ai.md).
+
 Learn more: [docs/advanced-ai.md](docs/advanced-ai.md)
 
 ## 📋 Schema-Template System

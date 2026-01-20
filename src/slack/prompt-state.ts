@@ -95,7 +95,10 @@ export class PromptStateManager {
   setFirstMessage(channel: string, threadTs: string, text: string): void {
     const key = this.key(channel, threadTs);
     if (!text || !text.trim()) return;
-    if (!this.firstMessage.has(key)) {
+    const existing = this.firstMessage.get(key);
+    // Only set if: no entry exists OR the existing entry was already consumed
+    // This allows new messages to be captured after a resume cycle
+    if (!existing || existing.consumed) {
       this.firstMessage.set(key, { text, consumed: false });
     }
   }
@@ -128,6 +131,20 @@ export class PromptStateManager {
       if (now - info.timestamp > this.ttlMs) {
         this.waiting.delete(key);
         removed++;
+      }
+    }
+    // Also clean up stale firstMessage entries (consumed entries older than TTL)
+    // Keep unconsumed entries to avoid losing user messages
+    for (const [key] of this.firstMessage.entries()) {
+      const waitingInfo = this.waiting.get(key);
+      // If no corresponding waiting entry exists and the firstMessage was consumed,
+      // the conversation is likely complete - safe to remove
+      if (!waitingInfo) {
+        const entry = this.firstMessage.get(key);
+        if (entry?.consumed) {
+          this.firstMessage.delete(key);
+          removed++;
+        }
       }
     }
     if (removed) {

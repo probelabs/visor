@@ -666,4 +666,105 @@ describe('CommandCheckProvider', () => {
       expect((result as any).output).toBe('content'); // CommandCheckProvider trims whitespace
     });
   });
+
+  describe('Workflow Inputs', () => {
+    it('should use workflowInputs from config when available', async () => {
+      const config: CheckProviderConfig & { workflowInputs: Record<string, string> } = {
+        type: 'command',
+        exec: 'echo "TEXT={{ inputs.text }}"',
+        workflowInputs: {
+          text: 'Hello from config.workflowInputs',
+        },
+      };
+
+      mockExecute.mockResolvedValue({
+        stdout: 'TEXT=Hello from config.workflowInputs\n',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await provider.execute(mockPRInfo, config);
+
+      // Verify the command was rendered with inputs from config.workflowInputs
+      expect(mockExecute).toHaveBeenCalledWith(
+        'echo "TEXT=Hello from config.workflowInputs"',
+        expect.any(Object)
+      );
+    });
+
+    it('should fall back to context.workflowInputs when config.workflowInputs is not set', async () => {
+      const config: CheckProviderConfig = {
+        type: 'command',
+        exec: 'echo "TEXT={{ inputs.text }}"',
+      };
+
+      const context = {
+        workflowInputs: {
+          text: 'Hello from context.workflowInputs',
+        },
+      };
+
+      mockExecute.mockResolvedValue({
+        stdout: 'TEXT=Hello from context.workflowInputs\n',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await provider.execute(mockPRInfo, config, undefined, context as any);
+
+      // Verify the command was rendered with inputs from context.workflowInputs
+      expect(mockExecute).toHaveBeenCalledWith(
+        'echo "TEXT=Hello from context.workflowInputs"',
+        expect.any(Object)
+      );
+    });
+
+    it('should prefer config.workflowInputs over context.workflowInputs', async () => {
+      const config: CheckProviderConfig & { workflowInputs: Record<string, string> } = {
+        type: 'command',
+        exec: 'echo "TEXT={{ inputs.text }}"',
+        workflowInputs: {
+          text: 'Config takes precedence',
+        },
+      };
+
+      const context = {
+        workflowInputs: {
+          text: 'Context should be ignored',
+        },
+      };
+
+      mockExecute.mockResolvedValue({
+        stdout: 'TEXT=Config takes precedence\n',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await provider.execute(mockPRInfo, config, undefined, context as any);
+
+      // Verify config.workflowInputs takes precedence
+      expect(mockExecute).toHaveBeenCalledWith(
+        'echo "TEXT=Config takes precedence"',
+        expect.any(Object)
+      );
+    });
+
+    it('should provide empty inputs when neither config nor context has workflowInputs', async () => {
+      const config: CheckProviderConfig = {
+        type: 'command',
+        exec: 'echo "TEXT={{ inputs.text }}"',
+      };
+
+      mockExecute.mockResolvedValue({
+        stdout: 'TEXT=\n',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await provider.execute(mockPRInfo, config);
+
+      // Verify the command was rendered with empty inputs (undefined renders as empty)
+      expect(mockExecute).toHaveBeenCalledWith('echo "TEXT="', expect.any(Object));
+    });
+  });
 });

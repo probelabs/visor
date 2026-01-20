@@ -14,6 +14,51 @@ export interface CompileOptions {
   wrapFunction?: boolean;
 }
 
+export interface JsSyntaxValidationResult {
+  valid: boolean;
+  error?: string;
+}
+
+/**
+ * Validate JavaScript syntax without executing it.
+ * Uses the sandbox's compile method to check for syntax errors.
+ * Returns validation result with error message if invalid.
+ */
+export function validateJsSyntax(code: string): JsSyntaxValidationResult {
+  if (!code || typeof code !== 'string') {
+    return { valid: false, error: 'Code must be a non-empty string' };
+  }
+
+  const trimmed = code.trim();
+  if (trimmed.length === 0) {
+    return { valid: false, error: 'Code cannot be empty' };
+  }
+
+  // Create a minimal sandbox instance for syntax checking
+  const sandbox = createSecureSandbox();
+
+  // Wrap code similar to compileAndRun to catch the same syntax issues
+  const looksLikeBlock = /\breturn\b/.test(trimmed) || /;/.test(trimmed) || /\n/.test(trimmed);
+  const looksLikeIife = /\)\s*\(\s*\)\s*;?$/.test(trimmed);
+  const body = looksLikeBlock
+    ? looksLikeIife
+      ? `return (\n${trimmed}\n);\n`
+      : `return (() => {\n${trimmed}\n})();\n`
+    : `return (\n${trimmed}\n);\n`;
+
+  // Add log injection header (same as compileAndRun)
+  const header = `const __lp = "[syntax-check]"; const log = (...a) => { try { console.log(__lp, ...a); } catch {} };\n`;
+  const fullCode = `${header}${body}`;
+
+  try {
+    sandbox.compile(fullCode);
+    return { valid: true };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { valid: false, error: msg };
+  }
+}
+
 /**
  * Create a hardened Sandbox with a consistent set of globals and prototype
  * whitelists. This is a superset of the sets previously used by individual

@@ -129,13 +129,12 @@ describe('GitCheckoutProvider Workspace Integration', () => {
         const output = (result as any).output as GitCheckoutOutput;
         expect(output.success).toBe(true);
         expect(output.workspace_path).toBeDefined();
-        // When checkName is provided, it's used as the project name
-        expect(output.workspace_path).toContain('test-checkout');
 
-        // Verify project was added to workspace
+        // Verify project was added to workspace and the name is derived
+        // from the repository/description, not the checkName.
         const projects = workspace.listProjects();
         expect(projects.length).toBe(1);
-        expect(projects[0].name).toBe('test-checkout');
+        expect(projects[0].name).toBe('external-repo');
       } finally {
         await workspace.cleanup();
         fs.rmSync(mainProjectDir, { recursive: true, force: true });

@@ -321,8 +321,154 @@ Tip: When you define a JSON Schema, you generally do **not** need to tell the mo
 - Avoid noisy fallbacks like `(outputs['x']?.kind ?? '') === 'status'` when `outputs['x']?.kind === 'status'` is equivalent.
 - These conventions apply uniformly to any provider (`ai`, `command`, `script`, `github`, `http_client`, etc).
 
+### Command step best practices
+
+When using `type: command` steps:
+
+**Avoid external tool dependencies** like `jq`, `yq`, `python`, etc.:
+- They may not be installed in all environments (GitHub Actions, Docker, CI)
+- Use `transform_js` to parse and transform output instead
+- Keep shell commands simple: `grep`, `sed`, `awk`, `sort`, `head` are universally available
+
+```yaml
+# Bad - requires jq
+extract-data:
+  type: command
+  exec: |
+    echo "$TEXT" | grep -oE '[A-Z]+-[0-9]+' | jq -R -s 'split("\n")'
+  parseJson: true
+
+# Good - use transform_js for parsing
+extract-data:
+  type: command
+  exec: |
+    echo "$TEXT" | grep -oE '[A-Z]+-[0-9]+' | sort -u
+  transform_js: |
+    const lines = (output || '').trim().split('\n').filter(Boolean);
+    return { data: lines, count: lines.length };
+```
+
+**Prefer line-separated output** over JSON from shell:
+- Simple to parse with `transform_js`
+- No need for `parseJson: true`
+- More robust across different shells/environments
+
+**Use transform_js for structured output**:
+- The sandbox provides `output` (command stdout as string)
+- Return an object with the fields you need
+- Works consistently across all environments
+
+### Testing workflows with `--no-mocks`
+
+The `--no-mocks` flag runs your test cases with real providers instead of injecting mock responses. This is essential for:
+
+1. **Debugging integration issues** - See actual API responses and errors
+2. **Capturing realistic mock data** - Get real output to copy into your test cases
+3. **Validating credentials** - Verify environment variables are set correctly
+4. **Developing new workflows** - Build tests incrementally with real data
+
+#### Basic usage
+
+```bash
+# Run all test cases with real providers
+visor test --config my-workflow.yaml --no-mocks
+
+# Run a specific test case with real providers
+visor test --config my-workflow.yaml --no-mocks --only "my-test-case"
+```
+
+#### Suggested mocks output
+
+When running with `--no-mocks`, Visor captures each step's output and prints it as YAML you can copy directly into your test case:
+
+```
+🔴 NO-MOCKS MODE: Running with real providers (no mock injection)
+   Step outputs will be captured and printed as suggested mocks
+
+... test execution ...
+
+📋 Suggested mocks (copy to your test case):
+mocks:
+  extract-keys:
+    data:
+      - PROJ-123
+      - DEV-456
+    count: 2
+  fetch-issues:
+    data:
+      - key: PROJ-123
+        summary: Fix authentication bug
+        status: In Progress
+```
+
+Copy the YAML under `mocks:` into your test case's `mocks:` section.
+
+#### Workflow for building tests
+
+1. **Start with a minimal test case** (no mocks):
+   ```yaml
+   tests:
+     cases:
+       - name: my-new-test
+         event: manual
+         fixture: local.minimal
+         workflow_input:
+           text: "Fix bug PROJ-123"
+   ```
+
+2. **Run with `--no-mocks`** to capture real outputs:
+   ```bash
+   visor test --config workflow.yaml --no-mocks --only "my-new-test"
+   ```
+
+3. **Copy the suggested mocks** into your test case:
+   ```yaml
+   tests:
+     cases:
+       - name: my-new-test
+         event: manual
+         fixture: local.minimal
+         workflow_input:
+           text: "Fix bug PROJ-123"
+         mocks:
+           extract-keys:
+             data: ["PROJ-123"]
+             count: 1
+           # ... rest of captured mocks
+   ```
+
+4. **Add assertions** based on the real data:
+   ```yaml
+         expect:
+           workflow_output:
+             - path: issue_count
+               equals: 1
+   ```
+
+5. **Run normally** to verify mocks work:
+   ```bash
+   visor test --config workflow.yaml --only "my-new-test"
+   ```
+
+#### Debugging with `--no-mocks`
+
+When a test fails with mocks, use `--no-mocks` to see what's actually happening:
+
+```bash
+# See real API responses and errors
+visor test --config workflow.yaml --no-mocks --only "failing-test"
+
+# Common issues revealed:
+# - Missing or expired credentials
+# - API endpoint changes
+# - Unexpected response formats
+# - Network/timeout issues
+```
+
+The real error messages and responses help identify whether the issue is with your mocks or the actual integration.
+
 ### More examples
 
-- `docs/NPM_USAGE.md` – CLI usage and flags  
-- `GITHUB_CHECKS.md` – Checks, outputs, and workflow integration  
+- `docs/NPM_USAGE.md` – CLI usage and flags
+- `GITHUB_CHECKS.md` – Checks, outputs, and workflow integration
 - `examples/` – MCP, Jira, and advanced configs

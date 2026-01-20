@@ -1,0 +1,40 @@
+diff --git a/node_modules/@nyariv/sandboxjs/dist/executor.js b/node_modules/@nyariv/sandboxjs/dist/executor.js
+index 97c4d30..d9c6f64 100644
+--- a/node_modules/@nyariv/sandboxjs/dist/executor.js
++++ b/node_modules/@nyariv/sandboxjs/dist/executor.js
+@@ -724,11 +724,11 @@ addOps(86 /* LispType.LoopAction */, (exec, done, ticks, a, b, obj, context, sco
+     }
+     done(undefined, new ExecReturn(context.ctx.auditReport, undefined, false, a === 'break', a === 'continue'));
+ });
+-addOps(13 /* LispType.If */, (exec, done, ticks, a, b, obj, context, scope) => {
+-    exec(ticks, valueOrProp(a, context) ? b.t : b.f, scope, context, done);
++addOps(13 /* LispType.If */, (exec, done, ticks, a, b, obj, context, scope, bobj, inLoopOrSwitch) => {
++    exec(ticks, valueOrProp(a, context) ? b.t : b.f, scope, context, done, inLoopOrSwitch);
+ });
+-addOps(15 /* LispType.InlineIf */, (exec, done, ticks, a, b, obj, context, scope) => {
+-    exec(ticks, valueOrProp(a, context) ? b.t : b.f, scope, context, done);
++addOps(15 /* LispType.InlineIf */, (exec, done, ticks, a, b, obj, context, scope, bobj, inLoopOrSwitch) => {
++    exec(ticks, valueOrProp(a, context) ? b.t : b.f, scope, context, done, inLoopOrSwitch);
+ });
+ addOps(16 /* LispType.InlineIfCase */, (exec, done, ticks, a, b) => done(undefined, new If(a, b)));
+ addOps(14 /* LispType.IfCase */, (exec, done, ticks, a, b) => done(undefined, new If(a, b)));
+diff --git a/node_modules/@nyariv/sandboxjs/dist/node/executor.js b/node_modules/@nyariv/sandboxjs/dist/node/executor.js
+index c531b8c..6ba719e 100644
+--- a/node_modules/@nyariv/sandboxjs/dist/node/executor.js
++++ b/node_modules/@nyariv/sandboxjs/dist/node/executor.js
+@@ -726,11 +726,11 @@ addOps(86 /* LispType.LoopAction */, (exec, done, ticks, a, b, obj, context, sco
+     }
+     done(undefined, new ExecReturn(context.ctx.auditReport, undefined, false, a === 'break', a === 'continue'));
+ });
+-addOps(13 /* LispType.If */, (exec, done, ticks, a, b, obj, context, scope) => {
+-    exec(ticks, valueOrProp(a, context) ? b.t : b.f, scope, context, done);
++addOps(13 /* LispType.If */, (exec, done, ticks, a, b, obj, context, scope, bobj, inLoopOrSwitch) => {
++    exec(ticks, valueOrProp(a, context) ? b.t : b.f, scope, context, done, inLoopOrSwitch);
+ });
+-addOps(15 /* LispType.InlineIf */, (exec, done, ticks, a, b, obj, context, scope) => {
+-    exec(ticks, valueOrProp(a, context) ? b.t : b.f, scope, context, done);
++addOps(15 /* LispType.InlineIf */, (exec, done, ticks, a, b, obj, context, scope, bobj, inLoopOrSwitch) => {
++    exec(ticks, valueOrProp(a, context) ? b.t : b.f, scope, context, done, inLoopOrSwitch);
+ });
+ addOps(16 /* LispType.InlineIfCase */, (exec, done, ticks, a, b) => done(undefined, new If(a, b)));
+ addOps(14 /* LispType.IfCase */, (exec, done, ticks, a, b) => done(undefined, new If(a, b)));

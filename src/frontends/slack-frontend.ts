@@ -1,6 +1,33 @@
+/**
+ * Slack Frontend for Visor workflows.
+ *
+ * Features:
+ * - Posts AI replies to Slack threads
+ * - Converts Markdown to Slack mrkdwn format
+ * - Renders mermaid diagrams to PNG and uploads as images
+ * - Manages 👀/👍 reactions for acknowledgement
+ * - Handles human input prompts via prompt-state
+ *
+ * Mermaid Diagram Rendering:
+ * - Detects ```mermaid code blocks in AI responses
+ * - Renders to PNG using @mermaid-js/mermaid-cli (mmdc)
+ * - Uploads rendered images to Slack thread
+ * - Replaces mermaid blocks with "_(See diagram above)_" placeholder
+ *
+ * Requirements for mermaid rendering:
+ * - Node.js and npx in PATH
+ * - Puppeteer/Chromium dependencies (mermaid-cli uses headless browser)
+ * - On Linux: apt-get install chromium-browser libatk-bridge2.0-0 libgtk-3-0
+ */
 import type { Frontend, FrontendContext } from './host';
 import { SlackClient } from '../slack/client';
-import { formatSlackText } from '../slack/markdown';
+import {
+  formatSlackText,
+  extractMermaidDiagrams,
+  renderMermaidToPng,
+  replaceMermaidBlocks,
+} from '../slack/markdown';
+import { context as otContext, trace } from '../telemetry/lazy-otel';
 
 type SlackFrontendConfig = {
   defaultChannel?: string;
@@ -8,6 +35,9 @@ type SlackFrontendConfig = {
   debounceMs?: number;
   maxWaitMs?: number;
   showRawOutput?: boolean;
+  telemetry?: {
+    enabled?: boolean;
+  };
 };
 
 export class SlackFrontend implements Frontend {
@@ -278,11 +308,15 @@ export class SlackFrontend implements Frontend {
       const slackRoot: any = (cfg as any).slack || {};
       const showRawOutput =
         slackRoot.show_raw_output === true || (this.cfg as any)?.showRawOutput === true;
+      const telemetryCfg = slackRoot.telemetry ?? (this.cfg as any)?.telemetry;
 
       const providerType = (checkCfg.type as string) || '';
       const isAi = providerType === 'ai';
       const isLogChat = providerType === 'log' && checkCfg.group === 'chat';
       if (!isAi && !isLogChat) return;
+
+      // Skip internal steps - they're intermediate processing and shouldn't post to Slack
+      if (checkCfg.criticality === 'internal') return;
 
       // For AI checks, only post when using simple/unstructured schemas (or none).
       if (isAi) {
@@ -316,6 +350,13 @@ export class SlackFrontend implements Frontend {
         ) {
           text = (result as any).content.trim();
         }
+      } else if (isLogChat && typeof (result as any)?.logOutput === 'string') {
+        // For log-based chat checks, render the formatted log output as the
+        // Slack message when no structured text field is present.
+        const raw = (result as any).logOutput;
+        if (raw.trim().length > 0) {
+          text = raw.trim();
+        }
       } else if (isAi && showRawOutput && out !== undefined) {
         try {
           text = JSON.stringify(out, null, 2);
@@ -325,13 +366,102 @@ export class SlackFrontend implements Frontend {
       }
       if (!text) return;
 
-      const formattedText = formatSlackText(text);
+      // Extract and render mermaid diagrams before posting
+      const diagrams = extractMermaidDiagrams(text);
+      let processedText = text;
+
+      if (diagrams.length > 0) {
+        try {
+          ctx.logger.info(
+            `[slack-frontend] found ${diagrams.length} mermaid diagram(s) to render for ${checkId}`
+          );
+        } catch {}
+
+        // Render and upload each diagram
+        const uploadedCount: number[] = [];
+        for (let i = 0; i < diagrams.length; i++) {
+          const diagram = diagrams[i];
+          try {
+            ctx.logger.info(`[slack-frontend] rendering mermaid diagram ${i + 1}...`);
+            const pngBuffer = await renderMermaidToPng(diagram.code);
+            if (pngBuffer) {
+              ctx.logger.info(
+                `[slack-frontend] rendered diagram ${i + 1}, size=${pngBuffer.length} bytes, uploading...`
+              );
+              const filename = `diagram-${i + 1}.png`;
+              const uploadResult = await slack.files.uploadV2({
+                content: pngBuffer,
+                filename,
+                channel,
+                thread_ts: threadTs,
+                title: `Diagram ${i + 1}`,
+              });
+              if (uploadResult.ok) {
+                uploadedCount.push(i);
+                ctx.logger.info(`[slack-frontend] uploaded mermaid diagram ${i + 1} to ${channel}`);
+              } else {
+                ctx.logger.warn(`[slack-frontend] upload failed for diagram ${i + 1}`);
+              }
+            } else {
+              ctx.logger.warn(
+                `[slack-frontend] mermaid rendering returned null for diagram ${i + 1} (mmdc failed or not installed)`
+              );
+            }
+          } catch (e) {
+            ctx.logger.warn(
+              `[slack-frontend] failed to render/upload mermaid diagram ${i + 1}: ${
+                e instanceof Error ? e.message : String(e)
+              }`
+            );
+          }
+        }
+
+        // Replace mermaid blocks with placeholder text
+        if (uploadedCount.length > 0) {
+          processedText = replaceMermaidBlocks(text, diagrams, idx =>
+            uploadedCount.includes(idx) ? '_(See diagram above)_' : '_(Diagram rendering failed)_'
+          );
+        }
+      }
+
+      let decoratedText = processedText;
+      const telemetryEnabled =
+        telemetryCfg === true ||
+        (telemetryCfg && typeof telemetryCfg === 'object' && telemetryCfg.enabled === true);
+      if (telemetryEnabled) {
+        const traceInfo = this.getTraceInfo();
+        if (traceInfo?.traceId) {
+          const suffix = `\`trace_id: ${traceInfo.traceId}\``;
+          decoratedText = `${decoratedText}\n\n${suffix}`;
+        }
+      }
+
+      const formattedText = formatSlackText(decoratedText);
       await slack.chat.postMessage({ channel, text: formattedText, thread_ts: threadTs });
+      ctx.logger.info(
+        `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs}`
+      );
+    } catch (outerErr) {
+      // Log errors instead of silently swallowing them
       try {
-        ctx.logger.info(
-          `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs}`
+        ctx.logger.warn(
+          `[slack-frontend] maybePostDirectReply failed for ${checkId}: ${
+            outerErr instanceof Error ? outerErr.message : String(outerErr)
+          }`
         );
       } catch {}
-    } catch {}
+    }
+  }
+
+  private getTraceInfo(): { traceId: string; spanId: string } | null {
+    try {
+      const span = trace.getSpan(otContext.active());
+      if (!span) return null;
+      const ctx = span.spanContext();
+      if (!ctx || !ctx.traceId) return null;
+      return { traceId: ctx.traceId, spanId: ctx.spanId };
+    } catch {
+      return null;
+    }
   }
 }

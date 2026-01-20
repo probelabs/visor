@@ -31,6 +31,8 @@ export class TestExecutionWrapper {
       const prev: any = (this.engine as any).executionContext || {};
       const merged = {
         ...prev,
+        // Inject workflow inputs for template access via {{ inputs.* }}
+        workflowInputs: cfg.workflow_inputs || prev.workflowInputs || {},
         mode: {
           ...(prev.mode || {}),
           test: true,

@@ -16,6 +16,8 @@ export interface GitCheckoutConfig {
   fetch_depth?: number;
   fetch_tags?: boolean;
   submodules?: boolean | 'recursive';
+  /** Timeout (ms) for cloning the bare repository; defaults to 300000 (5 minutes) */
+  clone_timeout_ms?: number;
 
   // Worktree configuration
   working_directory?: string;

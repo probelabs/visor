@@ -44,6 +44,26 @@ export function updateStats(
       issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
     };
 
+    // Respect explicit skip markers on the result (set by LevelDispatch).
+    const skippedMarker = (result as any).__skipped;
+    if (skippedMarker) {
+      stats.skipped = true;
+      stats.skipReason =
+        typeof skippedMarker === 'string'
+          ? (skippedMarker as any)
+          : (stats.skipReason as any) || 'if_condition';
+      // A skipped result should not contribute to run counters; reset
+      // them explicitly to guard against any prior values lingering
+      // from earlier runs of the same check.
+      stats.totalRuns = 0;
+      stats.successfulRuns = 0;
+      stats.failedRuns = 0;
+      stats.skippedRuns++;
+      // Do not count this as a run; keep totalRuns/failed/success unchanged.
+      state.stats.set(checkId, stats);
+      continue;
+    }
+
     // If this check was previously marked as skipped and now executed,
     // clear the skipped flag and any skip counters to ensure the run is visible.
     if (stats.skipped) {

@@ -7,6 +7,7 @@ import { SlackAdapter } from './adapter';
 import { CachePrewarmer } from './cache-prewarmer';
 import { RateLimiter, type RateLimitConfig } from './rate-limiter';
 import type { SlackBotConfig } from '../types/bot';
+import { withActiveSpan } from '../telemetry/trace-helpers';
 
 type SlackSocketConfig = {
   appToken?: string; // xapp- token
@@ -30,6 +31,7 @@ export class SlackSocketRunner {
   private botUserId?: string;
   private processedKeys: Map<string, number> = new Map();
   private adapter?: SlackAdapter;
+  private retryCount = 0;
 
   constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: SlackSocketConfig) {
     const app = opts.appToken || process.env.SLACK_APP_TOKEN || '';
@@ -43,17 +45,28 @@ export class SlackSocketRunner {
     this.cfg = cfg;
   }
 
+  /**
+   * Lazily initialize the SlackClient if not already set.
+   * Called by both start() and handleMessage() to ensure the client is available.
+   */
+  private async ensureClient(): Promise<void> {
+    if (this.client) return;
+    const slackAny: any = (this.cfg as any).slack || {};
+    const botToken = slackAny.bot_token || process.env.SLACK_BOT_TOKEN;
+    if (botToken) {
+      this.client = new SlackClient(botToken);
+      try {
+        this.botUserId = await this.client.getBotUserId();
+      } catch {}
+    }
+  }
+
   async start(): Promise<void> {
     // Optional cache prewarming
     try {
+      await this.ensureClient();
       const slackAny: any = (this.cfg as any).slack || {};
       const botToken = slackAny.bot_token || process.env.SLACK_BOT_TOKEN;
-      if (botToken) {
-        this.client = new SlackClient(botToken);
-        try {
-          this.botUserId = await this.client.getBotUserId();
-        } catch {}
-      }
       if (this.client && slackAny.cache_prewarming?.enabled) {
         const client = this.client;
         const adapter = new SlackAdapter(client, {
@@ -107,7 +120,10 @@ export class SlackSocketRunner {
 
   private async connect(url: string): Promise<void> {
     this.ws = new WebSocket(url);
-    this.ws.on('open', () => logger.info('[SlackSocket] WebSocket connected'));
+    this.ws.on('open', () => {
+      this.retryCount = 0; // Reset on successful connection
+      logger.info('[SlackSocket] WebSocket connected');
+    });
     this.ws.on('close', (code, reason) => {
       logger.warn(`[SlackSocket] WebSocket closed: ${code} ${reason}`);
       setTimeout(() => this.restart().catch(() => {}), 1000);
@@ -123,7 +139,13 @@ export class SlackSocketRunner {
       const url = await this.openConnection();
       await this.connect(url);
     } catch (e) {
-      logger.error(`[SlackSocket] Restart failed: ${e instanceof Error ? e.message : e}`);
+      this.retryCount++;
+      // Exponential backoff: 2s, 4s, 8s, 16s, 32s, capped at 60s
+      const delay = Math.min(2000 * Math.pow(2, this.retryCount - 1), 60000);
+      logger.error(
+        `[SlackSocket] Restart failed (attempt ${this.retryCount}), retrying in ${Math.round(delay / 1000)}s: ${e instanceof Error ? e.message : e}`
+      );
+      setTimeout(() => this.restart().catch(() => {}), delay);
     }
   }
 
@@ -285,47 +307,63 @@ export class SlackSocketRunner {
       const waiting = channel && threadTs ? mgr.getWaiting(channel, threadTs) : undefined;
       const path = waiting?.snapshotPath;
       const runEngine = new StateMachineExecutionEngine();
+      // Ensure Slack client is initialized (lazy init for tests that don't call start())
+      await this.ensureClient();
       // Inject Slack client into execution context so frontends/providers can use it
+      // Also propagate any hooks from the parent engine (useful for testing with mock responses)
       try {
-        if (this.client) {
-          const prevCtx: any = (runEngine as any).getExecutionContext?.() || {};
-          (runEngine as any).setExecutionContext?.({
-            ...prevCtx,
-            slack: this.client,
-            slackClient: this.client,
-          });
-        }
+        const parentCtx: any = (this.engine as any).getExecutionContext?.() || {};
+        const prevCtx: any = (runEngine as any).getExecutionContext?.() || {};
+        (runEngine as any).setExecutionContext?.({
+          ...parentCtx, // Propagate hooks and other context from parent engine
+          ...prevCtx,
+          slack: this.client || parentCtx.slack,
+          slackClient: this.client || parentCtx.slackClient,
+        });
       } catch {}
-      if (path) {
-        try {
-          const snapshot = await (runEngine as any).loadSnapshotFromFile(path);
-          const { resumeFromSnapshot } = await import('../state-machine-execution-engine');
-          logger.info(`[SlackSocket] Resuming from snapshot: ${path}`);
-          await resumeFromSnapshot(runEngine, snapshot, cfgForRun, {
-            webhookContext: { webhookData: map, eventType: 'manual' },
-            debug: process.env.VISOR_DEBUG === 'true',
-          });
-          if (this.limiter && rlReq) await this.limiter.release(rlReq);
-          return; // resume path handled
-        } catch (e) {
-          logger.warn(
-            `[SlackSocket] Snapshot resume failed, falling back to cold run: ${
-              e instanceof Error ? e.message : String(e)
-            }`
-          );
-        }
-      }
+      try {
+        await withActiveSpan(
+          'visor.run',
+          {
+            'visor.run.source': 'slack',
+            'slack.event.type': String(type || ''),
+            'slack.channel': channelId,
+            'slack.thread_ts': threadTs,
+          },
+          async () => {
+            if (path) {
+              try {
+                const snapshot = await (runEngine as any).loadSnapshotFromFile(path);
+                const { resumeFromSnapshot } = await import('../state-machine-execution-engine');
+                logger.info(`[SlackSocket] Resuming from snapshot: ${path}`);
+                await resumeFromSnapshot(runEngine, snapshot, cfgForRun, {
+                  webhookContext: { webhookData: map, eventType: 'manual' },
+                  debug: process.env.VISOR_DEBUG === 'true',
+                });
+                return;
+              } catch (e) {
+                logger.warn(
+                  `[SlackSocket] Snapshot resume failed, falling back to cold run: ${
+                    e instanceof Error ? e.message : String(e)
+                  }`
+                );
+              }
+            }
 
-      // Cold run (no snapshot)
-      await runEngine.executeChecks({
-        checks: allChecks,
-        showDetails: true,
-        outputFormat: 'json',
-        config: cfgForRun,
-        webhookContext: { webhookData: map, eventType: 'manual' },
-        debug: process.env.VISOR_DEBUG === 'true',
-      } as any);
-      if (this.limiter && rlReq) await this.limiter.release(rlReq);
+            // Cold run (no snapshot)
+            await runEngine.executeChecks({
+              checks: allChecks,
+              showDetails: true,
+              outputFormat: 'json',
+              config: cfgForRun,
+              webhookContext: { webhookData: map, eventType: 'manual' },
+              debug: process.env.VISOR_DEBUG === 'true',
+            } as any);
+          }
+        );
+      } finally {
+        if (this.limiter && rlReq) await this.limiter.release(rlReq);
+      }
     } catch (e) {
       logger.error(
         `[SlackSocket] Engine execution failed: ${e instanceof Error ? e.message : String(e)}`

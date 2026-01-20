@@ -16,6 +16,7 @@ import { CheckProviderConfig, ExecutionContext } from './providers/check-provide
 import { DependencyResolver } from './dependency-resolver';
 import { logger } from './logger';
 import { createSecureSandbox, compileAndRun } from './utils/sandbox';
+// eslint-disable-next-line no-restricted-imports -- needed for Liquid type
 import { Liquid } from 'liquidjs';
 
 /**
@@ -219,7 +220,9 @@ export class WorkflowExecutor {
     // Build dependency map
     const dependencies: Record<string, string[]> = {};
     for (const [stepId, step] of Object.entries(workflow.steps)) {
-      dependencies[stepId] = step.depends_on || [];
+      // Normalize depends_on to array (supports string | string[])
+      const rawDeps = step.depends_on;
+      dependencies[stepId] = Array.isArray(rawDeps) ? rawDeps : rawDeps ? [rawDeps] : [];
     }
 
     // Use static DependencyResolver

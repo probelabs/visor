@@ -356,10 +356,19 @@ export async function executeSingleCheck(
       const depCfg: any = context.config.checks?.[opt];
       const cont = !!(depCfg && depCfg.continue_on_failure === true);
       const st = state.stats.get(opt);
-      const wasMarkedFailed = !!(failedChecks && failedChecks.has(opt));
       const skipped = !!(st && (st as any).skipped === true);
+      const skipReason = (st as any)?.skipReason;
+      // forEach_empty is not a failure - it means there was nothing to process, which is valid
+      // The dependent step should still run (with empty data from the forEach step)
+      const skippedDueToEmptyForEach = skipped && skipReason === 'forEach_empty';
+      // Don't treat forEach_empty as a failure even if it's in failedChecks
+      // (forEach_empty checks are added to failedChecks for cascading within forEach chains,
+      // but should not be treated as failures for non-forEach dependents)
+      const wasMarkedFailed =
+        !!(failedChecks && failedChecks.has(opt)) && !skippedDueToEmptyForEach;
       const failedOnly = !!(st && (st.failedRuns || 0) > 0 && (st.successfulRuns || 0) === 0);
-      const satisfied = !skipped && ((!failedOnly && !wasMarkedFailed) || cont);
+      const satisfied =
+        (!skipped || skippedDueToEmptyForEach) && ((!failedOnly && !wasMarkedFailed) || cont);
       if (satisfied) return true;
     }
     return false;
@@ -411,6 +420,31 @@ export async function executeSingleCheck(
       emitEvent({ type: 'CheckCompleted', checkId, scope: [], result: emptyResult });
       return emptyResult;
     }
+  }
+
+  // Banner-style log when a check actually starts executing. This is emitted
+  // after all gating (if/depends_on) has passed so it only appears for real
+  // runs, and gives a clear visual separator in the logs between checks.
+  try {
+    const wave = state.wave;
+    const level = (state as any).currentLevel ?? '?';
+    const banner = `━━━ CHECK ${checkId} (wave ${wave}, level ${level}) ━━━`;
+
+    // When running in a TTY, colour the entire banner line for extra
+    // visibility; keep plain text for JSON/SARIF or non-TTY environments.
+    const isTTY = typeof process !== 'undefined' ? !!process.stderr.isTTY : false;
+    const outputFormat = process.env.VISOR_OUTPUT_FORMAT || '';
+    const isJsonLike = outputFormat === 'json' || outputFormat === 'sarif';
+
+    if (isTTY && !isJsonLike) {
+      const cyan = '\x1b[36m';
+      const reset = '\x1b[0m';
+      logger.info(`${cyan}${banner}${reset}`);
+    } else {
+      logger.info(banner);
+    }
+  } catch {
+    // best-effort only
   }
 
   let forEachParent: string | undefined;
@@ -563,12 +597,55 @@ export async function executeSingleCheck(
       files: [],
       commits: [],
     };
+    // Derive AI session reuse context for this check (self-mode only for now).
+    // When reuse_ai_session: 'self' is configured, look up the last root-scope
+    // journal entry for this check in the current engine session and expose its
+    // sessionId via ExecutionContext so ai-check-provider can call
+    // executeReviewWithSessionReuse() against the same ProbeAgent session.
+    let parentSessionId: string | undefined;
+    let reuseSession = false;
+    try {
+      const reuseCfg: unknown = (checkConfig as any).reuse_ai_session;
+      if (reuseCfg === 'self') {
+        const snapshotId = context.journal.beginSnapshot();
+        const visible = context.journal.readVisible(
+          context.sessionId,
+          snapshotId,
+          context.event as any
+        );
+        // Prefer the most recent root-scope result for this check
+        const prior = visible.filter(
+          e => e.checkId === checkId && (!e.scope || e.scope.length === 0)
+        );
+        if (prior.length > 0) {
+          const last = prior[prior.length - 1];
+          const sess = (last.result as any)?.sessionId;
+          if (typeof sess === 'string' && sess.length > 0) {
+            parentSessionId = sess;
+            reuseSession = true;
+          }
+        }
+      }
+    } catch {
+      // Best-effort only – fall back to normal (non-reuse) execution on error.
+      parentSessionId = undefined;
+      reuseSession = false;
+    }
+
     const executionContext = {
       ...context.executionContext,
       _engineMode: context.mode,
       _parentContext: context,
       _parentState: state,
+      // Explicitly propagate workspace reference for nested workflows
+      workspace: context.workspace,
     };
+
+    // Attach session reuse hints for providers that support them (AI, Claude Code, etc).
+    if (reuseSession && parentSessionId) {
+      (executionContext as any).parentSessionId = parentSessionId;
+      (executionContext as any).reuseSession = true;
+    }
 
     // Handle on_init lifecycle hook BEFORE main execution
     if (checkConfig.on_init) {
@@ -613,7 +690,12 @@ export async function executeSingleCheck(
 
     const result = await withActiveSpan(
       `visor.check.${checkId}`,
-      { 'visor.check.id': checkId, 'visor.check.type': providerType },
+      {
+        'visor.check.id': checkId,
+        'visor.check.type': providerType,
+        session_id: context.sessionId,
+        wave: state.wave,
+      },
       async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
     );
 

@@ -56,6 +56,20 @@ export const configSchema = {
           },
           description: 'Import workflow definitions from external files or URLs',
         },
+        inputs: {
+          type: 'array',
+          items: {
+            $ref: '#/definitions/WorkflowInput',
+          },
+          description: 'Workflow inputs (for standalone reusable workflows)',
+        },
+        outputs: {
+          type: 'array',
+          items: {
+            $ref: '#/definitions/WorkflowOutput',
+          },
+          description: 'Workflow outputs (for standalone reusable workflows)',
+        },
         steps: {
           $ref: '#/definitions/Record%3Cstring%2CCheckConfig%3E',
           description: 'Step configurations (recommended)',
@@ -67,7 +81,7 @@ export const configSchema = {
         },
         output: {
           $ref: '#/definitions/OutputConfig',
-          description: 'Output configuration',
+          description: 'Output configuration (optional - defaults provided)',
         },
         http_server: {
           $ref: '#/definitions/HttpServerConfig',
@@ -139,8 +153,16 @@ export const configSchema = {
           },
           description: 'Optional integrations: event-driven frontends (e.g., ndjson-sink, github)',
         },
+        workspace: {
+          $ref: '#/definitions/WorkspaceConfig',
+          description: 'Workspace isolation configuration for sandboxed execution',
+        },
+        slack: {
+          $ref: '#/definitions/SlackConfig',
+          description: 'Slack configuration',
+        },
       },
-      required: ['output', 'version'],
+      required: ['version'],
       patternProperties: {
         '^x-': {},
       },
@@ -241,6 +263,63 @@ export const configSchema = {
       type: 'object',
       additionalProperties: {
         type: 'string',
+      },
+    },
+    WorkflowInput: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Input parameter name',
+        },
+        schema: {
+          $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+          description: 'JSON Schema for the input',
+        },
+        required: {
+          type: 'boolean',
+          description: 'Whether this input is required',
+        },
+        default: {
+          description: 'Default value if not provided',
+        },
+        description: {
+          type: 'string',
+          description: 'Human-readable description',
+        },
+      },
+      required: ['name'],
+      additionalProperties: false,
+      description: 'Workflow input definition for standalone reusable workflows',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    WorkflowOutput: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Output name',
+        },
+        description: {
+          type: 'string',
+          description: 'Human-readable description',
+        },
+        value: {
+          type: 'string',
+          description: 'Value using Liquid template syntax (references step outputs)',
+        },
+        value_js: {
+          type: 'string',
+          description: 'Value using JavaScript expression (alternative to value)',
+        },
+      },
+      required: ['name'],
+      additionalProperties: false,
+      description: 'Workflow output definition for standalone reusable workflows',
+      patternProperties: {
+        '^x-': {},
       },
     },
     'Record<string,CheckConfig>': {
@@ -390,11 +469,19 @@ export const configSchema = {
           description: 'Timeout in seconds for command execution (default: 60)',
         },
         depends_on: {
-          type: 'array',
-          items: {
-            type: 'string',
-          },
-          description: 'Check IDs that this check depends on (optional)',
+          anyOf: [
+            {
+              type: 'string',
+            },
+            {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+            },
+          ],
+          description:
+            'Check IDs that this check depends on (optional). Accepts single string or array.',
         },
         group: {
           type: 'string',
@@ -653,12 +740,92 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
           $ref: '#/definitions/Record%3Cstring%2Cstring%3E',
           description: 'Map workflow outputs to check outputs',
+        },
+        workflow_inputs: {
+          $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+          description: 'Alias for args - workflow inputs (backward compatibility)',
+        },
+        config: {
+          type: 'string',
+          description:
+            'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
+        },
+        workflow_overrides: {
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845%3E%3E',
+          description: 'Alias for overrides - workflow step overrides (backward compatibility)',
+        },
+        ref: {
+          type: 'string',
+          description: 'Git reference to checkout (branch, tag, commit SHA) - supports templates',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository URL or owner/repo format (defaults to current repository)',
+        },
+        token: {
+          type: 'string',
+          description: 'GitHub token for private repositories (defaults to GITHUB_TOKEN env)',
+        },
+        fetch_depth: {
+          type: 'number',
+          description: 'Number of commits to fetch (0 for full history, default: 1)',
+        },
+        fetch_tags: {
+          type: 'boolean',
+          description: 'Whether to fetch tags (default: false)',
+        },
+        submodules: {
+          anyOf: [
+            {
+              type: 'boolean',
+            },
+            {
+              type: 'string',
+              const: 'recursive',
+            },
+          ],
+          description: "Checkout submodules: false, true, or 'recursive'",
+        },
+        working_directory: {
+          type: 'string',
+          description: 'Working directory for the checkout (defaults to temp directory)',
+        },
+        use_worktree: {
+          type: 'boolean',
+          description: 'Use git worktree for efficient parallel checkouts (default: true)',
+        },
+        clean: {
+          type: 'boolean',
+          description: 'Clean the working directory before checkout (default: true)',
+        },
+        sparse_checkout: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Sparse checkout paths - only checkout specific directories/files',
+        },
+        lfs: {
+          type: 'boolean',
+          description: 'Enable Git LFS (Large File Storage)',
+        },
+        clone_timeout_ms: {
+          type: 'number',
+          description: 'Timeout in ms for cloning the bare repository (default: 300000 = 5 min)',
+        },
+        cleanup_on_failure: {
+          type: 'boolean',
+          description: 'Clean up worktree on failure (default: true)',
+        },
+        persist_worktree: {
+          type: 'boolean',
+          description: 'Keep worktree after workflow completion (default: false)',
         },
       },
       additionalProperties: false,
@@ -793,6 +960,11 @@ export const configSchema = {
         bashConfig: {
           $ref: '#/definitions/BashConfig',
           description: 'Advanced bash command execution configuration',
+        },
+        completion_prompt: {
+          type: 'string',
+          description:
+            'Completion prompt for post-completion validation/review (runs after attempt_completion)',
         },
       },
       additionalProperties: false,
@@ -1223,7 +1395,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1238,14 +1410,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706>>':
+    'Record<string,Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706>': {
+    'Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845>': {
       type: 'object',
       additionalProperties: false,
     },
@@ -1807,6 +1979,71 @@ export const configSchema = {
       },
       additionalProperties: false,
       description: 'Global engine limits',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    WorkspaceConfig: {
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'boolean',
+          description: 'Enable workspace isolation (default: true when config present)',
+        },
+        base_path: {
+          type: 'string',
+          description: 'Base path for workspaces (default: /tmp/visor-workspaces)',
+        },
+        cleanup_on_exit: {
+          type: 'boolean',
+          description: 'Clean up workspace on exit (default: true)',
+        },
+      },
+      additionalProperties: false,
+      description: 'Workspace isolation configuration',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SlackConfig: {
+      type: 'object',
+      properties: {
+        version: {
+          type: 'string',
+          description: 'Slack API version',
+        },
+        mentions: {
+          type: 'string',
+          description: "Mention handling: 'all', 'direct', etc.",
+        },
+        threads: {
+          type: 'string',
+          description: "Thread handling: 'required', 'optional', etc.",
+        },
+        show_raw_output: {
+          type: 'boolean',
+          description: 'Show raw output in Slack responses',
+        },
+        telemetry: {
+          $ref: '#/definitions/SlackTelemetryConfig',
+          description: 'Append telemetry identifiers to Slack replies.',
+        },
+      },
+      additionalProperties: false,
+      description: 'Slack configuration',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SlackTelemetryConfig: {
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'boolean',
+          description: 'Enable telemetry ID suffix in Slack messages',
+        },
+      },
+      additionalProperties: false,
       patternProperties: {
         '^x-': {},
       },

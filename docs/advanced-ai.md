@@ -1,7 +1,7 @@
 ## 🧠 Advanced AI Features
 
 ### AI Session Reuse
-Use `reuse_ai_session: true` on dependent checks to continue conversation context with the AI across checks. This improves follow‑ups and consistency.
+Use `reuse_ai_session` on checks to continue conversation context with the AI across steps. This improves follow‑ups and consistency for follow‑on analysis and chat‑style flows.
 
 **Session Modes:**
 - **`clone` (default)**: Creates a copy of the conversation history. Each check gets an independent session with the same starting context. Changes made by one check don't affect others.
@@ -26,6 +26,65 @@ steps:
     depends_on: [security-remediation]
     reuse_ai_session: true
     session_mode: append  # Share history - sees full conversation
+
+#### Reusing your own session: `reuse_ai_session: self`
+
+Sometimes the step you want to loop back into is the AI step itself (e.g. Slack assistants or multi‑turn internal tools). For that case you can use:
+
+- `reuse_ai_session: "self"` – the step reuses its **own** Probe session when it runs again in the same engine run.
+- `session_mode: append` – makes the follow‑up behave like a normal conversation turn.
+
+On the first run of the step, Visor creates a new ProbeAgent session and registers it. If routing (`on_success.goto`, `goto_js`, etc.) later jumps back to the same step within the same run, the engine:
+
+- Finds the last result for that step in the current run.
+- Reads the `sessionId` stored in the result.
+- Calls the AI provider again using `executeReviewWithSessionReuse` with that session id.
+
+Simple example (no transport wiring, just CLI/tests):
+
+```yaml
+version: "2.0"
+
+steps:
+  seed:
+    type: script
+    content: |
+      return { text: "hello from seed" };
+
+  convo:
+    type: ai
+    depends_on: [seed]
+    reuse_ai_session: self
+    session_mode: append
+    ai:
+      provider: mock
+      model: mock
+      disableTools: true
+      allowedTools: []
+      system_prompt: "You are a tiny echo assistant."
+    prompt: |
+      Seed message: {{ outputs['seed'].text }}
+
+      Past convo outputs in this run:
+      {% assign hist = outputs_history['convo'] | default: empty %}
+      {% if hist and hist.size > 0 %}
+      {% for h in hist %}
+      - Previous reply {{ forloop.index }}.
+      {% endfor %}
+      {% else %}
+      - No previous replies yet.
+      {% endif %}
+    on_success:
+      goto_js: |
+        // Example: re‑enter this step up to 3 times in a single run
+        return attempt < 3 ? 'convo' : null;
+```
+
+The corresponding testable example lives at:
+
+- `examples/session-reuse-self.yaml`
+
+This keeps the configuration small but shows how to wire `reuse_ai_session: self` and `session_mode: append` without touching higher‑level workflows like `tyk-assistant`.
 ```
 
 **When to use each mode:**

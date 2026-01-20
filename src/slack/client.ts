@@ -142,6 +142,74 @@ export class SlackClient {
     }
   }
 
+  public readonly files = {
+    /**
+     * Upload a file to Slack using files.uploadV2 API
+     * @param options Upload options including file content, filename, channel, and thread_ts
+     */
+    uploadV2: async ({
+      content,
+      filename,
+      channel,
+      thread_ts,
+      title,
+      initial_comment,
+    }: {
+      content: Buffer;
+      filename: string;
+      channel: string;
+      thread_ts?: string;
+      title?: string;
+      initial_comment?: string;
+    }): Promise<{ ok: boolean; file?: { id: string; permalink?: string } }> => {
+      try {
+        // Step 1: Get upload URL
+        const getUrlResp: any = await this.api('files.getUploadURLExternal', {
+          filename,
+          length: content.length,
+        });
+        if (!getUrlResp || getUrlResp.ok !== true || !getUrlResp.upload_url) {
+          console.warn(
+            `Slack files.getUploadURLExternal failed: ${getUrlResp?.error || 'unknown'}`
+          );
+          return { ok: false };
+        }
+
+        // Step 2: Upload file content to the URL
+        const uploadResp = await fetch(getUrlResp.upload_url, {
+          method: 'POST',
+          body: content,
+        });
+        if (!uploadResp.ok) {
+          console.warn(`Slack file upload to URL failed: ${uploadResp.status}`);
+          return { ok: false };
+        }
+
+        // Step 3: Complete the upload and share to channel
+        const completeResp: any = await this.api('files.completeUploadExternal', {
+          files: [{ id: getUrlResp.file_id, title: title || filename }],
+          channel_id: channel,
+          thread_ts,
+          initial_comment,
+        });
+        if (!completeResp || completeResp.ok !== true) {
+          console.warn(
+            `Slack files.completeUploadExternal failed: ${completeResp?.error || 'unknown'}`
+          );
+          return { ok: false };
+        }
+
+        return {
+          ok: true,
+          file: completeResp.files?.[0] || { id: getUrlResp.file_id },
+        };
+      } catch (e) {
+        console.warn(`Slack file upload failed: ${e instanceof Error ? e.message : String(e)}`);
+        return { ok: false };
+      }
+    },
+  };
+
   getWebClient(): any {
     return {
       conversations: {

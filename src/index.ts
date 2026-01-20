@@ -628,8 +628,11 @@ function resolveDependencies(
 
     // Get dependencies for this check
     const checkConfig = config?.checks?.[checkId];
+    // Normalize depends_on to array (supports string | string[])
+    const rawDeps = checkConfig?.depends_on;
+    const depsArray = Array.isArray(rawDeps) ? rawDeps : rawDeps ? [rawDeps] : [];
     // Expand OR groups (pipe syntax) for dependency closure discovery
-    const dependencies = (checkConfig?.depends_on || []).flatMap(d =>
+    const dependencies = depsArray.flatMap((d: string) =>
       typeof d === 'string' && d.includes('|')
         ? d
             .split('|')

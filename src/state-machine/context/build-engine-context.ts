@@ -57,7 +57,12 @@ export function buildEngineContextForRun(
       ) as EventTrigger[],
       group: checkConfig.group,
       providerType: checkConfig.type || 'ai',
-      dependencies: checkConfig.depends_on || [],
+      // Normalize depends_on to array (supports string | string[])
+      dependencies: Array.isArray(checkConfig.depends_on)
+        ? checkConfig.depends_on
+        : checkConfig.depends_on
+          ? [checkConfig.depends_on]
+          : [],
     };
   }
 
@@ -134,11 +139,15 @@ export async function initializeWorkspace(context: EngineContext): Promise<Engin
   const originalPath = context.workingDirectory || process.cwd();
 
   try {
+    // Check if workspace should be kept (for debugging)
+    const keepWorkspace = process.env.VISOR_KEEP_WORKSPACE === 'true';
+
     // Create workspace manager
     const workspace = WorkspaceManager.getInstance(context.sessionId, originalPath, {
       enabled: true,
-      basePath: workspaceConfig?.base_path || process.env.VISOR_WORKSPACE_PATH,
-      cleanupOnExit: workspaceConfig?.cleanup_on_exit !== false,
+      basePath:
+        workspaceConfig?.base_path || process.env.VISOR_WORKSPACE_PATH || '/tmp/visor-workspaces',
+      cleanupOnExit: keepWorkspace ? false : workspaceConfig?.cleanup_on_exit !== false,
     });
 
     // Initialize workspace (creates main project worktree)
@@ -151,6 +160,9 @@ export async function initializeWorkspace(context: EngineContext): Promise<Engin
 
     logger.info(`[Workspace] Initialized workspace: ${info.workspacePath}`);
     logger.debug(`[Workspace] Main project at: ${info.mainProjectPath}`);
+    if (keepWorkspace) {
+      logger.info(`[Workspace] Keeping workspace after execution (--keep-workspace)`);
+    }
 
     return context;
   } catch (error) {

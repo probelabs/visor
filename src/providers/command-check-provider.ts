@@ -1,6 +1,7 @@
 import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary, ReviewIssue } from '../reviewer';
+// eslint-disable-next-line no-restricted-imports -- needed for Liquid type
 import { Liquid } from 'liquidjs';
 import Sandbox from '@nyariv/sandboxjs';
 import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
@@ -131,7 +132,8 @@ export class CommandCheckProvider extends CheckProvider {
       // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
       outputs_raw: outputsRaw,
       // Workflow inputs (when executing within a workflow)
-      inputs: context?.workflowInputs || {},
+      // Check config first (set by projectWorkflowToGraph), then fall back to context
+      inputs: (config as any).workflowInputs || context?.workflowInputs || {},
       // Custom arguments from on_init 'with' directive
       args: context?.args || {},
       env: this.getSafeEnvironmentVariables(),
@@ -178,17 +180,38 @@ export class CommandCheckProvider extends CheckProvider {
           mock = rawMock as Record<string, unknown>;
         }
         const m = mock as { stdout?: string; stderr?: string; exit_code?: number; exit?: number };
-        let out: unknown = m.stdout ?? '';
-        try {
-          if (
-            typeof out === 'string' &&
-            (out.trim().startsWith('{') || out.trim().startsWith('['))
-          ) {
-            out = JSON.parse(out);
-          }
-        } catch {}
-        const code =
-          typeof m.exit_code === 'number' ? m.exit_code : typeof m.exit === 'number' ? m.exit : 0;
+
+        // Check if this looks like a command mock (has stdout/stderr/exit_code) or direct data output
+        const isCommandMock =
+          m.stdout !== undefined ||
+          m.stderr !== undefined ||
+          m.exit_code !== undefined ||
+          m.exit !== undefined;
+
+        let out: unknown;
+        if (isCommandMock) {
+          // Traditional command mock format: { stdout: "...", exit_code: 0 }
+          out = m.stdout ?? '';
+          try {
+            if (
+              typeof out === 'string' &&
+              (out.trim().startsWith('{') || out.trim().startsWith('['))
+            ) {
+              out = JSON.parse(out);
+            }
+          } catch {}
+        } else {
+          // Direct data mock format: { data: [...], count: 1 } - use as-is
+          out = mock;
+        }
+
+        const code = isCommandMock
+          ? typeof m.exit_code === 'number'
+            ? m.exit_code
+            : typeof m.exit === 'number'
+              ? m.exit
+              : 0
+          : 0;
         if (code !== 0) {
           return {
             issues: [
@@ -231,9 +254,8 @@ export class CommandCheckProvider extends CheckProvider {
         }
       }
 
-      // Get timeout from config (in seconds) or use default (60 seconds)
-      const timeoutSeconds = (config.timeout as number) || 60;
-      const timeoutMs = timeoutSeconds * 1000;
+      // Get timeout from config (in milliseconds) or use default (60 seconds = 60000ms)
+      const timeoutMs = (config.timeout as number) || 60000;
 
       // Normalize only the eval payload for `node -e|--eval` invocations that may contain
       // literal newlines due to YAML processing ("\n" -> newline). We re-escape newlines
@@ -1530,6 +1552,26 @@ ${bodyWithReturn}
       data.message || data.text || data.description || data.summary
     );
     if (!message) {
+      return null;
+    }
+
+    // Require at least one issue-specific field beyond just a message-like field.
+    // This prevents objects like {text: "..."} from being treated as issues.
+    const hasIssueField =
+      data.file !== undefined ||
+      data.path !== undefined ||
+      data.filename !== undefined ||
+      data.line !== undefined ||
+      data.startLine !== undefined ||
+      data.lineNumber !== undefined ||
+      data.severity !== undefined ||
+      data.level !== undefined ||
+      data.priority !== undefined ||
+      data.ruleId !== undefined ||
+      data.rule !== undefined ||
+      data.category !== undefined ||
+      data.type !== undefined;
+    if (!hasIssueField) {
       return null;
     }
 

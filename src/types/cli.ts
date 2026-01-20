@@ -61,6 +61,8 @@ export interface CliOptions {
   githubV2?: boolean;
   /** Enable Slack Socket Mode runner */
   slack?: boolean;
+  /** Keep workspace folders after execution (for debugging) */
+  keepWorkspace?: boolean;
 }
 
 /**

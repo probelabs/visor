@@ -435,6 +435,7 @@ tests:
             issue-assistant:
               text: "Opening issue with claim about defaults/visor.yaml"
               intent: issue_triage
+              labels: ["bug", "triage"]
             extract-facts:
               - { id: f1, category: Configuration, claim: "max_parallelism defaults to 4", verifiable: true }
             validate-fact[]:
@@ -468,6 +469,7 @@ tests:
             issue-assistant:
               text: "Claim: max_parallelism defaults to 4"
               intent: issue_triage
+              labels: ["bug", "triage"]
             extract-facts:
               - { id: f1, category: Configuration, claim: "max_parallelism defaults to 4", verifiable: true }
             validate-fact[]:

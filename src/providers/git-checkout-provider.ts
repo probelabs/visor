@@ -69,6 +69,16 @@ export class GitCheckoutProvider extends CheckProvider {
       return false;
     }
 
+    if (checkoutConfig.clone_timeout_ms !== undefined) {
+      if (
+        typeof checkoutConfig.clone_timeout_ms !== 'number' ||
+        checkoutConfig.clone_timeout_ms <= 0
+      ) {
+        logger.error('Invalid config: clone_timeout_ms must be a positive number (milliseconds)');
+        return false;
+      }
+    }
+
     return true;
   }
 
@@ -91,7 +101,13 @@ export class GitCheckoutProvider extends CheckProvider {
       );
 
       // Resolve dynamic variables
-      const resolvedRef = await this.liquid.parseAndRender(checkoutConfig.ref, templateContext);
+      let resolvedRef = await this.liquid.parseAndRender(checkoutConfig.ref, templateContext);
+      // If ref resolves to an empty string, fall back to HEAD so we rely on
+      // the repository's default branch. This keeps downstream git commands
+      // well-defined and matches existing expectations/tests.
+      if (!resolvedRef || resolvedRef.trim().length === 0) {
+        resolvedRef = 'HEAD';
+      }
       const resolvedRepository = checkoutConfig.repository
         ? await this.liquid.parseAndRender(checkoutConfig.repository, templateContext)
         : process.env.GITHUB_REPOSITORY || 'unknown/unknown';
@@ -118,6 +134,7 @@ export class GitCheckoutProvider extends CheckProvider {
           clean: checkoutConfig.clean !== false, // Default: true
           workflowId: (context as any)?.workflowId,
           fetchDepth: checkoutConfig.fetch_depth,
+          cloneTimeoutMs: checkoutConfig.clone_timeout_ms,
         }
       );
 
@@ -134,18 +151,32 @@ export class GitCheckoutProvider extends CheckProvider {
 
       // Add project to workspace if workspace isolation is enabled
       const workspace = (context as any)?._parentContext?.workspace;
+
+      // Enhanced debug logging for workspace project addition diagnosis
+      const checkName = (config as any)?.checkName || 'unknown';
+      logger.info(`[GitCheckout] Workspace check for '${checkName}':`);
+      logger.info(`[GitCheckout]   _parentContext exists: ${!!(context as any)?._parentContext}`);
+      logger.info(`[GitCheckout]   workspace exists: ${!!workspace}`);
+      logger.info(`[GitCheckout]   workspace.isEnabled(): ${workspace?.isEnabled?.() ?? 'N/A'}`);
+      if (workspace) {
+        const projectCountBefore = workspace.listProjects?.()?.length ?? 'N/A';
+        logger.debug(`[GitCheckout]   projects before addProject: ${projectCountBefore}`);
+      }
+
       if (workspace?.isEnabled()) {
         try {
-          const workspacePath = await workspace.addProject(
-            resolvedRepository,
-            worktree.path,
-            checkoutConfig.checkName
-          );
+          // Don't pass checkName as description - let workspace use repo name
+          // This results in human-readable names like "tyk-docs" instead of "checkout-tyk-docs"
+          const workspacePath = await workspace.addProject(resolvedRepository, worktree.path);
           output.workspace_path = workspacePath;
-          logger.debug(`Added project to workspace: ${workspacePath}`);
+          const projectCountAfter = workspace.listProjects?.()?.length ?? 'N/A';
+          logger.debug(`[GitCheckout] Added project to workspace: ${workspacePath}`);
+          logger.debug(`[GitCheckout]   projects after addProject: ${projectCountAfter}`);
         } catch (error) {
           logger.warn(`Failed to add project to workspace: ${error}`);
         }
+      } else {
+        logger.debug(`[GitCheckout] Workspace not enabled, skipping addProject`);
       }
 
       logger.info(
@@ -228,7 +259,8 @@ export class GitCheckoutProvider extends CheckProvider {
       outputs: outputsObj,
       outputs_history: historyObj,
       env: safeEnv,
-      inputs: context?.workflowInputs,
+      // Check config first (set by projectWorkflowToGraph), then fall back to context
+      inputs: (config as any)?.workflowInputs || context?.workflowInputs,
     };
   }
 

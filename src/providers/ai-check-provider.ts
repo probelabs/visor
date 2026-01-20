@@ -186,7 +186,8 @@ export class AICheckProvider extends CheckProvider {
     eventContext?: Record<string, unknown>,
     dependencyResults?: Map<string, ReviewSummary>,
     outputHistory?: Map<string, unknown[]>,
-    args?: Record<string, unknown>
+    args?: Record<string, unknown>,
+    workflowInputs?: Record<string, unknown>
   ): Promise<string> {
     let promptContent: string;
 
@@ -204,7 +205,8 @@ export class AICheckProvider extends CheckProvider {
       eventContext,
       dependencyResults,
       outputHistory,
-      args
+      args,
+      workflowInputs
     );
   }
 
@@ -335,7 +337,8 @@ export class AICheckProvider extends CheckProvider {
     eventContext?: Record<string, unknown>,
     dependencyResults?: Map<string, ReviewSummary>,
     outputHistory?: Map<string, unknown[]>,
-    args?: Record<string, unknown>
+    args?: Record<string, unknown>,
+    workflowInputs?: Record<string, unknown>
   ): Promise<string> {
     // Build outputs_raw from -raw keys (aggregate parent values)
     const outputsRaw: Record<string, unknown> = {};
@@ -535,6 +538,8 @@ export class AICheckProvider extends CheckProvider {
       outputs_raw: outputsRaw,
       // Custom arguments from on_init 'with' directive
       args: args || {},
+      // Workflow inputs (for nested workflow steps to access parent inputs like {{ inputs.context }})
+      inputs: workflowInputs || {},
     };
 
     try {
@@ -621,7 +626,8 @@ export class AICheckProvider extends CheckProvider {
         console.error(`[ai-exec] step=${String((config as any).checkName || 'unknown')}`);
       }
     } catch {}
-    // Extract AI configuration - only set properties that are explicitly provided
+    // Extract AI configuration - only set properties that are explicitly provided.
+    // Workspace / allowedFolders will be derived below from the execution context.
     const aiConfig: AIReviewConfig = {};
 
     // Check-level AI configuration (ai object)
@@ -671,6 +677,9 @@ export class AICheckProvider extends CheckProvider {
       if (aiAny.bashConfig !== undefined) {
         aiConfig.bashConfig = aiAny.bashConfig as import('../types/config').BashConfig;
       }
+      if (aiAny.completion_prompt !== undefined) {
+        aiConfig.completionPrompt = aiAny.completion_prompt as string;
+      }
       if (aiAny.skip_code_context !== undefined) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (aiConfig as any).skip_code_context = aiAny.skip_code_context as boolean;
@@ -689,6 +698,116 @@ export class AICheckProvider extends CheckProvider {
       if (aiAny.fallback !== undefined) {
         aiConfig.fallback = aiAny.fallback as import('../types/config').AIFallbackConfig;
       }
+    }
+
+    // Derive workspace-aware allowedFolders for ProbeAgent when workspace
+    // isolation is enabled. This ensures tools like search/query operate
+    // inside the isolated workspace (and its project symlinks) instead of
+    // the Visor repository root.
+    // Folder names are human-readable (tyk-docs, visor2) thanks to WorkspaceManager.
+    try {
+      const ctxAny: any = sessionInfo as any;
+      const parentCtx = ctxAny?._parentContext;
+      const workspace = parentCtx?.workspace;
+
+      // Enhanced debug logging for workspace propagation diagnosis
+      logger.debug(
+        `[AI Provider] Workspace detection for check '${(config as any).checkName || 'unknown'}':`
+      );
+      logger.debug(`[AI Provider]   sessionInfo exists: ${!!sessionInfo}`);
+      logger.debug(`[AI Provider]   _parentContext exists: ${!!parentCtx}`);
+      logger.debug(`[AI Provider]   workspace exists: ${!!workspace}`);
+      if (workspace) {
+        logger.debug(
+          `[AI Provider]   workspace.isEnabled exists: ${typeof workspace.isEnabled === 'function'}`
+        );
+        logger.debug(
+          `[AI Provider]   workspace.isEnabled(): ${typeof workspace.isEnabled === 'function' ? workspace.isEnabled() : 'N/A'}`
+        );
+        const projectCount =
+          typeof workspace.listProjects === 'function' ? workspace.listProjects()?.length : 'N/A';
+        logger.debug(`[AI Provider]   workspace.listProjects() count: ${projectCount}`);
+      }
+
+      if (workspace && typeof workspace.isEnabled === 'function' && workspace.isEnabled()) {
+        const folders: string[] = [];
+        let workspaceRoot: string | undefined;
+        let mainProjectPath: string | undefined;
+        try {
+          const info = workspace.getWorkspaceInfo?.();
+          if (info && typeof info.workspacePath === 'string') {
+            workspaceRoot = info.workspacePath;
+            mainProjectPath = info.mainProjectPath;
+            // Add workspace root
+            folders.push(info.workspacePath);
+            // NOTE: We intentionally do NOT add mainProjectPath (visor2) here.
+            // The main project is the visor installation directory and should
+            // not be exposed to the AI agent - only checked-out external projects
+            // (like tyk, tyk-docs) should be accessible.
+          }
+        } catch {
+          // ignore workspace info errors
+        }
+        // Collect checked-out projects (these are the user's actual projects)
+        const projectPaths: string[] = [];
+        try {
+          const projects = workspace.listProjects?.() || [];
+          for (const proj of projects as any[]) {
+            if (proj && typeof proj.path === 'string') {
+              // Project paths have human-readable names (tyk-docs, not checkout-tyk-docs)
+              folders.push(proj.path);
+              projectPaths.push(proj.path);
+            }
+          }
+        } catch {
+          // ignore project listing errors
+        }
+        // SECURITY: Only include mainProjectPath if there are no checked-out projects.
+        // This is a fallback for workflows that don't checkout external repos.
+        // When external projects exist, the AI should focus on those, not visor.
+        if (projectPaths.length === 0 && mainProjectPath) {
+          folders.push(mainProjectPath);
+          logger.debug(
+            `[AI Provider] No external projects - including main project as fallback: ${mainProjectPath}`
+          );
+        } else if (mainProjectPath) {
+          logger.debug(
+            `[AI Provider] Excluding main project (visor) from allowedFolders: ${mainProjectPath}`
+          );
+        }
+        const unique = Array.from(new Set(folders.filter(p => typeof p === 'string' && p)));
+        if (unique.length > 0 && workspaceRoot) {
+          (aiConfig as any).allowedFolders = unique;
+          // Set path and cwd to workspace root - AI will run with cwd set to workspace
+          // Both are set for compatibility: path for older probe versions, cwd for rc175+
+          (aiConfig as any).path = workspaceRoot;
+          (aiConfig as any).cwd = workspaceRoot;
+          // Also set workspacePath for the AI to know the root
+          (aiConfig as any).workspacePath = workspaceRoot;
+          logger.debug(`[AI Provider] Workspace isolation enabled:`);
+          logger.debug(`[AI Provider]   workspaceRoot (cwd): ${workspaceRoot}`);
+          logger.debug(
+            `[AI Provider]   mainProjectPath (excluded unless fallback): ${mainProjectPath || 'N/A'}`
+          );
+          logger.debug(`[AI Provider]   allowedFolders: ${JSON.stringify(unique)}`);
+        }
+      } else if (parentCtx && typeof parentCtx.workingDirectory === 'string') {
+        // Fallback: when workspace is not available (or disabled), still
+        // constrain tools to the engine's working directory so ProbeAgent
+        // operates inside the same logical root as the state machine. This
+        // also ensures nested workflows (e.g. code-question-helper) use the
+        // workspace main project path once initializeWorkspace has updated
+        // the parent context.
+        if (!(aiConfig as any).allowedFolders) {
+          (aiConfig as any).allowedFolders = [parentCtx.workingDirectory];
+        }
+        if (!(aiConfig as any).path) {
+          (aiConfig as any).path = parentCtx.workingDirectory;
+          (aiConfig as any).cwd = parentCtx.workingDirectory;
+        }
+      }
+    } catch {
+      // Best-effort only; fall back to defaults on error.
     }
 
     // Check-level AI model and provider (top-level properties)
@@ -876,7 +995,8 @@ export class AICheckProvider extends CheckProvider {
       ctxWithStage,
       _dependencyResults,
       (config as any).__outputHistory as Map<string, unknown[]> | undefined,
-      (sessionInfo as any)?.args
+      (sessionInfo as any)?.args,
+      (config as any).workflowInputs as Record<string, unknown> | undefined
     );
 
     // Optional persona (vendor extension): ai.ai_persona or ai_persona.
@@ -885,13 +1005,14 @@ export class AICheckProvider extends CheckProvider {
     // Persona (underscore only)
     const persona = (aiAny?.ai_persona || (config as any).ai_persona || '').toString().trim();
     const finalPrompt = persona ? `Persona: ${persona}\n\n${processedPrompt}` : processedPrompt;
-    // Expose promptType to AIReviewService via env (bridge until ProbeAgent supports it in our SDK surface)
-    try {
-      const pt = ((config.ai as any)?.promptType || (config as any).ai_prompt_type || '')
-        .toString()
-        .trim();
-      if (pt) process.env.VISOR_PROMPT_TYPE = pt;
-    } catch {}
+    const promptTypeOverride = (
+      (aiAny?.prompt_type ||
+        (config.ai as any)?.promptType ||
+        (config as any).ai_prompt_type ||
+        '') as string
+    )
+      .toString()
+      .trim();
 
     // Test hook: capture the FINAL prompt (with PR context) before provider invocation
     try {
@@ -934,8 +1055,7 @@ export class AICheckProvider extends CheckProvider {
 
     // Create AI service with config - environment variables will be used if aiConfig is empty
     try {
-      const pt = (aiAny?.prompt_type || (config as any).ai_prompt_type || '').toString().trim();
-      if (pt) (aiConfig as any).promptType = pt;
+      if (promptTypeOverride) (aiConfig as any).promptType = promptTypeOverride;
       // Prefer new system_prompt; fall back to legacy custom_prompt for backward compatibility
       const sys = (aiAny?.system_prompt || (config as any).ai_system_prompt || '')
         .toString()
@@ -957,114 +1077,137 @@ export class AICheckProvider extends CheckProvider {
       // No extra console diagnostics here
 
       let result: ReviewSummary;
-
-      // Check if we should use session reuse (only if explicitly enabled on this check)
-      // No extra reuse_ai_session console diagnostics
-      const reuseEnabled =
-        (config as any).reuse_ai_session === true ||
-        typeof (config as any).reuse_ai_session === 'string';
-      if (sessionInfo?.reuseSession && sessionInfo.parentSessionId && reuseEnabled) {
-        // Safety: only reuse if the parent session actually exists
-        try {
-          const { SessionRegistry } = require('../session-registry');
-          const reg = SessionRegistry.getInstance();
-          if (!reg.hasSession(sessionInfo.parentSessionId)) {
-            if (aiConfig.debug || process.env.VISOR_DEBUG === 'true') {
-              console.warn(
-                `⚠️  Parent session ${sessionInfo.parentSessionId} not found; creating a new session for ${config.checkName}`
+      const prevPromptTypeEnv = process.env.VISOR_PROMPT_TYPE;
+      const shouldIgnoreEnvPromptType = aiAny?.disableTools === true;
+      let didAdjustPromptTypeEnv = false;
+      if (promptTypeOverride) {
+        process.env.VISOR_PROMPT_TYPE = promptTypeOverride;
+        didAdjustPromptTypeEnv = true;
+      } else if (shouldIgnoreEnvPromptType && prevPromptTypeEnv !== undefined) {
+        delete process.env.VISOR_PROMPT_TYPE;
+        didAdjustPromptTypeEnv = true;
+      }
+      try {
+        // Check if we should use session reuse (only if explicitly enabled on this check)
+        // No extra reuse_ai_session console diagnostics
+        const reuseEnabled =
+          (config as any).reuse_ai_session === true ||
+          typeof (config as any).reuse_ai_session === 'string';
+        let promptUsed = finalPrompt;
+        if (sessionInfo?.reuseSession && sessionInfo.parentSessionId && reuseEnabled) {
+          // Safety: only reuse if the parent session actually exists
+          try {
+            const { SessionRegistry } = require('../session-registry');
+            const reg = SessionRegistry.getInstance();
+            if (!reg.hasSession(sessionInfo.parentSessionId)) {
+              if (aiConfig.debug || process.env.VISOR_DEBUG === 'true') {
+                console.warn(
+                  `⚠️  Parent session ${sessionInfo.parentSessionId} not found; creating a new session for ${config.checkName}`
+                );
+              }
+              // Fall back to new session
+              promptUsed = processedPrompt;
+              const fresh = await service.executeReview(
+                prInfo,
+                processedPrompt,
+                schema,
+                config.checkName,
+                config.sessionId
               );
+              return {
+                ...fresh,
+                issues: new IssueFilter(config.suppressionEnabled !== false).filterIssues(
+                  fresh.issues || [],
+                  process.cwd()
+                ),
+              };
             }
-            // Fall back to new session
-            const fresh = await service.executeReview(
-              prInfo,
-              processedPrompt,
-              schema,
-              config.checkName,
-              config.sessionId
+          } catch {}
+          // Get session_mode from config, default to 'clone'
+          const sessionMode = (config.session_mode as 'clone' | 'append') || 'clone';
+
+          if (aiConfig.debug) {
+            console.error(
+              `🔄 Debug: Using session reuse with parent session: ${sessionInfo.parentSessionId} (mode: ${sessionMode})`
             );
-            return {
-              ...fresh,
-              issues: new IssueFilter(config.suppressionEnabled !== false).filterIssues(
-                fresh.issues || [],
-                process.cwd()
-              ),
-            };
           }
+          promptUsed = processedPrompt;
+          result = await service.executeReviewWithSessionReuse(
+            prInfo,
+            processedPrompt,
+            sessionInfo.parentSessionId,
+            schema,
+            config.checkName,
+            sessionMode
+          );
+        } else {
+          if (aiConfig.debug) {
+            console.error(`🆕 Debug: Creating new AI session for check: ${config.checkName}`);
+          }
+          promptUsed = finalPrompt;
+          result = await service.executeReview(
+            prInfo,
+            finalPrompt,
+            schema,
+            config.checkName,
+            config.sessionId
+          );
+        }
+
+        // Apply issue suppression filtering
+        const suppressionEnabled = config.suppressionEnabled !== false;
+        const issueFilter = new IssueFilter(suppressionEnabled);
+        const filteredIssues = issueFilter.filterIssues(result.issues || [], process.cwd());
+
+        const finalResult = {
+          ...result,
+          issues: filteredIssues,
+        };
+
+        // Capture AI provider call and output in active OTEL span
+        try {
+          const span = trace.getSpan(otContext.active());
+          if (span) {
+            captureProviderCall(
+              span,
+              'ai',
+              {
+                prompt: promptUsed,
+                model: aiConfig.model,
+              },
+              {
+                content: JSON.stringify(finalResult),
+                tokens: (result as any).usage?.totalTokens,
+              }
+            );
+            const outputForSpan = (finalResult as { output?: unknown }).output ?? finalResult;
+            captureCheckOutput(span, outputForSpan);
+          }
+        } catch {
+          // Ignore telemetry errors
+        }
+        // Fallback NDJSON for output (non-OTEL environments)
+        try {
+          const checkId = (config as any).checkName || (config as any).id || 'unknown';
+          const outJson = JSON.stringify((finalResult as any).output ?? finalResult);
+          const { emitNdjsonSpanWithEvents } = require('../telemetry/fallback-ndjson');
+          emitNdjsonSpanWithEvents(
+            'visor.check',
+            { 'visor.check.id': checkId, 'visor.check.output': outJson },
+            []
+          );
         } catch {}
-        // Get session_mode from config, default to 'clone'
-        const sessionMode = (config.session_mode as 'clone' | 'append') || 'clone';
 
-        if (aiConfig.debug) {
-          console.error(
-            `🔄 Debug: Using session reuse with parent session: ${sessionInfo.parentSessionId} (mode: ${sessionMode})`
-          );
+        return finalResult;
+      } finally {
+        if (didAdjustPromptTypeEnv) {
+          if (prevPromptTypeEnv === undefined) {
+            delete process.env.VISOR_PROMPT_TYPE;
+          } else {
+            process.env.VISOR_PROMPT_TYPE = prevPromptTypeEnv;
+          }
         }
-        result = await service.executeReviewWithSessionReuse(
-          prInfo,
-          processedPrompt,
-          sessionInfo.parentSessionId,
-          schema,
-          config.checkName,
-          sessionMode
-        );
-      } else {
-        if (aiConfig.debug) {
-          console.error(`🆕 Debug: Creating new AI session for check: ${config.checkName}`);
-        }
-        result = await service.executeReview(
-          prInfo,
-          finalPrompt,
-          schema,
-          config.checkName,
-          config.sessionId
-        );
       }
-
-      // Apply issue suppression filtering
-      const suppressionEnabled = config.suppressionEnabled !== false;
-      const issueFilter = new IssueFilter(suppressionEnabled);
-      const filteredIssues = issueFilter.filterIssues(result.issues || [], process.cwd());
-
-      const finalResult = {
-        ...result,
-        issues: filteredIssues,
-      };
-
-      // Capture AI provider call and output in active OTEL span
-      try {
-        const span = trace.getSpan(otContext.active());
-        if (span) {
-          captureProviderCall(
-            span,
-            'ai',
-            {
-              prompt: processedPrompt.substring(0, 500), // Preview only
-              model: aiConfig.model,
-            },
-            {
-              content: JSON.stringify(finalResult).substring(0, 500),
-              tokens: (result as any).usage?.totalTokens,
-            }
-          );
-          const outputForSpan = (finalResult as { output?: unknown }).output ?? finalResult;
-          captureCheckOutput(span, outputForSpan);
-        }
-      } catch {
-        // Ignore telemetry errors
-      }
-      // Fallback NDJSON for output (non-OTEL environments)
-      try {
-        const checkId = (config as any).checkName || (config as any).id || 'unknown';
-        const outJson = JSON.stringify((finalResult as any).output ?? finalResult);
-        const { emitNdjsonSpanWithEvents } = require('../telemetry/fallback-ndjson');
-        emitNdjsonSpanWithEvents(
-          'visor.check',
-          { 'visor.check.id': checkId, 'visor.check.output': outJson },
-          []
-        );
-      } catch {}
-
-      return finalResult;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
 

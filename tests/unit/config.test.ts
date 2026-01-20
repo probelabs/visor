@@ -48,7 +48,7 @@ output:
       expect(config.version).toBe('1.0');
       expect(config.checks).toHaveProperty('performance');
       expect(config.checks).toHaveProperty('security');
-      expect(config.output.pr_comment.format).toBe('table');
+      expect(config.output!.pr_comment.format).toBe('table');
     });
 
     it('should handle missing config file gracefully', async () => {
@@ -264,9 +264,9 @@ checks:
       const config = await configManager.loadConfig('/path/to/minimal.yaml');
 
       // Should have default output configuration
-      expect(config.output.pr_comment.format).toBe('markdown');
-      expect(config.output.pr_comment.group_by).toBe('check');
-      expect(config.output.pr_comment.collapse).toBe(true);
+      expect(config.output!.pr_comment.format).toBe('markdown');
+      expect(config.output!.pr_comment.group_by).toBe('check');
+      expect(config.output!.pr_comment.collapse).toBe(true);
     });
   });
 
@@ -483,8 +483,8 @@ output:
       expect(config.checks!.performance.prompt).toContain('N+1 database queries');
       expect(config.checks!.security.prompt).toContain('SQL injection');
       expect(config.checks!.architecture.prompt).toContain('SOLID principles');
-      expect(config.output.pr_comment.format).toBe('markdown');
-      expect(config.output.pr_comment.collapse).toBe(false);
+      expect(config.output!.pr_comment.format).toBe('markdown');
+      expect(config.output!.pr_comment.collapse).toBe(false);
     });
   });
 });

@@ -352,10 +352,30 @@ export class FlowStage {
       } catch {}
       // Prefer authoritative counts from res.statistics when available, then fall back to deltas/inferred
       const fromResStats: Record<string, number> = {};
+      const resSkipped: Record<string, boolean> = {};
       try {
         for (const s of (res.statistics?.checks || []) as any[]) {
           const n = (s && s.checkName) || '';
-          if (typeof n === 'string' && n) fromResStats[n] = (s.totalRuns || 0) as number;
+          if (typeof n === 'string' && n) {
+            fromResStats[n] = (s.totalRuns || 0) as number;
+            resSkipped[n] = !!(s as any).skipped || !!(s as any).skipReason;
+          }
+        }
+      } catch {}
+
+      // Steps that have explicit expectations in this stage. We will use
+      // this to avoid inflating run counts (via parent-alignment heuristics)
+      // for checks that are not even expected in this stage.
+      const expectedSteps = new Set<string>();
+      const expectedZero = new Set<string>();
+      try {
+        const expCalls = ((stage.expect || {}).calls || []) as Array<{ step?: string }>;
+        for (const c of expCalls) {
+          if (c && typeof c.step === 'string' && c.step) expectedSteps.add(c.step);
+          try {
+            if (c && typeof c.step === 'string' && c.step && (c as any).exactly === 0)
+              expectedZero.add(c.step);
+          } catch {}
         }
       } catch {}
 
@@ -410,10 +430,15 @@ export class FlowStage {
           const base = stageOnly ? 0 : statBase[name] || 0;
           const d = Math.max(0, resTotal - base);
           runs = d > 0 ? d : 0;
+          // If the engine marked this check as skipped, force runs to 0
+          // so parent-alignment heuristics below do not inflate it.
+          if (resSkipped[name]) {
+            runs = 0;
+          }
         } else {
           runs = deltaMap[name] !== undefined ? deltaMap[name] : inferred;
         }
-        if (runs === 0 && presentInResults.has(name)) runs = 1;
+        if (runs === 0 && presentInResults.has(name) && !resSkipped[name]) runs = 1;
         if (!isForEachLike && histRuns > 0) runs = histRuns;
         // Only use per-item history counts for non-forEach checks. For forEach parents,
         // use aggregated totals from res.statistics to reflect number of parent executions.
@@ -442,7 +467,15 @@ export class FlowStage {
             parentMax = Math.max(parentMax, dP);
           }
           // Apply only for non-forEach checks with no observable history in this stage
-          if (!isForEachLike && histRuns === 0 && histPerItemRuns === 0 && parentMax > 0) {
+          if (
+            !isForEachLike &&
+            histRuns === 0 &&
+            histPerItemRuns === 0 &&
+            parentMax > 0 &&
+            !resSkipped[name] &&
+            (expectedSteps.size === 0 || expectedSteps.has(name)) &&
+            !expectedZero.has(name)
+          ) {
             runs = Math.max(runs, parentMax);
           }
         } catch {}

@@ -55,6 +55,16 @@ describe('Slack simple chat e2e (first message consume, no prompt)', () => {
     const raw = fs.readFileSync('examples/slack-simple-chat.yaml', 'utf8');
     const cfg = yaml.load(raw) as VisorConfig;
     const engine = new StateMachineExecutionEngine();
+    // Inject mock responses for AI checks via execution context hooks
+    (engine as any).setExecutionContext({
+      hooks: {
+        mockForStep: (stepName: string) => {
+          if (stepName === 'route-intent') return { intent: 'chat', topic: 'test' };
+          if (stepName === 'chat-answer') return { text: 'Mock AI response' };
+          return undefined;
+        },
+      },
+    });
     const runner = new SlackSocketRunner(engine, cfg, {
       appToken: 'xapp-test',
       endpoint: '/bots/slack/support',
@@ -89,6 +99,16 @@ describe('Slack simple chat e2e (first message consume, no prompt)', () => {
     const raw = fs.readFileSync('examples/slack-simple-chat.yaml', 'utf8');
     const cfg = yaml.load(raw) as VisorConfig;
     const engine = new StateMachineExecutionEngine();
+    // Inject mock responses for AI checks via execution context hooks
+    (engine as any).setExecutionContext({
+      hooks: {
+        mockForStep: (stepName: string) => {
+          if (stepName === 'route-intent') return { intent: 'chat', topic: 'test' };
+          if (stepName === 'chat-answer') return { text: 'Mock AI response' };
+          return undefined;
+        },
+      },
+    });
     const runner = new SlackSocketRunner(engine, cfg, {
       appToken: 'xapp-test',
       endpoint: '/bots/slack/support',

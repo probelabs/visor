@@ -1067,6 +1067,10 @@ export async function resumeFromSnapshot(
     snapshot.requestedChecks
   ) as import('./types/engine').EngineContext;
 
+  // Initialize workspace isolation (if enabled) - same as executeGroupedChecks
+  const { initializeWorkspace } = require('./state-machine/context/build-engine-context');
+  await initializeWorkspace(context);
+
   // Propagate existing executionContext (hooks, octokit, webhookContext, slack, etc.)
   try {
     const prevExecCtx: any = (engine as any).getExecutionContext?.() || {};

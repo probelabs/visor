@@ -26,7 +26,7 @@ import type { CheckExecutionStats } from '../../types/execution';
 import type { CheckProviderConfig } from '../../providers/check-provider.interface';
 import type { CheckConfig } from '../../types/config';
 import { handleRouting, checkLoopBudget } from './routing';
-import { withActiveSpan } from '../../telemetry/trace-helpers';
+import { withActiveSpan, setSpanAttributes, addEvent } from '../../telemetry/trace-helpers';
 import { emitMermaidFromMarkdown } from '../../utils/mermaid-telemetry';
 import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from '../../telemetry/fallback-ndjson';
 import { FailureConditionEvaluator } from '../../failure-condition-evaluator';
@@ -44,6 +44,32 @@ function mapCheckNameToFocus(checkName: string): string {
   };
 
   return focusMap[checkName] || 'all';
+}
+
+function formatScopeLabel(scope: Array<{ check: string; index: number }> | undefined): string {
+  if (!scope || scope.length === 0) return '';
+  return scope.map(item => `${item.check}:${item.index}`).join('|');
+}
+
+function recordOnFinishRoutingEvent(args: {
+  checkId: string;
+  action: 'run' | 'goto';
+  target: string;
+  source: 'run' | 'goto' | 'goto_js' | 'transitions';
+  scope?: Array<{ check: string; index: number }>;
+  gotoEvent?: string;
+}): void {
+  const attrs: Record<string, unknown> = {
+    check_id: args.checkId,
+    trigger: 'on_finish',
+    action: args.action,
+    target: args.target,
+    source: args.source,
+  };
+  const scopeLabel = formatScopeLabel(args.scope);
+  if (scopeLabel) attrs.scope = scopeLabel;
+  if (args.gotoEvent) attrs.goto_event = args.gotoEvent;
+  addEvent('visor.routing', attrs);
 }
 
 /**
@@ -121,12 +147,12 @@ async function evaluateIfCondition(
         return false;
       }
     })();
+    // Steps with dependencies should always see outputs from all completed steps.
     // In forward-run waves (from on_success/on_fail goto), guards should see the
     // latest global outputs even if the check has no explicit dependencies.
     // In wave-retry (from on_finish), restrict to checks with dependencies to
     // avoid wrongly skipping top-level prompts like 'ask'.
-    const useGlobalOutputs =
-      (useGlobalOutputsFlag && waveKind === 'forward') || (useGlobalOutputsFlag && hasDeps);
+    const useGlobalOutputs = hasDeps || (useGlobalOutputsFlag && waveKind === 'forward');
 
     if (useGlobalOutputs) {
       // Forward-run wave: allow guards to consult latest outputs from the entire
@@ -199,6 +225,7 @@ async function evaluateIfCondition(
       baseBranch: (context.prInfo as any)?.baseBranch,
       filesChanged: context.prInfo?.files?.map(f => f.filename),
       environment: envSnapshot,
+      workflowInputs: (context.config as any).workflow_inputs || {},
     };
 
     const shouldRun = await evaluator.evaluateIfCondition(checkId, ifExpression, contextData);
@@ -238,6 +265,11 @@ export async function handleLevelDispatch(
   // Update current level tracking
   state.currentLevel = level.level;
   state.currentLevelChecks = new Set(level.parallel);
+  const levelChecksPreview = level.parallel.slice(0, 5).join(',');
+  setSpanAttributes({
+    level_size: level.parallel.length,
+    level_checks_preview: levelChecksPreview,
+  });
 
   // Emit level ready event
   emitEvent({ type: 'LevelReady', level, wave: state.wave });
@@ -689,6 +721,45 @@ async function executeCheckWithForEachItems(
         }
       } catch {}
 
+      // Extract Slack conversation from webhookContext (for Slack socket mode)
+      // The socket-runner stores conversation data in webhookData under the endpoint key
+      try {
+        const webhookCtx = (context.executionContext as any)?.webhookContext;
+        const webhookData = webhookCtx?.webhookData as Map<string, unknown> | undefined;
+        if (context.debug) {
+          logger.info(
+            `[LevelDispatch] webhookContext: ${webhookCtx ? 'present' : 'absent'}, webhookData size: ${webhookData?.size || 0}`
+          );
+        }
+        if (webhookData && webhookData.size > 0) {
+          // Find the payload with slack_conversation
+          for (const payload of webhookData.values()) {
+            const slackConv = (payload as any)?.slack_conversation;
+            if (slackConv) {
+              // Build slack context with event and conversation
+              const event = (payload as any)?.event;
+              const messageCount = Array.isArray(slackConv?.messages)
+                ? slackConv.messages.length
+                : 0;
+              if (context.debug) {
+                logger.info(
+                  `[LevelDispatch] Slack conversation extracted: ${messageCount} messages`
+                );
+              }
+              (providerConfig as any).eventContext = {
+                ...(providerConfig as any).eventContext,
+                slack: {
+                  event: event || {},
+                  conversation: slackConv,
+                },
+                conversation: slackConv, // Also expose at top level for convenience
+              };
+              break;
+            }
+          }
+        }
+      } catch {}
+
       // Build dependency results with scope
       const dependencyResults = buildDependencyResultsWithScope(
         checkId,
@@ -782,21 +853,28 @@ async function executeCheckWithForEachItems(
       };
 
       // Evaluate assume contract for this iteration (design-by-contract)
-      try {
+      {
         const assumeExpr = (checkConfig as any)?.assume as string | string[] | undefined;
         if (assumeExpr) {
-          const evaluator = new FailureConditionEvaluator();
-          const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
           let ok = true;
-          for (const ex of exprs) {
-            const res = await evaluator.evaluateIfCondition(checkId, ex, {
-              event: context.event || 'manual',
-              previousResults: dependencyResults as any,
-            } as any);
-            if (!res) {
-              ok = false;
-              break;
+          try {
+            const evaluator = new FailureConditionEvaluator();
+            const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+            for (const ex of exprs) {
+              const res = await evaluator.evaluateIfCondition(checkId, ex, {
+                event: context.event || 'manual',
+                previousResults: dependencyResults as any,
+              } as any);
+              if (!res) {
+                ok = false;
+                break;
+              }
             }
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            logger.error(`Failed to evaluate assume expression for check '${checkId}': ${msg}`);
+            // Fail-secure: if assume evaluation fails, skip execution
+            ok = false;
           }
           if (!ok) {
             logger.info(
@@ -809,7 +887,7 @@ async function executeCheckWithForEachItems(
             continue;
           }
         }
-      } catch {}
+      }
 
       // Emit provider telemetry
       try {
@@ -826,6 +904,8 @@ async function executeCheckWithForEachItems(
           'visor.check.id': checkId,
           'visor.check.type': providerType,
           'visor.foreach.index': itemIndex,
+          session_id: context.sessionId,
+          wave: state.wave,
         },
         async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
       );
@@ -942,6 +1022,7 @@ async function executeCheckWithForEachItems(
             const holds = await evaluator.evaluateIfCondition(checkId, ex, {
               previousResults: dependencyResults as any,
               event: context.event || 'manual',
+              output: output, // Pass the iteration output for guarantee evaluation
             } as any);
             if (!holds) {
               const issue: ReviewIssue = {
@@ -1311,6 +1392,13 @@ async function executeCheckWithForEachItems(
             // Increment loop count
             state.routingLoopCount++;
 
+            recordOnFinishRoutingEvent({
+              checkId: forEachParent,
+              action: 'run',
+              target: targetCheck,
+              source: 'run',
+              scope: [],
+            });
             emitEvent({
               type: 'ForwardRunRequested',
               target: targetCheck,
@@ -1358,6 +1446,14 @@ async function executeCheckWithForEachItems(
                 return aggregatedResult; // abort further routing
               }
               state.routingLoopCount++;
+              recordOnFinishRoutingEvent({
+                checkId: forEachParent,
+                action: 'goto',
+                target: transTarget.to,
+                source: 'transitions',
+                scope: [],
+                gotoEvent: (transTarget as any).goto_event,
+              });
               emitEvent({
                 type: 'ForwardRunRequested',
                 target: transTarget.to,
@@ -1464,6 +1560,13 @@ async function executeCheckWithForEachItems(
           // Increment loop count
           state.routingLoopCount++;
 
+          recordOnFinishRoutingEvent({
+            checkId: forEachParent,
+            action: 'goto',
+            target: gotoTarget,
+            source: onFinish.goto_js ? 'goto_js' : 'goto',
+            scope: [],
+          });
           emitEvent({
             type: 'ForwardRunRequested',
             target: gotoTarget,
@@ -1618,10 +1721,19 @@ async function executeSingleCheck(
       const depCfg: any = context.config.checks?.[opt];
       const cont = !!(depCfg && depCfg.continue_on_failure === true);
       const st = state.stats.get(opt);
-      const wasMarkedFailed = !!(failedChecks && failedChecks.has(opt));
       const skipped = !!(st && (st as any).skipped === true);
+      const skipReason = (st as any)?.skipReason;
+      // forEach_empty is not a failure - it means there was nothing to process, which is valid
+      // The dependent step should still run (with empty data from the forEach step)
+      const skippedDueToEmptyForEach = skipped && skipReason === 'forEach_empty';
+      // Don't treat forEach_empty as a failure even if it's in failedChecks
+      // (forEach_empty checks are added to failedChecks for cascading within forEach chains,
+      // but should not be treated as failures for non-forEach dependents)
+      const wasMarkedFailed =
+        !!(failedChecks && failedChecks.has(opt)) && !skippedDueToEmptyForEach;
       const failedOnly = !!(st && (st.failedRuns || 0) > 0 && (st.successfulRuns || 0) === 0);
-      const satisfied = !skipped && ((!failedOnly && !wasMarkedFailed) || cont);
+      const satisfied =
+        (!skipped || skippedDueToEmptyForEach) && ((!failedOnly && !wasMarkedFailed) || cont);
       if (satisfied) return true;
     }
     return false;
@@ -1923,6 +2035,41 @@ async function executeSingleCheck(
       }
     } catch {}
 
+    // Extract Slack conversation from webhookContext (for Slack socket mode)
+    // The socket-runner stores conversation data in webhookData under the endpoint key
+    try {
+      const webhookCtx = (context.executionContext as any)?.webhookContext;
+      const webhookData = webhookCtx?.webhookData as Map<string, unknown> | undefined;
+      if (context.debug) {
+        logger.info(
+          `[LevelDispatch] webhookContext: ${webhookCtx ? 'present' : 'absent'}, webhookData size: ${webhookData?.size || 0}`
+        );
+      }
+      if (webhookData && webhookData.size > 0) {
+        // Find the payload with slack_conversation
+        for (const payload of webhookData.values()) {
+          const slackConv = (payload as any)?.slack_conversation;
+          if (slackConv) {
+            // Build slack context with event and conversation
+            const event = (payload as any)?.event;
+            const messageCount = Array.isArray(slackConv?.messages) ? slackConv.messages.length : 0;
+            if (context.debug) {
+              logger.info(`[LevelDispatch] Slack conversation extracted: ${messageCount} messages`);
+            }
+            (providerConfig as any).eventContext = {
+              ...(providerConfig as any).eventContext,
+              slack: {
+                event: event || {},
+                conversation: slackConv,
+              },
+              conversation: slackConv, // Also expose at top level for convenience
+            };
+            break;
+          }
+        }
+      }
+    } catch {}
+
     // Build dependency results
     const dependencyResults = buildDependencyResults(checkId, checkConfig, context, state);
 
@@ -1948,21 +2095,28 @@ async function executeSingleCheck(
     };
 
     // Evaluate assume contract (design-by-contract) before executing
-    try {
+    {
       const assumeExpr = (checkConfig as any)?.assume as string | string[] | undefined;
       if (assumeExpr) {
-        const evaluator = new FailureConditionEvaluator();
-        const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
         let ok = true;
-        for (const ex of exprs) {
-          const res = await evaluator.evaluateIfCondition(checkId, ex, {
-            event: context.event || 'manual',
-            previousResults: dependencyResults as any,
-          } as any);
-          if (!res) {
-            ok = false;
-            break;
+        try {
+          const evaluator = new FailureConditionEvaluator();
+          const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+          for (const ex of exprs) {
+            const res = await evaluator.evaluateIfCondition(checkId, ex, {
+              event: context.event || 'manual',
+              previousResults: dependencyResults as any,
+            } as any);
+            if (!res) {
+              ok = false;
+              break;
+            }
           }
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          logger.error(`Failed to evaluate assume expression for check '${checkId}': ${msg}`);
+          // Fail-secure: if assume evaluation fails, skip execution
+          ok = false;
         }
         if (!ok) {
           logger.info(
@@ -2003,7 +2157,7 @@ async function executeSingleCheck(
           return emptyResult;
         }
       }
-    } catch {}
+    }
 
     // Emit provider telemetry
     try {
@@ -2016,7 +2170,12 @@ async function executeSingleCheck(
     // Execute provider with telemetry
     const result = await withActiveSpan(
       `visor.check.${checkId}`,
-      { 'visor.check.id': checkId, 'visor.check.type': providerType },
+      {
+        'visor.check.id': checkId,
+        'visor.check.type': providerType,
+        session_id: context.sessionId,
+        wave: state.wave,
+      },
       async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
     );
 
@@ -2031,8 +2190,13 @@ async function executeSingleCheck(
       if (awaitingHumanInput) {
         (state as any).flags = (state as any).flags || {};
         (state as any).flags.awaitingHumanInput = true;
+        logger.info(
+          `[LevelDispatch] Set awaitingHumanInput=true for check ${checkId} (wave=${state.wave})`
+        );
       }
-    } catch {}
+    } catch (e) {
+      logger.warn(`[LevelDispatch] Failed to check awaitingHumanInput flag: ${e}`);
+    }
 
     // Enrich issues with metadata
     const enrichedIssues = (result.issues || []).map((issue: ReviewIssue) => ({
@@ -2098,6 +2262,7 @@ async function executeSingleCheck(
           const holds = await evaluator.evaluateIfCondition(checkId, ex, {
             previousResults: dependencyResults as any,
             event: context.event || 'manual',
+            output: enrichedResult.output,
           } as any);
           if (!holds) {
             const issue: ReviewIssue = {

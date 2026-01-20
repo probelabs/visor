@@ -158,6 +158,7 @@ async function handleTestCommand(argv: string[]): Promise<void> {
   }
   const only = getArg('--only');
   const bail = hasFlag('--bail');
+  const noMocks = hasFlag('--no-mocks');
   const listOnly = hasFlag('--list');
   const validateOnly = hasFlag('--validate');
   const progress = (getArg('--progress') as 'compact' | 'detailed' | undefined) || 'compact';
@@ -224,6 +225,7 @@ async function handleTestCommand(argv: string[]): Promise<void> {
       const agg = await runSuites(multiFiles, {
         only,
         bail,
+        noMocks,
         maxParallelSuites: maxParallelSuites || Math.max(1, require('os').cpus()?.length || 2),
         maxParallel,
         promptMaxChars,
@@ -340,6 +342,7 @@ async function handleTestCommand(argv: string[]): Promise<void> {
       runRes = await runner.runCases(tpath, suite, {
         only,
         bail,
+        noMocks,
         maxParallel,
         promptMaxChars,
         engineMode: 'state-machine',
@@ -609,6 +612,9 @@ export async function main(): Promise<void> {
     // Set environment variables early for proper logging in all modules
     process.env.VISOR_OUTPUT_FORMAT = options.output;
     process.env.VISOR_DEBUG = options.debug ? 'true' : 'false';
+    if (options.keepWorkspace) {
+      process.env.VISOR_KEEP_WORKSPACE = 'true';
+    }
     // Configure centralized logger
     configureLoggerFromCli({
       output: options.output,
@@ -716,6 +722,31 @@ export async function main(): Promise<void> {
       const threads = slackAny.threads || 'any';
       const allow = Array.isArray(slackAny.channel_allowlist) ? slackAny.channel_allowlist : [];
       const appToken = slackAny.app_token || process.env.SLACK_APP_TOKEN;
+
+      // Initialize telemetry for Slack mode (normally done later for CLI runs).
+      if ((config as any)?.telemetry) {
+        const t = (config as any).telemetry as {
+          enabled?: boolean;
+          sink?: 'otlp' | 'file' | 'console';
+          file?: { dir?: string; ndjson?: boolean };
+          tracing?: { auto_instrumentations?: boolean; trace_report?: { enabled?: boolean } };
+        };
+        await initTelemetry({
+          enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true' || !!t?.enabled,
+          sink:
+            (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || t?.sink || 'file',
+          file: { dir: process.env.VISOR_TRACE_DIR || t?.file?.dir, ndjson: !!t?.file?.ndjson },
+          autoInstrument: !!t?.tracing?.auto_instrumentations,
+          traceReport: !!t?.tracing?.trace_report?.enabled,
+        });
+      } else {
+        await initTelemetry({
+          enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true',
+          sink: (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || 'file',
+          file: { dir: process.env.VISOR_TRACE_DIR },
+        });
+      }
+
       const runner = new SlackSocketRunner(engine, config, {
         appToken,
         endpoint,

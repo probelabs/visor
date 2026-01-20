@@ -76,6 +76,7 @@ export class CLI {
         parseInt(value, 10)
       )
       .option('--message <text>', 'Message for human-input checks (inline text or file path)')
+      .option('--keep-workspace', 'Keep workspace folders after execution (for debugging)')
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
 
@@ -154,6 +155,7 @@ export class CLI {
           parseInt(value, 10)
         )
         .option('--message <text>', 'Message for human-input checks (inline text or file path)')
+        .option('--keep-workspace', 'Keep workspace folders after execution (for debugging)')
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
         .addHelpText('after', this.getExamplesText())
@@ -224,6 +226,7 @@ export class CLI {
         message: options.message,
         githubV2: false,
         slack: Boolean(options.slack),
+        keepWorkspace: Boolean(options.keepWorkspace),
       };
     } catch (error: unknown) {
       // Handle commander.js exit overrides for help/version ONLY
@@ -348,6 +351,7 @@ export class CLI {
       .option('--debug-port <port>', 'Port for debug server (default: 3456)', value =>
         parseInt(value, 10)
       )
+      .option('--keep-workspace', 'Keep workspace folders after execution (for debugging)')
       .addHelpText('after', this.getExamplesText());
 
     // Get the basic help and append examples manually if addHelpText doesn't work

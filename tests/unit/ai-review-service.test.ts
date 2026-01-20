@@ -482,6 +482,37 @@ describe('AIReviewService', () => {
       expect(context).toContain('<additions>10</additions>');
       expect(context).toContain('<deletions>5</deletions>');
     });
+
+    it('should exclude diffs by default when in Slack mode', async () => {
+      // Slack mode is detected by presence of slackConversation property
+      (mockPRInfo as any).slackConversation = [{ user: 'U123', text: 'hello' }];
+      const context = await (service as any).formatPRContext(mockPRInfo);
+
+      // In Slack mode, diffs should be excluded by default
+      expect(context).not.toContain('<full_diff>');
+      expect(context).toContain('Code diffs excluded to reduce token usage');
+      // Should still include file summary
+      expect(context).toContain('<files_summary>');
+    });
+
+    it('should include diffs in Slack mode when explicitly requested', async () => {
+      (mockPRInfo as any).slackConversation = [{ user: 'U123', text: 'hello' }];
+      (mockPRInfo as any).includeCodeContext = true;
+      const context = await (service as any).formatPRContext(mockPRInfo);
+
+      // With explicit includeCodeContext: true, diffs should be included
+      expect(context).toContain('<full_diff>');
+      expect(context).toContain('--- test.ts');
+    });
+
+    it('should exclude diffs in Slack mode even when includeCodeContext is undefined', async () => {
+      (mockPRInfo as any).slackConversation = [{ user: 'U123', text: 'hello' }];
+      // Deliberately not setting includeCodeContext to test default behavior
+      const context = await (service as any).formatPRContext(mockPRInfo);
+
+      expect(context).not.toContain('<full_diff>');
+      expect(context).toContain('Code diffs excluded to reduce token usage');
+    });
   });
 
   describe('Comment Filtering for Code Review', () => {

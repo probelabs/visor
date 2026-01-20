@@ -152,6 +152,25 @@ describe('Session Reuse Configuration Validation', () => {
       }).not.toThrow();
     });
 
+    it('should accept reuse_ai_session=\"self\" without depends_on', () => {
+      const config: Partial<VisorConfig> = {
+        version: '1.0',
+        checks: {
+          'loop-check': {
+            type: 'ai',
+            prompt: 'Chat-like loop that reuses its own session',
+            on: ['pr_opened'],
+            // Special self-reuse mode does not require depends_on
+            reuse_ai_session: 'self',
+          },
+        },
+      };
+
+      expect(() => {
+        (configManager as any).validateConfig(config);
+      }).not.toThrow();
+    });
+
     it('should accept reuse_ai_session=true with multiple dependencies', () => {
       const config: Partial<VisorConfig> = {
         version: '1.0',
