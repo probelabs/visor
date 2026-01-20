@@ -47,10 +47,9 @@ describe('validateJsSyntax', () => {
   });
 });
 
-// Note: continue/break inside if statements not supported by @nyariv/sandboxjs on Node < 22
-// Also broken on Node 24+ due to sandboxjs compatibility issues
+// Note: continue/break inside if statements requires patch-package fix for @nyariv/sandboxjs
 const nodeVersion = parseInt(process.versions.node.split('.')[0], 10);
-const describeIfNodeGte22 = nodeVersion >= 22 && nodeVersion < 24 ? describe : describe.skip;
+const describeIfNodeGte22 = nodeVersion >= 22 ? describe : describe.skip;
 
 describeIfNodeGte22('sandbox execution features (Node 22+)', () => {
   it('should support continue inside if statements in loops', () => {
