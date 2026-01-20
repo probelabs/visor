@@ -81,7 +81,7 @@ steps:
     group: task-refinement
     depends_on: [refine]
     reuse_ai_session: refine
-    session_mode: append
+    session_mode: clone
     ai:
       # Allow tools so the model can inspect the repo context if needed
       disableTools: false

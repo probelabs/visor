@@ -30,122 +30,6 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// src/logger.ts
-var logger_exports = {};
-__export(logger_exports, {
-  configureLoggerFromCli: () => configureLoggerFromCli,
-  logger: () => logger
-});
-function levelToNumber(level) {
-  switch (level) {
-    case "silent":
-      return 0;
-    case "error":
-      return 10;
-    case "warn":
-      return 20;
-    case "info":
-      return 30;
-    case "verbose":
-      return 40;
-    case "debug":
-      return 50;
-  }
-}
-function configureLoggerFromCli(options) {
-  logger.configure({
-    outputFormat: options.output,
-    debug: options.debug,
-    verbose: options.verbose,
-    quiet: options.quiet
-  });
-  try {
-    if (options.output) process.env.VISOR_OUTPUT_FORMAT = String(options.output);
-    if (typeof options.debug === "boolean") {
-      process.env.VISOR_DEBUG = options.debug ? "true" : "false";
-    }
-  } catch {
-  }
-}
-var Logger, logger;
-var init_logger = __esm({
-  "src/logger.ts"() {
-    "use strict";
-    Logger = class {
-      level = "info";
-      isJsonLike = false;
-      isTTY = typeof process !== "undefined" ? !!process.stderr.isTTY : false;
-      showTimestamps = true;
-      // default: always show timestamps
-      configure(opts = {}) {
-        let lvl = "info";
-        if (opts.debug || process.env.VISOR_DEBUG === "true") {
-          lvl = "debug";
-        } else if (opts.verbose || process.env.VISOR_LOG_LEVEL === "verbose") {
-          lvl = "verbose";
-        } else if (opts.quiet || process.env.VISOR_LOG_LEVEL === "quiet") {
-          lvl = "warn";
-        } else if (opts.level) {
-          lvl = opts.level;
-        } else if (process.env.VISOR_LOG_LEVEL) {
-          const envLvl = process.env.VISOR_LOG_LEVEL;
-          if (["silent", "error", "warn", "info", "verbose", "debug"].includes(envLvl)) {
-            lvl = envLvl;
-          }
-        }
-        this.level = lvl;
-        const output = opts.outputFormat || process.env.VISOR_OUTPUT_FORMAT || "table";
-        this.isJsonLike = output === "json" || output === "sarif";
-      }
-      shouldLog(level) {
-        const desired = levelToNumber(level);
-        const current = levelToNumber(this.level);
-        if (desired > current) return false;
-        if (this.isJsonLike && desired < levelToNumber("error") && this.level !== "debug" && this.level !== "verbose") {
-          return false;
-        }
-        return true;
-      }
-      write(msg, level) {
-        try {
-          if (this.showTimestamps) {
-            const ts = (/* @__PURE__ */ new Date()).toISOString();
-            const lvl = level ? level : void 0;
-            const prefix = lvl ? `[${ts}] [${lvl}]` : `[${ts}]`;
-            process.stderr.write(`${prefix} ${msg}
-`);
-          } else {
-            process.stderr.write(msg + "\n");
-          }
-        } catch {
-        }
-      }
-      info(msg) {
-        if (this.shouldLog("info")) this.write(msg, "info");
-      }
-      warn(msg) {
-        if (this.shouldLog("warn")) this.write(msg, "warn");
-      }
-      error(msg) {
-        if (this.shouldLog("error")) this.write(msg, "error");
-      }
-      verbose(msg) {
-        if (this.shouldLog("verbose")) this.write(msg, "verbose");
-      }
-      debug(msg) {
-        if (this.shouldLog("debug")) this.write(msg, "debug");
-      }
-      step(msg) {
-        if (this.shouldLog("info")) this.write(`\u25B6 ${msg}`, "info");
-      }
-      success(msg) {
-        if (this.shouldLog("info")) this.write(`\u2714 ${msg}`, "info");
-      }
-    };
-    logger = new Logger();
-  }
-});
-
 // src/telemetry/lazy-otel.ts
 function getOtelApi() {
   if (otelApiAttempted) return otelApi;
@@ -276,6 +160,163 @@ var init_lazy_otel = __esm({
         return api?.SpanStatusCode?.ERROR ?? 2;
       }
     };
+  }
+});
+
+// src/logger.ts
+var logger_exports = {};
+__export(logger_exports, {
+  configureLoggerFromCli: () => configureLoggerFromCli,
+  logger: () => logger
+});
+function levelToNumber(level) {
+  switch (level) {
+    case "silent":
+      return 0;
+    case "error":
+      return 10;
+    case "warn":
+      return 20;
+    case "info":
+      return 30;
+    case "verbose":
+      return 40;
+    case "debug":
+      return 50;
+  }
+}
+function configureLoggerFromCli(options) {
+  logger.configure({
+    outputFormat: options.output,
+    debug: options.debug,
+    verbose: options.verbose,
+    quiet: options.quiet
+  });
+  try {
+    if (options.output) process.env.VISOR_OUTPUT_FORMAT = String(options.output);
+    if (typeof options.debug === "boolean") {
+      process.env.VISOR_DEBUG = options.debug ? "true" : "false";
+    }
+  } catch {
+  }
+}
+var Logger, logger;
+var init_logger = __esm({
+  "src/logger.ts"() {
+    "use strict";
+    init_lazy_otel();
+    Logger = class {
+      level = "info";
+      isJsonLike = false;
+      isTTY = typeof process !== "undefined" ? !!process.stderr.isTTY : false;
+      showTimestamps = true;
+      // default: always show timestamps
+      configure(opts = {}) {
+        let lvl = "info";
+        if (opts.debug || process.env.VISOR_DEBUG === "true") {
+          lvl = "debug";
+        } else if (opts.verbose || process.env.VISOR_LOG_LEVEL === "verbose") {
+          lvl = "verbose";
+        } else if (opts.quiet || process.env.VISOR_LOG_LEVEL === "quiet") {
+          lvl = "warn";
+        } else if (opts.level) {
+          lvl = opts.level;
+        } else if (process.env.VISOR_LOG_LEVEL) {
+          const envLvl = process.env.VISOR_LOG_LEVEL;
+          if (["silent", "error", "warn", "info", "verbose", "debug"].includes(envLvl)) {
+            lvl = envLvl;
+          }
+        }
+        this.level = lvl;
+        const output = opts.outputFormat || process.env.VISOR_OUTPUT_FORMAT || "table";
+        this.isJsonLike = output === "json" || output === "sarif";
+      }
+      shouldLog(level) {
+        const desired = levelToNumber(level);
+        const current = levelToNumber(this.level);
+        if (desired > current) return false;
+        if (this.isJsonLike && desired < levelToNumber("error") && this.level !== "debug" && this.level !== "verbose") {
+          return false;
+        }
+        return true;
+      }
+      getTraceSuffix(msg) {
+        if (!msg) return "";
+        if (msg.includes("trace_id=") || msg.includes("trace_id:")) return "";
+        try {
+          const span = trace.getSpan(context.active()) || trace.getActiveSpan();
+          const ctx = span?.spanContext?.();
+          if (!ctx?.traceId) return "";
+          return ` [trace_id=${ctx.traceId} span_id=${ctx.spanId}]`;
+        } catch {
+          return "";
+        }
+      }
+      write(msg, level) {
+        try {
+          const suffix = this.getTraceSuffix(msg);
+          const decoratedMsg = suffix ? `${msg}${suffix}` : msg;
+          if (this.showTimestamps) {
+            const ts = (/* @__PURE__ */ new Date()).toISOString();
+            const lvl = level ? level : void 0;
+            let tsToken = `[${ts}]`;
+            let lvlToken = lvl ? `[${lvl}]` : "";
+            if (this.isTTY && !this.isJsonLike) {
+              const reset = "\x1B[0m";
+              const dim = "\x1B[2m";
+              const colours = {
+                silent: "",
+                error: "\x1B[31m",
+                // red
+                warn: "\x1B[33m",
+                // yellow
+                info: "\x1B[36m",
+                // cyan
+                verbose: "\x1B[35m",
+                // magenta
+                debug: "\x1B[90m"
+                // bright black / gray
+              };
+              tsToken = `${dim}${tsToken}${reset}`;
+              if (lvl) {
+                const colour = colours[lvl] || "";
+                if (colour) {
+                  lvlToken = `${colour}${lvlToken}${reset}`;
+                }
+              }
+            }
+            const prefix = lvl ? `${tsToken} ${lvlToken}` : tsToken;
+            process.stderr.write(`${prefix} ${decoratedMsg}
+`);
+          } else {
+            process.stderr.write(decoratedMsg + "\n");
+          }
+        } catch {
+        }
+      }
+      info(msg) {
+        if (this.shouldLog("info")) this.write(msg, "info");
+      }
+      warn(msg) {
+        if (this.shouldLog("warn")) this.write(msg, "warn");
+      }
+      error(msg) {
+        if (this.shouldLog("error")) this.write(msg, "error");
+      }
+      verbose(msg) {
+        if (this.shouldLog("verbose")) this.write(msg, "verbose");
+      }
+      debug(msg) {
+        if (this.shouldLog("debug")) this.write(msg, "debug");
+      }
+      step(msg) {
+        if (this.shouldLog("info")) this.write(`\u25B6 ${msg}`, "info");
+      }
+      success(msg) {
+        if (this.shouldLog("info")) this.write(`\u2714 ${msg}`, "info");
+      }
+    };
+    logger = new Logger();
   }
 });
 
@@ -430,19 +471,19 @@ function __getOrCreateNdjsonPath() {
   try {
     if (process.env.VISOR_TELEMETRY_SINK && process.env.VISOR_TELEMETRY_SINK !== "file")
       return null;
-    const path20 = require("path");
-    const fs18 = require("fs");
+    const path22 = require("path");
+    const fs20 = require("fs");
     if (process.env.VISOR_FALLBACK_TRACE_FILE) {
       __ndjsonPath = process.env.VISOR_FALLBACK_TRACE_FILE;
-      const dir = path20.dirname(__ndjsonPath);
-      if (!fs18.existsSync(dir)) fs18.mkdirSync(dir, { recursive: true });
+      const dir = path22.dirname(__ndjsonPath);
+      if (!fs20.existsSync(dir)) fs20.mkdirSync(dir, { recursive: true });
       return __ndjsonPath;
     }
-    const outDir = process.env.VISOR_TRACE_DIR || path20.join(process.cwd(), "output", "traces");
-    if (!fs18.existsSync(outDir)) fs18.mkdirSync(outDir, { recursive: true });
+    const outDir = process.env.VISOR_TRACE_DIR || path22.join(process.cwd(), "output", "traces");
+    if (!fs20.existsSync(outDir)) fs20.mkdirSync(outDir, { recursive: true });
     if (!__ndjsonPath) {
       const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      __ndjsonPath = path20.join(outDir, `${ts}.ndjson`);
+      __ndjsonPath = path22.join(outDir, `${ts}.ndjson`);
     }
     return __ndjsonPath;
   } catch {
@@ -451,11 +492,11 @@ function __getOrCreateNdjsonPath() {
 }
 function _appendRunMarker() {
   try {
-    const fs18 = require("fs");
+    const fs20 = require("fs");
     const p = __getOrCreateNdjsonPath();
     if (!p) return;
     const line = { name: "visor.run", attributes: { started: true } };
-    fs18.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
+    fs20.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
   } catch {
   }
 }
@@ -1048,16 +1089,18 @@ async function handleWavePlanning(context2, state, transition) {
   }
   try {
     const flags = state.flags || {};
+    logger.info(
+      `[WavePlanning] Checking awaitingHumanInput flag: ${!!flags.awaitingHumanInput} (wave=${state.wave})`
+    );
     if (flags.awaitingHumanInput) {
-      if (context2.debug) {
-        logger.info("[WavePlanning] Awaiting human input \u2013 finishing run without further waves");
-      }
+      logger.info("[WavePlanning] Awaiting human input \u2013 finishing run without further waves");
       state.levelQueue = [];
       state.eventQueue = [];
       transition("Completed");
       return;
     }
-  } catch {
+  } catch (e) {
+    logger.warn(`[WavePlanning] Failed to check awaitingHumanInput flag: ${e}`);
   }
   if (!context2.dependencyGraph) {
     if (state.wave === 0 && state.levelQueue.length === 0) {
@@ -1241,7 +1284,9 @@ async function handleWavePlanning(context2, state, transition) {
     const subDeps = {};
     for (const id of checksToRun) {
       const cfg = context2.config.checks?.[id];
-      const deps = (cfg?.depends_on || []).filter((d) => checksToRun.includes(d));
+      const rawDeps = cfg?.depends_on;
+      const depsArray = Array.isArray(rawDeps) ? rawDeps : rawDeps ? [rawDeps] : [];
+      const deps = depsArray.filter((d) => checksToRun.includes(d));
       subDeps[id] = deps;
     }
     const subGraph = DependencyResolver.buildDependencyGraph(subDeps);
@@ -1276,6 +1321,11 @@ async function handleWavePlanning(context2, state, transition) {
     state.wave++;
     state.currentWaveCompletions = /* @__PURE__ */ new Set();
     state.failedChecks = /* @__PURE__ */ new Set();
+    try {
+      state.flags = state.flags || {};
+      state.flags.waveKind = "initial";
+    } catch {
+    }
   }
   if (state.levelQueue.length > 0) {
     transition("LevelDispatch");
@@ -1539,6 +1589,38 @@ var init_metrics = __esm({
 });
 
 // src/utils/sandbox.ts
+function validateJsSyntax(code) {
+  if (!code || typeof code !== "string") {
+    return { valid: false, error: "Code must be a non-empty string" };
+  }
+  const trimmed = code.trim();
+  if (trimmed.length === 0) {
+    return { valid: false, error: "Code cannot be empty" };
+  }
+  const sandbox = createSecureSandbox();
+  const looksLikeBlock = /\breturn\b/.test(trimmed) || /;/.test(trimmed) || /\n/.test(trimmed);
+  const looksLikeIife = /\)\s*\(\s*\)\s*;?$/.test(trimmed);
+  const body = looksLikeBlock ? looksLikeIife ? `return (
+${trimmed}
+);
+` : `return (() => {
+${trimmed}
+})();
+` : `return (
+${trimmed}
+);
+`;
+  const header = `const __lp = "[syntax-check]"; const log = (...a) => { try { console.log(__lp, ...a); } catch {} };
+`;
+  const fullCode = `${header}${body}`;
+  try {
+    sandbox.compile(fullCode);
+    return { valid: true };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { valid: false, error: msg };
+  }
+}
 function createSecureSandbox() {
   const globals = {
     ...import_sandboxjs.default.SAFE_GLOBALS,
@@ -2404,10 +2486,8 @@ var init_failure_condition_evaluator = __esm({
           })() : {},
           // Workflow inputs (for workflows)
           inputs: contextData?.workflowInputs || {},
-          // Required output property (empty for if conditions)
-          output: {
-            issues: []
-          },
+          // Output property: use provided output for guarantee evaluation, or empty for if conditions
+          output: contextData?.output !== void 0 && contextData.output !== null && typeof contextData.output === "object" ? contextData.output : { issues: [] },
           // Author association (used by permission helpers)
           authorAssociation: contextData?.authorAssociation,
           // Utility metadata
@@ -2429,18 +2509,9 @@ var init_failure_condition_evaluator = __esm({
           const res = this.evaluateExpression(expression, context2);
           try {
             if (process.env.VISOR_DEBUG === "true") {
-              const envMap = context2.env || {};
-              let memStr = "";
-              try {
-                const m = context2.memory;
-                const v = m && typeof m.get === "function" ? m.get("all_valid", "fact-validation") : void 0;
-                memStr = ` mem.fact-validation.all_valid=${String(v)}`;
-              } catch {
-              }
+              const outputKeys = Object.keys(context2.outputs || {});
               console.error(
-                `[if-eval] check=${checkName} expr="${expression}" env.ENABLE_FACT_VALIDATION=${String(
-                  envMap.ENABLE_FACT_VALIDATION
-                )} event=${context2.event?.event_name} result=${String(res)}${memStr}`
+                `[if-eval] check=${checkName} expr="${expression}" result=${String(res)} outputKeys=[${outputKeys.join(",")}]`
               );
             }
           } catch {
@@ -2627,7 +2698,17 @@ var init_failure_condition_evaluator = __esm({
           const isContributor2 = permissionHelpers.isContributor;
           const isFirstTimer2 = permissionHelpers.isFirstTimer;
           const output = context2.output || {};
-          const issues = output.issues || [];
+          let issues = output.issues || [];
+          if (typeof issues === "string") {
+            try {
+              issues = JSON.parse(issues);
+            } catch {
+              issues = [];
+            }
+          }
+          if (!Array.isArray(issues)) {
+            issues = [];
+          }
           const metadata = context2.metadata || {
             checkName: context2.checkName || "",
             schema: context2.schema || "",
@@ -2654,6 +2735,7 @@ var init_failure_condition_evaluator = __esm({
           const event = context2.event || "manual";
           const env = context2.env || {};
           const outputs = context2.outputs || {};
+          const inputs = context2.inputs || {};
           const debugData = context2.debug || null;
           const memoryStore = MemoryStore.getInstance();
           const memoryAccessor = {
@@ -2687,6 +2769,7 @@ var init_failure_condition_evaluator = __esm({
             filesCount,
             event,
             env,
+            inputs,
             // Helper functions
             contains,
             startsWith,
@@ -2748,6 +2831,7 @@ var init_failure_condition_evaluator = __esm({
                 filesCount,
                 event,
                 env,
+                inputs,
                 // Helpers
                 contains,
                 startsWith,
@@ -3218,6 +3302,23 @@ function createMemoryHelpers() {
     }
   };
 }
+function formatScopeLabel(scope) {
+  if (!scope || scope.length === 0) return "";
+  return scope.map((item) => `${item.check}:${item.index}`).join("|");
+}
+function recordRoutingEvent(args) {
+  const attrs = {
+    check_id: args.checkId,
+    trigger: args.trigger,
+    action: args.action
+  };
+  if (args.target) attrs.target = args.target;
+  if (args.source) attrs.source = args.source;
+  const scopeLabel = formatScopeLabel(args.scope);
+  if (scopeLabel) attrs.scope = scopeLabel;
+  if (args.gotoEvent) attrs.goto_event = args.gotoEvent;
+  addEvent("visor.routing", attrs);
+}
 async function handleRouting(context2, state, transition, emitEvent, routingContext) {
   const { checkId, scope, result, checkConfig, success } = routingContext;
   logger.info(`[Routing] Evaluating routing for check: ${checkId}, success: ${success}`);
@@ -3280,6 +3381,14 @@ async function processOnFinish(checkId, scope, result, checkConfig, context2, st
           const itemScope = [
             { check: checkId, index: itemIndex }
           ];
+          recordRoutingEvent({
+            checkId,
+            trigger: "on_finish",
+            action: "run",
+            target: targetCheck,
+            source: "run",
+            scope: itemScope
+          });
           emitEvent({
             type: "ForwardRunRequested",
             target: targetCheck,
@@ -3290,6 +3399,14 @@ async function processOnFinish(checkId, scope, result, checkConfig, context2, st
         }
       } else {
         state.routingLoopCount++;
+        recordRoutingEvent({
+          checkId,
+          trigger: "on_finish",
+          action: "run",
+          target: targetCheck,
+          source: "run",
+          scope: []
+        });
         emitEvent({
           type: "ForwardRunRequested",
           target: targetCheck,
@@ -3326,6 +3443,14 @@ async function processOnFinish(checkId, scope, result, checkConfig, context2, st
         logger.info(`[Routing] on_finish.run_js: scheduling ${targetCheck}`);
       }
       state.routingLoopCount++;
+      recordRoutingEvent({
+        checkId,
+        trigger: "on_finish",
+        action: "run",
+        target: targetCheck,
+        source: "run_js",
+        scope
+      });
       emitEvent({
         type: "ForwardRunRequested",
         target: targetCheck,
@@ -3358,6 +3483,15 @@ async function processOnFinish(checkId, scope, result, checkConfig, context2, st
         return;
       }
       state.routingLoopCount++;
+      recordRoutingEvent({
+        checkId,
+        trigger: "on_finish",
+        action: "goto",
+        target: finishTransTarget.to,
+        source: "transitions",
+        scope,
+        gotoEvent: finishTransTarget.goto_event
+      });
       emitEvent({
         type: "ForwardRunRequested",
         target: finishTransTarget.to,
@@ -3394,6 +3528,14 @@ async function processOnFinish(checkId, scope, result, checkConfig, context2, st
       logger.info(`[Routing] on_finish.goto: ${gotoTarget}`);
     }
     state.routingLoopCount++;
+    recordRoutingEvent({
+      checkId,
+      trigger: "on_finish",
+      action: "goto",
+      target: gotoTarget,
+      source: onFinish.goto_js ? "goto_js" : "goto",
+      scope
+    });
     emitEvent({
       type: "ForwardRunRequested",
       target: gotoTarget,
@@ -3542,6 +3684,14 @@ async function processOnSuccess(checkId, scope, result, checkConfig, context2, s
           const itemScope = [
             { check: checkId, index: itemIndex }
           ];
+          recordRoutingEvent({
+            checkId,
+            trigger: "on_success",
+            action: "run",
+            target: targetCheck,
+            source: "run",
+            scope: itemScope
+          });
           emitEvent({
             type: "ForwardRunRequested",
             target: targetCheck,
@@ -3551,6 +3701,14 @@ async function processOnSuccess(checkId, scope, result, checkConfig, context2, s
         }
       } else {
         state.routingLoopCount++;
+        recordRoutingEvent({
+          checkId,
+          trigger: "on_success",
+          action: "run",
+          target: targetCheck,
+          source: "run",
+          scope
+        });
         emitEvent({
           type: "ForwardRunRequested",
           target: targetCheck,
@@ -3586,6 +3744,14 @@ async function processOnSuccess(checkId, scope, result, checkConfig, context2, s
         logger.info(`[Routing] on_success.run_js: scheduling ${targetCheck}`);
       }
       state.routingLoopCount++;
+      recordRoutingEvent({
+        checkId,
+        trigger: "on_success",
+        action: "run",
+        target: targetCheck,
+        source: "run_js",
+        scope
+      });
       emitEvent({
         type: "ForwardRunRequested",
         target: targetCheck,
@@ -3617,6 +3783,15 @@ async function processOnSuccess(checkId, scope, result, checkConfig, context2, s
         return;
       }
       state.routingLoopCount++;
+      recordRoutingEvent({
+        checkId,
+        trigger: "on_success",
+        action: "goto",
+        target: successTransTarget.to,
+        source: "transitions",
+        scope,
+        gotoEvent: successTransTarget.goto_event
+      });
       emitEvent({
         type: "ForwardRunRequested",
         target: successTransTarget.to,
@@ -3654,6 +3829,15 @@ async function processOnSuccess(checkId, scope, result, checkConfig, context2, s
       logger.info(`[Routing] on_success.goto: ${gotoTarget}`);
     }
     state.routingLoopCount++;
+    recordRoutingEvent({
+      checkId,
+      trigger: "on_success",
+      action: "goto",
+      target: gotoTarget,
+      source: onSuccess.goto_js ? "goto_js" : "goto",
+      scope,
+      gotoEvent: onSuccess.goto_event
+    });
     emitEvent({
       type: "ForwardRunRequested",
       target: gotoTarget,
@@ -3706,6 +3890,14 @@ async function processOnFail(checkId, scope, result, checkConfig, context2, stat
           const itemScope = [
             { check: checkId, index: itemIndex }
           ];
+          recordRoutingEvent({
+            checkId,
+            trigger: "on_fail",
+            action: "run",
+            target: targetCheck,
+            source: "run",
+            scope: itemScope
+          });
           emitEvent({
             type: "ForwardRunRequested",
             target: targetCheck,
@@ -3715,6 +3907,14 @@ async function processOnFail(checkId, scope, result, checkConfig, context2, stat
         }
       } else {
         state.routingLoopCount++;
+        recordRoutingEvent({
+          checkId,
+          trigger: "on_fail",
+          action: "run",
+          target: targetCheck,
+          source: "run",
+          scope
+        });
         emitEvent({
           type: "ForwardRunRequested",
           target: targetCheck,
@@ -3750,6 +3950,14 @@ async function processOnFail(checkId, scope, result, checkConfig, context2, stat
         logger.info(`[Routing] on_fail.run_js: scheduling ${targetCheck}`);
       }
       state.routingLoopCount++;
+      recordRoutingEvent({
+        checkId,
+        trigger: "on_fail",
+        action: "run",
+        target: targetCheck,
+        source: "run_js",
+        scope
+      });
       emitEvent({
         type: "ForwardRunRequested",
         target: targetCheck,
@@ -3781,6 +3989,13 @@ async function processOnFail(checkId, scope, result, checkConfig, context2, stat
         if (used >= max) return;
         attemptsMap.set(key, used + 1);
         state.routingLoopCount++;
+        recordRoutingEvent({
+          checkId,
+          trigger: "on_fail",
+          action: "retry",
+          source: "retry",
+          scope: sc || []
+        });
         emitEvent({
           type: "ForwardRunRequested",
           target: checkId,
@@ -3826,6 +4041,15 @@ async function processOnFail(checkId, scope, result, checkConfig, context2, stat
         return;
       }
       state.routingLoopCount++;
+      recordRoutingEvent({
+        checkId,
+        trigger: "on_fail",
+        action: "goto",
+        target: failTransTarget.to,
+        source: "transitions",
+        scope,
+        gotoEvent: failTransTarget.goto_event
+      });
       emitEvent({
         type: "ForwardRunRequested",
         target: failTransTarget.to,
@@ -3863,6 +4087,15 @@ async function processOnFail(checkId, scope, result, checkConfig, context2, stat
       logger.info(`[Routing] on_fail.goto: ${gotoTarget}`);
     }
     state.routingLoopCount++;
+    recordRoutingEvent({
+      checkId,
+      trigger: "on_fail",
+      action: "goto",
+      target: gotoTarget,
+      source: onFail.goto_js ? "goto_js" : "goto",
+      scope,
+      gotoEvent: onFail.goto_event
+    });
     emitEvent({
       type: "ForwardRunRequested",
       target: gotoTarget,
@@ -4210,6 +4443,7 @@ var init_routing = __esm({
   "src/state-machine/states/routing.ts"() {
     "use strict";
     init_logger();
+    init_trace_helpers();
     init_failure_condition_evaluator();
     init_sandbox();
     init_memory_store();
@@ -4472,12 +4706,48 @@ function configureLiquidWithExtensions(liquid) {
       return "[Error: Unable to serialize to JSON]";
     }
   });
+  liquid.registerFilter("base64", (value) => {
+    if (value == null) return "";
+    const str = String(value);
+    return Buffer.from(str).toString("base64");
+  });
+  liquid.registerFilter("base64_decode", (value) => {
+    if (value == null) return "";
+    const str = String(value);
+    try {
+      return Buffer.from(str, "base64").toString("utf-8");
+    } catch {
+      return "[Error: Invalid base64 string]";
+    }
+  });
   liquid.registerFilter("safe_label", (value) => sanitizeLabel(value));
   liquid.registerFilter("safe_label_list", (value) => sanitizeLabelList(value));
   liquid.registerFilter("unescape_newlines", (value) => {
     if (value == null) return "";
     const s = String(value);
     return s.replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\t/g, "	");
+  });
+  liquid.registerFilter("json_escape", (value) => {
+    if (value == null) return "";
+    const s = String(value);
+    const jsonStr = JSON.stringify(s);
+    return jsonStr.slice(1, -1);
+  });
+  liquid.registerFilter("shell_escape", (value) => {
+    if (value == null) return "''";
+    const s = String(value);
+    return "'" + s.replace(/'/g, "'\\''") + "'";
+  });
+  liquid.registerFilter("escape_shell", (value) => {
+    if (value == null) return "''";
+    const s = String(value);
+    return "'" + s.replace(/'/g, "'\\''") + "'";
+  });
+  liquid.registerFilter("shell_escape_double", (value) => {
+    if (value == null) return '""';
+    const s = String(value);
+    const escaped = s.replace(/\\/g, "\\\\").replace(/\$/g, "\\$").replace(/`/g, "\\`").replace(/"/g, '\\"').replace(/!/g, "\\!");
+    return '"' + escaped + '"';
   });
   const isLocal = detectLocalMode();
   const resolveAssoc = (val) => {
@@ -4532,9 +4802,9 @@ function configureLiquidWithExtensions(liquid) {
   });
   liquid.registerFilter("get", (obj, pathExpr) => {
     if (obj == null) return void 0;
-    const path20 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
-    if (!path20) return obj;
-    const parts = path20.split(".");
+    const path22 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
+    if (!path22) return obj;
+    const parts = path22.split(".");
     let cur = obj;
     for (const p of parts) {
       if (cur == null) return void 0;
@@ -4654,9 +4924,9 @@ function configureLiquidWithExtensions(liquid) {
           }
         }
         const defaultRole = typeof rolesCfg.default === "string" && rolesCfg.default.trim() ? rolesCfg.default.trim() : void 0;
-        const getNested = (obj, path20) => {
-          if (!obj || !path20) return void 0;
-          const parts = path20.split(".");
+        const getNested = (obj, path22) => {
+          if (!obj || !path22) return void 0;
+          const parts = path22.split(".");
           let cur = obj;
           for (const p of parts) {
             if (cur == null) return void 0;
@@ -4807,8 +5077,8 @@ var init_liquid_extensions = __esm({
 async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs18 = await import("fs/promises");
-    const path20 = await import("path");
+    const fs20 = await import("fs/promises");
+    const path22 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
@@ -4816,24 +5086,24 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
       templateContent = String(checkConfig.template.content);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path20.resolve(process.cwd(), file);
-      templateContent = await fs18.readFile(resolved, "utf-8");
+      const resolved = path22.resolve(process.cwd(), file);
+      templateContent = await fs20.readFile(resolved, "utf-8");
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path20.join(__dirname, "output", sanitized, "template.liquid"),
+          path22.join(__dirname, "output", sanitized, "template.liquid"),
           // bundled: dist/output/
-          path20.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path22.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // source: output/
-          path20.join(process.cwd(), "output", sanitized, "template.liquid"),
+          path22.join(process.cwd(), "output", sanitized, "template.liquid"),
           // fallback: cwd/output/
-          path20.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          path22.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
           // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs18.readFile(p, "utf-8");
+            templateContent = await fs20.readFile(p, "utf-8");
             if (templateContent) break;
           } catch {
           }
@@ -4900,6 +5170,17 @@ function updateStats(results, state, isForEachIteration = false) {
       issuesFound: 0,
       issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 }
     };
+    const skippedMarker = result.__skipped;
+    if (skippedMarker) {
+      stats.skipped = true;
+      stats.skipReason = typeof skippedMarker === "string" ? skippedMarker : stats.skipReason || "if_condition";
+      stats.totalRuns = 0;
+      stats.successfulRuns = 0;
+      stats.failedRuns = 0;
+      stats.skippedRuns++;
+      state.stats.set(checkId, stats);
+      continue;
+    }
     if (stats.skipped) {
       stats.skipped = false;
       stats.skippedRuns = 0;
@@ -4996,6 +5277,16 @@ async function initializeTracer(sessionId, checkName) {
         enableConsole: false
       });
       const tracer = new SimpleAppTracer(telemetry, sessionId);
+      if (typeof tracer.recordEvent !== "function") {
+        tracer.recordEvent = (name, attributes) => {
+          try {
+            if (telemetry.record) {
+              telemetry.record({ event: name, ...attributes });
+            }
+          } catch {
+          }
+        };
+      }
       console.error(`\u{1F4CA} Simple tracing enabled, will save to: ${traceFilePath}`);
       if (process.env.GITHUB_ACTIONS) {
         console.log(`::notice title=AI Trace::Trace will be saved to ${traceFilePath}`);
@@ -5217,7 +5508,7 @@ async function processDiffWithOutline(diffContent) {
   }
   try {
     const originalProbePath = process.env.PROBE_PATH;
-    const fs18 = require("fs");
+    const fs20 = require("fs");
     const possiblePaths = [
       // Relative to current working directory (most common in production)
       path6.join(process.cwd(), "node_modules/@probelabs/probe/bin/probe-binary"),
@@ -5228,7 +5519,7 @@ async function processDiffWithOutline(diffContent) {
     ];
     let probeBinaryPath;
     for (const candidatePath of possiblePaths) {
-      if (fs18.existsSync(candidatePath)) {
+      if (fs20.existsSync(candidatePath)) {
         probeBinaryPath = candidatePath;
         break;
       }
@@ -5309,6 +5600,146 @@ var init_comment_metadata = __esm({
 function log(...args) {
   logger.debug(args.join(" "));
 }
+function createProbeTracerAdapter(fallbackTracer) {
+  const fallback = fallbackTracer && typeof fallbackTracer === "object" ? fallbackTracer : null;
+  const emitEvent = (name, attrs) => {
+    try {
+      const span = trace.getActiveSpan();
+      if (span && typeof span.addEvent === "function") {
+        span.addEvent(name, attrs);
+      }
+    } catch {
+    }
+  };
+  return {
+    withSpan: async (name, fn, attrs) => withActiveSpan(name, attrs, async (span) => {
+      if (fallback && typeof fallback.withSpan === "function") {
+        return await fallback.withSpan(name, async () => fn(span), attrs);
+      }
+      return await fn(span);
+    }),
+    recordEvent: (name, attrs) => {
+      emitEvent(name, attrs);
+      if (fallback && typeof fallback.recordEvent === "function") {
+        try {
+          fallback.recordEvent(name, attrs);
+        } catch {
+        }
+      }
+    },
+    addEvent: (name, attrs) => {
+      emitEvent(name, attrs);
+      if (fallback && typeof fallback.addEvent === "function") {
+        try {
+          fallback.addEvent(name, attrs);
+        } catch {
+        }
+      } else if (fallback && typeof fallback.recordEvent === "function") {
+        try {
+          fallback.recordEvent(name, attrs);
+        } catch {
+        }
+      }
+    },
+    recordDelegationEvent: (phase, attrs) => {
+      emitEvent(`delegation.${phase}`, attrs);
+      if (fallback && typeof fallback.recordDelegationEvent === "function") {
+        try {
+          fallback.recordDelegationEvent(phase, attrs);
+        } catch {
+        }
+      }
+    },
+    recordMermaidValidationEvent: (phase, attrs) => {
+      emitEvent(`mermaid.${phase}`, attrs);
+      if (fallback && typeof fallback.recordMermaidValidationEvent === "function") {
+        try {
+          fallback.recordMermaidValidationEvent(phase, attrs);
+        } catch {
+        }
+      }
+    },
+    recordJsonValidationEvent: (phase, attrs) => {
+      emitEvent(`json.${phase}`, attrs);
+      if (fallback && typeof fallback.recordJsonValidationEvent === "function") {
+        try {
+          fallback.recordJsonValidationEvent(phase, attrs);
+        } catch {
+        }
+      }
+    },
+    createDelegationSpan: (sessionId, task) => {
+      let fallbackSpan = null;
+      if (fallback && typeof fallback.createDelegationSpan === "function") {
+        try {
+          fallbackSpan = fallback.createDelegationSpan(sessionId, task);
+        } catch {
+        }
+      }
+      let span = null;
+      try {
+        const tracer = trace.getTracer("visor");
+        span = tracer.startSpan("probe.delegation", {
+          attributes: {
+            "delegation.session_id": sessionId,
+            "delegation.task": task
+          }
+        });
+      } catch {
+      }
+      if (!span && fallbackSpan) return fallbackSpan;
+      if (!span) return null;
+      return {
+        setAttributes: (attrs) => {
+          try {
+            if (attrs) span.setAttributes(attrs);
+          } catch {
+          }
+          if (fallbackSpan && typeof fallbackSpan.setAttributes === "function") {
+            try {
+              fallbackSpan.setAttributes(attrs);
+            } catch {
+            }
+          }
+        },
+        setStatus: (status) => {
+          try {
+            span.setStatus(status);
+          } catch {
+          }
+          if (fallbackSpan && typeof fallbackSpan.setStatus === "function") {
+            try {
+              fallbackSpan.setStatus(status);
+            } catch {
+            }
+          }
+        },
+        end: () => {
+          try {
+            span.end();
+          } catch {
+          }
+          if (fallbackSpan && typeof fallbackSpan.end === "function") {
+            try {
+              fallbackSpan.end();
+            } catch {
+            }
+          }
+        }
+      };
+    },
+    flush: async () => {
+      if (fallback && typeof fallback.flush === "function") {
+        await fallback.flush();
+      }
+    },
+    shutdown: async () => {
+      if (fallback && typeof fallback.shutdown === "function") {
+        await fallback.shutdown();
+      }
+    }
+  };
+}
 var import_probe2, AIReviewService;
 var init_ai_review_service = __esm({
   "src/ai-review-service.ts"() {
@@ -5316,6 +5747,8 @@ var init_ai_review_service = __esm({
     import_probe2 = require("@probelabs/probe");
     init_session_registry();
     init_logger();
+    init_lazy_otel();
+    init_trace_helpers();
     init_tracer_init();
     init_diff_processor();
     init_comment_metadata();
@@ -5432,7 +5865,11 @@ var init_ai_review_service = __esm({
         try {
           const call = this.callProbeAgent(prompt, schema, debugInfo, checkName, sessionId);
           const timeoutMs = Math.max(0, this.config.timeout || 0);
-          const { response, effectiveSchema } = timeoutMs > 0 ? await this.withTimeout(call, timeoutMs, "AI review") : await call;
+          const {
+            response,
+            effectiveSchema,
+            sessionId: usedSessionId
+          } = timeoutMs > 0 ? await this.withTimeout(call, timeoutMs, "AI review") : await call;
           const processingTime = Date.now() - startTime;
           if (debugInfo) {
             debugInfo.rawResponse = response;
@@ -5440,6 +5877,10 @@ var init_ai_review_service = __esm({
             debugInfo.processingTime = processingTime;
           }
           const result = this.parseAIResponse(response, debugInfo, effectiveSchema);
+          try {
+            result.sessionId = usedSessionId;
+          } catch {
+          }
           if (debugInfo) {
             result.debug = debugInfo;
           }
@@ -5726,9 +6167,19 @@ ${prContext}${slackContextXml}
         const prContextInfo = prInfo;
         const isIssue = prContextInfo.isIssue === true;
         const isPRContext = prContextInfo.isPRContext === true;
-        const includeCodeContext = isPRContext || prContextInfo.includeCodeContext !== false;
+        const isSlackMode = prContextInfo.slackConversation !== void 0;
+        let includeCodeContext;
+        if (isPRContext) {
+          includeCodeContext = true;
+        } else if (isSlackMode) {
+          includeCodeContext = prContextInfo.includeCodeContext === true;
+        } else {
+          includeCodeContext = prContextInfo.includeCodeContext !== false;
+        }
         if (isPRContext) {
           log("\u{1F50D} Including full code diffs in AI context (PR mode)");
+        } else if (isSlackMode && !includeCodeContext) {
+          log("\u{1F4AC} Slack mode: excluding code diffs (use includeCodeContext: true to enable)");
         } else if (!includeCodeContext) {
           log("\u{1F4CA} Including only file summary in AI context (no diffs)");
         } else {
@@ -6128,8 +6579,8 @@ ${schemaString}`);
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs18 = require("fs");
-              const path20 = require("path");
+              const fs20 = require("fs");
+              const path22 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const provider = this.config.provider || "auto";
               const model = this.config.model || "default";
@@ -6243,20 +6694,20 @@ ${"=".repeat(60)}
 `;
               readableVersion += `${"=".repeat(60)}
 `;
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
-              if (!fs18.existsSync(debugArtifactsDir)) {
-                fs18.mkdirSync(debugArtifactsDir, { recursive: true });
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path22.join(process.cwd(), "debug-artifacts");
+              if (!fs20.existsSync(debugArtifactsDir)) {
+                fs20.mkdirSync(debugArtifactsDir, { recursive: true });
               }
-              const debugFile = path20.join(
+              const debugFile = path22.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.json`
               );
-              fs18.writeFileSync(debugFile, debugJson, "utf-8");
-              const readableFile = path20.join(
+              fs20.writeFileSync(debugFile, debugJson, "utf-8");
+              const readableFile = path22.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.txt`
               );
-              fs18.writeFileSync(readableFile, readableVersion, "utf-8");
+              fs20.writeFileSync(readableFile, readableVersion, "utf-8");
               log(`
 \u{1F4BE} Full debug info saved to:`);
               log(`   JSON: ${debugFile}`);
@@ -6267,6 +6718,7 @@ ${"=".repeat(60)}
             }
           }
           const agentAny = agent;
+          agentAny.tracer = createProbeTracerAdapter(agentAny.tracer);
           let response;
           if (agentAny.tracer && typeof agentAny.tracer.withSpan === "function") {
             response = await agentAny.tracer.withSpan(
@@ -6288,8 +6740,8 @@ ${"=".repeat(60)}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs18 = require("fs");
-              const path20 = require("path");
+              const fs20 = require("fs");
+              const path22 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny2 = agent;
               let fullHistory = [];
@@ -6300,8 +6752,8 @@ ${"=".repeat(60)}
               } else if (agentAny2._messages) {
                 fullHistory = agentAny2._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path20.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path22.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path22.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -6313,7 +6765,7 @@ ${"=".repeat(60)}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs18.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs20.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -6340,7 +6792,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs18.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs20.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -6349,11 +6801,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs18 = require("fs");
-              const path20 = require("path");
+              const fs20 = require("fs");
+              const path22 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
-              const responseFile = path20.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path22.join(process.cwd(), "debug-artifacts");
+              const responseFile = path22.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -6386,7 +6838,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs18.writeFileSync(responseFile, responseContent, "utf-8");
+              fs20.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -6402,9 +6854,9 @@ ${"=".repeat(60)}
                 await agentAny._telemetryConfig.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${agentAny._traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs18 = require("fs");
-                  if (fs18.existsSync(agentAny._traceFilePath)) {
-                    const stats = fs18.statSync(agentAny._traceFilePath);
+                  const fs20 = require("fs");
+                  if (fs20.existsSync(agentAny._traceFilePath)) {
+                    const stats = fs20.statSync(agentAny._traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::${agentAny._traceFilePath} (${stats.size} bytes)`
                     );
@@ -6432,18 +6884,22 @@ ${"=".repeat(60)}
        * Call ProbeAgent SDK with built-in schema validation
        */
       async callProbeAgent(prompt, schema, debugInfo, _checkName, providedSessionId) {
+        const sessionId = providedSessionId || (() => {
+          const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+          return `visor-${timestamp.replace(/[:.]/g, "-")}-${_checkName || "unknown"}`;
+        })();
         if (this.config.model === "mock" || this.config.provider === "mock") {
           const inJest = !!process.env.JEST_WORKER_ID;
           log("\u{1F3AD} Using mock AI model/provider");
           if (!inJest) {
             const response = await this.generateMockResponse(prompt, _checkName, schema);
-            return { response, effectiveSchema: typeof schema === "object" ? "custom" : schema };
+            return {
+              response,
+              effectiveSchema: typeof schema === "object" ? "custom" : schema,
+              sessionId
+            };
           }
         }
-        const sessionId = providedSessionId || (() => {
-          const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-          return `visor-${timestamp.replace(/[:.]/g, "-")}-${_checkName || "unknown"}`;
-        })();
         log("\u{1F916} Creating ProbeAgent for AI review...");
         log(`\u{1F194} Session ID: ${sessionId}`);
         log(`\u{1F4DD} Prompt length: ${prompt.length} characters`);
@@ -6483,14 +6939,16 @@ ${"=".repeat(60)}
           };
           let traceFilePath = "";
           let telemetryConfig = null;
+          let probeFileTracer = null;
           if (this.config.debug) {
             const tracerResult = await initializeTracer(sessionId, _checkName);
             if (tracerResult) {
-              options.tracer = tracerResult.tracer;
+              probeFileTracer = tracerResult.tracer;
               telemetryConfig = tracerResult.telemetryConfig;
               traceFilePath = tracerResult.filePath;
             }
           }
+          options.tracer = createProbeTracerAdapter(probeFileTracer);
           if (this.config.mcpServers && Object.keys(this.config.mcpServers).length > 0) {
             options.enableMcp = true;
             options.mcpConfig = { mcpServers: this.config.mcpServers };
@@ -6516,10 +6974,31 @@ ${"=".repeat(60)}
             log(`\u{1F527} Setting disableTools: ${this.config.disableTools}`);
           }
           if (this.config.allowBash !== void 0) {
-            options.allowBash = this.config.allowBash;
+            options.enableBash = this.config.allowBash;
           }
           if (this.config.bashConfig !== void 0) {
             options.bashConfig = this.config.bashConfig;
+          }
+          if (this.config.completionPrompt !== void 0) {
+            options.completionPrompt = this.config.completionPrompt;
+          }
+          try {
+            const cfgAny = this.config;
+            const allowedFolders = cfgAny.allowedFolders;
+            const workspacePath = cfgAny.workspacePath || cfgAny.path || Array.isArray(allowedFolders) && allowedFolders[0];
+            if (Array.isArray(allowedFolders) && allowedFolders.length > 0) {
+              options.allowedFolders = allowedFolders;
+              if (!options.path && workspacePath) {
+                options.path = workspacePath;
+              }
+              log(`\u{1F5C2}\uFE0F ProbeAgent workspace config:`);
+              log(`   path (cwd): ${options.path}`);
+              log(`   allowedFolders[0]: ${allowedFolders[0]}`);
+            } else if (workspacePath) {
+              options.path = workspacePath;
+              log(`\u{1F5C2}\uFE0F ProbeAgent path: ${workspacePath} (no allowedFolders)`);
+            }
+          } catch {
           }
           if (this.config.provider) {
             const providerOverride = this.config.provider === "claude-code" || this.config.provider === "bedrock" ? "anthropic" : this.config.provider === "anthropic" || this.config.provider === "openai" || this.config.provider === "google" ? this.config.provider : void 0;
@@ -6563,9 +7042,9 @@ ${schemaString}`);
           const model = this.config.model || "default";
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs18 = require("fs");
-              const path20 = require("path");
-              const os = require("os");
+              const fs20 = require("fs");
+              const path22 = require("path");
+              const os2 = require("os");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const debugData = {
                 timestamp,
@@ -6637,19 +7116,19 @@ ${"=".repeat(60)}
 `;
               readableVersion += `${"=".repeat(60)}
 `;
-              const tempDir = os.tmpdir();
-              const promptFile = path20.join(tempDir, `visor-prompt-${timestamp}.txt`);
-              fs18.writeFileSync(promptFile, prompt, "utf-8");
+              const tempDir = os2.tmpdir();
+              const promptFile = path22.join(tempDir, `visor-prompt-${timestamp}.txt`);
+              fs20.writeFileSync(promptFile, prompt, "utf-8");
               log(`
 \u{1F4BE} Prompt saved to: ${promptFile}`);
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path22.join(process.cwd(), "debug-artifacts");
               try {
-                const base = path20.join(
+                const base = path22.join(
                   debugArtifactsDir,
                   `prompt-${_checkName || "unknown"}-${timestamp}`
                 );
-                fs18.writeFileSync(base + ".json", debugJson, "utf-8");
-                fs18.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
+                fs20.writeFileSync(base + ".json", debugJson, "utf-8");
+                fs20.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
                 log(`
 \u{1F4BE} Full debug info saved to directory: ${debugArtifactsDir}`);
               } catch {
@@ -6694,8 +7173,8 @@ $ ${cliCommand}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs18 = require("fs");
-              const path20 = require("path");
+              const fs20 = require("fs");
+              const path22 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny = agent;
               let fullHistory = [];
@@ -6706,8 +7185,8 @@ $ ${cliCommand}
               } else if (agentAny._messages) {
                 fullHistory = agentAny._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path20.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path22.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path22.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -6719,7 +7198,7 @@ $ ${cliCommand}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs18.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs20.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -6746,7 +7225,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs18.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs20.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -6755,11 +7234,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs18 = require("fs");
-              const path20 = require("path");
+              const fs20 = require("fs");
+              const path22 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
-              const responseFile = path20.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path22.join(process.cwd(), "debug-artifacts");
+              const responseFile = path22.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -6792,7 +7271,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs18.writeFileSync(responseFile, responseContent, "utf-8");
+              fs20.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -6810,9 +7289,9 @@ ${"=".repeat(60)}
                 await telemetry.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs18 = require("fs");
-                  if (fs18.existsSync(traceFilePath)) {
-                    const stats = fs18.statSync(traceFilePath);
+                  const fs20 = require("fs");
+                  if (fs20.existsSync(traceFilePath)) {
+                    const stats = fs20.statSync(traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::OpenTelemetry trace file size: ${stats.size} bytes`
                     );
@@ -6830,7 +7309,7 @@ ${"=".repeat(60)}
             this.registerSession(sessionId, agent);
             log(`\u{1F527} Debug: Registered AI session for potential reuse: ${sessionId}`);
           }
-          return { response, effectiveSchema };
+          return { response, effectiveSchema, sessionId };
         } catch (error) {
           console.error("\u274C ProbeAgent failed:", error);
           throw new Error(
@@ -6850,8 +7329,8 @@ ${"=".repeat(60)}
        * Load schema content from schema files or inline definitions
        */
       async loadSchemaContent(schema) {
-        const fs18 = require("fs").promises;
-        const path20 = require("path");
+        const fs20 = require("fs").promises;
+        const path22 = require("path");
         if (typeof schema === "object" && schema !== null) {
           log("\u{1F4CB} Using inline schema object from configuration");
           return JSON.stringify(schema);
@@ -6864,14 +7343,14 @@ ${"=".repeat(60)}
           }
         } catch {
         }
-        if ((schema.startsWith("./") || schema.includes(".json")) && !path20.isAbsolute(schema)) {
+        if ((schema.startsWith("./") || schema.includes(".json")) && !path22.isAbsolute(schema)) {
           if (schema.includes("..") || schema.includes("\0")) {
             throw new Error("Invalid schema path: path traversal not allowed");
           }
           try {
-            const schemaPath = path20.resolve(process.cwd(), schema);
+            const schemaPath = path22.resolve(process.cwd(), schema);
             log(`\u{1F4CB} Loading custom schema from file: ${schemaPath}`);
-            const schemaContent = await fs18.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs20.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch (error) {
             throw new Error(
@@ -6885,22 +7364,22 @@ ${"=".repeat(60)}
         }
         const candidatePaths = [
           // GitHub Action bundle location
-          path20.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
+          path22.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
           // Historical fallback when src/output was inadvertently bundled as output1/
-          path20.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
+          path22.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
           // Local dev (repo root)
-          path20.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
+          path22.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
         ];
         for (const schemaPath of candidatePaths) {
           try {
-            const schemaContent = await fs18.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs20.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch {
           }
         }
-        const distPath = path20.join(__dirname, "output", sanitizedSchemaName, "schema.json");
-        const distAltPath = path20.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
-        const cwdPath = path20.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
+        const distPath = path22.join(__dirname, "output", sanitizedSchemaName, "schema.json");
+        const distAltPath = path22.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
+        const cwdPath = path22.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
         throw new Error(
           `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath}, ${distAltPath}, and ${cwdPath}. Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
         );
@@ -6935,71 +7414,27 @@ ${"=".repeat(60)}
           }
           {
             log("\u{1F50D} Extracting JSON from AI response...");
+            const sanitizedResponse = response.replace(/^\uFEFF/, "").replace(/[\u200B-\u200D\uFEFF\u00A0]/g, "").replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").trim();
             try {
-              reviewData = JSON.parse(response.trim());
+              reviewData = JSON.parse(sanitizedResponse);
               log("\u2705 Successfully parsed direct JSON response");
               if (debugInfo) debugInfo.jsonParseSuccess = true;
-            } catch {
-              log("\u{1F50D} Direct parsing failed, trying to extract JSON from response...");
+            } catch (parseErr) {
+              const errMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+              log(`\u{1F50D} Direct JSON parsing failed: ${errMsg}`);
               if (response.toLowerCase().includes("i cannot") || response.toLowerCase().includes("unable to")) {
                 console.error("\u{1F6AB} AI refused to analyze - returning empty result");
                 return {
                   issues: []
                 };
               }
-              const jsonString = this.extractJsonFromResponse(response);
-              if (jsonString) {
-                try {
-                  reviewData = JSON.parse(jsonString);
-                  log("\u2705 Successfully parsed extracted JSON");
-                  if (debugInfo) debugInfo.jsonParseSuccess = true;
-                } catch {
-                  log("\u{1F527} Extracted JSON parsing failed, falling back to plain text handling...");
-                  if (!response.includes("{") && !response.includes("}")) {
-                    log("\u{1F527} Plain text response detected, creating structured fallback...");
-                    reviewData = {
-                      issues: [
-                        {
-                          file: "AI_RESPONSE",
-                          line: 1,
-                          ruleId: "ai/raw_response",
-                          message: response,
-                          severity: "info",
-                          category: "documentation"
-                        }
-                      ]
-                    };
-                  } else {
-                    log("\u{1F527} Creating fallback response from non-JSON content...");
-                    reviewData = {
-                      issues: [
-                        {
-                          file: "AI_RESPONSE",
-                          line: 1,
-                          ruleId: "ai/raw_response",
-                          message: response,
-                          severity: "info",
-                          category: "documentation"
-                        }
-                      ]
-                    };
-                  }
-                }
-              } else {
-                log("\u{1F527} No JSON found in response, treating as plain text...");
-                reviewData = {
-                  issues: [
-                    {
-                      file: "AI_RESPONSE",
-                      line: 1,
-                      ruleId: "ai/raw_response",
-                      message: response,
-                      severity: "info",
-                      category: "documentation"
-                    }
-                  ]
-                };
-              }
+              log("\u{1F527} Treating response as plain text (no JSON extraction)");
+              const trimmed = response.trim();
+              return {
+                issues: [],
+                output: { text: trimmed },
+                debug: debugInfo
+              };
             }
           }
           const looksLikeTextOutput = reviewData && typeof reviewData === "object" && typeof reviewData.text === "string" && String(reviewData.text).trim().length > 0;
@@ -7127,60 +7562,6 @@ ${"=".repeat(60)}
             `Invalid AI response format: ${error instanceof Error ? error.message : "Unknown error"}`
           );
         }
-      }
-      /**
-       * Extract JSON from a response that might contain surrounding text
-       * Uses proper bracket matching to find valid JSON objects or arrays
-       */
-      extractJsonFromResponse(response) {
-        const text = response.trim();
-        let bestJson = this.findJsonWithBracketMatching(text, "{", "}");
-        if (!bestJson) {
-          bestJson = this.findJsonWithBracketMatching(text, "[", "]");
-        }
-        return bestJson;
-      }
-      /**
-       * Find JSON with proper bracket matching to avoid false positives
-       */
-      findJsonWithBracketMatching(text, openChar, closeChar) {
-        const firstIndex = text.indexOf(openChar);
-        if (firstIndex === -1) return null;
-        let depth = 0;
-        let inString = false;
-        let escaping = false;
-        for (let i = firstIndex; i < text.length; i++) {
-          const char = text[i];
-          if (escaping) {
-            escaping = false;
-            continue;
-          }
-          if (char === "\\" && inString) {
-            escaping = true;
-            continue;
-          }
-          if (char === '"' && !escaping) {
-            inString = !inString;
-            continue;
-          }
-          if (!inString) {
-            if (char === openChar) {
-              depth++;
-            } else if (char === closeChar) {
-              depth--;
-              if (depth === 0) {
-                const candidate = text.substring(firstIndex, i + 1);
-                try {
-                  JSON.parse(candidate);
-                  return candidate;
-                } catch {
-                  break;
-                }
-              }
-            }
-          }
-        }
-        return null;
       }
       /**
        * Generate mock response for testing
@@ -7612,14 +7993,21 @@ function captureTransformJS(span, code, input, output) {
 function captureProviderCall(span, providerType, request, response) {
   try {
     span.setAttribute("visor.provider.type", providerType);
+    const fullCapture = process.env.VISOR_TELEMETRY_FULL_CAPTURE === "true" || process.env.VISOR_TELEMETRY_FULL_CAPTURE === "1";
     if (request.model) span.setAttribute("visor.provider.request.model", String(request.model));
     if (request.prompt) {
       span.setAttribute("visor.provider.request.prompt.length", request.prompt.length);
       span.setAttribute("visor.provider.request.prompt.preview", request.prompt.substring(0, 500));
+      if (fullCapture) {
+        span.setAttribute("visor.provider.request.prompt", safeSerialize(request.prompt));
+      }
     }
     if (response.content) {
       span.setAttribute("visor.provider.response.length", response.content.length);
       span.setAttribute("visor.provider.response.preview", response.content.substring(0, 500));
+      if (fullCapture) {
+        span.setAttribute("visor.provider.response.content", safeSerialize(response.content));
+      }
     }
     if (response.tokens) {
       span.setAttribute("visor.provider.response.tokens", response.tokens);
@@ -8465,7 +8853,7 @@ var init_ai_check_provider = __esm({
       /**
        * Process prompt configuration to resolve final prompt string
        */
-      async processPrompt(promptConfig, prInfo, eventContext, dependencyResults, outputHistory, args) {
+      async processPrompt(promptConfig, prInfo, eventContext, dependencyResults, outputHistory, args, workflowInputs) {
         let promptContent;
         if (await this.isFilePath(promptConfig)) {
           promptContent = await this.loadPromptFromFile(promptConfig);
@@ -8478,7 +8866,8 @@ var init_ai_check_provider = __esm({
           eventContext,
           dependencyResults,
           outputHistory,
-          args
+          args,
+          workflowInputs
         );
       }
       /**
@@ -8517,9 +8906,9 @@ var init_ai_check_provider = __esm({
           } else {
             resolvedPath = import_path3.default.resolve(process.cwd(), str);
           }
-          const fs18 = require("fs").promises;
+          const fs20 = require("fs").promises;
           try {
-            const stat = await fs18.stat(resolvedPath);
+            const stat = await fs20.stat(resolvedPath);
             return stat.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
@@ -8563,7 +8952,7 @@ var init_ai_check_provider = __esm({
       /**
        * Render Liquid template in prompt with comprehensive event context
        */
-      async renderPromptTemplate(promptContent, prInfo, eventContext, dependencyResults, outputHistory, args) {
+      async renderPromptTemplate(promptContent, prInfo, eventContext, dependencyResults, outputHistory, args, workflowInputs) {
         const outputsRaw = {};
         if (dependencyResults) {
           for (const [k, v] of dependencyResults.entries()) {
@@ -8720,7 +9109,9 @@ var init_ai_check_provider = __esm({
           // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
           outputs_raw: outputsRaw,
           // Custom arguments from on_init 'with' directive
-          args: args || {}
+          args: args || {},
+          // Workflow inputs (for nested workflow steps to access parent inputs like {{ inputs.context }})
+          inputs: workflowInputs || {}
         };
         try {
           if (process.env.VISOR_DEBUG === "true") {
@@ -8822,6 +9213,9 @@ var init_ai_check_provider = __esm({
           if (aiAny2.bashConfig !== void 0) {
             aiConfig.bashConfig = aiAny2.bashConfig;
           }
+          if (aiAny2.completion_prompt !== void 0) {
+            aiConfig.completionPrompt = aiAny2.completion_prompt;
+          }
           if (aiAny2.skip_code_context !== void 0) {
             aiConfig.skip_code_context = aiAny2.skip_code_context;
           } else if (skipTransport) {
@@ -8838,6 +9232,84 @@ var init_ai_check_provider = __esm({
           if (aiAny2.fallback !== void 0) {
             aiConfig.fallback = aiAny2.fallback;
           }
+        }
+        try {
+          const ctxAny = sessionInfo;
+          const parentCtx = ctxAny?._parentContext;
+          const workspace = parentCtx?.workspace;
+          logger.debug(
+            `[AI Provider] Workspace detection for check '${config.checkName || "unknown"}':`
+          );
+          logger.debug(`[AI Provider]   sessionInfo exists: ${!!sessionInfo}`);
+          logger.debug(`[AI Provider]   _parentContext exists: ${!!parentCtx}`);
+          logger.debug(`[AI Provider]   workspace exists: ${!!workspace}`);
+          if (workspace) {
+            logger.debug(
+              `[AI Provider]   workspace.isEnabled exists: ${typeof workspace.isEnabled === "function"}`
+            );
+            logger.debug(
+              `[AI Provider]   workspace.isEnabled(): ${typeof workspace.isEnabled === "function" ? workspace.isEnabled() : "N/A"}`
+            );
+            const projectCount = typeof workspace.listProjects === "function" ? workspace.listProjects()?.length : "N/A";
+            logger.debug(`[AI Provider]   workspace.listProjects() count: ${projectCount}`);
+          }
+          if (workspace && typeof workspace.isEnabled === "function" && workspace.isEnabled()) {
+            const folders = [];
+            let workspaceRoot;
+            let mainProjectPath;
+            try {
+              const info = workspace.getWorkspaceInfo?.();
+              if (info && typeof info.workspacePath === "string") {
+                workspaceRoot = info.workspacePath;
+                mainProjectPath = info.mainProjectPath;
+                folders.push(info.workspacePath);
+              }
+            } catch {
+            }
+            const projectPaths = [];
+            try {
+              const projects = workspace.listProjects?.() || [];
+              for (const proj of projects) {
+                if (proj && typeof proj.path === "string") {
+                  folders.push(proj.path);
+                  projectPaths.push(proj.path);
+                }
+              }
+            } catch {
+            }
+            if (projectPaths.length === 0 && mainProjectPath) {
+              folders.push(mainProjectPath);
+              logger.debug(
+                `[AI Provider] No external projects - including main project as fallback: ${mainProjectPath}`
+              );
+            } else if (mainProjectPath) {
+              logger.debug(
+                `[AI Provider] Excluding main project (visor) from allowedFolders: ${mainProjectPath}`
+              );
+            }
+            const unique = Array.from(new Set(folders.filter((p) => typeof p === "string" && p)));
+            if (unique.length > 0 && workspaceRoot) {
+              aiConfig.allowedFolders = unique;
+              aiConfig.path = workspaceRoot;
+              aiConfig.cwd = workspaceRoot;
+              aiConfig.workspacePath = workspaceRoot;
+              logger.debug(`[AI Provider] Workspace isolation enabled:`);
+              logger.debug(`[AI Provider]   workspaceRoot (cwd): ${workspaceRoot}`);
+              logger.debug(
+                `[AI Provider]   mainProjectPath (excluded unless fallback): ${mainProjectPath || "N/A"}`
+              );
+              logger.debug(`[AI Provider]   allowedFolders: ${JSON.stringify(unique)}`);
+            }
+          } else if (parentCtx && typeof parentCtx.workingDirectory === "string") {
+            if (!aiConfig.allowedFolders) {
+              aiConfig.allowedFolders = [parentCtx.workingDirectory];
+            }
+            if (!aiConfig.path) {
+              aiConfig.path = parentCtx.workingDirectory;
+              aiConfig.cwd = parentCtx.workingDirectory;
+            }
+          }
+        } catch {
         }
         if (config.ai_model !== void 0) {
           aiConfig.model = config.ai_model;
@@ -8961,18 +9433,15 @@ var init_ai_check_provider = __esm({
           ctxWithStage,
           _dependencyResults,
           config.__outputHistory,
-          sessionInfo?.args
+          sessionInfo?.args,
+          config.workflowInputs
         );
         const aiAny = config.ai || {};
         const persona = (aiAny?.ai_persona || config.ai_persona || "").toString().trim();
         const finalPrompt = persona ? `Persona: ${persona}
 
 ${processedPrompt}` : processedPrompt;
-        try {
-          const pt = (config.ai?.promptType || config.ai_prompt_type || "").toString().trim();
-          if (pt) process.env.VISOR_PROMPT_TYPE = pt;
-        } catch {
-        }
+        const promptTypeOverride = (aiAny?.prompt_type || config.ai?.promptType || config.ai_prompt_type || "").toString().trim();
         try {
           const stepName = config.checkName || "unknown";
           const serviceForCapture = new AIReviewService(aiConfig);
@@ -9004,8 +9473,7 @@ ${processedPrompt}` : processedPrompt;
         } catch {
         }
         try {
-          const pt = (aiAny?.prompt_type || config.ai_prompt_type || "").toString().trim();
-          if (pt) aiConfig.promptType = pt;
+          if (promptTypeOverride) aiConfig.promptType = promptTypeOverride;
           const sys = (aiAny?.system_prompt || config.ai_system_prompt || "").toString().trim();
           const legacy = (aiAny?.custom_prompt || config.ai_custom_prompt || "").toString().trim();
           if (sys) aiConfig.systemPrompt = sys;
@@ -9016,100 +9484,123 @@ ${processedPrompt}` : processedPrompt;
         const schema = config.schema;
         try {
           let result;
-          const reuseEnabled = config.reuse_ai_session === true || typeof config.reuse_ai_session === "string";
-          if (sessionInfo?.reuseSession && sessionInfo.parentSessionId && reuseEnabled) {
-            try {
-              const { SessionRegistry: SessionRegistry2 } = (init_session_registry(), __toCommonJS(session_registry_exports));
-              const reg = SessionRegistry2.getInstance();
-              if (!reg.hasSession(sessionInfo.parentSessionId)) {
-                if (aiConfig.debug || process.env.VISOR_DEBUG === "true") {
-                  console.warn(
-                    `\u26A0\uFE0F  Parent session ${sessionInfo.parentSessionId} not found; creating a new session for ${config.checkName}`
+          const prevPromptTypeEnv = process.env.VISOR_PROMPT_TYPE;
+          const shouldIgnoreEnvPromptType = aiAny?.disableTools === true;
+          let didAdjustPromptTypeEnv = false;
+          if (promptTypeOverride) {
+            process.env.VISOR_PROMPT_TYPE = promptTypeOverride;
+            didAdjustPromptTypeEnv = true;
+          } else if (shouldIgnoreEnvPromptType && prevPromptTypeEnv !== void 0) {
+            delete process.env.VISOR_PROMPT_TYPE;
+            didAdjustPromptTypeEnv = true;
+          }
+          try {
+            const reuseEnabled = config.reuse_ai_session === true || typeof config.reuse_ai_session === "string";
+            let promptUsed = finalPrompt;
+            if (sessionInfo?.reuseSession && sessionInfo.parentSessionId && reuseEnabled) {
+              try {
+                const { SessionRegistry: SessionRegistry2 } = (init_session_registry(), __toCommonJS(session_registry_exports));
+                const reg = SessionRegistry2.getInstance();
+                if (!reg.hasSession(sessionInfo.parentSessionId)) {
+                  if (aiConfig.debug || process.env.VISOR_DEBUG === "true") {
+                    console.warn(
+                      `\u26A0\uFE0F  Parent session ${sessionInfo.parentSessionId} not found; creating a new session for ${config.checkName}`
+                    );
+                  }
+                  promptUsed = processedPrompt;
+                  const fresh = await service.executeReview(
+                    prInfo,
+                    processedPrompt,
+                    schema,
+                    config.checkName,
+                    config.sessionId
                   );
+                  return {
+                    ...fresh,
+                    issues: new IssueFilter(config.suppressionEnabled !== false).filterIssues(
+                      fresh.issues || [],
+                      process.cwd()
+                    )
+                  };
                 }
-                const fresh = await service.executeReview(
-                  prInfo,
-                  processedPrompt,
-                  schema,
-                  config.checkName,
-                  config.sessionId
+              } catch {
+              }
+              const sessionMode = config.session_mode || "clone";
+              if (aiConfig.debug) {
+                console.error(
+                  `\u{1F504} Debug: Using session reuse with parent session: ${sessionInfo.parentSessionId} (mode: ${sessionMode})`
                 );
-                return {
-                  ...fresh,
-                  issues: new IssueFilter(config.suppressionEnabled !== false).filterIssues(
-                    fresh.issues || [],
-                    process.cwd()
-                  )
-                };
+              }
+              promptUsed = processedPrompt;
+              result = await service.executeReviewWithSessionReuse(
+                prInfo,
+                processedPrompt,
+                sessionInfo.parentSessionId,
+                schema,
+                config.checkName,
+                sessionMode
+              );
+            } else {
+              if (aiConfig.debug) {
+                console.error(`\u{1F195} Debug: Creating new AI session for check: ${config.checkName}`);
+              }
+              promptUsed = finalPrompt;
+              result = await service.executeReview(
+                prInfo,
+                finalPrompt,
+                schema,
+                config.checkName,
+                config.sessionId
+              );
+            }
+            const suppressionEnabled = config.suppressionEnabled !== false;
+            const issueFilter = new IssueFilter(suppressionEnabled);
+            const filteredIssues = issueFilter.filterIssues(result.issues || [], process.cwd());
+            const finalResult = {
+              ...result,
+              issues: filteredIssues
+            };
+            try {
+              const span = trace.getSpan(context.active());
+              if (span) {
+                captureProviderCall(
+                  span,
+                  "ai",
+                  {
+                    prompt: promptUsed,
+                    model: aiConfig.model
+                  },
+                  {
+                    content: JSON.stringify(finalResult),
+                    tokens: result.usage?.totalTokens
+                  }
+                );
+                const outputForSpan = finalResult.output ?? finalResult;
+                captureCheckOutput(span, outputForSpan);
               }
             } catch {
             }
-            const sessionMode = config.session_mode || "clone";
-            if (aiConfig.debug) {
-              console.error(
-                `\u{1F504} Debug: Using session reuse with parent session: ${sessionInfo.parentSessionId} (mode: ${sessionMode})`
+            try {
+              const checkId = config.checkName || config.id || "unknown";
+              const outJson = JSON.stringify(finalResult.output ?? finalResult);
+              const { emitNdjsonSpanWithEvents: emitNdjsonSpanWithEvents2 } = (init_fallback_ndjson(), __toCommonJS(fallback_ndjson_exports));
+              emitNdjsonSpanWithEvents2(
+                "visor.check",
+                { "visor.check.id": checkId, "visor.check.output": outJson },
+                []
               );
+            } catch {
             }
-            result = await service.executeReviewWithSessionReuse(
-              prInfo,
-              processedPrompt,
-              sessionInfo.parentSessionId,
-              schema,
-              config.checkName,
-              sessionMode
-            );
-          } else {
-            if (aiConfig.debug) {
-              console.error(`\u{1F195} Debug: Creating new AI session for check: ${config.checkName}`);
+            return finalResult;
+          } finally {
+            if (didAdjustPromptTypeEnv) {
+              if (prevPromptTypeEnv === void 0) {
+                delete process.env.VISOR_PROMPT_TYPE;
+              } else {
+                process.env.VISOR_PROMPT_TYPE = prevPromptTypeEnv;
+              }
             }
-            result = await service.executeReview(
-              prInfo,
-              finalPrompt,
-              schema,
-              config.checkName,
-              config.sessionId
-            );
           }
-          const suppressionEnabled = config.suppressionEnabled !== false;
-          const issueFilter = new IssueFilter(suppressionEnabled);
-          const filteredIssues = issueFilter.filterIssues(result.issues || [], process.cwd());
-          const finalResult = {
-            ...result,
-            issues: filteredIssues
-          };
-          try {
-            const span = trace.getSpan(context.active());
-            if (span) {
-              captureProviderCall(
-                span,
-                "ai",
-                {
-                  prompt: processedPrompt.substring(0, 500),
-                  // Preview only
-                  model: aiConfig.model
-                },
-                {
-                  content: JSON.stringify(finalResult).substring(0, 500),
-                  tokens: result.usage?.totalTokens
-                }
-              );
-              const outputForSpan = finalResult.output ?? finalResult;
-              captureCheckOutput(span, outputForSpan);
-            }
-          } catch {
-          }
-          try {
-            const checkId = config.checkName || config.id || "unknown";
-            const outJson = JSON.stringify(finalResult.output ?? finalResult);
-            const { emitNdjsonSpanWithEvents: emitNdjsonSpanWithEvents2 } = (init_fallback_ndjson(), __toCommonJS(fallback_ndjson_exports));
-            emitNdjsonSpanWithEvents2(
-              "visor.check",
-              { "visor.check.id": checkId, "visor.check.output": outJson },
-              []
-            );
-          } catch {
-          }
-          return finalResult;
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           console.error(`\u274C AI Check Provider Error for check: ${errorMessage}`);
@@ -9587,19 +10078,136 @@ var init_http_input_provider = __esm({
   }
 });
 
+// src/utils/template-context.ts
+function prCacheKey(pr) {
+  let sum = 0;
+  for (const f of pr.files) sum += (f.additions || 0) + (f.deletions || 0) + (f.changes || 0);
+  return [pr.number, pr.title, pr.author, pr.base, pr.head, pr.files.length, sum].join("|");
+}
+function buildProviderTemplateContext(prInfo, dependencyResults, memoryStore, outputHistory, stageHistoryBase, opts = {
+  attachMemoryReadHelpers: true
+}) {
+  const context2 = {};
+  const key = prCacheKey(prInfo);
+  let prObj = prCache.get(key);
+  if (!prObj) {
+    prObj = {
+      number: prInfo.number,
+      title: prInfo.title,
+      body: prInfo.body,
+      author: prInfo.author,
+      base: prInfo.base,
+      head: prInfo.head,
+      totalAdditions: prInfo.totalAdditions,
+      totalDeletions: prInfo.totalDeletions,
+      files: prInfo.files.map((f) => ({
+        filename: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        changes: f.changes
+      }))
+    };
+    prCache.set(key, prObj);
+    if (prCache.size > PR_CACHE_LIMIT) {
+      const first = prCache.keys().next();
+      if (!first.done) prCache.delete(first.value);
+    }
+  }
+  context2.pr = prObj;
+  const outputs = {};
+  const outputsRaw = {};
+  const history = {};
+  if (dependencyResults) {
+    for (const [checkName, result] of dependencyResults.entries()) {
+      if (typeof checkName !== "string") continue;
+      const summary = result;
+      if (checkName.endsWith("-raw")) {
+        const name = checkName.slice(0, -4);
+        outputsRaw[name] = summary.output !== void 0 ? summary.output : summary;
+      } else {
+        const extracted = summary.output !== void 0 ? summary.output : summary;
+        outputs[checkName] = extracted;
+      }
+    }
+  }
+  if (outputHistory) {
+    for (const [checkName, historyArray] of outputHistory) {
+      const arr = Array.isArray(historyArray) ? historyArray : [];
+      const filtered = arr.filter((v) => {
+        try {
+          if (!v || typeof v !== "object") return true;
+          const obj = v;
+          if (Array.isArray(obj.forEachItems)) return false;
+          if (obj.isForEach === true && obj.forEachItems !== void 0)
+            return false;
+        } catch {
+        }
+        return true;
+      });
+      history[checkName] = filtered;
+    }
+  }
+  const historyStage = {};
+  try {
+    if (outputHistory && stageHistoryBase) {
+      for (const [checkName, historyArray] of outputHistory) {
+        const start = stageHistoryBase[checkName] || 0;
+        const arr = Array.isArray(historyArray) ? historyArray : [];
+        historyStage[checkName] = arr.slice(start);
+      }
+    }
+  } catch {
+  }
+  outputs.history = history;
+  context2.outputs = outputs;
+  context2.outputs_history = history;
+  context2.outputs_history_stage = historyStage;
+  context2.outputs_raw = outputsRaw;
+  if (opts.attachMemoryReadHelpers && memoryStore) {
+    context2.memory = {
+      get: (key2, ns) => memoryStore.get(key2, ns),
+      has: (key2, ns) => memoryStore.has(key2, ns),
+      list: (ns) => memoryStore.list(ns),
+      getAll: (ns) => memoryStore.getAll(ns)
+    };
+  }
+  if (opts.args) {
+    context2.args = opts.args;
+  }
+  return context2;
+}
+var PR_CACHE_LIMIT, prCache;
+var init_template_context = __esm({
+  "src/utils/template-context.ts"() {
+    "use strict";
+    PR_CACHE_LIMIT = 16;
+    prCache = /* @__PURE__ */ new Map();
+  }
+});
+
 // src/providers/http-client-provider.ts
-var HttpClientProvider;
+var fs8, path9, HttpClientProvider;
 var init_http_client_provider = __esm({
   "src/providers/http-client-provider.ts"() {
     "use strict";
     init_check_provider_interface();
     init_liquid_extensions();
     init_env_resolver();
+    init_sandbox();
+    init_template_context();
+    init_logger();
+    fs8 = __toESM(require("fs"));
+    path9 = __toESM(require("path"));
     HttpClientProvider = class extends CheckProvider {
       liquid;
+      sandbox;
       constructor() {
         super();
         this.liquid = createExtendedLiquid();
+      }
+      createSecureSandbox() {
+        return createSecureSandbox();
       }
       getName() {
         return "http_client";
@@ -9631,35 +10239,104 @@ var init_http_client_provider = __esm({
         const headers = config.headers || {};
         const timeout = config.timeout || 3e4;
         const transform = config.transform;
+        const transformJs = config.transform_js;
         const bodyTemplate = config.body;
+        const outputFileTemplate = config.output_file;
+        const skipIfExists = config.skip_if_exists !== false;
+        let resolvedUrlForErrors = url;
         try {
-          const templateContext = {
-            pr: {
-              number: prInfo.number,
-              title: prInfo.title,
-              body: prInfo.body,
-              author: prInfo.author,
-              base: prInfo.base,
-              head: prInfo.head,
-              totalAdditions: prInfo.totalAdditions,
-              totalDeletions: prInfo.totalDeletions
-            },
-            outputs: dependencyResults ? Object.fromEntries(dependencyResults) : {},
-            env: process.env
-          };
-          let renderedUrl = url;
-          if (url.includes("{{") || url.includes("{%")) {
-            renderedUrl = await this.liquid.parseAndRender(url, templateContext);
+          const templateContext = buildProviderTemplateContext(
+            prInfo,
+            dependencyResults,
+            void 0,
+            // memoryStore
+            void 0,
+            // outputHistory
+            void 0,
+            // stageHistoryBase
+            { attachMemoryReadHelpers: false }
+          );
+          templateContext.env = process.env;
+          let renderedUrl = String(EnvironmentResolver.resolveValue(url));
+          resolvedUrlForErrors = renderedUrl;
+          if (renderedUrl.includes("{{") || renderedUrl.includes("{%")) {
+            renderedUrl = await this.liquid.parseAndRender(renderedUrl, templateContext);
+            resolvedUrlForErrors = renderedUrl;
           }
           let requestBody;
           if (bodyTemplate) {
-            const renderedBody = await this.liquid.parseAndRender(bodyTemplate, templateContext);
-            requestBody = renderedBody;
+            let resolvedBody = String(EnvironmentResolver.resolveValue(bodyTemplate));
+            if (resolvedBody.includes("{{") || resolvedBody.includes("{%")) {
+              resolvedBody = await this.liquid.parseAndRender(resolvedBody, templateContext);
+            }
+            requestBody = resolvedBody;
           }
-          const resolvedHeaders = EnvironmentResolver.resolveHeaders(headers);
+          const resolvedHeaders = {};
+          for (const [key, value] of Object.entries(headers)) {
+            let resolvedValue = String(EnvironmentResolver.resolveValue(value));
+            if (resolvedValue.includes("{{") || resolvedValue.includes("{%")) {
+              resolvedValue = await this.liquid.parseAndRender(resolvedValue, templateContext);
+            }
+            resolvedHeaders[key] = resolvedValue;
+            if (key.toLowerCase() === "authorization") {
+              const maskedValue = resolvedValue.length > 20 ? `${resolvedValue.substring(0, 15)}...${resolvedValue.substring(resolvedValue.length - 5)}` : resolvedValue;
+              logger.verbose(`[http_client] ${key}: ${maskedValue}`);
+            }
+          }
+          let resolvedOutputFile;
+          if (outputFileTemplate) {
+            let outputPath = String(EnvironmentResolver.resolveValue(outputFileTemplate));
+            if (outputPath.includes("{{") || outputPath.includes("{%")) {
+              outputPath = await this.liquid.parseAndRender(outputPath, templateContext);
+            }
+            resolvedOutputFile = outputPath.trim();
+            const parentContext = context2?._parentContext;
+            const workingDirectory = parentContext?.workingDirectory;
+            const workspaceEnabled = parentContext?.workspace?.isEnabled?.();
+            if (workspaceEnabled && workingDirectory && !path9.isAbsolute(resolvedOutputFile)) {
+              resolvedOutputFile = path9.join(workingDirectory, resolvedOutputFile);
+              logger.debug(
+                `[http_client] Resolved relative output_file to workspace: ${resolvedOutputFile}`
+              );
+            }
+            if (skipIfExists && fs8.existsSync(resolvedOutputFile)) {
+              const stats = fs8.statSync(resolvedOutputFile);
+              logger.verbose(`[http_client] File cached: ${resolvedOutputFile} (${stats.size} bytes)`);
+              return {
+                issues: [],
+                file_path: resolvedOutputFile,
+                size: stats.size,
+                cached: true
+              };
+            }
+          }
           const stepName = config.checkName || "unknown";
           const mock = context2?.hooks?.mockForStep?.(String(stepName));
-          const data = mock !== void 0 ? mock : await this.fetchData(renderedUrl, method, resolvedHeaders, requestBody, timeout);
+          if (mock !== void 0) {
+            const mockObj = typeof mock === "object" && mock !== null ? mock : { data: mock };
+            return {
+              issues: [],
+              ...mockObj
+            };
+          }
+          logger.verbose(`[http_client] ${method} ${renderedUrl}`);
+          if (requestBody) {
+            logger.verbose(
+              `[http_client] Body: ${requestBody.substring(0, 500)}${requestBody.length > 500 ? "..." : ""}`
+            );
+          }
+          if (resolvedOutputFile) {
+            const fileResult = await this.downloadToFile(
+              renderedUrl,
+              method,
+              resolvedHeaders,
+              requestBody,
+              timeout,
+              resolvedOutputFile
+            );
+            return fileResult;
+          }
+          const data = await this.fetchData(renderedUrl, method, resolvedHeaders, requestBody, timeout);
           let processedData = data;
           if (transform) {
             try {
@@ -9689,10 +10366,45 @@ var init_http_client_provider = __esm({
               };
             }
           }
+          if (transformJs) {
+            try {
+              if (!this.sandbox) {
+                this.sandbox = this.createSecureSandbox();
+              }
+              const jsScope = {
+                output: data,
+                pr: templateContext.pr,
+                outputs: templateContext.outputs,
+                env: process.env
+              };
+              const result = compileAndRun(this.sandbox, transformJs, jsScope, {
+                injectLog: true,
+                logPrefix: "\u{1F50D} [transform_js]",
+                wrapFunction: true
+              });
+              processedData = result;
+              logger.verbose(`\u2713 Applied JavaScript transform successfully`);
+            } catch (error) {
+              logger.error(
+                `\u2717 Failed to apply JavaScript transform: ${error instanceof Error ? error.message : "Unknown error"}`
+              );
+              return {
+                issues: [
+                  {
+                    file: "http_client",
+                    line: 0,
+                    ruleId: "http_client/transform_js_error",
+                    message: `Failed to apply JavaScript transform: ${error instanceof Error ? error.message : "Unknown error"}`,
+                    severity: "error",
+                    category: "logic"
+                  }
+                ]
+              };
+            }
+          }
           return {
             issues: [],
-            // Add custom data field that will be passed through to dependent checks
-            data: processedData
+            output: processedData
           };
         } catch (error) {
           return {
@@ -9701,7 +10413,7 @@ var init_http_client_provider = __esm({
                 file: "http_client",
                 line: 0,
                 ruleId: "http_client/fetch_error",
-                message: `Failed to fetch from ${url}: ${error instanceof Error ? error.message : "Unknown error"}`,
+                message: `Failed to fetch from ${resolvedUrlForErrors}: ${error instanceof Error ? error.message : "Unknown error"}`,
                 severity: "error",
                 category: "logic"
               }
@@ -9734,7 +10446,13 @@ var init_http_client_provider = __esm({
           }
           const response = await fetch(url, requestOptions);
           clearTimeout(timeoutId);
+          logger.verbose(`[http_client] Response: ${response.status} ${response.statusText}`);
           if (!response.ok) {
+            try {
+              const errorBody = await response.text();
+              logger.warn(`[http_client] Error body: ${errorBody.substring(0, 500)}`);
+            } catch {
+            }
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
           }
           const contentType = response.headers.get("content-type");
@@ -9758,6 +10476,89 @@ var init_http_client_provider = __esm({
           throw error;
         }
       }
+      async downloadToFile(url, method, headers, body, timeout, outputFile) {
+        if (typeof fetch === "undefined") {
+          throw new Error("HTTP client provider requires Node.js 18+ or node-fetch package");
+        }
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeout);
+        try {
+          const requestOptions = {
+            method,
+            headers: { ...headers },
+            signal: controller.signal
+          };
+          if (method !== "GET" && body) {
+            requestOptions.body = body;
+            if (!headers["Content-Type"] && !headers["content-type"]) {
+              requestOptions.headers = {
+                ...requestOptions.headers,
+                "Content-Type": "application/json"
+              };
+            }
+          }
+          const response = await fetch(url, requestOptions);
+          clearTimeout(timeoutId);
+          if (!response.ok) {
+            return {
+              issues: [
+                {
+                  file: "http_client",
+                  line: 0,
+                  ruleId: "http_client/download_error",
+                  message: `Failed to download file: HTTP ${response.status}: ${response.statusText}`,
+                  severity: "error",
+                  category: "logic"
+                }
+              ]
+            };
+          }
+          const parentDir = path9.dirname(outputFile);
+          if (parentDir && !fs8.existsSync(parentDir)) {
+            fs8.mkdirSync(parentDir, { recursive: true });
+          }
+          const arrayBuffer = await response.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          fs8.writeFileSync(outputFile, buffer);
+          const contentType = response.headers.get("content-type") || "application/octet-stream";
+          logger.verbose(`[http_client] Downloaded: ${outputFile} (${buffer.length} bytes)`);
+          return {
+            issues: [],
+            file_path: outputFile,
+            size: buffer.length,
+            content_type: contentType,
+            cached: false
+          };
+        } catch (error) {
+          clearTimeout(timeoutId);
+          if (error instanceof Error && error.name === "AbortError") {
+            return {
+              issues: [
+                {
+                  file: "http_client",
+                  line: 0,
+                  ruleId: "http_client/download_timeout",
+                  message: `Download timed out after ${timeout}ms`,
+                  severity: "error",
+                  category: "logic"
+                }
+              ]
+            };
+          }
+          return {
+            issues: [
+              {
+                file: "http_client",
+                line: 0,
+                ruleId: "http_client/download_error",
+                message: `Failed to download file: ${error instanceof Error ? error.message : "Unknown error"}`,
+                severity: "error",
+                category: "logic"
+              }
+            ]
+          };
+        }
+      }
       getSupportedConfigKeys() {
         return [
           "type",
@@ -9766,7 +10567,10 @@ var init_http_client_provider = __esm({
           "headers",
           "body",
           "transform",
+          "transform_js",
           "timeout",
+          "output_file",
+          "skip_if_exists",
           "depends_on",
           "on",
           "if",
@@ -9782,7 +10586,9 @@ var init_http_client_provider = __esm({
           "Valid HTTP/HTTPS URL to fetch from",
           "Network access to the endpoint",
           "Optional: Transform template for processing response data",
-          "Optional: Body template for POST/PUT requests"
+          "Optional: Body template for POST/PUT requests",
+          "Optional: output_file path to download response to a file",
+          "Optional: skip_if_exists (default: true) to enable caching for file downloads"
         ];
       }
     };
@@ -9885,7 +10691,8 @@ var init_log_check_provider = __esm({
           includeDependencies,
           includeMetadata,
           config.__outputHistory,
-          context2
+          context2,
+          config
         );
         const renderedMessage = await this.liquid.parseAndRender(message, templateContext);
         const logOutput = this.formatLogOutput(
@@ -9900,13 +10707,16 @@ var init_log_check_provider = __esm({
         else if (level === "warn") logger.warn(logOutput);
         else if (level === "debug") logger.debug(logOutput);
         else logger.info(logOutput);
-        return {
+        const summary = {
           issues: [],
-          // Add log output as custom field
           logOutput
         };
+        if (config.group === "chat") {
+          summary.output = { text: renderedMessage };
+        }
+        return summary;
       }
-      buildTemplateContext(prInfo, dependencyResults, _includePrContext = true, _includeDependencies = true, includeMetadata = true, outputHistory, executionContext) {
+      buildTemplateContext(prInfo, dependencyResults, _includePrContext = true, _includeDependencies = true, includeMetadata = true, outputHistory, executionContext, config) {
         const context2 = {};
         context2.pr = {
           number: prInfo.number,
@@ -9968,7 +10778,7 @@ var init_log_check_provider = __esm({
             workingDirectory: process.cwd()
           };
         }
-        const workflowInputs = executionContext?.workflowInputs || {};
+        const workflowInputs = config?.workflowInputs || executionContext?.workflowInputs || {};
         logger.debug(
           `[LogProvider] Adding ${Object.keys(workflowInputs).length} workflow inputs to context`
         );
@@ -11088,7 +11898,8 @@ var init_command_check_provider = __esm({
           // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
           outputs_raw: outputsRaw,
           // Workflow inputs (when executing within a workflow)
-          inputs: context2?.workflowInputs || {},
+          // Check config first (set by projectWorkflowToGraph), then fall back to context
+          inputs: config.workflowInputs || context2?.workflowInputs || {},
           // Custom arguments from on_init 'with' directive
           args: context2?.args || {},
           env: this.getSafeEnvironmentVariables()
@@ -11127,14 +11938,20 @@ var init_command_check_provider = __esm({
               mock = rawMock;
             }
             const m = mock;
-            let out = m.stdout ?? "";
-            try {
-              if (typeof out === "string" && (out.trim().startsWith("{") || out.trim().startsWith("["))) {
-                out = JSON.parse(out);
+            const isCommandMock = m.stdout !== void 0 || m.stderr !== void 0 || m.exit_code !== void 0 || m.exit !== void 0;
+            let out;
+            if (isCommandMock) {
+              out = m.stdout ?? "";
+              try {
+                if (typeof out === "string" && (out.trim().startsWith("{") || out.trim().startsWith("["))) {
+                  out = JSON.parse(out);
+                }
+              } catch {
               }
-            } catch {
+            } else {
+              out = mock;
             }
-            const code = typeof m.exit_code === "number" ? m.exit_code : typeof m.exit === "number" ? m.exit : 0;
+            const code = isCommandMock ? typeof m.exit_code === "number" ? m.exit_code : typeof m.exit === "number" ? m.exit : 0 : 0;
             if (code !== 0) {
               return {
                 issues: [
@@ -11173,8 +11990,7 @@ var init_command_check_provider = __esm({
               }
             }
           }
-          const timeoutSeconds = config.timeout || 60;
-          const timeoutMs = timeoutSeconds * 1e3;
+          const timeoutMs = config.timeout || 6e4;
           const normalizeNodeEval = (cmd) => {
             const re = /^(?<prefix>\s*(?:\/usr\/bin\/env\s+)?node(?:\.exe)?\s+(?:-e|--eval)\s+)(['"])([\s\S]*?)\2(?<suffix>\s|$)/;
             const m = cmd.match(re);
@@ -11188,9 +12004,17 @@ var init_command_check_provider = __esm({
             return cmd.replace(re, `${prefix}${quote}${escaped}${quote}${suffix}`);
           };
           const safeCommand = normalizeNodeEval(renderedCommand);
+          const parentContext = context2?._parentContext;
+          const workingDirectory = parentContext?.workingDirectory;
+          const workspaceEnabled = parentContext?.workspace?.isEnabled?.();
+          const cwd = workspaceEnabled && workingDirectory ? workingDirectory : void 0;
+          if (cwd) {
+            logger.debug(`[command] Using workspace working directory: ${cwd}`);
+          }
           const execResult = await commandExecutor.execute(safeCommand, {
             env: scriptEnv,
-            timeout: timeoutMs
+            timeout: timeoutMs,
+            cwd
           });
           const { stdout, stderr, exitCode } = execResult;
           if (stderr) {
@@ -12247,6 +13071,10 @@ ${stderrOutput}` : `Command execution failed: ${errorMessage}`;
         if (!message) {
           return null;
         }
+        const hasIssueField = data.file !== void 0 || data.path !== void 0 || data.filename !== void 0 || data.line !== void 0 || data.startLine !== void 0 || data.lineNumber !== void 0 || data.severity !== void 0 || data.level !== void 0 || data.priority !== void 0 || data.ruleId !== void 0 || data.rule !== void 0 || data.category !== void 0 || data.type !== void 0;
+        if (!hasIssueField) {
+          return null;
+        }
         const allowedSeverities = /* @__PURE__ */ new Set(["info", "warning", "error", "critical"]);
         const severityRaw = this.toTrimmedString(data.severity || data.level || data.priority);
         let severity = "warning";
@@ -12368,114 +13196,6 @@ ${stderrOutput}` : `Command execution failed: ${errorMessage}`;
         });
       }
     };
-  }
-});
-
-// src/utils/template-context.ts
-function prCacheKey(pr) {
-  let sum = 0;
-  for (const f of pr.files) sum += (f.additions || 0) + (f.deletions || 0) + (f.changes || 0);
-  return [pr.number, pr.title, pr.author, pr.base, pr.head, pr.files.length, sum].join("|");
-}
-function buildProviderTemplateContext(prInfo, dependencyResults, memoryStore, outputHistory, stageHistoryBase, opts = {
-  attachMemoryReadHelpers: true
-}) {
-  const context2 = {};
-  const key = prCacheKey(prInfo);
-  let prObj = prCache.get(key);
-  if (!prObj) {
-    prObj = {
-      number: prInfo.number,
-      title: prInfo.title,
-      body: prInfo.body,
-      author: prInfo.author,
-      base: prInfo.base,
-      head: prInfo.head,
-      totalAdditions: prInfo.totalAdditions,
-      totalDeletions: prInfo.totalDeletions,
-      files: prInfo.files.map((f) => ({
-        filename: f.filename,
-        status: f.status,
-        additions: f.additions,
-        deletions: f.deletions,
-        changes: f.changes
-      }))
-    };
-    prCache.set(key, prObj);
-    if (prCache.size > PR_CACHE_LIMIT) {
-      const first = prCache.keys().next();
-      if (!first.done) prCache.delete(first.value);
-    }
-  }
-  context2.pr = prObj;
-  const outputs = {};
-  const outputsRaw = {};
-  const history = {};
-  if (dependencyResults) {
-    for (const [checkName, result] of dependencyResults.entries()) {
-      if (typeof checkName !== "string") continue;
-      const summary = result;
-      if (checkName.endsWith("-raw")) {
-        const name = checkName.slice(0, -4);
-        outputsRaw[name] = summary.output !== void 0 ? summary.output : summary;
-      } else {
-        const extracted = summary.output !== void 0 ? summary.output : summary;
-        outputs[checkName] = extracted;
-      }
-    }
-  }
-  if (outputHistory) {
-    for (const [checkName, historyArray] of outputHistory) {
-      const arr = Array.isArray(historyArray) ? historyArray : [];
-      const filtered = arr.filter((v) => {
-        try {
-          if (!v || typeof v !== "object") return true;
-          const obj = v;
-          if (Array.isArray(obj.forEachItems)) return false;
-          if (obj.isForEach === true && obj.forEachItems !== void 0)
-            return false;
-        } catch {
-        }
-        return true;
-      });
-      history[checkName] = filtered;
-    }
-  }
-  const historyStage = {};
-  try {
-    if (outputHistory && stageHistoryBase) {
-      for (const [checkName, historyArray] of outputHistory) {
-        const start = stageHistoryBase[checkName] || 0;
-        const arr = Array.isArray(historyArray) ? historyArray : [];
-        historyStage[checkName] = arr.slice(start);
-      }
-    }
-  } catch {
-  }
-  outputs.history = history;
-  context2.outputs = outputs;
-  context2.outputs_history = history;
-  context2.outputs_history_stage = historyStage;
-  context2.outputs_raw = outputsRaw;
-  if (opts.attachMemoryReadHelpers && memoryStore) {
-    context2.memory = {
-      get: (key2, ns) => memoryStore.get(key2, ns),
-      has: (key2, ns) => memoryStore.has(key2, ns),
-      list: (ns) => memoryStore.list(ns),
-      getAll: (ns) => memoryStore.getAll(ns)
-    };
-  }
-  if (opts.args) {
-    context2.args = opts.args;
-  }
-  return context2;
-}
-var PR_CACHE_LIMIT, prCache;
-var init_template_context = __esm({
-  "src/utils/template-context.ts"() {
-    "use strict";
-    PR_CACHE_LIMIT = 16;
-    prCache = /* @__PURE__ */ new Map();
   }
 });
 
@@ -13751,7 +14471,8 @@ var init_prompt_state = __esm({
       setFirstMessage(channel, threadTs, text) {
         const key = this.key(channel, threadTs);
         if (!text || !text.trim()) return;
-        if (!this.firstMessage.has(key)) {
+        const existing = this.firstMessage.get(key);
+        if (!existing || existing.consumed) {
           this.firstMessage.set(key, { text, consumed: false });
         }
       }
@@ -13782,6 +14503,16 @@ var init_prompt_state = __esm({
           if (now - info.timestamp > this.ttlMs) {
             this.waiting.delete(key);
             removed++;
+          }
+        }
+        for (const [key] of this.firstMessage.entries()) {
+          const waitingInfo = this.waiting.get(key);
+          if (!waitingInfo) {
+            const entry = this.firstMessage.get(key);
+            if (entry?.consumed) {
+              this.firstMessage.delete(key);
+              removed++;
+            }
           }
         }
         if (removed) {
@@ -13858,7 +14589,7 @@ var init_stdin_reader = __esm({
 });
 
 // src/providers/human-input-check-provider.ts
-var fs9, path10, HumanInputCheckProvider;
+var fs10, path11, HumanInputCheckProvider;
 var init_human_input_check_provider = __esm({
   "src/providers/human-input-check-provider.ts"() {
     "use strict";
@@ -13867,8 +14598,8 @@ var init_human_input_check_provider = __esm({
     init_prompt_state();
     init_liquid_extensions();
     init_stdin_reader();
-    fs9 = __toESM(require("fs"));
-    path10 = __toESM(require("path"));
+    fs10 = __toESM(require("fs"));
+    path11 = __toESM(require("path"));
     HumanInputCheckProvider = class _HumanInputCheckProvider extends CheckProvider {
       liquid;
       /**
@@ -14042,19 +14773,19 @@ var init_human_input_check_provider = __esm({
        */
       async tryReadFile(filePath) {
         try {
-          const absolutePath = path10.isAbsolute(filePath) ? filePath : path10.resolve(process.cwd(), filePath);
-          const normalizedPath = path10.normalize(absolutePath);
+          const absolutePath = path11.isAbsolute(filePath) ? filePath : path11.resolve(process.cwd(), filePath);
+          const normalizedPath = path11.normalize(absolutePath);
           const cwd = process.cwd();
-          if (!normalizedPath.startsWith(cwd + path10.sep) && normalizedPath !== cwd) {
+          if (!normalizedPath.startsWith(cwd + path11.sep) && normalizedPath !== cwd) {
             return null;
           }
           try {
-            await fs9.promises.access(normalizedPath, fs9.constants.R_OK);
-            const stats = await fs9.promises.stat(normalizedPath);
+            await fs10.promises.access(normalizedPath, fs10.constants.R_OK);
+            const stats = await fs10.promises.stat(normalizedPath);
             if (!stats.isFile()) {
               return null;
             }
-            const content = await fs9.promises.readFile(normalizedPath, "utf-8");
+            const content = await fs10.promises.readFile(normalizedPath, "utf-8");
             return content.trim();
           } catch {
             return null;
@@ -14384,6 +15115,14 @@ var init_script_check_provider = __esm({
         return true;
       }
       async execute(prInfo, config, dependencyResults, _sessionInfo) {
+        try {
+          const stepName = config.checkName || "unknown";
+          const mock = _sessionInfo?.hooks?.mockForStep?.(String(stepName));
+          if (mock !== void 0) {
+            return { issues: [], output: mock };
+          }
+        } catch {
+        }
         const script = String(config.content || "");
         const memoryStore = MemoryStore.getInstance();
         const ctx = buildProviderTemplateContext(
@@ -14394,8 +15133,21 @@ var init_script_check_provider = __esm({
           _sessionInfo?.stageHistoryBase,
           { attachMemoryReadHelpers: false, args: _sessionInfo?.args }
         );
+        const inputs = config.workflowInputs || _sessionInfo?.workflowInputs || {};
+        ctx.inputs = inputs;
+        ctx.env = process.env;
         const { ops, needsSave } = createSyncMemoryOps(memoryStore);
         ctx.memory = ops;
+        ctx.escapeXml = (str) => {
+          if (str == null) return "";
+          return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+        };
+        ctx.btoa = (str) => {
+          return Buffer.from(String(str), "binary").toString("base64");
+        };
+        ctx.atob = (str) => {
+          return Buffer.from(String(str), "base64").toString("binary");
+        };
         const sandbox = this.createSecureSandbox();
         let result;
         try {
@@ -14479,12 +15231,12 @@ var workflow_registry_exports = {};
 __export(workflow_registry_exports, {
   WorkflowRegistry: () => WorkflowRegistry
 });
-var import_fs, path11, yaml, import_ajv2, import_ajv_formats, WorkflowRegistry;
+var import_fs, path12, yaml, import_ajv2, import_ajv_formats, WorkflowRegistry;
 var init_workflow_registry = __esm({
   "src/workflow-registry.ts"() {
     "use strict";
     import_fs = require("fs");
-    path11 = __toESM(require("path"));
+    path12 = __toESM(require("path"));
     yaml = __toESM(require("js-yaml"));
     init_logger();
     init_dependency_resolver();
@@ -14773,7 +15525,7 @@ var init_workflow_registry = __esm({
           }
           return await response.text();
         }
-        const filePath = path11.isAbsolute(source) ? source : path11.resolve(basePath || process.cwd(), source);
+        const filePath = path12.isAbsolute(source) ? source : path12.resolve(basePath || process.cwd(), source);
         return await import_fs.promises.readFile(filePath, "utf-8");
       }
       /**
@@ -14798,7 +15550,8 @@ var init_workflow_registry = __esm({
       detectCircularDependencies(workflow) {
         const dependencies = {};
         for (const [stepId, step] of Object.entries(workflow.steps || {})) {
-          dependencies[stepId] = step.depends_on || [];
+          const rawDeps = step.depends_on;
+          dependencies[stepId] = Array.isArray(rawDeps) ? rawDeps : rawDeps ? [rawDeps] : [];
         }
         try {
           const graph = DependencyResolver.buildDependencyGraph(dependencies);
@@ -14968,7 +15721,8 @@ var init_workflow_executor = __esm({
       resolveExecutionOrder(workflow) {
         const dependencies = {};
         for (const [stepId, step] of Object.entries(workflow.steps)) {
-          dependencies[stepId] = step.depends_on || [];
+          const rawDeps = step.depends_on;
+          dependencies[stepId] = Array.isArray(rawDeps) ? rawDeps : rawDeps ? [rawDeps] : [];
         }
         const graph = DependencyResolver.buildDependencyGraph(dependencies);
         if (graph.hasCycles) {
@@ -15200,7 +15954,8 @@ function projectWorkflowToGraph(workflow, workflowInputs, _parentCheckId) {
       triggers: step.on || workflow.on || [],
       group: step.group,
       providerType: step.type || "ai",
-      dependencies: (step.depends_on || []).map((dep) => dep)
+      // Normalize depends_on to array (supports string | string[])
+      dependencies: (Array.isArray(step.depends_on) ? step.depends_on : step.depends_on ? [step.depends_on] : []).map((dep) => dep)
     };
   }
   const config = {
@@ -15528,12 +16283,12 @@ var init_config_merger = __esm({
 });
 
 // src/utils/config-loader.ts
-var fs11, path12, yaml2, ConfigLoader;
+var fs12, path13, yaml2, ConfigLoader;
 var init_config_loader = __esm({
   "src/utils/config-loader.ts"() {
     "use strict";
-    fs11 = __toESM(require("fs"));
-    path12 = __toESM(require("path"));
+    fs12 = __toESM(require("fs"));
+    path13 = __toESM(require("path"));
     yaml2 = __toESM(require("js-yaml"));
     ConfigLoader = class {
       constructor(options = {}) {
@@ -15614,7 +16369,7 @@ var init_config_loader = __esm({
             return source.toLowerCase();
           case "local" /* LOCAL */:
             const basePath = this.options.baseDir || process.cwd();
-            return path12.resolve(basePath, source);
+            return path13.resolve(basePath, source);
           default:
             return source;
         }
@@ -15624,10 +16379,10 @@ var init_config_loader = __esm({
        */
       async fetchLocalConfig(filePath) {
         const basePath = this.options.baseDir || process.cwd();
-        const resolvedPath = path12.resolve(basePath, filePath);
+        const resolvedPath = path13.resolve(basePath, filePath);
         this.validateLocalPath(resolvedPath);
         try {
-          const content = fs11.readFileSync(resolvedPath, "utf8");
+          const content = fs12.readFileSync(resolvedPath, "utf8");
           const config = yaml2.load(content);
           if (!config || typeof config !== "object") {
             throw new Error(`Invalid YAML in configuration file: ${resolvedPath}`);
@@ -15638,7 +16393,7 @@ var init_config_loader = __esm({
             delete config.include;
           }
           const previousBaseDir = this.options.baseDir;
-          this.options.baseDir = path12.dirname(resolvedPath);
+          this.options.baseDir = path13.dirname(resolvedPath);
           try {
             if (config.extends) {
               const processedConfig = await this.processExtends(config);
@@ -15721,25 +16476,25 @@ var init_config_loader = __esm({
       async fetchDefaultConfig() {
         const possiblePaths = [
           // Only support new non-dot filename
-          path12.join(__dirname, "defaults", "visor.yaml"),
+          path13.join(__dirname, "defaults", "visor.yaml"),
           // When running from source
-          path12.join(__dirname, "..", "..", "defaults", "visor.yaml"),
+          path13.join(__dirname, "..", "..", "defaults", "visor.yaml"),
           // Try via package root
-          this.findPackageRoot() ? path12.join(this.findPackageRoot(), "defaults", "visor.yaml") : "",
+          this.findPackageRoot() ? path13.join(this.findPackageRoot(), "defaults", "visor.yaml") : "",
           // GitHub Action environment variable
-          process.env.GITHUB_ACTION_PATH ? path12.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml") : "",
-          process.env.GITHUB_ACTION_PATH ? path12.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml") : ""
+          process.env.GITHUB_ACTION_PATH ? path13.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml") : "",
+          process.env.GITHUB_ACTION_PATH ? path13.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml") : ""
         ].filter((p) => p);
         let defaultConfigPath;
         for (const possiblePath of possiblePaths) {
-          if (fs11.existsSync(possiblePath)) {
+          if (fs12.existsSync(possiblePath)) {
             defaultConfigPath = possiblePath;
             break;
           }
         }
         if (defaultConfigPath) {
           console.error(`\u{1F4E6} Loading bundled default configuration from ${defaultConfigPath}`);
-          const content = fs11.readFileSync(defaultConfigPath, "utf8");
+          const content = fs12.readFileSync(defaultConfigPath, "utf8");
           let config = yaml2.load(content);
           if (!config || typeof config !== "object") {
             throw new Error("Invalid default configuration");
@@ -15753,7 +16508,7 @@ var init_config_loader = __esm({
           if (config.extends) {
             const previousBaseDir = this.options.baseDir;
             try {
-              this.options.baseDir = path12.dirname(defaultConfigPath);
+              this.options.baseDir = path13.dirname(defaultConfigPath);
               return await this.processExtends(config);
             } finally {
               this.options.baseDir = previousBaseDir;
@@ -15830,8 +16585,8 @@ var init_config_loader = __esm({
        */
       validateLocalPath(resolvedPath) {
         const projectRoot = this.options.projectRoot || process.cwd();
-        const normalizedPath = path12.normalize(resolvedPath);
-        const normalizedRoot = path12.normalize(projectRoot);
+        const normalizedPath = path13.normalize(resolvedPath);
+        const normalizedRoot = path13.normalize(projectRoot);
         if (!normalizedPath.startsWith(normalizedRoot)) {
           throw new Error(
             `Security error: Path traversal detected. Cannot access files outside project root: ${projectRoot}`
@@ -15857,19 +16612,19 @@ var init_config_loader = __esm({
        */
       findPackageRoot() {
         let currentDir = __dirname;
-        const root = path12.parse(currentDir).root;
+        const root = path13.parse(currentDir).root;
         while (currentDir !== root) {
-          const packageJsonPath = path12.join(currentDir, "package.json");
-          if (fs11.existsSync(packageJsonPath)) {
+          const packageJsonPath = path13.join(currentDir, "package.json");
+          if (fs12.existsSync(packageJsonPath)) {
             try {
-              const packageJson = JSON.parse(fs11.readFileSync(packageJsonPath, "utf8"));
+              const packageJson = JSON.parse(fs12.readFileSync(packageJsonPath, "utf8"));
               if (packageJson.name === "@probelabs/visor") {
                 return currentDir;
               }
             } catch {
             }
           }
-          currentDir = path12.dirname(currentDir);
+          currentDir = path13.dirname(currentDir);
         }
         return null;
       }
@@ -15970,6 +16725,20 @@ var init_config_schema = __esm({
               },
               description: "Import workflow definitions from external files or URLs"
             },
+            inputs: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/WorkflowInput"
+              },
+              description: "Workflow inputs (for standalone reusable workflows)"
+            },
+            outputs: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/WorkflowOutput"
+              },
+              description: "Workflow outputs (for standalone reusable workflows)"
+            },
             steps: {
               $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E",
               description: "Step configurations (recommended)"
@@ -15980,7 +16749,7 @@ var init_config_schema = __esm({
             },
             output: {
               $ref: "#/definitions/OutputConfig",
-              description: "Output configuration"
+              description: "Output configuration (optional - defaults provided)"
             },
             http_server: {
               $ref: "#/definitions/HttpServerConfig",
@@ -16051,9 +16820,17 @@ var init_config_schema = __esm({
                 additionalProperties: false
               },
               description: "Optional integrations: event-driven frontends (e.g., ndjson-sink, github)"
+            },
+            workspace: {
+              $ref: "#/definitions/WorkspaceConfig",
+              description: "Workspace isolation configuration for sandboxed execution"
+            },
+            slack: {
+              $ref: "#/definitions/SlackConfig",
+              description: "Slack configuration"
             }
           },
-          required: ["output", "version"],
+          required: ["version"],
           patternProperties: {
             "^x-": {}
           }
@@ -16154,6 +16931,63 @@ var init_config_schema = __esm({
           type: "object",
           additionalProperties: {
             type: "string"
+          }
+        },
+        WorkflowInput: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "Input parameter name"
+            },
+            schema: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "JSON Schema for the input"
+            },
+            required: {
+              type: "boolean",
+              description: "Whether this input is required"
+            },
+            default: {
+              description: "Default value if not provided"
+            },
+            description: {
+              type: "string",
+              description: "Human-readable description"
+            }
+          },
+          required: ["name"],
+          additionalProperties: false,
+          description: "Workflow input definition for standalone reusable workflows",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        WorkflowOutput: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "Output name"
+            },
+            description: {
+              type: "string",
+              description: "Human-readable description"
+            },
+            value: {
+              type: "string",
+              description: "Value using Liquid template syntax (references step outputs)"
+            },
+            value_js: {
+              type: "string",
+              description: "Value using JavaScript expression (alternative to value)"
+            }
+          },
+          required: ["name"],
+          additionalProperties: false,
+          description: "Workflow output definition for standalone reusable workflows",
+          patternProperties: {
+            "^x-": {}
           }
         },
         "Record<string,CheckConfig>": {
@@ -16295,11 +17129,18 @@ var init_config_schema = __esm({
               description: "Timeout in seconds for command execution (default: 60)"
             },
             depends_on: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "Check IDs that this check depends on (optional)"
+              anyOf: [
+                {
+                  type: "string"
+                },
+                {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                }
+              ],
+              description: "Check IDs that this check depends on (optional). Accepts single string or array."
             },
             group: {
               type: "string",
@@ -16539,12 +17380,91 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
               $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
               description: "Map workflow outputs to check outputs"
+            },
+            workflow_inputs: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Alias for args - workflow inputs (backward compatibility)"
+            },
+            config: {
+              type: "string",
+              description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
+            },
+            workflow_overrides: {
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845%3E%3E",
+              description: "Alias for overrides - workflow step overrides (backward compatibility)"
+            },
+            ref: {
+              type: "string",
+              description: "Git reference to checkout (branch, tag, commit SHA) - supports templates"
+            },
+            repository: {
+              type: "string",
+              description: "Repository URL or owner/repo format (defaults to current repository)"
+            },
+            token: {
+              type: "string",
+              description: "GitHub token for private repositories (defaults to GITHUB_TOKEN env)"
+            },
+            fetch_depth: {
+              type: "number",
+              description: "Number of commits to fetch (0 for full history, default: 1)"
+            },
+            fetch_tags: {
+              type: "boolean",
+              description: "Whether to fetch tags (default: false)"
+            },
+            submodules: {
+              anyOf: [
+                {
+                  type: "boolean"
+                },
+                {
+                  type: "string",
+                  const: "recursive"
+                }
+              ],
+              description: "Checkout submodules: false, true, or 'recursive'"
+            },
+            working_directory: {
+              type: "string",
+              description: "Working directory for the checkout (defaults to temp directory)"
+            },
+            use_worktree: {
+              type: "boolean",
+              description: "Use git worktree for efficient parallel checkouts (default: true)"
+            },
+            clean: {
+              type: "boolean",
+              description: "Clean the working directory before checkout (default: true)"
+            },
+            sparse_checkout: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Sparse checkout paths - only checkout specific directories/files"
+            },
+            lfs: {
+              type: "boolean",
+              description: "Enable Git LFS (Large File Storage)"
+            },
+            clone_timeout_ms: {
+              type: "number",
+              description: "Timeout in ms for cloning the bare repository (default: 300000 = 5 min)"
+            },
+            cleanup_on_failure: {
+              type: "boolean",
+              description: "Clean up worktree on failure (default: true)"
+            },
+            persist_worktree: {
+              type: "boolean",
+              description: "Keep worktree after workflow completion (default: false)"
             }
           },
           additionalProperties: false,
@@ -16674,6 +17594,10 @@ var init_config_schema = __esm({
             bashConfig: {
               $ref: "#/definitions/BashConfig",
               description: "Advanced bash command execution configuration"
+            },
+            completion_prompt: {
+              type: "string",
+              description: "Completion prompt for post-completion validation/review (runs after attempt_completion)"
             }
           },
           additionalProperties: false,
@@ -17102,7 +18026,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -17117,13 +18041,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706>>": {
+        "Record<string,Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706>": {
+        "Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845>": {
           type: "object",
           additionalProperties: false
         },
@@ -17682,6 +18606,71 @@ var init_config_schema = __esm({
           patternProperties: {
             "^x-": {}
           }
+        },
+        WorkspaceConfig: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+              description: "Enable workspace isolation (default: true when config present)"
+            },
+            base_path: {
+              type: "string",
+              description: "Base path for workspaces (default: /tmp/visor-workspaces)"
+            },
+            cleanup_on_exit: {
+              type: "boolean",
+              description: "Clean up workspace on exit (default: true)"
+            }
+          },
+          additionalProperties: false,
+          description: "Workspace isolation configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        SlackConfig: {
+          type: "object",
+          properties: {
+            version: {
+              type: "string",
+              description: "Slack API version"
+            },
+            mentions: {
+              type: "string",
+              description: "Mention handling: 'all', 'direct', etc."
+            },
+            threads: {
+              type: "string",
+              description: "Thread handling: 'required', 'optional', etc."
+            },
+            show_raw_output: {
+              type: "boolean",
+              description: "Show raw output in Slack responses"
+            },
+            telemetry: {
+              $ref: "#/definitions/SlackTelemetryConfig",
+              description: "Append telemetry identifiers to Slack replies."
+            }
+          },
+          additionalProperties: false,
+          description: "Slack configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        SlackTelemetryConfig: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+              description: "Enable telemetry ID suffix in Slack messages"
+            }
+          },
+          additionalProperties: false,
+          patternProperties: {
+            "^x-": {}
+          }
         }
       }
     };
@@ -17695,19 +18684,20 @@ __export(config_exports, {
   ConfigManager: () => ConfigManager,
   VALID_EVENT_TRIGGERS: () => VALID_EVENT_TRIGGERS
 });
-var yaml3, fs12, path13, import_simple_git, import_ajv3, import_ajv_formats2, VALID_EVENT_TRIGGERS, ConfigManager, __ajvValidate, __ajvErrors;
+var yaml3, fs13, path14, import_simple_git, import_ajv3, import_ajv_formats2, VALID_EVENT_TRIGGERS, ConfigManager, __ajvValidate, __ajvErrors;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
     yaml3 = __toESM(require("js-yaml"));
-    fs12 = __toESM(require("fs"));
-    path13 = __toESM(require("path"));
+    fs13 = __toESM(require("fs"));
+    path14 = __toESM(require("path"));
     init_logger();
     import_simple_git = __toESM(require("simple-git"));
     init_config_loader();
     init_config_merger();
     import_ajv3 = __toESM(require("ajv"));
     import_ajv_formats2 = __toESM(require("ajv-formats"));
+    init_sandbox();
     VALID_EVENT_TRIGGERS = [
       "pr_opened",
       "pr_updated",
@@ -17744,11 +18734,11 @@ var init_config = __esm({
        */
       async loadConfig(configPath, options = {}) {
         const { validate = true, mergeDefaults = true, allowedRemotePatterns } = options;
-        const resolvedPath = path13.isAbsolute(configPath) ? configPath : path13.resolve(process.cwd(), configPath);
+        const resolvedPath = path14.isAbsolute(configPath) ? configPath : path14.resolve(process.cwd(), configPath);
         try {
           let configContent;
           try {
-            configContent = fs12.readFileSync(resolvedPath, "utf8");
+            configContent = fs13.readFileSync(resolvedPath, "utf8");
           } catch (readErr) {
             if (readErr && (readErr.code === "ENOENT" || readErr.code === "ENOTDIR")) {
               throw new Error(`Configuration file not found: ${resolvedPath}`);
@@ -17770,7 +18760,7 @@ var init_config = __esm({
           const extendsValue = parsedConfig.extends || parsedConfig.include;
           if (extendsValue) {
             const loaderOptions = {
-              baseDir: path13.dirname(resolvedPath),
+              baseDir: path14.dirname(resolvedPath),
               allowRemote: this.isRemoteExtendsAllowed(),
               maxDepth: 10,
               allowedRemotePatterns
@@ -17789,10 +18779,10 @@ var init_config = __esm({
             parsedConfig = merger.removeDisabledChecks(parsedConfig);
           }
           if (parsedConfig.id && typeof parsedConfig.id === "string") {
-            parsedConfig = await this.convertWorkflowToConfig(parsedConfig, path13.dirname(resolvedPath));
+            parsedConfig = await this.convertWorkflowToConfig(parsedConfig, path14.dirname(resolvedPath));
           }
           parsedConfig = this.normalizeStepsAndChecks(parsedConfig, !!extendsValue);
-          await this.loadWorkflows(parsedConfig, path13.dirname(resolvedPath));
+          await this.loadWorkflows(parsedConfig, path14.dirname(resolvedPath));
           if (validate) {
             this.validateConfig(parsedConfig);
           }
@@ -17870,16 +18860,16 @@ var init_config = __esm({
         const searchDirs = [gitRoot, process.cwd()].filter(Boolean);
         for (const baseDir of searchDirs) {
           const candidates = ["visor.yaml", "visor.yml", ".visor.yaml", ".visor.yml"].map(
-            (p) => path13.join(baseDir, p)
+            (p) => path14.join(baseDir, p)
           );
           for (const p of candidates) {
             try {
-              const st = fs12.statSync(p);
+              const st = fs13.statSync(p);
               if (!st.isFile()) continue;
-              const isLegacy = path13.basename(p).startsWith(".");
+              const isLegacy = path14.basename(p).startsWith(".");
               if (isLegacy) {
                 if (process.env.VISOR_STRICT_CONFIG_NAME === "true") {
-                  const rel = path13.relative(baseDir, p);
+                  const rel = path14.relative(baseDir, p);
                   throw new Error(
                     `Legacy config detected: ${rel}. Please rename to visor.yaml (or visor.yml).`
                   );
@@ -17942,23 +18932,23 @@ var init_config = __esm({
           const possiblePaths = [];
           if (typeof __dirname !== "undefined") {
             possiblePaths.push(
-              path13.join(__dirname, "defaults", "visor.yaml"),
-              path13.join(__dirname, "..", "defaults", "visor.yaml")
+              path14.join(__dirname, "defaults", "visor.yaml"),
+              path14.join(__dirname, "..", "defaults", "visor.yaml")
             );
           }
           const pkgRoot = this.findPackageRoot();
           if (pkgRoot) {
-            possiblePaths.push(path13.join(pkgRoot, "defaults", "visor.yaml"));
+            possiblePaths.push(path14.join(pkgRoot, "defaults", "visor.yaml"));
           }
           if (process.env.GITHUB_ACTION_PATH) {
             possiblePaths.push(
-              path13.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml"),
-              path13.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml")
+              path14.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml"),
+              path14.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml")
             );
           }
           let bundledConfigPath;
           for (const possiblePath of possiblePaths) {
-            if (fs12.existsSync(possiblePath)) {
+            if (fs13.existsSync(possiblePath)) {
               bundledConfigPath = possiblePath;
               break;
             }
@@ -17966,7 +18956,7 @@ var init_config = __esm({
           if (bundledConfigPath) {
             console.error(`\u{1F4E6} Loading bundled default configuration from ${bundledConfigPath}`);
             const readAndParse = (p) => {
-              const raw = fs12.readFileSync(p, "utf8");
+              const raw = fs13.readFileSync(p, "utf8");
               const obj = yaml3.load(raw);
               if (!obj || typeof obj !== "object") return {};
               if (obj.include && !obj.extends) {
@@ -17976,7 +18966,7 @@ var init_config = __esm({
               }
               return obj;
             };
-            const baseDir = path13.dirname(bundledConfigPath);
+            const baseDir = path14.dirname(bundledConfigPath);
             const merger = new (init_config_merger(), __toCommonJS(config_merger_exports)).ConfigMerger();
             const loadWithExtendsSync = (p) => {
               const current = readAndParse(p);
@@ -17988,7 +18978,7 @@ var init_config = __esm({
               let acc = {};
               for (const src of list) {
                 const rel = typeof src === "string" ? src : String(src);
-                const abs = path13.isAbsolute(rel) ? rel : path13.resolve(baseDir, rel);
+                const abs = path14.isAbsolute(rel) ? rel : path14.resolve(baseDir, rel);
                 const parentCfg = loadWithExtendsSync(abs);
                 acc = merger.merge(acc, parentCfg);
               }
@@ -18012,18 +19002,18 @@ var init_config = __esm({
        */
       findPackageRoot() {
         let currentDir = __dirname;
-        while (currentDir !== path13.dirname(currentDir)) {
-          const packageJsonPath = path13.join(currentDir, "package.json");
-          if (fs12.existsSync(packageJsonPath)) {
+        while (currentDir !== path14.dirname(currentDir)) {
+          const packageJsonPath = path14.join(currentDir, "package.json");
+          if (fs13.existsSync(packageJsonPath)) {
             try {
-              const packageJson = JSON.parse(fs12.readFileSync(packageJsonPath, "utf8"));
+              const packageJson = JSON.parse(fs13.readFileSync(packageJsonPath, "utf8"));
               if (packageJson.name === "@probelabs/visor") {
                 return currentDir;
               }
             } catch {
             }
           }
-          currentDir = path13.dirname(currentDir);
+          currentDir = path14.dirname(currentDir);
         }
         return null;
       }
@@ -18046,14 +19036,24 @@ var init_config = __esm({
 ${errors}`);
         }
         logger.info(`Registered workflow '${workflowId}' for standalone execution`);
+        const workflowSteps = workflowData.steps || {};
         const visorConfig = {
           version: "1.0",
-          steps: tests,
-          checks: tests
-          // Backward compatibility
+          steps: workflowSteps,
+          checks: workflowSteps,
+          tests
+          // Preserve test harness config (may be empty if stripped by test runner)
         };
-        logger.debug(`Standalone workflow config has ${Object.keys(tests).length} test checks`);
-        logger.debug(`Test check names: ${Object.keys(tests).join(", ")}`);
+        if (workflowData.outputs) {
+          visorConfig.outputs = workflowData.outputs;
+        }
+        if (workflowData.inputs) {
+          visorConfig.inputs = workflowData.inputs;
+        }
+        logger.debug(
+          `Standalone workflow config has ${Object.keys(workflowSteps).length} workflow steps as checks`
+        );
+        logger.debug(`Workflow step names: ${Object.keys(workflowSteps).join(", ")}`);
         logger.debug(`Config keys after conversion: ${Object.keys(visorConfig).join(", ")}`);
         return visorConfig;
       }
@@ -18404,29 +19404,31 @@ ${errors}`);
           }
         }
         if (checkConfig.reuse_ai_session !== void 0) {
-          const isString = typeof checkConfig.reuse_ai_session === "string";
-          const isBoolean = typeof checkConfig.reuse_ai_session === "boolean";
+          const reuseValue = checkConfig.reuse_ai_session;
+          const isString = typeof reuseValue === "string";
+          const isBoolean = typeof reuseValue === "boolean";
+          const isSelf = reuseValue === "self";
           if (!isString && !isBoolean) {
             errors.push({
               field: `checks.${checkName}.reuse_ai_session`,
               message: `Invalid reuse_ai_session value for "${checkName}": must be string (check name) or boolean`,
-              value: checkConfig.reuse_ai_session
+              value: reuseValue
             });
-          } else if (isString) {
-            const targetCheckName = checkConfig.reuse_ai_session;
+          } else if (isString && !isSelf) {
+            const targetCheckName = reuseValue;
             if (!config?.checks || !config.checks[targetCheckName]) {
               errors.push({
                 field: `checks.${checkName}.reuse_ai_session`,
                 message: `Check "${checkName}" references non-existent check "${targetCheckName}" for session reuse`,
-                value: checkConfig.reuse_ai_session
+                value: reuseValue
               });
             }
-          } else if (checkConfig.reuse_ai_session === true) {
+          } else if (reuseValue === true) {
             if (!checkConfig.depends_on || !Array.isArray(checkConfig.depends_on) || checkConfig.depends_on.length === 0) {
               errors.push({
                 field: `checks.${checkName}.reuse_ai_session`,
                 message: `Check "${checkName}" has reuse_ai_session=true but missing or empty depends_on. Session reuse requires dependency on another check.`,
-                value: checkConfig.reuse_ai_session
+                value: reuseValue
               });
             }
           }
@@ -18481,6 +19483,33 @@ ${errors}`);
               value: checkConfig.on_finish
             });
           }
+        }
+        try {
+          const transformJs = checkConfig.transform_js;
+          if (typeof transformJs === "string" && transformJs.trim().length > 0) {
+            const result = validateJsSyntax(transformJs);
+            if (!result.valid) {
+              errors.push({
+                field: `checks.${checkName}.transform_js`,
+                message: `JavaScript syntax error in "${checkName}" transform_js: ${result.error}`,
+                value: transformJs.slice(0, 100) + (transformJs.length > 100 ? "..." : "")
+              });
+            }
+          }
+          if (checkConfig.type === "script") {
+            const content = checkConfig.content;
+            if (typeof content === "string" && content.trim().length > 0) {
+              const result = validateJsSyntax(content);
+              if (!result.valid) {
+                errors.push({
+                  field: `checks.${checkName}.content`,
+                  message: `JavaScript syntax error in "${checkName}" script: ${result.error}`,
+                  value: content.slice(0, 100) + (content.length > 100 ? "..." : "")
+                });
+              }
+            }
+          }
+        } catch {
         }
       }
       /**
@@ -18545,7 +19574,7 @@ ${errors}`);
         try {
           if (!__ajvValidate) {
             try {
-              const jsonPath = path13.resolve(__dirname, "generated", "config-schema.json");
+              const jsonPath = path14.resolve(__dirname, "generated", "config-schema.json");
               const jsonSchema = require(jsonPath);
               if (jsonSchema) {
                 const ajv = new import_ajv3.default({ allErrors: true, allowUnionTypes: true, strict: false });
@@ -18827,8 +19856,38 @@ var init_workflow_check_provider = __esm({
       async execute(prInfo, config, dependencyResults, context2) {
         const cfg = config;
         const isConfigPathMode = !!cfg.config && !cfg.workflow;
+        const stepName = config.checkName || cfg.workflow || cfg.config || "workflow";
+        let workflow;
+        let workflowId = cfg.workflow;
+        if (isConfigPathMode) {
+          const parentCwd = context2?._parentContext?.originalWorkingDirectory || context2?._parentContext?.workingDirectory || context2?.originalWorkingDirectory || context2?.workingDirectory || process.cwd();
+          workflow = await this.loadWorkflowFromConfigPath(String(cfg.config), parentCwd);
+          workflowId = workflow.id;
+          logger.info(`Executing workflow from config '${cfg.config}' as '${workflowId}'`);
+        } else {
+          workflowId = String(cfg.workflow);
+          workflow = this.registry.get(workflowId);
+          if (!workflow) {
+            throw new Error(`Workflow '${workflowId}' not found in registry`);
+          }
+          logger.info(`Executing workflow '${workflowId}'`);
+        }
+        const inputs = await this.prepareInputs(workflow, config, prInfo, dependencyResults);
         try {
-          const stepName = config.checkName || cfg.workflow || cfg.config || "workflow";
+          const inputsCapture = Object.entries(inputs).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join("\n\n");
+          context2?.hooks?.onPromptCaptured?.({
+            step: String(stepName),
+            provider: "workflow",
+            prompt: inputsCapture
+          });
+        } catch {
+        }
+        const validation = this.registry.validateInputs(workflow, inputs);
+        if (!validation.valid) {
+          const errors = validation.errors?.map((e) => `${e.path}: ${e.message}`).join(", ");
+          throw new Error(`Invalid workflow inputs: ${errors}`);
+        }
+        try {
           const mock = context2?.hooks?.mockForStep?.(String(stepName));
           if (mock !== void 0) {
             const ms = mock;
@@ -18842,27 +19901,6 @@ var init_workflow_check_provider = __esm({
             return summary2;
           }
         } catch {
-        }
-        let workflow;
-        let workflowId = cfg.workflow;
-        if (isConfigPathMode) {
-          const parentCwd = context2?._parentContext?.workingDirectory || context2?.workingDirectory || process.cwd();
-          workflow = await this.loadWorkflowFromConfigPath(String(cfg.config), parentCwd);
-          workflowId = workflow.id;
-          logger.info(`Executing workflow from config '${cfg.config}' as '${workflowId}'`);
-        } else {
-          workflowId = String(cfg.workflow);
-          workflow = this.registry.get(workflowId);
-          if (!workflow) {
-            throw new Error(`Workflow '${workflowId}' not found in registry`);
-          }
-          logger.info(`Executing workflow '${workflowId}'`);
-        }
-        const inputs = await this.prepareInputs(workflow, config, prInfo, dependencyResults);
-        const validation = this.registry.validateInputs(workflow, inputs);
-        if (!validation.valid) {
-          const errors = validation.errors?.map((e) => `${e.path}: ${e.message}`).join(", ");
-          throw new Error(`Invalid workflow inputs: ${errors}`);
         }
         const modifiedWorkflow = this.applyOverrides(workflow, config);
         const engineMode = context2?._engineMode;
@@ -18929,32 +19967,94 @@ var init_workflow_check_provider = __esm({
             }
           }
         }
+        const eventContext = config.eventContext || {};
+        logger.debug(`[WorkflowProvider] prepareInputs for ${workflow.id}`);
+        logger.debug(
+          `[WorkflowProvider] eventContext keys: ${Object.keys(eventContext).join(", ") || "none"}`
+        );
+        logger.debug(
+          `[WorkflowProvider] eventContext.slack: ${eventContext.slack ? "present" : "absent"}`
+        );
+        logger.debug(
+          `[WorkflowProvider] eventContext.conversation: ${eventContext.conversation ? "present" : "absent"}`
+        );
+        const slack = (() => {
+          try {
+            const anyCtx = eventContext;
+            const slackCtx = anyCtx?.slack;
+            if (slackCtx && typeof slackCtx === "object") return slackCtx;
+          } catch {
+          }
+          return void 0;
+        })();
+        const conversation = (() => {
+          try {
+            const anyCtx = eventContext;
+            if (anyCtx?.slack?.conversation) return anyCtx.slack.conversation;
+            if (anyCtx?.github?.conversation) return anyCtx.github.conversation;
+            if (anyCtx?.conversation) return anyCtx.conversation;
+          } catch {
+          }
+          return void 0;
+        })();
+        logger.debug(`[WorkflowProvider] slack extracted: ${slack ? "present" : "absent"}`);
+        logger.debug(
+          `[WorkflowProvider] conversation extracted: ${conversation ? "present" : "absent"}`
+        );
+        if (conversation) {
+          logger.debug(
+            `[WorkflowProvider] conversation.messages count: ${Array.isArray(conversation.messages) ? conversation.messages.length : 0}`
+          );
+        }
+        const outputHistory = config.__outputHistory;
+        const outputs_history = {};
+        if (outputHistory) {
+          for (const [k, v] of outputHistory.entries()) {
+            outputs_history[k] = v;
+          }
+        }
+        const outputsMap = {};
+        logger.debug(
+          `[WorkflowProvider] dependencyResults: ${dependencyResults ? dependencyResults.size : "undefined"} entries`
+        );
+        if (dependencyResults) {
+          for (const [key, result] of dependencyResults.entries()) {
+            const extracted = result.output ?? result;
+            outputsMap[key] = extracted;
+            const extractedKeys = extracted && typeof extracted === "object" ? Object.keys(extracted).join(", ") : "not-object";
+            logger.debug(`[WorkflowProvider] outputs['${key}']: keys=[${extractedKeys}]`);
+          }
+        }
+        const templateContext = {
+          pr: prInfo,
+          outputs: outputsMap,
+          env: process.env,
+          slack,
+          conversation,
+          outputs_history
+        };
         const userInputs = config.args || config.workflow_inputs;
         if (userInputs) {
           for (const [key, value] of Object.entries(userInputs)) {
             if (typeof value === "string") {
               if (value.includes("{{") || value.includes("{%")) {
-                inputs[key] = await this.liquid.parseAndRender(value, {
-                  pr: prInfo,
-                  outputs: dependencyResults ? Object.fromEntries(dependencyResults) : {},
-                  env: process.env
-                });
+                inputs[key] = await this.liquid.parseAndRender(value, templateContext);
+                if (key === "text" || key === "question" || key === "context") {
+                  const rendered = String(inputs[key]);
+                  logger.info(
+                    `[WorkflowProvider] Rendered '${key}' input (${rendered.length} chars): ${rendered.substring(0, 500)}${rendered.length > 500 ? "..." : ""}`
+                  );
+                }
               } else {
                 inputs[key] = value;
               }
             } else if (typeof value === "object" && value !== null && "expression" in value) {
               const exprValue = value;
               const sandbox = createSecureSandbox();
-              inputs[key] = compileAndRun(
-                sandbox,
-                exprValue.expression,
-                {
-                  pr: prInfo,
-                  outputs: dependencyResults ? Object.fromEntries(dependencyResults) : {},
-                  env: process.env
-                },
-                { injectLog: true, logPrefix: `workflow.input.${key}` }
-              );
+              inputs[key] = compileAndRun(sandbox, exprValue.expression, templateContext, {
+                injectLog: true,
+                logPrefix: `workflow.input.${key}`
+              });
             } else {
               inputs[key] = value;
             }
@@ -19039,13 +20139,36 @@ var init_workflow_check_provider = __esm({
           await childMemory.initialize();
         } catch {
         }
+        const parentWorkspace = parentContext?.workspace;
+        logger.info(`[WorkflowProvider] Workspace propagation for nested workflow '${workflow.id}':`);
+        logger.info(`[WorkflowProvider]   parentContext exists: ${!!parentContext}`);
+        logger.info(`[WorkflowProvider]   parentContext.workspace exists: ${!!parentWorkspace}`);
+        if (parentWorkspace) {
+          logger.info(
+            `[WorkflowProvider]   parentWorkspace.isEnabled(): ${parentWorkspace.isEnabled?.() ?? "N/A"}`
+          );
+          const projectCount = parentWorkspace.listProjects?.()?.length ?? "N/A";
+          logger.info(`[WorkflowProvider]   parentWorkspace project count: ${projectCount}`);
+        } else {
+          logger.warn(
+            `[WorkflowProvider]   NO WORKSPACE from parent - nested checkouts won't be added to workspace!`
+          );
+        }
         const childContext = {
           mode: "state-machine",
           config: workflowConfig,
           checks: checksMetadata,
           journal: childJournal,
           memory: childMemory,
+          // For nested workflows we continue to execute inside the same logical
+          // working directory as the parent run. When workspace isolation is
+          // enabled on the parent engine, its WorkspaceManager is also propagated
+          // so that nested checks (AI, git-checkout, etc.) see the same isolated
+          // workspace and project symlinks instead of falling back to the Visor
+          // repository root.
           workingDirectory: parentContext?.workingDirectory || process.cwd(),
+          originalWorkingDirectory: parentContext?.originalWorkingDirectory || parentContext?.workingDirectory || process.cwd(),
+          workspace: parentWorkspace,
           // Always use a fresh session for nested workflows to isolate history
           sessionId: uuidv44(),
           event: parentContext?.event || prInfo.eventType,
@@ -19136,6 +20259,9 @@ var init_workflow_check_provider = __esm({
           }
         } catch {
         }
+        const outputsMap = Object.fromEntries(
+          Object.entries(flat).map(([id, result]) => [id, result.output])
+        );
         for (const output of workflow.outputs) {
           if (output.value_js) {
             outputs[output.name] = compileAndRun(
@@ -19143,10 +20269,9 @@ var init_workflow_check_provider = __esm({
               output.value_js,
               {
                 inputs,
-                steps: Object.fromEntries(
-                  Object.entries(flat).map(([id, result]) => [id, result.output])
-                ),
-                outputs: flat,
+                outputs: outputsMap,
+                // Keep 'steps' as alias for backwards compatibility
+                steps: outputsMap,
                 pr: prInfo
               },
               { injectLog: true, logPrefix: `workflow.output.${output.name}` }
@@ -19154,10 +20279,9 @@ var init_workflow_check_provider = __esm({
           } else if (output.value) {
             outputs[output.name] = await this.liquid.parseAndRender(output.value, {
               inputs,
-              steps: Object.fromEntries(
-                Object.entries(flat).map(([id, result]) => [id, result.output])
-              ),
-              outputs: flat,
+              outputs: outputsMap,
+              // Keep 'steps' as alias for backwards compatibility
+              steps: outputsMap,
               pr: prInfo
             });
           }
@@ -19225,10 +20349,10 @@ var init_workflow_check_provider = __esm({
        * so it can be executed by the state machine as a nested workflow.
        */
       async loadWorkflowFromConfigPath(sourcePath, baseDir) {
-        const path20 = require("path");
-        const fs18 = require("fs");
-        const resolved = path20.isAbsolute(sourcePath) ? sourcePath : path20.resolve(baseDir, sourcePath);
-        if (!fs18.existsSync(resolved)) {
+        const path22 = require("path");
+        const fs20 = require("fs");
+        const resolved = path22.isAbsolute(sourcePath) ? sourcePath : path22.resolve(baseDir, sourcePath);
+        if (!fs20.existsSync(resolved)) {
           throw new Error(`Workflow config not found at: ${resolved}`);
         }
         const { ConfigManager: ConfigManager2 } = (init_config(), __toCommonJS(config_exports));
@@ -19238,8 +20362,8 @@ var init_workflow_check_provider = __esm({
         if (!steps || Object.keys(steps).length === 0) {
           throw new Error(`Config '${resolved}' does not contain any steps to execute as a workflow`);
         }
-        const id = path20.basename(resolved).replace(/\.(ya?ml)$/i, "");
-        const name = loaded.name || `Workflow from ${path20.basename(resolved)}`;
+        const id = path22.basename(resolved).replace(/\.(ya?ml)$/i, "");
+        const name = loaded.name || `Workflow from ${path22.basename(resolved)}`;
         const workflowDef = {
           id,
           name,
@@ -19259,12 +20383,13 @@ var init_workflow_check_provider = __esm({
 });
 
 // src/utils/worktree-manager.ts
-var fs13, path14, crypto, WorktreeManager, worktreeManager;
+var fs14, fsp, path15, crypto, WorktreeManager, worktreeManager;
 var init_worktree_manager = __esm({
   "src/utils/worktree-manager.ts"() {
     "use strict";
-    fs13 = __toESM(require("fs"));
-    path14 = __toESM(require("path"));
+    fs14 = __toESM(require("fs"));
+    fsp = __toESM(require("fs/promises"));
+    path15 = __toESM(require("path"));
     crypto = __toESM(require("crypto"));
     init_command_executor();
     init_logger();
@@ -19280,7 +20405,7 @@ var init_worktree_manager = __esm({
         } catch {
           cwd = "/tmp";
         }
-        const defaultBasePath = process.env.VISOR_WORKTREE_PATH || path14.join(cwd, ".visor", "worktrees");
+        const defaultBasePath = process.env.VISOR_WORKTREE_PATH || path15.join(cwd, ".visor", "worktrees");
         this.config = {
           enabled: true,
           base_path: defaultBasePath,
@@ -19317,20 +20442,20 @@ var init_worktree_manager = __esm({
         }
         const reposDir = this.getReposDir();
         const worktreesDir = this.getWorktreesDir();
-        if (!fs13.existsSync(reposDir)) {
-          fs13.mkdirSync(reposDir, { recursive: true });
+        if (!fs14.existsSync(reposDir)) {
+          fs14.mkdirSync(reposDir, { recursive: true });
           logger.debug(`Created repos directory: ${reposDir}`);
         }
-        if (!fs13.existsSync(worktreesDir)) {
-          fs13.mkdirSync(worktreesDir, { recursive: true });
+        if (!fs14.existsSync(worktreesDir)) {
+          fs14.mkdirSync(worktreesDir, { recursive: true });
           logger.debug(`Created worktrees directory: ${worktreesDir}`);
         }
       }
       getReposDir() {
-        return path14.join(this.config.base_path, "repos");
+        return path15.join(this.config.base_path, "repos");
       }
       getWorktreesDir() {
-        return path14.join(this.config.base_path, "worktrees");
+        return path15.join(this.config.base_path, "worktrees");
       }
       /**
        * Generate a unique worktree ID
@@ -19344,14 +20469,25 @@ var init_worktree_manager = __esm({
       /**
        * Get or create bare repository
        */
-      async getOrCreateBareRepo(repository, repoUrl, token, fetchDepth) {
+      async getOrCreateBareRepo(repository, repoUrl, token, fetchDepth, cloneTimeoutMs) {
         const reposDir = this.getReposDir();
         const repoName = repository.replace(/\//g, "-");
-        const bareRepoPath = path14.join(reposDir, `${repoName}.git`);
-        if (fs13.existsSync(bareRepoPath)) {
+        const bareRepoPath = path15.join(reposDir, `${repoName}.git`);
+        if (fs14.existsSync(bareRepoPath)) {
           logger.debug(`Bare repository already exists: ${bareRepoPath}`);
-          await this.updateBareRepo(bareRepoPath);
-          return bareRepoPath;
+          const verifyResult = await this.verifyBareRepoRemote(bareRepoPath, repoUrl);
+          if (verifyResult === "timeout") {
+            logger.info(`Using stale bare repository (verification timed out): ${bareRepoPath}`);
+            return bareRepoPath;
+          } else if (verifyResult === false) {
+            logger.warn(
+              `Bare repository at ${bareRepoPath} has incorrect remote, removing and re-cloning`
+            );
+            await fsp.rm(bareRepoPath, { recursive: true, force: true });
+          } else {
+            await this.updateBareRepo(bareRepoPath);
+            return bareRepoPath;
+          }
         }
         const cloneUrl = this.buildAuthenticatedUrl(repoUrl, token);
         const redactedUrl = this.redactUrl(cloneUrl);
@@ -19367,7 +20503,10 @@ var init_worktree_manager = __esm({
           cloneCmd += ` --depth ${depth}`;
         }
         cloneCmd += ` ${this.escapeShellArg(cloneUrl)} ${this.escapeShellArg(bareRepoPath)}`;
-        const result = await this.executeGitCommand(cloneCmd, { timeout: 3e5 });
+        const result = await this.executeGitCommand(cloneCmd, {
+          timeout: cloneTimeoutMs || 3e5
+          // default 5 minutes
+        });
         if (result.exitCode !== 0) {
           const redactedStderr = this.redactUrl(result.stderr);
           throw new Error(`Failed to clone bare repository: ${redactedStderr}`);
@@ -19380,16 +20519,68 @@ var init_worktree_manager = __esm({
        */
       async updateBareRepo(bareRepoPath) {
         logger.debug(`Updating bare repository: ${bareRepoPath}`);
-        const updateCmd = `git -C ${this.escapeShellArg(bareRepoPath)} remote update --prune`;
-        const result = await this.executeGitCommand(updateCmd, { timeout: 6e4 });
-        if (result.exitCode !== 0) {
-          logger.warn(`Failed to update bare repository: ${result.stderr}`);
-        } else {
-          logger.debug(`Successfully updated bare repository`);
+        try {
+          const updateCmd = `git -C ${this.escapeShellArg(bareRepoPath)} remote update --prune`;
+          const result = await this.executeGitCommand(updateCmd, { timeout: 6e4 });
+          if (result.exitCode !== 0) {
+            logger.warn(`Failed to update bare repository: ${result.stderr}`);
+          } else {
+            logger.debug(`Successfully updated bare repository`);
+          }
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          logger.warn(`Failed to update bare repository (will use stale refs): ${errorMessage}`);
         }
       }
       /**
-       * Create a new worktree
+       * Verify that a bare repository has the correct remote URL.
+       * This prevents reusing corrupted repos that were cloned from a different repository.
+       * Returns: true (valid), false (invalid - should re-clone), or 'timeout' (use stale cache)
+       */
+      async verifyBareRepoRemote(bareRepoPath, expectedUrl) {
+        try {
+          const cmd = `git -C ${this.escapeShellArg(bareRepoPath)} remote get-url origin`;
+          const result = await this.executeGitCommand(cmd, { timeout: 1e4 });
+          if (result.exitCode !== 0) {
+            logger.warn(`Failed to get remote URL for ${bareRepoPath}: ${result.stderr}`);
+            return false;
+          }
+          const actualUrl = result.stdout.trim();
+          const normalizeUrl = (url) => {
+            if (url.startsWith("git@github.com:")) {
+              url = url.replace("git@github.com:", "https://github.com/");
+            }
+            return url.replace(/:\/\/[^@]+@/, "://").replace(/\.git$/, "").replace(/\/$/, "").toLowerCase();
+          };
+          const normalizedExpected = normalizeUrl(expectedUrl);
+          const normalizedActual = normalizeUrl(actualUrl);
+          if (normalizedExpected !== normalizedActual) {
+            logger.warn(`Bare repo remote mismatch: expected ${expectedUrl}, got ${actualUrl}`);
+            return false;
+          }
+          logger.debug(`Bare repo remote verified: ${actualUrl}`);
+          return true;
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          if (errorMessage.includes("timed out")) {
+            logger.warn(`Timeout verifying bare repo remote (will use stale cache): ${errorMessage}`);
+            return "timeout";
+          }
+          logger.warn(`Error verifying bare repo remote: ${error}`);
+          return false;
+        }
+      }
+      /**
+       * Create a new worktree for the given repository/ref.
+       *
+       * Important: we always create worktrees in a detached HEAD state pinned
+       * to a specific commit SHA rather than a named branch like "main". Git
+       * only allows a branch to be checked out in a single worktree at a time;
+       * using the raw commit (plus --detach) lets multiple workflows safely
+       * create independent worktrees for the same branch without hitting
+       * errors like:
+       *
+       *   fatal: 'main' is already used by worktree at '.../TykTechnologies-tyk-docs-main-XXXX'
        */
       async createWorktree(repository, repoUrl, ref, options = {}) {
         this.validateRef(ref);
@@ -19397,14 +20588,15 @@ var init_worktree_manager = __esm({
           repository,
           repoUrl,
           options.token,
-          options.fetchDepth
+          options.fetchDepth,
+          options.cloneTimeoutMs
         );
         const worktreeId = this.generateWorktreeId(repository, ref);
-        let worktreePath = options.workingDirectory || path14.join(this.getWorktreesDir(), worktreeId);
+        let worktreePath = options.workingDirectory || path15.join(this.getWorktreesDir(), worktreeId);
         if (options.workingDirectory) {
           worktreePath = this.validatePath(options.workingDirectory);
         }
-        if (fs13.existsSync(worktreePath)) {
+        if (fs14.existsSync(worktreePath)) {
           logger.debug(`Worktree already exists: ${worktreePath}`);
           if (options.clean) {
             logger.debug(`Cleaning existing worktree`);
@@ -19424,13 +20616,15 @@ var init_worktree_manager = __esm({
           }
         }
         await this.fetchRef(bareRepoPath, ref);
-        logger.info(`Creating worktree for ${repository}@${ref}`);
-        const createCmd = `git -C ${this.escapeShellArg(bareRepoPath)} worktree add ${this.escapeShellArg(worktreePath)} ${this.escapeShellArg(ref)}`;
+        const commit = await this.getCommitShaForRef(bareRepoPath, ref);
+        logger.info(`Creating worktree for ${repository}@${ref} (${commit})`);
+        const createCmd = `git -C ${this.escapeShellArg(
+          bareRepoPath
+        )} worktree add --detach ${this.escapeShellArg(worktreePath)} ${this.escapeShellArg(commit)}`;
         const result = await this.executeGitCommand(createCmd, { timeout: 6e4 });
         if (result.exitCode !== 0) {
           throw new Error(`Failed to create worktree: ${result.stderr}`);
         }
-        const commit = await this.getCommitSha(worktreePath);
         const metadata = {
           worktree_id: worktreeId,
           created_at: (/* @__PURE__ */ new Date()).toISOString(),
@@ -19474,13 +20668,16 @@ var init_worktree_manager = __esm({
         await this.executeGitCommand(cleanCmd);
       }
       /**
-       * Get commit SHA for worktree
+       * Get commit SHA for a given ref inside a bare repository.
+       *
+       * This runs after fetchRef so that <ref> should resolve to either a
+       * local branch, tag, or remote-tracking ref.
        */
-      async getCommitSha(worktreePath) {
-        const cmd = `git -C ${this.escapeShellArg(worktreePath)} rev-parse HEAD`;
+      async getCommitShaForRef(bareRepoPath, ref) {
+        const cmd = `git -C ${this.escapeShellArg(bareRepoPath)} rev-parse ${this.escapeShellArg(ref)}`;
         const result = await this.executeGitCommand(cmd);
         if (result.exitCode !== 0) {
-          throw new Error(`Failed to get commit SHA: ${result.stderr}`);
+          throw new Error(`Failed to get commit SHA for ref ${ref}: ${result.stderr}`);
         }
         return result.stdout.trim();
       }
@@ -19499,9 +20696,9 @@ var init_worktree_manager = __esm({
         const result = await this.executeGitCommand(removeCmd, { timeout: 3e4 });
         if (result.exitCode !== 0) {
           logger.warn(`Failed to remove worktree via git: ${result.stderr}`);
-          if (fs13.existsSync(worktree_path)) {
+          if (fs14.existsSync(worktree_path)) {
             logger.debug(`Manually removing worktree directory`);
-            fs13.rmSync(worktree_path, { recursive: true, force: true });
+            fs14.rmSync(worktree_path, { recursive: true, force: true });
           }
         }
         this.activeWorktrees.delete(worktreeId);
@@ -19511,19 +20708,19 @@ var init_worktree_manager = __esm({
        * Save worktree metadata
        */
       async saveMetadata(worktreePath, metadata) {
-        const metadataPath = path14.join(worktreePath, ".visor-metadata.json");
-        fs13.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
+        const metadataPath = path15.join(worktreePath, ".visor-metadata.json");
+        fs14.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
       }
       /**
        * Load worktree metadata
        */
       async loadMetadata(worktreePath) {
-        const metadataPath = path14.join(worktreePath, ".visor-metadata.json");
-        if (!fs13.existsSync(metadataPath)) {
+        const metadataPath = path15.join(worktreePath, ".visor-metadata.json");
+        if (!fs14.existsSync(metadataPath)) {
           return null;
         }
         try {
-          const content = fs13.readFileSync(metadataPath, "utf8");
+          const content = fs14.readFileSync(metadataPath, "utf8");
           return JSON.parse(content);
         } catch (error) {
           logger.warn(`Failed to load metadata: ${error}`);
@@ -19535,14 +20732,14 @@ var init_worktree_manager = __esm({
        */
       async listWorktrees() {
         const worktreesDir = this.getWorktreesDir();
-        if (!fs13.existsSync(worktreesDir)) {
+        if (!fs14.existsSync(worktreesDir)) {
           return [];
         }
-        const entries = fs13.readdirSync(worktreesDir, { withFileTypes: true });
+        const entries = fs14.readdirSync(worktreesDir, { withFileTypes: true });
         const worktrees = [];
         for (const entry of entries) {
           if (!entry.isDirectory()) continue;
-          const worktreePath = path14.join(worktreesDir, entry.name);
+          const worktreePath = path15.join(worktreesDir, entry.name);
           const metadata = await this.loadMetadata(worktreePath);
           if (metadata) {
             worktrees.push({
@@ -19674,8 +20871,8 @@ var init_worktree_manager = __esm({
        * Validate path to prevent directory traversal
        */
       validatePath(userPath) {
-        const resolvedPath = path14.resolve(userPath);
-        if (!path14.isAbsolute(resolvedPath)) {
+        const resolvedPath = path15.resolve(userPath);
+        if (!path15.isAbsolute(resolvedPath)) {
           throw new Error("Path must be absolute");
         }
         const sensitivePatterns = [
@@ -19705,9 +20902,15 @@ var init_worktree_manager = __esm({
        * Execute a git command
        */
       async executeGitCommand(command, options = {}) {
+        const gitEnv = {
+          ...process.env,
+          ...options.env,
+          GIT_TERMINAL_PROMPT: "0",
+          GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o StrictHostKeyChecking=no"
+        };
         const result = await commandExecutor.execute(command, {
           timeout: options.timeout || 3e4,
-          env: options.env || process.env
+          env: gitEnv
         });
         return {
           stdout: result.stdout,
@@ -19795,6 +20998,12 @@ var init_git_checkout_provider = __esm({
           logger.error("Invalid config: sparse_checkout must be an array");
           return false;
         }
+        if (checkoutConfig.clone_timeout_ms !== void 0) {
+          if (typeof checkoutConfig.clone_timeout_ms !== "number" || checkoutConfig.clone_timeout_ms <= 0) {
+            logger.error("Invalid config: clone_timeout_ms must be a positive number (milliseconds)");
+            return false;
+          }
+        }
         return true;
       }
       async execute(prInfo, config, dependencyResults, context2) {
@@ -19807,7 +21016,10 @@ var init_git_checkout_provider = __esm({
             context2,
             checkoutConfig
           );
-          const resolvedRef = await this.liquid.parseAndRender(checkoutConfig.ref, templateContext);
+          let resolvedRef = await this.liquid.parseAndRender(checkoutConfig.ref, templateContext);
+          if (!resolvedRef || resolvedRef.trim().length === 0) {
+            resolvedRef = "HEAD";
+          }
           const resolvedRepository = checkoutConfig.repository ? await this.liquid.parseAndRender(checkoutConfig.repository, templateContext) : process.env.GITHUB_REPOSITORY || "unknown/unknown";
           const resolvedToken = checkoutConfig.token ? await this.liquid.parseAndRender(checkoutConfig.token, templateContext) : void 0;
           const resolvedWorkingDirectory = checkoutConfig.working_directory ? await this.liquid.parseAndRender(checkoutConfig.working_directory, templateContext) : void 0;
@@ -19823,7 +21035,8 @@ var init_git_checkout_provider = __esm({
               clean: checkoutConfig.clean !== false,
               // Default: true
               workflowId: context2?.workflowId,
-              fetchDepth: checkoutConfig.fetch_depth
+              fetchDepth: checkoutConfig.fetch_depth,
+              cloneTimeoutMs: checkoutConfig.clone_timeout_ms
             }
           );
           const output = {
@@ -19836,18 +21049,27 @@ var init_git_checkout_provider = __esm({
             is_worktree: true
           };
           const workspace = context2?._parentContext?.workspace;
+          const checkName = config?.checkName || "unknown";
+          logger.info(`[GitCheckout] Workspace check for '${checkName}':`);
+          logger.info(`[GitCheckout]   _parentContext exists: ${!!context2?._parentContext}`);
+          logger.info(`[GitCheckout]   workspace exists: ${!!workspace}`);
+          logger.info(`[GitCheckout]   workspace.isEnabled(): ${workspace?.isEnabled?.() ?? "N/A"}`);
+          if (workspace) {
+            const projectCountBefore = workspace.listProjects?.()?.length ?? "N/A";
+            logger.debug(`[GitCheckout]   projects before addProject: ${projectCountBefore}`);
+          }
           if (workspace?.isEnabled()) {
             try {
-              const workspacePath = await workspace.addProject(
-                resolvedRepository,
-                worktree.path,
-                checkoutConfig.checkName
-              );
+              const workspacePath = await workspace.addProject(resolvedRepository, worktree.path);
               output.workspace_path = workspacePath;
-              logger.debug(`Added project to workspace: ${workspacePath}`);
+              const projectCountAfter = workspace.listProjects?.()?.length ?? "N/A";
+              logger.debug(`[GitCheckout] Added project to workspace: ${workspacePath}`);
+              logger.debug(`[GitCheckout]   projects after addProject: ${projectCountAfter}`);
             } catch (error) {
               logger.warn(`Failed to add project to workspace: ${error}`);
             }
+          } else {
+            logger.debug(`[GitCheckout] Workspace not enabled, skipping addProject`);
           }
           logger.info(
             `Successfully checked out ${resolvedRepository}@${resolvedRef} to ${worktree.path}`
@@ -19909,7 +21131,8 @@ var init_git_checkout_provider = __esm({
           outputs: outputsObj,
           outputs_history: historyObj,
           env: safeEnv,
-          inputs: context2?.workflowInputs
+          // Check config first (set by projectWorkflowToGraph), then fall back to context
+          inputs: config?.workflowInputs || context2?.workflowInputs
         };
       }
       getSupportedConfigKeys() {
@@ -20198,6 +21421,22 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
   const allOutputs = [];
   const allContents = [];
   const perIterationDurations = [];
+  try {
+    const wave = state.wave;
+    const lvl = state.currentLevel ?? "?";
+    const banner = `\u2501\u2501\u2501 CHECK ${checkId} (wave ${wave}, level ${lvl}, forEach parent) \u2501\u2501\u2501`;
+    const isTTY = typeof process !== "undefined" ? !!process.stderr.isTTY : false;
+    const outputFormat = process.env.VISOR_OUTPUT_FORMAT || "";
+    const isJsonLike = outputFormat === "json" || outputFormat === "sarif";
+    if (isTTY && !isJsonLike) {
+      const cyan = "\x1B[36m";
+      const reset = "\x1B[0m";
+      logger.info(`${cyan}${banner}${reset}`);
+    } else {
+      logger.info(banner);
+    }
+  } catch {
+  }
   for (let itemIndex = 0; itemIndex < forEachItems.length; itemIndex++) {
     const iterationStartMs = Date.now();
     const scope = [
@@ -20346,7 +21585,12 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
       };
       const result = await withActiveSpan(
         `visor.check.${checkId}`,
-        { "visor.check.id": checkId, "visor.check.type": providerType },
+        {
+          "visor.check.id": checkId,
+          "visor.check.type": providerType,
+          session_id: context2.sessionId,
+          wave: state.wave
+        },
         async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
       );
       const enrichedIssues = (result.issues || []).map((issue) => ({
@@ -21023,10 +22267,12 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       const depCfg = context2.config.checks?.[opt];
       const cont = !!(depCfg && depCfg.continue_on_failure === true);
       const st = state.stats.get(opt);
-      const wasMarkedFailed = !!(failedChecks && failedChecks.has(opt));
       const skipped = !!(st && st.skipped === true);
+      const skipReason = st?.skipReason;
+      const skippedDueToEmptyForEach = skipped && skipReason === "forEach_empty";
+      const wasMarkedFailed = !!(failedChecks && failedChecks.has(opt)) && !skippedDueToEmptyForEach;
       const failedOnly = !!(st && (st.failedRuns || 0) > 0 && (st.successfulRuns || 0) === 0);
-      const satisfied = !skipped && (!failedOnly && !wasMarkedFailed || cont);
+      const satisfied = (!skipped || skippedDueToEmptyForEach) && (!failedOnly && !wasMarkedFailed || cont);
       if (satisfied) return true;
     }
     return false;
@@ -21078,6 +22324,22 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       emitEvent({ type: "CheckCompleted", checkId, scope: [], result: emptyResult });
       return emptyResult;
     }
+  }
+  try {
+    const wave = state.wave;
+    const level = state.currentLevel ?? "?";
+    const banner = `\u2501\u2501\u2501 CHECK ${checkId} (wave ${wave}, level ${level}) \u2501\u2501\u2501`;
+    const isTTY = typeof process !== "undefined" ? !!process.stderr.isTTY : false;
+    const outputFormat = process.env.VISOR_OUTPUT_FORMAT || "";
+    const isJsonLike = outputFormat === "json" || outputFormat === "sarif";
+    if (isTTY && !isJsonLike) {
+      const cyan = "\x1B[36m";
+      const reset = "\x1B[0m";
+      logger.info(`${cyan}${banner}${reset}`);
+    } else {
+      logger.info(banner);
+    }
+  } catch {
   }
   let forEachParent;
   let forEachItems;
@@ -21219,12 +22481,45 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       files: [],
       commits: []
     };
+    let parentSessionId;
+    let reuseSession = false;
+    try {
+      const reuseCfg = checkConfig.reuse_ai_session;
+      if (reuseCfg === "self") {
+        const snapshotId = context2.journal.beginSnapshot();
+        const visible = context2.journal.readVisible(
+          context2.sessionId,
+          snapshotId,
+          context2.event
+        );
+        const prior = visible.filter(
+          (e) => e.checkId === checkId && (!e.scope || e.scope.length === 0)
+        );
+        if (prior.length > 0) {
+          const last = prior[prior.length - 1];
+          const sess = last.result?.sessionId;
+          if (typeof sess === "string" && sess.length > 0) {
+            parentSessionId = sess;
+            reuseSession = true;
+          }
+        }
+      }
+    } catch {
+      parentSessionId = void 0;
+      reuseSession = false;
+    }
     const executionContext = {
       ...context2.executionContext,
       _engineMode: context2.mode,
       _parentContext: context2,
-      _parentState: state
+      _parentState: state,
+      // Explicitly propagate workspace reference for nested workflows
+      workspace: context2.workspace
     };
+    if (reuseSession && parentSessionId) {
+      executionContext.parentSessionId = parentSessionId;
+      executionContext.reuseSession = true;
+    }
     if (checkConfig.on_init) {
       try {
         const dependencyResultsMap = {};
@@ -21260,7 +22555,12 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
     }
     const result = await withActiveSpan(
       `visor.check.${checkId}`,
-      { "visor.check.id": checkId, "visor.check.type": providerType },
+      {
+        "visor.check.id": checkId,
+        "visor.check.type": providerType,
+        session_id: context2.sessionId,
+        wave: state.wave
+      },
       async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
     );
     const enrichedIssues = (result.issues || []).map((issue) => ({
@@ -21457,23 +22757,23 @@ __export(renderer_schema_exports, {
 });
 async function loadRendererSchema(name) {
   try {
-    const fs18 = await import("fs/promises");
-    const path20 = await import("path");
+    const fs20 = await import("fs/promises");
+    const path22 = await import("path");
     const sanitized = String(name).replace(/[^a-zA-Z0-9-]/g, "");
     if (!sanitized) return void 0;
     const candidates = [
       // When bundled with ncc, __dirname is dist/ and output/ is at dist/output/
-      path20.join(__dirname, "output", sanitized, "schema.json"),
+      path22.join(__dirname, "output", sanitized, "schema.json"),
       // When running from source, __dirname is src/state-machine/dispatch/ and output/ is at output/
-      path20.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
+      path22.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
       // When running from a checkout with output/ folder copied to CWD
-      path20.join(process.cwd(), "output", sanitized, "schema.json"),
+      path22.join(process.cwd(), "output", sanitized, "schema.json"),
       // Fallback: cwd/dist/output/
-      path20.join(process.cwd(), "dist", "output", sanitized, "schema.json")
+      path22.join(process.cwd(), "dist", "output", sanitized, "schema.json")
     ];
     for (const p of candidates) {
       try {
-        const raw = await fs18.readFile(p, "utf-8");
+        const raw = await fs20.readFile(p, "utf-8");
         return JSON.parse(raw);
       } catch {
       }
@@ -21502,6 +22802,23 @@ function mapCheckNameToFocus2(checkName) {
     architecture: "architecture"
   };
   return focusMap[checkName] || "all";
+}
+function formatScopeLabel2(scope) {
+  if (!scope || scope.length === 0) return "";
+  return scope.map((item) => `${item.check}:${item.index}`).join("|");
+}
+function recordOnFinishRoutingEvent(args) {
+  const attrs = {
+    check_id: args.checkId,
+    trigger: "on_finish",
+    action: args.action,
+    target: args.target,
+    source: args.source
+  };
+  const scopeLabel = formatScopeLabel2(args.scope);
+  if (scopeLabel) attrs.scope = scopeLabel;
+  if (args.gotoEvent) attrs.goto_event = args.gotoEvent;
+  addEvent("visor.routing", attrs);
 }
 function buildOutputHistoryFromJournal2(context2) {
   const outputHistory = /* @__PURE__ */ new Map();
@@ -21542,7 +22859,7 @@ async function evaluateIfCondition(checkId, checkConfig, context2, state) {
         return false;
       }
     })();
-    const useGlobalOutputs = useGlobalOutputsFlag && waveKind === "forward" || useGlobalOutputsFlag && hasDeps;
+    const useGlobalOutputs = hasDeps || useGlobalOutputsFlag && waveKind === "forward";
     if (useGlobalOutputs) {
       try {
         const snapshotId = context2.journal.beginSnapshot();
@@ -21599,7 +22916,8 @@ async function evaluateIfCondition(checkId, checkConfig, context2, state) {
       branch: context2.prInfo?.branch,
       baseBranch: context2.prInfo?.baseBranch,
       filesChanged: context2.prInfo?.files?.map((f) => f.filename),
-      environment: envSnapshot
+      environment: envSnapshot,
+      workflowInputs: context2.config.workflow_inputs || {}
     };
     const shouldRun = await evaluator.evaluateIfCondition(checkId, ifExpression, contextData);
     return shouldRun;
@@ -21625,6 +22943,11 @@ async function handleLevelDispatch(context2, state, transition, emitEvent) {
   }
   state.currentLevel = level.level;
   state.currentLevelChecks = new Set(level.parallel);
+  const levelChecksPreview = level.parallel.slice(0, 5).join(",");
+  setSpanAttributes({
+    level_size: level.parallel.length,
+    level_checks_preview: levelChecksPreview
+  });
   emitEvent({ type: "LevelReady", level, wave: state.wave });
   const maxParallelism = context2.maxParallelism || 10;
   const results = [];
@@ -21935,6 +23258,40 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
         }
       } catch {
       }
+      try {
+        const webhookCtx = context2.executionContext?.webhookContext;
+        const webhookData = webhookCtx?.webhookData;
+        if (context2.debug) {
+          logger.info(
+            `[LevelDispatch] webhookContext: ${webhookCtx ? "present" : "absent"}, webhookData size: ${webhookData?.size || 0}`
+          );
+        }
+        if (webhookData && webhookData.size > 0) {
+          for (const payload of webhookData.values()) {
+            const slackConv = payload?.slack_conversation;
+            if (slackConv) {
+              const event = payload?.event;
+              const messageCount = Array.isArray(slackConv?.messages) ? slackConv.messages.length : 0;
+              if (context2.debug) {
+                logger.info(
+                  `[LevelDispatch] Slack conversation extracted: ${messageCount} messages`
+                );
+              }
+              providerConfig.eventContext = {
+                ...providerConfig.eventContext,
+                slack: {
+                  event: event || {},
+                  conversation: slackConv
+                },
+                conversation: slackConv
+                // Also expose at top level for convenience
+              };
+              break;
+            }
+          }
+        }
+      } catch {
+      }
       const dependencyResults = buildDependencyResultsWithScope2(
         checkId,
         checkConfig,
@@ -22009,21 +23366,27 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
         _parentContext: context2,
         _parentState: state
       };
-      try {
+      {
         const assumeExpr = checkConfig?.assume;
         if (assumeExpr) {
-          const evaluator = new FailureConditionEvaluator();
-          const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
           let ok = true;
-          for (const ex of exprs) {
-            const res = await evaluator.evaluateIfCondition(checkId, ex, {
-              event: context2.event || "manual",
-              previousResults: dependencyResults
-            });
-            if (!res) {
-              ok = false;
-              break;
+          try {
+            const evaluator = new FailureConditionEvaluator();
+            const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+            for (const ex of exprs) {
+              const res = await evaluator.evaluateIfCondition(checkId, ex, {
+                event: context2.event || "manual",
+                previousResults: dependencyResults
+              });
+              if (!res) {
+                ok = false;
+                break;
+              }
             }
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            logger.error(`Failed to evaluate assume expression for check '${checkId}': ${msg}`);
+            ok = false;
           }
           if (!ok) {
             logger.info(
@@ -22036,7 +23399,6 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
             continue;
           }
         }
-      } catch {
       }
       try {
         emitNdjsonFallback("visor.provider", {
@@ -22050,7 +23412,9 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
         {
           "visor.check.id": checkId,
           "visor.check.type": providerType,
-          "visor.foreach.index": itemIndex
+          "visor.foreach.index": itemIndex,
+          session_id: context2.sessionId,
+          wave: state.wave
         },
         async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
       );
@@ -22134,7 +23498,9 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
           for (const ex of exprs) {
             const holds = await evaluator.evaluateIfCondition(checkId, ex, {
               previousResults: dependencyResults,
-              event: context2.event || "manual"
+              event: context2.event || "manual",
+              output
+              // Pass the iteration output for guarantee evaluation
             });
             if (!holds) {
               const issue = {
@@ -22407,6 +23773,13 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
               return aggregatedResult;
             }
             state.routingLoopCount++;
+            recordOnFinishRoutingEvent({
+              checkId: forEachParent,
+              action: "run",
+              target: targetCheck,
+              source: "run",
+              scope: []
+            });
             emitEvent({
               type: "ForwardRunRequested",
               target: targetCheck,
@@ -22451,6 +23824,14 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
                 return aggregatedResult;
               }
               state.routingLoopCount++;
+              recordOnFinishRoutingEvent({
+                checkId: forEachParent,
+                action: "goto",
+                target: transTarget.to,
+                source: "transitions",
+                scope: [],
+                gotoEvent: transTarget.goto_event
+              });
               emitEvent({
                 type: "ForwardRunRequested",
                 target: transTarget.to,
@@ -22530,6 +23911,13 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
           }
           logger.info(`[LevelDispatch] on_finish for ${forEachParent} routing to: ${gotoTarget}`);
           state.routingLoopCount++;
+          recordOnFinishRoutingEvent({
+            checkId: forEachParent,
+            action: "goto",
+            target: gotoTarget,
+            source: onFinish.goto_js ? "goto_js" : "goto",
+            scope: []
+          });
           emitEvent({
             type: "ForwardRunRequested",
             target: gotoTarget,
@@ -22639,10 +24027,12 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
       const depCfg = context2.config.checks?.[opt];
       const cont = !!(depCfg && depCfg.continue_on_failure === true);
       const st = state.stats.get(opt);
-      const wasMarkedFailed = !!(failedChecks && failedChecks.has(opt));
       const skipped = !!(st && st.skipped === true);
+      const skipReason = st?.skipReason;
+      const skippedDueToEmptyForEach = skipped && skipReason === "forEach_empty";
+      const wasMarkedFailed = !!(failedChecks && failedChecks.has(opt)) && !skippedDueToEmptyForEach;
       const failedOnly = !!(st && (st.failedRuns || 0) > 0 && (st.successfulRuns || 0) === 0);
-      const satisfied = !skipped && (!failedOnly && !wasMarkedFailed || cont);
+      const satisfied = (!skipped || skippedDueToEmptyForEach) && (!failedOnly && !wasMarkedFailed || cont);
       if (satisfied) return true;
     }
     return false;
@@ -22886,6 +24276,38 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
       }
     } catch {
     }
+    try {
+      const webhookCtx = context2.executionContext?.webhookContext;
+      const webhookData = webhookCtx?.webhookData;
+      if (context2.debug) {
+        logger.info(
+          `[LevelDispatch] webhookContext: ${webhookCtx ? "present" : "absent"}, webhookData size: ${webhookData?.size || 0}`
+        );
+      }
+      if (webhookData && webhookData.size > 0) {
+        for (const payload of webhookData.values()) {
+          const slackConv = payload?.slack_conversation;
+          if (slackConv) {
+            const event = payload?.event;
+            const messageCount = Array.isArray(slackConv?.messages) ? slackConv.messages.length : 0;
+            if (context2.debug) {
+              logger.info(`[LevelDispatch] Slack conversation extracted: ${messageCount} messages`);
+            }
+            providerConfig.eventContext = {
+              ...providerConfig.eventContext,
+              slack: {
+                event: event || {},
+                conversation: slackConv
+              },
+              conversation: slackConv
+              // Also expose at top level for convenience
+            };
+            break;
+          }
+        }
+      }
+    } catch {
+    }
     const dependencyResults = buildDependencyResults(checkId, checkConfig2, context2, state);
     const prInfo = context2.prInfo || {
       number: 1,
@@ -22904,21 +24326,27 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
       // Make checks metadata available to providers that want it
       checksMeta
     };
-    try {
+    {
       const assumeExpr = checkConfig2?.assume;
       if (assumeExpr) {
-        const evaluator = new FailureConditionEvaluator();
-        const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
         let ok = true;
-        for (const ex of exprs) {
-          const res = await evaluator.evaluateIfCondition(checkId, ex, {
-            event: context2.event || "manual",
-            previousResults: dependencyResults
-          });
-          if (!res) {
-            ok = false;
-            break;
+        try {
+          const evaluator = new FailureConditionEvaluator();
+          const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+          for (const ex of exprs) {
+            const res = await evaluator.evaluateIfCondition(checkId, ex, {
+              event: context2.event || "manual",
+              previousResults: dependencyResults
+            });
+            if (!res) {
+              ok = false;
+              break;
+            }
           }
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          logger.error(`Failed to evaluate assume expression for check '${checkId}': ${msg}`);
+          ok = false;
         }
         if (!ok) {
           logger.info(
@@ -22960,7 +24388,6 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
           return emptyResult;
         }
       }
-    } catch {
     }
     try {
       emitNdjsonFallback("visor.provider", {
@@ -22971,7 +24398,12 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
     }
     const result = await withActiveSpan(
       `visor.check.${checkId}`,
-      { "visor.check.id": checkId, "visor.check.type": providerType },
+      {
+        "visor.check.id": checkId,
+        "visor.check.type": providerType,
+        session_id: context2.sessionId,
+        wave: state.wave
+      },
       async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
     );
     try {
@@ -22979,8 +24411,12 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
       if (awaitingHumanInput) {
         state.flags = state.flags || {};
         state.flags.awaitingHumanInput = true;
+        logger.info(
+          `[LevelDispatch] Set awaitingHumanInput=true for check ${checkId} (wave=${state.wave})`
+        );
       }
-    } catch {
+    } catch (e) {
+      logger.warn(`[LevelDispatch] Failed to check awaitingHumanInput flag: ${e}`);
     }
     const enrichedIssues = (result.issues || []).map((issue) => ({
       ...issue,
@@ -23036,7 +24472,8 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
         for (const ex of exprs) {
           const holds = await evaluator.evaluateIfCondition(checkId, ex, {
             previousResults: dependencyResults,
-            event: context2.event || "manual"
+            event: context2.event || "manual",
+            output: enrichedResult.output
           });
           if (!holds) {
             const issue = {
@@ -23541,8 +24978,8 @@ function updateStats2(results, state, isForEachIteration = false) {
 async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs18 = await import("fs/promises");
-    const path20 = await import("path");
+    const fs20 = await import("fs/promises");
+    const path22 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
@@ -23551,27 +24988,27 @@ async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
       logger.debug(`[LevelDispatch] Using inline template for ${checkId}`);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path20.resolve(process.cwd(), file);
-      templateContent = await fs18.readFile(resolved, "utf-8");
+      const resolved = path22.resolve(process.cwd(), file);
+      templateContent = await fs20.readFile(resolved, "utf-8");
       logger.debug(`[LevelDispatch] Using template file for ${checkId}: ${resolved}`);
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path20.join(__dirname, "output", sanitized, "template.liquid"),
+          path22.join(__dirname, "output", sanitized, "template.liquid"),
           // bundled: dist/output/
-          path20.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path22.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // source (from state-machine/states)
-          path20.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
+          path22.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
           // source (alternate)
-          path20.join(process.cwd(), "output", sanitized, "template.liquid"),
+          path22.join(process.cwd(), "output", sanitized, "template.liquid"),
           // fallback: cwd/output/
-          path20.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          path22.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
           // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs18.readFile(p, "utf-8");
+            templateContent = await fs20.readFile(p, "utf-8");
             if (templateContent) {
               logger.debug(`[LevelDispatch] Using schema template for ${checkId}: ${p}`);
               break;
@@ -23784,67 +25221,66 @@ var init_runner = __esm({
        * M4: Wraps each state execution in an OTEL span for observability
        */
       async executeState(state) {
-        return withActiveSpan(
-          `engine.state.${state.toLowerCase()}`,
-          {
-            state,
-            engine_mode: this.context.mode,
-            wave: this.state.wave,
-            session_id: this.context.sessionId
-          },
-          async () => {
-            try {
-              switch (state) {
-                case "Init":
-                  await handleInit(this.context, this.state, this.transition.bind(this));
-                  break;
-                case "PlanReady":
-                  await handlePlanReady(this.context, this.state, this.transition.bind(this));
-                  break;
-                case "WavePlanning":
-                  await handleWavePlanning(this.context, this.state, this.transition.bind(this));
-                  break;
-                case "LevelDispatch":
-                  await handleLevelDispatch(
-                    this.context,
-                    this.state,
-                    this.transition.bind(this),
-                    this.emitEvent.bind(this)
-                  );
-                  break;
-                case "CheckRunning":
-                  await handleCheckRunning(
-                    this.context,
-                    this.state,
-                    this.transition.bind(this),
-                    this.emitEvent.bind(this)
-                  );
-                  break;
-                case "Routing":
-                  throw new Error("Routing state should be handled by CheckRunning");
-                case "Completed":
-                  await handleCompleted(this.context, this.state);
-                  break;
-                case "Error":
-                  await handleError(this.context, this.state);
-                  break;
-                default:
-                  throw new Error(`Unknown state: ${state}`);
-              }
-            } catch (error) {
-              const errorMsg = error instanceof Error ? error.message : String(error);
-              logger.error(`[StateMachine] Error in state ${state}: ${errorMsg}`);
-              const serializedError = {
-                message: error instanceof Error ? error.message : String(error),
-                stack: error instanceof Error ? error.stack : void 0,
-                name: error instanceof Error ? error.name : void 0
-              };
-              this.emitEvent({ type: "Shutdown", error: serializedError });
-              this.state.currentState = "Error";
-              throw error;
+        const attrs = {
+          state,
+          engine_mode: this.context.mode,
+          wave: this.state.wave,
+          session_id: this.context.sessionId
+        };
+        const waveKind = this.state?.flags?.waveKind;
+        if (waveKind) attrs.wave_kind = waveKind;
+        return withActiveSpan(`engine.state.${state.toLowerCase()}`, attrs, async () => {
+          try {
+            switch (state) {
+              case "Init":
+                await handleInit(this.context, this.state, this.transition.bind(this));
+                break;
+              case "PlanReady":
+                await handlePlanReady(this.context, this.state, this.transition.bind(this));
+                break;
+              case "WavePlanning":
+                await handleWavePlanning(this.context, this.state, this.transition.bind(this));
+                break;
+              case "LevelDispatch":
+                await handleLevelDispatch(
+                  this.context,
+                  this.state,
+                  this.transition.bind(this),
+                  this.emitEvent.bind(this)
+                );
+                break;
+              case "CheckRunning":
+                await handleCheckRunning(
+                  this.context,
+                  this.state,
+                  this.transition.bind(this),
+                  this.emitEvent.bind(this)
+                );
+                break;
+              case "Routing":
+                throw new Error("Routing state should be handled by CheckRunning");
+              case "Completed":
+                await handleCompleted(this.context, this.state);
+                break;
+              case "Error":
+                await handleError(this.context, this.state);
+                break;
+              default:
+                throw new Error(`Unknown state: ${state}`);
             }
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            logger.error(`[StateMachine] Error in state ${state}: ${errorMsg}`);
+            const serializedError = {
+              message: error instanceof Error ? error.message : String(error),
+              stack: error instanceof Error ? error.stack : void 0,
+              name: error instanceof Error ? error.name : void 0
+            };
+            this.emitEvent({ type: "Shutdown", error: serializedError });
+            this.state.currentState = "Error";
+            throw error;
           }
-        );
+        });
       }
       /**
        * Transition to a new state
@@ -24152,13 +25588,13 @@ var init_runner = __esm({
 });
 
 // src/utils/file-exclusion.ts
-var import_ignore, fs14, path15, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
+var import_ignore, fs15, path16, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
 var init_file_exclusion = __esm({
   "src/utils/file-exclusion.ts"() {
     "use strict";
     import_ignore = __toESM(require("ignore"));
-    fs14 = __toESM(require("fs"));
-    path15 = __toESM(require("path"));
+    fs15 = __toESM(require("fs"));
+    path16 = __toESM(require("path"));
     DEFAULT_EXCLUSION_PATTERNS = [
       "dist/",
       "build/",
@@ -24177,7 +25613,7 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to include (optional, defaults to common build artifacts)
        */
       constructor(workingDirectory = process.cwd(), additionalPatterns = DEFAULT_EXCLUSION_PATTERNS) {
-        const normalizedPath = path15.resolve(workingDirectory);
+        const normalizedPath = path16.resolve(workingDirectory);
         if (normalizedPath.includes("\0")) {
           throw new Error("Invalid workingDirectory: contains null bytes");
         }
@@ -24189,11 +25625,11 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to add to gitignore rules
        */
       loadGitignore(additionalPatterns) {
-        const gitignorePath = path15.resolve(this.workingDirectory, ".gitignore");
-        const resolvedWorkingDir = path15.resolve(this.workingDirectory);
+        const gitignorePath = path16.resolve(this.workingDirectory, ".gitignore");
+        const resolvedWorkingDir = path16.resolve(this.workingDirectory);
         try {
-          const relativePath = path15.relative(resolvedWorkingDir, gitignorePath);
-          if (relativePath.startsWith("..") || path15.isAbsolute(relativePath)) {
+          const relativePath = path16.relative(resolvedWorkingDir, gitignorePath);
+          if (relativePath.startsWith("..") || path16.isAbsolute(relativePath)) {
             throw new Error("Invalid gitignore path: path traversal detected");
           }
           if (relativePath !== ".gitignore") {
@@ -24203,8 +25639,8 @@ var init_file_exclusion = __esm({
           if (additionalPatterns && additionalPatterns.length > 0) {
             this.gitignore.add(additionalPatterns);
           }
-          if (fs14.existsSync(gitignorePath)) {
-            const rawContent = fs14.readFileSync(gitignorePath, "utf8");
+          if (fs15.existsSync(gitignorePath)) {
+            const rawContent = fs15.readFileSync(gitignorePath, "utf8");
             const gitignoreContent = rawContent.replace(/[\r\n]+/g, "\n").replace(/[\x00-\x09\x0B-\x1F\x7F]/g, "").split("\n").filter((line) => line.length < 1e3).join("\n").trim();
             this.gitignore.add(gitignoreContent);
             if (process.env.VISOR_DEBUG === "true") {
@@ -24236,13 +25672,13 @@ var git_repository_analyzer_exports = {};
 __export(git_repository_analyzer_exports, {
   GitRepositoryAnalyzer: () => GitRepositoryAnalyzer
 });
-var import_simple_git2, path16, fs15, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
+var import_simple_git2, path17, fs16, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
 var init_git_repository_analyzer = __esm({
   "src/git-repository-analyzer.ts"() {
     "use strict";
     import_simple_git2 = require("simple-git");
-    path16 = __toESM(require("path"));
-    fs15 = __toESM(require("fs"));
+    path17 = __toESM(require("path"));
+    fs16 = __toESM(require("fs"));
     init_file_exclusion();
     MAX_PATCH_SIZE = 50 * 1024;
     GitRepositoryAnalyzer = class {
@@ -24431,7 +25867,7 @@ ${file.patch}`).join("\n\n");
               console.error(`\u23ED\uFE0F  Skipping excluded file: ${file}`);
               continue;
             }
-            const filePath = path16.join(this.cwd, file);
+            const filePath = path17.join(this.cwd, file);
             const fileChange = await this.analyzeFileChange(file, status2, filePath, includeContext);
             changes.push(fileChange);
           }
@@ -24507,7 +25943,7 @@ ${file.patch}`).join("\n\n");
         let content;
         let truncated = false;
         try {
-          if (includeContext && status !== "added" && fs15.existsSync(filePath)) {
+          if (includeContext && status !== "added" && fs16.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const result = this.truncatePatch(diff, filename);
@@ -24517,7 +25953,7 @@ ${file.patch}`).join("\n\n");
               additions = lines.filter((line) => line.startsWith("+")).length;
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
-          } else if (status !== "added" && fs15.existsSync(filePath)) {
+          } else if (status !== "added" && fs16.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const lines = diff.split("\n");
@@ -24525,17 +25961,17 @@ ${file.patch}`).join("\n\n");
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
           }
-          if (status === "added" && fs15.existsSync(filePath)) {
+          if (status === "added" && fs16.existsSync(filePath)) {
             try {
-              const stats = fs15.statSync(filePath);
+              const stats = fs16.statSync(filePath);
               if (stats.isFile() && stats.size < 1024 * 1024) {
                 if (includeContext) {
-                  content = fs15.readFileSync(filePath, "utf8");
+                  content = fs16.readFileSync(filePath, "utf8");
                   const result = this.truncatePatch(content, filename);
                   patch = result.patch;
                   truncated = result.truncated;
                 }
-                const fileContent = includeContext ? content : fs15.readFileSync(filePath, "utf8");
+                const fileContent = includeContext ? content : fs16.readFileSync(filePath, "utf8");
                 additions = fileContent.split("\n").length;
               }
             } catch {
@@ -24626,12 +26062,12 @@ function shellEscape(str) {
 function sanitizePathComponent(name) {
   return name.replace(/\.\./g, "").replace(/[\/\\]/g, "-").replace(/^\.+/, "").trim() || "unnamed";
 }
-var fsp, path17, WorkspaceManager;
+var fsp2, path18, WorkspaceManager;
 var init_workspace_manager = __esm({
   "src/utils/workspace-manager.ts"() {
     "use strict";
-    fsp = __toESM(require("fs/promises"));
-    path17 = __toESM(require("path"));
+    fsp2 = __toESM(require("fs/promises"));
+    path18 = __toESM(require("path"));
     init_command_executor();
     init_logger();
     WorkspaceManager = class _WorkspaceManager {
@@ -24656,7 +26092,7 @@ var init_workspace_manager = __esm({
           ...config
         };
         this.basePath = this.config.basePath;
-        this.workspacePath = path17.join(this.basePath, sanitizePathComponent(this.sessionId));
+        this.workspacePath = path18.join(this.basePath, sanitizePathComponent(this.sessionId));
       }
       /**
        * Get or create a WorkspaceManager instance for a session
@@ -24711,18 +26147,18 @@ var init_workspace_manager = __esm({
           return this.mainProjectInfo;
         }
         logger.info(`Initializing workspace: ${this.workspacePath}`);
-        await fsp.mkdir(this.workspacePath, { recursive: true });
+        await fsp2.mkdir(this.workspacePath, { recursive: true });
         logger.debug(`Created workspace directory: ${this.workspacePath}`);
         const mainProjectName = sanitizePathComponent(this.extractProjectName(this.originalPath));
         this.usedNames.add(mainProjectName);
-        const mainProjectPath = path17.join(this.workspacePath, mainProjectName);
+        const mainProjectPath = path18.join(this.workspacePath, mainProjectName);
         const isGitRepo = await this.isGitRepository(this.originalPath);
         if (isGitRepo) {
           await this.createMainProjectWorktree(mainProjectPath);
         } else {
           logger.debug(`Original path is not a git repo, creating symlink`);
           try {
-            await fsp.symlink(this.originalPath, mainProjectPath);
+            await fsp2.symlink(this.originalPath, mainProjectPath);
           } catch (error) {
             throw new Error(`Failed to create symlink for main project: ${error}`);
           }
@@ -24749,10 +26185,10 @@ var init_workspace_manager = __esm({
         let projectName = sanitizePathComponent(description || this.extractRepoName(repository));
         projectName = this.getUniqueName(projectName);
         this.usedNames.add(projectName);
-        const workspacePath = path17.join(this.workspacePath, projectName);
-        await fsp.rm(workspacePath, { recursive: true, force: true });
+        const workspacePath = path18.join(this.workspacePath, projectName);
+        await fsp2.rm(workspacePath, { recursive: true, force: true });
         try {
-          await fsp.symlink(worktreePath, workspacePath);
+          await fsp2.symlink(worktreePath, workspacePath);
         } catch (error) {
           throw new Error(`Failed to create symlink for project ${projectName}: ${error}`);
         }
@@ -24780,14 +26216,14 @@ var init_workspace_manager = __esm({
           if (this.mainProjectInfo) {
             const mainProjectPath = this.mainProjectInfo.mainProjectPath;
             try {
-              const stats = await fsp.lstat(mainProjectPath);
+              const stats = await fsp2.lstat(mainProjectPath);
               if (!stats.isSymbolicLink()) {
                 await this.removeMainProjectWorktree(mainProjectPath);
               }
             } catch {
             }
           }
-          await fsp.rm(this.workspacePath, { recursive: true, force: true });
+          await fsp2.rm(this.workspacePath, { recursive: true, force: true });
           logger.debug(`Removed workspace directory: ${this.workspacePath}`);
           _WorkspaceManager.instances.delete(this.sessionId);
           this.initialized = false;
@@ -24859,7 +26295,7 @@ var init_workspace_manager = __esm({
        * Extract project name from path
        */
       extractProjectName(dirPath) {
-        return path17.basename(dirPath);
+        return path18.basename(dirPath);
       }
       /**
        * Extract repository name from owner/repo format
@@ -24931,7 +26367,8 @@ function buildEngineContextForRun(workingDirectory, config, prInfo, debug, maxPa
       ),
       group: checkConfig.group,
       providerType: checkConfig.type || "ai",
-      dependencies: checkConfig.depends_on || []
+      // Normalize depends_on to array (supports string | string[])
+      dependencies: Array.isArray(checkConfig.depends_on) ? checkConfig.depends_on : checkConfig.depends_on ? [checkConfig.depends_on] : []
     };
   }
   if (requestedChecks && requestedChecks.length > 0) {
@@ -24984,10 +26421,11 @@ async function initializeWorkspace(context2) {
   }
   const originalPath = context2.workingDirectory || process.cwd();
   try {
+    const keepWorkspace = process.env.VISOR_KEEP_WORKSPACE === "true";
     const workspace = WorkspaceManager.getInstance(context2.sessionId, originalPath, {
       enabled: true,
-      basePath: workspaceConfig?.base_path || process.env.VISOR_WORKSPACE_PATH,
-      cleanupOnExit: workspaceConfig?.cleanup_on_exit !== false
+      basePath: workspaceConfig?.base_path || process.env.VISOR_WORKSPACE_PATH || "/tmp/visor-workspaces",
+      cleanupOnExit: keepWorkspace ? false : workspaceConfig?.cleanup_on_exit !== false
     });
     const info = await workspace.initialize();
     context2.workspace = workspace;
@@ -24995,6 +26433,9 @@ async function initializeWorkspace(context2) {
     context2.originalWorkingDirectory = originalPath;
     logger.info(`[Workspace] Initialized workspace: ${info.workspacePath}`);
     logger.debug(`[Workspace] Main project at: ${info.mainProjectPath}`);
+    if (keepWorkspace) {
+      logger.info(`[Workspace] Keeping workspace after execution (--keep-workspace)`);
+    }
     return context2;
   } catch (error) {
     logger.warn(`[Workspace] Failed to initialize workspace: ${error}`);
@@ -26630,6 +28071,60 @@ var init_client = __esm({
           return [];
         }
       }
+      files = {
+        /**
+         * Upload a file to Slack using files.uploadV2 API
+         * @param options Upload options including file content, filename, channel, and thread_ts
+         */
+        uploadV2: async ({
+          content,
+          filename,
+          channel,
+          thread_ts,
+          title,
+          initial_comment
+        }) => {
+          try {
+            const getUrlResp = await this.api("files.getUploadURLExternal", {
+              filename,
+              length: content.length
+            });
+            if (!getUrlResp || getUrlResp.ok !== true || !getUrlResp.upload_url) {
+              console.warn(
+                `Slack files.getUploadURLExternal failed: ${getUrlResp?.error || "unknown"}`
+              );
+              return { ok: false };
+            }
+            const uploadResp = await fetch(getUrlResp.upload_url, {
+              method: "POST",
+              body: content
+            });
+            if (!uploadResp.ok) {
+              console.warn(`Slack file upload to URL failed: ${uploadResp.status}`);
+              return { ok: false };
+            }
+            const completeResp = await this.api("files.completeUploadExternal", {
+              files: [{ id: getUrlResp.file_id, title: title || filename }],
+              channel_id: channel,
+              thread_ts,
+              initial_comment
+            });
+            if (!completeResp || completeResp.ok !== true) {
+              console.warn(
+                `Slack files.completeUploadExternal failed: ${completeResp?.error || "unknown"}`
+              );
+              return { ok: false };
+            }
+            return {
+              ok: true,
+              file: completeResp.files?.[0] || { id: getUrlResp.file_id }
+            };
+          } catch (e) {
+            console.warn(`Slack file upload failed: ${e instanceof Error ? e.message : String(e)}`);
+            return { ok: false };
+          }
+        }
+      };
       getWebClient() {
         return {
           conversations: {
@@ -26655,6 +28150,120 @@ var init_client = __esm({
 });
 
 // src/slack/markdown.ts
+function extractMermaidDiagrams(text) {
+  const diagrams = [];
+  const regex = /```mermaid\s*\n([\s\S]*?)```/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    diagrams.push({
+      fullMatch: match[0],
+      code: match[1].trim(),
+      startIndex: match.index,
+      endIndex: match.index + match[0].length
+    });
+  }
+  return diagrams;
+}
+async function renderMermaidToPng(mermaidCode) {
+  const tmpDir = os.tmpdir();
+  const inputFile = path20.join(
+    tmpDir,
+    `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}.mmd`
+  );
+  const outputFile = path20.join(
+    tmpDir,
+    `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}.png`
+  );
+  try {
+    fs18.writeFileSync(inputFile, mermaidCode, "utf-8");
+    const chromiumPaths = [
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+      "/usr/bin/google-chrome",
+      "/usr/bin/chrome"
+    ];
+    let chromiumPath;
+    for (const p of chromiumPaths) {
+      if (fs18.existsSync(p)) {
+        chromiumPath = p;
+        break;
+      }
+    }
+    const env = { ...process.env };
+    if (chromiumPath) {
+      env.PUPPETEER_EXECUTABLE_PATH = chromiumPath;
+    }
+    const result = await new Promise((resolve9) => {
+      const proc = (0, import_child_process2.spawn)(
+        "npx",
+        [
+          "--yes",
+          "@mermaid-js/mermaid-cli",
+          "-i",
+          inputFile,
+          "-o",
+          outputFile,
+          "-e",
+          "png",
+          "-b",
+          "white",
+          "-w",
+          "1200"
+        ],
+        {
+          timeout: 6e4,
+          // 60 second timeout (first run may download packages)
+          stdio: ["pipe", "pipe", "pipe"],
+          env
+        }
+      );
+      let stderr = "";
+      proc.stderr?.on("data", (data) => {
+        stderr += data.toString();
+      });
+      proc.on("close", (code) => {
+        if (code === 0) {
+          resolve9({ success: true });
+        } else {
+          resolve9({ success: false, error: stderr || `Exit code ${code}` });
+        }
+      });
+      proc.on("error", (err) => {
+        resolve9({ success: false, error: err.message });
+      });
+    });
+    if (!result.success) {
+      console.warn(`Mermaid rendering failed: ${result.error}`);
+      return null;
+    }
+    if (!fs18.existsSync(outputFile)) {
+      console.warn("Mermaid output file not created");
+      return null;
+    }
+    const pngBuffer = fs18.readFileSync(outputFile);
+    return pngBuffer;
+  } catch (e) {
+    console.warn(`Mermaid rendering error: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  } finally {
+    try {
+      if (fs18.existsSync(inputFile)) fs18.unlinkSync(inputFile);
+      if (fs18.existsSync(outputFile)) fs18.unlinkSync(outputFile);
+    } catch {
+    }
+  }
+}
+function replaceMermaidBlocks(text, diagrams, replacement = "_(See diagram above)_") {
+  if (diagrams.length === 0) return text;
+  const sorted = [...diagrams].sort((a, b) => b.startIndex - a.startIndex);
+  let result = text;
+  sorted.forEach((diagram, sortedIndex) => {
+    const originalIndex = diagrams.length - 1 - sortedIndex;
+    const rep = typeof replacement === "function" ? replacement(originalIndex) : replacement;
+    result = result.slice(0, diagram.startIndex) + rep + result.slice(diagram.endIndex);
+  });
+  return result;
+}
 function markdownToSlack(text) {
   if (!text || typeof text !== "string") return "";
   let out = text;
@@ -26678,9 +28287,22 @@ function markdownToSlack(text) {
       continue;
     }
     if (inCodeBlock) continue;
-    const match = /^(\s*)([-*])\s+(.+)$/.exec(line);
-    if (match) {
-      const [, indent, , rest] = match;
+    const headerMatch = /^(#{1,6})\s+(.+)$/.exec(trimmed);
+    if (headerMatch) {
+      const [, hashes, headerText] = headerMatch;
+      const prevLine = i > 0 ? lines[i - 1].trim() : "";
+      const prevIsHeaderOrFence = /^#{1,6}\s+/.test(prevLine) || /^\*[^*]+\*$/.test(prevLine) || /^```/.test(prevLine);
+      if (hashes.length <= 2 && i > 0 && prevLine !== "" && !prevIsHeaderOrFence) {
+        lines[i] = `
+*${headerText.trim()}*`;
+      } else {
+        lines[i] = `*${headerText.trim()}*`;
+      }
+      continue;
+    }
+    const bulletMatch = /^(\s*)([-*])\s+(.+)$/.exec(line);
+    if (bulletMatch) {
+      const [, indent, , rest] = bulletMatch;
       lines[i] = `${indent}\u2022 ${rest}`;
     }
   }
@@ -26690,9 +28312,14 @@ function markdownToSlack(text) {
 function formatSlackText(text) {
   return markdownToSlack(text);
 }
+var import_child_process2, fs18, path20, os;
 var init_markdown = __esm({
   "src/slack/markdown.ts"() {
     "use strict";
+    import_child_process2 = require("child_process");
+    fs18 = __toESM(require("fs"));
+    path20 = __toESM(require("path"));
+    os = __toESM(require("os"));
   }
 });
 
@@ -26707,6 +28334,7 @@ var init_slack_frontend = __esm({
     "use strict";
     init_client();
     init_markdown();
+    init_lazy_otel();
     SlackFrontend = class {
       name = "slack";
       subs = [];
@@ -26943,10 +28571,12 @@ var init_slack_frontend = __esm({
           if (!checkCfg) return;
           const slackRoot = cfg.slack || {};
           const showRawOutput = slackRoot.show_raw_output === true || this.cfg?.showRawOutput === true;
+          const telemetryCfg = slackRoot.telemetry ?? this.cfg?.telemetry;
           const providerType = checkCfg.type || "";
           const isAi = providerType === "ai";
           const isLogChat = providerType === "log" && checkCfg.group === "chat";
           if (!isAi && !isLogChat) return;
+          if (checkCfg.criticality === "internal") return;
           if (isAi) {
             const schema = checkCfg.schema;
             if (typeof schema === "string") {
@@ -26969,6 +28599,11 @@ var init_slack_frontend = __esm({
             if (typeof result?.content === "string" && result.content.trim().length > 0) {
               text = result.content.trim();
             }
+          } else if (isLogChat && typeof result?.logOutput === "string") {
+            const raw = result.logOutput;
+            if (raw.trim().length > 0) {
+              text = raw.trim();
+            }
           } else if (isAi && showRawOutput && out !== void 0) {
             try {
               text = JSON.stringify(out, null, 2);
@@ -26977,15 +28612,92 @@ var init_slack_frontend = __esm({
             }
           }
           if (!text) return;
-          const formattedText = formatSlackText(text);
+          const diagrams = extractMermaidDiagrams(text);
+          let processedText = text;
+          if (diagrams.length > 0) {
+            try {
+              ctx.logger.info(
+                `[slack-frontend] found ${diagrams.length} mermaid diagram(s) to render for ${checkId}`
+              );
+            } catch {
+            }
+            const uploadedCount = [];
+            for (let i = 0; i < diagrams.length; i++) {
+              const diagram = diagrams[i];
+              try {
+                ctx.logger.info(`[slack-frontend] rendering mermaid diagram ${i + 1}...`);
+                const pngBuffer = await renderMermaidToPng(diagram.code);
+                if (pngBuffer) {
+                  ctx.logger.info(
+                    `[slack-frontend] rendered diagram ${i + 1}, size=${pngBuffer.length} bytes, uploading...`
+                  );
+                  const filename = `diagram-${i + 1}.png`;
+                  const uploadResult = await slack.files.uploadV2({
+                    content: pngBuffer,
+                    filename,
+                    channel,
+                    thread_ts: threadTs,
+                    title: `Diagram ${i + 1}`
+                  });
+                  if (uploadResult.ok) {
+                    uploadedCount.push(i);
+                    ctx.logger.info(`[slack-frontend] uploaded mermaid diagram ${i + 1} to ${channel}`);
+                  } else {
+                    ctx.logger.warn(`[slack-frontend] upload failed for diagram ${i + 1}`);
+                  }
+                } else {
+                  ctx.logger.warn(
+                    `[slack-frontend] mermaid rendering returned null for diagram ${i + 1} (mmdc failed or not installed)`
+                  );
+                }
+              } catch (e) {
+                ctx.logger.warn(
+                  `[slack-frontend] failed to render/upload mermaid diagram ${i + 1}: ${e instanceof Error ? e.message : String(e)}`
+                );
+              }
+            }
+            if (uploadedCount.length > 0) {
+              processedText = replaceMermaidBlocks(
+                text,
+                diagrams,
+                (idx) => uploadedCount.includes(idx) ? "_(See diagram above)_" : "_(Diagram rendering failed)_"
+              );
+            }
+          }
+          let decoratedText = processedText;
+          const telemetryEnabled = telemetryCfg === true || telemetryCfg && typeof telemetryCfg === "object" && telemetryCfg.enabled === true;
+          if (telemetryEnabled) {
+            const traceInfo = this.getTraceInfo();
+            if (traceInfo?.traceId) {
+              const suffix = `\`trace_id: ${traceInfo.traceId}\``;
+              decoratedText = `${decoratedText}
+
+${suffix}`;
+            }
+          }
+          const formattedText = formatSlackText(decoratedText);
           await slack.chat.postMessage({ channel, text: formattedText, thread_ts: threadTs });
+          ctx.logger.info(
+            `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs}`
+          );
+        } catch (outerErr) {
           try {
-            ctx.logger.info(
-              `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs}`
+            ctx.logger.warn(
+              `[slack-frontend] maybePostDirectReply failed for ${checkId}: ${outerErr instanceof Error ? outerErr.message : String(outerErr)}`
             );
           } catch {
           }
+        }
+      }
+      getTraceInfo() {
+        try {
+          const span = trace.getSpan(context.active());
+          if (!span) return null;
+          const ctx = span.spanContext();
+          if (!ctx || !ctx.traceId) return null;
+          return { traceId: ctx.traceId, spanId: ctx.spanId };
         } catch {
+          return null;
         }
       }
     };
@@ -27102,8 +28814,8 @@ module.exports = __toCommonJS(sdk_exports);
 // src/state-machine-execution-engine.ts
 init_runner();
 init_logger();
-var path19 = __toESM(require("path"));
-var fs17 = __toESM(require("fs"));
+var path21 = __toESM(require("path"));
+var fs19 = __toESM(require("fs"));
 var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
   workingDirectory;
   executionContext;
@@ -27398,9 +29110,9 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
               }
               const checkId = String(ev?.checkId || "unknown");
               const threadKey = ev?.threadKey || (channel && threadTs ? `${channel}:${threadTs}` : "session");
-              const baseDir = process.env.VISOR_SNAPSHOT_DIR || path19.resolve(process.cwd(), ".visor", "snapshots");
-              fs17.mkdirSync(baseDir, { recursive: true });
-              const filePath = path19.join(baseDir, `${threadKey}-${checkId}.json`);
+              const baseDir = process.env.VISOR_SNAPSHOT_DIR || path21.resolve(process.cwd(), ".visor", "snapshots");
+              fs19.mkdirSync(baseDir, { recursive: true });
+              const filePath = path21.join(baseDir, `${threadKey}-${checkId}.json`);
               await this.saveSnapshotToFile(filePath);
               logger.info(`[Snapshot] Saved run snapshot: ${filePath}`);
               try {
@@ -27525,7 +29237,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
    * Does not include secrets. Intended for debugging and future resume support.
    */
   async saveSnapshotToFile(filePath) {
-    const fs18 = await import("fs/promises");
+    const fs20 = await import("fs/promises");
     const ctx = this._lastContext;
     const runner = this._lastRunner;
     if (!ctx || !runner) {
@@ -27545,14 +29257,14 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       journal: entries,
       requestedChecks: ctx.requestedChecks || []
     };
-    await fs18.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+    await fs20.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
   }
   /**
    * Load a snapshot JSON from file and return it. Resume support can build on this.
    */
   async loadSnapshotFromFile(filePath) {
-    const fs18 = await import("fs/promises");
-    const raw = await fs18.readFile(filePath, "utf8");
+    const fs20 = await import("fs/promises");
+    const raw = await fs20.readFile(filePath, "utf8");
     return JSON.parse(raw);
   }
   /**

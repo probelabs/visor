@@ -46,6 +46,20 @@ export declare const configSchema: {
                     };
                     readonly description: "Import workflow definitions from external files or URLs";
                 };
+                readonly inputs: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly $ref: "#/definitions/WorkflowInput";
+                    };
+                    readonly description: "Workflow inputs (for standalone reusable workflows)";
+                };
+                readonly outputs: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly $ref: "#/definitions/WorkflowOutput";
+                    };
+                    readonly description: "Workflow outputs (for standalone reusable workflows)";
+                };
                 readonly steps: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E";
                     readonly description: "Step configurations (recommended)";
@@ -56,7 +70,7 @@ export declare const configSchema: {
                 };
                 readonly output: {
                     readonly $ref: "#/definitions/OutputConfig";
-                    readonly description: "Output configuration";
+                    readonly description: "Output configuration (optional - defaults provided)";
                 };
                 readonly http_server: {
                     readonly $ref: "#/definitions/HttpServerConfig";
@@ -128,8 +142,16 @@ export declare const configSchema: {
                     };
                     readonly description: "Optional integrations: event-driven frontends (e.g., ndjson-sink, github)";
                 };
+                readonly workspace: {
+                    readonly $ref: "#/definitions/WorkspaceConfig";
+                    readonly description: "Workspace isolation configuration for sandboxed execution";
+                };
+                readonly slack: {
+                    readonly $ref: "#/definitions/SlackConfig";
+                    readonly description: "Slack configuration";
+                };
             };
-            readonly required: readonly ["output", "version"];
+            readonly required: readonly ["version"];
             readonly patternProperties: {
                 readonly '^x-': {};
             };
@@ -230,6 +252,63 @@ export declare const configSchema: {
             readonly type: "object";
             readonly additionalProperties: {
                 readonly type: "string";
+            };
+        };
+        readonly WorkflowInput: {
+            readonly type: "object";
+            readonly properties: {
+                readonly name: {
+                    readonly type: "string";
+                    readonly description: "Input parameter name";
+                };
+                readonly schema: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    readonly description: "JSON Schema for the input";
+                };
+                readonly required: {
+                    readonly type: "boolean";
+                    readonly description: "Whether this input is required";
+                };
+                readonly default: {
+                    readonly description: "Default value if not provided";
+                };
+                readonly description: {
+                    readonly type: "string";
+                    readonly description: "Human-readable description";
+                };
+            };
+            readonly required: readonly ["name"];
+            readonly additionalProperties: false;
+            readonly description: "Workflow input definition for standalone reusable workflows";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly WorkflowOutput: {
+            readonly type: "object";
+            readonly properties: {
+                readonly name: {
+                    readonly type: "string";
+                    readonly description: "Output name";
+                };
+                readonly description: {
+                    readonly type: "string";
+                    readonly description: "Human-readable description";
+                };
+                readonly value: {
+                    readonly type: "string";
+                    readonly description: "Value using Liquid template syntax (references step outputs)";
+                };
+                readonly value_js: {
+                    readonly type: "string";
+                    readonly description: "Value using JavaScript expression (alternative to value)";
+                };
+            };
+            readonly required: readonly ["name"];
+            readonly additionalProperties: false;
+            readonly description: "Workflow output definition for standalone reusable workflows";
+            readonly patternProperties: {
+                readonly '^x-': {};
             };
         };
         readonly 'Record<string,CheckConfig>': {
@@ -371,11 +450,15 @@ export declare const configSchema: {
                     readonly description: "Timeout in seconds for command execution (default: 60)";
                 };
                 readonly depends_on: {
-                    readonly type: "array";
-                    readonly items: {
+                    readonly anyOf: readonly [{
                         readonly type: "string";
-                    };
-                    readonly description: "Check IDs that this check depends on (optional)";
+                    }, {
+                        readonly type: "array";
+                        readonly items: {
+                            readonly type: "string";
+                        };
+                    }];
+                    readonly description: "Check IDs that this check depends on (optional). Accepts single string or array.";
                 };
                 readonly group: {
                     readonly type: "string";
@@ -603,12 +686,88 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
                     readonly $ref: "#/definitions/Record%3Cstring%2Cstring%3E";
                     readonly description: "Map workflow outputs to check outputs";
+                };
+                readonly workflow_inputs: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    readonly description: "Alias for args - workflow inputs (backward compatibility)";
+                };
+                readonly config: {
+                    readonly type: "string";
+                    readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
+                };
+                readonly workflow_overrides: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845%3E%3E";
+                    readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
+                };
+                readonly ref: {
+                    readonly type: "string";
+                    readonly description: "Git reference to checkout (branch, tag, commit SHA) - supports templates";
+                };
+                readonly repository: {
+                    readonly type: "string";
+                    readonly description: "Repository URL or owner/repo format (defaults to current repository)";
+                };
+                readonly token: {
+                    readonly type: "string";
+                    readonly description: "GitHub token for private repositories (defaults to GITHUB_TOKEN env)";
+                };
+                readonly fetch_depth: {
+                    readonly type: "number";
+                    readonly description: "Number of commits to fetch (0 for full history, default: 1)";
+                };
+                readonly fetch_tags: {
+                    readonly type: "boolean";
+                    readonly description: "Whether to fetch tags (default: false)";
+                };
+                readonly submodules: {
+                    readonly anyOf: readonly [{
+                        readonly type: "boolean";
+                    }, {
+                        readonly type: "string";
+                        readonly const: "recursive";
+                    }];
+                    readonly description: "Checkout submodules: false, true, or 'recursive'";
+                };
+                readonly working_directory: {
+                    readonly type: "string";
+                    readonly description: "Working directory for the checkout (defaults to temp directory)";
+                };
+                readonly use_worktree: {
+                    readonly type: "boolean";
+                    readonly description: "Use git worktree for efficient parallel checkouts (default: true)";
+                };
+                readonly clean: {
+                    readonly type: "boolean";
+                    readonly description: "Clean the working directory before checkout (default: true)";
+                };
+                readonly sparse_checkout: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Sparse checkout paths - only checkout specific directories/files";
+                };
+                readonly lfs: {
+                    readonly type: "boolean";
+                    readonly description: "Enable Git LFS (Large File Storage)";
+                };
+                readonly clone_timeout_ms: {
+                    readonly type: "number";
+                    readonly description: "Timeout in ms for cloning the bare repository (default: 300000 = 5 min)";
+                };
+                readonly cleanup_on_failure: {
+                    readonly type: "boolean";
+                    readonly description: "Clean up worktree on failure (default: true)";
+                };
+                readonly persist_worktree: {
+                    readonly type: "boolean";
+                    readonly description: "Keep worktree after workflow completion (default: false)";
                 };
             };
             readonly additionalProperties: false;
@@ -713,6 +872,10 @@ export declare const configSchema: {
                 readonly bashConfig: {
                     readonly $ref: "#/definitions/BashConfig";
                     readonly description: "Advanced bash command execution configuration";
+                };
+                readonly completion_prompt: {
+                    readonly type: "string";
+                    readonly description: "Completion prompt for post-completion validation/review (runs after attempt_completion)";
                 };
             };
             readonly additionalProperties: false;
@@ -1133,7 +1296,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1148,13 +1311,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706>': {
+        readonly 'Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };
@@ -1704,6 +1867,71 @@ export declare const configSchema: {
             };
             readonly additionalProperties: false;
             readonly description: "Global engine limits";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly WorkspaceConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly enabled: {
+                    readonly type: "boolean";
+                    readonly description: "Enable workspace isolation (default: true when config present)";
+                };
+                readonly base_path: {
+                    readonly type: "string";
+                    readonly description: "Base path for workspaces (default: /tmp/visor-workspaces)";
+                };
+                readonly cleanup_on_exit: {
+                    readonly type: "boolean";
+                    readonly description: "Clean up workspace on exit (default: true)";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Workspace isolation configuration";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly SlackConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly version: {
+                    readonly type: "string";
+                    readonly description: "Slack API version";
+                };
+                readonly mentions: {
+                    readonly type: "string";
+                    readonly description: "Mention handling: 'all', 'direct', etc.";
+                };
+                readonly threads: {
+                    readonly type: "string";
+                    readonly description: "Thread handling: 'required', 'optional', etc.";
+                };
+                readonly show_raw_output: {
+                    readonly type: "boolean";
+                    readonly description: "Show raw output in Slack responses";
+                };
+                readonly telemetry: {
+                    readonly $ref: "#/definitions/SlackTelemetryConfig";
+                    readonly description: "Append telemetry identifiers to Slack replies.";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Slack configuration";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly SlackTelemetryConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly enabled: {
+                    readonly type: "boolean";
+                    readonly description: "Enable telemetry ID suffix in Slack messages";
+                };
+            };
+            readonly additionalProperties: false;
             readonly patternProperties: {
                 readonly '^x-': {};
             };
