@@ -105,14 +105,18 @@ export function captureCheckInputContext(span: Span, context: Record<string, unk
     span.setAttribute('visor.check.input.context', safeSerialize(sanitizedContext));
 
     // Capture specific important variables separately for easy querying
-    if (context.pr) {
-      span.setAttribute('visor.check.input.pr', safeSerialize(context.pr, 1000));
+    // Use sanitizedContext consistently to avoid leaking sensitive data
+    if (sanitizedContext.pr) {
+      span.setAttribute('visor.check.input.pr', safeSerialize(sanitizedContext.pr, 1000));
     }
-    if (context.outputs) {
-      span.setAttribute('visor.check.input.outputs', safeSerialize(context.outputs, 5000));
+    if (sanitizedContext.outputs) {
+      span.setAttribute('visor.check.input.outputs', safeSerialize(sanitizedContext.outputs, 5000));
     }
-    if (context.env) {
-      span.setAttribute('visor.check.input.env_keys', Object.keys(context.env as object).join(','));
+    if (sanitizedContext.env) {
+      span.setAttribute(
+        'visor.check.input.env_keys',
+        Object.keys(sanitizedContext.env as object).join(',')
+      );
     }
   } catch (err) {
     try {
