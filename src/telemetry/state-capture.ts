@@ -10,6 +10,53 @@ import { Span } from './lazy-otel';
 const MAX_ATTRIBUTE_LENGTH = 10000; // Truncate large values
 const MAX_ARRAY_ITEMS = 100; // Limit array size in attributes
 
+// Patterns that indicate sensitive environment variables (case-insensitive)
+const SENSITIVE_ENV_PATTERNS = [
+  /api[_-]?key/i,
+  /secret/i,
+  /token/i,
+  /password/i,
+  /auth/i,
+  /credential/i,
+  /private[_-]?key/i,
+  /^sk-/i, // OpenAI-style keys
+  /^AIza/i, // Google API keys
+];
+
+/**
+ * Check if an environment variable name is sensitive
+ */
+function isSensitiveEnvVar(name: string): boolean {
+  return SENSITIVE_ENV_PATTERNS.some(pattern => pattern.test(name));
+}
+
+/**
+ * Sanitize context for telemetry by redacting sensitive environment variables.
+ * Returns a new object with env values redacted (keys preserved).
+ */
+export function sanitizeContextForTelemetry(
+  context: Record<string, unknown>
+): Record<string, unknown> {
+  if (!context || typeof context !== 'object') return context;
+
+  const sanitized = { ...context };
+
+  // Sanitize env object if present
+  if (sanitized.env && typeof sanitized.env === 'object') {
+    const sanitizedEnv: Record<string, string> = {};
+    for (const [key, value] of Object.entries(sanitized.env as Record<string, unknown>)) {
+      if (isSensitiveEnvVar(key)) {
+        sanitizedEnv[key] = '[REDACTED]';
+      } else {
+        sanitizedEnv[key] = String(value);
+      }
+    }
+    sanitized.env = sanitizedEnv;
+  }
+
+  return sanitized;
+}
+
 /**
  * Safely serialize a value for OTEL span attributes.
  * Handles truncation, circular refs, and type conversions.
@@ -46,13 +93,16 @@ function safeSerialize(value: unknown, maxLength = MAX_ATTRIBUTE_LENGTH): string
  */
 export function captureCheckInputContext(span: Span, context: Record<string, unknown>): void {
   try {
+    // Sanitize context to redact sensitive env vars before capturing
+    const sanitizedContext = sanitizeContextForTelemetry(context);
+
     // Capture key context variables
-    const keys = Object.keys(context);
+    const keys = Object.keys(sanitizedContext);
     span.setAttribute('visor.check.input.keys', keys.join(','));
     span.setAttribute('visor.check.input.count', keys.length);
 
-    // Capture full context as JSON (with size limit)
-    span.setAttribute('visor.check.input.context', safeSerialize(context));
+    // Capture full context as JSON (with size limit) - now sanitized
+    span.setAttribute('visor.check.input.context', safeSerialize(sanitizedContext));
 
     // Capture specific important variables separately for easy querying
     if (context.pr) {
