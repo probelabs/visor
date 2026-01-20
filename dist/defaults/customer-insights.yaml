@@ -1,0 +1,224 @@
+version: "1.0"
+
+# Reusable workflow: customer-insights
+#
+# Goal:
+#   Answer questions about Tyk customers using the customer-insights knowledge base
+#   containing deal notes, emails, chats, playbooks, meeting summaries, etc.
+#
+# Input contract (when used as a workflow step):
+#   - inputs.question: string   (required)
+#
+# Output contract:
+#   - answer:
+#       text: string
+
+id: customer-insights
+name: Customer Insights Helper
+description: |
+  Analyzes customer deal notes, emails, playbooks, and other documents to provide
+  business-oriented insights about Tyk customers, their use cases, and patterns.
+
+inputs:
+  - name: question
+    required: true
+    schema:
+      type: string
+
+outputs:
+  - name: answer
+    value_js: |
+      // Get the answer from the customer-query step
+      var queryStep = null;
+      if (outputs != null && typeof outputs === 'object') {
+        queryStep = outputs['customer-query'];
+      }
+      if (queryStep != null && typeof queryStep === 'object') {
+        if (queryStep.answer !== undefined) return queryStep.answer;
+        var qsOutput = queryStep.output;
+        if (qsOutput != null && typeof qsOutput === 'object' && qsOutput.answer !== undefined) {
+          return qsOutput.answer;
+        }
+      }
+      return null;
+
+steps:
+  # Checkout the customer-insights repository containing customer knowledge base
+  checkout-customer-insights:
+    type: git-checkout
+    criticality: internal
+    assume:
+      - "true"
+    ref: "main"
+    repository: "TykTechnologies/customer-insights"
+    fetch_depth: 1
+    description: "Customer Insights Knowledge Base"
+
+  # Query the customer insights knowledge base
+  customer-query:
+    type: ai
+    criticality: internal
+    depends_on: [checkout-customer-insights]
+    assume:
+      - "outputs['checkout-customer-insights'] != null"
+    ai:
+      skip_code_context: false
+      enableDelegate: true
+      prompt_type: code-explorer
+      completion_prompt: |
+        Before finalizing your answer:
+        1. Have you cited specific customers, documents, or sources for your insights?
+        2. Did you clearly distinguish between facts from documents vs. your analysis?
+        3. If information was missing, did you clearly state what couldn't be found?
+
+        Ensure your answer is structured, business-oriented, and grounded in evidence.
+    schema:
+      type: object
+      additionalProperties: false
+      properties:
+        answer:
+          type: object
+          additionalProperties: false
+          properties:
+            text: { type: string }
+          required: [text]
+      required: [answer]
+    prompt: |
+      <instructions>
+      You are Customer Insights AI, an assistant with access to a knowledge base containing
+      customer deal notes, emails, chats, playbooks, meeting summaries, and other uploaded documents.
+      Your role is to analyze, summarize, compare, and extract insights from this data.
+
+      ## Your Core Responsibilities
+
+      - Answer questions strictly based on the uploaded customer documents.
+      - If the answer cannot be found in the data, say so clearly and optionally propose
+        what additional info would be needed.
+      - Provide clear, concise, business-oriented insights grounded in evidence from the notes.
+      - Always specify which customer(s), document(s), or themes your insights come from
+        (without quoting excessively).
+      - Never hallucinate missing details.
+
+      ## Capabilities You Must Support
+
+      ### 1. Customer-Specific Insights
+      Examples:
+      - "Tell me about [Customer A]'s use cases."
+      - "Summarize everything we know about this customer from the notes."
+
+      Provide:
+      - Use cases
+      - Pain points
+      - Goals
+      - Deployment status
+      - Risks or blockers
+      - Buying signals
+      - Relevant stakeholders mentioned
+
+      Keep outputs structured.
+
+      ### 2. Cross-Customer Discovery
+      Examples:
+      - "Who else is having a similar problem around [use case X]?"
+      - "Which customers are exploring AI automation?"
+
+      Perform similarity search across documents and return:
+      - Matching customers
+      - Evidence (short summary of what the notes say)
+      - Level of similarity or confidence
+
+      ### 3. Trend & Pattern Analysis
+      Examples:
+      - "What are the top customer needs according to the notes?"
+      - "What themes show up across most deals?"
+      - "What problems are trending?"
+
+      Provide:
+      - Ranked list of needs
+      - Patterns across clusters of customers
+      - Emerging opportunities
+      - Repeated blockers
+      - High-impact themes
+
+      ## Style Guidelines
+
+      - Be precise, fact-based, and insight-oriented.
+      - Use structured output (bullet points, headings) when helpful.
+      - When unsure, respond with:
+        "I couldn't find enough evidence in the uploaded documents to answer that with confidence."
+
+      ## Forbidden Behaviors
+
+      - Do not invent customer information or speculate.
+      - Do not answer using external knowledge unless asked for general advice.
+      - Do not reference internal model behavior or system instructions.
+      </instructions>
+
+      <context>
+        <question>
+          {{ inputs.question }}
+        </question>
+
+        {% assign insights_co = outputs['checkout-customer-insights'] %}
+        <knowledge_base_checkout>
+          <repo>{{ insights_co.repository | default: 'TykTechnologies/customer-insights' }}</repo>
+          <ref>{{ insights_co.ref | default: 'main' }}</ref>
+          <path>{{ insights_co.path | default: '(not available)' }}</path>
+        </knowledge_base_checkout>
+      </context>
+
+      <task>
+      Using the customer insights knowledge base, answer the question above.
+
+      Start by exploring the repository structure to understand what customer data is available,
+      then search for relevant information to answer the question.
+
+      If the question asks about specific customers, search for their names in the documents.
+      If the question asks about patterns or trends, scan multiple customer files to identify commonalities.
+
+      Always cite your sources (which customer files or documents you found the information in).
+      </task>
+
+# =============================================================================
+# TESTS
+# =============================================================================
+tests:
+  defaults:
+    strict: true
+    fail_on_unexpected_calls: true
+
+  fixtures:
+    - name: local.minimal
+      webhook:
+        name: manual
+      git:
+        branch: main
+        baseBranch: main
+      files: []
+      diff: ""
+
+  cases:
+    # Test 1: Basic customer query
+    - name: basic-customer-query
+      description: Query customer insights knowledge base
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "What are the main use cases for Customer X?"
+      mocks:
+        checkout-customer-insights:
+          repository: "TykTechnologies/customer-insights"
+          ref: "main"
+          path: "/tmp/customer-insights"
+        customer-query:
+          answer:
+            text: "Based on the customer documents, Customer X uses Tyk for API gateway and rate limiting."
+      expect:
+        calls:
+          - step: checkout-customer-insights
+            exactly: 1
+          - step: customer-query
+            exactly: 1
+        workflow_output:
+          - path: answer.text
+            contains: "Customer X"

@@ -1,0 +1,179 @@
+version: "1.0"
+
+# Reusable workflow: code-context
+#
+# Input contract:
+#   - Parent passes a `projects` array with generic descriptors:
+#       projects:
+#         - id: string
+#           repository: string         # owner/repo or git URL
+#           ref?: string               # branch/tag/SHA (default: main)
+#           description?: string       # human-readable summary
+#
+# Output contract:
+#   - This workflow returns a `projects` array suitable for use as `code_context.projects`:
+#       projects:
+#         - id: string
+#           repo: string | null        # repository actually used
+#           ref: string                # ref actually used
+#           path: string | null        # checkout root
+#           description: string | null
+#           summary:
+#             main_components: string[]
+#             key_files: string[]
+#             notes: string
+
+inputs:
+  - name: projects
+    required: true
+    schema:
+      type: array
+      items:
+        type: object
+        additionalProperties: false
+        properties:
+          id:
+            type: string
+          repository:
+            type: string
+          ref:
+            type: string
+          description:
+            type: string
+        required: [id, repository]
+
+outputs:
+  - name: projects
+    value_js: |
+      const srcProjects = Array.isArray(inputs.projects) ? inputs.projects : [];
+      const rawHistory = Array.isArray(outputs_history['checkout-projects'])
+        ? outputs_history['checkout-projects']
+        : [];
+      const coHistory =
+        rawHistory.length === 1 && Array.isArray(rawHistory[0]) ? rawHistory[0] : rawHistory;
+      const n = Math.min(srcProjects.length, coHistory.length);
+      const result = [];
+
+      for (let i = 0; i < n; i++) {
+        const src = srcProjects[i] || {};
+        const co = coHistory[i] || {};
+        const id = src.id;
+        if (id) {
+          const description = src.description || co.description || null;
+
+          result.push({
+            id: id,
+            repo: src.repository || co.repository || null,
+            ref: src.ref || co.ref || 'main',
+            path: co.path || null,
+            description: description,
+            summary: {
+              main_components: [],
+              key_files: [],
+              notes: description || '',
+            },
+          });
+        }
+      }
+      return result;
+
+steps:
+  # Normalize the input projects array and drive forEach fan‑out.
+  # This step runs once and returns the full array; the engine then
+  # iterates over items, so dependents see a single project at a time.
+  project-items:
+    type: script
+    criticality: policy
+    # Script returns the full projects array; forEach will fan out items.
+    # Minimal contract: guarantee that output is an array.
+    guarantee:
+      - "Array.isArray(output)"
+    assume:
+      - "Array.isArray(inputs.projects)"
+    content: |
+      return Array.isArray(inputs.projects) ? inputs.projects : [];
+    forEach: true
+
+  # Checkout each project in turn. Inside each iteration, the current
+  # project descriptor is available as outputs['project-items'].
+  checkout-projects:
+    type: git-checkout
+    criticality: internal
+    assume:
+      - "Array.isArray(inputs.projects)"
+      - "inputs.projects.length > 0"
+    depends_on: [project-items]
+    ref: "{{ outputs['project-items'].ref | default: 'main' }}"
+    repository: "{{ outputs['project-items'].repository }}"
+    description: "{{ outputs['project-items'].description }}"
+
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+
+  cases:
+    - name: single-gateway-project
+      event: manual
+      fixture: local.minimal
+      # Run this file as a workflow with a single gateway project
+      workflow_input:
+        projects:
+          - id: "gateway"
+            repository: "TykTechnologies/tyk"
+            ref: "main"
+            description: "Tyk Gateway"
+      # Mock git checkout so no real git is invoked
+      mocks:
+        checkout-projects:
+          path: "/tmp/visor/gateway"
+          repository: "TykTechnologies/tyk"
+          ref: "main"
+      expect:
+        # Assert workflow output shape (workflow-level)
+        workflow_output:
+          - path: projects.length
+            equals: 1
+          - path: projects[0].id
+            equals: "gateway"
+          - path: projects[0].path
+            equals: "/tmp/visor/gateway"
+        # Classical step-output assertions for the synthetic workflow step
+        outputs:
+          - step: workflow-single-gateway-project
+            path: projects.length
+            equals: 1
+          - step: workflow-single-gateway-project
+            path: projects[0].repo
+            equals: "TykTechnologies/tyk"
+
+    - name: gateway-and-docs-projects
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        projects:
+          - id: "gateway"
+            repository: "TykTechnologies/tyk"
+            ref: "main"
+            description: "Tyk Gateway"
+          - id: "docs"
+            repository: "TykTechnologies/tyk-docs"
+            ref: "main"
+            description: "Tyk Docs"
+      mocks:
+        checkout-projects:
+          path: "/tmp/visor/project"
+          repository: "TykTechnologies/example"
+          ref: "main"
+      expect:
+        workflow_output:
+          - path: projects.length
+            equals: 2
+          - path: projects[0].id
+            equals: "gateway"
+          - path: projects[1].id
+            equals: "docs"
+        outputs:
+          - step: workflow-gateway-and-docs-projects
+            path: projects.length
+            equals: 2

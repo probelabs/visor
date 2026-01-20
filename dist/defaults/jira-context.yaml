@@ -1,0 +1,977 @@
+# Jira Context Extraction Workflow
+# Reusable workflow to extract Jira issue keys from text and fetch full context
+#
+# Usage in on_init:
+#   on_init:
+#     run:
+#       - workflow: jira-context
+#         with:
+#           text: "{{ pr.title }} {{ pr.body }}"
+#           custom_field_aliases:
+#             customfield_10001: "Story Points"
+#             customfield_10002: "Sprint"
+#             customfield_10003: "Epic Link"
+#         as: jira-context
+#
+# Using ticket_prefixes (recommended for specific projects):
+#   on_init:
+#     run:
+#       - workflow: jira-context
+#         with:
+#           text: "{{ pr.title }} {{ pr.body }}"
+#           ticket_prefixes: ["TT", "PROJ"]   # Only detect TT-*, PROJ-* tickets
+#         as: jira-context
+#
+# Using direct JQL query (bypasses text extraction):
+#   on_init:
+#     run:
+#       - workflow: jira-context
+#         with:
+#           jql: "project = TT AND status = Open ORDER BY created DESC"
+#           max_issues: 10
+#         as: jira-context
+#
+# The ticket_prefixes option can also extract tickets from URLs:
+#   Input: "See https://company.atlassian.net/browse/TT-102"
+#   Output: ["TT-102"]
+#
+# Environment variables required:
+#   JIRA_BASE_URL - https://company.atlassian.net
+#   JIRA_EMAIL - user@company.com
+#   JIRA_API_TOKEN - your API token (from https://id.atlassian.com/manage-profile/security/api-tokens)
+
+version: "1.0"
+
+# Workflow metadata
+id: jira-context
+name: Jira Context Extraction
+description: |
+  Extracts Jira issue keys from text and fetches full issue context including custom fields.
+  Returns structured XML output suitable for AI consumption.
+
+# Workflow inputs
+inputs:
+  - name: text
+    schema:
+      type: string
+    required: false
+    default: ""
+    description: Text to scan for Jira issue keys (e.g., PR title + body). Not required if jql is provided.
+
+  - name: jql
+    schema:
+      type: string
+    required: false
+    default: ""
+    description: |
+      Direct JQL query to use instead of extracting keys from text.
+      When provided, the text field is ignored and this JQL is used directly.
+      Example: "project = TT AND status = Open ORDER BY created DESC"
+
+  - name: custom_field_aliases
+    schema:
+      type: object
+      additionalProperties:
+        type: string
+    required: false
+    default: {}
+    description: |
+      Mapping of custom field IDs to human-readable names.
+      Example: { "customfield_10001": "Story Points" }
+
+  - name: include_comments
+    schema:
+      type: boolean
+    required: false
+    default: true
+    description: Whether to include issue comments in the output
+
+  - name: max_issues
+    schema:
+      type: number
+    required: false
+    default: 5
+    description: Maximum number of issues to fetch (to prevent overloading context)
+
+  - name: ticket_prefixes
+    schema:
+      type: array
+      items:
+        type: string
+    required: false
+    default: []
+    description: |
+      List of Jira project prefixes to detect (e.g., ["TT", "PROJ", "DEV"]).
+      When specified, only tickets matching these prefixes will be extracted.
+      When empty (default), uses generic pattern matching any PROJECT-123 format.
+      This can extract tickets from URLs, text, or any input containing ticket IDs.
+
+# Workflow outputs
+outputs:
+  - name: jira_context_xml
+    description: Full Jira context in XML format
+    value: "{{ outputs['format-output'] }}"
+
+  - name: issues
+    description: Raw issue data as array
+    value_js: |
+      return outputs['fetch-issues']?.data || [];
+
+  - name: issue_count
+    description: Number of issues found
+    value_js: |
+      const issues = outputs['fetch-issues']?.data || [];
+      return Array.isArray(issues) ? issues.length : 0;
+
+steps:
+  # Step 1: Extract Jira keys from input text (or pass through JQL)
+  extract-keys:
+    type: script
+    schema:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: string
+          description: Array of extracted Jira issue keys (empty if using JQL mode)
+        count:
+          type: number
+          description: Number of keys found (or -1 if using JQL mode)
+        jql_mode:
+          type: boolean
+          description: True if using direct JQL query instead of key extraction
+        jql:
+          type: string
+          description: The JQL query to use (only set in JQL mode)
+      required: [data, count, jql_mode]
+    content: |
+      var jql = inputs.jql || '';
+      var text = inputs.text || '';
+      var maxIssues = inputs.max_issues || 5;
+      var prefixes = inputs.ticket_prefixes || [];
+
+      // If JQL is provided, use it directly (skip key extraction)
+      if (jql.trim()) {
+        return { data: [], count: -1, jql_mode: true, jql: jql.trim() };
+      }
+
+      // Build regex pattern based on prefixes
+      var pattern;
+      if (prefixes.length > 0) {
+        // Escape special regex chars in prefixes and build alternation
+        var escaped = [];
+        for (var i = 0; i < prefixes.length; i++) {
+          escaped.push(prefixes[i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+        }
+        pattern = new RegExp('(' + escaped.join('|') + ')-[0-9]+', 'g');
+      } else {
+        pattern = /[A-Z][A-Z0-9]+-[0-9]+/g;
+      }
+
+      // Extract all matches
+      var matches = text.match(pattern) || [];
+
+      // Get unique keys using object as set
+      var seen = {};
+      var unique = [];
+      for (var j = 0; j < matches.length; j++) {
+        var key = matches[j];
+        if (!seen[key]) {
+          seen[key] = true;
+          unique.push(key);
+        }
+      }
+
+      // Sort and limit
+      unique.sort();
+      var keys = unique.slice(0, maxIssues);
+
+      return { data: keys, count: keys.length, jql_mode: false };
+
+  # Step 2: Fetch issues from Jira REST API using http_client
+  # Note: Uses the new /search/jql endpoint (POST) instead of deprecated /search (GET)
+  # Supports both: extracting keys from text OR using direct JQL query
+  fetch-issues:
+    type: http_client
+    criticality: external
+    guarantee: "output.data != null"
+    schema:
+      type: object
+      properties:
+        data:
+          type: array
+          description: Array of normalized Jira issues
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+                description: Jira issue key (e.g., TT-123)
+              summary:
+                type: string
+                description: Issue summary/title
+              description:
+                type: string
+                description: Issue description text
+              status:
+                type: string
+                description: Current status name
+              priority:
+                type: string
+                description: Priority level name
+              assignee:
+                type: string
+                description: Assignee display name
+              reporter:
+                type: string
+                description: Reporter display name
+              labels:
+                type: array
+                items:
+                  type: string
+                description: Issue labels
+              components:
+                type: array
+                items:
+                  type: string
+                description: Component names
+              custom_fields:
+                type: object
+                additionalProperties: true
+                description: Custom field values keyed by field ID
+              parent:
+                type: string
+                nullable: true
+                description: Parent issue key if exists
+              subtasks:
+                type: array
+                items:
+                  type: string
+                description: Subtask issue keys
+              comments:
+                type: array
+                description: Last 5 comments
+                items:
+                  type: object
+                  properties:
+                    author:
+                      type: string
+                    created:
+                      type: string
+                    body:
+                      type: string
+            required: [key, summary, status]
+      required: [data]
+    depends_on: [extract-keys]
+    if: "outputs['extract-keys'].count > 0 || outputs['extract-keys'].jql_mode"
+    url: "${JIRA_BASE_URL}/rest/api/3/search/jql"
+    method: POST
+    headers:
+      Authorization: "Basic {{ env.JIRA_EMAIL | append: ':' | append: env.JIRA_API_TOKEN | base64 }}"
+      Accept: "application/json"
+      Content-Type: "application/json"
+    body: |
+      {
+        "jql": "{% if outputs['extract-keys'].jql_mode %}{{ outputs['extract-keys'].jql | json_escape }}{% else %}key in ({{ outputs['extract-keys'].data | join: ', ' }}){% endif %}",
+        "fields": ["key", "summary", "description", "status", "priority", "assignee", "reporter", "labels", "components", "parent", "subtasks", "comment"],
+        "maxResults": {{ inputs.max_issues | default: 50 }}
+      }
+    timeout: 30000
+    transform_js: |
+      // Transform raw Jira API response to normalized structure
+      // Using standard for loops and nested ifs for sandbox compatibility
+      // Note: Sandbox has bug where && doesn't short-circuit array access
+
+      // Helper to safely get nested property (avoids sandbox && bug with array access)
+      function safeGet(obj, path) {
+        var parts = path.split('.');
+        var current = obj;
+        for (var i = 0; i < parts.length; i++) {
+          if (current == null) return undefined;
+          var part = parts[i];
+          // Handle array index notation like "0" or "content[0]"
+          var bracketIdx = part.indexOf('[');
+          if (bracketIdx !== -1) {
+            var prop = part.substring(0, bracketIdx);
+            var idx = parseInt(part.substring(bracketIdx + 1, part.length - 1), 10);
+            if (prop) {
+              current = current[prop];
+              if (current == null) return undefined;
+            }
+            if (!Array.isArray(current)) return undefined;
+            current = current[idx];
+          } else {
+            current = current[part];
+          }
+        }
+        return current;
+      }
+
+      // Log raw output type for debugging
+      log('JIRA transform: output type=' + typeof output + ', isArray=' + Array.isArray(output));
+
+      // Defensive: ensure output is an object
+      if (!output || typeof output !== 'object') {
+        log('JIRA transform: output is not an object, type:', typeof output);
+        return { data: [] };
+      }
+
+      // Log output keys for debugging
+      var outputKeys = Object.keys(output);
+      log('JIRA transform: output keys=' + outputKeys.join(','));
+
+      // Check for Jira error response
+      if (output.errorMessages) {
+        var errMsgs = output.errorMessages;
+        if (errMsgs && Array.isArray(errMsgs) && errMsgs.length > 0) {
+          log('JIRA API error:', errMsgs.join(', '));
+          return { data: [], error: errMsgs.join(', ') };
+        }
+      }
+
+      var response = output;
+      var rawIssues = response.issues;
+
+      // Defensive: ensure issues is an array
+      if (!rawIssues) {
+        log('JIRA transform: issues is null/undefined');
+        return { data: [] };
+      }
+      if (!Array.isArray(rawIssues)) {
+        log('JIRA transform: issues is not an array, got:', typeof rawIssues);
+        return { data: [] };
+      }
+
+      log('JIRA transform: processing ' + rawIssues.length + ' issues');
+      var issues = [];
+
+      for (var idx = 0; idx < rawIssues.length; idx++) {
+        var issue = rawIssues[idx];
+        if (issue) {
+          var fields = issue.fields || {};
+
+          // Log raw issue structure for debugging
+          log('JIRA issue ' + issue.key + ': fields keys=' + Object.keys(fields).join(','));
+          log('JIRA issue ' + issue.key + ': description type=' + typeof fields.description);
+          if (fields.description && typeof fields.description === 'object') {
+            log('JIRA issue ' + issue.key + ': description keys=' + Object.keys(fields.description).join(','));
+            if (fields.description.content) {
+              log('JIRA issue ' + issue.key + ': description.content length=' + (Array.isArray(fields.description.content) ? fields.description.content.length : 'not array'));
+            }
+          }
+          if (fields.comment) {
+            log('JIRA issue ' + issue.key + ': comment keys=' + Object.keys(fields.comment).join(','));
+            if (fields.comment.comments) {
+              log('JIRA issue ' + issue.key + ': comments count=' + (Array.isArray(fields.comment.comments) ? fields.comment.comments.length : 'not array'));
+            }
+          }
+
+          // Extract custom fields using Object.keys
+          var customFields = {};
+          var fieldKeys = Object.keys(fields);
+          for (var i = 0; i < fieldKeys.length; i++) {
+            var cfKey = fieldKeys[i];
+            var cfValue = fields[cfKey];
+            if (cfKey.indexOf("customfield_") === 0 && cfValue != null) {
+              if (typeof cfValue === "object") {
+                customFields[cfKey] = cfValue.value || cfValue.name || JSON.stringify(cfValue);
+              } else {
+                customFields[cfKey] = cfValue;
+              }
+            }
+          }
+
+          // Extract comments using standard for loop
+          var comments = [];
+          var commentObj = fields.comment || {};
+          var commentList = commentObj.comments;
+          if (commentList && Array.isArray(commentList)) {
+            var lastFive = commentList.slice(-5);
+            for (var j = 0; j < lastFive.length; j++) {
+              var c = lastFive[j];
+              if (c) {
+                var author = c.author || {};
+                var authorName = author.displayName || author.name || "";
+                // Use safeGet to avoid sandbox && short-circuit bug with array access
+                var bodyContent = safeGet(c, 'body.content[0].content[0]');
+                var bodyText = (bodyContent ? bodyContent.text : null) || (typeof c.body === "string" ? c.body : "");
+                log('JIRA issue ' + issue.key + ' comment ' + j + ': body type=' + typeof c.body + ', bodyContent=' + JSON.stringify(bodyContent));
+                comments.push({
+                  author: authorName,
+                  created: c.created || "",
+                  body: bodyText
+                });
+              }
+            }
+          }
+
+          // Extract description text using safeGet to avoid sandbox && bug
+          var descObj = fields.description || {};
+          var descContent = safeGet(descObj, 'content[0].content[0]');
+          var descText = (descContent ? descContent.text : null) || (typeof fields.description === "string" ? fields.description : "");
+          log('JIRA issue ' + issue.key + ': descContent=' + JSON.stringify(descContent) + ', descText=' + (descText ? descText.substring(0, 50) : '(empty)'));
+
+          // Extract components (with array check)
+          var componentsArr = [];
+          var rawComponents = fields.components;
+          if (rawComponents && Array.isArray(rawComponents)) {
+            for (var k = 0; k < rawComponents.length; k++) {
+              var comp = rawComponents[k];
+              componentsArr.push(comp && comp.name ? comp.name : comp);
+            }
+          }
+
+          // Extract subtasks (with array check)
+          var subtasksArr = [];
+          var rawSubtasks = fields.subtasks;
+          if (rawSubtasks && Array.isArray(rawSubtasks)) {
+            for (var m = 0; m < rawSubtasks.length; m++) {
+              var sub = rawSubtasks[m];
+              subtasksArr.push(sub && sub.key ? sub.key : sub);
+            }
+          }
+
+          // Build issue object
+          var statusObj = fields.status || {};
+          var priorityObj = fields.priority || {};
+          var assigneeObj = fields.assignee || {};
+          var reporterObj = fields.reporter || {};
+          var parentObj = fields.parent || {};
+          var labelsArr = fields.labels;
+          if (!labelsArr || !Array.isArray(labelsArr)) {
+            labelsArr = [];
+          }
+
+          issues.push({
+            key: issue.key,
+            summary: fields.summary || "",
+            description: descText,
+            status: statusObj.name || "",
+            priority: priorityObj.name || "",
+            assignee: assigneeObj.displayName || assigneeObj.name || "",
+            reporter: reporterObj.displayName || reporterObj.name || "",
+            labels: labelsArr,
+            components: componentsArr,
+            custom_fields: customFields,
+            parent: parentObj.key || null,
+            subtasks: subtasksArr,
+            comments: comments
+          });
+        }
+      }
+
+      log('JIRA transform: returning ' + issues.length + ' issues');
+      return { data: issues };
+
+  # Step 3: Format output as XML
+  format-output:
+    type: script
+    depends_on: [fetch-issues]
+    content: |
+      var issues = outputs['fetch-issues'] && outputs['fetch-issues'].data ? outputs['fetch-issues'].data : [];
+      var aliases = inputs.custom_field_aliases || {};
+
+      // Format custom fields as XML
+      function formatCustomFields(fields, aliases) {
+        if (!fields || typeof fields !== 'object') return '';
+        var result = [];
+        var keys = Object.keys(fields);
+        for (var i = 0; i < keys.length; i++) {
+          var key = keys[i];
+          var value = fields[key];
+          if (value !== null && value !== undefined) {
+            var name = aliases[key] || key;
+            var val = typeof value === 'object' ? JSON.stringify(value) : value;
+            result.push('    <custom_field name="' + escapeXml(name) + '" id="' + escapeXml(key) + '">' + escapeXml(val) + '</custom_field>');
+          }
+        }
+        return result.join('\n');
+      }
+
+      var xml = '<jira_context>\n';
+      xml += '  <issue_count>' + issues.length + '</issue_count>\n';
+
+      for (var i = 0; i < issues.length; i++) {
+        var issue = issues[i];
+        xml += '  <issue key="' + escapeXml(issue.key) + '">\n';
+        xml += '    <summary>' + escapeXml(issue.summary) + '</summary>\n';
+        xml += '    <description>' + escapeXml(issue.description) + '</description>\n';
+        xml += '    <status>' + escapeXml(issue.status) + '</status>\n';
+        xml += '    <priority>' + escapeXml(issue.priority) + '</priority>\n';
+        xml += '    <assignee>' + escapeXml(issue.assignee) + '</assignee>\n';
+        xml += '    <reporter>' + escapeXml(issue.reporter) + '</reporter>\n';
+
+        if (issue.labels && issue.labels.length) {
+          var escapedLabels = [];
+          for (var j = 0; j < issue.labels.length; j++) {
+            escapedLabels.push(escapeXml(issue.labels[j]));
+          }
+          xml += '    <labels>' + escapedLabels.join(', ') + '</labels>\n';
+        }
+
+        if (issue.components && issue.components.length) {
+          var escapedComponents = [];
+          for (var k = 0; k < issue.components.length; k++) {
+            escapedComponents.push(escapeXml(issue.components[k]));
+          }
+          xml += '    <components>' + escapedComponents.join(', ') + '</components>\n';
+        }
+
+        if (issue.parent) {
+          xml += '    <parent>' + escapeXml(issue.parent) + '</parent>\n';
+        }
+
+        if (issue.subtasks && issue.subtasks.length) {
+          var escapedSubtasks = [];
+          for (var m = 0; m < issue.subtasks.length; m++) {
+            escapedSubtasks.push(escapeXml(issue.subtasks[m]));
+          }
+          xml += '    <subtasks>' + escapedSubtasks.join(', ') + '</subtasks>\n';
+        }
+
+        // Custom fields section
+        var customFieldsXml = formatCustomFields(issue.custom_fields, aliases);
+        if (customFieldsXml) {
+          xml += '    <custom_fields>\n' + customFieldsXml + '\n    </custom_fields>\n';
+        }
+
+        // Comments section
+        if (issue.comments && issue.comments.length) {
+          xml += '    <comments>\n';
+          for (var n = 0; n < issue.comments.length; n++) {
+            var comment = issue.comments[n];
+            xml += '      <comment author="' + escapeXml(comment.author) + '" created="' + escapeXml(comment.created) + '">\n';
+            xml += '        ' + escapeXml(comment.body) + '\n';
+            xml += '      </comment>\n';
+          }
+          xml += '    </comments>\n';
+        }
+
+        xml += '  </issue>\n';
+      }
+
+      xml += '</jira_context>';
+      return xml;
+
+  # Fallback step when no issues found (only for text-extraction mode, not JQL mode)
+  no-issues-fallback:
+    type: command
+    depends_on: [extract-keys]
+    if: "outputs['extract-keys'].count == 0 && !outputs['extract-keys'].jql_mode"
+    exec: |
+      echo '<jira_context><issue_count>0</issue_count><message>No Jira issue keys found in the provided text</message></jira_context>'
+
+# =============================================================================
+# TESTS
+# =============================================================================
+tests:
+  defaults:
+    strict: true
+    fail_on_unexpected_calls: true
+
+  fixtures:
+    - name: local.minimal
+      webhook:
+        name: manual
+      git:
+        branch: main
+        baseBranch: main
+      files: []
+      diff: ""
+
+  cases:
+    # Test 1: Extract multiple Jira keys and format as XML
+    # Based on real Jira data from TT-9234 and TT-102
+    - name: extract-multiple-jira-keys
+      description: Extract TT-9234, TT-102 from text, mock fetch, verify XML output
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        text: "Fix auth bug TT-9234, also related to TT-102"
+        custom_field_aliases:
+          customfield_10001: "Story Points"
+          customfield_10002: "Sprint"
+      mocks:
+        extract-keys:
+          data: ["TT-102", "TT-9234"]
+          count: 2
+        fetch-issues:
+          data:
+            - key: "TT-9234"
+              summary: "Graceful shutdown of Gateway"
+              description: "Summary"
+              status: "Closed"
+              priority: "Medium"
+              assignee: "Maciej Wojciechowski"
+              reporter: "Josh Blakeley"
+              labels: ["QA_Fail", "customer_bug", "jira_escalated"]
+              components: ["Tyk Gateway"]
+              custom_fields: {}
+              parent: null
+              subtasks: ["TT-15063", "TT-15064"]
+              comments:
+                - author: "Josh Blakeley"
+                  created: "2025-04-07T08:21:04.217+0100"
+                  body: "Related issue here"
+            - key: "TT-102"
+              summary: "Portal: after editing key via portal additional key is created"
+              description: "https://github.com/TykTechnologies/tyk-analytics/issues/2022"
+              status: "Closed"
+              priority: "Medium"
+              assignee: ""
+              reporter: "Zendesk Support for Jira"
+              labels: ["AI-Complexity-Medium", "customer_bug", "jira_escalated"]
+              components: ["Tyk Portal"]
+              custom_fields: {}
+              parent: "TT-93"
+              subtasks: []
+              comments:
+                - author: "Greg Delhon"
+                  created: "2020-08-17T11:07:34.445+0100"
+                  body: "This notification was sent from JIRA"
+        format-output: |
+          <jira_context>
+            <issue_count>2</issue_count>
+            <issue key="TT-9234">
+              <summary>Graceful shutdown of Gateway</summary>
+              <description>Summary</description>
+              <status>Closed</status>
+              <priority>Medium</priority>
+              <assignee>Maciej Wojciechowski</assignee>
+              <reporter>Josh Blakeley</reporter>
+              <labels>QA_Fail, customer_bug, jira_escalated</labels>
+              <components>Tyk Gateway</components>
+              <subtasks>TT-15063, TT-15064</subtasks>
+              <comments>
+                <comment author="Josh Blakeley" created="2025-04-07T08:21:04.217+0100">
+                  Related issue here
+                </comment>
+              </comments>
+            </issue>
+            <issue key="TT-102">
+              <summary>Portal: after editing key via portal additional key is created</summary>
+              <description>https://github.com/TykTechnologies/tyk-analytics/issues/2022</description>
+              <status>Closed</status>
+              <priority>Medium</priority>
+              <assignee></assignee>
+              <reporter>Zendesk Support for Jira</reporter>
+              <labels>AI-Complexity-Medium, customer_bug, jira_escalated</labels>
+              <components>Tyk Portal</components>
+              <parent>TT-93</parent>
+              <comments>
+                <comment author="Greg Delhon" created="2020-08-17T11:07:34.445+0100">
+                  This notification was sent from JIRA
+                </comment>
+              </comments>
+            </issue>
+          </jira_context>
+      expect:
+        calls:
+          - step: extract-keys
+            exactly: 1
+          - step: fetch-issues
+            exactly: 1
+          - step: format-output
+            exactly: 1
+        workflow_output:
+          - path: issue_count
+            equals: 2
+          - path: jira_context_xml
+            contains: "<issue key=\"TT-9234\">"
+          - path: jira_context_xml
+            contains: "<issue key=\"TT-102\">"
+          - path: jira_context_xml
+            contains: "<issue_count>2</issue_count>"
+          - path: jira_context_xml
+            contains: "Graceful shutdown of Gateway"
+
+    # Test 2: No Jira keys in text
+    - name: no-jira-keys-found
+      description: Text without Jira keys should produce empty context
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        text: "This is a regular PR without any ticket references"
+        custom_field_aliases: {}
+      mocks:
+        extract-keys:
+          data: []
+          count: 0
+        no-issues-fallback: |
+          <jira_context><issue_count>0</issue_count><message>No Jira issue keys found in the provided text</message></jira_context>
+      expect:
+        calls:
+          - step: extract-keys
+            exactly: 1
+          - step: fetch-issues
+            exactly: 0
+          - step: no-issues-fallback
+            exactly: 1
+        workflow_output:
+          - path: issue_count
+            equals: 0
+
+    # Test 3: Single issue with custom field aliases
+    # Uses real TT- ticket for --no-mocks compatibility
+    - name: single-issue-custom-fields
+      description: Single issue with custom field alias mapping
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        text: "Implements feature from TT-102"
+        ticket_prefixes: ["TT"]
+        custom_field_aliases:
+          customfield_10016: "Epic Link"
+          customfield_10020: "Acceptance Criteria"
+      mocks:
+        extract-keys:
+          data: ["TT-102"]
+          count: 1
+        fetch-issues:
+          data:
+            - key: "TT-102"
+              summary: "Portal: after editing key via portal additional key is created"
+              description: "https://github.com/TykTechnologies/tyk-analytics/issues/2022"
+              status: "Closed"
+              priority: "Medium"
+              assignee: ""
+              reporter: "Zendesk Support for Jira"
+              labels: ["AI-Complexity-Medium", "customer_bug", "jira_escalated"]
+              components: ["Tyk Portal"]
+              custom_fields: {}
+              parent: "TT-93"
+              subtasks: []
+              comments: []
+        format-output: |
+          <jira_context>
+            <issue_count>1</issue_count>
+            <issue key="TT-102">
+              <summary>Portal: after editing key via portal additional key is created</summary>
+              <status>Closed</status>
+              <parent>TT-93</parent>
+            </issue>
+          </jira_context>
+      expect:
+        calls:
+          - step: extract-keys
+            exactly: 1
+          - step: fetch-issues
+            exactly: 1
+          - step: format-output
+            exactly: 1
+        workflow_output:
+          - path: issue_count
+            equals: 1
+          - path: jira_context_xml
+            contains: "<issue key=\"TT-102\">"
+          - path: issues[0].key
+            equals: "TT-102"
+
+    # Test 4: Prefix-based detection - only detect specific prefixes
+    # Uses real TT- tickets for --no-mocks compatibility
+    - name: prefix-based-detection
+      description: Use ticket_prefixes to only detect TT tickets, ignoring ABC tickets
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        text: "Fix bug TT-9234 and also ABC-456 but only TT should match. URL: https://tyktech.atlassian.net/browse/TT-102"
+        ticket_prefixes: ["TT"]
+        custom_field_aliases: {}
+      mocks:
+        extract-keys:
+          data: ["TT-102", "TT-9234"]
+          count: 2
+        fetch-issues:
+          data:
+            - key: "TT-9234"
+              summary: "Graceful shutdown of Gateway"
+              description: "Summary"
+              status: "Closed"
+              priority: "Medium"
+              assignee: "Maciej Wojciechowski"
+              reporter: "Josh Blakeley"
+              labels: ["QA_Fail", "customer_bug", "jira_escalated"]
+              components: ["Tyk Gateway"]
+              custom_fields: {}
+              parent: null
+              subtasks: ["TT-15063", "TT-15064"]
+              comments: []
+            - key: "TT-102"
+              summary: "Portal: after editing key via portal additional key is created"
+              description: "https://github.com/TykTechnologies/tyk-analytics/issues/2022"
+              status: "Closed"
+              priority: "Medium"
+              assignee: ""
+              reporter: "Zendesk Support for Jira"
+              labels: ["AI-Complexity-Medium", "customer_bug", "jira_escalated"]
+              components: ["Tyk Portal"]
+              custom_fields: {}
+              parent: "TT-93"
+              subtasks: []
+              comments: []
+        format-output: |
+          <jira_context>
+            <issue_count>2</issue_count>
+            <issue key="TT-9234">
+              <summary>Graceful shutdown of Gateway</summary>
+              <status>Closed</status>
+            </issue>
+            <issue key="TT-102">
+              <summary>Portal: after editing key via portal additional key is created</summary>
+              <status>Closed</status>
+            </issue>
+          </jira_context>
+      expect:
+        calls:
+          - step: extract-keys
+            exactly: 1
+          - step: fetch-issues
+            exactly: 1
+          - step: format-output
+            exactly: 1
+        workflow_output:
+          - path: issue_count
+            equals: 2
+          - path: jira_context_xml
+            contains: "<issue key=\"TT-9234\">"
+          - path: jira_context_xml
+            contains: "<issue key=\"TT-102\">"
+          # ABC-456 should NOT be in the output
+          - path: jira_context_xml
+            not_contains: "ABC-456"
+
+    # Test 5: Multiple prefixes
+    # Uses real TT- tickets for --no-mocks compatibility
+    # Tests that multiple allowed prefixes work and non-allowed are filtered
+    - name: multiple-prefixes-detection
+      description: Use multiple prefixes (TT and DEV) - filters out ABC tickets
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        text: "Working on TT-9234 and TT-102 and ABC-300"
+        ticket_prefixes: ["TT", "DEV"]
+        custom_field_aliases: {}
+      mocks:
+        extract-keys:
+          data: ["TT-102", "TT-9234"]
+          count: 2
+        fetch-issues:
+          data:
+            - key: "TT-9234"
+              summary: "Graceful shutdown of Gateway"
+              description: "Summary"
+              status: "Closed"
+              priority: "Medium"
+              assignee: "Maciej Wojciechowski"
+              reporter: "Josh Blakeley"
+              labels: []
+              components: ["Tyk Gateway"]
+              custom_fields: {}
+              parent: null
+              subtasks: []
+              comments: []
+            - key: "TT-102"
+              summary: "Portal: after editing key via portal additional key is created"
+              description: ""
+              status: "Closed"
+              priority: "Medium"
+              assignee: ""
+              reporter: "Zendesk Support for Jira"
+              labels: []
+              components: ["Tyk Portal"]
+              custom_fields: {}
+              parent: "TT-93"
+              subtasks: []
+              comments: []
+        format-output: |
+          <jira_context>
+            <issue_count>2</issue_count>
+            <issue key="TT-9234"><summary>Graceful shutdown of Gateway</summary></issue>
+            <issue key="TT-102"><summary>Portal: after editing key via portal additional key is created</summary></issue>
+          </jira_context>
+      expect:
+        calls:
+          - step: extract-keys
+            exactly: 1
+          - step: fetch-issues
+            exactly: 1
+        workflow_output:
+          - path: issue_count
+            equals: 2
+          # ABC-300 should NOT be in the output (not in allowed prefixes)
+          - path: jira_context_xml
+            not_contains: "ABC-300"
+
+    # Test 6: Direct JQL query input (bypasses text extraction)
+    - name: direct-jql-query
+      description: Use jql input directly instead of extracting keys from text
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        jql: "project = TT AND status = Open ORDER BY created DESC"
+        max_issues: 3
+        custom_field_aliases: {}
+      mocks:
+        extract-keys:
+          data: []
+          count: -1
+          jql_mode: true
+          jql: "project = TT AND status = Open ORDER BY created DESC"
+        fetch-issues:
+          data:
+            - key: "TT-15001"
+              summary: "New feature request"
+              description: "User wants new feature"
+              status: "Open"
+              priority: "High"
+              assignee: "Dev Team"
+              reporter: "Customer Support"
+              labels: ["feature-request"]
+              components: ["Tyk Gateway"]
+              custom_fields: {}
+              parent: null
+              subtasks: []
+              comments: []
+            - key: "TT-15002"
+              summary: "Bug in dashboard"
+              description: "Dashboard not loading"
+              status: "Open"
+              priority: "Medium"
+              assignee: ""
+              reporter: "QA Team"
+              labels: ["bug"]
+              components: ["Dashboard"]
+              custom_fields: {}
+              parent: null
+              subtasks: []
+              comments: []
+        format-output: |
+          <jira_context>
+            <issue_count>2</issue_count>
+            <issue key="TT-15001">
+              <summary>New feature request</summary>
+              <status>Open</status>
+            </issue>
+            <issue key="TT-15002">
+              <summary>Bug in dashboard</summary>
+              <status>Open</status>
+            </issue>
+          </jira_context>
+      expect:
+        calls:
+          - step: extract-keys
+            exactly: 1
+          - step: fetch-issues
+            exactly: 1
+          - step: format-output
+            exactly: 1
+          - step: no-issues-fallback
+            exactly: 0
+        workflow_output:
+          - path: issue_count
+            equals: 2
+          - path: jira_context_xml
+            contains: "<issue key=\"TT-15001\">"
+          - path: jira_context_xml
+            contains: "<issue key=\"TT-15002\">"

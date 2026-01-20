@@ -1,0 +1,208 @@
+# Using Visor via npm/npx
+
+## Quick Start (No Installation Required)
+
+Run Visor directly using npx:
+
+```bash
+npx -y @probelabs/visor@latest --help
+```
+
+### Safety & Criticality (Quick Note)
+
+Visor follows a criticality‑first model:
+
+- Declare criticality on steps (`criticality: external|internal|policy|info`).
+- Pair critical steps with contracts:
+  - `assume:` preconditions (skip if unmet; use a guard step if you need a hard fail)
+  - `guarantee:` postconditions (violation adds issues and routes `on_fail`)
+- Prefer declarative `transitions` over `goto_js` for routing.
+
+Example (block‑style YAML):
+```yaml
+checks:
+  post-comment:
+    type: github
+    criticality: external
+    on:
+      - pr_opened
+    op: comment.create
+    assume:
+      - "isMember()"
+    guarantee:
+      - "output && typeof output.id === 'number'"
+    continue_on_failure: false
+```
+
+## Global Installation
+
+Install globally for frequent use:
+
+```bash
+npm install -g @probelabs/visor
+```
+
+Then use the `visor` command:
+
+```bash
+visor --check all --output table
+```
+
+## Local Project Installation
+
+Add to your project as a dev dependency:
+
+```bash
+npm install --save-dev @probelabs/visor
+```
+
+Add to your package.json scripts:
+
+```json
+{
+  "scripts": {
+    "review": "visor --check all",
+    "review:security": "visor --check security --output json"
+  }
+}
+```
+
+## Usage Examples
+
+### Validate configuration
+```bash
+# Validate config in current directory (searches for .visor.yaml)
+npx -y @probelabs/visor validate
+
+# Validate specific config file
+npx -y @probelabs/visor validate --config .visor.yaml
+
+# Validate before committing
+npx -y @probelabs/visor validate --config examples/my-config.yaml
+```
+
+The `validate` command checks your configuration for:
+- Missing required fields (e.g., `version`)
+- Invalid check types or event triggers
+- Incorrect field names and values
+- Schema compliance
+
+It provides detailed error messages with helpful hints to fix issues.
+
+### Run all checks
+```bash
+npx -y @probelabs/visor@latest --check all
+```
+
+### Security check with JSON output
+```bash
+npx -y @probelabs/visor@latest --check security --output json
+```
+
+### Multiple checks with custom config
+```bash
+npx -y @probelabs/visor@latest --check performance --check architecture --config .visor.yaml
+```
+
+### Generate SARIF report for CI/CD
+```bash
+npx -y @probelabs/visor@latest --check security --output sarif --output-file results.sarif
+```
+
+### Save JSON to a file (recommended)
+```bash
+npx -y @probelabs/visor@latest --check all --output json --output-file visor-results.json
+```
+
+## Configuration
+
+Create a `.visor.yaml` file in your project root:
+
+```yaml
+project:
+  name: my-project
+  language: typescript
+
+steps:
+  - type: ai
+    prompt: security
+  - type: ai
+    prompt: performance
+    
+output:
+  format: table
+  verbose: false
+
+## Structured outputs and schemas (unified `schema`)
+
+Use a single `schema` field:
+
+- Strings (e.g., `code-review` or `markdown`) select the renderer/template and do not imply validation.
+- Objects (JSON Schema) validate the produced `output` after execution for any provider (ai, command, script, http).
+
+Examples:
+```yaml
+checks:
+  summary:
+    type: ai
+    schema: code-review
+    prompt: |
+      Summarize the PR...
+
+  summarize-json:
+    type: ai
+    schema:
+      type: object
+      properties:
+        ok: { type: boolean }
+        items: { type: array, items: { type: string } }
+      required: [ok, items]
+    prompt: |
+      Return JSON with ok and items...
+
+  parse:
+    type: command
+    exec: node scripts/parse.js
+    schema:
+      type: object
+      properties:
+        count: { type: integer }
+      required: [count]
+
+  aggregate:
+    type: script
+    content: |
+      return { all_valid: true };
+    schema:
+      type: object
+      properties:
+        all_valid: { type: boolean }
+      required: [all_valid]
+      additionalProperties: false
+```
+
+Note: `output_schema` is deprecated and kept for backward compatibility. Prefer `schema` as a JSON object for validation.
+```
+
+## Environment Variables
+
+Set API keys for AI-powered reviews:
+
+```bash
+export GOOGLE_API_KEY=your-key-here
+# or
+export ANTHROPIC_API_KEY=your-key-here
+# or
+export OPENAI_API_KEY=your-key-here
+```
+
+## CI/CD Integration
+
+Add to your GitHub Actions workflow:
+
+```yaml
+- name: Run Visor Code Review
+  run: npx -y @probelabs/visor@latest --check all --output markdown
+  env:
+    GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+```

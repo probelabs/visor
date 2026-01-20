@@ -1,0 +1,755 @@
+# Zendesk Context Extraction Workflow
+# Reusable workflow to extract Zendesk ticket IDs from text and fetch full context
+#
+# Usage in on_init:
+#   on_init:
+#     run:
+#       - workflow: zendesk-context
+#         with:
+#           text: "{{ pr.title }} {{ pr.body }}"
+#         as: zendesk-context
+#
+# Environment variables required:
+#   ZENDESK_SUBDOMAIN - your-company (from your-company.zendesk.com)
+#   ZENDESK_EMAIL - user@company.com
+#   ZENDESK_API_TOKEN - your API token
+#
+# Supported ticket ID formats:
+#   - Plain numbers: 12345
+#   - Hash prefix: #12345
+#   - URLs: https://company.zendesk.com/agent/tickets/12345
+
+version: "1.0"
+
+# Workflow metadata
+id: zendesk-context
+name: Zendesk Context Extraction
+description: |
+  Extracts Zendesk ticket IDs from text and fetches full ticket context.
+  Returns structured XML output suitable for AI consumption.
+
+# Workflow inputs
+inputs:
+  - name: text
+    schema:
+      type: string
+    required: true
+    description: Text to scan for Zendesk ticket IDs (e.g., PR title + body)
+
+  - name: include_comments
+    schema:
+      type: boolean
+    required: false
+    default: true
+    description: Whether to include ticket comments in the output
+
+  - name: max_tickets
+    schema:
+      type: number
+    required: false
+    default: 5
+    description: Maximum number of tickets to fetch (to prevent overloading context)
+
+  - name: download_assets
+    schema:
+      type: boolean
+    required: false
+    default: true
+    description: Whether to download and cache ticket attachments
+
+  - name: cache_dir
+    schema:
+      type: string
+    required: false
+    default: ".cache/zendesk"
+    description: Directory to cache downloaded attachments (relative to workspace or absolute)
+
+# Workflow outputs
+outputs:
+  - name: zendesk_context_xml
+    description: Full Zendesk context in XML format
+    value: "{{ outputs['format-output'] }}"
+
+  - name: tickets
+    description: Raw ticket data as JSON array
+    value: "{{ outputs['fetch-tickets'].data | json }}"
+
+  - name: ticket_count
+    description: Number of tickets found
+    value_js: |
+      const tickets = outputs['fetch-tickets']?.data || [];
+      return Array.isArray(tickets) ? tickets.length : 0;
+
+  - name: attachments
+    description: Downloaded attachment file paths by ticket ID
+    value: "{{ outputs['aggregate-downloads'].attachments | json }}"
+
+steps:
+  # Step 1: Extract Zendesk ticket IDs from input text
+  extract-ids:
+    type: command
+    schema:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: string
+          description: Array of extracted Zendesk ticket IDs
+        count:
+          type: number
+          description: Number of IDs found
+      required: [data, count]
+    exec: |
+      TEXT_B64="{{ inputs.text | base64 }}"
+      MAX_TICKETS={{ inputs.max_tickets | default: 5 }}
+
+      TEXT="$(printf '%s' "$TEXT_B64" | base64 -d)"
+
+      # Extract ticket IDs from:
+      # - Plain numbers (5+ digits to avoid false positives): 12345
+      # - Hash prefix: #12345
+      # - URLs: zendesk.com/agent/tickets/12345 or zendesk.com/tickets/12345
+      printf '%s' "$TEXT" | grep -oE '(#[0-9]{4,}|zendesk\.com/(agent/)?tickets/[0-9]+|[^a-zA-Z0-9][0-9]{5,}[^a-zA-Z0-9])' | grep -oE '[0-9]+' | sort -un | head -n $MAX_TICKETS
+    transform_js: |
+      // Parse line-separated IDs into array
+      const text = (output || '').trim();
+      const ids = text ? text.split('\n').filter(k => k.trim()) : [];
+      return { data: ids, count: ids.length };
+
+  # Step 2: Fetch tickets from Zendesk API
+  fetch-tickets:
+    type: http_client
+    criticality: external
+    # Schema validation ensures data array exists
+    schema:
+      type: object
+      properties:
+        data:
+          type: array
+          description: Array of normalized Zendesk tickets
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                description: Zendesk ticket ID
+              subject:
+                type: string
+                description: Ticket subject/title
+              description:
+                type: string
+                description: Ticket description
+              status:
+                type: string
+                description: Current status (new, open, pending, hold, solved, closed)
+              priority:
+                type: string
+                description: Priority level (low, normal, high, urgent)
+              requester:
+                type: string
+                description: Requester name
+              assignee:
+                type: string
+                description: Assignee name
+              tags:
+                type: array
+                items:
+                  type: string
+                description: Ticket tags
+              created_at:
+                type: string
+                description: Creation timestamp
+              updated_at:
+                type: string
+                description: Last update timestamp
+            required: [id, subject, status]
+      required: [data]
+    depends_on: [extract-ids]
+    if: "outputs['extract-ids'].count > 0"
+    url: "https://${ZENDESK_SUBDOMAIN}.zendesk.com/api/v2/tickets/show_many.json?ids={{ outputs['extract-ids'].data | join: ',' }}"
+    method: GET
+    headers:
+      Authorization: "Basic {{ env.ZENDESK_EMAIL | append: '/token:' | append: env.ZENDESK_API_TOKEN | base64 }}"
+      Accept: "application/json"
+    timeout: 30000
+    transform_js: |
+      // Transform raw Zendesk API response to normalized structure
+      var response = output || {};
+      var rawTickets = response.tickets || [];
+      var tickets = [];
+
+      for (var idx = 0; idx < rawTickets.length; idx++) {
+        var ticket = rawTickets[idx];
+        if (ticket) {
+          tickets.push({
+            id: String(ticket.id),
+            subject: ticket.subject || "",
+            description: ticket.description || "",
+            status: ticket.status || "",
+            priority: ticket.priority || "",
+            requester_id: ticket.requester_id || "",
+            assignee_id: ticket.assignee_id || "",
+            tags: ticket.tags || [],
+            created_at: ticket.created_at || "",
+            updated_at: ticket.updated_at || ""
+          });
+        }
+      }
+
+      return { data: tickets };
+
+  # Step 3: Prepare list of attachments to download
+  # Uses script to fetch comments for each ticket and extract attachment metadata
+  prepare-attachments:
+    type: script
+    depends_on: [fetch-tickets]
+    if: "outputs['extract-ids'].count > 0 && inputs.download_assets !== false"
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          ticket_id: { type: string }
+          id: { type: number }
+          file_name: { type: string }
+          content_url: { type: string }
+          content_type: { type: string }
+          size: { type: number }
+          local_path: { type: string }
+    content: |
+      const tickets = outputs['fetch-tickets']?.data || [];
+      const cacheDir = inputs.cache_dir || '.cache/zendesk';
+      const subdomain = env.ZENDESK_SUBDOMAIN;
+      const auth = btoa((env.ZENDESK_EMAIL || '') + '/token:' + (env.ZENDESK_API_TOKEN || ''));
+
+      const allAttachments = [];
+
+      for (const ticket of tickets) {
+        try {
+          const res = await fetch(
+            `https://${subdomain}.zendesk.com/api/v2/tickets/${ticket.id}/comments.json`,
+            { headers: { Authorization: `Basic ${auth}` } }
+          );
+          if (!res.ok) continue;
+          const data = await res.json();
+
+          for (const comment of (data.comments || [])) {
+            for (const att of (comment.attachments || [])) {
+              allAttachments.push({
+                ticket_id: String(ticket.id),
+                id: att.id,
+                file_name: att.file_name,
+                content_url: att.content_url,
+                content_type: att.content_type || 'application/octet-stream',
+                size: att.size || 0,
+                local_path: `${cacheDir}/${ticket.id}/${att.id}_${att.file_name}`
+              });
+            }
+          }
+        } catch (e) {
+          // Skip tickets with fetch errors
+        }
+      }
+
+      return allAttachments;
+    forEach: true
+
+  # Step 4: Download each attachment using http_client with output_file
+  download-attachment:
+    type: http_client
+    criticality: external
+    depends_on: [prepare-attachments]
+    assume:
+      - "outputs['prepare-attachments'].content_url != null"
+    schema:
+      type: object
+      properties:
+        file_path: { type: string }
+        size: { type: number }
+        cached: { type: boolean }
+    url: "{{ outputs['prepare-attachments'].content_url }}"
+    method: GET
+    headers:
+      Authorization: "Basic {{ env.ZENDESK_EMAIL | append: '/token:' | append: env.ZENDESK_API_TOKEN | base64 }}"
+    output_file: "{{ outputs['prepare-attachments'].local_path }}"
+    skip_if_exists: true
+    timeout: 60000
+
+  # Step 5: Aggregate downloaded attachments by ticket
+  aggregate-downloads:
+    type: script
+    depends_on: [prepare-attachments, download-attachment]
+    fanout: reduce
+    content: |
+      // Get all attachment metadata from prepare-attachments (raw array)
+      const attachments = outputs_raw['prepare-attachments'] || [];
+      const downloads = outputs_raw['download-attachment'] || [];
+
+      // Build map of ticket_id -> attachments with download status
+      const result = {};
+      for (let i = 0; i < attachments.length; i++) {
+        const att = attachments[i];
+        const download = downloads[i] || {};
+
+        if (!result[att.ticket_id]) {
+          result[att.ticket_id] = [];
+        }
+
+        result[att.ticket_id].push({
+          file_name: att.file_name,
+          local_path: att.local_path,
+          content_type: att.content_type,
+          size: download.size || att.size,
+          cached: download.cached || false
+        });
+      }
+
+      return { attachments: result };
+
+  # Step 6: Format output as XML
+  format-output:
+    type: script
+    depends_on: [fetch-tickets, aggregate-downloads]
+    content: |
+      var tickets = outputs['fetch-tickets'] && outputs['fetch-tickets'].data ? outputs['fetch-tickets'].data : [];
+      var attachments = outputs['aggregate-downloads'] && outputs['aggregate-downloads'].attachments ? outputs['aggregate-downloads'].attachments : {};
+
+      var xml = '<zendesk_context>\n';
+      xml += '  <ticket_count>' + tickets.length + '</ticket_count>\n';
+
+      for (var i = 0; i < tickets.length; i++) {
+        var ticket = tickets[i];
+        xml += '  <ticket id="' + escapeXml(ticket.id) + '">\n';
+        xml += '    <subject>' + escapeXml(ticket.subject) + '</subject>\n';
+        xml += '    <description>' + escapeXml(ticket.description) + '</description>\n';
+        xml += '    <status>' + escapeXml(ticket.status) + '</status>\n';
+        xml += '    <priority>' + escapeXml(ticket.priority) + '</priority>\n';
+        xml += '    <created_at>' + escapeXml(ticket.created_at) + '</created_at>\n';
+        xml += '    <updated_at>' + escapeXml(ticket.updated_at) + '</updated_at>\n';
+
+        if (ticket.tags && ticket.tags.length) {
+          var escapedTags = [];
+          for (var j = 0; j < ticket.tags.length; j++) {
+            escapedTags.push(escapeXml(ticket.tags[j]));
+          }
+          xml += '    <tags>' + escapedTags.join(', ') + '</tags>\n';
+        }
+
+        // Add attachments if available
+        var ticketAttachments = attachments[ticket.id] || [];
+        if (ticketAttachments.length > 0) {
+          xml += '    <attachments count="' + ticketAttachments.length + '">\n';
+          for (var k = 0; k < ticketAttachments.length; k++) {
+            var att = ticketAttachments[k];
+            xml += '      <attachment>\n';
+            xml += '        <file_name>' + escapeXml(att.file_name) + '</file_name>\n';
+            xml += '        <local_path>' + escapeXml(att.local_path) + '</local_path>\n';
+            xml += '        <content_type>' + escapeXml(att.content_type) + '</content_type>\n';
+            xml += '        <size>' + (att.size || 0) + '</size>\n';
+            xml += '        <cached>' + (att.cached ? 'true' : 'false') + '</cached>\n';
+            xml += '      </attachment>\n';
+          }
+          xml += '    </attachments>\n';
+        }
+
+        xml += '  </ticket>\n';
+      }
+
+      xml += '</zendesk_context>';
+      return xml;
+
+  # Fallback step when no tickets found
+  no-tickets-fallback:
+    type: command
+    depends_on: [extract-ids]
+    if: "outputs['extract-ids'].count == 0"
+    exec: |
+      echo '<zendesk_context><ticket_count>0</ticket_count><message>No Zendesk ticket IDs found in the provided text</message></zendesk_context>'
+
+# =============================================================================
+# TESTS
+# =============================================================================
+tests:
+  defaults:
+    strict: true
+    fail_on_unexpected_calls: true
+
+  fixtures:
+    - name: local.minimal
+      webhook:
+        name: manual
+      git:
+        branch: main
+        baseBranch: main
+      files: []
+      diff: ""
+
+  cases:
+    # Test 1: Extract ticket ID and fetch
+    # Uses real ticket ID 10312 for --no-mocks compatibility
+    - name: extract-ticket-id
+      description: Extract ticket ID from text and fetch details
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        text: "Related to Zendesk ticket #10312"
+        download_assets: true
+      mocks:
+        extract-ids:
+          data: ["10312"]
+          count: 1
+        fetch-tickets:
+          data:
+            - id: "10312"
+              subject: "oAuth client expiration | Enhancement"
+              description: ""
+              status: "hold"
+              priority: ""
+              tags: []
+              created_at: "2020-08-19T14:00:00Z"
+              updated_at: "2025-01-15T12:30:00Z"
+        prepare-attachments: []
+        aggregate-downloads:
+          attachments: {}
+        format-output: |
+          <zendesk_context>
+            <ticket_count>1</ticket_count>
+            <ticket id="10312">
+              <subject>oAuth client expiration | Enhancement</subject>
+              <status>hold</status>
+            </ticket>
+          </zendesk_context>
+      expect:
+        calls:
+          - step: extract-ids
+            exactly: 1
+          - step: fetch-tickets
+            exactly: 1
+          - step: prepare-attachments
+            exactly: 1
+          - step: aggregate-downloads
+            exactly: 1
+          - step: format-output
+            exactly: 1
+        workflow_output:
+          - path: ticket_count
+            equals: 1
+          - path: zendesk_context_xml
+            contains: "<ticket id=\"10312\">"
+
+    # Test 2: No ticket IDs in text
+    - name: no-ticket-ids-found
+      description: Text without ticket IDs should produce empty context
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        text: "This is a regular PR without any ticket references"
+      mocks:
+        extract-ids:
+          data: []
+          count: 0
+        no-tickets-fallback: |
+          <zendesk_context><ticket_count>0</ticket_count><message>No Zendesk ticket IDs found in the provided text</message></zendesk_context>
+      expect:
+        calls:
+          - step: extract-ids
+            exactly: 1
+          - step: fetch-tickets
+            exactly: 0
+          - step: no-tickets-fallback
+            exactly: 1
+        workflow_output:
+          - path: ticket_count
+            equals: 0
+
+    # Test 3: Multiple tickets
+    # Uses real ticket IDs 10312, 10355 for --no-mocks compatibility
+    - name: multiple-tickets
+      description: Extract and fetch multiple Zendesk tickets
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        text: "Issues #10312 and #10355 are related"
+        download_assets: true
+      mocks:
+        extract-ids:
+          data: ["10312", "10355"]
+          count: 2
+        fetch-tickets:
+          data:
+            - id: "10312"
+              subject: "oAuth client expiration | Enhancement"
+              description: ""
+              status: "hold"
+              priority: "low"
+              tags: ["feature", "jira_escalated"]
+              created_at: "2019-07-17T08:18:17Z"
+              updated_at: "2021-10-04T15:05:25Z"
+            - id: "10355"
+              subject: "Detailed error analytics"
+              description: ""
+              status: "hold"
+              priority: ""
+              tags: []
+              created_at: "2019-08-01T10:00:00Z"
+              updated_at: "2025-01-15T12:30:00Z"
+        prepare-attachments: []
+        aggregate-downloads:
+          attachments: {}
+        format-output: |
+          <zendesk_context>
+            <ticket_count>2</ticket_count>
+            <ticket id="10312">
+              <subject>oAuth client expiration | Enhancement</subject>
+              <status>hold</status>
+            </ticket>
+            <ticket id="10355">
+              <subject>Detailed error analytics</subject>
+              <status>hold</status>
+            </ticket>
+          </zendesk_context>
+      expect:
+        calls:
+          - step: extract-ids
+            exactly: 1
+          - step: fetch-tickets
+            exactly: 1
+          - step: prepare-attachments
+            exactly: 1
+          - step: aggregate-downloads
+            exactly: 1
+          - step: format-output
+            exactly: 1
+        workflow_output:
+          - path: ticket_count
+            equals: 2
+          - path: zendesk_context_xml
+            contains: "<ticket id=\"10312\">"
+          - path: zendesk_context_xml
+            contains: "<ticket id=\"10355\">"
+
+    # Test 4: URL-based detection
+    # Tests extraction from Zendesk ticket URLs
+    - name: url-based-detection
+      description: Extract ticket ID from Zendesk URL
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        text: "See https://tyksupport.zendesk.com/agent/tickets/10312 for details"
+        download_assets: true
+      mocks:
+        extract-ids:
+          data: ["10312"]
+          count: 1
+        fetch-tickets:
+          data:
+            - id: "10312"
+              subject: "oAuth client expiration | Enhancement"
+              description: ""
+              status: "hold"
+              priority: "low"
+              tags: ["feature", "jira_escalated"]
+              created_at: "2019-07-17T08:18:17Z"
+              updated_at: "2021-10-04T15:05:25Z"
+        prepare-attachments: []
+        aggregate-downloads:
+          attachments: {}
+        format-output: |
+          <zendesk_context>
+            <ticket_count>1</ticket_count>
+            <ticket id="10312">
+              <subject>oAuth client expiration | Enhancement</subject>
+              <status>hold</status>
+            </ticket>
+          </zendesk_context>
+      expect:
+        calls:
+          - step: extract-ids
+            exactly: 1
+          - step: fetch-tickets
+            exactly: 1
+          - step: prepare-attachments
+            exactly: 1
+          - step: aggregate-downloads
+            exactly: 1
+          - step: format-output
+            exactly: 1
+        workflow_output:
+          - path: ticket_count
+            equals: 1
+          - path: zendesk_context_xml
+            contains: "<ticket id=\"10312\">"
+
+    # Test 5: Real ticket 17962 for live testing
+    # Uses real ticket from production Zendesk
+    - name: real-ticket-17962
+      description: Test with real production ticket 17962 - Tyk Dashboard API keys issue
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        text: "https://tyksupport.zendesk.com/agent/tickets/17962"
+        download_assets: true
+      mocks:
+        extract-ids:
+          data: ["17962"]
+          count: 1
+        fetch-tickets:
+          data:
+            - id: "17962"
+              subject: "Hundreds of thousands of keys showing up in Tyk Dashboard"
+              description: |
+                Hi there,
+
+                Today I went to create an API key in Tyk Dashboard and noticed that in our QA environment we have ~5900 API keys and in prod ~128,670 API keys!!
+
+                ![](https://tyksupport.zendesk.com/attachments/token/t12s2zT5k4skLeIuhzULbz4Ng/?name=blobid0.png)
+
+                In looking at it in more detail, it looks like there's some additional TykJWTSessionID metadata for each one:
+
+                ![](https://tyksupport.zendesk.com/attachments/token/iJaLMXNPQdykDstKFYwhcMMiX/?name=blobid1.png)
+
+                As far as I know, we don't have any automated processes that would be creating these.  Are these some sort of session ids showing up in Dashboard API Key UI?
+
+                On a related note (maybe a separate ticket?), even if I know the alias of an existing key - I can't search for it in the search field in API Keys.  I just get "No Data Available" with a red dialog saying "Could not retrieve key detail".
+
+                Thanks,
+                Marc
+              status: "hold"
+              priority: "normal"
+              requester_id: 6631527109020
+              assignee_id: ""
+              tags:
+                - bug
+                - gold
+                - jira_escalated
+                - on-prem
+                - q_a
+                - sla
+                - us
+                - wes
+              created_at: "2023-12-01T23:58:30Z"
+              updated_at: "2024-05-09T16:07:56Z"
+        prepare-attachments: []
+        aggregate-downloads:
+          attachments: {}
+        format-output: |
+          <zendesk_context>
+            <ticket_count>1</ticket_count>
+            <ticket id="17962">
+              <subject>Hundreds of thousands of keys showing up in Tyk Dashboard</subject>
+              <description>Hi there,
+
+          Today I went to create an API key in Tyk Dashboard and noticed that in our QA environment we have ~5900 API keys and in prod ~128,670 API keys!!</description>
+              <status>hold</status>
+              <priority>normal</priority>
+              <created_at>2023-12-01T23:58:30Z</created_at>
+              <updated_at>2024-05-09T16:07:56Z</updated_at>
+              <tags>bug, gold, jira_escalated, on-prem, q_a, sla, us, wes</tags>
+            </ticket>
+          </zendesk_context>
+      expect:
+        calls:
+          - step: extract-ids
+            exactly: 1
+          - step: fetch-tickets
+            exactly: 1
+          - step: prepare-attachments
+            exactly: 1
+          - step: aggregate-downloads
+            exactly: 1
+          - step: format-output
+            exactly: 1
+        workflow_output:
+          - path: ticket_count
+            equals: 1
+          - path: zendesk_context_xml
+            contains: "<ticket id=\"17962\">"
+          - path: zendesk_context_xml
+            contains: "Hundreds of thousands of keys"
+          - path: zendesk_context_xml
+            contains: "jira_escalated"
+
+    # Test 6: Ticket with attachments
+    # Uses real ticket ID 23787 which has attachments for --no-mocks compatibility
+    - name: ticket-with-attachments
+      description: Fetch ticket with attachments and include in output
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        text: "Check ticket #23787"
+        download_assets: true
+      mocks:
+        extract-ids:
+          data: ["23787"]
+          count: 1
+        fetch-tickets:
+          data:
+            - id: "23787"
+              subject: "Re: tyk gw container resets"
+              description: "Container keeps restarting"
+              status: "open"
+              priority: "high"
+              tags: []
+              created_at: "2024-01-15T10:00:00Z"
+              updated_at: "2024-01-16T14:30:00Z"
+        prepare-attachments:
+          - ticket_id: "23787"
+            id: 23699884585372
+            file_name: "tyk-logs.txt"
+            content_url: "https://tyksupport.zendesk.com/attachments/token/xyz/?name=tyk-logs.txt"
+            content_type: "text/plain"
+            size: 359930
+            local_path: ".cache/zendesk/23787/23699884585372_tyk-logs.txt"
+        download-attachment:
+          file_path: ".cache/zendesk/23787/23699884585372_tyk-logs.txt"
+          size: 359930
+          cached: false
+        aggregate-downloads:
+          attachments:
+            "23787":
+              - file_name: "tyk-logs.txt"
+                local_path: ".cache/zendesk/23787/23699884585372_tyk-logs.txt"
+                content_type: "text/plain"
+                size: 359930
+                cached: false
+        format-output: |
+          <zendesk_context>
+            <ticket_count>1</ticket_count>
+            <ticket id="23787">
+              <subject>Re: tyk gw container resets</subject>
+              <status>open</status>
+              <attachments count="1">
+                <attachment>
+                  <file_name>tyk-logs.txt</file_name>
+                  <local_path>.cache/zendesk/23787/23699884585372_tyk-logs.txt</local_path>
+                  <content_type>text/plain</content_type>
+                  <size>359930</size>
+                  <cached>false</cached>
+                </attachment>
+              </attachments>
+            </ticket>
+          </zendesk_context>
+      expect:
+        calls:
+          - step: extract-ids
+            exactly: 1
+          - step: fetch-tickets
+            exactly: 1
+          - step: prepare-attachments
+            exactly: 1
+          - step: download-attachment
+            exactly: 1
+          - step: aggregate-downloads
+            exactly: 1
+          - step: format-output
+            exactly: 1
+        workflow_output:
+          - path: ticket_count
+            equals: 1
+          - path: zendesk_context_xml
+            contains: "<ticket id=\"23787\">"
+          - path: zendesk_context_xml
+            contains: "<attachments count=\"1\">"
+          - path: zendesk_context_xml
+            contains: "tyk-logs.txt"

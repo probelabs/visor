@@ -1,0 +1,258 @@
+version: "1.0"
+
+inputs:
+  - name: question
+    required: false
+    schema:
+      type: string
+
+outputs:
+  - name: issues
+    description: All refinement issues from personas
+    value_js: |
+      var r = outputs ? outputs['refine'] : null;
+      if (r == null) return [];
+      return Array.isArray(r.issues) ? r.issues : [];
+
+  - name: hasBlockers
+    description: True if there are blocking issues
+    value_js: |
+      var r = outputs ? outputs['refine'] : null;
+      if (r == null) return false;
+      return r.hasBlockers === true;
+
+  - name: ticket
+    description: Normalized ticket
+    value_js: |
+      var t = outputs ? outputs['normalize-ticket'] : null;
+      if (t == null) return null;
+      return t.ticket != null ? t.ticket : null;
+
+# Task Refinement v2 - Uses refinement.yaml for 3-amigos analysis
+#
+# Flow:
+#   1) ticket-input - Capture raw ticket description
+#   2) normalize-ticket - Normalize into structured ticket
+#   3) refine - Call refinement workflow with personas (PM, QA, Eng)
+#   4) ticket-output - Log results
+
+steps:
+  ticket-seed:
+    type: script
+    group: task-refinement-v2
+    if: "typeof workflow_inputs !== 'undefined' && workflow_inputs.question"
+    content: |
+      module.exports = {
+        text: {{ workflow_inputs.question | to_json }}
+      };
+
+  ticket-input:
+    type: human-input
+    group: task-refinement-v2
+    if: "!(typeof workflow_inputs !== 'undefined' && workflow_inputs.question)"
+    prompt: |
+      Describe the ticket or task you want to refine.
+      Include any relevant context, links, and constraints.
+    multiline: true
+    allow_empty: false
+
+  normalize-ticket:
+    type: ai
+    group: task-refinement-v2
+    depends_on: [ticket-input]
+    ai:
+      skip_code_context: true
+      disableTools: true
+      system_prompt: |
+        You normalize raw ticket descriptions into a canonical ticket object.
+        - Extract a concise title and a rich description.
+        - Infer labels/components when obvious (e.g. gateway, dashboard, MDCB).
+        - Include any repo/branch hints if present.
+    schema:
+      type: object
+      properties:
+        ticket:
+          type: object
+          properties:
+            title: { type: string }
+            description: { type: string }
+            labels:
+              type: array
+              items: { type: string }
+            components:
+              type: array
+              items: { type: string }
+      required: [ticket]
+    prompt: |
+      Raw input:
+      {{ outputs['ticket-seed'].text
+         | default: outputs['ticket-input'].text
+         | default: outputs['ticket-input']
+         | default: workflow_inputs.question }}
+
+      Return a JSON object with a "ticket" field containing:
+      - title: concise title
+      - description: detailed description
+      - labels: relevant tags (bug, feature, etc.)
+      - components: affected system components
+
+  refine:
+    type: workflow
+    group: task-refinement-v2
+    depends_on: [normalize-ticket]
+    criticality: internal
+    assume:
+      - "true"
+    config: defaults/refinement.yaml
+    workflow_inputs:
+      context: |
+        Ticket to evaluate:
+        {{ outputs['normalize-ticket'].ticket | to_json }}
+
+  ticket-output:
+    type: log
+    group: task-refinement-v2
+    depends_on: [refine]
+    message: |
+      Task Refinement Complete
+
+      Ticket:
+      {{ outputs['normalize-ticket'].ticket | to_json }}
+
+      {% if outputs['refine'].hasBlockers %}
+      BLOCKERS FOUND - Not ready for implementation
+      {% else %}
+      Ready for implementation
+      {% endif %}
+
+      Issues ({{ outputs['refine'].issues | size }}):
+      {% for issue in outputs['refine'].issues %}
+      - [{{ issue.severity | upcase }}] {{ issue.ruleId }}: {{ issue.message }}
+      {% endfor %}
+    level: info
+    include_pr_context: false
+    include_dependencies: false
+    include_metadata: false
+
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+
+  cases:
+    - name: basic-refinement
+      event: manual
+      fixture: local.minimal
+      mocks:
+        ticket-input:
+          text: "Bug: rate limiting misbehaves on Tyk Gateway..."
+        normalize-ticket:
+          ticket:
+            title: "Gateway rate limiting bug"
+            description: "Rate limiting misbehaves for certain routes."
+            labels: ["bug"]
+            components: ["gateway"]
+        refine:
+          issues:
+            - ruleId: "pm/unclear-scope"
+              message: "Which routes are affected?"
+              severity: "warning"
+            - ruleId: "qa/missing-criteria"
+              message: "No acceptance criteria for fix verification"
+              severity: "error"
+            - ruleId: "eng/needs-investigation"
+              message: "Root cause needs investigation before fix"
+              severity: "warning"
+          hasBlockers: true
+      expect:
+        calls:
+          - step: ticket-input
+            exactly: 1
+          - step: normalize-ticket
+            exactly: 1
+          - step: refine
+            exactly: 1
+          - step: ticket-output
+            exactly: 1
+        outputs:
+          - step: normalize-ticket
+            path: ticket.title
+            matches: "(?i)rate limiting"
+        workflow_output:
+          - path: hasBlockers
+            equals: true
+          - path: issues.length
+            equals: 3
+
+    - name: ready-for-implementation
+      event: manual
+      fixture: local.minimal
+      mocks:
+        ticket-input:
+          text: "Feature: add dark mode toggle to settings page"
+        normalize-ticket:
+          ticket:
+            title: "Add dark mode toggle"
+            description: "Add a toggle in settings to switch between light and dark mode"
+            labels: ["feature", "ui"]
+            components: ["dashboard-ui"]
+        refine:
+          issues:
+            - ruleId: "pm/well-defined"
+              message: "Clear user need and scope"
+              severity: "info"
+            - ruleId: "qa/good-coverage"
+              message: "Criteria are testable"
+              severity: "info"
+            - ruleId: "eng/straightforward"
+              message: "Can use existing theme system"
+              severity: "info"
+          hasBlockers: false
+      expect:
+        calls:
+          - step: ticket-input
+            exactly: 1
+          - step: normalize-ticket
+            exactly: 1
+          - step: refine
+            exactly: 1
+          - step: ticket-output
+            exactly: 1
+        workflow_output:
+          - path: hasBlockers
+            equals: false
+
+    - name: process-only-ticket
+      event: manual
+      fixture: local.minimal
+      mocks:
+        ticket-input:
+          text: "Define incident triage process for P0/P1 incidents"
+        normalize-ticket:
+          ticket:
+            title: "Incident triage process"
+            description: "Define consistent process for triaging high-priority incidents"
+            labels: ["process", "runbook"]
+            components: []
+        refine:
+          issues:
+            - ruleId: "pm/process-scope"
+              message: "Need to define which teams are involved"
+              severity: "warning"
+            - ruleId: "qa/testability"
+              message: "How do we validate the process works?"
+              severity: "warning"
+          hasBlockers: false
+      expect:
+        calls:
+          - step: ticket-input
+            exactly: 1
+          - step: normalize-ticket
+            exactly: 1
+          - step: refine
+            exactly: 1
+          - step: ticket-output
+            exactly: 1
+        workflow_output:
+          - path: hasBlockers
+            equals: false

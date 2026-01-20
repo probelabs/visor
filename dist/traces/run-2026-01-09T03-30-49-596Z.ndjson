@@ -1,0 +1,15 @@
+{"name":"visor.run","attributes":{"started":true}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"Init","state_to":"PlanReady","engine_mode":"state-machine","wave":0,"session_id":"e1cdf77a-9df5-4787-b2fa-4547c8cf192e"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"PlanReady","state_to":"WavePlanning","engine_mode":"state-machine","wave":0,"session_id":"e1cdf77a-9df5-4787-b2fa-4547c8cf192e"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":1,"session_id":"e1cdf77a-9df5-4787-b2fa-4547c8cf192e"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"ask","visor.provider.type":"human-input"}}
+{"name":"visor.provider","attributes":{"visor.check.id":"route-intent-error","visor.provider.type":"log"}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"e1cdf77a-9df5-4787-b2fa-4547c8cf192e"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"visor.routing","attrs":{"check_id":"route-intent-error","trigger":"on_success","action":"goto","target":"ask","source":"goto"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"e1cdf77a-9df5-4787-b2fa-4547c8cf192e"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":1,"session_id":"e1cdf77a-9df5-4787-b2fa-4547c8cf192e"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"LevelDispatch","engine_mode":"state-machine","wave":2,"session_id":"e1cdf77a-9df5-4787-b2fa-4547c8cf192e"}}]}
+{"name":"visor.provider","attributes":{"visor.check.id":"ask","visor.provider.type":"human-input"}}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"LevelDispatch","state_to":"WavePlanning","engine_mode":"state-machine","wave":2,"session_id":"e1cdf77a-9df5-4787-b2fa-4547c8cf192e"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"WavePlanning","engine_mode":"state-machine","wave":2,"session_id":"e1cdf77a-9df5-4787-b2fa-4547c8cf192e"}}]}
+{"name":"visor.event","attributes":{},"events":[{"name":"engine.state_transition","attrs":{"state_from":"WavePlanning","state_to":"Completed","engine_mode":"state-machine","wave":2,"session_id":"e1cdf77a-9df5-4787-b2fa-4547c8cf192e"}}]}

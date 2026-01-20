@@ -1,0 +1,518 @@
+version: "1.0"
+
+# Reusable workflow: engineer
+#
+# Goal:
+#   Make code changes, create PRs, and implement features using Claude Code,
+#   with automatic project classification and checkout.
+#
+# Input contract:
+#   - inputs.task: string (required) - Description of what to implement/fix
+#
+# Output contract:
+#   - result.text: string - Summary of what was done
+
+inputs:
+  - name: task
+    required: true
+    schema:
+      type: string
+
+outputs:
+  - name: result
+    value_js: |
+      // Command step returns stdout directly as text
+      var engineerStep = outputs?.['engineer-task'];
+      if (typeof engineerStep === 'string') {
+        return { text: engineerStep };
+      }
+      if (engineerStep != null && typeof engineerStep === 'object') {
+        // If it's an object with stdout, use that
+        if (typeof engineerStep.stdout === 'string') {
+          return { text: engineerStep.stdout };
+        }
+        return engineerStep;
+      }
+      return null;
+
+steps:
+  # Step 1: Always checkout tyk-docs for context about how features work
+  checkout-tyk-docs:
+    type: git-checkout
+    criticality: internal
+    assume:
+      - "true"
+    ref: "main"
+    repository: "TykTechnologies/tyk-docs"
+    fetch_depth: 1
+    description: "Tyk Docs"
+
+  # Step 2: Use AI to classify which projects are relevant for the task
+  ensure-code-plan:
+    type: ai
+    criticality: info
+    depends_on: [checkout-tyk-docs]
+    guarantee: "(output?.projects?.length ?? 0) > 0"
+    fail_if: "(output?.projects?.length ?? 0) === 0"
+    ai:
+      skip_code_context: true
+      prompt_type: code-explorer
+      system_prompt: |
+        You decide which parts of the Tyk stack need to be modified for a given task.
+        Your job is to plan *which projects must be checked out for editing*, not to
+        implement the task directly.
+
+        Using tyk-docs to understand the task:
+        - The tyk-docs repository has been checked out for you.
+        - Before deciding on projects, investigate tyk-docs to understand:
+          - Which components are involved in the feature/bug
+          - How configuration flows between components
+          - Any dependencies between projects
+
+        Known project IDs (use these exact strings):
+        - "tyk"              - Tyk Gateway (Go)
+        - "tyk-docs"         - Tyk Documentation (Markdown/Hugo)
+        - "tyk-analytics"    - Dashboard backend (Go)
+        - "tyk-analytics-ui" - Dashboard UI (React/TypeScript)
+        - "tyk-pump"         - Analytics pipeline (Go)
+        - "tyk-sink"         - MDCB (Go)
+        - "storage"          - Shared storage library (Go)
+        - "portal"           - Enterprise developer portal (Go/React)
+
+        Routing heuristics:
+        - For gateway features: usually need "tyk" and possibly "tyk-analytics"
+        - For UI changes: need "tyk-analytics-ui"
+        - For API changes visible in dashboard: need both "tyk-analytics" and "tyk-analytics-ui"
+        - For portal features: need "portal"
+        - For documentation updates, clarifications, or new docs: need "tyk-docs"
+        - Cross-stack changes may need multiple projects
+
+        IMPORTANT: Select ALL projects that need changes, including "tyk-docs" for any
+        documentation updates, clarifications, or new documentation pages.
+    schema:
+      type: object
+      additionalProperties: false
+      properties:
+        projects:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              project_id:
+                type: string
+                enum:
+                  - "tyk"
+                  - "tyk-docs"
+                  - "tyk-analytics"
+                  - "tyk-analytics-ui"
+                  - "tyk-pump"
+                  - "tyk-sink"
+                  - "storage"
+                  - "portal"
+              reason:
+                type: string
+                description: Why this project needs changes
+            required: [project_id, reason]
+        implementation_notes:
+          type: string
+          description: High-level approach for the implementation
+      required: [projects]
+    prompt: |
+      Task to implement:
+      {{ inputs.task }}
+
+      Tyk docs checkout (use for understanding the codebase):
+      - path: {{ outputs['checkout-tyk-docs'].path | default: '(not available)' }}
+
+      Based on this task, determine which Tyk projects need code changes.
+      Use the docs to understand how components interact.
+
+      Return JSON with:
+      - "projects": array of { project_id, reason } for each project needing changes
+      - "implementation_notes": brief description of the approach
+
+  # Step 3: Convert plan to checkout descriptors with forEach
+  project-items:
+    type: script
+    criticality: internal
+    schema:
+      type: array
+    depends_on: [ensure-code-plan]
+    assume:
+      - "Array.isArray(outputs['ensure-code-plan']?.projects)"
+    guarantee:
+      - "Array.isArray(output)"
+    content: |
+      var planner = null;
+      if (outputs != null && typeof outputs === 'object') {
+        planner = outputs['ensure-code-plan'];
+      }
+      var src = [];
+      if (planner != null && typeof planner === 'object' && Array.isArray(planner.projects)) {
+        src = planner.projects;
+      }
+
+      const baseMap = {
+        tyk: { repo: 'TykTechnologies/tyk', description: 'Tyk Gateway' },
+        'tyk-docs': { repo: 'TykTechnologies/tyk-docs', description: 'Tyk Documentation' },
+        'tyk-analytics': { repo: 'TykTechnologies/tyk-analytics', description: 'Tyk Dashboard backend' },
+        'tyk-analytics-ui': { repo: 'TykTechnologies/tyk-analytics-ui', description: 'Tyk Dashboard UI' },
+        'tyk-pump': { repo: 'TykTechnologies/tyk-pump', description: 'Tyk Pump' },
+        'tyk-sink': { repo: 'TykTechnologies/tyk-sink', description: 'Tyk MDCB' },
+        storage: { repo: 'TykTechnologies/storage', description: 'Shared storage library' },
+        portal: { repo: 'TykTechnologies/portal', description: 'Enterprise developer portal' },
+      };
+
+      const result = [];
+      for (const p of src) {
+        if (!p || typeof p !== 'object') continue;
+        const id = p.project_id;
+        if (!id || typeof id !== 'string') continue;
+        const info = baseMap[id];
+        if (!info || typeof info.repo !== 'string') continue;
+
+        result.push({
+          project_id: id,
+          reason: p.reason || '',
+          repository: info.repo,
+          description: info.description || id,
+        });
+      }
+
+      return result;
+    forEach: true
+
+  # Step 4: Checkout each selected project
+  checkout-projects:
+    type: git-checkout
+    criticality: internal
+    depends_on: [project-items]
+    assume:
+      - "outputs['project-items'] != null"
+    ref: "{{ outputs['project-items'].ref | default: 'HEAD' }}"
+    repository: "{{ outputs['project-items'].repository }}"
+    fetch_depth: 1
+    description: "{{ outputs['project-items'].description }}"
+
+  # Step 5: Build engineer prompt and command for Claude Code
+  build-engineer-prompt:
+    type: script
+    criticality: internal
+    schema:
+      type: object
+      properties:
+        command:
+          type: string
+    depends_on: [ensure-code-plan, project-items, checkout-projects]
+    assume:
+      - "outputs['checkout-projects'] != null"
+    fanout: reduce
+    content: |
+      const task = inputs.task || '';
+      const implNotes = outputs['ensure-code-plan']?.implementation_notes || 'No specific plan provided';
+      const docsPath = outputs['checkout-tyk-docs']?.path || '(not available)';
+
+      // With fanout: reduce, outputs from forEach steps are wrapped in an object
+      // project-items is an array, checkout-projects has forEachItems containing the array
+      const items = outputs['project-items'] || [];
+      const checkoutsRaw = outputs['checkout-projects'];
+      const checkouts = checkoutsRaw?.forEachItems || (Array.isArray(checkoutsRaw) ? checkoutsRaw : []);
+
+      // Build add_dirs array
+      const addDirs = [docsPath];
+      if (Array.isArray(checkouts)) {
+        for (const co of checkouts) {
+          if (co && co.path) addDirs.push(co.path);
+        }
+      }
+
+      // Build projects XML
+      let projectsXml = '';
+      if (Array.isArray(items) && Array.isArray(checkouts)) {
+        for (let i = 0; i < items.length; i++) {
+          const p = items[i];
+          const co = checkouts[i] || {};
+          projectsXml += `
+          <project>
+            <id>${p.project_id || ''}</id>
+            <repo>${p.repository || ''}</repo>
+            <path>${co.path || ''}</path>
+            <reason>${p.reason || 'not provided'}</reason>
+          </project>`;
+        }
+      }
+
+      // Build prompt using array join to avoid YAML parsing issues
+      const promptLines = [
+        '<task>',
+        task,
+        '</task>',
+        '',
+        '<implementation_plan>',
+        implNotes,
+        '</implementation_plan>',
+        '',
+        '<context>',
+        '  <docs_checkout>',
+        '    <path>' + docsPath + '</path>',
+        '  </docs_checkout>',
+        '',
+        '  <projects>' + projectsXml,
+        '  </projects>',
+        '</context>',
+        '',
+        '<instructions>',
+        'You are a senior Tyk engineer. Implement the task described above.',
+        '',
+        'Guidelines -',
+        '1. First, explore the codebase to understand existing patterns and conventions',
+        '2. Use tyk-docs to understand how features should work',
+        '3. Make changes that follow existing code style and patterns',
+        '4. Keep changes focused and minimal - do not refactor unrelated code',
+        '',
+        'Testing and Build Verification -',
+        '- You do NOT need to write tests unless explicitly requested',
+        '- However, you MUST verify that the code builds successfully after your changes',
+        '- Run the appropriate build command for each project (e.g., go build, npm run build, make)',
+        '- If the build environment is not configured or dependencies are missing, acknowledge this in your final summary',
+        '',
+        'For each project you modify -',
+        '- Understand the project structure first',
+        '- Find similar existing implementations to follow as patterns',
+        '- Make incremental changes and verify they work',
+        '- Run the build to ensure no compilation/syntax errors',
+        '',
+        'When done, provide a summary that includes -',
+        '- What you changed and why',
+        '- List of modified files',
+        '- Build verification status (success, or why it could not be verified)',
+        '- Any follow-up work needed',
+        '- PR URL if you created one',
+        '',
+        'Once finished create PR using gh tool, if PR for this branch already exists re-use it and update if needed.',
+        'If you are on main branch now, ensure your changes will be in separate PR.',
+        '</instructions>'
+      ];
+      const prompt = promptLines.join('\n');
+
+      // Build the full command with properly escaped prompt
+      // Use base64 encoding to safely pass the prompt through shell
+      const promptBase64 = btoa(unescape(encodeURIComponent(prompt)));
+
+      let cmd = 'echo "' + promptBase64 + '" | base64 -d | claude -p --dangerously-skip-permissions';
+      for (const dir of addDirs) {
+        cmd += ' --add-dir "' + dir.replace(/"/g, '\\"') + '"';
+      }
+
+      return { command: cmd };
+
+  # Step 6: Use Claude Code CLI to implement the task
+  engineer-task:
+    type: command
+    criticality: internal
+    depends_on: [build-engineer-prompt]
+    assume:
+      - "outputs['build-engineer-prompt'] != null"
+    guarantee: "output != null"
+    timeout: 1200000  # 20 minutes for Claude Code to complete
+    exec: "{{ outputs['build-engineer-prompt'].command }}"
+    transform_js: |
+      // Command step returns stdout as string, wrap in object with text property
+      if (typeof output === 'string') {
+        return { text: output };
+      }
+      if (output && typeof output === 'object') {
+        // If already has text property, return as-is
+        if (output.text) {
+          return output;
+        }
+        // If has stdout, wrap it
+        if (output.stdout) {
+          return { text: output.stdout };
+        }
+      }
+      return { text: String(output || '') };
+
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+
+  cases:
+    - name: basic-engineering-task
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        task: "Add a new endpoint to check gateway health status"
+      mocks:
+        ensure-code-plan:
+          projects:
+            - { project_id: "tyk", reason: "Gateway handles health check endpoints" }
+          implementation_notes: "Add new handler in gateway/api.go"
+        engineer-task: "Added /health endpoint to gateway API. Files changed: gateway/api.go, gateway/api_test.go"
+      expect:
+        calls:
+          - step: checkout-tyk-docs
+            exactly: 1
+          - step: ensure-code-plan
+            exactly: 1
+          - step: project-items
+            exactly: 1
+          - step: checkout-projects
+            exactly: 1
+          - step: build-engineer-prompt
+            exactly: 1
+          - step: engineer-task
+            exactly: 1
+        workflow_output:
+          - path: result.text
+            contains: "Added /health endpoint"
+
+    - name: multi-project-task
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        task: "Add a new dashboard setting for rate limiting configuration"
+      mocks:
+        ensure-code-plan:
+          projects:
+            - { project_id: "tyk-analytics", reason: "Dashboard backend needs new API endpoint" }
+            - { project_id: "tyk-analytics-ui", reason: "Dashboard UI needs new settings form" }
+          implementation_notes: "Add backend endpoint, then UI component"
+        engineer-task: "Added rate limiting settings to dashboard. Backend endpoint and UI form created."
+      expect:
+        calls:
+          - step: checkout-tyk-docs
+            exactly: 1
+          - step: ensure-code-plan
+            exactly: 1
+          - step: project-items
+            exactly: 1
+          - step: checkout-projects
+            exactly: 2
+          - step: build-engineer-prompt
+            exactly: 1
+          - step: engineer-task
+            exactly: 1
+
+    - name: docs-only-task
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        task: "Create a documentation PR to clarify Portal and Dashboard connection"
+      mocks:
+        ensure-code-plan:
+          projects:
+            - { project_id: "tyk-docs", reason: "Documentation clarification needed" }
+          implementation_notes: "Update Portal documentation to clarify connection to Dashboard"
+        engineer-task: "Updated Portal documentation to clarify that it connects to Dashboard via REST API."
+      expect:
+        calls:
+          - step: checkout-tyk-docs
+            exactly: 1
+          - step: ensure-code-plan
+            exactly: 1
+          - step: project-items
+            exactly: 1
+          - step: checkout-projects
+            exactly: 1
+          - step: build-engineer-prompt
+            exactly: 1
+          - step: engineer-task
+            exactly: 1
+        workflow_output:
+          - path: result.text
+            contains: "Portal documentation"
+
+    # Test transform_js handles object with text property (already wrapped)
+    - name: transform-handles-text-object
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        task: "Test task for transform_js object with text"
+      mocks:
+        ensure-code-plan:
+          projects:
+            - { project_id: "tyk", reason: "Test project" }
+          implementation_notes: "Test notes"
+        engineer-task:
+          text: "Output already wrapped in text object"
+      expect:
+        calls:
+          - step: checkout-tyk-docs
+            exactly: 1
+          - step: ensure-code-plan
+            exactly: 1
+          - step: project-items
+            exactly: 1
+          - step: checkout-projects
+            exactly: 1
+          - step: build-engineer-prompt
+            exactly: 1
+          - step: engineer-task
+            exactly: 1
+        workflow_output:
+          - path: result.text
+            equals: "Output already wrapped in text object"
+
+    # Test transform_js handles object with stdout property
+    - name: transform-handles-stdout-object
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        task: "Test task for transform_js object with stdout"
+      mocks:
+        ensure-code-plan:
+          projects:
+            - { project_id: "tyk", reason: "Test project" }
+          implementation_notes: "Test notes"
+        engineer-task:
+          stdout: "Output from stdout property"
+      expect:
+        calls:
+          - step: checkout-tyk-docs
+            exactly: 1
+          - step: ensure-code-plan
+            exactly: 1
+          - step: project-items
+            exactly: 1
+          - step: checkout-projects
+            exactly: 1
+          - step: build-engineer-prompt
+            exactly: 1
+          - step: engineer-task
+            exactly: 1
+        workflow_output:
+          - path: result.text
+            equals: "Output from stdout property"
+
+    # Test transform_js handles plain string
+    - name: transform-handles-string
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        task: "Test task for transform_js plain string"
+      mocks:
+        ensure-code-plan:
+          projects:
+            - { project_id: "tyk", reason: "Test project" }
+          implementation_notes: "Test notes"
+        engineer-task: "Plain string output from claude"
+      expect:
+        calls:
+          - step: checkout-tyk-docs
+            exactly: 1
+          - step: ensure-code-plan
+            exactly: 1
+          - step: project-items
+            exactly: 1
+          - step: checkout-projects
+            exactly: 1
+          - step: build-engineer-prompt
+            exactly: 1
+          - step: engineer-task
+            exactly: 1
+        workflow_output:
+          - path: result.text
+            equals: "Plain string output from claude"

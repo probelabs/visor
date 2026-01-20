@@ -1,0 +1,165 @@
+version: "1.0"
+
+steps:
+  # Security check using comprehensive liquid template
+  security-enhanced:
+    type: ai
+    group: security-analysis
+    schema: code-review
+    prompt:
+      file: "./examples/prompts/security-comprehensive.liquid"
+    template:
+      file: "./examples/templates/security-report.liquid"
+    on: [pr_opened, pr_updated]
+    ai:
+      provider: anthropic
+      model: claude-3-5-sonnet-20241022
+
+  # Architecture analysis with dependency on security
+  architecture:
+    type: ai
+    group: architecture-review  
+    schema: plain
+    depends_on: [security-enhanced]
+    prompt:
+      file: "./examples/prompts/architecture-analysis.liquid"
+    on: [pr_opened]
+    ai:
+      timeout: 300000  # 5 minutes for complex analysis
+
+  # Performance check with inline liquid template
+  performance-context:
+    type: ai
+    group: code-review
+    schema: code-review
+    prompt:
+      content: |
+        # Performance Analysis for PR {{ pr.number }}
+
+        {% if pr.isIncremental %}
+        ## Incremental Analysis
+        Analyzing only the latest commit changes.
+        {% else %}
+        ## Full PR Analysis  
+        Analyzing all changes in this pull request.
+        {% endif %}
+
+        ## Files to Analyze
+        {% for ext, files in utils.filesByExtension %}
+        ### {{ ext | upcase }} Files ({{ files.size }})
+        {% for file in files %}
+        - `{{ file.filename }}` ({{ file.status }}, {{ file.changes }} changes)
+        {% endfor %}
+        {% endfor %}
+
+        {% if utils.hasLargeChanges %}
+        ⚠️ **Note**: Large changes detected - pay extra attention to performance implications.
+        {% endif %}
+
+        ## Previous Security Context
+        {% if outputs.security-enhanced %}
+        Security analysis found {{ outputs.security-enhanced.totalIssues }} issues.
+        {% if outputs.security-enhanced.criticalIssues > 0 %}
+        Consider performance impact of security fixes needed for {{ outputs.security-enhanced.criticalIssues }} critical issues.
+        {% endif %}
+        {% endif %}
+
+        ## Focus Areas
+        Please analyze for performance issues including:
+        - Algorithm complexity and efficiency
+        - Database query optimization (N+1 queries, missing indexes)
+        - Memory usage patterns and potential leaks
+        - Async/await usage and blocking operations
+        - Bundle size impact for frontend changes
+        - API response time implications
+
+        Return results in JSON format matching the code-review schema.
+    on: [pr_opened, pr_updated]
+    depends_on: [security-enhanced]
+
+  # Event-aware overview using all available context
+  pr-overview:
+    type: ai
+    group: pr-summary
+    schema: plain
+    depends_on: [security-enhanced, performance-context]
+    prompt:
+      content: |
+        # 📋 Pull Request Overview: {{ pr.title }}
+
+        {% if event.comment %}
+        **Triggered by**: {{ event.comment.author }} commented "{{ event.comment.body }}"
+        {% endif %}
+
+        ## Summary
+        - **Repository**: {{ event.repository.fullName }}
+        - **Author**: {{ pr.author }}
+        - **Branch**: `{{ pr.headBranch }}` → `{{ pr.baseBranch }}`
+        - **Files**: {{ files.size }} files changed
+        - **Scope**: {{ pr.totalAdditions }} additions, {{ pr.totalDeletions }} deletions
+
+        ## Analysis Results Summary
+
+        {% if outputs.security-enhanced %}
+        ### 🔒 Security Analysis
+        - **Total Issues**: {{ outputs.security-enhanced.totalIssues }}
+        {% if outputs.security-enhanced.criticalIssues > 0 %}
+        - **🚨 Critical Issues**: {{ outputs.security-enhanced.criticalIssues }} requiring immediate attention
+        {% endif %}
+        {% if outputs.security-enhanced.errorIssues > 0 %}
+        - **❌ Errors**: {{ outputs.security-enhanced.errorIssues }}
+        {% endif %}
+        {% if outputs.security-enhanced.warningIssues > 0 %}
+        - **⚠️ Warnings**: {{ outputs.security-enhanced.warningIssues }}
+        {% endif %}
+        {% endif %}
+
+        {% if outputs.performance-context %}
+        ### ⚡ Performance Analysis
+        - **Total Issues**: {{ outputs.performance-context.totalIssues }}
+        {% if outputs.performance-context.errorIssues > 0 %}
+        - **Performance Errors**: {{ outputs.performance-context.errorIssues }}
+        {% endif %}
+        {% if outputs.performance-context.warningIssues > 0 %}
+        - **Performance Warnings**: {{ outputs.performance-context.warningIssues }}
+        {% endif %}
+        {% endif %}
+
+        ## Files Changed
+
+        | File | Type | Status | Changes |
+        |------|------|--------|---------|
+        {% for file in files %}
+        | `{{ file.filename }}` | {{ file.filename | split: "." | last | upcase }} | {{ file.status }} | +{{ file.additions }}/-{{ file.deletions }} |
+        {% endfor %}
+
+        ## Architecture Impact
+
+        {% if utils.hasLargeChanges %}
+        ⚠️ **Large Changes**: This PR contains significant modifications that may impact system architecture.
+        {% endif %}
+
+        Generate a comprehensive overview including:
+        1. **Change Summary**: What this PR accomplishes
+        2. **Technical Impact**: How it affects the system
+        3. **Risk Assessment**: Potential concerns based on analysis results
+        4. **Recommendation**: Overall assessment and next steps
+
+        {% if utils.filesByExtension.size > 3 %}
+        Note: Multiple file types modified - consider cross-language compatibility.
+        {% endif %}
+
+        Please provide a markdown overview focusing on the business and technical impact of these changes.
+    on: [pr_opened, pr_updated]
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true
+    debug:
+      enabled: false
+      includePrompts: false
+      includeRawResponses: false
+      includeTiming: true
+      includeProviderInfo: true

@@ -120,7 +120,7 @@ interface FailureConditionResult {
 /**
  * Valid check types in configuration
  */
-type ConfigCheckType = 'ai' | 'command' | 'script' | 'http' | 'http_input' | 'http_client' | 'noop' | 'log' | 'memory' | 'github' | 'claude-code' | 'mcp' | 'human-input' | 'workflow';
+type ConfigCheckType = 'ai' | 'command' | 'script' | 'http' | 'http_input' | 'http_client' | 'noop' | 'log' | 'memory' | 'github' | 'claude-code' | 'mcp' | 'human-input' | 'workflow' | 'git-checkout';
 /**
  * Valid event triggers for checks
  */
@@ -235,6 +235,15 @@ interface AIProviderConfig {
     custom_prompt?: string;
     /** Skip adding code context (diffs, files, PR info) to the prompt */
     skip_code_context?: boolean;
+    /** Skip adding Slack conversation context to the prompt (when running under Slack) */
+    skip_slack_context?: boolean;
+    /**
+     * Skip adding transport-specific context (e.g., GitHub PR/issue XML, Slack
+     * conversation XML) to the prompt. When true, this behaves like setting both
+     * skip_code_context and skip_slack_context to true, unless those are
+     * explicitly overridden.
+     */
+    skip_transport_context?: boolean;
     /** MCP servers configuration */
     mcpServers?: Record<string, McpServerConfig>;
     /** Enable the delegate tool for task distribution to subagents */
@@ -347,6 +356,8 @@ interface CheckConfig {
     ai_custom_prompt?: string;
     /** MCP servers for this AI check - overrides global setting */
     ai_mcp_servers?: Record<string, McpServerConfig>;
+    /** List of custom tool names to expose to this AI check via ephemeral SSE MCP server */
+    ai_custom_tools?: string[];
     /** Claude Code configuration (for claude-code type checks) */
     claude_code?: ClaudeCodeConfig;
     /** Environment variables for this check */
@@ -409,6 +420,8 @@ interface CheckConfig {
     fanout?: 'map' | 'reduce';
     /** Alias for fanout: 'reduce' */
     reduce?: boolean;
+    /** Init routing configuration for this check (runs before execution/preprocessing) */
+    on_init?: OnInitConfig;
     /** Failure routing configuration for this check (retry/goto/run) */
     on_fail?: OnFailConfig;
     /** Success routing configuration for this check (post-actions and optional goto) */
@@ -588,6 +601,59 @@ interface OnFinishConfig {
     transitions?: TransitionRule[];
 }
 /**
+ * Init routing configuration per check
+ * Runs BEFORE the check executes (preprocessing/setup)
+ */
+interface OnInitConfig {
+    /** Items to run before this check executes */
+    run?: OnInitRunItem[];
+    /** Dynamic init items: JS expression returning OnInitRunItem[] */
+    run_js?: string;
+    /** Declarative transitions (optional, for advanced use cases) */
+    transitions?: TransitionRule[];
+}
+/**
+ * Unified on_init run item - can be tool, step, workflow, or plain string
+ */
+type OnInitRunItem = OnInitToolInvocation | OnInitStepInvocation | OnInitWorkflowInvocation | string;
+/**
+ * Invoke a custom tool (from tools: section)
+ */
+interface OnInitToolInvocation {
+    /** Tool name (must exist in tools: section) */
+    tool: string;
+    /** Arguments to pass to the tool (Liquid templates supported) */
+    with?: Record<string, unknown>;
+    /** Custom output name (defaults to tool name) */
+    as?: string;
+}
+/**
+ * Invoke a helper step (regular check)
+ */
+interface OnInitStepInvocation {
+    /** Step name (must exist in steps: section) */
+    step: string;
+    /** Arguments to pass to the step (Liquid templates supported) */
+    with?: Record<string, unknown>;
+    /** Custom output name (defaults to step name) */
+    as?: string;
+}
+/**
+ * Invoke a reusable workflow
+ */
+interface OnInitWorkflowInvocation {
+    /** Workflow ID or path */
+    workflow: string;
+    /** Workflow inputs (Liquid templates supported) */
+    with?: Record<string, unknown>;
+    /** Custom output name (defaults to workflow name) */
+    as?: string;
+    /** Step overrides */
+    overrides?: Record<string, Partial<CheckConfig>>;
+    /** Output mapping */
+    output_mapping?: Record<string, string>;
+}
+/**
  * Declarative transition rule for on_* blocks.
  */
 interface TransitionRule {
@@ -654,6 +720,8 @@ interface DebugConfig {
  * PR comment output configuration
  */
 interface PrCommentOutput {
+    /** Whether PR comments are enabled */
+    enabled?: boolean;
     /** Format of the output */
     format: ConfigOutputFormat;
     /** How to group the results */
@@ -975,6 +1043,36 @@ interface DebugInfo {
     }>;
 }
 
+interface EventEnvelope<T = any> {
+    id: string;
+    version: 1;
+    timestamp: string;
+    runId: string;
+    workflowId?: string;
+    caseId?: string;
+    wave?: number;
+    attempt?: number;
+    checkId?: string;
+    traceId?: string;
+    spanId?: string;
+    causationId?: string;
+    correlationId?: string;
+    payload: T;
+}
+type AnyEvent = any;
+
+type EventHandler<T = AnyEvent> = (event: T | EventEnvelope<T>) => void | Promise<void>;
+interface Subscription {
+    unsubscribe(): void;
+}
+declare class EventBus {
+    private handlers;
+    private anyHandlers;
+    on<T = AnyEvent>(eventType: string, handler: EventHandler<T>): Subscription;
+    onAny(handler: EventHandler): Subscription;
+    emit(event: AnyEvent | EventEnvelope): Promise<void>;
+}
+
 /**
  * Execution context passed to check providers
  */
@@ -994,6 +1092,8 @@ interface ExecutionContext {
     stageHistoryBase?: Record<string, number>;
     /** Workflow inputs - available when executing within a workflow */
     workflowInputs?: Record<string, unknown>;
+    /** Custom arguments passed from on_init 'with' directive */
+    args?: Record<string, unknown>;
     /** SDK hooks for human input */
     hooks?: {
         onHumanInput?: (request: HumanInputRequest) => Promise<string>;
@@ -1017,6 +1117,13 @@ interface ExecutionContext {
         postGroupedComments?: boolean;
         /** reset per-run guard state before grouped execution */
         resetPerRunState?: boolean;
+    };
+    /** Optional event bus for emitting integration events (e.g., HumanInputRequested) */
+    eventBus?: EventBus;
+    /** Optional webhook context (e.g., Slack Events API payload) */
+    webhookContext?: {
+        webhookData?: Map<string, unknown>;
+        eventType?: string;
     };
 }
 

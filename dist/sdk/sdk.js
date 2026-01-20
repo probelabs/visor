@@ -366,11 +366,11 @@ function getTracer() {
 }
 async function withActiveSpan(name, attrs, fn) {
   const tracer = getTracer();
-  return await new Promise((resolve7, reject) => {
+  return await new Promise((resolve9, reject) => {
     const callback = async (span) => {
       try {
         const res = await fn(span);
-        resolve7(res);
+        resolve9(res);
       } catch (err) {
         try {
           if (err instanceof Error) span.recordException(err);
@@ -430,19 +430,19 @@ function __getOrCreateNdjsonPath() {
   try {
     if (process.env.VISOR_TELEMETRY_SINK && process.env.VISOR_TELEMETRY_SINK !== "file")
       return null;
-    const path17 = require("path");
-    const fs16 = require("fs");
+    const path20 = require("path");
+    const fs18 = require("fs");
     if (process.env.VISOR_FALLBACK_TRACE_FILE) {
       __ndjsonPath = process.env.VISOR_FALLBACK_TRACE_FILE;
-      const dir = path17.dirname(__ndjsonPath);
-      if (!fs16.existsSync(dir)) fs16.mkdirSync(dir, { recursive: true });
+      const dir = path20.dirname(__ndjsonPath);
+      if (!fs18.existsSync(dir)) fs18.mkdirSync(dir, { recursive: true });
       return __ndjsonPath;
     }
-    const outDir = process.env.VISOR_TRACE_DIR || path17.join(process.cwd(), "output", "traces");
-    if (!fs16.existsSync(outDir)) fs16.mkdirSync(outDir, { recursive: true });
+    const outDir = process.env.VISOR_TRACE_DIR || path20.join(process.cwd(), "output", "traces");
+    if (!fs18.existsSync(outDir)) fs18.mkdirSync(outDir, { recursive: true });
     if (!__ndjsonPath) {
       const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      __ndjsonPath = path17.join(outDir, `${ts}.ndjson`);
+      __ndjsonPath = path20.join(outDir, `${ts}.ndjson`);
     }
     return __ndjsonPath;
   } catch {
@@ -451,11 +451,11 @@ function __getOrCreateNdjsonPath() {
 }
 function _appendRunMarker() {
   try {
-    const fs16 = require("fs");
+    const fs18 = require("fs");
     const p = __getOrCreateNdjsonPath();
     if (!p) return;
     const line = { name: "visor.run", attributes: { started: true } };
-    fs16.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
+    fs18.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
   } catch {
   }
 }
@@ -930,7 +930,8 @@ async function handlePlanReady(context2, state, transition) {
   };
   const finalChecks = {};
   for (const [checkId, checkConfig] of Object.entries(filteredChecks)) {
-    const dependencies = checkConfig.depends_on || [];
+    const depRaw = checkConfig.depends_on;
+    const dependencies = Array.isArray(depRaw) ? depRaw : typeof depRaw === "string" ? [depRaw] : [];
     if (dependencies.length > 0 && !tagFilter && !areDependenciesSatisfied(dependencies)) {
       if (context2.debug) {
         logger.info(
@@ -948,7 +949,9 @@ async function handlePlanReady(context2, state, transition) {
   }
   const checkDependencies = {};
   for (const [checkId, checkConfig] of Object.entries(finalChecks)) {
-    const dependencies = (checkConfig.depends_on || []).flatMap((d) => {
+    const depsRaw2 = checkConfig.depends_on;
+    const depList = Array.isArray(depsRaw2) ? depsRaw2 : typeof depsRaw2 === "string" ? [depsRaw2] : [];
+    const dependencies = depList.flatMap((d) => {
       if (typeof d === "string" && d.includes("|")) {
         const orOptions = d.split("|").map((s) => s.trim()).filter(Boolean).filter((opt) => finalChecks[opt] !== void 0);
         return orOptions;
@@ -1043,8 +1046,23 @@ async function handleWavePlanning(context2, state, transition) {
     state.flags.forwardRunActive = false;
   } catch {
   }
+  try {
+    const flags = state.flags || {};
+    if (flags.awaitingHumanInput) {
+      if (context2.debug) {
+        logger.info("[WavePlanning] Awaiting human input \u2013 finishing run without further waves");
+      }
+      state.levelQueue = [];
+      state.eventQueue = [];
+      transition("Completed");
+      return;
+    }
+  } catch {
+  }
   if (!context2.dependencyGraph) {
-    throw new Error("Dependency graph not available");
+    if (state.wave === 0 && state.levelQueue.length === 0) {
+      throw new Error("Dependency graph not available");
+    }
   }
   const bubbledEvents = context2._bubbledEvents || [];
   if (bubbledEvents.length > 0) {
@@ -1104,11 +1122,29 @@ async function handleWavePlanning(context2, state, transition) {
       }
       const dependencies = findTransitiveDependencies(target, context2);
       for (const dep of dependencies) {
-        checksToRun.add(dep);
+        const stats = state.stats.get(dep);
+        const hasSucceeded = !!stats && (stats.successfulRuns || 0) > 0;
+        if (!hasSucceeded) {
+          checksToRun.add(dep);
+        }
       }
-      const dependents = findTransitiveDependents(target, context2, gotoEvent);
-      for (const dep of dependents) {
-        checksToRun.add(dep);
+      let shouldIncludeDependents = true;
+      try {
+        const origin = request.origin;
+        const cfg = context2.config.checks?.[target];
+        const targetType = String(cfg?.type || "").toLowerCase();
+        const execCtx = context2.executionContext || {};
+        const hasWebhook = !!execCtx.webhookContext;
+        if (hasWebhook && (origin === "goto" || origin === "goto_js") && targetType === "human-input") {
+          shouldIncludeDependents = false;
+        }
+      } catch {
+      }
+      if (shouldIncludeDependents) {
+        const dependents = findTransitiveDependents(target, context2, gotoEvent);
+        for (const dep of dependents) {
+          checksToRun.add(dep);
+        }
       }
     }
     if (checksToRun.size > 0) {
@@ -1228,6 +1264,9 @@ async function handleWavePlanning(context2, state, transition) {
     return;
   }
   if (state.wave === 0 && state.levelQueue.length === 0) {
+    if (!context2.dependencyGraph) {
+      throw new Error("Dependency graph not available");
+    }
     state.levelQueue = [...context2.dependencyGraph.executionOrder];
     if (context2.debug) {
       logger.info(
@@ -4238,6 +4277,674 @@ var init_mermaid_telemetry = __esm({
   }
 });
 
+// src/state-machine/dispatch/history-snapshot.ts
+var history_snapshot_exports = {};
+__export(history_snapshot_exports, {
+  buildOutputHistoryFromJournal: () => buildOutputHistoryFromJournal
+});
+function buildOutputHistoryFromJournal(context2) {
+  const outputHistory = /* @__PURE__ */ new Map();
+  try {
+    const snapshot = context2.journal.beginSnapshot();
+    const allEntries = context2.journal.readVisible(context2.sessionId, snapshot, void 0);
+    for (const entry of allEntries) {
+      const checkId = entry.checkId;
+      if (!outputHistory.has(checkId)) {
+        outputHistory.set(checkId, []);
+      }
+      try {
+        if (entry && typeof entry.result === "object" && entry.result.__skipped) {
+          continue;
+        }
+      } catch {
+      }
+      const payload = entry.result.output !== void 0 ? entry.result.output : entry.result;
+      try {
+        if (payload && typeof payload === "object" && payload.forEachItems && Array.isArray(payload.forEachItems)) {
+          continue;
+        }
+      } catch {
+      }
+      if (payload !== void 0) outputHistory.get(checkId).push(payload);
+    }
+  } catch (error) {
+    logger.debug(`[LevelDispatch] Error building output history: ${error}`);
+  }
+  return outputHistory;
+}
+var init_history_snapshot = __esm({
+  "src/state-machine/dispatch/history-snapshot.ts"() {
+    "use strict";
+    init_logger();
+  }
+});
+
+// src/state-machine/dispatch/dependency-gating.ts
+function buildDependencyResultsWithScope(checkId, checkConfig, context2, scope) {
+  const dependencyResults = /* @__PURE__ */ new Map();
+  const dependencies = checkConfig.depends_on || [];
+  const depList = Array.isArray(dependencies) ? dependencies : [dependencies];
+  const currentIndex = scope.length > 0 ? scope[scope.length - 1].index : void 0;
+  for (const depId of depList) {
+    if (!depId) continue;
+    try {
+      const snapshotId = context2.journal.beginSnapshot();
+      const visible = context2.journal.readVisible(
+        context2.sessionId,
+        snapshotId,
+        context2.event
+      );
+      const sameScope = (a, b) => {
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++)
+          if (a[i].check !== b[i].check || a[i].index !== b[i].index) return false;
+        return true;
+      };
+      const matches = visible.filter((e) => e.checkId === depId && sameScope(e.scope, scope));
+      let journalResult = matches.length > 0 ? matches[matches.length - 1].result : void 0;
+      if (journalResult && Array.isArray(journalResult.forEachItems) && currentIndex !== void 0) {
+        const perItemSummary = journalResult.forEachItemResults && journalResult.forEachItemResults[currentIndex] || { issues: [] };
+        const perItemOutput = journalResult.forEachItems[currentIndex];
+        const combined = { ...perItemSummary, output: perItemOutput };
+        dependencyResults.set(depId, combined);
+        continue;
+      }
+      if (!journalResult) {
+        try {
+          const { ContextView: ContextView2 } = (init_snapshot_store(), __toCommonJS(snapshot_store_exports));
+          const rawContextView = new ContextView2(
+            context2.journal,
+            context2.sessionId,
+            snapshotId,
+            [],
+            context2.event
+          );
+          const raw = rawContextView.get(depId);
+          if (raw && Array.isArray(raw.forEachItems) && currentIndex !== void 0) {
+            const perItemSummary = raw.forEachItemResults && raw.forEachItemResults[currentIndex] || { issues: [] };
+            const perItemOutput = raw.forEachItems[currentIndex];
+            journalResult = { ...perItemSummary, output: perItemOutput };
+          }
+        } catch {
+        }
+      }
+      if (journalResult) {
+        dependencyResults.set(depId, journalResult);
+      }
+    } catch {
+    }
+  }
+  try {
+    const snapshotId = context2.journal.beginSnapshot();
+    const allEntries = context2.journal.readVisible(
+      context2.sessionId,
+      snapshotId,
+      context2.event
+    );
+    const allCheckNames = Array.from(new Set(allEntries.map((e) => e.checkId)));
+    for (const checkName of allCheckNames) {
+      try {
+        const { ContextView: ContextView2 } = (init_snapshot_store(), __toCommonJS(snapshot_store_exports));
+        const rawContextView = new ContextView2(
+          context2.journal,
+          context2.sessionId,
+          snapshotId,
+          scope,
+          context2.event
+        );
+        const jr = rawContextView.get(checkName);
+        if (jr) dependencyResults.set(checkName, jr);
+      } catch {
+      }
+    }
+    for (const checkName of allCheckNames) {
+      const checkCfg = context2.config.checks?.[checkName];
+      if (checkCfg?.forEach) {
+        try {
+          const { ContextView: ContextView2 } = (init_snapshot_store(), __toCommonJS(snapshot_store_exports));
+          const rawContextView = new ContextView2(
+            context2.journal,
+            context2.sessionId,
+            snapshotId,
+            [],
+            context2.event
+          );
+          const rawResult = rawContextView.get(checkName);
+          if (rawResult && rawResult.forEachItems) {
+            const rawKey = `${checkName}-raw`;
+            dependencyResults.set(rawKey, {
+              issues: [],
+              output: rawResult.forEachItems
+            });
+          }
+        } catch {
+        }
+      }
+    }
+  } catch {
+  }
+  return dependencyResults;
+}
+var init_dependency_gating = __esm({
+  "src/state-machine/dispatch/dependency-gating.ts"() {
+    "use strict";
+  }
+});
+
+// src/liquid-extensions.ts
+var liquid_extensions_exports = {};
+__export(liquid_extensions_exports, {
+  ReadFileTag: () => ReadFileTag,
+  configureLiquidWithExtensions: () => configureLiquidWithExtensions,
+  createExtendedLiquid: () => createExtendedLiquid,
+  sanitizeLabel: () => sanitizeLabel,
+  sanitizeLabelList: () => sanitizeLabelList,
+  withPermissionsContext: () => withPermissionsContext
+});
+function sanitizeLabel(value) {
+  if (value == null) return "";
+  const s = String(value);
+  return s.replace(/[^A-Za-z0-9:\/\- ]/g, "").replace(/\/{2,}/g, "/").trim();
+}
+function sanitizeLabelList(labels) {
+  if (!Array.isArray(labels)) return [];
+  return labels.map((v) => sanitizeLabel(v)).filter((s) => s.length > 0);
+}
+async function withPermissionsContext(ctx, fn) {
+  return await permissionsALS.run(ctx, fn);
+}
+function configureLiquidWithExtensions(liquid) {
+  liquid.registerTag("readfile", ReadFileTag);
+  liquid.registerFilter("parse_json", (value) => {
+    if (typeof value !== "string") {
+      return value;
+    }
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  });
+  liquid.registerFilter("to_json", (value) => {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "[Error: Unable to serialize to JSON]";
+    }
+  });
+  liquid.registerFilter("safe_label", (value) => sanitizeLabel(value));
+  liquid.registerFilter("safe_label_list", (value) => sanitizeLabelList(value));
+  liquid.registerFilter("unescape_newlines", (value) => {
+    if (value == null) return "";
+    const s = String(value);
+    return s.replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\t/g, "	");
+  });
+  const isLocal = detectLocalMode();
+  const resolveAssoc = (val) => {
+    if (typeof val === "string" && val.length > 0) return val;
+    const store = permissionsALS.getStore();
+    return store?.authorAssociation;
+  };
+  liquid.registerFilter("has_min_permission", (authorAssociation, level) => {
+    return hasMinPermission(resolveAssoc(authorAssociation), level, isLocal);
+  });
+  liquid.registerFilter("is_owner", (authorAssociation) => {
+    return isOwner(resolveAssoc(authorAssociation), isLocal);
+  });
+  liquid.registerFilter("is_member", (authorAssociation) => {
+    return isMember(resolveAssoc(authorAssociation), isLocal);
+  });
+  liquid.registerFilter("is_collaborator", (authorAssociation) => {
+    return isCollaborator(resolveAssoc(authorAssociation), isLocal);
+  });
+  liquid.registerFilter("is_contributor", (authorAssociation) => {
+    return isContributor(resolveAssoc(authorAssociation), isLocal);
+  });
+  liquid.registerFilter("is_first_timer", (authorAssociation) => {
+    return isFirstTimer(resolveAssoc(authorAssociation), isLocal);
+  });
+  const memoryStore = MemoryStore.getInstance();
+  liquid.registerFilter("memory_get", (key, namespace) => {
+    if (typeof key !== "string") {
+      return void 0;
+    }
+    return memoryStore.get(key, namespace);
+  });
+  liquid.registerFilter("memory_has", (key, namespace) => {
+    if (typeof key !== "string") {
+      return false;
+    }
+    const has = memoryStore.has(key, namespace);
+    try {
+      if (process.env.VISOR_DEBUG === "true" && key === "fact_validation_issues") {
+        console.error(
+          `[liquid] memory_has('${key}', ns='${namespace || memoryStore.getDefaultNamespace()}') => ${String(
+            has
+          )}`
+        );
+      }
+    } catch {
+    }
+    return has;
+  });
+  liquid.registerFilter("memory_list", (namespace) => {
+    return memoryStore.list(namespace);
+  });
+  liquid.registerFilter("get", (obj, pathExpr) => {
+    if (obj == null) return void 0;
+    const path20 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
+    if (!path20) return obj;
+    const parts = path20.split(".");
+    let cur = obj;
+    for (const p of parts) {
+      if (cur == null) return void 0;
+      cur = cur[p];
+    }
+    return cur;
+  });
+  liquid.registerFilter("not_empty", (v) => {
+    if (Array.isArray(v)) return v.length > 0;
+    if (typeof v === "string") return v.length > 0;
+    if (v && typeof v === "object") return Object.keys(v).length > 0;
+    return false;
+  });
+  liquid.registerFilter("coalesce", (first, ...rest) => {
+    const all = [first, ...rest];
+    for (const v of all) {
+      if (Array.isArray(v) && v.length > 0) return v;
+      if (typeof v === "string" && v.length > 0) return v;
+      if (v && typeof v === "object" && Object.keys(v).length > 0) return v;
+    }
+    return Array.isArray(first) ? [] : first ?? void 0;
+  });
+  liquid.registerFilter("where_exp", (items, varName, expr) => {
+    const arr = Array.isArray(items) ? items : [];
+    const name = typeof varName === "string" && varName.trim() ? varName.trim() : "i";
+    const body = String(expr || "");
+    try {
+      const fn = new Function(
+        name,
+        "idx",
+        "arr",
+        `try { return (${body}); } catch { return false; }`
+      );
+      const out = [];
+      for (let idx = 0; idx < arr.length; idx++) {
+        const i = arr[idx];
+        let ok = false;
+        try {
+          ok = !!fn(i, idx, arr);
+        } catch {
+          ok = false;
+        }
+        if (ok) out.push(i);
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  });
+  liquid.registerFilter(
+    "chat_history",
+    function(value, ...args) {
+      try {
+        const impl = this;
+        const ctx = impl?.context;
+        const allArgs = Array.isArray(args) ? args : [];
+        if (allArgs.length === 0) {
+          return [];
+        }
+        const positional = [];
+        const options = {};
+        for (const arg of allArgs) {
+          if (Array.isArray(arg) && arg.length === 2 && typeof arg[0] === "string" && arg[0].length > 0) {
+            options[arg[0]] = arg[1];
+          } else {
+            positional.push(arg);
+          }
+        }
+        const stepArgs = positional;
+        const steps = stepArgs.map((s) => String(s ?? "").trim()).filter((s) => s.length > 0);
+        if (steps.length === 0) return [];
+        const outputsHistoryVar = ctx?.get(["outputs_history"]) || {};
+        const outputsVar = ctx?.get(["outputs"]) || {};
+        const outputsHistory = outputsHistoryVar && Object.keys(outputsHistoryVar).length > 0 ? outputsHistoryVar : outputsVar?.history || {};
+        const checksMeta = ctx?.get(["checks_meta"]) || ctx?.get(["event"])?.payload?.__checksMeta || void 0;
+        const directionRaw = typeof options.direction === "string" ? options.direction.toLowerCase() : "";
+        const direction = directionRaw === "desc" ? "desc" : "asc";
+        const limit = typeof options.limit === "number" && options.limit > 0 ? Math.floor(options.limit) : void 0;
+        const textCfg = options.text && typeof options.text === "object" ? options.text : {};
+        const defaultField = typeof textCfg.default_field === "string" && textCfg.default_field.trim() ? textCfg.default_field.trim() : "text";
+        const byStepText = {};
+        if (textCfg.by_step && typeof textCfg.by_step === "object") {
+          for (const [k, v] of Object.entries(textCfg.by_step)) {
+            if (typeof v === "string" && v.trim()) {
+              byStepText[k] = v.trim();
+            }
+          }
+        }
+        const rolesCfg = options.roles && typeof options.roles === "object" ? options.roles : {};
+        const byTypeRole = {};
+        if (rolesCfg.by_type && typeof rolesCfg.by_type === "object") {
+          for (const [k, v] of Object.entries(rolesCfg.by_type)) {
+            if (typeof v === "string" && v.trim()) {
+              byTypeRole[k] = v.trim();
+            }
+          }
+        }
+        const byStepRole = {};
+        if (rolesCfg.by_step && typeof rolesCfg.by_step === "object") {
+          for (const [k, v] of Object.entries(rolesCfg.by_step)) {
+            if (typeof v === "string" && v.trim()) {
+              byStepRole[k] = v.trim();
+            }
+          }
+        }
+        if (typeof options.role_map === "string" && options.role_map.trim().length > 0) {
+          const parts = String(options.role_map).split(",").map((p) => p.trim()).filter(Boolean);
+          for (const part of parts) {
+            const eqIdx = part.indexOf("=");
+            if (eqIdx > 0) {
+              const k = part.slice(0, eqIdx).trim();
+              const v = part.slice(eqIdx + 1).trim();
+              if (k && v) {
+                byStepRole[k] = v;
+              }
+            }
+          }
+        }
+        const defaultRole = typeof rolesCfg.default === "string" && rolesCfg.default.trim() ? rolesCfg.default.trim() : void 0;
+        const getNested = (obj, path20) => {
+          if (!obj || !path20) return void 0;
+          const parts = path20.split(".");
+          let cur = obj;
+          for (const p of parts) {
+            if (cur == null) return void 0;
+            cur = cur[p];
+          }
+          return cur;
+        };
+        const normalizeText = (step, raw) => {
+          try {
+            const overrideField = byStepText[step];
+            if (overrideField) {
+              const val = getNested(raw, overrideField);
+              if (val !== void 0 && val !== null) {
+                const s = String(val);
+                if (s.trim().length > 0) return s;
+              }
+            }
+            if (raw && typeof raw === "object") {
+              if (typeof raw.text === "string" && raw.text.trim().length > 0) {
+                return raw.text;
+              }
+              if (typeof raw.content === "string" && raw.content.trim().length > 0) {
+                return raw.content;
+              }
+              const dfVal = raw[defaultField];
+              if (dfVal !== void 0 && dfVal !== null) {
+                const s = String(dfVal);
+                if (s.trim().length > 0) return s;
+              }
+            }
+            if (typeof raw === "string") return raw;
+            if (raw == null) return "";
+            try {
+              return JSON.stringify(raw);
+            } catch {
+              return String(raw);
+            }
+          } catch {
+            if (typeof raw === "string") return raw;
+            return "";
+          }
+        };
+        const normalizeRole = (step) => {
+          try {
+            if (byStepRole[step]) return byStepRole[step];
+            const meta = checksMeta ? checksMeta[step] : void 0;
+            const type = meta?.type;
+            if (type && byTypeRole[type]) return byTypeRole[type];
+            if (type === "human-input") return "user";
+            if (type === "ai") return "assistant";
+            if (defaultRole) return defaultRole;
+            if (type) {
+              if (type === "human-input") return "user";
+              if (type === "ai") return "assistant";
+            }
+          } catch {
+          }
+          return "assistant";
+        };
+        const messages = [];
+        const tsBase = Date.now();
+        let counter = 0;
+        for (const step of steps) {
+          const arr = outputsHistory?.[step];
+          if (!Array.isArray(arr)) continue;
+          for (const raw of arr) {
+            let ts;
+            if (raw && typeof raw === "object" && typeof raw.ts === "number") {
+              ts = raw.ts;
+            }
+            if (!Number.isFinite(ts)) {
+              ts = tsBase + counter++;
+            }
+            const text = normalizeText(step, raw);
+            const role = normalizeRole(step);
+            messages.push({ step, role, text, ts, raw });
+          }
+        }
+        messages.sort((a, b) => a.ts - b.ts);
+        if (direction === "desc") {
+          messages.reverse();
+        }
+        if (limit && limit > 0 && messages.length > limit) {
+          if (direction === "asc") {
+            return messages.slice(messages.length - limit);
+          }
+          return messages.slice(0, limit);
+        }
+        return messages;
+      } catch {
+        return [];
+      }
+    }
+  );
+}
+function createExtendedLiquid(options = {}) {
+  const liquid = new import_liquidjs.Liquid({
+    cache: false,
+    strictFilters: false,
+    strictVariables: false,
+    ...options
+  });
+  configureLiquidWithExtensions(liquid);
+  return liquid;
+}
+var import_liquidjs, import_async_hooks, import_promises2, import_path2, ReadFileTag, permissionsALS;
+var init_liquid_extensions = __esm({
+  "src/liquid-extensions.ts"() {
+    "use strict";
+    import_liquidjs = require("liquidjs");
+    import_async_hooks = require("async_hooks");
+    import_promises2 = __toESM(require("fs/promises"));
+    import_path2 = __toESM(require("path"));
+    init_author_permissions();
+    init_memory_store();
+    ReadFileTag = class extends import_liquidjs.Tag {
+      filepath;
+      constructor(token, remainTokens, liquid) {
+        super(token, remainTokens, liquid);
+        this.filepath = new import_liquidjs.Value(token.args, liquid);
+      }
+      *render(ctx, emitter) {
+        const filePath = yield this.filepath.value(ctx, false);
+        if (!filePath || typeof filePath !== "string") {
+          emitter.write("[Error: Invalid file path]");
+          return;
+        }
+        const projectRoot = process.cwd();
+        const resolvedPath = import_path2.default.resolve(projectRoot, filePath.toString());
+        if (!resolvedPath.startsWith(projectRoot)) {
+          emitter.write("[Error: File path escapes project directory]");
+          return;
+        }
+        try {
+          const content = yield import_promises2.default.readFile(resolvedPath, "utf-8");
+          emitter.write(content);
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : error?.code || "Unknown error";
+          emitter.write(`[Error reading file: ${errorMessage}]`);
+        }
+      }
+    };
+    permissionsALS = new import_async_hooks.AsyncLocalStorage();
+  }
+});
+
+// src/state-machine/dispatch/template-renderer.ts
+async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
+  try {
+    const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
+    const fs18 = await import("fs/promises");
+    const path20 = await import("path");
+    const schemaRaw = checkConfig.schema || "plain";
+    const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
+    let templateContent;
+    if (checkConfig.template && checkConfig.template.content) {
+      templateContent = String(checkConfig.template.content);
+    } else if (checkConfig.template && checkConfig.template.file) {
+      const file = String(checkConfig.template.file);
+      const resolved = path20.resolve(process.cwd(), file);
+      templateContent = await fs18.readFile(resolved, "utf-8");
+    } else if (schema && schema !== "plain") {
+      const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
+      if (sanitized) {
+        const candidatePaths = [
+          path20.join(__dirname, "output", sanitized, "template.liquid"),
+          // bundled: dist/output/
+          path20.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          // source: output/
+          path20.join(process.cwd(), "output", sanitized, "template.liquid"),
+          // fallback: cwd/output/
+          path20.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          // fallback: cwd/dist/output/
+        ];
+        for (const p of candidatePaths) {
+          try {
+            templateContent = await fs18.readFile(p, "utf-8");
+            if (templateContent) break;
+          } catch {
+          }
+        }
+      }
+    }
+    if (!templateContent) return void 0;
+    const liquid = createExtendedLiquid2({
+      trimTagLeft: false,
+      trimTagRight: false,
+      trimOutputLeft: false,
+      trimOutputRight: false,
+      greedy: false
+    });
+    let output = reviewSummary.output;
+    if (typeof output === "string") {
+      const trimmed = output.trim();
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        try {
+          output = JSON.parse(trimmed);
+        } catch {
+        }
+      }
+    }
+    const templateData = {
+      issues: reviewSummary.issues || [],
+      checkName: checkId,
+      output
+    };
+    const rendered = await liquid.parseAndRender(templateContent, templateData);
+    return rendered.trim();
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.error(`[LevelDispatch] Failed to render template for ${checkId}: ${msg}`);
+    return void 0;
+  }
+}
+var init_template_renderer = __esm({
+  "src/state-machine/dispatch/template-renderer.ts"() {
+    "use strict";
+    init_logger();
+  }
+});
+
+// src/state-machine/dispatch/stats-manager.ts
+function hasFatalIssues(result) {
+  if (!result.issues) return false;
+  return result.issues.some((issue) => {
+    const ruleId = issue.ruleId || "";
+    return ruleId.endsWith("/error") || ruleId.includes("/execution_error") || ruleId.endsWith("_fail_if");
+  });
+}
+function updateStats(results, state, isForEachIteration = false) {
+  for (const { checkId, result, error, duration } of results) {
+    const existing = state.stats.get(checkId);
+    const stats = existing || {
+      checkName: checkId,
+      totalRuns: 0,
+      successfulRuns: 0,
+      failedRuns: 0,
+      skippedRuns: 0,
+      skipped: false,
+      totalDuration: 0,
+      issuesFound: 0,
+      issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 }
+    };
+    if (stats.skipped) {
+      stats.skipped = false;
+      stats.skippedRuns = 0;
+      stats.skipReason = void 0;
+      stats.skipCondition = void 0;
+    }
+    stats.totalRuns++;
+    if (typeof duration === "number" && Number.isFinite(duration)) {
+      stats.totalDuration += duration;
+    }
+    const hasExecutionFailure = !!error || hasFatalIssues(result);
+    if (error) {
+      stats.failedRuns++;
+    } else if (hasExecutionFailure) {
+      stats.failedRuns++;
+      if (!isForEachIteration) {
+        state.failedChecks = state.failedChecks || /* @__PURE__ */ new Set();
+        state.failedChecks.add(checkId);
+      }
+    } else {
+      stats.successfulRuns++;
+    }
+    if (result.issues) {
+      stats.issuesFound += result.issues.length;
+      for (const issue of result.issues) {
+        if (issue.severity === "critical") stats.issuesBySeverity.critical++;
+        else if (issue.severity === "error") stats.issuesBySeverity.error++;
+        else if (issue.severity === "warning") stats.issuesBySeverity.warning++;
+        else if (issue.severity === "info") stats.issuesBySeverity.info++;
+      }
+    }
+    if (stats.outputsProduced === void 0) {
+      const forEachItems = result.forEachItems;
+      if (Array.isArray(forEachItems)) stats.outputsProduced = forEachItems.length;
+      else if (result.output !== void 0) stats.outputsProduced = 1;
+    }
+    state.stats.set(checkId, stats);
+  }
+}
+var init_stats_manager = __esm({
+  "src/state-machine/dispatch/stats-manager.ts"() {
+    "use strict";
+  }
+});
+
 // src/providers/check-provider.interface.ts
 var CheckProvider;
 var init_check_provider_interface = __esm({
@@ -4268,15 +4975,15 @@ async function initializeTracer(sessionId, checkName) {
     const SimpleTelemetry = ProbeLib?.SimpleTelemetry;
     const SimpleAppTracer = ProbeLib?.SimpleAppTracer;
     if (SimpleTelemetry && SimpleAppTracer) {
-      const sanitizedCheckName = checkName ? path4.basename(checkName) : "check";
+      const sanitizedCheckName = checkName ? path5.basename(checkName) : "check";
       const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      const traceDir = process.env.GITHUB_WORKSPACE ? path4.join(process.env.GITHUB_WORKSPACE, "debug-artifacts") : path4.join(process.cwd(), "debug-artifacts");
-      if (!fs4.existsSync(traceDir)) {
-        fs4.mkdirSync(traceDir, { recursive: true });
+      const traceDir = process.env.GITHUB_WORKSPACE ? path5.join(process.env.GITHUB_WORKSPACE, "debug-artifacts") : path5.join(process.cwd(), "debug-artifacts");
+      if (!fs5.existsSync(traceDir)) {
+        fs5.mkdirSync(traceDir, { recursive: true });
       }
-      const traceFilePath = path4.join(traceDir, `trace-${sanitizedCheckName}-${timestamp}.jsonl`);
-      const resolvedTracePath = path4.resolve(traceFilePath);
-      const resolvedTraceDir = path4.resolve(traceDir);
+      const traceFilePath = path5.join(traceDir, `trace-${sanitizedCheckName}-${timestamp}.jsonl`);
+      const resolvedTracePath = path5.resolve(traceFilePath);
+      const resolvedTraceDir = path5.resolve(traceDir);
       if (!resolvedTracePath.startsWith(resolvedTraceDir)) {
         console.error(
           `\u26A0\uFE0F Security: Attempted path traversal detected. Check name: ${checkName}, resolved path: ${resolvedTracePath}`
@@ -4307,12 +5014,12 @@ async function initializeTracer(sessionId, checkName) {
     return null;
   }
 }
-var path4, fs4;
+var path5, fs5;
 var init_tracer_init = __esm({
   "src/utils/tracer-init.ts"() {
     "use strict";
-    path4 = __toESM(require("path"));
-    fs4 = __toESM(require("fs"));
+    path5 = __toESM(require("path"));
+    fs5 = __toESM(require("fs"));
   }
 });
 
@@ -4510,18 +5217,18 @@ async function processDiffWithOutline(diffContent) {
   }
   try {
     const originalProbePath = process.env.PROBE_PATH;
-    const fs16 = require("fs");
+    const fs18 = require("fs");
     const possiblePaths = [
       // Relative to current working directory (most common in production)
-      path5.join(process.cwd(), "node_modules/@probelabs/probe/bin/probe-binary"),
+      path6.join(process.cwd(), "node_modules/@probelabs/probe/bin/probe-binary"),
       // Relative to __dirname (for unbundled development)
-      path5.join(__dirname, "../..", "node_modules/@probelabs/probe/bin/probe-binary"),
+      path6.join(__dirname, "../..", "node_modules/@probelabs/probe/bin/probe-binary"),
       // Relative to dist directory (for bundled CLI)
-      path5.join(__dirname, "node_modules/@probelabs/probe/bin/probe-binary")
+      path6.join(__dirname, "node_modules/@probelabs/probe/bin/probe-binary")
     ];
     let probeBinaryPath;
     for (const candidatePath of possiblePaths) {
-      if (fs16.existsSync(candidatePath)) {
+      if (fs18.existsSync(candidatePath)) {
         probeBinaryPath = candidatePath;
         break;
       }
@@ -4556,12 +5263,45 @@ async function processDiffWithOutline(diffContent) {
     return diffContent;
   }
 }
-var import_probe, path5;
+var import_probe, path6;
 var init_diff_processor = __esm({
   "src/utils/diff-processor.ts"() {
     "use strict";
     import_probe = require("@probelabs/probe");
-    path5 = __toESM(require("path"));
+    path6 = __toESM(require("path"));
+  }
+});
+
+// src/utils/comment-metadata.ts
+function parseVisorThreadMetadata(commentBody) {
+  const headerRe = /<!--\s*visor:thread=(\{[\s\S]*?\})\s*-->/m;
+  const match = headerRe.exec(commentBody);
+  if (!match) {
+    return null;
+  }
+  try {
+    const metadata = JSON.parse(match[1]);
+    return metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata : null;
+  } catch {
+    return null;
+  }
+}
+function shouldFilterVisorReviewComment(commentBody) {
+  if (!commentBody) {
+    return false;
+  }
+  if (commentBody.includes("visor-comment-id:pr-review-")) {
+    return true;
+  }
+  const metadata = parseVisorThreadMetadata(commentBody);
+  if (metadata && metadata.group === "review") {
+    return true;
+  }
+  return false;
+}
+var init_comment_metadata = __esm({
+  "src/utils/comment-metadata.ts"() {
+    "use strict";
   }
 });
 
@@ -4578,6 +5318,7 @@ var init_ai_review_service = __esm({
     init_logger();
     init_tracer_init();
     init_diff_processor();
+    init_comment_metadata();
     AIReviewService = class {
       config;
       sessionRegistry;
@@ -4631,8 +5372,13 @@ var init_ai_review_service = __esm({
       async executeReview(prInfo, customPrompt, schema, checkName, sessionId) {
         const startTime = Date.now();
         const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+        const cfgAny = this.config;
+        const skipTransport = cfgAny?.skip_transport_context === true;
+        const skipPRContext = cfgAny?.skip_code_context === true || skipTransport && cfgAny?.skip_code_context !== false;
+        const skipSlackContext = cfgAny?.skip_slack_context === true || skipTransport && cfgAny?.skip_slack_context !== false;
         const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema, {
-          skipPRContext: this.config?.skip_code_context === true
+          skipPRContext,
+          skipSlackContext
         });
         log(`Executing AI review with ${this.config.provider} provider...`);
         log(`\u{1F527} Debug: Raw schema parameter: ${JSON.stringify(schema)} (type: ${typeof schema})`);
@@ -4746,8 +5492,13 @@ var init_ai_review_service = __esm({
             `Session not found for reuse: ${parentSessionId}. Ensure the parent check completed successfully.`
           );
         }
+        const cfgAny = this.config;
+        const skipTransport = cfgAny?.skip_transport_context === true;
+        const skipSlackContext = cfgAny?.skip_slack_context === true || skipTransport && cfgAny?.skip_slack_context !== false;
         const prompt = await this.buildCustomPrompt(prInfo, customPrompt, schema, {
-          skipPRContext: true
+          // When reusing sessions we always skip PR context, regardless of flags
+          skipPRContext: true,
+          skipSlackContext
         });
         let agentToUse;
         let currentSessionId;
@@ -4878,11 +5629,13 @@ var init_ai_review_service = __esm({
        */
       async buildCustomPrompt(prInfo, customInstructions, schema, options) {
         const skipPRContext = options?.skipPRContext === true;
+        const skipSlackContext = options?.skipSlackContext === true;
         const isCodeReviewSchema = schema === "code-review";
         const prContext = skipPRContext ? "" : await this.formatPRContext(prInfo, isCodeReviewSchema);
+        const slackContextXml = skipSlackContext === true ? "" : this.formatSlackContextFromPRInfo(prInfo);
         const isIssue = prInfo.isIssue === true;
         if (isIssue) {
-          if (skipPRContext) {
+          if (skipPRContext && !slackContextXml) {
             return `<instructions>
 ${customInstructions}
 </instructions>`;
@@ -4893,7 +5646,7 @@ ${customInstructions}
   </instructions>
 
   <context>
-${prContext}
+${prContext}${slackContextXml}
   </context>
 
   <rules>
@@ -4909,7 +5662,7 @@ ${prContext}
         }
         if (isCodeReviewSchema) {
           const analysisType = prInfo.isIncremental ? "INCREMENTAL" : "FULL";
-          if (skipPRContext) {
+          if (skipPRContext && !slackContextXml) {
             return `<instructions>
 ${customInstructions}
 </instructions>
@@ -4934,7 +5687,7 @@ ${customInstructions}
   </instructions>
 
   <context>
-${prContext}
+${prContext}${slackContextXml}
   </context>
 
   <rules>
@@ -4951,7 +5704,7 @@ ${prContext}
   </rules>
 </review_request>`;
         }
-        if (skipPRContext) {
+        if (skipPRContext && !slackContextXml) {
           return `<instructions>
 ${customInstructions}
 </instructions>`;
@@ -4961,7 +5714,7 @@ ${customInstructions}
 </instructions>
 
 <context>
-${prContext}
+${prContext}${slackContextXml}
 </context>`;
       }
       // REMOVED: Built-in prompts - only use custom prompts from .visor.yaml
@@ -5052,7 +5805,7 @@ ${this.escapeXml(prInfo.body)}
             let historicalComments = triggeringComment2 ? issueComments.filter((c) => c.id !== triggeringComment2.id) : issueComments;
             if (isCodeReviewSchema) {
               historicalComments = historicalComments.filter(
-                (c) => !c.body || !c.body.includes("visor-comment-id:pr-review-")
+                (c) => !shouldFilterVisorReviewComment(c.body)
               );
             }
             if (historicalComments.length > 0) {
@@ -5165,7 +5918,7 @@ ${this.escapeXml(processedFallbackDiff)}
           let historicalComments = triggeringComment ? prComments.filter((c) => c.id !== triggeringComment.id) : prComments;
           if (isCodeReviewSchema) {
             historicalComments = historicalComments.filter(
-              (c) => !c.body || !c.body.includes("visor-comment-id:pr-review-")
+              (c) => !shouldFilterVisorReviewComment(c.body)
             );
           }
           if (historicalComments.length > 0) {
@@ -5187,6 +5940,144 @@ ${this.escapeXml(processedFallbackDiff)}
         context2 += `
 </pull_request>`;
         return context2;
+      }
+      /**
+       * Format Slack conversation context (if attached to PRInfo) as XML
+       */
+      formatSlackContextFromPRInfo(prInfo) {
+        try {
+          const anyInfo = prInfo;
+          const conv = anyInfo.slackConversation;
+          if (!conv || typeof conv !== "object") return "";
+          const transport = conv.transport || "slack";
+          const thread = conv.thread || {};
+          const messages = Array.isArray(conv.messages) ? conv.messages : [];
+          const current = conv.current || {};
+          const attrs = conv.attributes || {};
+          let xml = `
+<slack_context>
+  <transport>${this.escapeXml(String(transport))}</transport>
+  <thread>
+    <id>${this.escapeXml(String(thread.id || ""))}</id>
+    <url>${this.escapeXml(String(thread.url || ""))}</url>
+  </thread>`;
+          const attrKeys = Object.keys(attrs);
+          if (attrKeys.length > 0) {
+            xml += `
+  <attributes>`;
+            for (const k of attrKeys) {
+              const v = attrs[k];
+              xml += `
+    <attribute>
+      <key>${this.escapeXml(String(k))}</key>
+      <value>${this.escapeXml(String(v ?? ""))}</value>
+    </attribute>`;
+            }
+            xml += `
+  </attributes>`;
+          }
+          if (messages.length > 0) {
+            xml += `
+  <messages>`;
+            for (const m of messages) {
+              xml += `
+    <message>
+      <role>${this.escapeXml(String(m.role || "user"))}</role>
+      <user>${this.escapeXml(String(m.user || ""))}</user>
+      <text>${this.escapeXml(String(m.text || ""))}</text>
+      <timestamp>${this.escapeXml(String(m.timestamp || ""))}</timestamp>
+      <origin>${this.escapeXml(String(m.origin || ""))}</origin>
+    </message>`;
+            }
+            xml += `
+  </messages>`;
+          }
+          xml += `
+  <current>
+    <role>${this.escapeXml(String(current.role || "user"))}</role>
+    <user>${this.escapeXml(String(current.user || ""))}</user>
+    <text>${this.escapeXml(String(current.text || ""))}</text>
+    <timestamp>${this.escapeXml(String(current.timestamp || ""))}</timestamp>
+    <origin>${this.escapeXml(String(current.origin || ""))}</origin>
+  </current>
+</slack_context>`;
+          return xml;
+        } catch {
+          return "";
+        }
+      }
+      /**
+       * Build a normalized ConversationContext for GitHub (PR/issue + comments)
+       * using the same contract as Slack's ConversationContext. This is exposed
+       * to templates via the unified `conversation` object.
+       */
+      buildGitHubConversationFromPRInfo(prInfo) {
+        try {
+          const anyInfo = prInfo;
+          const eventCtx = anyInfo.eventContext || {};
+          const comments = anyInfo.comments || [];
+          const repoOwner = eventCtx.repository?.owner?.login || process.env.GITHUB_REPOSITORY?.split("/")?.[0];
+          const repoName = eventCtx.repository?.name || process.env.GITHUB_REPOSITORY?.split("/")?.[1];
+          const number = prInfo.number;
+          const threadId = repoOwner && repoName ? `${repoOwner}/${repoName}#${number}` : `github#${number}`;
+          const threadUrl = eventCtx.issue?.html_url || eventCtx.pull_request?.html_url || (repoOwner && repoName ? `https://github.com/${repoOwner}/${repoName}/pull/${number}` : void 0);
+          const messages = [];
+          if (prInfo.body && prInfo.body.trim().length > 0) {
+            messages.push({
+              role: "user",
+              user: prInfo.author || "unknown",
+              text: prInfo.body,
+              timestamp: eventCtx.pull_request?.created_at || eventCtx.issue?.created_at || "",
+              origin: "github"
+            });
+          }
+          for (const c of comments) {
+            messages.push({
+              role: "user",
+              user: c.author || "unknown",
+              text: c.body || "",
+              timestamp: c.createdAt || "",
+              origin: "github"
+            });
+          }
+          const triggeringComment = eventCtx.comment;
+          let current;
+          if (triggeringComment) {
+            current = {
+              role: "user",
+              user: triggeringComment.user && triggeringComment.user.login || "unknown",
+              text: triggeringComment.body || "",
+              timestamp: triggeringComment.created_at || "",
+              origin: "github"
+            };
+          } else if (messages.length > 0) {
+            current = messages[messages.length - 1];
+          } else {
+            current = {
+              role: "user",
+              user: prInfo.author || "unknown",
+              text: prInfo.title || "",
+              timestamp: "",
+              origin: "github"
+            };
+          }
+          const attributes = {};
+          if (repoOwner) attributes.owner = repoOwner;
+          if (repoName) attributes.repo = repoName;
+          attributes.number = String(number);
+          if (eventCtx.event_name) attributes.event_name = String(eventCtx.event_name);
+          if (eventCtx.action) attributes.action = String(eventCtx.action);
+          const ctx = {
+            transport: "github",
+            thread: { id: threadId, url: threadUrl },
+            messages,
+            current,
+            attributes
+          };
+          return ctx;
+        } catch {
+          return void 0;
+        }
       }
       /**
        * No longer escaping XML - returning text as-is
@@ -5237,8 +6128,8 @@ ${schemaString}`);
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs16 = require("fs");
-              const path17 = require("path");
+              const fs18 = require("fs");
+              const path20 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const provider = this.config.provider || "auto";
               const model = this.config.model || "default";
@@ -5352,20 +6243,20 @@ ${"=".repeat(60)}
 `;
               readableVersion += `${"=".repeat(60)}
 `;
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
-              if (!fs16.existsSync(debugArtifactsDir)) {
-                fs16.mkdirSync(debugArtifactsDir, { recursive: true });
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
+              if (!fs18.existsSync(debugArtifactsDir)) {
+                fs18.mkdirSync(debugArtifactsDir, { recursive: true });
               }
-              const debugFile = path17.join(
+              const debugFile = path20.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.json`
               );
-              fs16.writeFileSync(debugFile, debugJson, "utf-8");
-              const readableFile = path17.join(
+              fs18.writeFileSync(debugFile, debugJson, "utf-8");
+              const readableFile = path20.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.txt`
               );
-              fs16.writeFileSync(readableFile, readableVersion, "utf-8");
+              fs18.writeFileSync(readableFile, readableVersion, "utf-8");
               log(`
 \u{1F4BE} Full debug info saved to:`);
               log(`   JSON: ${debugFile}`);
@@ -5397,8 +6288,8 @@ ${"=".repeat(60)}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs16 = require("fs");
-              const path17 = require("path");
+              const fs18 = require("fs");
+              const path20 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny2 = agent;
               let fullHistory = [];
@@ -5409,8 +6300,8 @@ ${"=".repeat(60)}
               } else if (agentAny2._messages) {
                 fullHistory = agentAny2._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path17.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path20.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -5422,7 +6313,7 @@ ${"=".repeat(60)}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs16.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs18.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -5449,7 +6340,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs16.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs18.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -5458,11 +6349,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs16 = require("fs");
-              const path17 = require("path");
+              const fs18 = require("fs");
+              const path20 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
-              const responseFile = path17.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
+              const responseFile = path20.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -5495,7 +6386,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs16.writeFileSync(responseFile, responseContent, "utf-8");
+              fs18.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -5511,9 +6402,9 @@ ${"=".repeat(60)}
                 await agentAny._telemetryConfig.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${agentAny._traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs16 = require("fs");
-                  if (fs16.existsSync(agentAny._traceFilePath)) {
-                    const stats = fs16.statSync(agentAny._traceFilePath);
+                  const fs18 = require("fs");
+                  if (fs18.existsSync(agentAny._traceFilePath)) {
+                    const stats = fs18.statSync(agentAny._traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::${agentAny._traceFilePath} (${stats.size} bytes)`
                     );
@@ -5576,6 +6467,10 @@ ${"=".repeat(60)}
           } else if (this.config.provider === "bedrock") {
           }
           const explicitPromptType = (process.env.VISOR_PROMPT_TYPE || "").trim();
+          let systemPrompt = this.config.systemPrompt;
+          if (!systemPrompt && schema !== "code-review") {
+            systemPrompt = "You are general assistant, follow user instructions.";
+          }
           const options = {
             sessionId,
             // Prefer config promptType, then env override, else fallback to code-review when schema is set
@@ -5583,8 +6478,8 @@ ${"=".repeat(60)}
             allowEdit: false,
             // We don't want the agent to modify files
             debug: this.config.debug || false,
-            // Map systemPrompt to Probe customPrompt until SDK exposes a first-class field
-            customPrompt: this.config.systemPrompt || this.config.customPrompt
+            // Use systemPrompt (native in rc168+) with fallback to customPrompt for backward compat
+            systemPrompt: systemPrompt || this.config.systemPrompt || this.config.customPrompt
           };
           let traceFilePath = "";
           let telemetryConfig = null;
@@ -5614,9 +6509,11 @@ ${"=".repeat(60)}
           }
           if (this.config.allowedTools !== void 0) {
             options.allowedTools = this.config.allowedTools;
+            log(`\u{1F527} Setting allowedTools: ${JSON.stringify(this.config.allowedTools)}`);
           }
           if (this.config.disableTools !== void 0) {
             options.disableTools = this.config.disableTools;
+            log(`\u{1F527} Setting disableTools: ${this.config.disableTools}`);
           }
           if (this.config.allowBash !== void 0) {
             options.allowBash = this.config.allowBash;
@@ -5666,8 +6563,8 @@ ${schemaString}`);
           const model = this.config.model || "default";
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs16 = require("fs");
-              const path17 = require("path");
+              const fs18 = require("fs");
+              const path20 = require("path");
               const os = require("os");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const debugData = {
@@ -5741,18 +6638,18 @@ ${"=".repeat(60)}
               readableVersion += `${"=".repeat(60)}
 `;
               const tempDir = os.tmpdir();
-              const promptFile = path17.join(tempDir, `visor-prompt-${timestamp}.txt`);
-              fs16.writeFileSync(promptFile, prompt, "utf-8");
+              const promptFile = path20.join(tempDir, `visor-prompt-${timestamp}.txt`);
+              fs18.writeFileSync(promptFile, prompt, "utf-8");
               log(`
 \u{1F4BE} Prompt saved to: ${promptFile}`);
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
               try {
-                const base = path17.join(
+                const base = path20.join(
                   debugArtifactsDir,
                   `prompt-${_checkName || "unknown"}-${timestamp}`
                 );
-                fs16.writeFileSync(base + ".json", debugJson, "utf-8");
-                fs16.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
+                fs18.writeFileSync(base + ".json", debugJson, "utf-8");
+                fs18.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
                 log(`
 \u{1F4BE} Full debug info saved to directory: ${debugArtifactsDir}`);
               } catch {
@@ -5797,8 +6694,8 @@ $ ${cliCommand}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs16 = require("fs");
-              const path17 = require("path");
+              const fs18 = require("fs");
+              const path20 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny = agent;
               let fullHistory = [];
@@ -5809,8 +6706,8 @@ $ ${cliCommand}
               } else if (agentAny._messages) {
                 fullHistory = agentAny._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path17.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path20.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -5822,7 +6719,7 @@ $ ${cliCommand}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs16.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs18.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -5849,7 +6746,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs16.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs18.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -5858,11 +6755,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs16 = require("fs");
-              const path17 = require("path");
+              const fs18 = require("fs");
+              const path20 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path17.join(process.cwd(), "debug-artifacts");
-              const responseFile = path17.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path20.join(process.cwd(), "debug-artifacts");
+              const responseFile = path20.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -5895,7 +6792,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs16.writeFileSync(responseFile, responseContent, "utf-8");
+              fs18.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -5913,9 +6810,9 @@ ${"=".repeat(60)}
                 await telemetry.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs16 = require("fs");
-                  if (fs16.existsSync(traceFilePath)) {
-                    const stats = fs16.statSync(traceFilePath);
+                  const fs18 = require("fs");
+                  if (fs18.existsSync(traceFilePath)) {
+                    const stats = fs18.statSync(traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::OpenTelemetry trace file size: ${stats.size} bytes`
                     );
@@ -5953,8 +6850,8 @@ ${"=".repeat(60)}
        * Load schema content from schema files or inline definitions
        */
       async loadSchemaContent(schema) {
-        const fs16 = require("fs").promises;
-        const path17 = require("path");
+        const fs18 = require("fs").promises;
+        const path20 = require("path");
         if (typeof schema === "object" && schema !== null) {
           log("\u{1F4CB} Using inline schema object from configuration");
           return JSON.stringify(schema);
@@ -5967,14 +6864,14 @@ ${"=".repeat(60)}
           }
         } catch {
         }
-        if ((schema.startsWith("./") || schema.includes(".json")) && !path17.isAbsolute(schema)) {
+        if ((schema.startsWith("./") || schema.includes(".json")) && !path20.isAbsolute(schema)) {
           if (schema.includes("..") || schema.includes("\0")) {
             throw new Error("Invalid schema path: path traversal not allowed");
           }
           try {
-            const schemaPath = path17.resolve(process.cwd(), schema);
+            const schemaPath = path20.resolve(process.cwd(), schema);
             log(`\u{1F4CB} Loading custom schema from file: ${schemaPath}`);
-            const schemaContent = await fs16.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs18.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch (error) {
             throw new Error(
@@ -5988,22 +6885,22 @@ ${"=".repeat(60)}
         }
         const candidatePaths = [
           // GitHub Action bundle location
-          path17.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
+          path20.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
           // Historical fallback when src/output was inadvertently bundled as output1/
-          path17.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
+          path20.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
           // Local dev (repo root)
-          path17.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
+          path20.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
         ];
         for (const schemaPath of candidatePaths) {
           try {
-            const schemaContent = await fs16.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs18.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch {
           }
         }
-        const distPath = path17.join(__dirname, "output", sanitizedSchemaName, "schema.json");
-        const distAltPath = path17.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
-        const cwdPath = path17.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
+        const distPath = path20.join(__dirname, "output", sanitizedSchemaName, "schema.json");
+        const distAltPath = path20.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
+        const cwdPath = path20.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
         throw new Error(
           `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath}, ${distAltPath}, and ${cwdPath}. Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
         );
@@ -6024,19 +6921,15 @@ ${"=".repeat(60)}
           let reviewData;
           if (_schema === "plain" || !_schema) {
             log(
-              `\u{1F4CB} ${_schema === "plain" ? "Plain" : "No"} schema detected - returning raw response without JSON parsing`
+              `\u{1F4CB} ${_schema === "plain" ? "Plain" : "No"} schema detected - treating raw response as text output`
             );
+            const trimmed = typeof response === "string" ? response.trim() : "";
+            const out = trimmed ? { text: trimmed } : {};
             return {
-              issues: [
-                {
-                  file: "AI_RESPONSE",
-                  line: 1,
-                  ruleId: "ai/raw_response",
-                  message: response,
-                  severity: "info",
-                  category: "documentation"
-                }
-              ],
+              issues: [],
+              // Expose assistant-style content via output.text so downstream formatters
+              // (Slack frontend, CLI "Assistant Response" section, templates) can render it.
+              output: out,
               debug: debugInfo
             };
           }
@@ -6293,7 +7186,7 @@ ${"=".repeat(60)}
        * Generate mock response for testing
        */
       async generateMockResponse(_prompt, _checkName, _schema) {
-        await new Promise((resolve7) => setTimeout(resolve7, 500));
+        await new Promise((resolve9) => setTimeout(resolve9, 500));
         const name = (_checkName || "").toLowerCase();
         if (name.includes("extract-facts")) {
           const arr = Array.from({ length: 6 }, (_, i) => ({
@@ -6502,12 +7395,12 @@ var issue_filter_exports = {};
 __export(issue_filter_exports, {
   IssueFilter: () => IssueFilter
 });
-var fs5, path6, IssueFilter;
+var fs6, path7, IssueFilter;
 var init_issue_filter = __esm({
   "src/issue-filter.ts"() {
     "use strict";
-    fs5 = __toESM(require("fs"));
-    path6 = __toESM(require("path"));
+    fs6 = __toESM(require("fs"));
+    path7 = __toESM(require("path"));
     IssueFilter = class {
       fileCache = /* @__PURE__ */ new Map();
       suppressionEnabled;
@@ -6575,17 +7468,17 @@ var init_issue_filter = __esm({
           return this.fileCache.get(filePath);
         }
         try {
-          const resolvedPath = path6.isAbsolute(filePath) ? filePath : path6.join(workingDir, filePath);
-          if (!fs5.existsSync(resolvedPath)) {
-            if (fs5.existsSync(filePath)) {
-              const content2 = fs5.readFileSync(filePath, "utf8");
+          const resolvedPath = path7.isAbsolute(filePath) ? filePath : path7.join(workingDir, filePath);
+          if (!fs6.existsSync(resolvedPath)) {
+            if (fs6.existsSync(filePath)) {
+              const content2 = fs6.readFileSync(filePath, "utf8");
               const lines2 = content2.split("\n");
               this.fileCache.set(filePath, lines2);
               return lines2;
             }
             return null;
           }
-          const content = fs5.readFileSync(resolvedPath, "utf8");
+          const content = fs6.readFileSync(resolvedPath, "utf8");
           const lines = content.split("\n");
           this.fileCache.set(filePath, lines);
           return lines;
@@ -6600,211 +7493,6 @@ var init_issue_filter = __esm({
         this.fileCache.clear();
       }
     };
-  }
-});
-
-// src/liquid-extensions.ts
-var liquid_extensions_exports = {};
-__export(liquid_extensions_exports, {
-  ReadFileTag: () => ReadFileTag,
-  configureLiquidWithExtensions: () => configureLiquidWithExtensions,
-  createExtendedLiquid: () => createExtendedLiquid,
-  sanitizeLabel: () => sanitizeLabel,
-  sanitizeLabelList: () => sanitizeLabelList,
-  withPermissionsContext: () => withPermissionsContext
-});
-function sanitizeLabel(value) {
-  if (value == null) return "";
-  const s = String(value);
-  return s.replace(/[^A-Za-z0-9:\/\- ]/g, "").replace(/\/{2,}/g, "/").trim();
-}
-function sanitizeLabelList(labels) {
-  if (!Array.isArray(labels)) return [];
-  return labels.map((v) => sanitizeLabel(v)).filter((s) => s.length > 0);
-}
-async function withPermissionsContext(ctx, fn) {
-  return await permissionsALS.run(ctx, fn);
-}
-function configureLiquidWithExtensions(liquid) {
-  liquid.registerTag("readfile", ReadFileTag);
-  liquid.registerFilter("parse_json", (value) => {
-    if (typeof value !== "string") {
-      return value;
-    }
-    try {
-      return JSON.parse(value);
-    } catch {
-      return value;
-    }
-  });
-  liquid.registerFilter("to_json", (value) => {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return "[Error: Unable to serialize to JSON]";
-    }
-  });
-  liquid.registerFilter("safe_label", (value) => sanitizeLabel(value));
-  liquid.registerFilter("safe_label_list", (value) => sanitizeLabelList(value));
-  liquid.registerFilter("unescape_newlines", (value) => {
-    if (value == null) return "";
-    const s = String(value);
-    return s.replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\t/g, "	");
-  });
-  const isLocal = detectLocalMode();
-  const resolveAssoc = (val) => {
-    if (typeof val === "string" && val.length > 0) return val;
-    const store = permissionsALS.getStore();
-    return store?.authorAssociation;
-  };
-  liquid.registerFilter("has_min_permission", (authorAssociation, level) => {
-    return hasMinPermission(resolveAssoc(authorAssociation), level, isLocal);
-  });
-  liquid.registerFilter("is_owner", (authorAssociation) => {
-    return isOwner(resolveAssoc(authorAssociation), isLocal);
-  });
-  liquid.registerFilter("is_member", (authorAssociation) => {
-    return isMember(resolveAssoc(authorAssociation), isLocal);
-  });
-  liquid.registerFilter("is_collaborator", (authorAssociation) => {
-    return isCollaborator(resolveAssoc(authorAssociation), isLocal);
-  });
-  liquid.registerFilter("is_contributor", (authorAssociation) => {
-    return isContributor(resolveAssoc(authorAssociation), isLocal);
-  });
-  liquid.registerFilter("is_first_timer", (authorAssociation) => {
-    return isFirstTimer(resolveAssoc(authorAssociation), isLocal);
-  });
-  const memoryStore = MemoryStore.getInstance();
-  liquid.registerFilter("memory_get", (key, namespace) => {
-    if (typeof key !== "string") {
-      return void 0;
-    }
-    return memoryStore.get(key, namespace);
-  });
-  liquid.registerFilter("memory_has", (key, namespace) => {
-    if (typeof key !== "string") {
-      return false;
-    }
-    const has = memoryStore.has(key, namespace);
-    try {
-      if (process.env.VISOR_DEBUG === "true" && key === "fact_validation_issues") {
-        console.error(
-          `[liquid] memory_has('${key}', ns='${namespace || memoryStore.getDefaultNamespace()}') => ${String(
-            has
-          )}`
-        );
-      }
-    } catch {
-    }
-    return has;
-  });
-  liquid.registerFilter("memory_list", (namespace) => {
-    return memoryStore.list(namespace);
-  });
-  liquid.registerFilter("get", (obj, pathExpr) => {
-    if (obj == null) return void 0;
-    const path17 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
-    if (!path17) return obj;
-    const parts = path17.split(".");
-    let cur = obj;
-    for (const p of parts) {
-      if (cur == null) return void 0;
-      cur = cur[p];
-    }
-    return cur;
-  });
-  liquid.registerFilter("not_empty", (v) => {
-    if (Array.isArray(v)) return v.length > 0;
-    if (typeof v === "string") return v.length > 0;
-    if (v && typeof v === "object") return Object.keys(v).length > 0;
-    return false;
-  });
-  liquid.registerFilter("coalesce", (first, ...rest) => {
-    const all = [first, ...rest];
-    for (const v of all) {
-      if (Array.isArray(v) && v.length > 0) return v;
-      if (typeof v === "string" && v.length > 0) return v;
-      if (v && typeof v === "object" && Object.keys(v).length > 0) return v;
-    }
-    return Array.isArray(first) ? [] : first ?? void 0;
-  });
-  liquid.registerFilter("where_exp", (items, varName, expr) => {
-    const arr = Array.isArray(items) ? items : [];
-    const name = typeof varName === "string" && varName.trim() ? varName.trim() : "i";
-    const body = String(expr || "");
-    try {
-      const fn = new Function(
-        name,
-        "idx",
-        "arr",
-        `try { return (${body}); } catch { return false; }`
-      );
-      const out = [];
-      for (let idx = 0; idx < arr.length; idx++) {
-        const i = arr[idx];
-        let ok = false;
-        try {
-          ok = !!fn(i, idx, arr);
-        } catch {
-          ok = false;
-        }
-        if (ok) out.push(i);
-      }
-      return out;
-    } catch {
-      return [];
-    }
-  });
-}
-function createExtendedLiquid(options = {}) {
-  const liquid = new import_liquidjs.Liquid({
-    cache: false,
-    strictFilters: false,
-    strictVariables: false,
-    ...options
-  });
-  configureLiquidWithExtensions(liquid);
-  return liquid;
-}
-var import_liquidjs, import_async_hooks, import_promises2, import_path2, ReadFileTag, permissionsALS;
-var init_liquid_extensions = __esm({
-  "src/liquid-extensions.ts"() {
-    "use strict";
-    import_liquidjs = require("liquidjs");
-    import_async_hooks = require("async_hooks");
-    import_promises2 = __toESM(require("fs/promises"));
-    import_path2 = __toESM(require("path"));
-    init_author_permissions();
-    init_memory_store();
-    ReadFileTag = class extends import_liquidjs.Tag {
-      filepath;
-      constructor(token, remainTokens, liquid) {
-        super(token, remainTokens, liquid);
-        this.filepath = new import_liquidjs.Value(token.args, liquid);
-      }
-      *render(ctx, emitter) {
-        const filePath = yield this.filepath.value(ctx, false);
-        if (!filePath || typeof filePath !== "string") {
-          emitter.write("[Error: Invalid file path]");
-          return;
-        }
-        const projectRoot = process.cwd();
-        const resolvedPath = import_path2.default.resolve(projectRoot, filePath.toString());
-        if (!resolvedPath.startsWith(projectRoot)) {
-          emitter.write("[Error: File path escapes project directory]");
-          return;
-        }
-        try {
-          const content = yield import_promises2.default.readFile(resolvedPath, "utf-8");
-          emitter.write(content);
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : error?.code || "Unknown error";
-          emitter.write(`[Error reading file: ${errorMessage}]`);
-        }
-      }
-    };
-    permissionsALS = new import_async_hooks.AsyncLocalStorage();
   }
 });
 
@@ -6981,6 +7669,670 @@ var init_state_capture = __esm({
   }
 });
 
+// src/utils/command-executor.ts
+var command_executor_exports = {};
+__export(command_executor_exports, {
+  CommandExecutor: () => CommandExecutor,
+  commandExecutor: () => commandExecutor
+});
+var import_child_process, import_util, CommandExecutor, commandExecutor;
+var init_command_executor = __esm({
+  "src/utils/command-executor.ts"() {
+    "use strict";
+    import_child_process = require("child_process");
+    import_util = require("util");
+    init_logger();
+    CommandExecutor = class _CommandExecutor {
+      static instance;
+      constructor() {
+      }
+      static getInstance() {
+        if (!_CommandExecutor.instance) {
+          _CommandExecutor.instance = new _CommandExecutor();
+        }
+        return _CommandExecutor.instance;
+      }
+      /**
+       * Execute a shell command with optional stdin, environment, and timeout
+       */
+      async execute(command, options = {}) {
+        const execAsync = (0, import_util.promisify)(import_child_process.exec);
+        const timeout = options.timeout || 3e4;
+        if (options.stdin) {
+          return this.executeWithStdin(command, options);
+        }
+        try {
+          const result = await execAsync(command, {
+            cwd: options.cwd,
+            env: options.env,
+            timeout
+          });
+          return {
+            stdout: result.stdout || "",
+            stderr: result.stderr || "",
+            exitCode: 0
+          };
+        } catch (error) {
+          return this.handleExecutionError(error, timeout);
+        }
+      }
+      /**
+       * Execute command with stdin input
+       */
+      executeWithStdin(command, options) {
+        return new Promise((resolve9, reject) => {
+          const childProcess = (0, import_child_process.exec)(
+            command,
+            {
+              cwd: options.cwd,
+              env: options.env,
+              timeout: options.timeout || 3e4
+            },
+            (error, stdout, stderr) => {
+              if (error && error.killed && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM")) {
+                reject(new Error(`Command timed out after ${options.timeout || 3e4}ms`));
+              } else {
+                resolve9({
+                  stdout: stdout || "",
+                  stderr: stderr || "",
+                  exitCode: error ? error.code || 1 : 0
+                });
+              }
+            }
+          );
+          if (options.stdin && childProcess.stdin) {
+            childProcess.stdin.write(options.stdin);
+            childProcess.stdin.end();
+          }
+        });
+      }
+      /**
+       * Handle execution errors consistently
+       */
+      handleExecutionError(error, timeout) {
+        const execError = error;
+        if (execError.killed && (execError.code === "ETIMEDOUT" || execError.signal === "SIGTERM")) {
+          throw new Error(`Command timed out after ${timeout}ms`);
+        }
+        let exitCode = 1;
+        if (execError.code) {
+          exitCode = typeof execError.code === "string" ? parseInt(execError.code, 10) : execError.code;
+        }
+        return {
+          stdout: execError.stdout || "",
+          stderr: execError.stderr || "",
+          exitCode
+        };
+      }
+      /**
+       * Build safe environment variables by merging process.env with custom env
+       * Ensures all values are strings (no undefined)
+       */
+      buildEnvironment(baseEnv = process.env, ...customEnvs) {
+        const result = {};
+        for (const [key, value] of Object.entries(baseEnv)) {
+          if (value !== void 0) {
+            result[key] = value;
+          }
+        }
+        for (const customEnv of customEnvs) {
+          if (customEnv) {
+            Object.assign(result, customEnv);
+          }
+        }
+        return result;
+      }
+      /**
+       * Log command execution for debugging
+       */
+      logExecution(command, options) {
+        const debugInfo = [
+          `Executing command: ${command}`,
+          options.cwd ? `cwd: ${options.cwd}` : null,
+          options.stdin ? "with stdin" : null,
+          options.timeout ? `timeout: ${options.timeout}ms` : null,
+          options.env ? `env vars: ${Object.keys(options.env).length}` : null
+        ].filter(Boolean).join(", ");
+        logger.debug(debugInfo);
+      }
+    };
+    commandExecutor = CommandExecutor.getInstance();
+  }
+});
+
+// src/providers/custom-tool-executor.ts
+var import_ajv, CustomToolExecutor;
+var init_custom_tool_executor = __esm({
+  "src/providers/custom-tool-executor.ts"() {
+    "use strict";
+    init_liquid_extensions();
+    init_sandbox();
+    init_logger();
+    init_command_executor();
+    import_ajv = __toESM(require("ajv"));
+    CustomToolExecutor = class {
+      liquid;
+      sandbox;
+      tools;
+      ajv;
+      constructor(tools) {
+        this.liquid = createExtendedLiquid({
+          cache: false,
+          strictFilters: false,
+          strictVariables: false
+        });
+        this.tools = new Map(Object.entries(tools || {}));
+        this.ajv = new import_ajv.default({ allErrors: true, verbose: true });
+      }
+      /**
+       * Register a custom tool
+       */
+      registerTool(tool) {
+        if (!tool.name) {
+          throw new Error("Tool must have a name");
+        }
+        this.tools.set(tool.name, tool);
+      }
+      /**
+       * Register multiple tools
+       */
+      registerTools(tools) {
+        for (const [name, tool] of Object.entries(tools)) {
+          tool.name = tool.name || name;
+          this.registerTool(tool);
+        }
+      }
+      /**
+       * Get all registered tools
+       */
+      getTools() {
+        return Array.from(this.tools.values());
+      }
+      /**
+       * Get a specific tool by name
+       */
+      getTool(name) {
+        return this.tools.get(name);
+      }
+      /**
+       * Validate tool input against schema using ajv
+       */
+      validateInput(tool, input) {
+        if (!tool.inputSchema) {
+          return;
+        }
+        const validate = this.ajv.compile(tool.inputSchema);
+        const valid = validate(input);
+        if (!valid) {
+          const errors = validate.errors?.map((err) => {
+            if (err.instancePath) {
+              return `${err.instancePath}: ${err.message}`;
+            }
+            return err.message;
+          }).join(", ");
+          throw new Error(`Input validation failed for tool '${tool.name}': ${errors}`);
+        }
+      }
+      /**
+       * Execute a custom tool
+       */
+      async execute(toolName, args, context2) {
+        const tool = this.tools.get(toolName);
+        if (!tool) {
+          throw new Error(`Tool not found: ${toolName}`);
+        }
+        this.validateInput(tool, args);
+        const templateContext = {
+          ...context2,
+          args,
+          input: args
+        };
+        const command = await this.liquid.parseAndRender(tool.exec, templateContext);
+        let stdin;
+        if (tool.stdin) {
+          stdin = await this.liquid.parseAndRender(tool.stdin, templateContext);
+        }
+        const env = commandExecutor.buildEnvironment(process.env, tool.env, context2?.env);
+        const result = await commandExecutor.execute(command, {
+          stdin,
+          cwd: tool.cwd,
+          env,
+          timeout: tool.timeout || 3e4
+        });
+        if (result.exitCode !== 0) {
+          const errorOutput = result.stderr || result.stdout || "Command failed";
+          throw new Error(
+            `Tool '${toolName}' execution failed with exit code ${result.exitCode}: ${errorOutput}`
+          );
+        }
+        let output = result.stdout;
+        if (tool.parseJson) {
+          try {
+            output = JSON.parse(result.stdout);
+          } catch (e) {
+            const err = e instanceof Error ? e : new Error(String(e));
+            logger.warn(`Failed to parse tool output as JSON: ${err.message}`);
+            if (!tool.transform && !tool.transform_js) {
+              throw new Error(`Tool '${toolName}' output could not be parsed as JSON: ${err.message}`);
+            }
+          }
+        }
+        if (tool.transform) {
+          const transformContext = {
+            ...templateContext,
+            output,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode
+          };
+          const transformed = await this.liquid.parseAndRender(tool.transform, transformContext);
+          if (typeof transformed === "string" && transformed.trim().startsWith("{")) {
+            try {
+              output = JSON.parse(transformed);
+            } catch {
+              output = transformed;
+            }
+          } else {
+            output = transformed;
+          }
+        }
+        if (tool.transform_js) {
+          output = await this.applyJavaScriptTransform(tool.transform_js, output, {
+            ...templateContext,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode
+          });
+        }
+        return output;
+      }
+      /**
+       * Apply JavaScript transform to output
+       */
+      async applyJavaScriptTransform(transformJs, output, context2) {
+        if (!this.sandbox) {
+          this.sandbox = createSecureSandbox();
+        }
+        const code = `
+      const output = ${JSON.stringify(output)};
+      const context = ${JSON.stringify(context2)};
+      const args = context.args || {};
+      const pr = context.pr || {};
+      const files = context.files || [];
+      const outputs = context.outputs || {};
+      const env = context.env || {};
+
+      ${transformJs}
+    `;
+        try {
+          return await compileAndRun(this.sandbox, code, { timeout: 5e3 });
+        } catch (error) {
+          logger.error(`JavaScript transform error: ${error}`);
+          throw error;
+        }
+      }
+      /**
+       * Convert custom tools to MCP tool format
+       */
+      toMcpTools() {
+        return Array.from(this.tools.values()).map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          handler: async (args) => {
+            return this.execute(tool.name, args);
+          }
+        }));
+      }
+    };
+  }
+});
+
+// src/providers/mcp-custom-sse-server.ts
+var import_http, import_events, CustomToolsSSEServer;
+var init_mcp_custom_sse_server = __esm({
+  "src/providers/mcp-custom-sse-server.ts"() {
+    "use strict";
+    init_custom_tool_executor();
+    init_logger();
+    import_http = __toESM(require("http"));
+    import_events = require("events");
+    CustomToolsSSEServer = class {
+      server = null;
+      port = 0;
+      connections = /* @__PURE__ */ new Set();
+      toolExecutor;
+      sessionId;
+      debug;
+      eventBus;
+      messageQueue = /* @__PURE__ */ new Map();
+      constructor(tools, sessionId, debug = false) {
+        this.sessionId = sessionId;
+        this.debug = debug;
+        this.eventBus = new import_events.EventEmitter();
+        const toolsRecord = {};
+        for (const [name, tool] of tools.entries()) {
+          toolsRecord[name] = tool;
+        }
+        this.toolExecutor = new CustomToolExecutor(toolsRecord);
+        if (this.debug) {
+          logger.debug(`[CustomToolsSSEServer:${sessionId}] Initialized with ${tools.size} tools`);
+        }
+      }
+      /**
+       * Start the SSE server on an ephemeral port
+       * Returns the actual bound port number
+       */
+      async start() {
+        return new Promise((resolve9, reject) => {
+          try {
+            this.server = import_http.default.createServer((req, res) => {
+              this.handleRequest(req, res).catch((error) => {
+                logger.error(
+                  `[CustomToolsSSEServer:${this.sessionId}] Request handler error: ${error}`
+                );
+              });
+            });
+            this.server.on("error", (error) => {
+              if (error.code === "EADDRINUSE") {
+                if (this.debug) {
+                  logger.debug(
+                    `[CustomToolsSSEServer:${this.sessionId}] Port ${this.port} in use, retrying with new port`
+                  );
+                }
+                reject(new Error(`Port ${this.port} already in use`));
+              } else {
+                reject(error);
+              }
+            });
+            this.server.listen(0, "localhost", () => {
+              const address = this.server.address();
+              if (!address || typeof address === "string") {
+                reject(new Error("Failed to bind to port"));
+                return;
+              }
+              this.port = address.port;
+              if (this.debug) {
+                logger.debug(
+                  `[CustomToolsSSEServer:${this.sessionId}] Started on http://localhost:${this.port}/sse`
+                );
+              }
+              resolve9(this.port);
+            });
+          } catch (error) {
+            reject(error);
+          }
+        });
+      }
+      /**
+       * Stop the server and cleanup resources
+       */
+      async stop() {
+        if (this.debug) {
+          logger.debug(`[CustomToolsSSEServer:${this.sessionId}] Stopping server...`);
+        }
+        for (const connection of this.connections) {
+          try {
+            connection.response.end();
+          } catch (error) {
+            if (this.debug) {
+              logger.debug(
+                `[CustomToolsSSEServer:${this.sessionId}] Error closing connection: ${error}`
+              );
+            }
+          }
+        }
+        this.connections.clear();
+        if (this.server) {
+          await new Promise((resolve9, reject) => {
+            const timeout = setTimeout(() => {
+              if (this.debug) {
+                logger.debug(
+                  `[CustomToolsSSEServer:${this.sessionId}] Force closing server after timeout`
+                );
+              }
+              this.server?.close(() => resolve9());
+            }, 5e3);
+            this.server.close((error) => {
+              clearTimeout(timeout);
+              if (error) {
+                reject(error);
+              } else {
+                resolve9();
+              }
+            });
+          });
+          this.server = null;
+        }
+        if (this.debug) {
+          logger.debug(`[CustomToolsSSEServer:${this.sessionId}] Server stopped`);
+        }
+      }
+      /**
+       * Get the SSE endpoint URL
+       */
+      getUrl() {
+        if (!this.port) {
+          throw new Error("Server not started");
+        }
+        return `http://localhost:${this.port}/sse`;
+      }
+      /**
+       * Handle incoming HTTP requests
+       */
+      async handleRequest(req, res) {
+        if (req.method === "OPTIONS") {
+          this.handleCORS(res);
+          res.writeHead(204);
+          res.end();
+          return;
+        }
+        if (req.method !== "POST" || req.url !== "/sse") {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Not found" }));
+          return;
+        }
+        this.handleCORS(res);
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive"
+        });
+        const connectionId = `conn-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const connection = {
+          response: res,
+          id: connectionId
+        };
+        this.connections.add(connection);
+        if (this.debug) {
+          logger.debug(`[CustomToolsSSEServer:${this.sessionId}] New SSE connection: ${connectionId}`);
+        }
+        this.sendSSE(connection, "endpoint", `http://localhost:${this.port}/message`);
+        req.on("close", () => {
+          if (this.debug) {
+            logger.debug(`[CustomToolsSSEServer:${this.sessionId}] Connection closed: ${connectionId}`);
+          }
+          this.connections.delete(connection);
+        });
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        req.on("end", async () => {
+          try {
+            const message = JSON.parse(body);
+            await this.handleMCPMessage(connection, message);
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : "Unknown error";
+            if (this.debug) {
+              logger.error(
+                `[CustomToolsSSEServer:${this.sessionId}] Error parsing request: ${errorMsg}`
+              );
+            }
+            this.sendErrorResponse(connection, null, -32700, "Parse error", { error: errorMsg });
+          }
+        });
+      }
+      /**
+       * Handle CORS headers
+       */
+      handleCORS(res) {
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+      }
+      /**
+       * Send SSE message to client
+       */
+      sendSSE(connection, event, data) {
+        try {
+          const dataStr = typeof data === "string" ? data : JSON.stringify(data);
+          connection.response.write(`event: ${event}
+`);
+          connection.response.write(`data: ${dataStr}
+
+`);
+        } catch (error) {
+          if (this.debug) {
+            logger.error(`[CustomToolsSSEServer:${this.sessionId}] Error sending SSE: ${error}`);
+          }
+        }
+      }
+      /**
+       * Handle MCP protocol messages
+       */
+      async handleMCPMessage(connection, message) {
+        if (this.debug) {
+          logger.debug(
+            `[CustomToolsSSEServer:${this.sessionId}] Received MCP message: ${JSON.stringify(message)}`
+          );
+        }
+        if (message.method === "tools/list") {
+          const response = await this.handleToolsList(message.id);
+          this.sendSSE(connection, "message", response);
+          return;
+        }
+        if (message.method === "tools/call") {
+          const request = message;
+          const response = await this.handleToolCall(
+            request.id,
+            request.params.name,
+            request.params.arguments
+          );
+          this.sendSSE(connection, "message", response);
+          return;
+        }
+        if (message.method === "initialize") {
+          const response = {
+            jsonrpc: "2.0",
+            id: message.id,
+            result: {
+              protocolVersion: "2024-11-05",
+              capabilities: {
+                tools: {}
+              },
+              serverInfo: {
+                name: "visor-custom-tools",
+                version: "1.0.0"
+              }
+            }
+          };
+          this.sendSSE(connection, "message", response);
+          return;
+        }
+        if (message.method === "notifications/initialized") {
+          return;
+        }
+        this.sendErrorResponse(connection, message.id, -32601, "Method not found");
+      }
+      /**
+       * Handle tools/list MCP request
+       */
+      async handleToolsList(id) {
+        const tools = this.toolExecutor.getTools();
+        return {
+          jsonrpc: "2.0",
+          id,
+          result: {
+            tools: tools.map((tool) => ({
+              name: tool.name,
+              description: tool.description || `Execute ${tool.name}`,
+              inputSchema: tool.inputSchema || {
+                type: "object",
+                properties: {},
+                required: []
+              }
+            }))
+          }
+        };
+      }
+      /**
+       * Handle tools/call MCP request
+       */
+      async handleToolCall(id, toolName, args) {
+        try {
+          if (this.debug) {
+            logger.debug(
+              `[CustomToolsSSEServer:${this.sessionId}] Executing tool: ${toolName} with args: ${JSON.stringify(args)}`
+            );
+          }
+          const result = await this.toolExecutor.execute(toolName, args);
+          const resultText = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+          if (this.debug) {
+            logger.debug(
+              `[CustomToolsSSEServer:${this.sessionId}] Tool execution completed: ${toolName}`
+            );
+          }
+          return {
+            jsonrpc: "2.0",
+            id,
+            result: {
+              content: [
+                {
+                  type: "text",
+                  text: resultText
+                }
+              ]
+            }
+          };
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : "Unknown error";
+          logger.error(
+            `[CustomToolsSSEServer:${this.sessionId}] Tool execution failed: ${toolName} - ${errorMsg}`
+          );
+          return {
+            jsonrpc: "2.0",
+            id,
+            error: {
+              code: -32603,
+              message: "Internal error",
+              data: {
+                tool: toolName,
+                error: errorMsg
+              }
+            }
+          };
+        }
+      }
+      /**
+       * Send error response via SSE
+       */
+      sendErrorResponse(connection, id, code, message, data) {
+        const errorResponse = {
+          jsonrpc: "2.0",
+          id: id ?? "error",
+          error: {
+            code,
+            message,
+            data
+          }
+        };
+        this.sendSSE(connection, "message", errorResponse);
+      }
+    };
+  }
+});
+
 // src/providers/ai-check-provider.ts
 var import_promises3, import_path3, AICheckProvider;
 var init_ai_check_provider = __esm({
@@ -6995,6 +8347,8 @@ var init_ai_check_provider = __esm({
     import_path3 = __toESM(require("path"));
     init_lazy_otel();
     init_state_capture();
+    init_mcp_custom_sse_server();
+    init_logger();
     AICheckProvider = class extends CheckProvider {
       aiReviewService;
       liquidEngine;
@@ -7008,6 +8362,39 @@ var init_ai_check_provider = __esm({
       }
       getDescription() {
         return "AI-powered code review using Google Gemini, Anthropic Claude, OpenAI GPT, or AWS Bedrock models";
+      }
+      /** Lightweight debug helper to avoid importing logger here */
+      logDebug(msg) {
+        try {
+          if (process.env.VISOR_DEBUG === "true") {
+            console.debug(msg);
+          }
+        } catch {
+        }
+      }
+      /** Detect Slack webhook payload and build a lightweight slack context for templates */
+      buildSlackEventContext(context2, config, prInfo) {
+        try {
+          const aiCfg = config?.ai || {};
+          if (aiCfg.skip_slack_context === true) return {};
+          const webhook = context2?.webhookContext;
+          const map = webhook?.webhookData;
+          if (!map || !(map instanceof Map)) return {};
+          const first = Array.from(map.values())[0];
+          if (!first || typeof first !== "object") return {};
+          const ev = first.event;
+          const conv = first.slack_conversation;
+          if (!ev && !conv) return {};
+          if (conv && prInfo) {
+            try {
+              prInfo.slackConversation = conv;
+            } catch {
+            }
+          }
+          return { slack: { event: ev, conversation: conv } };
+        } catch {
+          return {};
+        }
       }
       async validateConfig(config) {
         if (!config || typeof config !== "object") {
@@ -7078,7 +8465,7 @@ var init_ai_check_provider = __esm({
       /**
        * Process prompt configuration to resolve final prompt string
        */
-      async processPrompt(promptConfig, prInfo, eventContext, dependencyResults, outputHistory) {
+      async processPrompt(promptConfig, prInfo, eventContext, dependencyResults, outputHistory, args) {
         let promptContent;
         if (await this.isFilePath(promptConfig)) {
           promptContent = await this.loadPromptFromFile(promptConfig);
@@ -7090,7 +8477,8 @@ var init_ai_check_provider = __esm({
           prInfo,
           eventContext,
           dependencyResults,
-          outputHistory
+          outputHistory,
+          args
         );
       }
       /**
@@ -7129,9 +8517,9 @@ var init_ai_check_provider = __esm({
           } else {
             resolvedPath = import_path3.default.resolve(process.cwd(), str);
           }
-          const fs16 = require("fs").promises;
+          const fs18 = require("fs").promises;
           try {
-            const stat = await fs16.stat(resolvedPath);
+            const stat = await fs18.stat(resolvedPath);
             return stat.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
@@ -7175,7 +8563,7 @@ var init_ai_check_provider = __esm({
       /**
        * Render Liquid template in prompt with comprehensive event context
        */
-      async renderPromptTemplate(promptContent, prInfo, eventContext, dependencyResults, outputHistory) {
+      async renderPromptTemplate(promptContent, prInfo, eventContext, dependencyResults, outputHistory, args) {
         const outputsRaw = {};
         if (dependencyResults) {
           for (const [k, v] of dependencyResults.entries()) {
@@ -7207,7 +8595,7 @@ var init_ai_check_provider = __esm({
           // File Details
           files: prInfo.files || [],
           description: prInfo.body || "",
-          // GitHub Event Context
+          // GitHub / webhook Event Context
           event: eventContext ? {
             name: eventContext.event_name || "unknown",
             action: eventContext.action,
@@ -7250,6 +8638,27 @@ var init_ai_check_provider = __esm({
             // Raw event payload for advanced use cases
             payload: eventContext
           } : void 0,
+          // Slack conversation context (if provided via eventContext.slack)
+          slack: (() => {
+            try {
+              const anyCtx = eventContext;
+              const slack = anyCtx?.slack;
+              if (slack && typeof slack === "object") return slack;
+            } catch {
+            }
+            return void 0;
+          })(),
+          // Unified conversation context across transports (Slack & GitHub)
+          conversation: (() => {
+            try {
+              const anyCtx = eventContext;
+              if (anyCtx?.slack?.conversation) return anyCtx.slack.conversation;
+              if (anyCtx?.github?.conversation) return anyCtx.github.conversation;
+              if (anyCtx?.conversation) return anyCtx.conversation;
+            } catch {
+            }
+            return void 0;
+          })(),
           // Utility data for templates
           utils: {
             // Date/time helpers
@@ -7266,6 +8675,14 @@ var init_ai_check_provider = __esm({
             hasLargeChanges: (prInfo.files || []).some((f) => f.changes > 50),
             totalFiles: (prInfo.files || []).length
           },
+          // Checks metadata for helpers like chat_history
+          checks_meta: (() => {
+            try {
+              return eventContext?.__checksMeta || void 0;
+            } catch {
+              return void 0;
+            }
+          })(),
           // Previous check outputs (dependency results)
           // Expose raw output directly if available, otherwise expose the result as-is
           outputs: dependencyResults ? Object.fromEntries(
@@ -7301,7 +8718,9 @@ var init_ai_check_provider = __esm({
             return stage;
           })(),
           // New: outputs_raw exposes aggregate values (e.g., full arrays for forEach parents)
-          outputs_raw: outputsRaw
+          outputs_raw: outputsRaw,
+          // Custom arguments from on_init 'with' directive
+          args: args || {}
         };
         try {
           if (process.env.VISOR_DEBUG === "true") {
@@ -7364,47 +8783,60 @@ var init_ai_check_provider = __esm({
         }
         const aiConfig = {};
         if (config.ai) {
-          if (config.ai.apiKey !== void 0) {
-            aiConfig.apiKey = config.ai.apiKey;
+          const aiAny2 = config.ai;
+          const skipTransport = aiAny2.skip_transport_context === true;
+          if (aiAny2.apiKey !== void 0) {
+            aiConfig.apiKey = aiAny2.apiKey;
           }
-          if (config.ai.model !== void 0) {
-            aiConfig.model = config.ai.model;
+          if (aiAny2.model !== void 0) {
+            aiConfig.model = aiAny2.model;
           }
-          if (config.ai.timeout !== void 0) {
-            aiConfig.timeout = config.ai.timeout;
+          if (aiAny2.timeout !== void 0) {
+            aiConfig.timeout = aiAny2.timeout;
           }
-          if (config.ai.provider !== void 0) {
-            aiConfig.provider = config.ai.provider;
+          if (aiAny2.provider !== void 0) {
+            aiConfig.provider = aiAny2.provider;
           }
-          if (config.ai.debug !== void 0) {
-            aiConfig.debug = config.ai.debug;
+          if (aiAny2.debug !== void 0) {
+            aiConfig.debug = aiAny2.debug;
           }
-          if (config.ai.enableDelegate !== void 0) {
-            aiConfig.enableDelegate = config.ai.enableDelegate;
+          if (aiAny2.enableDelegate !== void 0) {
+            aiConfig.enableDelegate = aiAny2.enableDelegate;
           }
-          if (config.ai.allowEdit !== void 0) {
-            aiConfig.allowEdit = config.ai.allowEdit;
+          if (aiAny2.allowEdit !== void 0) {
+            aiConfig.allowEdit = aiAny2.allowEdit;
           }
-          if (config.ai.allowedTools !== void 0) {
-            aiConfig.allowedTools = config.ai.allowedTools;
+          if (aiAny2.allowedTools !== void 0) {
+            aiConfig.allowedTools = aiAny2.allowedTools;
+            this.logDebug(
+              `[AI Provider] Read allowedTools from YAML: ${JSON.stringify(aiAny2.allowedTools)}`
+            );
           }
-          if (config.ai.disableTools !== void 0) {
-            aiConfig.disableTools = config.ai.disableTools;
+          if (aiAny2.disableTools !== void 0) {
+            aiConfig.disableTools = aiAny2.disableTools;
+            this.logDebug(`[AI Provider] Read disableTools from YAML: ${aiAny2.disableTools}`);
           }
-          if (config.ai.allowBash !== void 0) {
-            aiConfig.allowBash = config.ai.allowBash;
+          if (aiAny2.allowBash !== void 0) {
+            aiConfig.allowBash = aiAny2.allowBash;
           }
-          if (config.ai.bashConfig !== void 0) {
-            aiConfig.bashConfig = config.ai.bashConfig;
+          if (aiAny2.bashConfig !== void 0) {
+            aiConfig.bashConfig = aiAny2.bashConfig;
           }
-          if (config.ai.skip_code_context !== void 0) {
-            aiConfig.skip_code_context = config.ai.skip_code_context;
+          if (aiAny2.skip_code_context !== void 0) {
+            aiConfig.skip_code_context = aiAny2.skip_code_context;
+          } else if (skipTransport) {
+            aiConfig.skip_code_context = true;
           }
-          if (config.ai.retry !== void 0) {
-            aiConfig.retry = config.ai.retry;
+          if (aiAny2.skip_slack_context !== void 0) {
+            aiConfig.skip_slack_context = aiAny2.skip_slack_context;
+          } else if (skipTransport) {
+            aiConfig.skip_slack_context = true;
           }
-          if (config.ai.fallback !== void 0) {
-            aiConfig.fallback = config.ai.fallback;
+          if (aiAny2.retry !== void 0) {
+            aiConfig.retry = aiAny2.retry;
+          }
+          if (aiAny2.fallback !== void 0) {
+            aiConfig.fallback = aiAny2.fallback;
           }
         }
         if (config.ai_model !== void 0) {
@@ -7430,6 +8862,47 @@ var init_ai_check_provider = __esm({
         if (config.ai?.mcpServers) {
           Object.assign(mcpServers, config.ai.mcpServers);
         }
+        let customToolsServer = null;
+        let customToolsToLoad = [];
+        let customToolsServerName = null;
+        const legacyCustomTools = this.getCustomToolsForAI(config);
+        if (legacyCustomTools.length > 0) {
+          customToolsToLoad = legacyCustomTools;
+          customToolsServerName = "__custom_tools__";
+        }
+        for (const [serverName, serverConfig] of Object.entries(mcpServers)) {
+          if (serverConfig.tools && Array.isArray(serverConfig.tools)) {
+            customToolsToLoad = serverConfig.tools;
+            customToolsServerName = serverName;
+            break;
+          }
+        }
+        if (customToolsToLoad.length > 0 && customToolsServerName && !config.ai?.disableTools) {
+          try {
+            const customTools = this.loadCustomTools(customToolsToLoad, config);
+            if (customTools.size > 0) {
+              const sessionId = config.checkName || `ai-check-${Date.now()}`;
+              const debug = aiConfig.debug || process.env.VISOR_DEBUG === "true";
+              customToolsServer = new CustomToolsSSEServer(customTools, sessionId, debug);
+              const port = await customToolsServer.start();
+              if (debug) {
+                logger.debug(
+                  `[AICheckProvider] Started custom tools SSE server '${customToolsServerName}' on port ${port} for ${customTools.size} tools`
+                );
+              }
+              mcpServers[customToolsServerName] = {
+                command: "",
+                args: [],
+                url: `http://localhost:${port}/sse`,
+                transport: "sse"
+              };
+            }
+          } catch (error) {
+            logger.error(
+              `[AICheckProvider] Failed to start custom tools SSE server '${customToolsServerName}': ${error instanceof Error ? error.message : "Unknown error"}`
+            );
+          }
+        }
         if (Object.keys(mcpServers).length > 0 && !config.ai?.disableTools) {
           aiConfig.mcpServers = mcpServers;
         } else if (config.ai?.disableTools) {
@@ -7448,7 +8921,8 @@ var init_ai_check_provider = __esm({
               checkName,
               result.output !== void 0 ? result.output : result
             ])
-          ) : {}
+          ) : {},
+          args: sessionInfo?.args || {}
         };
         try {
           const span = trace.getSpan(context.active());
@@ -7468,7 +8942,15 @@ var init_ai_check_provider = __esm({
           );
         } catch {
         }
-        const eventContext = config.eventContext || {};
+        const baseEventContext = config.eventContext || {};
+        const checksMeta = config.checksMeta;
+        const slackCtx = this.buildSlackEventContext(
+          sessionInfo,
+          config,
+          prInfo
+        );
+        const baseWithSlack = { ...baseEventContext, ...slackCtx };
+        const eventContext = checksMeta ? { ...baseWithSlack, __checksMeta: checksMeta } : baseWithSlack;
         const ctxWithStage = {
           ...eventContext || {},
           __stageHistoryBase: sessionInfo?.stageHistoryBase
@@ -7478,7 +8960,8 @@ var init_ai_check_provider = __esm({
           prInfo,
           ctxWithStage,
           _dependencyResults,
-          config.__outputHistory
+          config.__outputHistory,
+          sessionInfo?.args
         );
         const aiAny = config.ai || {};
         const persona = (aiAny?.ai_persona || config.ai_persona || "").toString().trim();
@@ -7636,7 +9119,59 @@ ${processedPrompt}` : processedPrompt;
             console.error(`\u{1F6A8} This check cannot proceed without valid API credentials`);
           }
           throw new Error(`AI analysis failed: ${errorMessage}`);
+        } finally {
+          if (customToolsServer) {
+            try {
+              await customToolsServer.stop();
+              if (aiConfig.debug || process.env.VISOR_DEBUG === "true") {
+                logger.debug("[AICheckProvider] Custom tools SSE server stopped");
+              }
+            } catch (error) {
+              logger.error(
+                `[AICheckProvider] Error stopping custom tools SSE server: ${error instanceof Error ? error.message : "Unknown error"}`
+              );
+            }
+          }
         }
+      }
+      /**
+       * Get custom tool names from check configuration
+       */
+      getCustomToolsForAI(config) {
+        const aiCustomTools = config.ai_custom_tools;
+        if (!aiCustomTools) {
+          return [];
+        }
+        if (Array.isArray(aiCustomTools)) {
+          return aiCustomTools.filter((name) => typeof name === "string");
+        }
+        if (typeof aiCustomTools === "string") {
+          return [aiCustomTools];
+        }
+        return [];
+      }
+      /**
+       * Load custom tools from global configuration
+       */
+      loadCustomTools(toolNames, config) {
+        const tools = /* @__PURE__ */ new Map();
+        const globalTools = config.__globalTools;
+        if (!globalTools) {
+          logger.warn(
+            `[AICheckProvider] ai_custom_tools specified but no global tools found in configuration`
+          );
+          return tools;
+        }
+        for (const toolName of toolNames) {
+          const tool = globalTools[toolName];
+          if (!tool) {
+            logger.warn(`[AICheckProvider] Custom tool not found: ${toolName}`);
+            continue;
+          }
+          tool.name = tool.name || toolName;
+          tools.set(toolName, tool);
+        }
+        return tools;
       }
       getSupportedConfigKeys() {
         return [
@@ -9391,132 +10926,6 @@ var init_claude_code_check_provider = __esm({
   }
 });
 
-// src/utils/command-executor.ts
-var import_child_process, import_util, CommandExecutor, commandExecutor;
-var init_command_executor = __esm({
-  "src/utils/command-executor.ts"() {
-    "use strict";
-    import_child_process = require("child_process");
-    import_util = require("util");
-    init_logger();
-    CommandExecutor = class _CommandExecutor {
-      static instance;
-      constructor() {
-      }
-      static getInstance() {
-        if (!_CommandExecutor.instance) {
-          _CommandExecutor.instance = new _CommandExecutor();
-        }
-        return _CommandExecutor.instance;
-      }
-      /**
-       * Execute a shell command with optional stdin, environment, and timeout
-       */
-      async execute(command, options = {}) {
-        const execAsync = (0, import_util.promisify)(import_child_process.exec);
-        const timeout = options.timeout || 3e4;
-        if (options.stdin) {
-          return this.executeWithStdin(command, options);
-        }
-        try {
-          const result = await execAsync(command, {
-            cwd: options.cwd,
-            env: options.env,
-            timeout
-          });
-          return {
-            stdout: result.stdout || "",
-            stderr: result.stderr || "",
-            exitCode: 0
-          };
-        } catch (error) {
-          return this.handleExecutionError(error, timeout);
-        }
-      }
-      /**
-       * Execute command with stdin input
-       */
-      executeWithStdin(command, options) {
-        return new Promise((resolve7, reject) => {
-          const childProcess = (0, import_child_process.exec)(
-            command,
-            {
-              cwd: options.cwd,
-              env: options.env,
-              timeout: options.timeout || 3e4
-            },
-            (error, stdout, stderr) => {
-              if (error && error.killed && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM")) {
-                reject(new Error(`Command timed out after ${options.timeout || 3e4}ms`));
-              } else {
-                resolve7({
-                  stdout: stdout || "",
-                  stderr: stderr || "",
-                  exitCode: error ? error.code || 1 : 0
-                });
-              }
-            }
-          );
-          if (options.stdin && childProcess.stdin) {
-            childProcess.stdin.write(options.stdin);
-            childProcess.stdin.end();
-          }
-        });
-      }
-      /**
-       * Handle execution errors consistently
-       */
-      handleExecutionError(error, timeout) {
-        const execError = error;
-        if (execError.killed && (execError.code === "ETIMEDOUT" || execError.signal === "SIGTERM")) {
-          throw new Error(`Command timed out after ${timeout}ms`);
-        }
-        let exitCode = 1;
-        if (execError.code) {
-          exitCode = typeof execError.code === "string" ? parseInt(execError.code, 10) : execError.code;
-        }
-        return {
-          stdout: execError.stdout || "",
-          stderr: execError.stderr || "",
-          exitCode
-        };
-      }
-      /**
-       * Build safe environment variables by merging process.env with custom env
-       * Ensures all values are strings (no undefined)
-       */
-      buildEnvironment(baseEnv = process.env, ...customEnvs) {
-        const result = {};
-        for (const [key, value] of Object.entries(baseEnv)) {
-          if (value !== void 0) {
-            result[key] = value;
-          }
-        }
-        for (const customEnv of customEnvs) {
-          if (customEnv) {
-            Object.assign(result, customEnv);
-          }
-        }
-        return result;
-      }
-      /**
-       * Log command execution for debugging
-       */
-      logExecution(command, options) {
-        const debugInfo = [
-          `Executing command: ${command}`,
-          options.cwd ? `cwd: ${options.cwd}` : null,
-          options.stdin ? "with stdin" : null,
-          options.timeout ? `timeout: ${options.timeout}ms` : null,
-          options.env ? `env vars: ${Object.keys(options.env).length}` : null
-        ].filter(Boolean).join(", ");
-        logger.debug(debugInfo);
-      }
-    };
-    commandExecutor = CommandExecutor.getInstance();
-  }
-});
-
 // src/utils/env-exposure.ts
 var env_exposure_exports = {};
 __export(env_exposure_exports, {
@@ -9680,6 +11089,8 @@ var init_command_check_provider = __esm({
           outputs_raw: outputsRaw,
           // Workflow inputs (when executing within a workflow)
           inputs: context2?.workflowInputs || {},
+          // Custom arguments from on_init 'with' directive
+          args: context2?.args || {},
           env: this.getSafeEnvironmentVariables()
         };
         logger.debug(
@@ -10966,7 +12377,9 @@ function prCacheKey(pr) {
   for (const f of pr.files) sum += (f.additions || 0) + (f.deletions || 0) + (f.changes || 0);
   return [pr.number, pr.title, pr.author, pr.base, pr.head, pr.files.length, sum].join("|");
 }
-function buildProviderTemplateContext(prInfo, dependencyResults, memoryStore, outputHistory, stageHistoryBase, opts = { attachMemoryReadHelpers: true }) {
+function buildProviderTemplateContext(prInfo, dependencyResults, memoryStore, outputHistory, stageHistoryBase, opts = {
+  attachMemoryReadHelpers: true
+}) {
   const context2 = {};
   const key = prCacheKey(prInfo);
   let prObj = prCache.get(key);
@@ -11051,6 +12464,9 @@ function buildProviderTemplateContext(prInfo, dependencyResults, memoryStore, ou
       list: (ns) => memoryStore.list(ns),
       getAll: (ns) => memoryStore.getAll(ns)
     };
+  }
+  if (opts.args) {
+    context2.args = opts.args;
   }
   return context2;
 }
@@ -11197,7 +12613,8 @@ var init_memory_check_provider = __esm({
           dependencyResults,
           memoryStore,
           config.__outputHistory,
-          _sessionInfo?.stageHistoryBase
+          _sessionInfo?.stageHistoryBase,
+          _sessionInfo?.args
         );
         let result;
         try {
@@ -11348,13 +12765,14 @@ var init_memory_check_provider = __esm({
       /**
        * Build template context for Liquid and JS evaluation
        */
-      buildTemplateContext(prInfo, dependencyResults, memoryStore, outputHistory, stageHistoryBase) {
+      buildTemplateContext(prInfo, dependencyResults, memoryStore, outputHistory, stageHistoryBase, args) {
         const base = buildProviderTemplateContext(
           prInfo,
           dependencyResults,
           memoryStore,
           outputHistory,
-          stageHistoryBase
+          stageHistoryBase,
+          { attachMemoryReadHelpers: true, args }
         );
         if (memoryStore) {
           const { ops } = createSyncMemoryOps(memoryStore);
@@ -11390,184 +12808,6 @@ var init_memory_check_provider = __esm({
           "No external dependencies required",
           "Used for state management and persistent storage across checks"
         ];
-      }
-    };
-  }
-});
-
-// src/providers/custom-tool-executor.ts
-var import_ajv, CustomToolExecutor;
-var init_custom_tool_executor = __esm({
-  "src/providers/custom-tool-executor.ts"() {
-    "use strict";
-    init_liquid_extensions();
-    init_sandbox();
-    init_logger();
-    init_command_executor();
-    import_ajv = __toESM(require("ajv"));
-    CustomToolExecutor = class {
-      liquid;
-      sandbox;
-      tools;
-      ajv;
-      constructor(tools) {
-        this.liquid = createExtendedLiquid({
-          cache: false,
-          strictFilters: false,
-          strictVariables: false
-        });
-        this.tools = new Map(Object.entries(tools || {}));
-        this.ajv = new import_ajv.default({ allErrors: true, verbose: true });
-      }
-      /**
-       * Register a custom tool
-       */
-      registerTool(tool) {
-        if (!tool.name) {
-          throw new Error("Tool must have a name");
-        }
-        this.tools.set(tool.name, tool);
-      }
-      /**
-       * Register multiple tools
-       */
-      registerTools(tools) {
-        for (const [name, tool] of Object.entries(tools)) {
-          tool.name = tool.name || name;
-          this.registerTool(tool);
-        }
-      }
-      /**
-       * Get all registered tools
-       */
-      getTools() {
-        return Array.from(this.tools.values());
-      }
-      /**
-       * Get a specific tool by name
-       */
-      getTool(name) {
-        return this.tools.get(name);
-      }
-      /**
-       * Validate tool input against schema using ajv
-       */
-      validateInput(tool, input) {
-        if (!tool.inputSchema) {
-          return;
-        }
-        const validate = this.ajv.compile(tool.inputSchema);
-        const valid = validate(input);
-        if (!valid) {
-          const errors = validate.errors?.map((err) => {
-            if (err.instancePath) {
-              return `${err.instancePath}: ${err.message}`;
-            }
-            return err.message;
-          }).join(", ");
-          throw new Error(`Input validation failed for tool '${tool.name}': ${errors}`);
-        }
-      }
-      /**
-       * Execute a custom tool
-       */
-      async execute(toolName, args, context2) {
-        const tool = this.tools.get(toolName);
-        if (!tool) {
-          throw new Error(`Tool not found: ${toolName}`);
-        }
-        this.validateInput(tool, args);
-        const templateContext = {
-          ...context2,
-          args,
-          input: args
-        };
-        const command = await this.liquid.parseAndRender(tool.exec, templateContext);
-        let stdin;
-        if (tool.stdin) {
-          stdin = await this.liquid.parseAndRender(tool.stdin, templateContext);
-        }
-        const env = commandExecutor.buildEnvironment(process.env, tool.env, context2?.env);
-        const result = await commandExecutor.execute(command, {
-          stdin,
-          cwd: tool.cwd,
-          env,
-          timeout: tool.timeout || 3e4
-        });
-        let output = result.stdout;
-        if (tool.parseJson) {
-          try {
-            output = JSON.parse(result.stdout);
-          } catch (e) {
-            logger.warn(`Failed to parse tool output as JSON: ${e}`);
-          }
-        }
-        if (tool.transform) {
-          const transformContext = {
-            ...templateContext,
-            output,
-            stdout: result.stdout,
-            stderr: result.stderr,
-            exitCode: result.exitCode
-          };
-          const transformed = await this.liquid.parseAndRender(tool.transform, transformContext);
-          if (typeof transformed === "string" && transformed.trim().startsWith("{")) {
-            try {
-              output = JSON.parse(transformed);
-            } catch {
-              output = transformed;
-            }
-          } else {
-            output = transformed;
-          }
-        }
-        if (tool.transform_js) {
-          output = await this.applyJavaScriptTransform(tool.transform_js, output, {
-            ...templateContext,
-            stdout: result.stdout,
-            stderr: result.stderr,
-            exitCode: result.exitCode
-          });
-        }
-        return output;
-      }
-      /**
-       * Apply JavaScript transform to output
-       */
-      async applyJavaScriptTransform(transformJs, output, context2) {
-        if (!this.sandbox) {
-          this.sandbox = createSecureSandbox();
-        }
-        const code = `
-      const output = ${JSON.stringify(output)};
-      const context = ${JSON.stringify(context2)};
-      const args = context.args || {};
-      const pr = context.pr || {};
-      const files = context.files || [];
-      const outputs = context.outputs || {};
-      const env = context.env || {};
-
-      ${transformJs}
-    `;
-        try {
-          return await compileAndRun(this.sandbox, code, { timeout: 5e3 });
-        } catch (error) {
-          logger.error(`JavaScript transform error: ${error}`);
-          throw error;
-        }
-      }
-      /**
-       * Convert custom tools to MCP tool format
-       */
-      toMcpTools() {
-        return Array.from(this.tools.values()).map((tool) => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-          handler: async (args) => {
-            return this.execute(tool.name, args);
-          }
-        }));
       }
     };
   }
@@ -11671,7 +12911,7 @@ var init_mcp_check_provider = __esm({
         }
         return true;
       }
-      async execute(prInfo, config, dependencyResults) {
+      async execute(prInfo, config, dependencyResults, sessionInfo) {
         const cfg = config;
         try {
           const templateContext = {
@@ -11685,6 +12925,7 @@ var init_mcp_check_provider = __esm({
             files: prInfo.files,
             fileCount: prInfo.files.length,
             outputs: this.buildOutputContext(dependencyResults),
+            args: sessionInfo?.args || {},
             env: this.getSafeEnvironmentVariables()
           };
           let methodArgs = cfg.methodArgs || {};
@@ -12153,7 +13394,7 @@ async function acquirePromptLock() {
     activePrompt = true;
     return;
   }
-  await new Promise((resolve7) => waiters.push(resolve7));
+  await new Promise((resolve9) => waiters.push(resolve9));
   activePrompt = true;
 }
 function releasePromptLock() {
@@ -12163,7 +13404,7 @@ function releasePromptLock() {
 }
 async function interactivePrompt(options) {
   await acquirePromptLock();
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve9, reject) => {
     const dbg = process.env.VISOR_DEBUG === "true";
     try {
       if (dbg) {
@@ -12250,12 +13491,12 @@ async function interactivePrompt(options) {
     };
     const finish = (value) => {
       cleanup();
-      resolve7(value);
+      resolve9(value);
     };
     if (options.timeout && options.timeout > 0) {
       timeoutId = setTimeout(() => {
         cleanup();
-        if (defaultValue !== void 0) return resolve7(defaultValue);
+        if (defaultValue !== void 0) return resolve9(defaultValue);
         return reject(new Error("Input timeout"));
       }, options.timeout);
     }
@@ -12387,7 +13628,7 @@ async function interactivePrompt(options) {
   });
 }
 async function simplePrompt(prompt) {
-  return new Promise((resolve7) => {
+  return new Promise((resolve9) => {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout
@@ -12403,7 +13644,7 @@ async function simplePrompt(prompt) {
     rl.question(`${prompt}
 > `, (answer) => {
       rl.close();
-      resolve7(answer.trim());
+      resolve9(answer.trim());
     });
   });
 }
@@ -12417,12 +13658,150 @@ var init_interactive_prompt = __esm({
   }
 });
 
+// src/slack/prompt-state.ts
+var prompt_state_exports = {};
+__export(prompt_state_exports, {
+  PromptStateManager: () => PromptStateManager,
+  getPromptStateManager: () => getPromptStateManager,
+  resetPromptStateManager: () => resetPromptStateManager
+});
+function getPromptStateManager(ttlMs) {
+  if (!__promptState) __promptState = new PromptStateManager(ttlMs);
+  return __promptState;
+}
+function resetPromptStateManager() {
+  __promptState = void 0;
+}
+var PromptStateManager, __promptState;
+var init_prompt_state = __esm({
+  "src/slack/prompt-state.ts"() {
+    "use strict";
+    init_logger();
+    PromptStateManager = class {
+      waiting = /* @__PURE__ */ new Map();
+      // key: `${channel}:${threadTs}`
+      ttlMs;
+      timer;
+      firstMessage = /* @__PURE__ */ new Map();
+      summaryTs = /* @__PURE__ */ new Map();
+      // key: threadKey -> group -> ts
+      constructor(ttlMs = 60 * 60 * 1e3) {
+        this.ttlMs = ttlMs;
+        this.startCleanup();
+      }
+      key(channel, threadTs) {
+        return `${channel}:${threadTs}`;
+      }
+      setWaiting(channel, threadTs, info) {
+        const key = this.key(channel, threadTs);
+        const value = { ...info, timestamp: Date.now(), channel, threadTs };
+        this.waiting.set(key, value);
+        try {
+          logger.info(
+            `[prompt-state] waiting set for ${key} (check=${info.checkName}, prompt="${info.prompt.substring(
+              0,
+              60
+            )}\u2026")`
+          );
+        } catch {
+        }
+      }
+      getWaiting(channel, threadTs) {
+        const key = this.key(channel, threadTs);
+        const info = this.waiting.get(key);
+        if (!info) return void 0;
+        const age = Date.now() - info.timestamp;
+        if (age > this.ttlMs) {
+          this.waiting.delete(key);
+          try {
+            logger.warn(`[prompt-state] expired ${key} (age=${Math.round(age / 1e3)}s)`);
+          } catch {
+          }
+          return void 0;
+        }
+        return info;
+      }
+      clear(channel, threadTs) {
+        const key = this.key(channel, threadTs);
+        const had = this.waiting.delete(key);
+        if (had) {
+          try {
+            logger.info(`[prompt-state] cleared ${key}`);
+          } catch {
+          }
+        }
+        return had;
+      }
+      /** Merge updates into an existing waiting entry */
+      update(channel, threadTs, patch) {
+        const key = this.key(channel, threadTs);
+        const prev = this.waiting.get(key);
+        if (!prev) return void 0;
+        const next = { ...prev, ...patch };
+        this.waiting.set(key, next);
+        try {
+          if (patch.snapshotPath) {
+            logger.info(`[prompt-state] snapshotPath set for ${key}`);
+          }
+        } catch {
+        }
+        return next;
+      }
+      // First message capture helpers
+      setFirstMessage(channel, threadTs, text) {
+        const key = this.key(channel, threadTs);
+        if (!text || !text.trim()) return;
+        if (!this.firstMessage.has(key)) {
+          this.firstMessage.set(key, { text, consumed: false });
+        }
+      }
+      consumeFirstMessage(channel, threadTs) {
+        const key = this.key(channel, threadTs);
+        const entry = this.firstMessage.get(key);
+        if (entry && !entry.consumed) {
+          entry.consumed = true;
+          this.firstMessage.set(key, entry);
+          return entry.text;
+        }
+        return void 0;
+      }
+      hasUnconsumedFirstMessage(channel, threadTs) {
+        const key = this.key(channel, threadTs);
+        const e = this.firstMessage.get(key);
+        return !!(e && !e.consumed && e.text && e.text.trim());
+      }
+      startCleanup(intervalMs = 5 * 60 * 1e3) {
+        if (this.timer) clearInterval(this.timer);
+        this.timer = setInterval(() => this.cleanup(), intervalMs);
+        if (this.timer.unref) this.timer.unref();
+      }
+      cleanup() {
+        const now = Date.now();
+        let removed = 0;
+        for (const [key, info] of this.waiting.entries()) {
+          if (now - info.timestamp > this.ttlMs) {
+            this.waiting.delete(key);
+            removed++;
+          }
+        }
+        if (removed) {
+          try {
+            logger.info(`[prompt-state] cleanup removed ${removed} entries`);
+          } catch {
+          }
+        }
+        return removed;
+      }
+    };
+  }
+});
+
 // src/utils/stdin-reader.ts
 function isStdinAvailable() {
   return !process.stdin.isTTY;
 }
 async function readStdin(timeout, maxSize = 1024 * 1024) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve9, reject) => {
     let data = "";
     let timeoutId;
     if (timeout) {
@@ -12449,7 +13828,7 @@ async function readStdin(timeout, maxSize = 1024 * 1024) {
     };
     const onEnd = () => {
       cleanup();
-      resolve7(data.trim());
+      resolve9(data.trim());
     };
     const onError = (err) => {
       cleanup();
@@ -12485,6 +13864,7 @@ var init_human_input_check_provider = __esm({
     "use strict";
     init_check_provider_interface();
     init_interactive_prompt();
+    init_prompt_state();
     init_liquid_extensions();
     init_stdin_reader();
     fs9 = __toESM(require("fs"));
@@ -12599,6 +13979,14 @@ var init_human_input_check_provider = __esm({
           for (const [k, v] of outputHistory.entries()) hist[k] = Array.isArray(v) ? v : [];
         }
         ctx.outputs_history = hist;
+        try {
+          const anyCtx = _context;
+          const checksMeta = anyCtx?.checksMeta;
+          if (checksMeta && typeof checksMeta === "object") {
+            ctx.checks_meta = checksMeta;
+          }
+        } catch {
+        }
         return ctx;
       }
       /**
@@ -12679,6 +14067,54 @@ var init_human_input_check_provider = __esm({
        * Get user input through various methods
        */
       async getUserInput(checkName, config, context2) {
+        try {
+          const payload = context2?.webhookContext?.webhookData?.get(
+            config?.endpoint || "/bots/slack/support"
+          );
+          const ev = payload && payload.event;
+          const channel = ev && String(ev.channel || "");
+          const threadTs = ev && String(ev.thread_ts || ev.ts || ev.event_ts || "");
+          const text = ev && String(ev.text || "");
+          if (channel && threadTs) {
+            const mgr = getPromptStateManager();
+            try {
+              const waiting2 = mgr.getWaiting(channel, threadTs);
+              const promptsPosted = waiting2?.promptsPosted || 0;
+              if (promptsPosted === 0 && mgr.hasUnconsumedFirstMessage(channel, threadTs)) {
+                const first = mgr.consumeFirstMessage(channel, threadTs);
+                if (first && first.trim().length > 0) {
+                  return first;
+                }
+              }
+            } catch {
+            }
+            const waiting = mgr.getWaiting(channel, threadTs);
+            if (waiting && waiting.checkName === checkName) {
+              const answer = text.replace(/<@[A-Z0-9]+>/gi, "").trim();
+              mgr.clear(channel, threadTs);
+              if (!answer && config.allow_empty !== true) {
+              } else {
+                return answer || config.default || "";
+              }
+            } else {
+              const prompt2 = String(config.prompt || "Please provide input:");
+              try {
+                await context2?.eventBus?.emit({
+                  type: "HumanInputRequested",
+                  checkId: checkName,
+                  prompt: prompt2,
+                  channel,
+                  threadTs,
+                  threadKey: `${channel}:${threadTs}`
+                });
+              } catch {
+              }
+              throw this.buildAwaitingError(checkName, prompt2);
+            }
+          }
+        } catch (e) {
+          if (e && e.issues) throw e;
+        }
         try {
           const mockVal = context2?.hooks?.mockForStep?.(checkName);
           if (mockVal !== void 0 && mockVal !== null) {
@@ -12763,6 +14199,21 @@ var init_human_input_check_provider = __esm({
           );
         }
       }
+      /** Build a deterministic, fatal error used to pause Slack-driven runs. */
+      buildAwaitingError(checkName, prompt) {
+        const err = new Error(`awaiting human input for ${checkName}`);
+        err.issues = [
+          {
+            file: "system",
+            line: 0,
+            ruleId: `${checkName}/execution_error`,
+            message: `Awaiting human input (Slack thread): ${prompt.slice(0, 80)}`,
+            severity: "error",
+            category: "logic"
+          }
+        ];
+        return err;
+      }
       async execute(_prInfo, config, _dependencyResults, context2) {
         const checkName = config.checkName || "human-input";
         try {
@@ -12838,6 +14289,13 @@ ${snippet}`
             output: { text: sanitizedInput, ts: Date.now() }
           };
         } catch (error) {
+          if (error && error.issues) {
+            const summary = {
+              issues: error.issues
+            };
+            summary.awaitingHumanInput = true;
+            return summary;
+          }
           return {
             issues: [
               {
@@ -12934,7 +14392,7 @@ var init_script_check_provider = __esm({
           memoryStore,
           config.__outputHistory,
           _sessionInfo?.stageHistoryBase,
-          { attachMemoryReadHelpers: false }
+          { attachMemoryReadHelpers: false, args: _sessionInfo?.args }
         );
         const { ops, needsSave } = createSyncMemoryOps(memoryStore);
         ctx.memory = ops;
@@ -14817,6 +16275,13 @@ var init_config_schema = __esm({
               $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
               description: "MCP servers for this AI check - overrides global setting"
             },
+            ai_custom_tools: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "List of custom tool names to expose to this AI check via ephemeral SSE MCP server"
+            },
             claude_code: {
               $ref: "#/definitions/ClaudeCodeConfig",
               description: "Claude Code configuration (for claude-code type checks)"
@@ -14908,6 +16373,10 @@ var init_config_schema = __esm({
             reduce: {
               type: "boolean",
               description: "Alias for fanout: 'reduce'"
+            },
+            on_init: {
+              $ref: "#/definitions/OnInitConfig",
+              description: "Init routing configuration for this check (runs before execution/preprocessing)"
             },
             on_fail: {
               $ref: "#/definitions/OnFailConfig",
@@ -15070,7 +16539,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -15100,7 +16569,8 @@ var init_config_schema = __esm({
             "claude-code",
             "mcp",
             "human-input",
-            "workflow"
+            "workflow",
+            "git-checkout"
           ],
           description: "Valid check types in configuration"
         },
@@ -15157,6 +16627,14 @@ var init_config_schema = __esm({
             skip_code_context: {
               type: "boolean",
               description: "Skip adding code context (diffs, files, PR info) to the prompt"
+            },
+            skip_slack_context: {
+              type: "boolean",
+              description: "Skip adding Slack conversation context to the prompt (when running under Slack)"
+            },
+            skip_transport_context: {
+              type: "boolean",
+              description: "Skip adding transport-specific context (e.g., GitHub PR/issue XML, Slack conversation XML) to the prompt. When true, this behaves like setting both skip_code_context and skip_slack_context to true, unless those are explicitly overridden."
             },
             mcpServers: {
               $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
@@ -15517,6 +16995,161 @@ var init_config_schema = __esm({
           enum: ["error", "warning", "info"],
           description: "Failure condition severity levels"
         },
+        OnInitConfig: {
+          type: "object",
+          properties: {
+            run: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/OnInitRunItem"
+              },
+              description: "Items to run before this check executes"
+            },
+            run_js: {
+              type: "string",
+              description: "Dynamic init items: JS expression returning OnInitRunItem[]"
+            },
+            transitions: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/TransitionRule"
+              },
+              description: "Declarative transitions (optional, for advanced use cases)"
+            }
+          },
+          additionalProperties: false,
+          description: "Init routing configuration per check Runs BEFORE the check executes (preprocessing/setup)",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        OnInitRunItem: {
+          anyOf: [
+            {
+              $ref: "#/definitions/OnInitToolInvocation"
+            },
+            {
+              $ref: "#/definitions/OnInitStepInvocation"
+            },
+            {
+              $ref: "#/definitions/OnInitWorkflowInvocation"
+            },
+            {
+              type: "string"
+            }
+          ],
+          description: "Unified on_init run item - can be tool, step, workflow, or plain string"
+        },
+        OnInitToolInvocation: {
+          type: "object",
+          properties: {
+            tool: {
+              type: "string",
+              description: "Tool name (must exist in tools: section)"
+            },
+            with: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Arguments to pass to the tool (Liquid templates supported)"
+            },
+            as: {
+              type: "string",
+              description: "Custom output name (defaults to tool name)"
+            }
+          },
+          required: ["tool"],
+          additionalProperties: false,
+          description: "Invoke a custom tool (from tools: section)",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        OnInitStepInvocation: {
+          type: "object",
+          properties: {
+            step: {
+              type: "string",
+              description: "Step name (must exist in steps: section)"
+            },
+            with: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Arguments to pass to the step (Liquid templates supported)"
+            },
+            as: {
+              type: "string",
+              description: "Custom output name (defaults to step name)"
+            }
+          },
+          required: ["step"],
+          additionalProperties: false,
+          description: "Invoke a helper step (regular check)",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        OnInitWorkflowInvocation: {
+          type: "object",
+          properties: {
+            workflow: {
+              type: "string",
+              description: "Workflow ID or path"
+            },
+            with: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Workflow inputs (Liquid templates supported)"
+            },
+            as: {
+              type: "string",
+              description: "Custom output name (defaults to workflow name)"
+            },
+            overrides: {
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E%3E",
+              description: "Step overrides"
+            },
+            output_mapping: {
+              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
+              description: "Output mapping"
+            }
+          },
+          required: ["workflow"],
+          additionalProperties: false,
+          description: "Invoke a reusable workflow",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        "Record<string,Partial<interface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706>>": {
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E"
+          }
+        },
+        "Partial<interface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706>": {
+          type: "object",
+          additionalProperties: false
+        },
+        TransitionRule: {
+          type: "object",
+          properties: {
+            when: {
+              type: "string",
+              description: "JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule."
+            },
+            to: {
+              type: ["string", "null"],
+              description: "Target step ID, or null to explicitly prevent goto."
+            },
+            goto_event: {
+              $ref: "#/definitions/EventTrigger",
+              description: "Optional event override when performing goto."
+            }
+          },
+          required: ["when"],
+          additionalProperties: false,
+          description: "Declarative transition rule for on_* blocks.",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
         OnFailConfig: {
           type: "object",
           properties: {
@@ -15594,29 +17227,6 @@ var init_config_schema = __esm({
           },
           additionalProperties: false,
           description: "Backoff policy for retries",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        TransitionRule: {
-          type: "object",
-          properties: {
-            when: {
-              type: "string",
-              description: "JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule."
-            },
-            to: {
-              type: ["string", "null"],
-              description: "Target step ID, or null to explicitly prevent goto."
-            },
-            goto_event: {
-              $ref: "#/definitions/EventTrigger",
-              description: "Optional event override when performing goto."
-            }
-          },
-          required: ["when"],
-          additionalProperties: false,
-          description: "Declarative transition rule for on_* blocks.",
           patternProperties: {
             "^x-": {}
           }
@@ -15701,16 +17311,6 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>>": {
-          type: "object",
-          additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E"
-          }
-        },
-        "Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>": {
-          type: "object",
-          additionalProperties: false
-        },
         OutputConfig: {
           type: "object",
           properties: {
@@ -15741,6 +17341,10 @@ var init_config_schema = __esm({
         PrCommentOutput: {
           type: "object",
           properties: {
+            enabled: {
+              type: "boolean",
+              description: "Whether PR comments are enabled"
+            },
             format: {
               $ref: "#/definitions/ConfigOutputFormat",
               description: "Format of the output"
@@ -16129,7 +17733,8 @@ var init_config = __esm({
         "log",
         "github",
         "human-input",
-        "workflow"
+        "workflow",
+        "git-checkout"
       ];
       validEventTriggers = [...VALID_EVENT_TRIGGERS];
       validOutputFormats = ["table", "json", "markdown", "sarif"];
@@ -16979,6 +18584,9 @@ ${errors}`);
                 const addl = e.params && e.params.additionalProperty || "unknown";
                 const fullField = pathStr ? `${pathStr}.${addl}` : addl;
                 const topLevel = !pathStr;
+                if (topLevel && (addl === "tests" || addl === "slack")) {
+                  continue;
+                }
                 warnings.push({
                   field: fullField || "config",
                   message: topLevel ? `Unknown top-level key '${addl}' will be ignored.` : `Unknown key '${addl}' will be ignored`
@@ -17617,10 +19225,10 @@ var init_workflow_check_provider = __esm({
        * so it can be executed by the state machine as a nested workflow.
        */
       async loadWorkflowFromConfigPath(sourcePath, baseDir) {
-        const path17 = require("path");
-        const fs16 = require("fs");
-        const resolved = path17.isAbsolute(sourcePath) ? sourcePath : path17.resolve(baseDir, sourcePath);
-        if (!fs16.existsSync(resolved)) {
+        const path20 = require("path");
+        const fs18 = require("fs");
+        const resolved = path20.isAbsolute(sourcePath) ? sourcePath : path20.resolve(baseDir, sourcePath);
+        if (!fs18.existsSync(resolved)) {
           throw new Error(`Workflow config not found at: ${resolved}`);
         }
         const { ConfigManager: ConfigManager2 } = (init_config(), __toCommonJS(config_exports));
@@ -17630,8 +19238,8 @@ var init_workflow_check_provider = __esm({
         if (!steps || Object.keys(steps).length === 0) {
           throw new Error(`Config '${resolved}' does not contain any steps to execute as a workflow`);
         }
-        const id = path17.basename(resolved).replace(/\.(ya?ml)$/i, "");
-        const name = loaded.name || `Workflow from ${path17.basename(resolved)}`;
+        const id = path20.basename(resolved).replace(/\.(ya?ml)$/i, "");
+        const name = loaded.name || `Workflow from ${path20.basename(resolved)}`;
         const workflowDef = {
           id,
           name,
@@ -17645,6 +19253,702 @@ var init_workflow_check_provider = __esm({
           outputs: loaded.outputs
         };
         return workflowDef;
+      }
+    };
+  }
+});
+
+// src/utils/worktree-manager.ts
+var fs13, path14, crypto, WorktreeManager, worktreeManager;
+var init_worktree_manager = __esm({
+  "src/utils/worktree-manager.ts"() {
+    "use strict";
+    fs13 = __toESM(require("fs"));
+    path14 = __toESM(require("path"));
+    crypto = __toESM(require("crypto"));
+    init_command_executor();
+    init_logger();
+    WorktreeManager = class _WorktreeManager {
+      static instance;
+      config;
+      activeWorktrees;
+      cleanupHandlersRegistered = false;
+      constructor() {
+        let cwd;
+        try {
+          cwd = process.cwd() || "/tmp";
+        } catch {
+          cwd = "/tmp";
+        }
+        const defaultBasePath = process.env.VISOR_WORKTREE_PATH || path14.join(cwd, ".visor", "worktrees");
+        this.config = {
+          enabled: true,
+          base_path: defaultBasePath,
+          cleanup_on_exit: true,
+          max_age_hours: 24
+        };
+        this.activeWorktrees = /* @__PURE__ */ new Map();
+        this.ensureDirectories();
+        this.registerCleanupHandlers();
+      }
+      static getInstance() {
+        if (!_WorktreeManager.instance) {
+          _WorktreeManager.instance = new _WorktreeManager();
+        }
+        return _WorktreeManager.instance;
+      }
+      /**
+       * Update configuration
+       */
+      configure(config) {
+        this.config = { ...this.config, ...config };
+        this.ensureDirectories();
+      }
+      getConfig() {
+        return { ...this.config };
+      }
+      /**
+       * Ensure base directories exist
+       */
+      ensureDirectories() {
+        if (!this.config.base_path) {
+          logger.debug("Skipping directory creation: base_path not initialized");
+          return;
+        }
+        const reposDir = this.getReposDir();
+        const worktreesDir = this.getWorktreesDir();
+        if (!fs13.existsSync(reposDir)) {
+          fs13.mkdirSync(reposDir, { recursive: true });
+          logger.debug(`Created repos directory: ${reposDir}`);
+        }
+        if (!fs13.existsSync(worktreesDir)) {
+          fs13.mkdirSync(worktreesDir, { recursive: true });
+          logger.debug(`Created worktrees directory: ${worktreesDir}`);
+        }
+      }
+      getReposDir() {
+        return path14.join(this.config.base_path, "repos");
+      }
+      getWorktreesDir() {
+        return path14.join(this.config.base_path, "worktrees");
+      }
+      /**
+       * Generate a unique worktree ID
+       */
+      generateWorktreeId(repository, ref) {
+        const sanitizedRepo = repository.replace(/[^a-zA-Z0-9-]/g, "-");
+        const sanitizedRef = ref.replace(/[^a-zA-Z0-9-]/g, "-");
+        const hash = crypto.createHash("md5").update(`${repository}:${ref}:${Date.now()}`).digest("hex").substring(0, 8);
+        return `${sanitizedRepo}-${sanitizedRef}-${hash}`;
+      }
+      /**
+       * Get or create bare repository
+       */
+      async getOrCreateBareRepo(repository, repoUrl, token, fetchDepth) {
+        const reposDir = this.getReposDir();
+        const repoName = repository.replace(/\//g, "-");
+        const bareRepoPath = path14.join(reposDir, `${repoName}.git`);
+        if (fs13.existsSync(bareRepoPath)) {
+          logger.debug(`Bare repository already exists: ${bareRepoPath}`);
+          await this.updateBareRepo(bareRepoPath);
+          return bareRepoPath;
+        }
+        const cloneUrl = this.buildAuthenticatedUrl(repoUrl, token);
+        const redactedUrl = this.redactUrl(cloneUrl);
+        logger.info(
+          `Cloning bare repository: ${redactedUrl}${fetchDepth ? ` (depth: ${fetchDepth})` : ""}`
+        );
+        let cloneCmd = `git clone --bare`;
+        if (fetchDepth && fetchDepth > 0) {
+          const depth = parseInt(String(fetchDepth), 10);
+          if (isNaN(depth) || depth < 1) {
+            throw new Error("fetch_depth must be a positive integer");
+          }
+          cloneCmd += ` --depth ${depth}`;
+        }
+        cloneCmd += ` ${this.escapeShellArg(cloneUrl)} ${this.escapeShellArg(bareRepoPath)}`;
+        const result = await this.executeGitCommand(cloneCmd, { timeout: 3e5 });
+        if (result.exitCode !== 0) {
+          const redactedStderr = this.redactUrl(result.stderr);
+          throw new Error(`Failed to clone bare repository: ${redactedStderr}`);
+        }
+        logger.info(`Successfully cloned bare repository to ${bareRepoPath}`);
+        return bareRepoPath;
+      }
+      /**
+       * Update bare repository refs
+       */
+      async updateBareRepo(bareRepoPath) {
+        logger.debug(`Updating bare repository: ${bareRepoPath}`);
+        const updateCmd = `git -C ${this.escapeShellArg(bareRepoPath)} remote update --prune`;
+        const result = await this.executeGitCommand(updateCmd, { timeout: 6e4 });
+        if (result.exitCode !== 0) {
+          logger.warn(`Failed to update bare repository: ${result.stderr}`);
+        } else {
+          logger.debug(`Successfully updated bare repository`);
+        }
+      }
+      /**
+       * Create a new worktree
+       */
+      async createWorktree(repository, repoUrl, ref, options = {}) {
+        this.validateRef(ref);
+        const bareRepoPath = await this.getOrCreateBareRepo(
+          repository,
+          repoUrl,
+          options.token,
+          options.fetchDepth
+        );
+        const worktreeId = this.generateWorktreeId(repository, ref);
+        let worktreePath = options.workingDirectory || path14.join(this.getWorktreesDir(), worktreeId);
+        if (options.workingDirectory) {
+          worktreePath = this.validatePath(options.workingDirectory);
+        }
+        if (fs13.existsSync(worktreePath)) {
+          logger.debug(`Worktree already exists: ${worktreePath}`);
+          if (options.clean) {
+            logger.debug(`Cleaning existing worktree`);
+            await this.cleanWorktree(worktreePath);
+          }
+          const metadata2 = await this.loadMetadata(worktreePath);
+          if (metadata2) {
+            this.activeWorktrees.set(worktreeId, metadata2);
+            return {
+              id: worktreeId,
+              path: worktreePath,
+              ref: metadata2.ref,
+              commit: metadata2.commit,
+              metadata: metadata2,
+              locked: false
+            };
+          }
+        }
+        await this.fetchRef(bareRepoPath, ref);
+        logger.info(`Creating worktree for ${repository}@${ref}`);
+        const createCmd = `git -C ${this.escapeShellArg(bareRepoPath)} worktree add ${this.escapeShellArg(worktreePath)} ${this.escapeShellArg(ref)}`;
+        const result = await this.executeGitCommand(createCmd, { timeout: 6e4 });
+        if (result.exitCode !== 0) {
+          throw new Error(`Failed to create worktree: ${result.stderr}`);
+        }
+        const commit = await this.getCommitSha(worktreePath);
+        const metadata = {
+          worktree_id: worktreeId,
+          created_at: (/* @__PURE__ */ new Date()).toISOString(),
+          workflow_id: options.workflowId,
+          ref,
+          commit,
+          repository,
+          pid: process.pid,
+          cleanup_on_exit: true,
+          bare_repo_path: bareRepoPath,
+          worktree_path: worktreePath
+        };
+        await this.saveMetadata(worktreePath, metadata);
+        this.activeWorktrees.set(worktreeId, metadata);
+        logger.info(`Successfully created worktree: ${worktreePath}`);
+        return {
+          id: worktreeId,
+          path: worktreePath,
+          ref,
+          commit,
+          metadata,
+          locked: false
+        };
+      }
+      /**
+       * Fetch a specific ref in bare repository
+       */
+      async fetchRef(bareRepoPath, ref) {
+        this.validateRef(ref);
+        logger.debug(`Fetching ref: ${ref}`);
+        const fetchCmd = `git -C ${this.escapeShellArg(bareRepoPath)} fetch origin ${this.escapeShellArg(ref + ":" + ref)} 2>&1 || true`;
+        await this.executeGitCommand(fetchCmd, { timeout: 6e4 });
+      }
+      /**
+       * Clean worktree (reset and remove untracked files)
+       */
+      async cleanWorktree(worktreePath) {
+        const resetCmd = `git -C ${this.escapeShellArg(worktreePath)} reset --hard HEAD`;
+        await this.executeGitCommand(resetCmd);
+        const cleanCmd = `git -C ${this.escapeShellArg(worktreePath)} clean -fdx`;
+        await this.executeGitCommand(cleanCmd);
+      }
+      /**
+       * Get commit SHA for worktree
+       */
+      async getCommitSha(worktreePath) {
+        const cmd = `git -C ${this.escapeShellArg(worktreePath)} rev-parse HEAD`;
+        const result = await this.executeGitCommand(cmd);
+        if (result.exitCode !== 0) {
+          throw new Error(`Failed to get commit SHA: ${result.stderr}`);
+        }
+        return result.stdout.trim();
+      }
+      /**
+       * Remove a worktree
+       */
+      async removeWorktree(worktreeId) {
+        const metadata = this.activeWorktrees.get(worktreeId);
+        if (!metadata) {
+          logger.warn(`Worktree not found in active list: ${worktreeId}`);
+          return;
+        }
+        const { bare_repo_path, worktree_path } = metadata;
+        logger.info(`Removing worktree: ${worktree_path}`);
+        const removeCmd = `git -C ${this.escapeShellArg(bare_repo_path)} worktree remove ${this.escapeShellArg(worktree_path)} --force`;
+        const result = await this.executeGitCommand(removeCmd, { timeout: 3e4 });
+        if (result.exitCode !== 0) {
+          logger.warn(`Failed to remove worktree via git: ${result.stderr}`);
+          if (fs13.existsSync(worktree_path)) {
+            logger.debug(`Manually removing worktree directory`);
+            fs13.rmSync(worktree_path, { recursive: true, force: true });
+          }
+        }
+        this.activeWorktrees.delete(worktreeId);
+        logger.info(`Successfully removed worktree: ${worktreeId}`);
+      }
+      /**
+       * Save worktree metadata
+       */
+      async saveMetadata(worktreePath, metadata) {
+        const metadataPath = path14.join(worktreePath, ".visor-metadata.json");
+        fs13.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
+      }
+      /**
+       * Load worktree metadata
+       */
+      async loadMetadata(worktreePath) {
+        const metadataPath = path14.join(worktreePath, ".visor-metadata.json");
+        if (!fs13.existsSync(metadataPath)) {
+          return null;
+        }
+        try {
+          const content = fs13.readFileSync(metadataPath, "utf8");
+          return JSON.parse(content);
+        } catch (error) {
+          logger.warn(`Failed to load metadata: ${error}`);
+          return null;
+        }
+      }
+      /**
+       * List all worktrees
+       */
+      async listWorktrees() {
+        const worktreesDir = this.getWorktreesDir();
+        if (!fs13.existsSync(worktreesDir)) {
+          return [];
+        }
+        const entries = fs13.readdirSync(worktreesDir, { withFileTypes: true });
+        const worktrees = [];
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          const worktreePath = path14.join(worktreesDir, entry.name);
+          const metadata = await this.loadMetadata(worktreePath);
+          if (metadata) {
+            worktrees.push({
+              id: metadata.worktree_id,
+              path: worktreePath,
+              ref: metadata.ref,
+              commit: metadata.commit,
+              metadata,
+              locked: this.isProcessAlive(metadata.pid)
+            });
+          }
+        }
+        return worktrees;
+      }
+      /**
+       * Cleanup stale worktrees
+       */
+      async cleanupStaleWorktrees() {
+        logger.debug("Cleaning up stale worktrees");
+        const worktrees = await this.listWorktrees();
+        const now = /* @__PURE__ */ new Date();
+        const maxAgeMs = this.config.max_age_hours * 60 * 60 * 1e3;
+        for (const worktree of worktrees) {
+          const createdAt = new Date(worktree.metadata.created_at);
+          const ageMs = now.getTime() - createdAt.getTime();
+          if (worktree.locked) {
+            continue;
+          }
+          if (ageMs > maxAgeMs) {
+            logger.info(
+              `Removing stale worktree: ${worktree.id} (age: ${Math.round(ageMs / 1e3 / 60)} minutes)`
+            );
+            await this.removeWorktree(worktree.id);
+          }
+        }
+      }
+      /**
+       * Cleanup all worktrees for current process
+       */
+      async cleanupProcessWorktrees() {
+        logger.debug("Cleaning up worktrees for current process");
+        const currentPid = process.pid;
+        const worktrees = await this.listWorktrees();
+        for (const worktree of worktrees) {
+          if (worktree.metadata.pid === currentPid && worktree.metadata.cleanup_on_exit) {
+            logger.info(`Cleaning up worktree: ${worktree.id}`);
+            await this.removeWorktree(worktree.id);
+          }
+        }
+      }
+      /**
+       * Check if a process is alive
+       */
+      isProcessAlive(pid) {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch (_error) {
+          return false;
+        }
+      }
+      /**
+       * Register cleanup handlers
+       */
+      registerCleanupHandlers() {
+        if (this.cleanupHandlersRegistered) {
+          return;
+        }
+        if (this.config.cleanup_on_exit) {
+          process.on("exit", () => {
+            logger.debug("Process exiting, cleanup handler triggered");
+          });
+          process.on("SIGINT", async () => {
+            logger.info("SIGINT received, cleaning up worktrees");
+            await this.cleanupProcessWorktrees();
+            process.exit(130);
+          });
+          process.on("SIGTERM", async () => {
+            logger.info("SIGTERM received, cleaning up worktrees");
+            await this.cleanupProcessWorktrees();
+            process.exit(143);
+          });
+          process.on("uncaughtException", async (error) => {
+            logger.error(`Uncaught exception, cleaning up worktrees: ${error}`);
+            await this.cleanupProcessWorktrees();
+            process.exit(1);
+          });
+        }
+        this.cleanupHandlersRegistered = true;
+      }
+      /**
+       * Escape shell argument to prevent command injection
+       *
+       * Uses POSIX-standard single-quote escaping which prevents ALL shell metacharacter
+       * interpretation (including $, `, \, ", ;, &, |, etc.)
+       *
+       * How it works:
+       * - Everything is wrapped in single quotes: 'arg'
+       * - Single quotes within are escaped as: ' → '\''
+       *   (close quote, literal escaped quote, open quote)
+       *
+       * This is safer than double quotes which still allow $expansion and `backticks`
+       *
+       * Example: "foo'bar" → 'foo'\''bar'
+       */
+      escapeShellArg(arg) {
+        return `'${arg.replace(/'/g, "'\\''")}'`;
+      }
+      /**
+       * Validate git ref to prevent command injection
+       */
+      validateRef(ref) {
+        const safeRefPattern = /^[a-zA-Z0-9._/:-]+$/;
+        if (!safeRefPattern.test(ref)) {
+          throw new Error(
+            `Invalid git ref: ${ref}. Refs must only contain alphanumeric characters, dots, underscores, slashes, colons, and hyphens.`
+          );
+        }
+        if (ref.includes("..") || ref.startsWith("-") || ref.endsWith(".lock")) {
+          throw new Error(
+            `Invalid git ref: ${ref}. Refs cannot contain '..', start with '-', or end with '.lock'.`
+          );
+        }
+        if (ref.length > 256) {
+          throw new Error(`Invalid git ref: ${ref}. Refs cannot exceed 256 characters.`);
+        }
+      }
+      /**
+       * Validate path to prevent directory traversal
+       */
+      validatePath(userPath) {
+        const resolvedPath = path14.resolve(userPath);
+        if (!path14.isAbsolute(resolvedPath)) {
+          throw new Error("Path must be absolute");
+        }
+        const sensitivePatterns = [
+          "/etc",
+          "/root",
+          "/boot",
+          "/sys",
+          "/proc",
+          "/dev",
+          "C:\\Windows\\System32",
+          "C:\\Program Files"
+        ];
+        for (const pattern of sensitivePatterns) {
+          if (resolvedPath.startsWith(pattern)) {
+            throw new Error(`Access to system directory ${pattern} is not allowed`);
+          }
+        }
+        return resolvedPath;
+      }
+      /**
+       * Redact sensitive tokens from URLs for logging
+       */
+      redactUrl(url) {
+        return url.replace(/x-access-token:[^@]+@/g, "x-access-token:[REDACTED]@").replace(/:\/\/[^:]+:[^@]+@/g, "://[REDACTED]:[REDACTED]@");
+      }
+      /**
+       * Execute a git command
+       */
+      async executeGitCommand(command, options = {}) {
+        const result = await commandExecutor.execute(command, {
+          timeout: options.timeout || 3e4,
+          env: options.env || process.env
+        });
+        return {
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitCode: result.exitCode
+        };
+      }
+      /**
+       * Build authenticated URL with token
+       */
+      buildAuthenticatedUrl(repoUrl, token) {
+        if (!token) {
+          return repoUrl;
+        }
+        if (repoUrl.includes("github.com")) {
+          if (repoUrl.startsWith("git@github.com:")) {
+            repoUrl = repoUrl.replace("git@github.com:", "https://github.com/");
+          }
+          if (repoUrl.startsWith("https://")) {
+            return repoUrl.replace("https://", `https://x-access-token:${token}@`);
+          }
+        }
+        return repoUrl;
+      }
+      /**
+       * Get repository URL from repository identifier
+       */
+      getRepositoryUrl(repository, _token) {
+        if (repository.startsWith("http://") || repository.startsWith("https://") || repository.startsWith("git@")) {
+          return repository;
+        }
+        return `https://github.com/${repository}.git`;
+      }
+    };
+    worktreeManager = WorktreeManager.getInstance();
+  }
+});
+
+// src/providers/git-checkout-provider.ts
+var GitCheckoutProvider;
+var init_git_checkout_provider = __esm({
+  "src/providers/git-checkout-provider.ts"() {
+    "use strict";
+    init_check_provider_interface();
+    init_worktree_manager();
+    init_logger();
+    init_liquid_extensions();
+    init_env_exposure();
+    GitCheckoutProvider = class extends CheckProvider {
+      liquid = createExtendedLiquid();
+      getName() {
+        return "git-checkout";
+      }
+      getDescription() {
+        return "Checkout code from git repositories using worktrees for efficient multi-workflow execution";
+      }
+      async validateConfig(config) {
+        if (!config || typeof config !== "object") {
+          logger.error("Invalid config: must be an object");
+          return false;
+        }
+        const checkoutConfig = config;
+        if (!checkoutConfig.ref || typeof checkoutConfig.ref !== "string") {
+          logger.error("Invalid config: ref is required and must be a string");
+          return false;
+        }
+        if (checkoutConfig.fetch_depth !== void 0) {
+          if (typeof checkoutConfig.fetch_depth !== "number" || checkoutConfig.fetch_depth < 0) {
+            logger.error("Invalid config: fetch_depth must be a non-negative number");
+            return false;
+          }
+        }
+        if (checkoutConfig.fetch_tags !== void 0 && typeof checkoutConfig.fetch_tags !== "boolean") {
+          logger.error("Invalid config: fetch_tags must be a boolean");
+          return false;
+        }
+        if (checkoutConfig.submodules !== void 0) {
+          const validSubmoduleValues = [true, false, "recursive"];
+          if (!validSubmoduleValues.includes(checkoutConfig.submodules)) {
+            logger.error('Invalid config: submodules must be true, false, or "recursive"');
+            return false;
+          }
+        }
+        if (checkoutConfig.sparse_checkout !== void 0 && !Array.isArray(checkoutConfig.sparse_checkout)) {
+          logger.error("Invalid config: sparse_checkout must be an array");
+          return false;
+        }
+        return true;
+      }
+      async execute(prInfo, config, dependencyResults, context2) {
+        const checkoutConfig = config;
+        const issues = [];
+        try {
+          const templateContext = this.buildTemplateContext(
+            prInfo,
+            dependencyResults,
+            context2,
+            checkoutConfig
+          );
+          const resolvedRef = await this.liquid.parseAndRender(checkoutConfig.ref, templateContext);
+          const resolvedRepository = checkoutConfig.repository ? await this.liquid.parseAndRender(checkoutConfig.repository, templateContext) : process.env.GITHUB_REPOSITORY || "unknown/unknown";
+          const resolvedToken = checkoutConfig.token ? await this.liquid.parseAndRender(checkoutConfig.token, templateContext) : void 0;
+          const resolvedWorkingDirectory = checkoutConfig.working_directory ? await this.liquid.parseAndRender(checkoutConfig.working_directory, templateContext) : void 0;
+          logger.info(`Checking out repository: ${resolvedRepository}@${resolvedRef}`);
+          const repoUrl = worktreeManager.getRepositoryUrl(resolvedRepository, resolvedToken);
+          const worktree = await worktreeManager.createWorktree(
+            resolvedRepository,
+            repoUrl,
+            resolvedRef,
+            {
+              token: resolvedToken,
+              workingDirectory: resolvedWorkingDirectory,
+              clean: checkoutConfig.clean !== false,
+              // Default: true
+              workflowId: context2?.workflowId,
+              fetchDepth: checkoutConfig.fetch_depth
+            }
+          );
+          const output = {
+            success: true,
+            path: worktree.path,
+            ref: resolvedRef,
+            commit: worktree.commit,
+            worktree_id: worktree.id,
+            repository: resolvedRepository,
+            is_worktree: true
+          };
+          const workspace = context2?._parentContext?.workspace;
+          if (workspace?.isEnabled()) {
+            try {
+              const workspacePath = await workspace.addProject(
+                resolvedRepository,
+                worktree.path,
+                checkoutConfig.checkName
+              );
+              output.workspace_path = workspacePath;
+              logger.debug(`Added project to workspace: ${workspacePath}`);
+            } catch (error) {
+              logger.warn(`Failed to add project to workspace: ${error}`);
+            }
+          }
+          logger.info(
+            `Successfully checked out ${resolvedRepository}@${resolvedRef} to ${worktree.path}`
+          );
+          return {
+            issues,
+            output
+          };
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          logger.error(`Git checkout failed: ${errorMessage}`);
+          issues.push({
+            file: "git-checkout",
+            line: 0,
+            ruleId: "git-checkout/error",
+            message: `Failed to checkout code: ${errorMessage}`,
+            severity: "error",
+            category: "logic"
+          });
+          const output = {
+            success: false,
+            error: errorMessage
+          };
+          return {
+            issues,
+            output
+          };
+        }
+      }
+      /**
+       * Build template context for variable resolution
+       */
+      buildTemplateContext(prInfo, dependencyResults, context2, config) {
+        const outputsObj = {};
+        if (dependencyResults) {
+          for (const [checkName, result] of dependencyResults.entries()) {
+            outputsObj[checkName] = result.output !== void 0 ? result.output : result;
+          }
+        }
+        const outputHistory = config?.__outputHistory;
+        const historyObj = {};
+        if (outputHistory) {
+          for (const [checkName, history] of outputHistory.entries()) {
+            historyObj[checkName] = history;
+          }
+        }
+        const safeEnv = buildSandboxEnv(process.env);
+        return {
+          pr: {
+            number: prInfo.number,
+            title: prInfo.title,
+            author: prInfo.author,
+            head: prInfo.head,
+            base: prInfo.base,
+            repo: process.env.GITHUB_REPOSITORY || "",
+            files: prInfo.files
+          },
+          files: prInfo.files,
+          outputs: outputsObj,
+          outputs_history: historyObj,
+          env: safeEnv,
+          inputs: context2?.workflowInputs
+        };
+      }
+      getSupportedConfigKeys() {
+        return [
+          "type",
+          "ref",
+          "repository",
+          "token",
+          "fetch_depth",
+          "fetch_tags",
+          "submodules",
+          "working_directory",
+          "use_worktree",
+          "clean",
+          "sparse_checkout",
+          "lfs",
+          "timeout",
+          "criticality",
+          "assume",
+          "guarantee",
+          "cleanup_on_failure",
+          "persist_worktree",
+          "depends_on",
+          "if",
+          "fail_if",
+          "on"
+        ];
+      }
+      async isAvailable() {
+        try {
+          const { commandExecutor: commandExecutor2 } = await Promise.resolve().then(() => (init_command_executor(), command_executor_exports));
+          const result = await commandExecutor2.execute("git --version", { timeout: 5e3 });
+          return result.exitCode === 0;
+        } catch (_error) {
+          return false;
+        }
+      }
+      getRequirements() {
+        return ["git"];
       }
     };
   }
@@ -17673,6 +19977,7 @@ var init_check_provider_registry = __esm({
     init_human_input_check_provider();
     init_script_check_provider();
     init_workflow_check_provider();
+    init_git_checkout_provider();
     CheckProviderRegistry = class _CheckProviderRegistry {
       providers = /* @__PURE__ */ new Map();
       static instance;
@@ -17705,6 +20010,7 @@ var init_check_provider_registry = __esm({
         this.register(new GitHubOpsProvider());
         this.register(new HumanInputCheckProvider());
         this.register(new WorkflowCheckProvider());
+        this.register(new GitCheckoutProvider());
         try {
           this.register(new ClaudeCodeCheckProvider());
         } catch (error) {
@@ -17839,6 +20145,1311 @@ var init_check_provider_registry = __esm({
   }
 });
 
+// src/state-machine/dispatch/foreach-processor.ts
+async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems, context2, state, emitEvent, transition) {
+  try {
+    const snapId = context2.journal.beginSnapshot();
+    const visible = context2.journal.readVisible(context2.sessionId, snapId, context2.event);
+    let latestItems;
+    for (let i = visible.length - 1; i >= 0; i--) {
+      const e = visible[i];
+      if (e.checkId === forEachParent && Array.isArray(e.scope) && e.scope.length === 0) {
+        const r = e.result;
+        if (r && Array.isArray(r.forEachItems)) {
+          latestItems = r.forEachItems;
+          break;
+        }
+      }
+    }
+    if (Array.isArray(latestItems)) {
+      if (context2.debug) {
+        try {
+          const prevLen = Array.isArray(forEachItems) ? forEachItems.length : 0;
+          const newLen = latestItems.length;
+          if (prevLen !== newLen) {
+            logger.info(
+              `[LevelDispatch] Refreshing forEachItems for ${checkId}: from parent '${forEachParent}' latestItems=${newLen} (was ${prevLen})`
+            );
+          }
+        } catch {
+        }
+      }
+      forEachItems = latestItems;
+    }
+  } catch (e) {
+    if (context2.debug) {
+      logger.warn(
+        `[LevelDispatch] Failed to refresh forEachItems from journal for ${forEachParent}: ${e}`
+      );
+    }
+  }
+  const checkConfig = context2.config.checks?.[checkId];
+  if (!checkConfig) {
+    throw new Error(`Check configuration not found: ${checkId}`);
+  }
+  logger.info(
+    `[LevelDispatch][DEBUG] executeCheckWithForEachItems: checkId=${checkId}, forEachParent=${forEachParent}, items=${forEachItems.length}`
+  );
+  logger.info(
+    `[LevelDispatch][DEBUG] forEachItems: ${JSON.stringify(forEachItems).substring(0, 200)}`
+  );
+  const allIssues = [];
+  const perItemResults = [];
+  const allOutputs = [];
+  const allContents = [];
+  const perIterationDurations = [];
+  for (let itemIndex = 0; itemIndex < forEachItems.length; itemIndex++) {
+    const iterationStartMs = Date.now();
+    const scope = [
+      { check: forEachParent, index: itemIndex }
+    ];
+    const forEachItem = forEachItems[itemIndex];
+    logger.info(
+      `[LevelDispatch][DEBUG] Starting iteration ${itemIndex} of ${checkId}, parent=${forEachParent}, item=${JSON.stringify(forEachItem)?.substring(0, 100)}`
+    );
+    const shouldSkipDueToParentFailure = forEachItem?.__failed === true || forEachItem?.__skip === true;
+    if (shouldSkipDueToParentFailure) {
+      logger.info(
+        `\u23ED  Skipped ${checkId} iteration ${itemIndex} (forEach parent "${forEachParent}" iteration ${itemIndex} marked as failed)`
+      );
+      const iterationDurationMs = Date.now() - iterationStartMs;
+      perIterationDurations.push(iterationDurationMs);
+      perItemResults.push({ issues: [] });
+      allOutputs.push({ __skip: true });
+      continue;
+    }
+    try {
+      emitNdjsonSpanWithEvents(
+        "visor.foreach.item",
+        {
+          "visor.check.id": checkId,
+          "visor.foreach.index": itemIndex,
+          "visor.foreach.total": forEachItems.length
+        },
+        []
+      );
+    } catch (error) {
+      logger.warn(`[LevelDispatch] Failed to emit foreach.item span: ${error}`);
+    }
+    emitEvent({ type: "CheckScheduled", checkId, scope });
+    const dispatch = {
+      id: `${checkId}-${itemIndex}-${Date.now()}`,
+      checkId,
+      scope,
+      provider: context2.checks[checkId]?.providerType || "unknown",
+      startMs: Date.now(),
+      attempts: 1,
+      foreachIndex: itemIndex
+    };
+    state.activeDispatches.set(`${checkId}-${itemIndex}`, dispatch);
+    try {
+      const providerType = checkConfig.type || "ai";
+      const providerRegistry = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports)).CheckProviderRegistry.getInstance();
+      const provider = providerRegistry.getProviderOrThrow(providerType);
+      const outputHistory = buildOutputHistoryFromJournal(context2);
+      const providerConfig = {
+        type: providerType,
+        checkName: checkId,
+        prompt: checkConfig.prompt,
+        exec: checkConfig.exec,
+        schema: checkConfig.schema,
+        group: checkConfig.group,
+        focus: checkConfig.focus || (() => {
+          const focusMap = {
+            security: "security",
+            performance: "performance",
+            style: "style",
+            architecture: "architecture"
+          };
+          return focusMap[checkId] || "all";
+        })(),
+        transform: checkConfig.transform,
+        transform_js: checkConfig.transform_js,
+        env: checkConfig.env,
+        forEach: checkConfig.forEach,
+        ...checkConfig,
+        eventContext: context2.prInfo?.eventContext || {},
+        __outputHistory: outputHistory,
+        ai: {
+          ...checkConfig.ai || {},
+          timeout: checkConfig.ai?.timeout || 6e5,
+          debug: !!context2.debug
+        }
+      };
+      const dependencyResults = buildDependencyResultsWithScope(
+        checkId,
+        checkConfig,
+        context2,
+        scope
+      );
+      try {
+        const rawDeps = checkConfig?.depends_on || [];
+        const depList = Array.isArray(rawDeps) ? rawDeps : [rawDeps];
+        if (depList.length > 0) {
+          const groupSatisfied = (token) => {
+            if (typeof token !== "string") return true;
+            const orOptions = token.includes("|") ? token.split("|").map((s) => s.trim()).filter(Boolean) : [token];
+            for (const opt of orOptions) {
+              const dr = dependencyResults.get(opt);
+              const depCfg = context2.config.checks?.[opt];
+              const cont = !!(depCfg && depCfg.continue_on_failure === true);
+              let failed = false;
+              let skipped = false;
+              if (!dr) failed = true;
+              else {
+                const out = dr.output;
+                const fatal = hasFatalIssues(dr);
+                failed = fatal || !!out && typeof out === "object" && out.__failed === true;
+                skipped = !!(out && typeof out === "object" && out.__skip === true);
+              }
+              const satisfied = !skipped && (!failed || cont);
+              if (satisfied) return true;
+            }
+            return false;
+          };
+          let allSatisfied = true;
+          for (const token of depList) {
+            if (!groupSatisfied(token)) {
+              allSatisfied = false;
+              break;
+            }
+          }
+          if (!allSatisfied) {
+            if (context2.debug) {
+              logger.info(
+                `[LevelDispatch] Skipping ${checkId} iteration ${itemIndex} due to unsatisfied dependency group(s)`
+              );
+            }
+            const iterationDurationMs2 = Date.now() - iterationStartMs;
+            perIterationDurations.push(iterationDurationMs2);
+            perItemResults.push({ issues: [] });
+            allOutputs.push({ __skip: true });
+            continue;
+          }
+        }
+      } catch {
+      }
+      const prInfo = context2.prInfo || {
+        number: 1,
+        title: "State Machine Execution",
+        author: "system",
+        eventType: context2.event || "manual",
+        eventContext: {},
+        files: [],
+        commits: []
+      };
+      const executionContext = {
+        ...context2.executionContext,
+        _engineMode: context2.mode,
+        _parentContext: context2,
+        _parentState: state
+      };
+      const result = await withActiveSpan(
+        `visor.check.${checkId}`,
+        { "visor.check.id": checkId, "visor.check.type": providerType },
+        async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+      );
+      const enrichedIssues = (result.issues || []).map((issue) => ({
+        ...issue,
+        checkName: checkId,
+        ruleId: `${checkId}/${issue.ruleId || "unknown"}`,
+        group: checkConfig.group,
+        schema: typeof checkConfig.schema === "object" ? "custom" : checkConfig.schema,
+        template: checkConfig.template,
+        timestamp: Date.now()
+      }));
+      const enrichedResult = { ...result, issues: enrichedIssues };
+      const iterationDurationMs = Date.now() - iterationStartMs;
+      perIterationDurations.push(iterationDurationMs);
+      updateStats(
+        [{ checkId, result: enrichedResult, duration: iterationDurationMs }],
+        state,
+        true
+      );
+      try {
+        context2.journal.commitEntry({
+          sessionId: context2.sessionId,
+          checkId,
+          result: enrichedResult,
+          event: context2.event || "manual",
+          scope
+        });
+        logger.info(
+          `[LevelDispatch][DEBUG] Committing to journal: checkId=${checkId}, scope=${JSON.stringify(scope)}, hasOutput=${enrichedResult.output !== void 0}`
+        );
+      } catch (error) {
+        logger.warn(`[LevelDispatch] Failed to commit per-iteration result to journal: ${error}`);
+      }
+      perItemResults.push(enrichedResult);
+      if (enrichedResult.content)
+        allContents.push(String(enrichedResult.content));
+      if (enrichedResult.output !== void 0)
+        allOutputs.push(enrichedResult.output);
+      allIssues.push(...enrichedResult.issues || []);
+      emitEvent({ type: "CheckCompleted", checkId, scope, result: enrichedResult });
+    } catch (error) {
+      const iterationDurationMs = Date.now() - iterationStartMs;
+      perIterationDurations.push(iterationDurationMs);
+      const err = error instanceof Error ? error : new Error(String(error));
+      logger.error(
+        `[LevelDispatch] Error executing ${checkId} iteration ${itemIndex}: ${err.message}`
+      );
+      updateStats(
+        [
+          {
+            checkId,
+            result: {
+              issues: [
+                {
+                  severity: "error",
+                  category: "logic",
+                  ruleId: `${checkId}/error`,
+                  file: "system",
+                  line: 0,
+                  message: err.message,
+                  timestamp: Date.now()
+                }
+              ]
+            },
+            error: err,
+            duration: iterationDurationMs
+          }
+        ],
+        state,
+        true
+      );
+      allOutputs.push({ __failed: true });
+      perItemResults.push({
+        issues: [
+          {
+            severity: "error",
+            category: "logic",
+            ruleId: `${checkId}/error`,
+            file: "system",
+            line: 0,
+            message: err.message,
+            timestamp: Date.now()
+          }
+        ]
+      });
+      emitEvent({
+        type: "CheckErrored",
+        checkId,
+        scope,
+        error: { message: err.message, stack: err.stack, name: err.name }
+      });
+    } finally {
+      state.activeDispatches.delete(`${checkId}-${itemIndex}`);
+    }
+  }
+  const checkStats = state.stats.get(checkId);
+  if (checkStats) {
+    checkStats.outputsProduced = allOutputs.length;
+    checkStats.perIterationDuration = perIterationDurations;
+    const previewItems = allOutputs.slice(0, 3).map((item) => {
+      const str = typeof item === "string" ? item : JSON.stringify(item) ?? "undefined";
+      return str.length > 50 ? str.substring(0, 50) + "..." : str;
+    });
+    checkStats.forEachPreview = allOutputs.length > 3 ? [...previewItems, `...${allOutputs.length - 3} more`] : previewItems;
+    state.stats.set(checkId, checkStats);
+    if (checkStats.totalRuns > 0 && checkStats.failedRuns === checkStats.totalRuns) {
+      logger.info(
+        `[LevelDispatch] forEach check ${checkId} failed completely (${checkStats.failedRuns}/${checkStats.totalRuns} iterations failed)`
+      );
+      state.failedChecks = state.failedChecks || /* @__PURE__ */ new Set();
+      state.failedChecks.add(checkId);
+    }
+  }
+  const aggregatedResult = {
+    issues: allIssues,
+    isForEach: true,
+    forEachItems: allOutputs,
+    forEachItemResults: perItemResults,
+    ...allContents.length > 0 ? { content: allContents.join("\n") } : {}
+  };
+  logger.info(
+    `[LevelDispatch][DEBUG] Aggregated result for ${checkId}: forEachItems.length=${allOutputs.length}, results=${perItemResults.length}`
+  );
+  logger.info(`[LevelDispatch][DEBUG] allOutputs: ${JSON.stringify(allOutputs).substring(0, 200)}`);
+  try {
+    logger.info(`[LevelDispatch] Calling handleRouting for ${checkId}`);
+  } catch {
+  }
+  try {
+    state.completedChecks.add(checkId);
+    const currentWaveCompletions = state.currentWaveCompletions;
+    if (currentWaveCompletions) currentWaveCompletions.add(checkId);
+    await handleRouting(context2, state, transition, emitEvent, {
+      checkId,
+      scope: [],
+      result: aggregatedResult,
+      checkConfig,
+      success: !hasFatalIssues(aggregatedResult)
+    });
+  } catch (error) {
+    logger.warn(`[LevelDispatch] Routing error for aggregated forEach ${checkId}: ${error}`);
+  }
+  try {
+    context2.journal.commitEntry({
+      sessionId: context2.sessionId,
+      checkId,
+      result: aggregatedResult,
+      event: context2.event || "manual",
+      scope: []
+    });
+    logger.info(`[LevelDispatch][DEBUG] Committed aggregated result to journal with scope=[]`);
+  } catch (error) {
+    logger.warn(`[LevelDispatch] Failed to commit aggregated forEach result to journal: ${error}`);
+  }
+  emitEvent({ type: "CheckCompleted", checkId, scope: [], result: aggregatedResult });
+  const parentCheckConfig = context2.config.checks?.[forEachParent];
+  logger.info(
+    `[LevelDispatch][DEBUG] Checking on_finish for forEach parent ${forEachParent}: has_on_finish=${!!parentCheckConfig?.on_finish}, is_forEach=${!!parentCheckConfig?.forEach}`
+  );
+  if (parentCheckConfig?.on_finish && parentCheckConfig.forEach) {
+    logger.info(
+      `[LevelDispatch] Processing on_finish for forEach parent ${forEachParent} after children complete`
+    );
+    try {
+      const snapshotId = context2.journal.beginSnapshot();
+      const { ContextView: ContextView2 } = (init_snapshot_store(), __toCommonJS(snapshot_store_exports));
+      const contextView = new ContextView2(
+        context2.journal,
+        context2.sessionId,
+        snapshotId,
+        [],
+        context2.event
+      );
+      const parentResult = contextView.get(forEachParent);
+      if (parentResult) {
+        logger.info(
+          `[LevelDispatch] Found parent result for ${forEachParent}, evaluating on_finish`
+        );
+        const onFinish = parentCheckConfig.on_finish;
+        let queuedForward = false;
+        logger.info(
+          `[LevelDispatch] on_finish.run: ${onFinish.run?.length || 0} targets, targets=${JSON.stringify(onFinish.run || [])}`
+        );
+        if (onFinish.run && onFinish.run.length > 0) {
+          for (const targetCheck of onFinish.run) {
+            logger.info(`[LevelDispatch] Processing on_finish.run target: ${targetCheck}`);
+            logger.info(
+              `[LevelDispatch] Loop budget check: routingLoopCount=${state.routingLoopCount}, max_loops=${context2.config.routing?.max_loops ?? 10}`
+            );
+            if (checkLoopBudget(context2, state, "on_finish", "run")) {
+              const errorIssue = {
+                file: "system",
+                line: 0,
+                ruleId: `${forEachParent}/routing/loop_budget_exceeded`,
+                message: `Routing loop budget exceeded (max_loops=${context2.config.routing?.max_loops ?? 10}) during on_finish run`,
+                severity: "error",
+                category: "logic"
+              };
+              parentResult.issues = [...parentResult.issues || [], errorIssue];
+              try {
+                context2.journal.commitEntry({
+                  sessionId: context2.sessionId,
+                  checkId: forEachParent,
+                  result: parentResult,
+                  event: context2.event || "manual",
+                  scope: []
+                });
+              } catch (err) {
+                logger.warn(
+                  `[LevelDispatch] Failed to commit parent result with loop budget error: ${err}`
+                );
+              }
+              return aggregatedResult;
+            }
+            state.routingLoopCount++;
+            emitEvent({
+              type: "ForwardRunRequested",
+              target: targetCheck,
+              scope: [],
+              origin: "run"
+            });
+            queuedForward = true;
+          }
+        }
+        if (context2.debug) {
+          logger.info(
+            `[LevelDispatch] Evaluating on_finish.goto_js for forEach parent: ${forEachParent}`
+          );
+          if (onFinish.goto_js)
+            logger.info(`[LevelDispatch] goto_js code: ${onFinish.goto_js.substring(0, 200)}`);
+          try {
+            const snapshotId2 = context2.journal.beginSnapshot();
+            const all = context2.journal.readVisible(context2.sessionId, snapshotId2, void 0);
+            const keys = Array.from(new Set(all.map((e) => e.checkId)));
+            logger.info(`[LevelDispatch] history keys: ${keys.join(", ")}`);
+          } catch {
+          }
+        }
+        const gotoTarget = await evaluateGoto(
+          onFinish.goto_js,
+          onFinish.goto,
+          forEachParent,
+          parentCheckConfig,
+          parentResult,
+          context2,
+          state
+        );
+        if (context2.debug)
+          logger.info(`[LevelDispatch] goto_js evaluation result: ${gotoTarget || "null"}`);
+        if (gotoTarget) {
+          if (queuedForward && gotoTarget === forEachParent) {
+            logger.info(
+              `[LevelDispatch] on_finish.goto to self (${gotoTarget}) deferred, will process after WaveRetry`
+            );
+            emitEvent({ type: "WaveRetry", reason: "on_finish" });
+          } else {
+            if (checkLoopBudget(context2, state, "on_finish", "goto")) {
+              const errorIssue = {
+                file: "system",
+                line: 0,
+                ruleId: `${forEachParent}/routing/loop_budget_exceeded`,
+                message: `Routing loop budget exceeded (max_loops=${context2.config.routing?.max_loops ?? 10}) during on_finish goto`,
+                severity: "error",
+                category: "logic"
+              };
+              parentResult.issues = [...parentResult.issues || [], errorIssue];
+              try {
+                context2.journal.commitEntry({
+                  sessionId: context2.sessionId,
+                  checkId: forEachParent,
+                  result: parentResult,
+                  event: context2.event || "manual",
+                  scope: []
+                });
+              } catch {
+              }
+              return aggregatedResult;
+            }
+            state.routingLoopCount++;
+            emitEvent({ type: "ForwardRunRequested", target: gotoTarget, origin: "goto" });
+          }
+        }
+        if (queuedForward) {
+          const guardKey = `waveRetry:on_finish:${forEachParent}:wave:${state.wave}`;
+          logger.info(
+            `[LevelDispatch] Checking WaveRetry guard: ${guardKey}, has=${!!state.forwardRunGuards?.has(guardKey)}`
+          );
+          if (!state.forwardRunGuards?.has(guardKey)) {
+            state.forwardRunGuards?.add(guardKey);
+            logger.info(`[LevelDispatch] Emitting WaveRetry event for on_finish.run targets`);
+            emitEvent({ type: "WaveRetry", reason: "on_finish" });
+          }
+        }
+      }
+    } catch {
+    }
+  }
+  return aggregatedResult;
+}
+var init_foreach_processor = __esm({
+  "src/state-machine/dispatch/foreach-processor.ts"() {
+    "use strict";
+    init_logger();
+    init_fallback_ndjson();
+    init_trace_helpers();
+    init_history_snapshot();
+    init_dependency_gating();
+    init_stats_manager();
+    init_routing();
+  }
+});
+
+// src/state-machine/dispatch/on-init-handlers.ts
+async function renderTemplateArguments(args, prInfo, dependencyResults, executionContext) {
+  const renderedArgs = {};
+  if (!args) {
+    return renderedArgs;
+  }
+  const liquid = createExtendedLiquid();
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === "string") {
+      try {
+        renderedArgs[key] = await liquid.parseAndRender(value, {
+          pr: prInfo,
+          outputs: dependencyResults,
+          env: process.env,
+          args: executionContext.args || {}
+        });
+      } catch (error) {
+        logger.warn(`[OnInit] Failed to render template for ${key}: ${error}`);
+        renderedArgs[key] = value;
+      }
+    } else {
+      renderedArgs[key] = value;
+    }
+  }
+  return renderedArgs;
+}
+async function executeInvocation(item, context2, scope, prInfo, dependencyResults, executionContext) {
+  const CheckProviderRegistry2 = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports)).CheckProviderRegistry;
+  const providerRegistry = CheckProviderRegistry2.getInstance();
+  const renderedArgs = await renderTemplateArguments(
+    item.with,
+    prInfo,
+    dependencyResults,
+    executionContext
+  );
+  if ("tool" in item) {
+    const toolName = item.tool;
+    const toolDef = context2.config.tools?.[toolName];
+    if (!toolDef) {
+      throw new Error(`Tool '${toolName}' not found in tools: section`);
+    }
+    logger.info(`[OnInit] Executing tool: ${toolName}`);
+    const tempCheckConfig = {
+      type: "mcp",
+      method: toolName,
+      transport: "custom",
+      args: renderedArgs
+    };
+    const provider = providerRegistry.getProviderOrThrow("mcp");
+    const result = await provider.execute(
+      prInfo,
+      tempCheckConfig,
+      dependencyResults,
+      executionContext
+    );
+    const output = result.output;
+    logger.info(`[OnInit] Tool ${toolName} completed`);
+    return output;
+  } else if ("step" in item) {
+    const stepName = item.step;
+    const stepConfig = context2.config.checks?.[stepName];
+    if (!stepConfig) {
+      throw new Error(`Step '${stepName}' not found in checks: section`);
+    }
+    logger.info(`[OnInit] Executing step: ${stepName}`);
+    const enrichedExecutionContext = {
+      ...executionContext,
+      args: renderedArgs
+    };
+    const providerType = stepConfig.type || "ai";
+    const provider = providerRegistry.getProviderOrThrow(providerType);
+    const { buildOutputHistoryFromJournal: buildOutputHistoryFromJournal3 } = (init_history_snapshot(), __toCommonJS(history_snapshot_exports));
+    const outputHistory = buildOutputHistoryFromJournal3(context2);
+    const providerConfig = {
+      type: providerType,
+      checkName: stepName,
+      prompt: stepConfig.prompt,
+      exec: stepConfig.exec,
+      schema: stepConfig.schema,
+      group: stepConfig.group,
+      transform: stepConfig.transform,
+      transform_js: stepConfig.transform_js,
+      env: stepConfig.env,
+      ...stepConfig,
+      eventContext: prInfo?.eventContext || {},
+      __outputHistory: outputHistory,
+      ai: {
+        ...stepConfig.ai || {},
+        timeout: stepConfig.ai?.timeout || 6e5,
+        debug: !!context2.debug
+      }
+    };
+    const result = await provider.execute(
+      prInfo,
+      providerConfig,
+      dependencyResults,
+      enrichedExecutionContext
+    );
+    const output = result.output;
+    logger.info(`[OnInit] Step ${stepName} completed`);
+    return output;
+  } else if ("workflow" in item) {
+    const workflowName = item.workflow;
+    if (!workflowName) {
+      throw new Error("Workflow name is required in on_init workflow invocation");
+    }
+    logger.info(`[OnInit] Executing workflow: ${workflowName}`);
+    const tempCheckConfig = {
+      type: "workflow",
+      workflow: workflowName,
+      args: renderedArgs,
+      overrides: item.overrides,
+      output_mapping: item.output_mapping
+    };
+    const provider = providerRegistry.getProviderOrThrow("workflow");
+    const result = await provider.execute(
+      prInfo,
+      tempCheckConfig,
+      dependencyResults,
+      executionContext
+    );
+    const output = result.output;
+    logger.info(`[OnInit] Workflow ${workflowName} completed`);
+    return output;
+  }
+  throw new Error("Invalid on_init invocation: must specify tool, step, or workflow");
+}
+async function executeToolInvocation(item, context2, scope, prInfo, dependencyResults, executionContext) {
+  return executeInvocation(item, context2, scope, prInfo, dependencyResults, executionContext);
+}
+async function executeStepInvocation(item, context2, scope, prInfo, dependencyResults, executionContext) {
+  return executeInvocation(item, context2, scope, prInfo, dependencyResults, executionContext);
+}
+async function executeWorkflowInvocation(item, context2, scope, prInfo, dependencyResults, executionContext) {
+  return executeInvocation(item, context2, scope, prInfo, dependencyResults, executionContext);
+}
+var init_on_init_handlers = __esm({
+  "src/state-machine/dispatch/on-init-handlers.ts"() {
+    "use strict";
+    init_logger();
+    init_liquid_extensions();
+  }
+});
+
+// src/state-machine/dispatch/execution-invoker.ts
+var execution_invoker_exports = {};
+__export(execution_invoker_exports, {
+  executeSingleCheck: () => executeSingleCheck
+});
+function normalizeRunItems(run) {
+  if (!Array.isArray(run)) return [];
+  return run.filter(Boolean);
+}
+function detectInvocationType(item) {
+  if (typeof item === "string") return "step";
+  if ("tool" in item) return "tool";
+  if ("workflow" in item) return "workflow";
+  if ("step" in item) return "step";
+  throw new Error(
+    `Invalid on_init item type: ${JSON.stringify(item)}. Must specify tool, step, or workflow.`
+  );
+}
+async function executeOnInitItem(item, context2, scope, prInfo, dependencyResults, executionContext) {
+  const itemType = detectInvocationType(item);
+  let output;
+  let outputName;
+  switch (itemType) {
+    case "tool": {
+      const toolItem = item;
+      output = await executeToolInvocation(
+        toolItem,
+        context2,
+        scope,
+        prInfo,
+        dependencyResults,
+        executionContext
+      );
+      outputName = toolItem.as || toolItem.tool;
+      break;
+    }
+    case "step": {
+      if (typeof item === "string") {
+        const stepItem = { step: item, with: void 0, as: item };
+        output = await executeStepInvocation(
+          stepItem,
+          context2,
+          scope,
+          prInfo,
+          dependencyResults,
+          executionContext
+        );
+        outputName = item;
+      } else {
+        const stepItem = item;
+        output = await executeStepInvocation(
+          stepItem,
+          context2,
+          scope,
+          prInfo,
+          dependencyResults,
+          executionContext
+        );
+        outputName = stepItem.as || stepItem.step;
+      }
+      break;
+    }
+    case "workflow": {
+      const workflowItem = item;
+      output = await executeWorkflowInvocation(
+        workflowItem,
+        context2,
+        scope,
+        prInfo,
+        dependencyResults,
+        executionContext
+      );
+      outputName = workflowItem.as || workflowItem.workflow;
+      break;
+    }
+    default:
+      throw new Error(`Unknown on_init item type: ${itemType}`);
+  }
+  return { output, outputName };
+}
+async function handleOnInit(checkId, onInit, context2, scope, prInfo, dependencyResults, executionContext) {
+  logger.info(`[OnInit] Processing on_init for check: ${checkId}`);
+  if (executionContext.__onInitDepth && executionContext.__onInitDepth > 0) {
+    logger.warn(
+      `[OnInit] Skipping nested on_init for ${checkId} (depth: ${executionContext.__onInitDepth})`
+    );
+    return;
+  }
+  let runItems = [];
+  if (onInit.run_js) {
+    logger.info(`[OnInit] Evaluating run_js for ${checkId}`);
+    try {
+      const sandbox = createSecureSandbox();
+      const result = await compileAndRun(
+        sandbox,
+        onInit.run_js,
+        {
+          pr: prInfo,
+          outputs: dependencyResults,
+          env: process.env,
+          args: executionContext.args || {}
+        },
+        { injectLog: true, wrapFunction: false }
+      );
+      if (Array.isArray(result)) {
+        runItems = result;
+      } else {
+        logger.warn(`[OnInit] run_js for ${checkId} did not return an array, got ${typeof result}`);
+      }
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      logger.error(`[OnInit] Error evaluating run_js for ${checkId}: ${err.message}`);
+      const wrappedError = new Error(`on_init.run_js evaluation failed: ${err.message}`);
+      wrappedError.stack = err.stack;
+      throw wrappedError;
+    }
+  } else if (onInit.run) {
+    runItems = normalizeRunItems(onInit.run);
+  }
+  if (runItems.length === 0) {
+    logger.info(`[OnInit] No items to run for ${checkId}`);
+    return;
+  }
+  if (runItems.length > MAX_ON_INIT_ITEMS) {
+    const msg = `on_init for ${checkId} has ${runItems.length} items, exceeding maximum of ${MAX_ON_INIT_ITEMS}`;
+    logger.error(`[OnInit] ${msg}`);
+    throw new Error(msg);
+  }
+  logger.info(`[OnInit] Running ${runItems.length} items for ${checkId}`);
+  const originalDepth = executionContext.__onInitDepth || 0;
+  executionContext.__onInitDepth = originalDepth + 1;
+  try {
+    for (let i = 0; i < runItems.length; i++) {
+      const item = runItems[i];
+      const itemType = detectInvocationType(item);
+      const itemName = typeof item === "string" ? item : "tool" in item ? item.tool : "step" in item ? item.step : "workflow" in item ? item.workflow : "unknown";
+      logger.info(`[OnInit] [${i + 1}/${runItems.length}] Executing ${itemType}: ${itemName}`);
+      try {
+        const { output, outputName } = await executeOnInitItem(
+          item,
+          context2,
+          scope,
+          prInfo,
+          dependencyResults,
+          executionContext
+        );
+        dependencyResults[outputName] = output;
+        logger.info(`[OnInit] Stored output as: ${outputName}`);
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        logger.error(
+          `[OnInit] Error executing ${itemType} ${itemName} for ${checkId}: ${err.message}`
+        );
+        const wrappedError = new Error(`on_init ${itemType} '${itemName}' failed: ${err.message}`);
+        wrappedError.stack = err.stack;
+        throw wrappedError;
+      }
+    }
+    logger.info(`[OnInit] Completed all on_init items for ${checkId}`);
+  } finally {
+    executionContext.__onInitDepth = originalDepth;
+  }
+}
+async function executeSingleCheck(checkId, context2, state, emitEvent, transition, evaluateIf, scopeOverride) {
+  const checkConfig = context2.config.checks?.[checkId];
+  if (checkConfig?.if) {
+    const shouldRun = await evaluateIf(checkId, checkConfig, context2, state);
+    if (!shouldRun) {
+      logger.info(
+        `\u23ED  Skipped (if: ${checkConfig.if.substring(0, 40)}${checkConfig.if.length > 40 ? "..." : ""})`
+      );
+      const emptyResult = { issues: [] };
+      try {
+        Object.defineProperty(emptyResult, "__skipped", {
+          value: "if_condition",
+          enumerable: false
+        });
+      } catch {
+      }
+      state.completedChecks.add(checkId);
+      const stats = {
+        checkName: checkId,
+        totalRuns: 0,
+        successfulRuns: 0,
+        failedRuns: 0,
+        skippedRuns: 0,
+        skipped: true,
+        skipReason: "if_condition",
+        skipCondition: checkConfig.if,
+        totalDuration: 0,
+        issuesFound: 0,
+        issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 }
+      };
+      state.stats.set(checkId, stats);
+      logger.info(`[LevelDispatch] Recorded skip stats for ${checkId}: skipReason=if_condition`);
+      try {
+        context2.journal.commitEntry({
+          sessionId: context2.sessionId,
+          checkId,
+          result: emptyResult,
+          event: context2.event || "manual",
+          scope: []
+        });
+      } catch (error) {
+        logger.warn(`[LevelDispatch] Failed to commit skipped result to journal: ${error}`);
+      }
+      emitEvent({ type: "CheckCompleted", checkId, scope: [], result: emptyResult });
+      return emptyResult;
+    }
+  }
+  const dependencies = checkConfig?.depends_on || [];
+  const depList = Array.isArray(dependencies) ? dependencies : [dependencies];
+  const failedChecks = state.failedChecks;
+  const tokens = depList.filter(Boolean);
+  const groupSatisfied = (token) => {
+    const options = token.includes("|") ? token.split("|").map((s) => s.trim()).filter(Boolean) : [token];
+    for (const opt of options) {
+      const depCfg = context2.config.checks?.[opt];
+      const cont = !!(depCfg && depCfg.continue_on_failure === true);
+      const st = state.stats.get(opt);
+      const wasMarkedFailed = !!(failedChecks && failedChecks.has(opt));
+      const skipped = !!(st && st.skipped === true);
+      const failedOnly = !!(st && (st.failedRuns || 0) > 0 && (st.successfulRuns || 0) === 0);
+      const satisfied = !skipped && (!failedOnly && !wasMarkedFailed || cont);
+      if (satisfied) return true;
+    }
+    return false;
+  };
+  if (tokens.length > 0) {
+    let allOk = true;
+    for (const t of tokens) {
+      if (!groupSatisfied(t)) {
+        allOk = false;
+        break;
+      }
+    }
+    if (!allOk) {
+      const emptyResult = { issues: [] };
+      try {
+        Object.defineProperty(emptyResult, "__skipped", {
+          value: "dependency_failed",
+          enumerable: false
+        });
+      } catch {
+      }
+      state.completedChecks.add(checkId);
+      state.failedChecks = state.failedChecks || /* @__PURE__ */ new Set();
+      state.failedChecks.add(checkId);
+      const stats = {
+        checkName: checkId,
+        totalRuns: 0,
+        successfulRuns: 0,
+        failedRuns: 0,
+        skippedRuns: 0,
+        skipped: true,
+        skipReason: "dependency_failed",
+        totalDuration: 0,
+        issuesFound: 0,
+        issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 }
+      };
+      state.stats.set(checkId, stats);
+      try {
+        context2.journal.commitEntry({
+          sessionId: context2.sessionId,
+          checkId,
+          result: emptyResult,
+          event: context2.event || "manual",
+          scope: []
+        });
+      } catch (error) {
+        logger.warn(`[LevelDispatch] Failed to commit empty result to journal: ${error}`);
+      }
+      emitEvent({ type: "CheckCompleted", checkId, scope: [], result: emptyResult });
+      return emptyResult;
+    }
+  }
+  let forEachParent;
+  let forEachItems;
+  for (const depId of depList) {
+    if (!depId) continue;
+    try {
+      const snapshotId = context2.journal.beginSnapshot();
+      const { ContextView: ContextView2 } = (init_snapshot_store(), __toCommonJS(snapshot_store_exports));
+      const contextView = new ContextView2(
+        context2.journal,
+        context2.sessionId,
+        snapshotId,
+        [],
+        context2.event
+      );
+      const depResult = contextView.get(depId);
+      if (depResult?.forEachItems && Array.isArray(depResult.forEachItems)) {
+        forEachParent = depId;
+        forEachItems = depResult.forEachItems;
+        break;
+      }
+    } catch {
+    }
+  }
+  if (forEachParent && forEachItems !== void 0) {
+    let fanoutMode = "reduce";
+    const explicit = checkConfig?.fanout;
+    if (explicit === "map" || explicit === "reduce") fanoutMode = explicit;
+    else {
+      const providerType = context2.checks[checkId]?.providerType || "";
+      const reduceProviders = /* @__PURE__ */ new Set(["log", "memory", "script", "workflow", "noop"]);
+      fanoutMode = reduceProviders.has(providerType) ? "reduce" : "map";
+    }
+    if (fanoutMode === "map") {
+      if (forEachItems.length === 0) {
+        logger.info(`\u23ED  Skipped (forEach parent "${forEachParent}" has 0 items)`);
+        const emptyResult = { issues: [] };
+        try {
+          Object.defineProperty(emptyResult, "__skipped", {
+            value: "forEach_empty",
+            enumerable: false
+          });
+        } catch {
+        }
+        state.completedChecks.add(checkId);
+        let derivedSkipReason = "forEach_empty";
+        try {
+          const parentFailed = !!(state.failedChecks && state.failedChecks.has(forEachParent)) || (() => {
+            const s = state.stats.get(forEachParent);
+            return !!(s && (s.failedRuns || 0) > 0);
+          })();
+          if (parentFailed) derivedSkipReason = "dependency_failed";
+        } catch {
+        }
+        const stats = {
+          checkName: checkId,
+          totalRuns: 0,
+          successfulRuns: 0,
+          failedRuns: 0,
+          skippedRuns: 0,
+          skipped: true,
+          skipReason: derivedSkipReason,
+          totalDuration: 0,
+          issuesFound: 0,
+          issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 }
+        };
+        state.stats.set(checkId, stats);
+        try {
+          context2.journal.commitEntry({
+            sessionId: context2.sessionId,
+            checkId,
+            result: emptyResult,
+            event: context2.event || "manual",
+            scope: []
+          });
+        } catch (error) {
+          logger.warn(`[LevelDispatch] Failed to commit empty result to journal: ${error}`);
+        }
+        emitEvent({ type: "CheckCompleted", checkId, scope: [], result: emptyResult });
+        return emptyResult;
+      }
+      return await executeCheckWithForEachItems(
+        checkId,
+        forEachParent,
+        forEachItems,
+        context2,
+        state,
+        emitEvent,
+        transition
+      );
+    }
+  }
+  const scope = scopeOverride || [];
+  emitEvent({ type: "CheckScheduled", checkId, scope });
+  const startTime = Date.now();
+  const dispatch = {
+    id: `${checkId}-${Date.now()}`,
+    checkId,
+    scope,
+    provider: context2.checks[checkId]?.providerType || "unknown",
+    startMs: startTime,
+    attempts: 1
+  };
+  state.activeDispatches.set(checkId, dispatch);
+  try {
+    if (!checkConfig) throw new Error(`Check configuration not found: ${checkId}`);
+    const providerType = checkConfig.type || "ai";
+    const providerRegistry = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports)).CheckProviderRegistry.getInstance();
+    const provider = providerRegistry.getProviderOrThrow(providerType);
+    const outputHistory = buildOutputHistoryFromJournal(context2);
+    const providerConfig = {
+      type: providerType,
+      checkName: checkId,
+      prompt: checkConfig.prompt,
+      exec: checkConfig.exec,
+      schema: checkConfig.schema,
+      group: checkConfig.group,
+      focus: checkConfig.focus || mapCheckNameToFocus(checkId),
+      transform: checkConfig.transform,
+      transform_js: checkConfig.transform_js,
+      env: checkConfig.env,
+      forEach: checkConfig.forEach,
+      ...checkConfig,
+      eventContext: context2.prInfo?.eventContext || {},
+      __outputHistory: outputHistory,
+      ai: {
+        ...checkConfig.ai || {},
+        timeout: checkConfig.ai?.timeout || 6e5,
+        debug: !!context2.debug
+      }
+    };
+    const dependencyResults = buildDependencyResultsWithScope(checkId, checkConfig, context2, scope);
+    const prInfo = context2.prInfo || {
+      number: 1,
+      title: "State Machine Execution",
+      author: "system",
+      eventType: context2.event || "manual",
+      eventContext: {},
+      files: [],
+      commits: []
+    };
+    const executionContext = {
+      ...context2.executionContext,
+      _engineMode: context2.mode,
+      _parentContext: context2,
+      _parentState: state
+    };
+    if (checkConfig.on_init) {
+      try {
+        const dependencyResultsMap = {};
+        for (const [key, value] of dependencyResults.entries()) {
+          dependencyResultsMap[key] = value;
+        }
+        await handleOnInit(
+          checkId,
+          checkConfig.on_init,
+          context2,
+          scope,
+          prInfo,
+          dependencyResultsMap,
+          executionContext
+        );
+        for (const [key, value] of Object.entries(dependencyResultsMap)) {
+          if (!dependencyResults.has(key)) {
+            dependencyResults.set(key, value);
+          }
+        }
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        logger.error(`[LevelDispatch] on_init failed for ${checkId}: ${err.message}`);
+        throw err;
+      }
+    }
+    try {
+      emitNdjsonFallback("visor.provider", {
+        "visor.check.id": checkId,
+        "visor.provider.type": providerType
+      });
+    } catch {
+    }
+    const result = await withActiveSpan(
+      `visor.check.${checkId}`,
+      { "visor.check.id": checkId, "visor.check.type": providerType },
+      async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+    );
+    const enrichedIssues = (result.issues || []).map((issue) => ({
+      ...issue,
+      checkName: checkId,
+      ruleId: `${checkId}/${issue.ruleId || "unknown"}`,
+      group: checkConfig.group,
+      schema: typeof checkConfig.schema === "object" ? "custom" : checkConfig.schema,
+      template: checkConfig.template,
+      timestamp: Date.now()
+    }));
+    const enrichedResult = { ...result, issues: enrichedIssues };
+    let isForEach = false;
+    let forEachItemsLocal;
+    if (checkConfig.forEach) {
+      const output = result.output;
+      if (Array.isArray(output)) {
+        isForEach = true;
+        forEachItemsLocal = output;
+        enrichedResult.isForEach = true;
+        enrichedResult.forEachItems = output;
+      } else {
+        if (context2.debug)
+          logger.warn(
+            `[LevelDispatch] Check ${checkId} has forEach:true but output is not an array: ${typeof output}, converting to single-item array`
+          );
+        isForEach = true;
+        forEachItemsLocal = [output];
+        enrichedResult.isForEach = true;
+        enrichedResult.forEachItems = [output];
+      }
+    }
+    if (result.isForEach) enrichedResult.isForEach = true;
+    if (result.forEachItems) enrichedResult.forEachItems = result.forEachItems;
+    if (result.forEachItemResults)
+      enrichedResult.forEachItemResults = result.forEachItemResults;
+    if (result.forEachFatalMask)
+      enrichedResult.forEachFatalMask = result.forEachFatalMask;
+    let renderedContent;
+    try {
+      renderedContent = await renderTemplateContent(checkId, checkConfig, enrichedResult);
+      if (renderedContent) emitMermaidFromMarkdown(checkId, renderedContent, "content");
+    } catch (error) {
+      logger.warn(`[LevelDispatch] Failed to render template for ${checkId}: ${error}`);
+    }
+    let outputWithTimestamp = void 0;
+    if (result.output !== void 0) {
+      const output = result.output;
+      if (output !== null && typeof output === "object" && !Array.isArray(output))
+        outputWithTimestamp = { ...output, ts: Date.now() };
+      else outputWithTimestamp = output;
+    }
+    const enrichedResultWithContent = renderedContent ? { ...enrichedResult, content: renderedContent } : enrichedResult;
+    const enrichedResultWithTimestamp = outputWithTimestamp !== void 0 ? { ...enrichedResultWithContent, output: outputWithTimestamp } : enrichedResultWithContent;
+    state.completedChecks.add(checkId);
+    const currentWaveCompletions = state.currentWaveCompletions;
+    if (currentWaveCompletions) currentWaveCompletions.add(checkId);
+    try {
+      logger.info(`[LevelDispatch] Calling handleRouting for ${checkId}`);
+    } catch {
+    }
+    await handleRouting(context2, state, transition, emitEvent, {
+      checkId,
+      scope,
+      result: enrichedResult,
+      checkConfig,
+      success: !hasFatalIssues(enrichedResult)
+    });
+    try {
+      const commitResult = {
+        ...enrichedResult,
+        ...renderedContent ? { content: renderedContent } : {},
+        ...result.output !== void 0 ? outputWithTimestamp !== void 0 ? { output: outputWithTimestamp } : { output: result.output } : {}
+      };
+      context2.journal.commitEntry({
+        sessionId: context2.sessionId,
+        checkId,
+        result: commitResult,
+        event: context2.event || "manual",
+        scope
+      });
+    } catch (error) {
+      logger.warn(`[LevelDispatch] Failed to commit to journal: ${error}`);
+    }
+    try {
+      const duration = Date.now() - startTime;
+      updateStats([{ checkId, result: enrichedResult, duration }], state, false);
+    } catch {
+    }
+    if (isForEach) {
+      try {
+        const existing = state.stats.get(checkId);
+        const aggStats = existing || {
+          checkName: checkId,
+          totalRuns: 0,
+          successfulRuns: 0,
+          failedRuns: 0,
+          skippedRuns: 0,
+          skipped: false,
+          totalDuration: 0,
+          issuesFound: 0,
+          issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 }
+        };
+        aggStats.totalRuns++;
+        const hasFatal = hasFatalIssues(enrichedResultWithTimestamp);
+        if (hasFatal) aggStats.failedRuns++;
+        else aggStats.successfulRuns++;
+        const items = enrichedResultWithTimestamp.forEachItems;
+        if (Array.isArray(items)) aggStats.outputsProduced = items.length;
+        state.stats.set(checkId, aggStats);
+      } catch {
+      }
+    }
+    if (isForEach && forEachItemsLocal && Array.isArray(forEachItemsLocal)) {
+      for (let itemIndex = 0; itemIndex < forEachItemsLocal.length; itemIndex++) {
+        const itemScope = [
+          { check: checkId, index: itemIndex }
+        ];
+        const item = forEachItemsLocal[itemIndex];
+        try {
+          context2.journal.commitEntry({
+            sessionId: context2.sessionId,
+            checkId,
+            result: { issues: [], output: item },
+            event: context2.event || "manual",
+            scope: itemScope
+          });
+        } catch (error) {
+          logger.warn(
+            `[LevelDispatch] Failed to commit per-item journal for ${checkId} item ${itemIndex}: ${error}`
+          );
+        }
+      }
+    }
+    state.activeDispatches.delete(checkId);
+    emitEvent({
+      type: "CheckCompleted",
+      checkId,
+      scope,
+      result: {
+        ...enrichedResult,
+        output: result.output,
+        content: renderedContent || result.content
+      }
+    });
+    return enrichedResult;
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    logger.error(`[LevelDispatch] Error executing check ${checkId}: ${err.message}`);
+    state.activeDispatches.delete(checkId);
+    emitEvent({
+      type: "CheckErrored",
+      checkId,
+      scope,
+      error: { message: err.message, stack: err.stack, name: err.name }
+    });
+    throw err;
+  }
+}
+function mapCheckNameToFocus(checkName) {
+  const focusMap = {
+    security: "security",
+    performance: "performance",
+    style: "style",
+    architecture: "architecture"
+  };
+  return focusMap[checkName] || "all";
+}
+var MAX_ON_INIT_ITEMS;
+var init_execution_invoker = __esm({
+  "src/state-machine/dispatch/execution-invoker.ts"() {
+    "use strict";
+    init_logger();
+    init_trace_helpers();
+    init_mermaid_telemetry();
+    init_fallback_ndjson();
+    init_history_snapshot();
+    init_dependency_gating();
+    init_template_renderer();
+    init_stats_manager();
+    init_routing();
+    init_foreach_processor();
+    init_stats_manager();
+    init_on_init_handlers();
+    init_sandbox();
+    MAX_ON_INIT_ITEMS = 50;
+  }
+});
+
 // src/state-machine/dispatch/renderer-schema.ts
 var renderer_schema_exports = {};
 __export(renderer_schema_exports, {
@@ -17846,19 +21457,23 @@ __export(renderer_schema_exports, {
 });
 async function loadRendererSchema(name) {
   try {
-    const fs16 = await import("fs/promises");
-    const path17 = await import("path");
+    const fs18 = await import("fs/promises");
+    const path20 = await import("path");
     const sanitized = String(name).replace(/[^a-zA-Z0-9-]/g, "");
     if (!sanitized) return void 0;
     const candidates = [
-      // When running from dist
-      path17.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
+      // When bundled with ncc, __dirname is dist/ and output/ is at dist/output/
+      path20.join(__dirname, "output", sanitized, "schema.json"),
+      // When running from source, __dirname is src/state-machine/dispatch/ and output/ is at output/
+      path20.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
       // When running from a checkout with output/ folder copied to CWD
-      path17.join(process.cwd(), "output", sanitized, "schema.json")
+      path20.join(process.cwd(), "output", sanitized, "schema.json"),
+      // Fallback: cwd/dist/output/
+      path20.join(process.cwd(), "dist", "output", sanitized, "schema.json")
     ];
     for (const p of candidates) {
       try {
-        const raw = await fs16.readFile(p, "utf-8");
+        const raw = await fs18.readFile(p, "utf-8");
         return JSON.parse(raw);
       } catch {
       }
@@ -17879,7 +21494,7 @@ var init_renderer_schema = __esm({
 });
 
 // src/state-machine/states/level-dispatch.ts
-function mapCheckNameToFocus(checkName) {
+function mapCheckNameToFocus2(checkName) {
   const focusMap = {
     security: "security",
     performance: "performance",
@@ -17888,7 +21503,7 @@ function mapCheckNameToFocus(checkName) {
   };
   return focusMap[checkName] || "all";
 }
-function buildOutputHistoryFromJournal(context2) {
+function buildOutputHistoryFromJournal2(context2) {
   const outputHistory = /* @__PURE__ */ new Map();
   try {
     const snapshot = context2.journal.beginSnapshot();
@@ -18036,7 +21651,7 @@ async function handleLevelDispatch(context2, state, transition, emitEvent) {
     if (r.result.__skipped) return false;
     return true;
   });
-  updateStats(nonForEachResults, state);
+  updateStats2(nonForEachResults, state);
   if (state.flags.failFastTriggered) {
     state.levelQueue = [];
     if (context2.debug) {
@@ -18106,7 +21721,7 @@ async function executeCheckGroup(checks, context2, state, maxParallelism, emitEv
     const runOnce = async (scopeOverride) => {
       const startTime = Date.now();
       try {
-        const result = await executeSingleCheck(
+        const result = await executeSingleCheck2(
           checkId,
           context2,
           state,
@@ -18146,7 +21761,7 @@ async function executeCheckGroup(checks, context2, state, maxParallelism, emitEv
   await Promise.all(pool);
   return results;
 }
-async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems, context2, state, emitEvent, transition) {
+async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItems, context2, state, emitEvent, transition) {
   try {
     const snapId = context2.journal.beginSnapshot();
     const visible = context2.journal.readVisible(context2.sessionId, snapId, context2.event);
@@ -18198,9 +21813,51 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
   const allOutputs = [];
   const allContents = [];
   const perIterationDurations = [];
+  const scope = [];
+  const sharedDependencyResults = buildDependencyResultsWithScope2(
+    checkId,
+    checkConfig,
+    context2,
+    scope
+  );
+  if (checkConfig.on_init) {
+    try {
+      const { handleOnInit: handleOnInit2 } = (init_execution_invoker(), __toCommonJS(execution_invoker_exports));
+      const dependencyResultsMap = {};
+      for (const [key, value] of sharedDependencyResults.entries()) {
+        dependencyResultsMap[key] = value;
+      }
+      const prInfo = context2.prInfo;
+      const executionContext = {
+        sessionId: context2.sessionId,
+        checkId,
+        event: context2.event,
+        _parentContext: context2
+      };
+      await handleOnInit2(
+        checkId,
+        checkConfig.on_init,
+        context2,
+        scope,
+        prInfo,
+        dependencyResultsMap,
+        executionContext
+      );
+      for (const [key, value] of Object.entries(dependencyResultsMap)) {
+        if (!sharedDependencyResults.has(key)) {
+          sharedDependencyResults.set(key, value);
+        }
+      }
+      logger.info(`[LevelDispatch] on_init completed for ${checkId} before forEach loop`);
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      logger.error(`[LevelDispatch] on_init failed for ${checkId}: ${err.message}`);
+      throw err;
+    }
+  }
   for (let itemIndex = 0; itemIndex < forEachItems.length; itemIndex++) {
     const iterationStartMs = Date.now();
-    const scope = [
+    const scope2 = [
       { check: forEachParent, index: itemIndex }
     ];
     const forEachItem = forEachItems[itemIndex];
@@ -18231,11 +21888,11 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
     } catch (error) {
       logger.warn(`[LevelDispatch] Failed to emit foreach.item span: ${error}`);
     }
-    emitEvent({ type: "CheckScheduled", checkId, scope });
+    emitEvent({ type: "CheckScheduled", checkId, scope: scope2 });
     const dispatch = {
       id: `${checkId}-${itemIndex}-${Date.now()}`,
       checkId,
-      scope,
+      scope: scope2,
       provider: context2.checks[checkId]?.providerType || "unknown",
       startMs: Date.now(),
       attempts: 1,
@@ -18246,7 +21903,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
       const providerType = checkConfig.type || "ai";
       const providerRegistry = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports)).CheckProviderRegistry.getInstance();
       const provider = providerRegistry.getProviderOrThrow(providerType);
-      const outputHistory = buildOutputHistoryFromJournal(context2);
+      const outputHistory = buildOutputHistoryFromJournal2(context2);
       const providerConfig = {
         type: providerType,
         checkName: checkId,
@@ -18254,7 +21911,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
         exec: checkConfig.exec,
         schema: checkConfig.schema,
         group: checkConfig.group,
-        focus: checkConfig.focus || mapCheckNameToFocus(checkId),
+        focus: checkConfig.focus || mapCheckNameToFocus2(checkId),
         transform: checkConfig.transform,
         transform_js: checkConfig.transform_js,
         env: checkConfig.env,
@@ -18278,12 +21935,17 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
         }
       } catch {
       }
-      const dependencyResults = buildDependencyResultsWithScope(
+      const dependencyResults = buildDependencyResultsWithScope2(
         checkId,
         checkConfig,
         context2,
-        scope
+        scope2
       );
+      for (const [key, value] of sharedDependencyResults.entries()) {
+        if (!dependencyResults.has(key)) {
+          dependencyResults.set(key, value);
+        }
+      }
       try {
         const rawDeps = checkConfig?.depends_on || [];
         const depList = Array.isArray(rawDeps) ? rawDeps : [rawDeps];
@@ -18301,7 +21963,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
                 failed = true;
               } else {
                 const out = dr.output;
-                const fatal = hasFatalIssues(dr);
+                const fatal = hasFatalIssues2(dr);
                 failed = fatal || !!out && typeof out === "object" && out.__failed === true;
                 skipped = !!(out && typeof out === "object" && out.__skip === true);
               }
@@ -18552,10 +22214,10 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
           checkId,
           result: { ...enrichedResult, output },
           event: context2.event || "manual",
-          scope
+          scope: scope2
         };
         logger.info(
-          `[LevelDispatch][DEBUG] Committing to journal: checkId=${checkId}, scope=${JSON.stringify(scope)}, hasOutput=${output !== void 0}`
+          `[LevelDispatch][DEBUG] Committing to journal: checkId=${checkId}, scope=${JSON.stringify(scope2)}, hasOutput=${output !== void 0}`
         );
         context2.journal.commitEntry(journalEntry);
       } catch (error) {
@@ -18565,7 +22227,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
       emitEvent({
         type: "CheckCompleted",
         checkId,
-        scope,
+        scope: scope2,
         result: {
           ...enrichedResult,
           output
@@ -18573,7 +22235,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
       });
       const iterationDurationMs = Date.now() - iterationStartMs;
       perIterationDurations.push(iterationDurationMs);
-      updateStats(
+      updateStats2(
         [{ checkId, result: enrichedResult, duration: iterationDurationMs }],
         state,
         true
@@ -18589,7 +22251,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
       emitEvent({
         type: "CheckErrored",
         checkId,
-        scope,
+        scope: scope2,
         error: {
           message: err.message,
           stack: err.stack,
@@ -18606,7 +22268,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
       };
       allIssues.push(errorIssue);
       perItemResults.push({ issues: [errorIssue] });
-      updateStats(
+      updateStats2(
         [{ checkId, result: { issues: [errorIssue] }, error: err, duration: iterationDurationMs }],
         state,
         true
@@ -18663,7 +22325,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
       scope: [],
       result: aggregatedResult,
       checkConfig,
-      success: !hasFatalIssues(aggregatedResult)
+      success: !hasFatalIssues2(aggregatedResult)
     });
   } catch (error) {
     logger.warn(`[LevelDispatch] Routing error for aggregated forEach ${checkId}: ${error}`);
@@ -18910,7 +22572,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
   }
   return aggregatedResult;
 }
-async function executeSingleCheck(checkId, context2, state, emitEvent, transition, scopeOverride) {
+async function executeSingleCheck2(checkId, context2, state, emitEvent, transition, scopeOverride) {
   const checkConfig = context2.config.checks?.[checkId];
   if (checkConfig?.if) {
     const shouldRun = await evaluateIfCondition(checkId, checkConfig, context2, state);
@@ -19150,7 +22812,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
         });
         return emptyResult;
       }
-      return await executeCheckWithForEachItems(
+      return await executeCheckWithForEachItems2(
         checkId,
         forEachParent,
         forEachItems,
@@ -19178,10 +22840,19 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
     if (!checkConfig2) {
       throw new Error(`Check configuration not found: ${checkId}`);
     }
+    const checksMeta = {};
+    try {
+      const allChecks = context2.config.checks || {};
+      for (const [id, cfg] of Object.entries(allChecks)) {
+        const anyCfg = cfg;
+        checksMeta[id] = { type: anyCfg.type, group: anyCfg.group };
+      }
+    } catch {
+    }
     const providerType = checkConfig2.type || "ai";
     const providerRegistry = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports)).CheckProviderRegistry.getInstance();
     const provider = providerRegistry.getProviderOrThrow(providerType);
-    const outputHistory = buildOutputHistoryFromJournal(context2);
+    const outputHistory = buildOutputHistoryFromJournal2(context2);
     const providerConfig = {
       type: providerType,
       checkName: checkId,
@@ -19189,14 +22860,16 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       exec: checkConfig2.exec,
       schema: checkConfig2.schema,
       group: checkConfig2.group,
-      focus: checkConfig2.focus || mapCheckNameToFocus(checkId),
+      focus: checkConfig2.focus || mapCheckNameToFocus2(checkId),
       transform: checkConfig2.transform,
       transform_js: checkConfig2.transform_js,
       env: checkConfig2.env,
       forEach: checkConfig2.forEach,
       ...checkConfig2,
       eventContext: context2.prInfo?.eventContext || {},
+      // Expose history and checks metadata for template helpers
       __outputHistory: outputHistory,
+      checksMeta,
       ai: {
         ...checkConfig2.ai || {},
         timeout: checkConfig2.ai?.timeout || 6e5,
@@ -19227,7 +22900,9 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       ...context2.executionContext,
       _engineMode: context2.mode,
       _parentContext: context2,
-      _parentState: state
+      _parentState: state,
+      // Make checks metadata available to providers that want it
+      checksMeta
     };
     try {
       const assumeExpr = checkConfig2?.assume;
@@ -19299,6 +22974,14 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       { "visor.check.id": checkId, "visor.check.type": providerType },
       async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
     );
+    try {
+      const awaitingHumanInput = result?.awaitingHumanInput === true || result?.output && result.output.awaitingHumanInput === true;
+      if (awaitingHumanInput) {
+        state.flags = state.flags || {};
+        state.flags.awaitingHumanInput = true;
+      }
+    } catch {
+    }
     const enrichedIssues = (result.issues || []).map((issue) => ({
       ...issue,
       checkName: checkId,
@@ -19485,9 +23168,14 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
     }
     let renderedContent;
     try {
-      renderedContent = await renderTemplateContent(checkId, checkConfig2, enrichedResult);
+      renderedContent = await renderTemplateContent2(checkId, checkConfig2, enrichedResult);
       if (renderedContent) {
+        logger.debug(
+          `[LevelDispatch] Template rendered for ${checkId}: ${renderedContent.length} chars`
+        );
         emitMermaidFromMarkdown(checkId, renderedContent, "content");
+      } else {
+        logger.debug(`[LevelDispatch] No template content rendered for ${checkId}`);
       }
     } catch (error) {
       logger.warn(`[LevelDispatch] Failed to render template for ${checkId}: ${error}`);
@@ -19522,7 +23210,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       scope,
       result: enrichedResult,
       checkConfig: checkConfig2,
-      success: !hasFatalIssues(enrichedResult)
+      success: !hasFatalIssues2(enrichedResult)
     });
     try {
       const commitResult = {
@@ -19555,7 +23243,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
           issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 }
         };
         aggStats.totalRuns++;
-        const hasFatal = hasFatalIssues(enrichedResultWithTimestamp);
+        const hasFatal = hasFatalIssues2(enrichedResultWithTimestamp);
         if (hasFatal) aggStats.failedRuns++;
         else aggStats.successfulRuns++;
         const items = enrichedResultWithTimestamp.forEachItems;
@@ -19614,7 +23302,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
     throw err;
   }
 }
-function buildDependencyResultsWithScope(checkId, checkConfig, context2, scope) {
+function buildDependencyResultsWithScope2(checkId, checkConfig, context2, scope) {
   const dependencyResults = /* @__PURE__ */ new Map();
   const dependencies = checkConfig.depends_on || [];
   const depList = Array.isArray(dependencies) ? dependencies : [dependencies];
@@ -19746,18 +23434,18 @@ function buildDependencyResultsWithScope(checkId, checkConfig, context2, scope) 
   return dependencyResults;
 }
 function buildDependencyResults(checkId, checkConfig, context2, _state) {
-  return buildDependencyResultsWithScope(checkId, checkConfig, context2, []);
+  return buildDependencyResultsWithScope2(checkId, checkConfig, context2, []);
 }
 function shouldFailFast(results) {
   for (const { result } of results) {
     if (!result || !result.issues) continue;
-    if (hasFatalIssues(result)) {
+    if (hasFatalIssues2(result)) {
       return true;
     }
   }
   return false;
 }
-function hasFatalIssues(result) {
+function hasFatalIssues2(result) {
   if (!result.issues) {
     return false;
   }
@@ -19768,7 +23456,7 @@ function hasFatalIssues(result) {
     ruleId.endsWith("_fail_if") && ruleId !== "global_fail_if";
   });
 }
-function updateStats(results, state, isForEachIteration = false) {
+function updateStats2(results, state, isForEachIteration = false) {
   for (const { checkId, result, error, duration } of results) {
     const existing = state.stats.get(checkId);
     const stats = existing || {
@@ -19850,39 +23538,56 @@ function updateStats(results, state, isForEachIteration = false) {
     state.stats.set(checkId, stats);
   }
 }
-async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
+async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs16 = await import("fs/promises");
-    const path17 = await import("path");
+    const fs18 = await import("fs/promises");
+    const path20 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
     if (checkConfig.template && checkConfig.template.content) {
       templateContent = String(checkConfig.template.content);
+      logger.debug(`[LevelDispatch] Using inline template for ${checkId}`);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path17.resolve(process.cwd(), file);
-      templateContent = await fs16.readFile(resolved, "utf-8");
+      const resolved = path20.resolve(process.cwd(), file);
+      templateContent = await fs18.readFile(resolved, "utf-8");
+      logger.debug(`[LevelDispatch] Using template file for ${checkId}: ${resolved}`);
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          // When bundled (dist), __dirname points to dist/state-machine/states
-          path17.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
-          // Dev fallback
-          path17.join(process.cwd(), "output", sanitized, "template.liquid")
+          path20.join(__dirname, "output", sanitized, "template.liquid"),
+          // bundled: dist/output/
+          path20.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          // source (from state-machine/states)
+          path20.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
+          // source (alternate)
+          path20.join(process.cwd(), "output", sanitized, "template.liquid"),
+          // fallback: cwd/output/
+          path20.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs16.readFile(p, "utf-8");
-            if (templateContent) break;
+            templateContent = await fs18.readFile(p, "utf-8");
+            if (templateContent) {
+              logger.debug(`[LevelDispatch] Using schema template for ${checkId}: ${p}`);
+              break;
+            }
           } catch {
           }
+        }
+        if (!templateContent) {
+          logger.debug(
+            `[LevelDispatch] No template found for schema '${sanitized}' (tried ${candidatePaths.length} paths)`
+          );
         }
       }
     }
     if (!templateContent) {
+      logger.debug(`[LevelDispatch] No template content found for ${checkId}`);
       return void 0;
     }
     const liquid = createExtendedLiquid2({
@@ -19892,12 +23597,28 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
       trimOutputRight: false,
       greedy: false
     });
+    let output = reviewSummary.output;
+    if (typeof output === "string") {
+      const trimmed = output.trim();
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        try {
+          output = JSON.parse(trimmed);
+        } catch {
+        }
+      }
+    }
     const templateData = {
       issues: reviewSummary.issues || [],
       checkName: checkId,
-      output: reviewSummary.output
+      output
     };
+    logger.debug(
+      `[LevelDispatch] Rendering template for ${checkId} with output keys: ${output && typeof output === "object" ? Object.keys(output).join(", ") : "none"}`
+    );
     const rendered = await liquid.parseAndRender(templateContent, templateData);
+    logger.debug(
+      `[LevelDispatch] Template rendered successfully for ${checkId}: ${rendered.length} chars, trimmed: ${rendered.trim().length} chars`
+    );
     return rendered.trim();
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -19993,6 +23714,7 @@ var init_runner = __esm({
       context;
       state;
       debugServer;
+      hasRun = false;
       constructor(context2, debugServer) {
         this.context = context2;
         this.state = this.initializeState();
@@ -20031,6 +23753,7 @@ var init_runner = __esm({
        * Execute the state machine
        */
       async run() {
+        this.hasRun = true;
         try {
           this.emitEvent({ type: "StateTransition", from: "Init", to: "Init" });
           while (!this.isTerminalState(this.state.currentState)) {
@@ -20400,6 +24123,16 @@ var init_runner = __esm({
         return this.state;
       }
       /**
+       * Hydrate the runner with a previously serialized state. Must be called
+       * before `run()` (i.e., when the runner has not started yet).
+       */
+      setState(state) {
+        if (this.hasRun) {
+          throw new Error("StateMachineRunner.setState: cannot set state after run() has started");
+        }
+        this.state = state;
+      }
+      /**
        * Bubble an event to parent context (nested workflows support)
        * This allows nested workflows to trigger re-runs in parent workflows
        */
@@ -20419,13 +24152,13 @@ var init_runner = __esm({
 });
 
 // src/utils/file-exclusion.ts
-var import_ignore, fs13, path14, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
+var import_ignore, fs14, path15, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
 var init_file_exclusion = __esm({
   "src/utils/file-exclusion.ts"() {
     "use strict";
     import_ignore = __toESM(require("ignore"));
-    fs13 = __toESM(require("fs"));
-    path14 = __toESM(require("path"));
+    fs14 = __toESM(require("fs"));
+    path15 = __toESM(require("path"));
     DEFAULT_EXCLUSION_PATTERNS = [
       "dist/",
       "build/",
@@ -20444,7 +24177,7 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to include (optional, defaults to common build artifacts)
        */
       constructor(workingDirectory = process.cwd(), additionalPatterns = DEFAULT_EXCLUSION_PATTERNS) {
-        const normalizedPath = path14.resolve(workingDirectory);
+        const normalizedPath = path15.resolve(workingDirectory);
         if (normalizedPath.includes("\0")) {
           throw new Error("Invalid workingDirectory: contains null bytes");
         }
@@ -20456,11 +24189,11 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to add to gitignore rules
        */
       loadGitignore(additionalPatterns) {
-        const gitignorePath = path14.resolve(this.workingDirectory, ".gitignore");
-        const resolvedWorkingDir = path14.resolve(this.workingDirectory);
+        const gitignorePath = path15.resolve(this.workingDirectory, ".gitignore");
+        const resolvedWorkingDir = path15.resolve(this.workingDirectory);
         try {
-          const relativePath = path14.relative(resolvedWorkingDir, gitignorePath);
-          if (relativePath.startsWith("..") || path14.isAbsolute(relativePath)) {
+          const relativePath = path15.relative(resolvedWorkingDir, gitignorePath);
+          if (relativePath.startsWith("..") || path15.isAbsolute(relativePath)) {
             throw new Error("Invalid gitignore path: path traversal detected");
           }
           if (relativePath !== ".gitignore") {
@@ -20470,8 +24203,8 @@ var init_file_exclusion = __esm({
           if (additionalPatterns && additionalPatterns.length > 0) {
             this.gitignore.add(additionalPatterns);
           }
-          if (fs13.existsSync(gitignorePath)) {
-            const rawContent = fs13.readFileSync(gitignorePath, "utf8");
+          if (fs14.existsSync(gitignorePath)) {
+            const rawContent = fs14.readFileSync(gitignorePath, "utf8");
             const gitignoreContent = rawContent.replace(/[\r\n]+/g, "\n").replace(/[\x00-\x09\x0B-\x1F\x7F]/g, "").split("\n").filter((line) => line.length < 1e3).join("\n").trim();
             this.gitignore.add(gitignoreContent);
             if (process.env.VISOR_DEBUG === "true") {
@@ -20503,13 +24236,13 @@ var git_repository_analyzer_exports = {};
 __export(git_repository_analyzer_exports, {
   GitRepositoryAnalyzer: () => GitRepositoryAnalyzer
 });
-var import_simple_git2, path15, fs14, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
+var import_simple_git2, path16, fs15, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
 var init_git_repository_analyzer = __esm({
   "src/git-repository-analyzer.ts"() {
     "use strict";
     import_simple_git2 = require("simple-git");
-    path15 = __toESM(require("path"));
-    fs14 = __toESM(require("fs"));
+    path16 = __toESM(require("path"));
+    fs15 = __toESM(require("fs"));
     init_file_exclusion();
     MAX_PATCH_SIZE = 50 * 1024;
     GitRepositoryAnalyzer = class {
@@ -20698,7 +24431,7 @@ ${file.patch}`).join("\n\n");
               console.error(`\u23ED\uFE0F  Skipping excluded file: ${file}`);
               continue;
             }
-            const filePath = path15.join(this.cwd, file);
+            const filePath = path16.join(this.cwd, file);
             const fileChange = await this.analyzeFileChange(file, status2, filePath, includeContext);
             changes.push(fileChange);
           }
@@ -20774,7 +24507,7 @@ ${file.patch}`).join("\n\n");
         let content;
         let truncated = false;
         try {
-          if (includeContext && status !== "added" && fs14.existsSync(filePath)) {
+          if (includeContext && status !== "added" && fs15.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const result = this.truncatePatch(diff, filename);
@@ -20784,7 +24517,7 @@ ${file.patch}`).join("\n\n");
               additions = lines.filter((line) => line.startsWith("+")).length;
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
-          } else if (status !== "added" && fs14.existsSync(filePath)) {
+          } else if (status !== "added" && fs15.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const lines = diff.split("\n");
@@ -20792,17 +24525,17 @@ ${file.patch}`).join("\n\n");
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
           }
-          if (status === "added" && fs14.existsSync(filePath)) {
+          if (status === "added" && fs15.existsSync(filePath)) {
             try {
-              const stats = fs14.statSync(filePath);
+              const stats = fs15.statSync(filePath);
               if (stats.isFile() && stats.size < 1024 * 1024) {
                 if (includeContext) {
-                  content = fs14.readFileSync(filePath, "utf8");
+                  content = fs15.readFileSync(filePath, "utf8");
                   const result = this.truncatePatch(content, filename);
                   patch = result.patch;
                   truncated = result.truncated;
                 }
-                const fileContent = includeContext ? content : fs14.readFileSync(filePath, "utf8");
+                const fileContent = includeContext ? content : fs15.readFileSync(filePath, "utf8");
                 additions = fileContent.split("\n").length;
               }
             } catch {
@@ -20883,6 +24616,401 @@ ${file.patch}`).join("\n\n");
         };
       }
     };
+  }
+});
+
+// src/utils/workspace-manager.ts
+function shellEscape(str) {
+  return "'" + str.replace(/'/g, "'\\''") + "'";
+}
+function sanitizePathComponent(name) {
+  return name.replace(/\.\./g, "").replace(/[\/\\]/g, "-").replace(/^\.+/, "").trim() || "unnamed";
+}
+var fsp, path17, WorkspaceManager;
+var init_workspace_manager = __esm({
+  "src/utils/workspace-manager.ts"() {
+    "use strict";
+    fsp = __toESM(require("fs/promises"));
+    path17 = __toESM(require("path"));
+    init_command_executor();
+    init_logger();
+    WorkspaceManager = class _WorkspaceManager {
+      static instances = /* @__PURE__ */ new Map();
+      sessionId;
+      basePath;
+      workspacePath;
+      originalPath;
+      config;
+      initialized = false;
+      mainProjectInfo = null;
+      projects = /* @__PURE__ */ new Map();
+      cleanupHandlersRegistered = false;
+      usedNames = /* @__PURE__ */ new Set();
+      constructor(sessionId, originalPath, config) {
+        this.sessionId = sessionId;
+        this.originalPath = originalPath;
+        this.config = {
+          enabled: true,
+          basePath: process.env.VISOR_WORKSPACE_PATH || "/tmp/visor-workspaces",
+          cleanupOnExit: true,
+          ...config
+        };
+        this.basePath = this.config.basePath;
+        this.workspacePath = path17.join(this.basePath, sanitizePathComponent(this.sessionId));
+      }
+      /**
+       * Get or create a WorkspaceManager instance for a session
+       */
+      static getInstance(sessionId, originalPath, config) {
+        if (!_WorkspaceManager.instances.has(sessionId)) {
+          _WorkspaceManager.instances.set(
+            sessionId,
+            new _WorkspaceManager(sessionId, originalPath, config)
+          );
+        }
+        return _WorkspaceManager.instances.get(sessionId);
+      }
+      /**
+       * Clear all instances (for testing)
+       */
+      static clearInstances() {
+        _WorkspaceManager.instances.clear();
+      }
+      /**
+       * Check if workspace isolation is enabled
+       */
+      isEnabled() {
+        return this.config.enabled;
+      }
+      /**
+       * Get the workspace path
+       */
+      getWorkspacePath() {
+        return this.workspacePath;
+      }
+      /**
+       * Get the original working directory
+       */
+      getOriginalPath() {
+        return this.originalPath;
+      }
+      /**
+       * Get workspace info (only available after initialize)
+       */
+      getWorkspaceInfo() {
+        return this.mainProjectInfo;
+      }
+      /**
+       * Initialize the workspace - creates workspace directory and main project worktree
+       */
+      async initialize() {
+        if (!this.config.enabled) {
+          throw new Error("Workspace isolation is not enabled");
+        }
+        if (this.initialized && this.mainProjectInfo) {
+          return this.mainProjectInfo;
+        }
+        logger.info(`Initializing workspace: ${this.workspacePath}`);
+        await fsp.mkdir(this.workspacePath, { recursive: true });
+        logger.debug(`Created workspace directory: ${this.workspacePath}`);
+        const mainProjectName = sanitizePathComponent(this.extractProjectName(this.originalPath));
+        this.usedNames.add(mainProjectName);
+        const mainProjectPath = path17.join(this.workspacePath, mainProjectName);
+        const isGitRepo = await this.isGitRepository(this.originalPath);
+        if (isGitRepo) {
+          await this.createMainProjectWorktree(mainProjectPath);
+        } else {
+          logger.debug(`Original path is not a git repo, creating symlink`);
+          try {
+            await fsp.symlink(this.originalPath, mainProjectPath);
+          } catch (error) {
+            throw new Error(`Failed to create symlink for main project: ${error}`);
+          }
+        }
+        this.registerCleanupHandlers();
+        this.mainProjectInfo = {
+          sessionId: this.sessionId,
+          workspacePath: this.workspacePath,
+          mainProjectPath,
+          mainProjectName,
+          originalPath: this.originalPath
+        };
+        this.initialized = true;
+        logger.info(`Workspace initialized: ${this.workspacePath}`);
+        return this.mainProjectInfo;
+      }
+      /**
+       * Add a project to the workspace (creates symlink to worktree)
+       */
+      async addProject(repository, worktreePath, description) {
+        if (!this.initialized) {
+          throw new Error("Workspace not initialized. Call initialize() first.");
+        }
+        let projectName = sanitizePathComponent(description || this.extractRepoName(repository));
+        projectName = this.getUniqueName(projectName);
+        this.usedNames.add(projectName);
+        const workspacePath = path17.join(this.workspacePath, projectName);
+        await fsp.rm(workspacePath, { recursive: true, force: true });
+        try {
+          await fsp.symlink(worktreePath, workspacePath);
+        } catch (error) {
+          throw new Error(`Failed to create symlink for project ${projectName}: ${error}`);
+        }
+        this.projects.set(projectName, {
+          name: projectName,
+          path: workspacePath,
+          worktreePath,
+          repository
+        });
+        logger.info(`Added project to workspace: ${projectName} -> ${worktreePath}`);
+        return workspacePath;
+      }
+      /**
+       * List all projects in the workspace
+       */
+      listProjects() {
+        return Array.from(this.projects.values());
+      }
+      /**
+       * Cleanup the workspace
+       */
+      async cleanup() {
+        logger.info(`Cleaning up workspace: ${this.workspacePath}`);
+        try {
+          if (this.mainProjectInfo) {
+            const mainProjectPath = this.mainProjectInfo.mainProjectPath;
+            try {
+              const stats = await fsp.lstat(mainProjectPath);
+              if (!stats.isSymbolicLink()) {
+                await this.removeMainProjectWorktree(mainProjectPath);
+              }
+            } catch {
+            }
+          }
+          await fsp.rm(this.workspacePath, { recursive: true, force: true });
+          logger.debug(`Removed workspace directory: ${this.workspacePath}`);
+          _WorkspaceManager.instances.delete(this.sessionId);
+          this.initialized = false;
+          this.mainProjectInfo = null;
+          this.projects.clear();
+          this.usedNames.clear();
+          logger.info(`Workspace cleanup completed: ${this.sessionId}`);
+        } catch (error) {
+          logger.warn(`Failed to cleanup workspace: ${error}`);
+        }
+      }
+      /**
+       * Create worktree for the main project
+       *
+       * visor-disable: architecture - Not using WorktreeManager here because:
+       * 1. WorktreeManager expects remote URLs and clones to bare repos first
+       * 2. This operates on the LOCAL repo we're already in (no cloning needed)
+       * 3. Adding a "local mode" to WorktreeManager would add complexity for minimal benefit
+       * The git commands here are simpler (just rev-parse + worktree add) vs WorktreeManager's
+       * full clone/bare-repo/fetch/worktree pipeline.
+       */
+      async createMainProjectWorktree(targetPath) {
+        logger.debug(`Creating main project worktree: ${targetPath}`);
+        const headResult = await commandExecutor.execute(
+          `git -C ${shellEscape(this.originalPath)} rev-parse HEAD`,
+          {
+            timeout: 1e4
+          }
+        );
+        if (headResult.exitCode !== 0) {
+          throw new Error(`Failed to get HEAD: ${headResult.stderr}`);
+        }
+        const headRef = headResult.stdout.trim();
+        const createCmd = `git -C ${shellEscape(this.originalPath)} worktree add --detach ${shellEscape(targetPath)} ${shellEscape(headRef)}`;
+        const result = await commandExecutor.execute(createCmd, { timeout: 6e4 });
+        if (result.exitCode !== 0) {
+          throw new Error(`Failed to create main project worktree: ${result.stderr}`);
+        }
+        logger.debug(`Created main project worktree at ${targetPath}`);
+      }
+      /**
+       * Remove main project worktree
+       */
+      async removeMainProjectWorktree(worktreePath) {
+        logger.debug(`Removing main project worktree: ${worktreePath}`);
+        const removeCmd = `git -C ${shellEscape(this.originalPath)} worktree remove ${shellEscape(worktreePath)} --force`;
+        const result = await commandExecutor.execute(removeCmd, { timeout: 3e4 });
+        if (result.exitCode !== 0) {
+          logger.warn(`Failed to remove worktree via git: ${result.stderr}`);
+        }
+      }
+      /**
+       * Check if a path is a git repository
+       */
+      async isGitRepository(dirPath) {
+        try {
+          const result = await commandExecutor.execute(
+            `git -C ${shellEscape(dirPath)} rev-parse --git-dir`,
+            {
+              timeout: 5e3
+            }
+          );
+          return result.exitCode === 0;
+        } catch {
+          return false;
+        }
+      }
+      /**
+       * Extract project name from path
+       */
+      extractProjectName(dirPath) {
+        return path17.basename(dirPath);
+      }
+      /**
+       * Extract repository name from owner/repo format
+       */
+      extractRepoName(repository) {
+        if (repository.includes("://") || repository.startsWith("git@")) {
+          const match = repository.match(/[/:]([^/:]+\/[^/:]+?)(?:\.git)?$/);
+          if (match) {
+            return match[1].split("/").pop() || repository;
+          }
+        }
+        if (repository.includes("/")) {
+          return repository.split("/").pop() || repository;
+        }
+        return repository;
+      }
+      /**
+       * Get a unique name by appending a number if needed
+       */
+      getUniqueName(baseName) {
+        if (!this.usedNames.has(baseName)) {
+          return baseName;
+        }
+        let counter = 2;
+        let uniqueName = `${baseName}-${counter}`;
+        while (this.usedNames.has(uniqueName)) {
+          counter++;
+          uniqueName = `${baseName}-${counter}`;
+        }
+        return uniqueName;
+      }
+      /**
+       * Register cleanup handlers for process exit
+       */
+      registerCleanupHandlers() {
+        if (this.cleanupHandlersRegistered || !this.config.cleanupOnExit) {
+          return;
+        }
+        this.cleanupHandlersRegistered = true;
+      }
+    };
+  }
+});
+
+// src/state-machine/context/build-engine-context.ts
+var build_engine_context_exports = {};
+__export(build_engine_context_exports, {
+  buildEngineContextForRun: () => buildEngineContextForRun,
+  initializeWorkspace: () => initializeWorkspace
+});
+function applyCriticalityDefaults(cfg) {
+  const checks = cfg.checks || {};
+  for (const id of Object.keys(checks)) {
+    const c = checks[id];
+    if (!c.criticality) c.criticality = "policy";
+    if (c.criticality === "info" && typeof c.continue_on_failure === "undefined")
+      c.continue_on_failure = true;
+  }
+}
+function buildEngineContextForRun(workingDirectory, config, prInfo, debug, maxParallelism, failFast, requestedChecks) {
+  const clonedConfig = JSON.parse(JSON.stringify(config));
+  const checks = {};
+  applyCriticalityDefaults(clonedConfig);
+  for (const [checkId, checkConfig] of Object.entries(clonedConfig.checks || {})) {
+    checks[checkId] = {
+      tags: checkConfig.tags || [],
+      triggers: (Array.isArray(checkConfig.on) ? checkConfig.on : [checkConfig.on]).filter(
+        Boolean
+      ),
+      group: checkConfig.group,
+      providerType: checkConfig.type || "ai",
+      dependencies: checkConfig.depends_on || []
+    };
+  }
+  if (requestedChecks && requestedChecks.length > 0) {
+    for (const checkName of requestedChecks) {
+      if (!checks[checkName] && !clonedConfig.checks?.[checkName]) {
+        logger.debug(`[StateMachine] Synthesizing minimal config for legacy check: ${checkName}`);
+        if (!clonedConfig.checks) {
+          clonedConfig.checks = {};
+        }
+        clonedConfig.checks[checkName] = {
+          type: "ai",
+          prompt: `Perform ${checkName} analysis`
+        };
+        checks[checkName] = {
+          tags: [],
+          triggers: [],
+          group: "default",
+          providerType: "ai",
+          dependencies: []
+        };
+      }
+    }
+  }
+  const journal = new ExecutionJournal();
+  const memory = MemoryStore.getInstance(clonedConfig.memory);
+  return {
+    mode: "state-machine",
+    config: clonedConfig,
+    checks,
+    journal,
+    memory,
+    workingDirectory,
+    originalWorkingDirectory: workingDirectory,
+    sessionId: (0, import_uuid2.v4)(),
+    event: prInfo.eventType,
+    debug,
+    maxParallelism,
+    failFast,
+    requestedChecks: requestedChecks && requestedChecks.length > 0 ? requestedChecks : void 0,
+    // Store prInfo for later access (e.g., in getOutputHistorySnapshot)
+    prInfo
+  };
+}
+async function initializeWorkspace(context2) {
+  const workspaceConfig = context2.config.workspace;
+  const isEnabled2 = workspaceConfig?.enabled !== false && process.env.VISOR_WORKSPACE_ENABLED !== "false";
+  if (!isEnabled2) {
+    logger.debug("[Workspace] Workspace isolation is disabled");
+    return context2;
+  }
+  const originalPath = context2.workingDirectory || process.cwd();
+  try {
+    const workspace = WorkspaceManager.getInstance(context2.sessionId, originalPath, {
+      enabled: true,
+      basePath: workspaceConfig?.base_path || process.env.VISOR_WORKSPACE_PATH,
+      cleanupOnExit: workspaceConfig?.cleanup_on_exit !== false
+    });
+    const info = await workspace.initialize();
+    context2.workspace = workspace;
+    context2.workingDirectory = info.mainProjectPath;
+    context2.originalWorkingDirectory = originalPath;
+    logger.info(`[Workspace] Initialized workspace: ${info.workspacePath}`);
+    logger.debug(`[Workspace] Main project at: ${info.mainProjectPath}`);
+    return context2;
+  } catch (error) {
+    logger.warn(`[Workspace] Failed to initialize workspace: ${error}`);
+    logger.debug("[Workspace] Continuing without workspace isolation");
+    return context2;
+  }
+}
+var import_uuid2;
+var init_build_engine_context = __esm({
+  "src/state-machine/context/build-engine-context.ts"() {
+    "use strict";
+    init_snapshot_store();
+    init_memory_store();
+    import_uuid2 = require("uuid");
+    init_logger();
+    init_workspace_manager();
   }
 });
 
@@ -20972,6 +25100,88 @@ var init_ndjson_sink = __esm({
         return import_path5.default.join(process.cwd(), p);
       }
     };
+  }
+});
+
+// src/utils/json-text-extractor.ts
+function extractTextFieldFromMalformedJson(content) {
+  const fieldPatterns = [
+    /^\s*\{\s*"text"\s*:\s*"/i,
+    /^\s*\{\s*"response"\s*:\s*"/i,
+    /^\s*\{\s*"message"\s*:\s*"/i
+  ];
+  for (const pattern of fieldPatterns) {
+    const match = pattern.exec(content);
+    if (match) {
+      const valueStart = match[0].length;
+      const remaining = content.substring(valueStart);
+      let value = "";
+      let i = 0;
+      while (i < remaining.length) {
+        const char = remaining[i];
+        if (char === "\\" && i + 1 < remaining.length) {
+          const nextChar = remaining[i + 1];
+          if (nextChar === "n") {
+            value += "\n";
+          } else if (nextChar === "r") {
+            value += "\r";
+          } else if (nextChar === "t") {
+            value += "	";
+          } else if (nextChar === '"') {
+            value += '"';
+          } else if (nextChar === "\\") {
+            value += "\\";
+          } else {
+            value += char + nextChar;
+          }
+          i += 2;
+        } else if (char === '"') {
+          break;
+        } else {
+          value += char;
+          i++;
+        }
+      }
+      if (value.trim().length > 0) {
+        return value.trim();
+      }
+    }
+  }
+  return void 0;
+}
+function extractTextFromJson(content) {
+  if (content === void 0 || content === null) return void 0;
+  let parsed = content;
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+      return trimmed.length > 0 ? trimmed : void 0;
+    }
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      const extracted = extractTextFieldFromMalformedJson(trimmed);
+      if (extracted) {
+        return extracted;
+      }
+      return trimmed.length > 0 ? trimmed : void 0;
+    }
+  }
+  if (parsed && typeof parsed === "object") {
+    const txt = parsed.text || parsed.response || parsed.message;
+    if (typeof txt === "string" && txt.trim()) {
+      return txt.trim();
+    }
+  }
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    return trimmed.length > 0 ? trimmed : void 0;
+  }
+  return void 0;
+}
+var init_json_text_extractor = __esm({
+  "src/utils/json-text-extractor.ts"() {
+    "use strict";
   }
 });
 
@@ -21451,11 +25661,11 @@ var github_comments_exports = {};
 __export(github_comments_exports, {
   CommentManager: () => CommentManager
 });
-var import_uuid2, CommentManager;
+var import_uuid3, CommentManager;
 var init_github_comments = __esm({
   "src/github-comments.ts"() {
     "use strict";
-    import_uuid2 = require("uuid");
+    import_uuid3 = require("uuid");
     init_logger();
     init_footer();
     CommentManager = class {
@@ -21507,10 +25717,30 @@ var init_github_comments = __esm({
           commentId = this.generateCommentId(),
           triggeredBy = "unknown",
           allowConcurrentUpdates = false,
-          commitSha
+          commitSha,
+          cachedGithubCommentId
         } = options;
         return this.withRetry(async () => {
-          const existingComment = await this.findVisorComment(owner, repo, prNumber, commentId);
+          let existingComment = await this.findVisorComment(owner, repo, prNumber, commentId);
+          if (!existingComment && cachedGithubCommentId) {
+            try {
+              const cachedComment = await this.octokit.rest.issues.getComment({
+                owner,
+                repo,
+                comment_id: cachedGithubCommentId
+              });
+              if (cachedComment.data && this.isVisorComment(cachedComment.data.body || "", commentId)) {
+                existingComment = cachedComment.data;
+                logger.debug(
+                  `[github-comments] Found comment via cached ID ${cachedGithubCommentId} (not visible in listComments yet)`
+                );
+              }
+            } catch (_e) {
+              logger.debug(
+                `[github-comments] Cached comment ${cachedGithubCommentId} not found, will create new`
+              );
+            }
+          }
           const formattedContent = this.formatCommentWithMetadata(content, {
             commentId,
             lastUpdated: (/* @__PURE__ */ new Date()).toISOString(),
@@ -21603,7 +25833,7 @@ ${content}
        * Generate unique comment ID
        */
       generateCommentId() {
-        return (0, import_uuid2.v4)().substring(0, 8);
+        return (0, import_uuid3.v4)().substring(0, 8);
       }
       /**
        * Check if comment is a Visor comment
@@ -21690,8 +25920,8 @@ ${content}
        * Sleep utility
        */
       sleep(ms) {
-        return new Promise((resolve7) => {
-          const t = setTimeout(resolve7, ms);
+        return new Promise((resolve9) => {
+          const t = setTimeout(resolve9, ms);
           if (typeof t.unref === "function") {
             try {
               t.unref();
@@ -21746,6 +25976,7 @@ var init_github_frontend = __esm({
   "src/frontends/github-frontend.ts"() {
     "use strict";
     init_logger();
+    init_json_text_extractor();
     GitHubFrontend = class {
       name = "github";
       subs = [];
@@ -21761,6 +25992,12 @@ var init_github_frontend = __esm({
       _timer = null;
       _lastFlush = 0;
       _pendingIds = /* @__PURE__ */ new Set();
+      // Mutex for serializing comment updates per group
+      updateLocks = /* @__PURE__ */ new Map();
+      minUpdateDelayMs = 1e3;
+      // Minimum delay between updates (public for testing)
+      // Cache of created GitHub comment IDs per group to handle API eventual consistency
+      createdCommentGithubIds = /* @__PURE__ */ new Map();
       start(ctx) {
         const log2 = ctx.logger;
         const bus = ctx.eventBus;
@@ -21831,12 +26068,14 @@ var init_github_frontend = __esm({
                 const failureResults = await this.evaluateFailureResults(ctx, ev.checkId, ev.result);
                 const failed = Array.isArray(failureResults) ? failureResults.some((r) => r && r.failed) : false;
                 const group = this.getGroupForCheck(ctx, ev.checkId);
+                const rawContent = ev?.result?.content;
+                const extractedContent = extractTextFromJson(rawContent);
                 this.upsertSectionState(group, ev.checkId, {
                   status: "completed",
                   conclusion: failed ? "failure" : "success",
                   issues: count,
                   lastUpdated: (/* @__PURE__ */ new Date()).toISOString(),
-                  content: ev?.result?.content
+                  content: extractedContent
                 });
                 await this.updateGroupedComment(ctx, comments, group, ev.checkId);
               }
@@ -21944,22 +26183,83 @@ ${end}`);
         }
         return lines.join("\\n\\n");
       }
+      /**
+       * Acquires a mutex lock for the given group and executes the update.
+       * This ensures only one comment update happens at a time per group,
+       * preventing race conditions where updates overwrite each other.
+       *
+       * Uses a proper queue-based mutex: each new caller chains onto the previous
+       * lock, ensuring strict serialization even when multiple callers wait
+       * simultaneously.
+       */
       async updateGroupedComment(ctx, comments, group, changedIds) {
+        const existingLock = this.updateLocks.get(group);
+        let resolveLock;
+        const ourLock = new Promise((resolve9) => {
+          resolveLock = resolve9;
+        });
+        this.updateLocks.set(group, ourLock);
+        try {
+          if (existingLock) {
+            try {
+              await existingLock;
+            } catch (error) {
+              logger.warn(
+                `[github-frontend] Previous update for group ${group} failed: ${error instanceof Error ? error.message : error}`
+              );
+            }
+          }
+          await this.performGroupedCommentUpdate(ctx, comments, group, changedIds);
+        } finally {
+          if (this.updateLocks.get(group) === ourLock) {
+            this.updateLocks.delete(group);
+          }
+          resolveLock();
+        }
+      }
+      /**
+       * Performs the actual comment update with delay enforcement.
+       */
+      async performGroupedCommentUpdate(ctx, comments, group, changedIds) {
         try {
           if (!ctx.run.repo || !ctx.run.pr) return;
+          const config = ctx.config;
+          const prCommentEnabled = config?.output?.pr_comment?.enabled !== false;
+          if (!prCommentEnabled) {
+            logger.debug(
+              `[github-frontend] PR comments disabled in config, skipping comment for group: ${group}`
+            );
+            return;
+          }
+          const timeSinceLastFlush = Date.now() - this._lastFlush;
+          if (this._lastFlush > 0 && timeSinceLastFlush < this.minUpdateDelayMs) {
+            const delay = this.minUpdateDelayMs - timeSinceLastFlush;
+            logger.debug(
+              `[github-frontend] Waiting ${delay}ms before next update to prevent rate limiting`
+            );
+            await this.sleep(delay);
+          }
           this.revision++;
+          const commentId = this.commentIdForGroup(ctx, group);
           const mergedBody = await this.mergeIntoExistingBody(ctx, comments, group, changedIds);
-          await comments.updateOrCreateComment(
+          const cachedGithubId = this.createdCommentGithubIds.get(commentId);
+          const result = await comments.updateOrCreateComment(
             ctx.run.repo.owner,
             ctx.run.repo.name,
             ctx.run.pr,
             mergedBody,
             {
-              commentId: this.commentIdForGroup(ctx, group),
+              commentId,
               triggeredBy: this.deriveTriggeredBy(ctx),
-              commitSha: ctx.run.headSha
+              commitSha: ctx.run.headSha,
+              // Pass the cached GitHub comment ID if available
+              cachedGithubCommentId: cachedGithubId
             }
           );
+          if (result && result.id) {
+            this.createdCommentGithubIds.set(commentId, result.id);
+          }
+          this._lastFlush = Date.now();
         } catch (e) {
           logger.debug(
             `[github-frontend] updateGroupedComment failed: ${e instanceof Error ? e.message : e}`
@@ -22119,6 +26419,9 @@ ${blocks}
         groupMap.set(checkId, { ...prev, ...patch });
       }
       commentIdForGroup(ctx, group) {
+        if (group === "dynamic") {
+          return `visor-thread-dynamic-${ctx.run.runId}`;
+        }
         const r = ctx.run;
         const base = r.repo && r.pr ? `${r.repo.owner}/${r.repo.name}#${r.pr}` : r.runId;
         return `visor-thread-${group}-${base}`;
@@ -22201,6 +26504,490 @@ ${blocks}
         await this.updateGroupedComment(ctx, comments, group, ids.length > 0 ? ids : void 0);
         this._lastFlush = Date.now();
       }
+      /**
+       * Sleep utility for enforcing delays
+       */
+      sleep(ms) {
+        return new Promise((resolve9) => setTimeout(resolve9, ms));
+      }
+    };
+  }
+});
+
+// src/slack/client.ts
+var SlackClient;
+var init_client = __esm({
+  "src/slack/client.ts"() {
+    "use strict";
+    SlackClient = class {
+      token;
+      constructor(botToken) {
+        if (!botToken || typeof botToken !== "string") {
+          throw new Error("SlackClient: botToken is required");
+        }
+        this.token = botToken;
+      }
+      reactions = {
+        add: async ({
+          channel,
+          timestamp,
+          name
+        }) => {
+          const resp = await this.api("reactions.add", { channel, timestamp, name });
+          if (!resp || resp.ok !== true) {
+            const err = resp && resp.error || "unknown_error";
+            console.warn(`Slack reactions.add failed (non-fatal): ${err}`);
+            return { ok: false };
+          }
+          return { ok: true };
+        },
+        remove: async ({
+          channel,
+          timestamp,
+          name
+        }) => {
+          const resp = await this.api("reactions.remove", { channel, timestamp, name });
+          if (!resp || resp.ok !== true) {
+            const err = resp && resp.error || "unknown_error";
+            console.warn(`Slack reactions.remove failed (non-fatal): ${err}`);
+            return { ok: false };
+          }
+          return { ok: true };
+        }
+      };
+      chat = {
+        postMessage: async ({
+          channel,
+          text,
+          thread_ts
+        }) => {
+          const resp = await this.api("chat.postMessage", { channel, text, thread_ts });
+          if (!resp || resp.ok !== true) {
+            const err = resp && resp.error || "unknown_error";
+            console.warn(`Slack chat.postMessage failed (non-fatal): ${err}`);
+            return {
+              ts: void 0,
+              message: void 0,
+              data: resp
+            };
+          }
+          return {
+            ts: resp.ts || resp.message && resp.message.ts || void 0,
+            message: resp.message,
+            data: resp
+          };
+        },
+        update: async ({ channel, ts, text }) => {
+          const resp = await this.api("chat.update", { channel, ts, text });
+          if (!resp || resp.ok !== true) {
+            const err = resp && resp.error || "unknown_error";
+            console.warn(`Slack chat.update failed (non-fatal): ${err}`);
+            return { ok: false, ts };
+          }
+          return { ok: true, ts: resp.ts || ts };
+        }
+      };
+      async getBotUserId() {
+        const resp = await this.api("auth.test", {});
+        if (!resp || resp.ok !== true || !resp.user_id) {
+          console.warn("Slack auth.test failed (non-fatal); bot user id unavailable");
+          return "UNKNOWN_BOT";
+        }
+        return String(resp.user_id);
+      }
+      async fetchThreadReplies(channel, thread_ts, limit = 40) {
+        try {
+          const params = new URLSearchParams({
+            channel,
+            ts: thread_ts,
+            limit: String(limit)
+          });
+          const res = await fetch(`https://slack.com/api/conversations.replies?${params.toString()}`, {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${this.token}`
+            }
+          });
+          const resp = await res.json();
+          if (!resp || resp.ok !== true || !Array.isArray(resp.messages)) {
+            const err = resp && resp.error || "unknown_error";
+            console.warn(
+              `Slack conversations.replies failed (non-fatal): ${err} (channel=${channel}, ts=${thread_ts}, limit=${limit})`
+            );
+            return [];
+          }
+          return resp.messages.map((m) => ({
+            ts: String(m.ts || ""),
+            user: m.user,
+            text: m.text,
+            bot_id: m.bot_id,
+            thread_ts: m.thread_ts
+          }));
+        } catch (e) {
+          console.warn(
+            `Slack conversations.replies failed (non-fatal): ${e instanceof Error ? e.message : String(e)} (channel=${channel}, ts=${thread_ts}, limit=${limit})`
+          );
+          return [];
+        }
+      }
+      getWebClient() {
+        return {
+          conversations: {
+            history: async ({ channel, limit }) => await this.api("conversations.history", { channel, limit }),
+            open: async ({ users }) => await this.api("conversations.open", { users }),
+            replies: async ({ channel, ts, limit }) => await this.api("conversations.replies", { channel, ts, limit })
+          }
+        };
+      }
+      async api(method, body) {
+        const res = await fetch(`https://slack.com/api/${method}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json; charset=utf-8",
+            Authorization: `Bearer ${this.token}`
+          },
+          body: JSON.stringify(body)
+        });
+        return await res.json();
+      }
+    };
+  }
+});
+
+// src/slack/markdown.ts
+function markdownToSlack(text) {
+  if (!text || typeof text !== "string") return "";
+  let out = text;
+  out = out.replace(
+    /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
+    (_m, alt, url) => `<${url}|${alt || "image"}>`
+  );
+  out = out.replace(
+    /\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
+    (_m, label, url) => `<${url}|${label}>`
+  );
+  out = out.replace(/\*\*([^*]+)\*\*/g, (_m, inner) => `*${inner}*`);
+  out = out.replace(/__([^_]+)__/g, (_m, inner) => `*${inner}*`);
+  const lines = out.split(/\r?\n/);
+  let inCodeBlock = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trimStart();
+    if (/^```/.test(trimmed)) {
+      inCodeBlock = !inCodeBlock;
+      continue;
+    }
+    if (inCodeBlock) continue;
+    const match = /^(\s*)([-*])\s+(.+)$/.exec(line);
+    if (match) {
+      const [, indent, , rest] = match;
+      lines[i] = `${indent}\u2022 ${rest}`;
+    }
+  }
+  out = lines.join("\n");
+  return out;
+}
+function formatSlackText(text) {
+  return markdownToSlack(text);
+}
+var init_markdown = __esm({
+  "src/slack/markdown.ts"() {
+    "use strict";
+  }
+});
+
+// src/frontends/slack-frontend.ts
+var slack_frontend_exports = {};
+__export(slack_frontend_exports, {
+  SlackFrontend: () => SlackFrontend
+});
+var SlackFrontend;
+var init_slack_frontend = __esm({
+  "src/frontends/slack-frontend.ts"() {
+    "use strict";
+    init_client();
+    init_markdown();
+    SlackFrontend = class {
+      name = "slack";
+      subs = [];
+      cfg;
+      // Reactions ack/done per run (inbound Slack events only)
+      acked = false;
+      ackRef = null;
+      ackName = "eyes";
+      doneName = "thumbsup";
+      constructor(config) {
+        this.cfg = config || {};
+      }
+      start(ctx) {
+        const bus = ctx.eventBus;
+        try {
+          const hasClient = !!(ctx.slack || ctx.slackClient || this.cfg?.botToken || process.env.SLACK_BOT_TOKEN);
+          ctx.logger.info(`[slack-frontend] started; hasClient=${hasClient} defaultChannel=unset`);
+        } catch {
+        }
+        try {
+          const payload = this.getInboundSlackPayload(ctx);
+          if (payload) {
+            const ev = payload.event || {};
+            const ch = String(ev.channel || "-");
+            const ts = String(ev.ts || ev.event_ts || "-");
+            const user = String(ev.user || ev.bot_id || "-");
+            const type = String(ev.type || "-");
+            const thread = String(ev.thread_ts || "");
+            ctx.logger.info(
+              `[slack-frontend] inbound event received: type=${type} channel=${ch} ts=${ts}` + (thread ? ` thread_ts=${thread}` : "") + ` user=${user}`
+            );
+          }
+        } catch {
+        }
+        this.subs.push(
+          bus.on("CheckCompleted", async (env) => {
+            const ev = env && env.payload || env;
+            await this.maybePostDirectReply(ctx, ev.checkId, ev.result).catch(() => {
+            });
+          })
+        );
+        this.subs.push(
+          bus.on("StateTransition", async (env) => {
+            const ev = env && env.payload || env;
+            if (ev && (ev.to === "Completed" || ev.to === "Error")) {
+              await this.finalizeReactions(ctx).catch(() => {
+              });
+            }
+          })
+        );
+        this.subs.push(
+          bus.on("CheckScheduled", async () => {
+            await this.ensureAcknowledgement(ctx).catch(() => {
+            });
+          })
+        );
+        this.subs.push(
+          bus.on("HumanInputRequested", async (env) => {
+            try {
+              const ev = env && env.payload || env;
+              if (!ev || typeof ev.prompt !== "string" || !ev.checkId) return;
+              let channel = ev.channel;
+              let threadTs = ev.threadTs;
+              if (!channel || !threadTs) {
+                const payload = this.getInboundSlackPayload(ctx);
+                const e = payload?.event;
+                const derivedTs = String(e?.thread_ts || e?.ts || e?.event_ts || "");
+                const derivedCh = String(e?.channel || "");
+                if (derivedCh && derivedTs) {
+                  channel = channel || derivedCh;
+                  threadTs = threadTs || derivedTs;
+                }
+              }
+              if (!channel || !threadTs) return;
+              const { getPromptStateManager: getPromptStateManager2 } = await Promise.resolve().then(() => (init_prompt_state(), prompt_state_exports));
+              const mgr = getPromptStateManager2();
+              const prev = mgr.getWaiting(channel, threadTs);
+              const text = String(ev.prompt);
+              mgr.setWaiting(channel, threadTs, {
+                checkName: String(ev.checkId),
+                prompt: text,
+                promptMessageTs: prev?.promptMessageTs,
+                promptsPosted: (prev?.promptsPosted || 0) + 1
+              });
+              try {
+                ctx.logger.info(
+                  `[slack-frontend] registered human-input waiting state for ${channel} thread=${threadTs}`
+                );
+              } catch {
+              }
+            } catch (e) {
+              try {
+                ctx.logger.warn(
+                  `[slack-frontend] HumanInputRequested handling failed: ${e instanceof Error ? e.message : String(e)}`
+                );
+              } catch {
+              }
+            }
+          })
+        );
+        this.subs.push(
+          bus.on("SnapshotSaved", async (env) => {
+            try {
+              const ev = env && env.payload || env;
+              const channel = String(ev?.channel || "");
+              const threadTs = String(ev?.threadTs || "");
+              const filePath = String(ev?.filePath || "");
+              if (!channel || !threadTs || !filePath) return;
+              const { getPromptStateManager: getPromptStateManager2 } = await Promise.resolve().then(() => (init_prompt_state(), prompt_state_exports));
+              const mgr = getPromptStateManager2();
+              mgr.update(channel, threadTs, { snapshotPath: filePath });
+              try {
+                ctx.logger.info(
+                  `[slack-frontend] snapshot path attached to waiting prompt: ${filePath}`
+                );
+              } catch {
+              }
+            } catch {
+            }
+          })
+        );
+      }
+      stop() {
+        for (const s of this.subs) s.unsubscribe();
+        this.subs = [];
+      }
+      getSlack(ctx) {
+        const injected = ctx.slack || ctx.slackClient;
+        if (injected) return injected;
+        try {
+          const token = this.cfg?.botToken || process.env.SLACK_BOT_TOKEN;
+          if (typeof token === "string" && token.trim()) {
+            return new SlackClient(token.trim());
+          }
+        } catch {
+        }
+        return void 0;
+      }
+      getInboundSlackPayload(ctx) {
+        try {
+          const anyCfg = ctx.config || {};
+          const slackCfg = anyCfg.slack || {};
+          const endpoint = slackCfg.endpoint || "/bots/slack/support";
+          const payload = ctx.webhookContext?.webhookData?.get(endpoint);
+          return payload || null;
+        } catch {
+          return null;
+        }
+      }
+      getInboundSlackEvent(ctx) {
+        try {
+          const payload = this.getInboundSlackPayload(ctx);
+          const ev = payload?.event;
+          const channel = String(ev?.channel || "");
+          const ts = String(ev?.ts || ev?.event_ts || "");
+          if (channel && ts) return { channel, ts };
+        } catch {
+        }
+        return null;
+      }
+      async ensureAcknowledgement(ctx) {
+        if (this.acked) return;
+        const ref = this.getInboundSlackEvent(ctx);
+        if (!ref) return;
+        const slack = this.getSlack(ctx);
+        if (!slack) return;
+        try {
+          const payload = this.getInboundSlackPayload(ctx);
+          const ev = payload?.event;
+          if (ev?.subtype === "bot_message") return;
+          try {
+            const botId = await slack.getBotUserId?.();
+            if (botId && ev?.user && String(ev.user) === String(botId)) return;
+          } catch {
+          }
+        } catch {
+        }
+        try {
+          const anyCfg = ctx.config || {};
+          const slackCfg = anyCfg.slack || {};
+          if (slackCfg?.reactions?.enabled === false) return;
+          this.ackName = slackCfg?.reactions?.ack || this.ackName;
+          this.doneName = slackCfg?.reactions?.done || this.doneName;
+        } catch {
+        }
+        await slack.reactions.add({ channel: ref.channel, timestamp: ref.ts, name: this.ackName });
+        try {
+          ctx.logger.info(
+            `[slack-frontend] added acknowledgement reaction :${this.ackName}: channel=${ref.channel} ts=${ref.ts}`
+          );
+        } catch {
+        }
+        this.acked = true;
+        this.ackRef = ref;
+      }
+      async finalizeReactions(ctx) {
+        if (!this.acked || !this.ackRef) return;
+        const slack = this.getSlack(ctx);
+        if (!slack) return;
+        try {
+          try {
+            await slack.reactions.remove({
+              channel: this.ackRef.channel,
+              timestamp: this.ackRef.ts,
+              name: this.ackName
+            });
+          } catch {
+          }
+          await slack.reactions.add({
+            channel: this.ackRef.channel,
+            timestamp: this.ackRef.ts,
+            name: this.doneName
+          });
+          try {
+            ctx.logger.info(
+              `[slack-frontend] replaced acknowledgement with completion reaction :${this.doneName}: channel=${this.ackRef.channel} ts=${this.ackRef.ts}`
+            );
+          } catch {
+          }
+        } finally {
+          this.acked = false;
+          this.ackRef = null;
+        }
+      }
+      /**
+       * Post direct replies into the originating Slack thread when appropriate.
+       * This is independent of summary messages and is intended for chat-style flows
+       * (e.g., AI answers and explicit chat/notify steps).
+       */
+      async maybePostDirectReply(ctx, checkId, result) {
+        try {
+          const cfg = ctx.config || {};
+          const checkCfg = cfg.checks?.[checkId];
+          if (!checkCfg) return;
+          const slackRoot = cfg.slack || {};
+          const showRawOutput = slackRoot.show_raw_output === true || this.cfg?.showRawOutput === true;
+          const providerType = checkCfg.type || "";
+          const isAi = providerType === "ai";
+          const isLogChat = providerType === "log" && checkCfg.group === "chat";
+          if (!isAi && !isLogChat) return;
+          if (isAi) {
+            const schema = checkCfg.schema;
+            if (typeof schema === "string") {
+              const simpleSchemas = ["code-review", "markdown", "text", "plain"];
+              if (!simpleSchemas.includes(schema)) return;
+            }
+          }
+          const slack = this.getSlack(ctx);
+          if (!slack) return;
+          const payload = this.getInboundSlackPayload(ctx);
+          const ev = payload?.event;
+          const channel = String(ev?.channel || "");
+          const threadTs = String(ev?.thread_ts || ev?.ts || ev?.event_ts || "");
+          if (!channel || !threadTs) return;
+          const out = result?.output;
+          let text;
+          if (out && typeof out.text === "string" && out.text.trim().length > 0) {
+            text = out.text.trim();
+          } else if (isAi && typeof checkCfg.schema === "string") {
+            if (typeof result?.content === "string" && result.content.trim().length > 0) {
+              text = result.content.trim();
+            }
+          } else if (isAi && showRawOutput && out !== void 0) {
+            try {
+              text = JSON.stringify(out, null, 2);
+            } catch {
+              text = String(out);
+            }
+          }
+          if (!text) return;
+          const formattedText = formatSlackText(text);
+          await slack.chat.postMessage({ channel, text: formattedText, thread_ts: threadTs });
+          try {
+            ctx.logger.info(
+              `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs}`
+            );
+          } catch {
+          }
+        } catch {
+        }
+      }
     };
   }
 });
@@ -22231,6 +27018,9 @@ var init_host = __esm({
           } else if (spec.name === "github") {
             const { GitHubFrontend: GitHubFrontend2 } = await Promise.resolve().then(() => (init_github_frontend(), github_frontend_exports));
             this.frontends.push(new GitHubFrontend2());
+          } else if (spec.name === "slack") {
+            const { SlackFrontend: SlackFrontend2 } = await Promise.resolve().then(() => (init_slack_frontend(), slack_frontend_exports));
+            this.frontends.push(new SlackFrontend2(spec.config));
           } else {
             this.log.warn(`[FrontendsHost] Unknown frontend '${spec.name}', skipping`);
           }
@@ -22256,86 +27046,6 @@ var init_host = __esm({
         }
       }
     };
-  }
-});
-
-// src/state-machine/context/build-engine-context.ts
-var build_engine_context_exports = {};
-__export(build_engine_context_exports, {
-  buildEngineContextForRun: () => buildEngineContextForRun
-});
-function applyCriticalityDefaults(cfg) {
-  const checks = cfg.checks || {};
-  for (const id of Object.keys(checks)) {
-    const c = checks[id];
-    if (!c.criticality) c.criticality = "policy";
-    if (c.criticality === "info" && typeof c.continue_on_failure === "undefined")
-      c.continue_on_failure = true;
-  }
-}
-function buildEngineContextForRun(workingDirectory, config, prInfo, debug, maxParallelism, failFast, requestedChecks) {
-  const clonedConfig = JSON.parse(JSON.stringify(config));
-  const checks = {};
-  applyCriticalityDefaults(clonedConfig);
-  for (const [checkId, checkConfig] of Object.entries(clonedConfig.checks || {})) {
-    checks[checkId] = {
-      tags: checkConfig.tags || [],
-      triggers: (Array.isArray(checkConfig.on) ? checkConfig.on : [checkConfig.on]).filter(
-        Boolean
-      ),
-      group: checkConfig.group,
-      providerType: checkConfig.type || "ai",
-      dependencies: checkConfig.depends_on || []
-    };
-  }
-  if (requestedChecks && requestedChecks.length > 0) {
-    for (const checkName of requestedChecks) {
-      if (!checks[checkName] && !clonedConfig.checks?.[checkName]) {
-        logger.debug(`[StateMachine] Synthesizing minimal config for legacy check: ${checkName}`);
-        if (!clonedConfig.checks) {
-          clonedConfig.checks = {};
-        }
-        clonedConfig.checks[checkName] = {
-          type: "ai",
-          prompt: `Perform ${checkName} analysis`
-        };
-        checks[checkName] = {
-          tags: [],
-          triggers: [],
-          group: "default",
-          providerType: "ai",
-          dependencies: []
-        };
-      }
-    }
-  }
-  const journal = new ExecutionJournal();
-  const memory = MemoryStore.getInstance(clonedConfig.memory);
-  return {
-    mode: "state-machine",
-    config: clonedConfig,
-    checks,
-    journal,
-    memory,
-    workingDirectory,
-    sessionId: (0, import_uuid3.v4)(),
-    event: prInfo.eventType,
-    debug,
-    maxParallelism,
-    failFast,
-    requestedChecks: requestedChecks && requestedChecks.length > 0 ? requestedChecks : void 0,
-    // Store prInfo for later access (e.g., in getOutputHistorySnapshot)
-    prInfo
-  };
-}
-var import_uuid3;
-var init_build_engine_context = __esm({
-  "src/state-machine/context/build-engine-context.ts"() {
-    "use strict";
-    init_snapshot_store();
-    init_memory_store();
-    import_uuid3 = require("uuid");
-    init_logger();
   }
 });
 
@@ -22392,6 +27102,8 @@ module.exports = __toCommonJS(sdk_exports);
 // src/state-machine-execution-engine.ts
 init_runner();
 init_logger();
+var path19 = __toESM(require("path"));
+var fs17 = __toESM(require("fs"));
 var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
   workingDirectory;
   executionContext;
@@ -22450,6 +27162,18 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
           timestamp,
           options.checks
         );
+      }
+      try {
+        const map = options?.webhookContext?.webhookData;
+        if (map) {
+          const { CheckProviderRegistry: CheckProviderRegistry2 } = await Promise.resolve().then(() => (init_check_provider_registry(), check_provider_registry_exports));
+          const reg = CheckProviderRegistry2.getInstance();
+          const p = reg.getProvider("http_input");
+          if (p && typeof p.setWebhookContext === "function") p.setWebhookContext(map);
+          const prev = this.executionContext || {};
+          this.setExecutionContext({ ...prev, webhookContext: { webhookData: map } });
+        }
+      } catch {
       }
       logger.info(`Executing checks: ${filteredChecks.join(", ")}`);
       const executionResult = await this.executeGroupedChecks(
@@ -22573,6 +27297,8 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       checks
       // Pass the explicit checks list
     );
+    const { initializeWorkspace: initializeWorkspace2 } = (init_build_engine_context(), __toCommonJS(build_engine_context_exports));
+    await initializeWorkspace2(context2);
     context2.executionContext = this.getExecutionContext();
     this._lastContext = context2;
     let frontendsHost;
@@ -22583,6 +27309,17 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
         const bus = new EventBus2();
         context2.eventBus = bus;
         frontendsHost = new FrontendsHost2(bus, logger);
+        if (process.env.VISOR_DEBUG === "true") {
+          try {
+            const fns = (configWithTagFilter.frontends || []).map((f) => ({
+              name: f?.name,
+              hasConfig: !!f?.config,
+              cfg: f?.config || void 0
+            }));
+            logger.info(`[Frontends] Loading specs: ${JSON.stringify(fns)}`);
+          } catch {
+          }
+        }
         await frontendsHost.load(configWithTagFilter.frontends);
         let owner;
         let name;
@@ -22609,6 +27346,15 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
           } catch {
           }
         }
+        try {
+          const prev = this.getExecutionContext() || {};
+          this.setExecutionContext({ ...prev, eventBus: bus });
+          try {
+            context2.executionContext = this.getExecutionContext();
+          } catch {
+          }
+        } catch {
+        }
         await frontendsHost.startAll(() => ({
           eventBus: bus,
           logger,
@@ -22622,8 +27368,60 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
             event: context2.event || prInfo?.eventType,
             actor: prInfo?.eventContext?.sender?.login || (typeof process.env.GITHUB_ACTOR === "string" ? process.env.GITHUB_ACTOR : void 0)
           },
-          octokit
+          octokit,
+          webhookContext: this.executionContext?.webhookContext,
+          // Surface any injected test doubles for Slack as well
+          slack: this.executionContext?.slack || this.executionContext?.slackClient
         }));
+        try {
+          bus.on("HumanInputRequested", async (envelope) => {
+            try {
+              const ev = envelope && envelope.payload || envelope;
+              let channel = ev?.channel;
+              let threadTs = ev?.threadTs;
+              if (!channel || !threadTs) {
+                try {
+                  const anyCfg = configWithTagFilter || {};
+                  const slackCfg = anyCfg.slack || {};
+                  const endpoint = slackCfg.endpoint || "/bots/slack/support";
+                  const map = this.executionContext?.webhookContext?.webhookData;
+                  const payload = map?.get(endpoint);
+                  const e = payload?.event;
+                  const derivedTs = String(e?.thread_ts || e?.ts || e?.event_ts || "");
+                  const derivedCh = String(e?.channel || "");
+                  if (derivedCh && derivedTs) {
+                    channel = channel || derivedCh;
+                    threadTs = threadTs || derivedTs;
+                  }
+                } catch {
+                }
+              }
+              const checkId = String(ev?.checkId || "unknown");
+              const threadKey = ev?.threadKey || (channel && threadTs ? `${channel}:${threadTs}` : "session");
+              const baseDir = process.env.VISOR_SNAPSHOT_DIR || path19.resolve(process.cwd(), ".visor", "snapshots");
+              fs17.mkdirSync(baseDir, { recursive: true });
+              const filePath = path19.join(baseDir, `${threadKey}-${checkId}.json`);
+              await this.saveSnapshotToFile(filePath);
+              logger.info(`[Snapshot] Saved run snapshot: ${filePath}`);
+              try {
+                await bus.emit({
+                  type: "SnapshotSaved",
+                  checkId: ev?.checkId || "unknown",
+                  channel,
+                  threadTs,
+                  threadKey,
+                  filePath
+                });
+              } catch {
+              }
+            } catch (e) {
+              logger.warn(
+                `[Snapshot] Failed to save snapshot on HumanInputRequested: ${e instanceof Error ? e.message : String(e)}`
+              );
+            }
+          });
+        } catch {
+        }
       } catch (err) {
         logger.warn(
           `[Frontends] Failed to initialize frontends: ${err instanceof Error ? err.message : String(err)}`
@@ -22648,6 +27446,13 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       sessionRegistry.clearAllSessions();
     } catch (error) {
       logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
+    }
+    if (context2.workspace) {
+      try {
+        await context2.workspace.cleanup();
+      } catch (error) {
+        logger.debug(`[StateMachine] Failed to cleanup workspace: ${error}`);
+      }
     }
     return result;
   }
@@ -22720,7 +27525,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
    * Does not include secrets. Intended for debugging and future resume support.
    */
   async saveSnapshotToFile(filePath) {
-    const fs16 = await import("fs/promises");
+    const fs18 = await import("fs/promises");
     const ctx = this._lastContext;
     const runner = this._lastRunner;
     if (!ctx || !runner) {
@@ -22740,14 +27545,14 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       journal: entries,
       requestedChecks: ctx.requestedChecks || []
     };
-    await fs16.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+    await fs18.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
   }
   /**
    * Load a snapshot JSON from file and return it. Resume support can build on this.
    */
   async loadSnapshotFromFile(filePath) {
-    const fs16 = await import("fs/promises");
-    const raw = await fs16.readFile(filePath, "utf8");
+    const fs18 = await import("fs/promises");
+    const raw = await fs18.readFile(filePath, "utf8");
     return JSON.parse(raw);
   }
   /**
@@ -22984,76 +27789,6 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
     return { valid, invalid };
   }
   /**
-   * Render check content using the appropriate template
-   *
-   * This method handles template rendering for check results, supporting:
-   * - Plain schema: returns raw content without template processing
-   * - Custom templates: from inline content or file
-   * - Built-in schema templates: from output/{schema}/template.liquid
-   */
-  async renderCheckContent(checkName, reviewSummary, checkConfig, _prInfo) {
-    const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs16 = await import("fs/promises");
-    const path17 = await import("path");
-    const schema = checkConfig.schema || "plain";
-    let templateContent;
-    if (checkConfig.template) {
-      if (checkConfig.template.content) {
-        templateContent = checkConfig.template.content;
-      } else if (checkConfig.template.file) {
-        const templateFile = checkConfig.template.file;
-        if (path17.isAbsolute(templateFile)) {
-          throw new Error("Template path must be relative to project directory");
-        }
-        if (templateFile.includes("..")) {
-          throw new Error('Template path cannot contain ".." segments');
-        }
-        if (templateFile.startsWith("~")) {
-          throw new Error("Template path cannot reference home directory");
-        }
-        if (templateFile.includes("\0")) {
-          throw new Error("Template path contains invalid characters");
-        }
-        if (templateFile.trim() === "") {
-          throw new Error("Template path must be a non-empty string");
-        }
-        if (!templateFile.endsWith(".liquid")) {
-          throw new Error("Template file must have .liquid extension");
-        }
-        const { GitRepositoryAnalyzer: GitRepositoryAnalyzer2 } = await Promise.resolve().then(() => (init_git_repository_analyzer(), git_repository_analyzer_exports));
-        const gitAnalyzer = new GitRepositoryAnalyzer2(this.workingDirectory);
-        const repoInfo = await gitAnalyzer.analyzeRepository();
-        const workingDir = repoInfo.workingDirectory;
-        const resolvedPath = path17.resolve(workingDir, templateFile);
-        templateContent = await fs16.readFile(resolvedPath, "utf-8");
-      } else {
-        throw new Error('Custom template must specify either "file" or "content"');
-      }
-    } else if (schema === "plain") {
-      return reviewSummary.issues?.[0]?.message || "";
-    } else {
-      const sanitizedSchema = schema.replace(/[^a-zA-Z0-9-]/g, "");
-      if (!sanitizedSchema) {
-        throw new Error("Invalid schema name");
-      }
-      const templatePath = path17.join(__dirname, `output/${sanitizedSchema}/template.liquid`);
-      templateContent = await fs16.readFile(templatePath, "utf-8");
-    }
-    const liquid = createExtendedLiquid2({
-      trimTagLeft: false,
-      trimTagRight: false,
-      trimOutputLeft: false,
-      trimOutputRight: false,
-      greedy: false
-    });
-    const templateData = {
-      issues: reviewSummary.issues || [],
-      checkName
-    };
-    const rendered = await liquid.parseAndRender(templateContent, templateData);
-    return rendered.trim();
-  }
-  /**
    * Format the status column for execution statistics
    * Used by execution-statistics-formatting tests
    */
@@ -23130,6 +27865,11 @@ function serializeRunState(state) {
     historyLog: state.historyLog,
     forwardRunGuards: Array.from(state.forwardRunGuards.values()),
     currentLevelChecks: Array.from(state.currentLevelChecks.values()),
+    currentWaveCompletions: Array.from(
+      state.currentWaveCompletions || []
+    ),
+    // failedChecks is an internal Set added by stats/dispatch layers; keep it if present
+    failedChecks: Array.from(state.failedChecks || []),
     pendingRunScopes: Array.from((state.pendingRunScopes || /* @__PURE__ */ new Map()).entries()).map(([k, v]) => [
       k,
       v

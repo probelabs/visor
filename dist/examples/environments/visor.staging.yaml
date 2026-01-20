@@ -1,0 +1,46 @@
+# Staging Environment Configuration
+# Balanced checks for pre-production validation
+
+version: "1.0"
+
+# Inherit all checks from base
+extends: ./visor.base.yaml
+
+# Filter for staging-appropriate checks
+tag_filter:
+  include:
+    - staging
+    - security
+    - performance
+    - quality
+  exclude:
+    - experimental
+    - dev
+
+# Use balanced AI model
+ai_model: gemini-1.5-flash
+
+# Staging-specific settings
+max_parallelism: 3
+fail_fast: false  # Run all checks to get full picture
+
+# Add staging-specific check
+steps:
+  staging-integration:
+    type: command
+    group: staging
+    exec: "npm run test:staging"
+    tags: ["staging", "integration"]
+    on: [pr_opened]
+    depends_on: [test-unit, test-integration]
+
+# Output for staging
+output:
+  pr_comment:
+    format: markdown
+    group_by: group
+    collapse: true
+
+  github_checks:
+    enabled: true
+    per_check: true  # Individual check runs for visibility

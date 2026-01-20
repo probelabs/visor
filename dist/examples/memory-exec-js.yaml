@@ -1,0 +1,247 @@
+# Script Example: Complex Logic with Memory
+#
+# This example demonstrates using the script provider to perform
+# complex data analysis and manipulation with full JavaScript support.
+
+version: "1.0"
+
+memory:
+  storage: memory
+  namespace: default
+
+steps:
+  # Simulate multiple validation checks
+  check-security:
+    type: command
+    exec: 'echo ''{"issues": 3, "severity": "high"}'''
+    transform_js: "JSON.parse(output.trim())"
+
+  check-performance:
+    type: command
+    exec: 'echo ''{"issues": 7, "severity": "medium"}'''
+    transform_js: "JSON.parse(output.trim())"
+
+  check-style:
+    type: command
+    exec: 'echo ''{"issues": 15, "severity": "low"}'''
+    transform_js: "JSON.parse(output.trim())"
+
+  # Use script to aggregate and analyze results
+  analyze-all-checks:
+    type: script
+    depends_on: [check-security, check-performance, check-style]
+    content: |
+      // Collect all check results
+      const checks = {
+        security: outputs['check-security'],
+        performance: outputs['check-performance'],
+        style: outputs['check-style']
+      };
+
+      // Initialize analysis object
+      const analysis = {
+        checks: {},
+        totals: {
+          critical: 0,
+          high: 0,
+          medium: 0,
+          low: 0,
+          total: 0
+        },
+        summary: {
+          passed: 0,
+          failed: 0,
+          total: 3
+        }
+      };
+
+      // Analyze each check
+      for (const [name, result] of Object.entries(checks)) {
+        const issueCount = result.issues || 0;
+        const severity = result.severity || 'low';
+
+        analysis.checks[name] = {
+          issues: issueCount,
+          severity: severity,
+          status: issueCount === 0 ? 'passed' : 'failed'
+        };
+
+        // Update totals
+        analysis.totals.total += issueCount;
+        analysis.totals[severity] = (analysis.totals[severity] || 0) + issueCount;
+
+        // Update summary
+        if (issueCount === 0) {
+          analysis.summary.passed++;
+        } else {
+          analysis.summary.failed++;
+        }
+      }
+
+      // Calculate risk score (0-100, higher is worse)
+      const riskScore = Math.min(100,
+        (analysis.totals.critical * 20) +
+        (analysis.totals.high * 10) +
+        (analysis.totals.medium * 5) +
+        (analysis.totals.low * 1)
+      );
+
+      analysis.riskScore = riskScore;
+
+      // Determine overall status
+      let overallStatus;
+      if (analysis.totals.critical > 0 || analysis.totals.high > 5) {
+        overallStatus = 'critical';
+      } else if (analysis.totals.high > 0 || analysis.totals.medium > 10) {
+        overallStatus = 'warning';
+      } else if (analysis.totals.total > 20) {
+        overallStatus = 'attention';
+      } else {
+        overallStatus = 'ok';
+      }
+
+      analysis.overallStatus = overallStatus;
+
+      // Store in memory for other checks
+      memory.set('analysis', analysis);
+      memory.set('risk_score', riskScore);
+      memory.set('overall_status', overallStatus);
+
+      // Create recommendations based on analysis
+      const recommendations = [];
+      if (analysis.totals.critical > 0) {
+        recommendations.push('Address all critical security issues immediately');
+      }
+      if (analysis.totals.high >= 3) {
+        recommendations.push(`Fix ${analysis.totals.high} high-severity issues`);
+      }
+      if (analysis.totals.medium > 5) {
+        recommendations.push('Consider addressing medium-severity issues');
+      }
+      if (analysis.totals.low > 20) {
+        recommendations.push('Clean up style issues in a follow-up PR');
+      }
+
+      memory.set('recommendations', recommendations);
+
+      // Return summary
+      return {
+        riskScore,
+        overallStatus,
+        totalIssues: analysis.totals.total,
+        recommendationCount: recommendations.length
+      };
+
+  # Generate detailed report
+  generate-report:
+    type: log
+    depends_on: [analyze-all-checks]
+    message: |
+      {% assign analysis = "analysis" | memory_get %}
+      {% assign recommendations = "recommendations" | memory_get %}
+
+      ## Code Quality Report
+
+      ### Overall Status: {{ analysis.overallStatus | upcase }}
+      **Risk Score:** {{ analysis.riskScore }}/100
+
+      ### Check Results
+      | Check | Issues | Severity | Status |
+      |-------|--------|----------|--------|
+      {% for check in analysis.checks %}
+      | {{ check[0] }} | {{ check[1].issues }} | {{ check[1].severity }} | {{ check[1].status }} |
+      {% endfor %}
+
+      ### Issue Summary
+      - 🔴 Critical: {{ analysis.totals.critical }}
+      - 🟠 High: {{ analysis.totals.high }}
+      - 🟡 Medium: {{ analysis.totals.medium }}
+      - 🟢 Low: {{ analysis.totals.low }}
+      - **Total:** {{ analysis.totals.total }}
+
+      ### Recommendations
+      {% if recommendations.size > 0 %}
+      {% for rec in recommendations %}
+      {{ forloop.index }}. {{ rec }}
+      {% endfor %}
+      {% else %}
+      ✅ No issues found - great job!
+      {% endif %}
+
+  # Calculate trends if previous data exists
+  calculate-trend:
+    type: script
+    depends_on: [analyze-all-checks]
+    content: |
+      const currentScore = memory.get('risk_score');
+
+      // Get previous score (would be from persistent storage in real use)
+      const previousScore = memory.get('previous_risk_score') || currentScore;
+
+      // Calculate trend
+      const diff = currentScore - previousScore;
+      const percentChange = previousScore > 0
+        ? ((diff / previousScore) * 100).toFixed(1)
+        : 0;
+
+      let trend;
+      if (Math.abs(diff) < 5) {
+        trend = 'stable';
+      } else if (diff > 0) {
+        trend = 'worsening';
+      } else {
+        trend = 'improving';
+      }
+
+      const trendData = {
+        current: currentScore,
+        previous: previousScore,
+        diff,
+        percentChange,
+        trend
+      };
+
+      memory.set('trend', trendData);
+
+      // Store current as previous for next run
+      memory.set('previous_risk_score', currentScore);
+
+      return trendData;
+
+  # Report trend
+  report-trend:
+    type: log
+    depends_on: [calculate-trend]
+    message: |
+      {% assign trend = "trend" | memory_get %}
+
+      ### Trend Analysis
+      - Previous Score: {{ trend.previous }}
+      - Current Score: {{ trend.current }}
+      - Change: {% if trend.diff > 0 %}+{% endif %}{{ trend.diff }} ({{ trend.percentChange }}%)
+      - Trend: **{{ trend.trend | upcase }}**
+
+      {% if trend.trend == "improving" %}
+      📈 Code quality is improving!
+      {% elsif trend.trend == "worsening" %}
+      📉 Code quality is declining - attention needed
+      {% else %}
+      ➡️ Code quality remains stable
+      {% endif %}
+
+  # Final check - fail if risk is too high
+  verify-quality-gate:
+    type: noop
+    depends_on: [report-trend]
+    fail_if: |
+      const riskScore = memory.get('risk_score');
+      const overallStatus = memory.get('overall_status');
+
+      // Fail if critical status or risk score > 50
+      return overallStatus === 'critical' || riskScore > 50;
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: false

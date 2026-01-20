@@ -1,0 +1,90 @@
+version: "1.0"
+
+# Simple fail_if conditions - one line, easy to read!
+# The check fails if the expression evaluates to true
+
+# Global fail condition - applies to all checks
+fail_if: "output.issues.some(i => i.severity === 'critical')"
+
+steps:
+  # Security check - zero tolerance
+  security-check:
+    type: ai
+    schema: code-review
+    prompt: "Analyze for security vulnerabilities"
+    on: [pr_opened, pr_updated]
+    # Fail if ANY security issues found
+    fail_if: "output.issues.length > 0"
+
+  # Performance check - some tolerance
+  performance-check:
+    type: ai
+    schema: code-review
+    prompt: "Review for performance issues"
+    on: [pr_opened, pr_updated]
+    # Fail only if critical performance issues
+    fail_if: "output.issues.some(i => i.severity === 'critical') || output.issues.filter(i => i.severity === 'error').length > 2"
+
+  # Code style - lenient
+  style-check:
+    type: ai
+    schema: code-review
+    prompt: "Check code style and formatting"
+    on: [pr_opened, pr_updated]
+    # Only fail if too many style issues
+    fail_if: "output.issues.length > 20"
+
+  # Using GitHub Actions-style functions
+  quality-gate:
+    type: ai
+    schema: code-review
+    prompt: "Overall code quality check"
+    on: [pr_opened, pr_updated]
+    # Using expressions with output
+    fail_if: "output.issues.some(i => i.severity === 'critical' || i.severity === 'error')"  # Fails if critical or error issues found
+
+  # With contains() function
+  sensitive-files:
+    type: ai
+    schema: security
+    prompt: "Check for exposed secrets"
+    on: [pr_opened, pr_updated]
+    # Fail if checking sensitive files with issues
+    fail_if: "hasFileMatching(issues, '.env') || hasFileMatching(issues, 'secret')"
+
+  # With startsWith() function
+  api-check:
+    type: ai
+    schema: code-review
+    prompt: "Review API endpoints"
+    on: [pr_opened, pr_updated]
+    # Stricter for API files (using checkName from context)
+    fail_if: "startsWith(checkName, 'api') && output.issues.length > 0"
+
+  # Always pass example
+  info-only:
+    type: ai
+    schema: plain
+    prompt: "Informational analysis"
+    on: [pr_opened]
+    # Never fails - using always() returns true, ! makes it false
+    fail_if: "!always()"
+
+  # Complex single-line condition
+  combined-check:
+    type: ai
+    schema: code-review
+    prompt: "Combined quality check"
+    on: [pr_opened, pr_updated]
+    depends_on: [security-check, performance-check]
+    # Fail if previous checks found issues OR current check has critical issues
+    fail_if: |
+      (outputs['security-check'] && outputs['security-check'].issues.length > 0) ||
+      (outputs['performance-check'] && outputs['performance-check'].issues.some(i => i.severity === 'critical')) ||
+      output.issues.some(i => i.severity === 'critical')
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true

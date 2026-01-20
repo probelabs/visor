@@ -351,6 +351,13 @@ export declare const configSchema: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E";
                     readonly description: "MCP servers for this AI check - overrides global setting";
                 };
+                readonly ai_custom_tools: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "List of custom tool names to expose to this AI check via ephemeral SSE MCP server";
+                };
                 readonly claude_code: {
                     readonly $ref: "#/definitions/ClaudeCodeConfig";
                     readonly description: "Claude Code configuration (for claude-code type checks)";
@@ -439,6 +446,10 @@ export declare const configSchema: {
                 readonly reduce: {
                     readonly type: "boolean";
                     readonly description: "Alias for fanout: 'reduce'";
+                };
+                readonly on_init: {
+                    readonly $ref: "#/definitions/OnInitConfig";
+                    readonly description: "Init routing configuration for this check (runs before execution/preprocessing)";
                 };
                 readonly on_fail: {
                     readonly $ref: "#/definitions/OnFailConfig";
@@ -592,7 +603,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -608,7 +619,7 @@ export declare const configSchema: {
         };
         readonly ConfigCheckType: {
             readonly type: "string";
-            readonly enum: readonly ["ai", "command", "script", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input", "workflow"];
+            readonly enum: readonly ["ai", "command", "script", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input", "workflow", "git-checkout"];
             readonly description: "Valid check types in configuration";
         };
         readonly EventTrigger: {
@@ -655,6 +666,14 @@ export declare const configSchema: {
                 readonly skip_code_context: {
                     readonly type: "boolean";
                     readonly description: "Skip adding code context (diffs, files, PR info) to the prompt";
+                };
+                readonly skip_slack_context: {
+                    readonly type: "boolean";
+                    readonly description: "Skip adding Slack conversation context to the prompt (when running under Slack)";
+                };
+                readonly skip_transport_context: {
+                    readonly type: "boolean";
+                    readonly description: "Skip adding transport-specific context (e.g., GitHub PR/issue XML, Slack conversation XML) to the prompt. When true, this behaves like setting both skip_code_context and skip_slack_context to true, unless those are explicitly overridden.";
                 };
                 readonly mcpServers: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E";
@@ -1012,6 +1031,156 @@ export declare const configSchema: {
             readonly enum: readonly ["error", "warning", "info"];
             readonly description: "Failure condition severity levels";
         };
+        readonly OnInitConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly run: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly $ref: "#/definitions/OnInitRunItem";
+                    };
+                    readonly description: "Items to run before this check executes";
+                };
+                readonly run_js: {
+                    readonly type: "string";
+                    readonly description: "Dynamic init items: JS expression returning OnInitRunItem[]";
+                };
+                readonly transitions: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly $ref: "#/definitions/TransitionRule";
+                    };
+                    readonly description: "Declarative transitions (optional, for advanced use cases)";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Init routing configuration per check Runs BEFORE the check executes (preprocessing/setup)";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly OnInitRunItem: {
+            readonly anyOf: readonly [{
+                readonly $ref: "#/definitions/OnInitToolInvocation";
+            }, {
+                readonly $ref: "#/definitions/OnInitStepInvocation";
+            }, {
+                readonly $ref: "#/definitions/OnInitWorkflowInvocation";
+            }, {
+                readonly type: "string";
+            }];
+            readonly description: "Unified on_init run item - can be tool, step, workflow, or plain string";
+        };
+        readonly OnInitToolInvocation: {
+            readonly type: "object";
+            readonly properties: {
+                readonly tool: {
+                    readonly type: "string";
+                    readonly description: "Tool name (must exist in tools: section)";
+                };
+                readonly with: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    readonly description: "Arguments to pass to the tool (Liquid templates supported)";
+                };
+                readonly as: {
+                    readonly type: "string";
+                    readonly description: "Custom output name (defaults to tool name)";
+                };
+            };
+            readonly required: readonly ["tool"];
+            readonly additionalProperties: false;
+            readonly description: "Invoke a custom tool (from tools: section)";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly OnInitStepInvocation: {
+            readonly type: "object";
+            readonly properties: {
+                readonly step: {
+                    readonly type: "string";
+                    readonly description: "Step name (must exist in steps: section)";
+                };
+                readonly with: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    readonly description: "Arguments to pass to the step (Liquid templates supported)";
+                };
+                readonly as: {
+                    readonly type: "string";
+                    readonly description: "Custom output name (defaults to step name)";
+                };
+            };
+            readonly required: readonly ["step"];
+            readonly additionalProperties: false;
+            readonly description: "Invoke a helper step (regular check)";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly OnInitWorkflowInvocation: {
+            readonly type: "object";
+            readonly properties: {
+                readonly workflow: {
+                    readonly type: "string";
+                    readonly description: "Workflow ID or path";
+                };
+                readonly with: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    readonly description: "Workflow inputs (Liquid templates supported)";
+                };
+                readonly as: {
+                    readonly type: "string";
+                    readonly description: "Custom output name (defaults to workflow name)";
+                };
+                readonly overrides: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E%3E";
+                    readonly description: "Step overrides";
+                };
+                readonly output_mapping: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cstring%3E";
+                    readonly description: "Output mapping";
+                };
+            };
+            readonly required: readonly ["workflow"];
+            readonly additionalProperties: false;
+            readonly description: "Invoke a reusable workflow";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly 'Record<string,Partial<interface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706>>': {
+            readonly type: "object";
+            readonly additionalProperties: {
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706%3E";
+            };
+        };
+        readonly 'Partial<interface-src_types_config.ts-11138-21461-src_types_config.ts-0-36706>': {
+            readonly type: "object";
+            readonly additionalProperties: false;
+        };
+        readonly TransitionRule: {
+            readonly type: "object";
+            readonly properties: {
+                readonly when: {
+                    readonly type: "string";
+                    readonly description: "JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule.";
+                };
+                readonly to: {
+                    readonly type: readonly ["string", "null"];
+                    readonly description: "Target step ID, or null to explicitly prevent goto.";
+                };
+                readonly goto_event: {
+                    readonly $ref: "#/definitions/EventTrigger";
+                    readonly description: "Optional event override when performing goto.";
+                };
+            };
+            readonly required: readonly ["when"];
+            readonly additionalProperties: false;
+            readonly description: "Declarative transition rule for on_* blocks.";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
         readonly OnFailConfig: {
             readonly type: "object";
             readonly properties: {
@@ -1089,29 +1258,6 @@ export declare const configSchema: {
             };
             readonly additionalProperties: false;
             readonly description: "Backoff policy for retries";
-            readonly patternProperties: {
-                readonly '^x-': {};
-            };
-        };
-        readonly TransitionRule: {
-            readonly type: "object";
-            readonly properties: {
-                readonly when: {
-                    readonly type: "string";
-                    readonly description: "JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule.";
-                };
-                readonly to: {
-                    readonly type: readonly ["string", "null"];
-                    readonly description: "Target step ID, or null to explicitly prevent goto.";
-                };
-                readonly goto_event: {
-                    readonly $ref: "#/definitions/EventTrigger";
-                    readonly description: "Optional event override when performing goto.";
-                };
-            };
-            readonly required: readonly ["when"];
-            readonly additionalProperties: false;
-            readonly description: "Declarative transition rule for on_* blocks.";
             readonly patternProperties: {
                 readonly '^x-': {};
             };
@@ -1196,16 +1342,6 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>>': {
-            readonly type: "object";
-            readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222%3E";
-            };
-        };
-        readonly 'Partial<interface-src_types_config.ts-10692-20779-src_types_config.ts-0-34222>': {
-            readonly type: "object";
-            readonly additionalProperties: false;
-        };
         readonly OutputConfig: {
             readonly type: "object";
             readonly properties: {
@@ -1236,6 +1372,10 @@ export declare const configSchema: {
         readonly PrCommentOutput: {
             readonly type: "object";
             readonly properties: {
+                readonly enabled: {
+                    readonly type: "boolean";
+                    readonly description: "Whether PR comments are enabled";
+                };
                 readonly format: {
                     readonly $ref: "#/definitions/ConfigOutputFormat";
                     readonly description: "Format of the output";

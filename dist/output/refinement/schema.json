@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "refinement",
+  "title": "Task Refinement",
+  "description": "Structured format for 3-amigos task refinement issues. CRITICAL: Return ONLY a valid JSON object matching this schema. Do NOT include prose, explanations, markdown, or XML tags. Start your response with { and end with }.",
+  "type": "object",
+  "required": ["issues"],
+  "properties": {
+    "issues": {
+      "type": "array",
+      "description": "List of refinement concerns raised during analysis",
+      "items": {
+        "type": "object",
+        "required": ["ruleId", "message", "severity"],
+        "properties": {
+          "ruleId": {
+            "type": "string",
+            "description": "Rule identifier in format 'persona/category' (e.g., 'pm/unclear-scope', 'qa/missing-criteria', 'eng/technical-risk')",
+            "pattern": "^[a-z-]+/[a-z-]+$"
+          },
+          "message": {
+            "type": "string",
+            "description": "Clear description of the concern or question"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["info", "warning", "error", "critical"],
+            "description": "Severity: info (note/suggestion), warning (should address), error (must address before implementation), critical (blocker - cannot proceed)"
+          },
+          "category": {
+            "type": "string",
+            "description": "Issue category",
+            "enum": ["requirement", "scope", "acceptance", "testing", "architecture", "dependency", "risk", "question"]
+          },
+          "suggestion": {
+            "type": "string",
+            "description": "Recommended action or resolution"
+          }
+        }
+      }
+    }
+  }
+}
