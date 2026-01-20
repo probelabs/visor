@@ -3,7 +3,7 @@ import {
   check_provider_registry_exports,
   init_check_provider_registry,
   init_runner
-} from "./chunk-VW46O2SP.mjs";
+} from "./chunk-23L3QRYX.mjs";
 import "./chunk-NAW3DB3I.mjs";
 import {
   commandExecutor,
@@ -549,7 +549,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       try {
         const map = options?.webhookContext?.webhookData;
         if (map) {
-          const { CheckProviderRegistry } = await import("./check-provider-registry-U7K54IC3.mjs");
+          const { CheckProviderRegistry } = await import("./check-provider-registry-534KL5HT.mjs");
           const reg = CheckProviderRegistry.getInstance();
           const p = reg.getProvider("http_input");
           if (p && typeof p.setWebhookContext === "function") p.setWebhookContext(map);

@@ -7888,8 +7888,28 @@ __export(state_capture_exports, {
   captureProviderCall: () => captureProviderCall,
   captureRoutingDecision: () => captureRoutingDecision,
   captureStateSnapshot: () => captureStateSnapshot,
-  captureTransformJS: () => captureTransformJS
+  captureTransformJS: () => captureTransformJS,
+  sanitizeContextForTelemetry: () => sanitizeContextForTelemetry
 });
+function isSensitiveEnvVar(name) {
+  return SENSITIVE_ENV_PATTERNS.some((pattern) => pattern.test(name));
+}
+function sanitizeContextForTelemetry(context2) {
+  if (!context2 || typeof context2 !== "object") return context2;
+  const sanitized = { ...context2 };
+  if (sanitized.env && typeof sanitized.env === "object") {
+    const sanitizedEnv = {};
+    for (const [key, value] of Object.entries(sanitized.env)) {
+      if (isSensitiveEnvVar(key)) {
+        sanitizedEnv[key] = "[REDACTED]";
+      } else {
+        sanitizedEnv[key] = String(value);
+      }
+    }
+    sanitized.env = sanitizedEnv;
+  }
+  return sanitized;
+}
 function safeSerialize(value, maxLength = MAX_ATTRIBUTE_LENGTH) {
   try {
     if (value === void 0 || value === null) return String(value);
@@ -7914,18 +7934,22 @@ function safeSerialize(value, maxLength = MAX_ATTRIBUTE_LENGTH) {
 }
 function captureCheckInputContext(span, context2) {
   try {
-    const keys = Object.keys(context2);
+    const sanitizedContext = sanitizeContextForTelemetry(context2);
+    const keys = Object.keys(sanitizedContext);
     span.setAttribute("visor.check.input.keys", keys.join(","));
     span.setAttribute("visor.check.input.count", keys.length);
-    span.setAttribute("visor.check.input.context", safeSerialize(context2));
-    if (context2.pr) {
-      span.setAttribute("visor.check.input.pr", safeSerialize(context2.pr, 1e3));
+    span.setAttribute("visor.check.input.context", safeSerialize(sanitizedContext));
+    if (sanitizedContext.pr) {
+      span.setAttribute("visor.check.input.pr", safeSerialize(sanitizedContext.pr, 1e3));
     }
-    if (context2.outputs) {
-      span.setAttribute("visor.check.input.outputs", safeSerialize(context2.outputs, 5e3));
+    if (sanitizedContext.outputs) {
+      span.setAttribute("visor.check.input.outputs", safeSerialize(sanitizedContext.outputs, 5e3));
     }
-    if (context2.env) {
-      span.setAttribute("visor.check.input.env_keys", Object.keys(context2.env).join(","));
+    if (sanitizedContext.env) {
+      span.setAttribute(
+        "visor.check.input.env_keys",
+        Object.keys(sanitizedContext.env).join(",")
+      );
     }
   } catch (err) {
     try {
@@ -8048,12 +8072,25 @@ function captureStateSnapshot(span, checkId, outputs, memory) {
     span.setAttribute("visor.snapshot.error", String(err));
   }
 }
-var MAX_ATTRIBUTE_LENGTH, MAX_ARRAY_ITEMS;
+var MAX_ATTRIBUTE_LENGTH, MAX_ARRAY_ITEMS, SENSITIVE_ENV_PATTERNS;
 var init_state_capture = __esm({
   "src/telemetry/state-capture.ts"() {
     "use strict";
     MAX_ATTRIBUTE_LENGTH = 1e4;
     MAX_ARRAY_ITEMS = 100;
+    SENSITIVE_ENV_PATTERNS = [
+      /api[_-]?key/i,
+      /secret/i,
+      /token/i,
+      /password/i,
+      /auth/i,
+      /credential/i,
+      /private[_-]?key/i,
+      /^sk-/i,
+      // OpenAI-style keys
+      /^AIza/i
+      // Google API keys
+    ];
   }
 });
 
@@ -9405,7 +9442,7 @@ var init_ai_check_provider = __esm({
         }
         try {
           const checkId = config.checkName || config.id || "unknown";
-          const ctxJson = JSON.stringify(templateContext);
+          const ctxJson = JSON.stringify(sanitizeContextForTelemetry(templateContext));
           const { emitNdjsonSpanWithEvents: emitNdjsonSpanWithEvents2 } = (init_fallback_ndjson(), __toCommonJS(fallback_ndjson_exports));
           emitNdjsonSpanWithEvents2(
             "visor.check",
@@ -11916,7 +11953,7 @@ var init_command_check_provider = __esm({
         }
         try {
           const checkId = config.checkName || config.id || "unknown";
-          const ctxJson = JSON.stringify(templateContext);
+          const ctxJson = JSON.stringify(sanitizeContextForTelemetry(templateContext));
           const { emitNdjsonSpanWithEvents: emitNdjsonSpanWithEvents2 } = (init_fallback_ndjson(), __toCommonJS(fallback_ndjson_exports));
           emitNdjsonSpanWithEvents2(
             "visor.check",
