@@ -12,6 +12,7 @@ import {
   captureCheckInputContext,
   captureCheckOutput,
   captureProviderCall,
+  sanitizeContextForTelemetry,
 } from '../telemetry/state-capture';
 import { CustomToolsSSEServer } from './mcp-custom-sse-server';
 import { CustomToolDefinition } from '../types/config';
@@ -951,7 +952,8 @@ export class AICheckProvider extends CheckProvider {
     // Fallback NDJSON for input context (non-OTEL environments)
     try {
       const checkId = (config as any).checkName || (config as any).id || 'unknown';
-      const ctxJson = JSON.stringify(templateContext);
+      // Sanitize context to avoid leaking API keys in traces
+      const ctxJson = JSON.stringify(sanitizeContextForTelemetry(templateContext));
       const { emitNdjsonSpanWithEvents } = require('../telemetry/fallback-ndjson');
       emitNdjsonSpanWithEvents(
         'visor.check',

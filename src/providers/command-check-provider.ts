@@ -18,6 +18,7 @@ import {
   captureCheckInputContext,
   captureCheckOutput,
   captureTransformJS,
+  sanitizeContextForTelemetry,
 } from '../telemetry/state-capture';
 
 /**
@@ -155,7 +156,8 @@ export class CommandCheckProvider extends CheckProvider {
     // Fallback NDJSON for input context (non-OTEL environments)
     try {
       const checkId = (config as any).checkName || (config as any).id || 'unknown';
-      const ctxJson = JSON.stringify(templateContext);
+      // Sanitize context to avoid leaking API keys in traces
+      const ctxJson = JSON.stringify(sanitizeContextForTelemetry(templateContext));
       const { emitNdjsonSpanWithEvents } = require('../telemetry/fallback-ndjson');
       // Emit both start and completion markers together for deterministic E2E assertions
       emitNdjsonSpanWithEvents(
