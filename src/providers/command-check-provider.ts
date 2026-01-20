@@ -279,10 +279,21 @@ export class CommandCheckProvider extends CheckProvider {
 
       const safeCommand = normalizeNodeEval(renderedCommand);
 
+      // Determine working directory - use workspace if enabled, otherwise default
+      const parentContext = (context as any)?._parentContext;
+      const workingDirectory = parentContext?.workingDirectory;
+      const workspaceEnabled = parentContext?.workspace?.isEnabled?.();
+      const cwd = workspaceEnabled && workingDirectory ? workingDirectory : undefined;
+
+      if (cwd) {
+        logger.debug(`[command] Using workspace working directory: ${cwd}`);
+      }
+
       // Use shared command executor
       const execResult = await commandExecutor.execute(safeCommand, {
         env: scriptEnv,
         timeout: timeoutMs,
+        cwd,
       });
 
       const { stdout, stderr, exitCode } = execResult;

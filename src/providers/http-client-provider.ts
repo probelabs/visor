@@ -144,6 +144,18 @@ export class HttpClientProvider extends CheckProvider {
         }
         resolvedOutputFile = outputPath.trim();
 
+        // When workspace is enabled and path is relative, resolve against workingDirectory
+        const parentContext = (context as any)?._parentContext;
+        const workingDirectory = parentContext?.workingDirectory;
+        const workspaceEnabled = parentContext?.workspace?.isEnabled?.();
+
+        if (workspaceEnabled && workingDirectory && !path.isAbsolute(resolvedOutputFile)) {
+          resolvedOutputFile = path.join(workingDirectory, resolvedOutputFile);
+          logger.debug(
+            `[http_client] Resolved relative output_file to workspace: ${resolvedOutputFile}`
+          );
+        }
+
         // Check if file already exists (caching)
         if (skipIfExists && fs.existsSync(resolvedOutputFile)) {
           const stats = fs.statSync(resolvedOutputFile);
