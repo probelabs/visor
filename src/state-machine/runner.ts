@@ -124,68 +124,67 @@ export class StateMachineRunner {
    */
   private async executeState(state: EngineState): Promise<void> {
     // M4: Wrap state execution in OTEL span
-    return withActiveSpan(
-      `engine.state.${state.toLowerCase()}`,
-      {
-        state: state,
-        engine_mode: this.context.mode,
-        wave: this.state.wave,
-        session_id: this.context.sessionId,
-      },
-      async () => {
-        try {
-          switch (state) {
-            case 'Init':
-              await handleInit(this.context, this.state, this.transition.bind(this));
-              break;
-            case 'PlanReady':
-              await handlePlanReady(this.context, this.state, this.transition.bind(this));
-              break;
-            case 'WavePlanning':
-              await handleWavePlanning(this.context, this.state, this.transition.bind(this));
-              break;
-            case 'LevelDispatch':
-              await handleLevelDispatch(
-                this.context,
-                this.state,
-                this.transition.bind(this),
-                this.emitEvent.bind(this)
-              );
-              break;
-            case 'CheckRunning':
-              await handleCheckRunning(
-                this.context,
-                this.state,
-                this.transition.bind(this),
-                this.emitEvent.bind(this)
-              );
-              break;
-            case 'Routing':
-              // Routing is handled inline by CheckRunning for now
-              throw new Error('Routing state should be handled by CheckRunning');
-            case 'Completed':
-              await handleCompleted(this.context, this.state);
-              break;
-            case 'Error':
-              await handleError(this.context, this.state);
-              break;
-            default:
-              throw new Error(`Unknown state: ${state}`);
-          }
-        } catch (error) {
-          const errorMsg = error instanceof Error ? error.message : String(error);
-          logger.error(`[StateMachine] Error in state ${state}: ${errorMsg}`);
-          const serializedError: SerializedError = {
-            message: error instanceof Error ? error.message : String(error),
-            stack: error instanceof Error ? error.stack : undefined,
-            name: error instanceof Error ? error.name : undefined,
-          };
-          this.emitEvent({ type: 'Shutdown', error: serializedError });
-          this.state.currentState = 'Error';
-          throw error; // Re-throw to trigger span error recording
+    const attrs: Record<string, unknown> = {
+      state: state,
+      engine_mode: this.context.mode,
+      wave: this.state.wave,
+      session_id: this.context.sessionId,
+    };
+    const waveKind = (this.state as any)?.flags?.waveKind;
+    if (waveKind) attrs.wave_kind = waveKind;
+    return withActiveSpan(`engine.state.${state.toLowerCase()}`, attrs, async () => {
+      try {
+        switch (state) {
+          case 'Init':
+            await handleInit(this.context, this.state, this.transition.bind(this));
+            break;
+          case 'PlanReady':
+            await handlePlanReady(this.context, this.state, this.transition.bind(this));
+            break;
+          case 'WavePlanning':
+            await handleWavePlanning(this.context, this.state, this.transition.bind(this));
+            break;
+          case 'LevelDispatch':
+            await handleLevelDispatch(
+              this.context,
+              this.state,
+              this.transition.bind(this),
+              this.emitEvent.bind(this)
+            );
+            break;
+          case 'CheckRunning':
+            await handleCheckRunning(
+              this.context,
+              this.state,
+              this.transition.bind(this),
+              this.emitEvent.bind(this)
+            );
+            break;
+          case 'Routing':
+            // Routing is handled inline by CheckRunning for now
+            throw new Error('Routing state should be handled by CheckRunning');
+          case 'Completed':
+            await handleCompleted(this.context, this.state);
+            break;
+          case 'Error':
+            await handleError(this.context, this.state);
+            break;
+          default:
+            throw new Error(`Unknown state: ${state}`);
         }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        logger.error(`[StateMachine] Error in state ${state}: ${errorMsg}`);
+        const serializedError: SerializedError = {
+          message: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+          name: error instanceof Error ? error.name : undefined,
+        };
+        this.emitEvent({ type: 'Shutdown', error: serializedError });
+        this.state.currentState = 'Error';
+        throw error; // Re-throw to trigger span error recording
       }
-    );
+    });
   }
 
   /**

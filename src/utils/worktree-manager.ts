@@ -6,6 +6,7 @@
  */
 
 import * as fs from 'fs';
+import * as fsp from 'fs/promises';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { commandExecutor } from './command-executor';
@@ -119,7 +120,8 @@ export class WorktreeManager {
     repository: string,
     repoUrl: string,
     token?: string,
-    fetchDepth?: number
+    fetchDepth?: number,
+    cloneTimeoutMs?: number
   ): Promise<string> {
     const reposDir = this.getReposDir();
     const repoName = repository.replace(/\//g, '-');
@@ -129,9 +131,23 @@ export class WorktreeManager {
     if (fs.existsSync(bareRepoPath)) {
       logger.debug(`Bare repository already exists: ${bareRepoPath}`);
 
-      // Update remote refs
-      await this.updateBareRepo(bareRepoPath);
-      return bareRepoPath;
+      // Verify the bare repo has the correct remote URL to prevent using corrupted repos
+      const verifyResult = await this.verifyBareRepoRemote(bareRepoPath, repoUrl);
+      if (verifyResult === 'timeout') {
+        // Timeout during verification - use stale cache to avoid hanging on re-clone
+        logger.info(`Using stale bare repository (verification timed out): ${bareRepoPath}`);
+        return bareRepoPath;
+      } else if (verifyResult === false) {
+        logger.warn(
+          `Bare repository at ${bareRepoPath} has incorrect remote, removing and re-cloning`
+        );
+        await fsp.rm(bareRepoPath, { recursive: true, force: true });
+        // Fall through to clone below
+      } else {
+        // Update remote refs
+        await this.updateBareRepo(bareRepoPath);
+        return bareRepoPath;
+      }
     }
 
     // Clone as bare repository
@@ -153,7 +169,9 @@ export class WorktreeManager {
     }
     cloneCmd += ` ${this.escapeShellArg(cloneUrl)} ${this.escapeShellArg(bareRepoPath)}`;
 
-    const result = await this.executeGitCommand(cloneCmd, { timeout: 300000 }); // 5 minute timeout
+    const result = await this.executeGitCommand(cloneCmd, {
+      timeout: cloneTimeoutMs || 300000, // default 5 minutes
+    });
 
     if (result.exitCode !== 0) {
       // Redact tokens from error messages
@@ -171,19 +189,98 @@ export class WorktreeManager {
   private async updateBareRepo(bareRepoPath: string): Promise<void> {
     logger.debug(`Updating bare repository: ${bareRepoPath}`);
 
-    const updateCmd = `git -C ${this.escapeShellArg(bareRepoPath)} remote update --prune`;
-    const result = await this.executeGitCommand(updateCmd, { timeout: 60000 }); // 1 minute timeout
+    try {
+      const updateCmd = `git -C ${this.escapeShellArg(bareRepoPath)} remote update --prune`;
+      const result = await this.executeGitCommand(updateCmd, { timeout: 60000 }); // 1 minute timeout
 
-    if (result.exitCode !== 0) {
-      logger.warn(`Failed to update bare repository: ${result.stderr}`);
-      // Don't throw - we can continue with stale refs
-    } else {
-      logger.debug(`Successfully updated bare repository`);
+      if (result.exitCode !== 0) {
+        logger.warn(`Failed to update bare repository: ${result.stderr}`);
+        // Don't throw - we can continue with stale refs
+      } else {
+        logger.debug(`Successfully updated bare repository`);
+      }
+    } catch (error) {
+      // Handle timeout or other errors gracefully - we can continue with stale refs
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.warn(`Failed to update bare repository (will use stale refs): ${errorMessage}`);
     }
   }
 
   /**
-   * Create a new worktree
+   * Verify that a bare repository has the correct remote URL.
+   * This prevents reusing corrupted repos that were cloned from a different repository.
+   * Returns: true (valid), false (invalid - should re-clone), or 'timeout' (use stale cache)
+   */
+  private async verifyBareRepoRemote(
+    bareRepoPath: string,
+    expectedUrl: string
+  ): Promise<boolean | 'timeout'> {
+    try {
+      const cmd = `git -C ${this.escapeShellArg(bareRepoPath)} remote get-url origin`;
+      const result = await this.executeGitCommand(cmd, { timeout: 10000 });
+
+      if (result.exitCode !== 0) {
+        logger.warn(`Failed to get remote URL for ${bareRepoPath}: ${result.stderr}`);
+        return false;
+      }
+
+      const actualUrl = result.stdout.trim();
+
+      // Normalize URLs for comparison:
+      // - remove credentials (tokens/username)
+      // - remove .git suffix if present
+      // - trim trailing slash
+      // - lowercase for case‑insensitive match
+      const normalizeUrl = (url: string): string => {
+        // Convert common SSH form to https for comparison
+        if (url.startsWith('git@github.com:')) {
+          url = url.replace('git@github.com:', 'https://github.com/');
+        }
+        return (
+          url
+            // strip userinfo part to avoid mismatches when the cached bare
+            // repo was cloned with an access token but the expected URL is
+            // tokenless (or vice‑versa)
+            .replace(/:\/\/[^@]+@/, '://')
+            .replace(/\.git$/, '')
+            .replace(/\/$/, '')
+            .toLowerCase()
+        );
+      };
+
+      const normalizedExpected = normalizeUrl(expectedUrl);
+      const normalizedActual = normalizeUrl(actualUrl);
+
+      if (normalizedExpected !== normalizedActual) {
+        logger.warn(`Bare repo remote mismatch: expected ${expectedUrl}, got ${actualUrl}`);
+        return false;
+      }
+
+      logger.debug(`Bare repo remote verified: ${actualUrl}`);
+      return true;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      // If it's a timeout, return 'timeout' so caller can use stale cache instead of re-cloning
+      if (errorMessage.includes('timed out')) {
+        logger.warn(`Timeout verifying bare repo remote (will use stale cache): ${errorMessage}`);
+        return 'timeout';
+      }
+      logger.warn(`Error verifying bare repo remote: ${error}`);
+      return false;
+    }
+  }
+
+  /**
+   * Create a new worktree for the given repository/ref.
+   *
+   * Important: we always create worktrees in a detached HEAD state pinned
+   * to a specific commit SHA rather than a named branch like "main". Git
+   * only allows a branch to be checked out in a single worktree at a time;
+   * using the raw commit (plus --detach) lets multiple workflows safely
+   * create independent worktrees for the same branch without hitting
+   * errors like:
+   *
+   *   fatal: 'main' is already used by worktree at '.../TykTechnologies-tyk-docs-main-XXXX'
    */
   async createWorktree(
     repository: string,
@@ -195,6 +292,7 @@ export class WorktreeManager {
       clean?: boolean;
       workflowId?: string;
       fetchDepth?: number;
+      cloneTimeoutMs?: number;
     } = {}
   ): Promise<WorktreeInfo> {
     // Validate ref to prevent command injection
@@ -205,7 +303,8 @@ export class WorktreeManager {
       repository,
       repoUrl,
       options.token,
-      options.fetchDepth
+      options.fetchDepth,
+      options.cloneTimeoutMs
     );
 
     // Generate worktree ID and path
@@ -241,20 +340,23 @@ export class WorktreeManager {
       }
     }
 
-    // Fetch the ref if needed
+    // Fetch the ref if needed, then resolve it to a concrete commit SHA.
+    // We use the commit (detached HEAD) instead of the branch name so we
+    // can have multiple worktrees for the same branch without git refusing
+    // with "branch X is already checked out".
     await this.fetchRef(bareRepoPath, ref);
+    const commit = await this.getCommitShaForRef(bareRepoPath, ref);
 
-    // Create worktree
-    logger.info(`Creating worktree for ${repository}@${ref}`);
-    const createCmd = `git -C ${this.escapeShellArg(bareRepoPath)} worktree add ${this.escapeShellArg(worktreePath)} ${this.escapeShellArg(ref)}`;
+    // Create worktree in detached HEAD state at the resolved commit
+    logger.info(`Creating worktree for ${repository}@${ref} (${commit})`);
+    const createCmd = `git -C ${this.escapeShellArg(
+      bareRepoPath
+    )} worktree add --detach ${this.escapeShellArg(worktreePath)} ${this.escapeShellArg(commit)}`;
     const result = await this.executeGitCommand(createCmd, { timeout: 60000 });
 
     if (result.exitCode !== 0) {
       throw new Error(`Failed to create worktree: ${result.stderr}`);
     }
-
-    // Get commit SHA
-    const commit = await this.getCommitSha(worktreePath);
 
     // Create metadata
     const metadata: WorktreeMetadata = {
@@ -316,14 +418,17 @@ export class WorktreeManager {
   }
 
   /**
-   * Get commit SHA for worktree
+   * Get commit SHA for a given ref inside a bare repository.
+   *
+   * This runs after fetchRef so that <ref> should resolve to either a
+   * local branch, tag, or remote-tracking ref.
    */
-  private async getCommitSha(worktreePath: string): Promise<string> {
-    const cmd = `git -C ${this.escapeShellArg(worktreePath)} rev-parse HEAD`;
+  private async getCommitShaForRef(bareRepoPath: string, ref: string): Promise<string> {
+    const cmd = `git -C ${this.escapeShellArg(bareRepoPath)} rev-parse ${this.escapeShellArg(ref)}`;
     const result = await this.executeGitCommand(cmd);
 
     if (result.exitCode !== 0) {
-      throw new Error(`Failed to get commit SHA: ${result.stderr}`);
+      throw new Error(`Failed to get commit SHA for ref ${ref}: ${result.stderr}`);
     }
 
     return result.stdout.trim();
@@ -621,9 +726,21 @@ export class WorktreeManager {
     command: string,
     options: { timeout?: number; env?: Record<string, string> } = {}
   ): Promise<GitCommandResult> {
+    // Merge provided env with process.env and add git-specific settings
+    // These settings prevent git from hanging on interactive prompts while
+    // still allowing OS-level credential helpers to work:
+    // - GIT_TERMINAL_PROMPT=0: Prevents terminal credential prompts
+    // - GIT_SSH_COMMAND: Disables SSH password prompts (BatchMode)
+    const gitEnv = {
+      ...process.env,
+      ...options.env,
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o StrictHostKeyChecking=no',
+    };
+
     const result = await commandExecutor.execute(command, {
       timeout: options.timeout || 30000,
-      env: options.env || process.env,
+      env: gitEnv,
     } as any);
 
     return {

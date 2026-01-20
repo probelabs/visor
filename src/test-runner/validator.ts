@@ -25,6 +25,16 @@ const schema: any = {
     hooks: { type: 'object' },
     slack: { type: 'object' },
     frontends: { type: 'array' },
+    workspace: { type: 'object' },
+    // Workflow definition fields (for workflow files with co-located tests)
+    id: { type: 'string' },
+    name: { type: 'string' },
+    description: { type: 'string' },
+    inputs: { type: 'array' },
+    outputs: { type: 'array' },
+    ai_mcp_servers: { type: 'object' },
+    ai_provider: { type: 'string' },
+    ai_model: { type: 'string' },
     tests: {
       type: 'object',
       additionalProperties: false,
@@ -136,6 +146,8 @@ const schema: any = {
             oneOf: [{ type: 'string' }, { type: 'array' }, { type: 'object' }],
           },
         },
+        // Workflow testing: input values to pass to the workflow
+        workflow_input: { type: 'object' },
         expect: { $ref: '#/$defs/expectBlock' },
         // Flow cases
         flow: {
@@ -270,6 +282,35 @@ const schema: any = {
       },
       required: ['step', 'path'],
     },
+    // Workflow output expectation: like outputsExpectation but without step (tests workflow-level outputs)
+    workflowOutputExpectation: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        path: { type: 'string' },
+        equals: {},
+        equalsDeep: {},
+        matches: { type: 'string' },
+        contains: {
+          oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+        },
+        not_contains: {
+          oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+        },
+        where: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            path: { type: 'string' },
+            equals: {},
+            matches: { type: 'string' },
+          },
+          required: ['path'],
+        },
+        contains_unordered: { type: 'array' },
+      },
+      required: ['path'],
+    },
     expectBlock: {
       type: 'object',
       additionalProperties: false,
@@ -278,6 +319,8 @@ const schema: any = {
         calls: { type: 'array', items: { $ref: '#/$defs/callsExpectation' } },
         prompts: { type: 'array', items: { $ref: '#/$defs/promptsExpectation' } },
         outputs: { type: 'array', items: { $ref: '#/$defs/outputsExpectation' } },
+        // Workflow testing: assert on workflow-level outputs (defined in workflow's outputs: section)
+        workflow_output: { type: 'array', items: { $ref: '#/$defs/workflowOutputExpectation' } },
         no_calls: {
           type: 'array',
           items: {
@@ -343,6 +386,7 @@ const knownKeys = new Set([
   'version',
   'extends',
   'tests',
+  'workspace',
   // tests
   'tests.defaults',
   'tests.fixtures',
@@ -363,6 +407,7 @@ const knownKeys = new Set([
   'env',
   'routing',
   'mocks',
+  'workflow_input',
   'expect',
   'flow',
   // expect
@@ -370,6 +415,7 @@ const knownKeys = new Set([
   'expect.calls',
   'expect.prompts',
   'expect.outputs',
+  'expect.workflow_output',
   'expect.no_calls',
   'expect.fail',
   'expect.strict_violation',
@@ -424,7 +470,7 @@ function formatError(e: ErrorObject): string {
       if (hint) msg += ` (${hint})`;
       // Small curated allow-list for frequent nodes to reduce guesswork
       if (path.endsWith('expect')) {
-        msg += ` (allowed: use, calls, prompts, outputs, no_calls, fail, strict_violation)`;
+        msg += ` (allowed: use, calls, prompts, outputs, workflow_output, no_calls, fail, strict_violation)`;
       } else if (path.endsWith('env')) {
         msg += ` (values must be strings)`;
       } else if (path.endsWith('tests')) {

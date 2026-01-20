@@ -77,6 +77,26 @@ export async function executeCheckWithForEachItems(
   const allContents: string[] = [];
   const perIterationDurations: number[] = [];
 
+  // Emit a banner for the forEach parent so logs clearly show when we are
+  // entering the aggregated execution for that step.
+  try {
+    const wave = state.wave;
+    const lvl = (state as any).currentLevel ?? '?';
+    const banner = `━━━ CHECK ${checkId} (wave ${wave}, level ${lvl}, forEach parent) ━━━`;
+    const isTTY = typeof process !== 'undefined' ? !!process.stderr.isTTY : false;
+    const outputFormat = process.env.VISOR_OUTPUT_FORMAT || '';
+    const isJsonLike = outputFormat === 'json' || outputFormat === 'sarif';
+    if (isTTY && !isJsonLike) {
+      const cyan = '\x1b[36m';
+      const reset = '\x1b[0m';
+      logger.info(`${cyan}${banner}${reset}`);
+    } else {
+      logger.info(banner);
+    }
+  } catch {
+    // best-effort only
+  }
+
   for (let itemIndex = 0; itemIndex < forEachItems.length; itemIndex++) {
     const iterationStartMs = Date.now();
     const scope: Array<{ check: string; index: number }> = [
@@ -248,7 +268,12 @@ export async function executeCheckWithForEachItems(
 
       const result = await withActiveSpan(
         `visor.check.${checkId}`,
-        { 'visor.check.id': checkId, 'visor.check.type': providerType },
+        {
+          'visor.check.id': checkId,
+          'visor.check.type': providerType,
+          session_id: context.sessionId,
+          wave: state.wave,
+        },
         async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
       );
 

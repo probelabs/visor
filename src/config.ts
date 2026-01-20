@@ -20,6 +20,7 @@ import { ConfigLoader, ConfigLoaderOptions } from './utils/config-loader';
 import { ConfigMerger } from './utils/config-merger';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
+import { validateJsSyntax } from './utils/sandbox';
 
 /**
  * Valid event triggers for checks
@@ -477,16 +478,31 @@ export class ConfigManager {
 
     logger.info(`Registered workflow '${workflowId}' for standalone execution`);
 
-    // Create a COMPLETELY NEW visor config with ONLY the test checks
-    // This prevents any workflow fields from leaking into the config
-    const visorConfig: Partial<VisorConfig> = {
+    // For standalone workflow testing, use the workflow's steps as checks
+    // This allows the test runner to execute the workflow steps directly
+    const workflowSteps = workflowData.steps || {};
+
+    // Create a config that includes the workflow steps as checks,
+    // plus the tests section and workflow metadata for output computation
+    const visorConfig: Partial<VisorConfig> & { tests?: any; outputs?: any; inputs?: any } = {
       version: '1.0',
-      steps: tests,
-      checks: tests, // Backward compatibility
+      steps: workflowSteps,
+      checks: workflowSteps,
+      tests: tests, // Preserve test harness config (may be empty if stripped by test runner)
     };
 
-    logger.debug(`Standalone workflow config has ${Object.keys(tests).length} test checks`);
-    logger.debug(`Test check names: ${Object.keys(tests).join(', ')}`);
+    // Preserve workflow metadata for output computation during tests
+    if (workflowData.outputs) {
+      visorConfig.outputs = workflowData.outputs;
+    }
+    if (workflowData.inputs) {
+      visorConfig.inputs = workflowData.inputs;
+    }
+
+    logger.debug(
+      `Standalone workflow config has ${Object.keys(workflowSteps).length} workflow steps as checks`
+    );
+    logger.debug(`Workflow step names: ${Object.keys(workflowSteps).join(', ')}`);
     logger.debug(`Config keys after conversion: ${Object.keys(visorConfig).join(', ')}`);
 
     return visorConfig;
@@ -982,26 +998,29 @@ export class ConfigManager {
 
     // Validate reuse_ai_session configuration
     if (checkConfig.reuse_ai_session !== undefined) {
-      const isString = typeof checkConfig.reuse_ai_session === 'string';
-      const isBoolean = typeof checkConfig.reuse_ai_session === 'boolean';
+      const reuseValue = checkConfig.reuse_ai_session as unknown;
+      const isString = typeof reuseValue === 'string';
+      const isBoolean = typeof reuseValue === 'boolean';
+      const isSelf = reuseValue === 'self';
 
       if (!isString && !isBoolean) {
         errors.push({
           field: `checks.${checkName}.reuse_ai_session`,
           message: `Invalid reuse_ai_session value for "${checkName}": must be string (check name) or boolean`,
-          value: checkConfig.reuse_ai_session,
+          value: reuseValue,
         });
-      } else if (isString) {
-        // When reuse_ai_session is a string, it must refer to a valid check
-        const targetCheckName = checkConfig.reuse_ai_session as string;
+      } else if (isString && !isSelf) {
+        // When reuse_ai_session is a string (other than the special 'self' value),
+        // it must refer to a valid check name
+        const targetCheckName = reuseValue as string;
         if (!config?.checks || !config.checks[targetCheckName]) {
           errors.push({
             field: `checks.${checkName}.reuse_ai_session`,
             message: `Check "${checkName}" references non-existent check "${targetCheckName}" for session reuse`,
-            value: checkConfig.reuse_ai_session,
+            value: reuseValue,
           });
         }
-      } else if (checkConfig.reuse_ai_session === true) {
+      } else if (reuseValue === true) {
         // When reuse_ai_session is true, depends_on must be specified and non-empty
         if (
           !checkConfig.depends_on ||
@@ -1011,7 +1030,7 @@ export class ConfigManager {
           errors.push({
             field: `checks.${checkName}.reuse_ai_session`,
             message: `Check "${checkName}" has reuse_ai_session=true but missing or empty depends_on. Session reuse requires dependency on another check.`,
-            value: checkConfig.reuse_ai_session,
+            value: reuseValue,
           });
         }
       }
@@ -1075,6 +1094,39 @@ export class ConfigManager {
           value: checkConfig.on_finish,
         });
       }
+    }
+
+    // Validate JavaScript syntax in transform_js and script content
+    try {
+      // Validate transform_js if present
+      const transformJs = (checkConfig as any).transform_js;
+      if (typeof transformJs === 'string' && transformJs.trim().length > 0) {
+        const result = validateJsSyntax(transformJs);
+        if (!result.valid) {
+          errors.push({
+            field: `checks.${checkName}.transform_js`,
+            message: `JavaScript syntax error in "${checkName}" transform_js: ${result.error}`,
+            value: transformJs.slice(0, 100) + (transformJs.length > 100 ? '...' : ''),
+          });
+        }
+      }
+
+      // Validate script content if type is 'script'
+      if (checkConfig.type === 'script') {
+        const content = (checkConfig as any).content;
+        if (typeof content === 'string' && content.trim().length > 0) {
+          const result = validateJsSyntax(content);
+          if (!result.valid) {
+            errors.push({
+              field: `checks.${checkName}.content`,
+              message: `JavaScript syntax error in "${checkName}" script: ${result.error}`,
+              value: content.slice(0, 100) + (content.length > 100 ? '...' : ''),
+            });
+          }
+        }
+      }
+    } catch {
+      // Syntax validation is best-effort; don't fail the whole config on validation errors
     }
   }
 

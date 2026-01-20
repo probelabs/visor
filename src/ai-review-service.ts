@@ -4,6 +4,8 @@ import { PRInfo } from './pr-analyzer';
 import { ReviewSummary, ReviewIssue } from './reviewer';
 import { SessionRegistry } from './session-registry';
 import { logger } from './logger';
+import { trace as otTrace } from './telemetry/lazy-otel';
+import { withActiveSpan } from './telemetry/trace-helpers';
 import { initializeTracer } from './utils/tracer-init';
 import { processDiffWithOutline } from './utils/diff-processor';
 import { shouldFilterVisorReviewComment } from './utils/comment-metadata';
@@ -13,6 +15,138 @@ import { shouldFilterVisorReviewComment } from './utils/comment-metadata';
  */
 function log(...args: unknown[]): void {
   logger.debug(args.join(' '));
+}
+
+function createProbeTracerAdapter(fallbackTracer?: any) {
+  const fallback = fallbackTracer && typeof fallbackTracer === 'object' ? fallbackTracer : null;
+  const emitEvent = (name: string, attrs?: Record<string, unknown>) => {
+    try {
+      const span = otTrace.getActiveSpan();
+      if (span && typeof span.addEvent === 'function') {
+        span.addEvent(name, attrs as Record<string, unknown>);
+      }
+    } catch {}
+  };
+  return {
+    withSpan: async (
+      name: string,
+      fn: (...args: any[]) => Promise<any>,
+      attrs?: Record<string, unknown>
+    ) =>
+      withActiveSpan(name, attrs as Record<string, unknown>, async span => {
+        if (fallback && typeof fallback.withSpan === 'function') {
+          return await fallback.withSpan(name, async () => fn(span), attrs);
+        }
+        return await fn(span);
+      }),
+    recordEvent: (name: string, attrs?: Record<string, unknown>) => {
+      emitEvent(name, attrs);
+      if (fallback && typeof fallback.recordEvent === 'function') {
+        try {
+          fallback.recordEvent(name, attrs);
+        } catch {}
+      }
+    },
+    addEvent: (name: string, attrs?: Record<string, unknown>) => {
+      // Alias for ProbeAgent versions that call tracer.addEvent directly.
+      emitEvent(name, attrs);
+      if (fallback && typeof fallback.addEvent === 'function') {
+        try {
+          fallback.addEvent(name, attrs);
+        } catch {}
+      } else if (fallback && typeof fallback.recordEvent === 'function') {
+        try {
+          fallback.recordEvent(name, attrs);
+        } catch {}
+      }
+    },
+    recordDelegationEvent: (phase: string, attrs?: Record<string, unknown>) => {
+      emitEvent(`delegation.${phase}`, attrs);
+      if (fallback && typeof fallback.recordDelegationEvent === 'function') {
+        try {
+          fallback.recordDelegationEvent(phase, attrs);
+        } catch {}
+      }
+    },
+    recordMermaidValidationEvent: (phase: string, attrs?: Record<string, unknown>) => {
+      emitEvent(`mermaid.${phase}`, attrs);
+      if (fallback && typeof fallback.recordMermaidValidationEvent === 'function') {
+        try {
+          fallback.recordMermaidValidationEvent(phase, attrs);
+        } catch {}
+      }
+    },
+    recordJsonValidationEvent: (phase: string, attrs?: Record<string, unknown>) => {
+      emitEvent(`json.${phase}`, attrs);
+      if (fallback && typeof fallback.recordJsonValidationEvent === 'function') {
+        try {
+          fallback.recordJsonValidationEvent(phase, attrs);
+        } catch {}
+      }
+    },
+    createDelegationSpan: (sessionId: string, task: string) => {
+      let fallbackSpan: any = null;
+      if (fallback && typeof fallback.createDelegationSpan === 'function') {
+        try {
+          fallbackSpan = fallback.createDelegationSpan(sessionId, task);
+        } catch {}
+      }
+      let span: any = null;
+      try {
+        const tracer = otTrace.getTracer('visor');
+        span = tracer.startSpan('probe.delegation', {
+          attributes: {
+            'delegation.session_id': sessionId,
+            'delegation.task': task,
+          },
+        });
+      } catch {}
+      if (!span && fallbackSpan) return fallbackSpan;
+      if (!span) return null;
+      return {
+        setAttributes: (attrs?: Record<string, unknown>) => {
+          try {
+            if (attrs) span.setAttributes(attrs as Record<string, unknown>);
+          } catch {}
+          if (fallbackSpan && typeof fallbackSpan.setAttributes === 'function') {
+            try {
+              fallbackSpan.setAttributes(attrs);
+            } catch {}
+          }
+        },
+        setStatus: (status: unknown) => {
+          try {
+            span.setStatus(status as never);
+          } catch {}
+          if (fallbackSpan && typeof fallbackSpan.setStatus === 'function') {
+            try {
+              fallbackSpan.setStatus(status);
+            } catch {}
+          }
+        },
+        end: () => {
+          try {
+            span.end();
+          } catch {}
+          if (fallbackSpan && typeof fallbackSpan.end === 'function') {
+            try {
+              fallbackSpan.end();
+            } catch {}
+          }
+        },
+      };
+    },
+    flush: async () => {
+      if (fallback && typeof fallback.flush === 'function') {
+        await fallback.flush();
+      }
+    },
+    shutdown: async () => {
+      if (fallback && typeof fallback.shutdown === 'function') {
+        await fallback.shutdown();
+      }
+    },
+  };
 }
 
 /**
@@ -65,6 +199,13 @@ export interface AIReviewConfig {
   allowBash?: boolean;
   // Advanced bash command execution configuration
   bashConfig?: import('./types/config').BashConfig;
+  // Optional workspace root and allowed folders for ProbeAgent.
+  // When provided, these are forwarded to ProbeAgent so tools like search/query
+  // operate inside the isolated workspace/projects instead of the Visor repo root.
+  path?: string;
+  allowedFolders?: string[];
+  // Completion prompt for post-completion validation/review (runs after attempt_completion)
+  completionPrompt?: string;
 }
 
 export interface AIDebugInfo {
@@ -278,8 +419,11 @@ export class AIReviewService {
     try {
       const call = this.callProbeAgent(prompt, schema, debugInfo, checkName, sessionId);
       const timeoutMs = Math.max(0, this.config.timeout || 0);
-      const { response, effectiveSchema } =
-        timeoutMs > 0 ? await this.withTimeout(call, timeoutMs, 'AI review') : await call;
+      const {
+        response,
+        effectiveSchema,
+        sessionId: usedSessionId,
+      } = timeoutMs > 0 ? await this.withTimeout(call, timeoutMs, 'AI review') : await call;
       const processingTime = Date.now() - startTime;
 
       if (debugInfo) {
@@ -289,6 +433,11 @@ export class AIReviewService {
       }
 
       const result = this.parseAIResponse(response, debugInfo, effectiveSchema);
+
+      // Expose the session ID used for this call so the engine can reuse it later
+      try {
+        (result as any).sessionId = usedSessionId;
+      } catch {}
 
       if (debugInfo) {
         result.debug = debugInfo;
@@ -651,17 +800,34 @@ ${prContext}${slackContextXml}
     const prContextInfo = prInfo as PRInfo & {
       isPRContext?: boolean;
       includeCodeContext?: boolean;
+      slackConversation?: unknown;
     };
     const isIssue = prContextInfo.isIssue === true;
 
     // Check if we should include code context (diffs)
     const isPRContext = prContextInfo.isPRContext === true;
-    // In PR context, always include diffs. Otherwise check the flag.
-    const includeCodeContext = isPRContext || prContextInfo.includeCodeContext !== false;
+    const isSlackMode = prContextInfo.slackConversation !== undefined;
+
+    // Determine whether to include code context:
+    // - In explicit PR context (GitHub PR events), always include diffs
+    // - In Slack mode, default to NO code context unless explicitly requested
+    // - Otherwise, include code context unless explicitly disabled
+    let includeCodeContext: boolean;
+    if (isPRContext) {
+      includeCodeContext = true;
+    } else if (isSlackMode) {
+      // In Slack mode, only include code context if explicitly set to true
+      includeCodeContext = prContextInfo.includeCodeContext === true;
+    } else {
+      // Default: include unless explicitly disabled
+      includeCodeContext = prContextInfo.includeCodeContext !== false;
+    }
 
     // Log the decision for transparency (debug level)
     if (isPRContext) {
       log('🔍 Including full code diffs in AI context (PR mode)');
+    } else if (isSlackMode && !includeCodeContext) {
+      log('💬 Slack mode: excluding code diffs (use includeCodeContext: true to enable)');
     } else if (!includeCodeContext) {
       log('📊 Including only file summary in AI context (no diffs)');
     } else {
@@ -1341,6 +1507,8 @@ ${this.escapeXml(processedFallbackDiff)}
       // Wrap in a span for hierarchical tracing
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const agentAny = agent as any;
+      // Ensure Probe spans are emitted as children of the active Visor span.
+      agentAny.tracer = createProbeTracerAdapter(agentAny.tracer);
       let response: string;
       if (agentAny.tracer && typeof agentAny.tracer.withSpan === 'function') {
         response = await agentAny.tracer.withSpan(
@@ -1537,7 +1705,15 @@ ${'='.repeat(60)}
     debugInfo?: AIDebugInfo,
     _checkName?: string,
     providedSessionId?: string
-  ): Promise<{ response: string; effectiveSchema?: string }> {
+  ): Promise<{ response: string; effectiveSchema?: string; sessionId: string }> {
+    // Derive a stable session ID for this call so the engine can reuse it later
+    const sessionId =
+      providedSessionId ||
+      (() => {
+        const timestamp = new Date().toISOString();
+        return `visor-${timestamp.replace(/[:.]/g, '-')}-${_checkName || 'unknown'}`;
+      })();
+
     // Handle mock model/provider
     if (this.config.model === 'mock' || this.config.provider === 'mock') {
       const inJest = !!process.env.JEST_WORKER_ID;
@@ -1545,19 +1721,17 @@ ${'='.repeat(60)}
       if (!inJest) {
         // Fast path for CLI/integration: synthesize a mock response without invoking ProbeAgent
         const response = await this.generateMockResponse(prompt, _checkName, schema);
-        return { response, effectiveSchema: typeof schema === 'object' ? 'custom' : schema };
+        return {
+          response,
+          effectiveSchema: typeof schema === 'object' ? 'custom' : schema,
+          sessionId,
+        };
       }
       // In unit tests, still invoke ProbeAgent so tests can assert on options (schema) passed in
       // Fall through to normal flow below
     }
 
     // Create ProbeAgent instance with proper options
-    const sessionId =
-      providedSessionId ||
-      (() => {
-        const timestamp = new Date().toISOString();
-        return `visor-${timestamp.replace(/[:.]/g, '-')}-${_checkName || 'unknown'}`;
-      })();
 
     log('🤖 Creating ProbeAgent for AI review...');
     log(`🆔 Session ID: ${sessionId}`);
@@ -1620,14 +1794,16 @@ ${'='.repeat(60)}
       // This uses SimpleTelemetry for lightweight tracing
       let traceFilePath = '';
       let telemetryConfig: unknown = null;
+      let probeFileTracer: unknown = null;
       if (this.config.debug) {
         const tracerResult = await initializeTracer(sessionId, _checkName);
         if (tracerResult) {
-          options.tracer = tracerResult.tracer;
+          probeFileTracer = tracerResult.tracer;
           telemetryConfig = tracerResult.telemetryConfig;
           traceFilePath = tracerResult.filePath;
         }
       }
+      options.tracer = createProbeTracerAdapter(probeFileTracer);
 
       // Wire MCP configuration when provided
       if (this.config.mcpServers && Object.keys(this.config.mcpServers).length > 0) {
@@ -1666,12 +1842,44 @@ ${'='.repeat(60)}
       }
 
       // Pass bash command execution configuration to ProbeAgent
-      // Pass allowBash and bashConfig separately (following allowEdit pattern)
+      // Pass enableBash and bashConfig separately (following allowEdit pattern)
+      // Note: Probe expects 'enableBash' property, not 'allowBash'
       if (this.config.allowBash !== undefined) {
-        (options as any).allowBash = this.config.allowBash;
+        (options as any).enableBash = this.config.allowBash;
       }
       if (this.config.bashConfig !== undefined) {
         (options as any).bashConfig = this.config.bashConfig;
+      }
+
+      // Pass completion prompt for post-completion validation/review
+      if (this.config.completionPrompt !== undefined) {
+        (options as any).completionPrompt = this.config.completionPrompt;
+      }
+
+      // Propagate workspace / allowed folders to ProbeAgent so that tools
+      // operate inside the isolated workspace and project checkouts instead
+      // of the Visor repository root.
+      try {
+        const cfgAny: any = this.config as any;
+        const allowedFolders = cfgAny.allowedFolders as string[] | undefined;
+        const workspacePath =
+          cfgAny.workspacePath ||
+          cfgAny.path ||
+          (Array.isArray(allowedFolders) && allowedFolders[0]);
+        if (Array.isArray(allowedFolders) && allowedFolders.length > 0) {
+          (options as any).allowedFolders = allowedFolders;
+          if (!options.path && workspacePath) {
+            (options as any).path = workspacePath;
+          }
+          log(`🗂️ ProbeAgent workspace config:`);
+          log(`   path (cwd): ${(options as any).path}`);
+          log(`   allowedFolders[0]: ${allowedFolders[0]}`);
+        } else if (workspacePath) {
+          (options as any).path = workspacePath;
+          log(`🗂️ ProbeAgent path: ${workspacePath} (no allowedFolders)`);
+        }
+      } catch {
+        // Best-effort only; fall back to ProbeAgent defaults on error.
       }
 
       // Add provider-specific options if configured
@@ -2037,7 +2245,7 @@ ${'='.repeat(60)}
         log(`🔧 Debug: Registered AI session for potential reuse: ${sessionId}`);
       }
 
-      return { response, effectiveSchema };
+      return { response, effectiveSchema, sessionId };
     } catch (error) {
       console.error('❌ ProbeAgent failed:', error);
       throw new Error(
@@ -2191,13 +2399,23 @@ ${'='.repeat(60)}
         // For other schemas (code-review, etc.), extract and parse JSON with boundary detection
         log('🔍 Extracting JSON from AI response...');
 
-        // Try direct parsing first - if AI returned pure JSON
+        // Sanitize response: strip BOM, zero-width chars, and other invisible characters
+        // that can cause JSON parsing to fail even when the text looks valid
+        const sanitizedResponse = response
+          .replace(/^\uFEFF/, '') // BOM
+          .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '') // Zero-width chars, NBSP
+          .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // Control chars (except \t \n \r)
+          .trim();
+
+        // Try direct JSON parsing - no bracket-matching extraction
+        // JSON validation is offloaded to Probe agent when schema is provided
         try {
-          reviewData = JSON.parse(response.trim());
+          reviewData = JSON.parse(sanitizedResponse);
           log('✅ Successfully parsed direct JSON response');
           if (debugInfo) debugInfo.jsonParseSuccess = true;
-        } catch {
-          log('🔍 Direct parsing failed, trying to extract JSON from response...');
+        } catch (parseErr) {
+          const errMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+          log(`🔍 Direct JSON parsing failed: ${errMsg}`);
 
           // If the response starts with "I cannot" or similar, it's likely a refusal
           if (
@@ -2210,66 +2428,16 @@ ${'='.repeat(60)}
             };
           }
 
-          // Try to extract JSON using improved method with proper bracket matching
-          const jsonString = this.extractJsonFromResponse(response);
-
-          if (jsonString) {
-            try {
-              reviewData = JSON.parse(jsonString);
-              log('✅ Successfully parsed extracted JSON');
-              if (debugInfo) debugInfo.jsonParseSuccess = true;
-            } catch {
-              log('🔧 Extracted JSON parsing failed, falling back to plain text handling...');
-
-              // Check if response is plain text and doesn't contain structured data
-              if (!response.includes('{') && !response.includes('}')) {
-                log('🔧 Plain text response detected, creating structured fallback...');
-
-                reviewData = {
-                  issues: [
-                    {
-                      file: 'AI_RESPONSE',
-                      line: 1,
-                      ruleId: 'ai/raw_response',
-                      message: response,
-                      severity: 'info',
-                      category: 'documentation',
-                    },
-                  ],
-                };
-              } else {
-                // Fallback: treat the entire response as an issue
-                log('🔧 Creating fallback response from non-JSON content...');
-                reviewData = {
-                  issues: [
-                    {
-                      file: 'AI_RESPONSE',
-                      line: 1,
-                      ruleId: 'ai/raw_response',
-                      message: response,
-                      severity: 'info',
-                      category: 'documentation',
-                    },
-                  ],
-                };
-              }
-            }
-          } else {
-            // No JSON found at all - treat as plain text response
-            log('🔧 No JSON found in response, treating as plain text...');
-            reviewData = {
-              issues: [
-                {
-                  file: 'AI_RESPONSE',
-                  line: 1,
-                  ruleId: 'ai/raw_response',
-                  message: response,
-                  severity: 'info',
-                  category: 'documentation',
-                },
-              ],
-            };
-          }
+          // Not valid JSON - treat entire response as text output
+          // This allows Probe (or other AI providers) to handle JSON validation
+          // and avoids false positives from bracket-matching (e.g., mermaid diagrams)
+          log('🔧 Treating response as plain text (no JSON extraction)');
+          const trimmed = response.trim();
+          return {
+            issues: [],
+            output: { text: trimmed },
+            debug: debugInfo,
+          };
         }
       }
 
@@ -2455,80 +2623,6 @@ ${'='.repeat(60)}
         `Invalid AI response format: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
-  }
-
-  /**
-   * Extract JSON from a response that might contain surrounding text
-   * Uses proper bracket matching to find valid JSON objects or arrays
-   */
-  private extractJsonFromResponse(response: string): string | null {
-    const text = response.trim();
-
-    // Try to find JSON objects first (higher priority)
-    let bestJson = this.findJsonWithBracketMatching(text, '{', '}');
-
-    // If no object found, try arrays
-    if (!bestJson) {
-      bestJson = this.findJsonWithBracketMatching(text, '[', ']');
-    }
-
-    return bestJson;
-  }
-
-  /**
-   * Find JSON with proper bracket matching to avoid false positives
-   */
-  private findJsonWithBracketMatching(
-    text: string,
-    openChar: string,
-    closeChar: string
-  ): string | null {
-    const firstIndex = text.indexOf(openChar);
-    if (firstIndex === -1) return null;
-
-    let depth = 0;
-    let inString = false;
-    let escaping = false;
-
-    for (let i = firstIndex; i < text.length; i++) {
-      const char = text[i];
-
-      if (escaping) {
-        escaping = false;
-        continue;
-      }
-
-      if (char === '\\' && inString) {
-        escaping = true;
-        continue;
-      }
-
-      if (char === '"' && !escaping) {
-        inString = !inString;
-        continue;
-      }
-
-      if (!inString) {
-        if (char === openChar) {
-          depth++;
-        } else if (char === closeChar) {
-          depth--;
-          if (depth === 0) {
-            // Found matching closing bracket
-            const candidate = text.substring(firstIndex, i + 1);
-            try {
-              JSON.parse(candidate); // Validate it's actually valid JSON
-              return candidate;
-            } catch {
-              // This wasn't valid JSON, keep looking
-              break;
-            }
-          }
-        }
-      }
-    }
-
-    return null;
   }
 
   /**

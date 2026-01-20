@@ -35,16 +35,19 @@ export async function handleWavePlanning(
   // continuing to schedule downstream checks or forward-run waves.
   try {
     const flags = (state as any).flags || {};
+    logger.info(
+      `[WavePlanning] Checking awaitingHumanInput flag: ${!!flags.awaitingHumanInput} (wave=${state.wave})`
+    );
     if (flags.awaitingHumanInput) {
-      if (context.debug) {
-        logger.info('[WavePlanning] Awaiting human input – finishing run without further waves');
-      }
+      logger.info('[WavePlanning] Awaiting human input – finishing run without further waves');
       state.levelQueue = [];
       state.eventQueue = [];
       transition('Completed');
       return;
     }
-  } catch {}
+  } catch (e) {
+    logger.warn(`[WavePlanning] Failed to check awaitingHumanInput flag: ${e}`);
+  }
 
   // Check if we have a dependency graph
   // For fresh runs, PlanReady always initializes dependencyGraph before
@@ -351,8 +354,11 @@ export async function handleWavePlanning(
     for (const id of checksToRun) {
       // Only include dependencies that are within the same subset (often none).
       const cfg = context.config.checks?.[id];
-      const deps = (cfg?.depends_on || []).filter((d: string) => checksToRun.includes(d));
-      subDeps[id] = deps as string[];
+      // Normalize depends_on to array (supports string | string[])
+      const rawDeps = cfg?.depends_on;
+      const depsArray = Array.isArray(rawDeps) ? rawDeps : rawDeps ? [rawDeps] : [];
+      const deps = depsArray.filter((d: string) => checksToRun.includes(d));
+      subDeps[id] = deps;
     }
 
     const subGraph = DependencyResolver.buildDependencyGraph(subDeps);
@@ -410,6 +416,10 @@ export async function handleWavePlanning(
     // Initialize current wave state
     (state as any).currentWaveCompletions = new Set<string>();
     (state as any).failedChecks = new Set<string>();
+    try {
+      (state as any).flags = (state as any).flags || {};
+      (state as any).flags.waveKind = 'initial';
+    } catch {}
   }
 
   // Check if there are levels to execute

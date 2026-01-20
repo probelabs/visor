@@ -15,6 +15,7 @@ import type { EngineContext, RunState, EngineState, EngineEvent } from '../../ty
 import type { ReviewSummary, ReviewIssue } from '../../reviewer';
 import type { CheckConfig, OnFailConfig, TransitionRule } from '../../types/config';
 import { logger } from '../../logger';
+import { addEvent } from '../../telemetry/trace-helpers';
 import { FailureConditionEvaluator } from '../../failure-condition-evaluator';
 import { createSecureSandbox, compileAndRun } from '../../utils/sandbox';
 import { MemoryStore } from '../../memory-store';
@@ -153,6 +154,37 @@ function createMemoryHelpers() {
   };
 }
 
+type RoutingTrigger = 'on_success' | 'on_fail' | 'on_finish';
+type RoutingAction = 'run' | 'goto' | 'retry';
+type RoutingSource = 'run' | 'run_js' | 'goto' | 'goto_js' | 'transitions' | 'retry';
+
+function formatScopeLabel(scope: Array<{ check: string; index: number }> | undefined): string {
+  if (!scope || scope.length === 0) return '';
+  return scope.map(item => `${item.check}:${item.index}`).join('|');
+}
+
+function recordRoutingEvent(args: {
+  checkId: string;
+  trigger: RoutingTrigger;
+  action: RoutingAction;
+  target?: string;
+  source?: RoutingSource;
+  scope?: Array<{ check: string; index: number }>;
+  gotoEvent?: string;
+}): void {
+  const attrs: Record<string, unknown> = {
+    check_id: args.checkId,
+    trigger: args.trigger,
+    action: args.action,
+  };
+  if (args.target) attrs.target = args.target;
+  if (args.source) attrs.source = args.source;
+  const scopeLabel = formatScopeLabel(args.scope);
+  if (scopeLabel) attrs.scope = scopeLabel;
+  if (args.gotoEvent) attrs.goto_event = args.gotoEvent;
+  addEvent('visor.routing', attrs);
+}
+
 /**
  * Handle routing state - evaluate conditions and decide next actions
  */
@@ -271,6 +303,14 @@ async function processOnFinish(
             { check: checkId, index: itemIndex },
           ];
 
+          recordRoutingEvent({
+            checkId,
+            trigger: 'on_finish',
+            action: 'run',
+            target: targetCheck,
+            source: 'run',
+            scope: itemScope,
+          });
           emitEvent({
             type: 'ForwardRunRequested',
             target: targetCheck,
@@ -284,6 +324,14 @@ async function processOnFinish(
         // Increment loop count
         state.routingLoopCount++;
 
+        recordRoutingEvent({
+          checkId,
+          trigger: 'on_finish',
+          action: 'run',
+          target: targetCheck,
+          source: 'run',
+          scope: [],
+        });
         emitEvent({
           type: 'ForwardRunRequested',
           target: targetCheck,
@@ -328,6 +376,14 @@ async function processOnFinish(
       // Increment loop count
       state.routingLoopCount++;
 
+      recordRoutingEvent({
+        checkId,
+        trigger: 'on_finish',
+        action: 'run',
+        target: targetCheck,
+        source: 'run_js',
+        scope,
+      });
       emitEvent({
         type: 'ForwardRunRequested',
         target: targetCheck,
@@ -362,6 +418,15 @@ async function processOnFinish(
         return;
       }
       state.routingLoopCount++;
+      recordRoutingEvent({
+        checkId,
+        trigger: 'on_finish',
+        action: 'goto',
+        target: finishTransTarget.to,
+        source: 'transitions',
+        scope,
+        gotoEvent: finishTransTarget.goto_event,
+      });
       emitEvent({
         type: 'ForwardRunRequested',
         target: finishTransTarget.to,
@@ -406,6 +471,14 @@ async function processOnFinish(
     // Increment loop count
     state.routingLoopCount++;
 
+    recordRoutingEvent({
+      checkId,
+      trigger: 'on_finish',
+      action: 'goto',
+      target: gotoTarget,
+      source: onFinish.goto_js ? 'goto_js' : 'goto',
+      scope,
+    });
     // Enqueue forward run event
     emitEvent({
       type: 'ForwardRunRequested',
@@ -640,6 +713,14 @@ async function processOnSuccess(
             { check: checkId, index: itemIndex },
           ];
 
+          recordRoutingEvent({
+            checkId,
+            trigger: 'on_success',
+            action: 'run',
+            target: targetCheck,
+            source: 'run',
+            scope: itemScope,
+          });
           emitEvent({
             type: 'ForwardRunRequested',
             target: targetCheck,
@@ -652,6 +733,14 @@ async function processOnSuccess(
         // Increment loop count
         state.routingLoopCount++;
 
+        recordRoutingEvent({
+          checkId,
+          trigger: 'on_success',
+          action: 'run',
+          target: targetCheck,
+          source: 'run',
+          scope,
+        });
         emitEvent({
           type: 'ForwardRunRequested',
           target: targetCheck,
@@ -695,6 +784,14 @@ async function processOnSuccess(
       // Increment loop count
       state.routingLoopCount++;
 
+      recordRoutingEvent({
+        checkId,
+        trigger: 'on_success',
+        action: 'run',
+        target: targetCheck,
+        source: 'run_js',
+        scope,
+      });
       emitEvent({
         type: 'ForwardRunRequested',
         target: targetCheck,
@@ -728,6 +825,15 @@ async function processOnSuccess(
         return;
       }
       state.routingLoopCount++;
+      recordRoutingEvent({
+        checkId,
+        trigger: 'on_success',
+        action: 'goto',
+        target: successTransTarget.to,
+        source: 'transitions',
+        scope,
+        gotoEvent: successTransTarget.goto_event,
+      });
       emitEvent({
         type: 'ForwardRunRequested',
         target: successTransTarget.to,
@@ -773,6 +879,15 @@ async function processOnSuccess(
     // Increment loop count
     state.routingLoopCount++;
 
+    recordRoutingEvent({
+      checkId,
+      trigger: 'on_success',
+      action: 'goto',
+      target: gotoTarget,
+      source: onSuccess.goto_js ? 'goto_js' : 'goto',
+      scope,
+      gotoEvent: onSuccess.goto_event,
+    });
     // Enqueue forward run event with optional event override
     emitEvent({
       type: 'ForwardRunRequested',
@@ -864,6 +979,14 @@ async function processOnFail(
           const itemScope: Array<{ check: string; index: number }> = [
             { check: checkId, index: itemIndex },
           ];
+          recordRoutingEvent({
+            checkId,
+            trigger: 'on_fail',
+            action: 'run',
+            target: targetCheck,
+            source: 'run',
+            scope: itemScope,
+          });
           emitEvent({
             type: 'ForwardRunRequested',
             target: targetCheck,
@@ -874,6 +997,14 @@ async function processOnFail(
       } else {
         // No forEach context: preserve current scope (if any)
         state.routingLoopCount++;
+        recordRoutingEvent({
+          checkId,
+          trigger: 'on_fail',
+          action: 'run',
+          target: targetCheck,
+          source: 'run',
+          scope,
+        });
         emitEvent({
           type: 'ForwardRunRequested',
           target: targetCheck,
@@ -917,6 +1048,14 @@ async function processOnFail(
       // Increment loop count
       state.routingLoopCount++;
 
+      recordRoutingEvent({
+        checkId,
+        trigger: 'on_fail',
+        action: 'run',
+        target: targetCheck,
+        source: 'run_js',
+        scope,
+      });
       emitEvent({
         type: 'ForwardRunRequested',
         target: targetCheck,
@@ -958,6 +1097,13 @@ async function processOnFail(
 
         // Increment loop count and schedule forward run for the same check
         state.routingLoopCount++;
+        recordRoutingEvent({
+          checkId,
+          trigger: 'on_fail',
+          action: 'retry',
+          source: 'retry',
+          scope: sc || [],
+        });
         emitEvent({
           type: 'ForwardRunRequested',
           target: checkId,
@@ -1013,6 +1159,15 @@ async function processOnFail(
         return;
       }
       state.routingLoopCount++;
+      recordRoutingEvent({
+        checkId,
+        trigger: 'on_fail',
+        action: 'goto',
+        target: failTransTarget.to,
+        source: 'transitions',
+        scope,
+        gotoEvent: failTransTarget.goto_event,
+      });
       emitEvent({
         type: 'ForwardRunRequested',
         target: failTransTarget.to,
@@ -1058,6 +1213,15 @@ async function processOnFail(
     // Increment loop count
     state.routingLoopCount++;
 
+    recordRoutingEvent({
+      checkId,
+      trigger: 'on_fail',
+      action: 'goto',
+      target: gotoTarget,
+      source: onFail.goto_js ? 'goto_js' : 'goto',
+      scope,
+      gotoEvent: onFail.goto_event,
+    });
     // Enqueue forward run event with optional event override
     emitEvent({
       type: 'ForwardRunRequested',

@@ -410,7 +410,9 @@ export class WorkflowRegistry {
     // Build dependency map
     const dependencies: Record<string, string[]> = {};
     for (const [stepId, step] of Object.entries(workflow.steps || {})) {
-      dependencies[stepId] = step.depends_on || [];
+      // Normalize depends_on to array (supports string | string[])
+      const rawDeps = step.depends_on;
+      dependencies[stepId] = Array.isArray(rawDeps) ? rawDeps : rawDeps ? [rawDeps] : [];
     }
 
     try {

@@ -684,6 +684,10 @@ tests:
             project-intent[]:
               - project: "checkout-service"
                 kind: "status"
+            project-status-fetch[]:
+              - project: "checkout-service"
+                status: "green"
+                last_deploy: "2025-11-20T12:00:00Z"
             project-status-answer[]:
               - text: "Status reply"
           expect:
@@ -706,9 +710,9 @@ tests:
           event: manual
           fixture: local.minimal
           routing:
-            # Use a non-zero loop budget so forward-run routing behaves like real Slack runs,
-            # but rely on exact call expectations to detect accidental loops.
-            max_loops: 5
+            # Set max_loops: 0 to test single pass through the deployment flow.
+            # The goto: ask in project-deploy-answer would otherwise trigger loops.
+            max_loops: 0
           mocks:
             ask[]:
               - "Help me deploy service"

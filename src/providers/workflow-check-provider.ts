@@ -10,6 +10,7 @@ import { WorkflowExecutor } from '../workflow-executor';
 import { logger } from '../logger';
 import { WorkflowDefinition, WorkflowExecutionContext } from '../types/workflow';
 import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
+// eslint-disable-next-line no-restricted-imports -- needed for Liquid type
 import { Liquid } from 'liquidjs';
 
 /**
@@ -67,12 +68,65 @@ export class WorkflowCheckProvider extends CheckProvider {
   ): Promise<ReviewSummary> {
     const cfg = config as CheckProviderConfig & { workflow?: string; config?: string };
     const isConfigPathMode = !!cfg.config && !cfg.workflow;
+    const stepName = (config as any).checkName || cfg.workflow || cfg.config || 'workflow';
+
+    // Resolve workflow definition FIRST (needed for input preparation and validation)
+    let workflow: WorkflowDefinition | undefined;
+    let workflowId = cfg.workflow as string | undefined;
+
+    if (isConfigPathMode) {
+      // Use originalWorkingDirectory for config file resolution - workflow configs
+      // should be loaded from the original project path, not the sandbox
+      const parentCwd = ((context as any)?._parentContext?.originalWorkingDirectory ||
+        (context as any)?._parentContext?.workingDirectory ||
+        (context as any)?.originalWorkingDirectory ||
+        (context as any)?.workingDirectory ||
+        process.cwd()) as string;
+      workflow = await this.loadWorkflowFromConfigPath(String(cfg.config), parentCwd);
+      workflowId = workflow.id;
+      logger.info(`Executing workflow from config '${cfg.config}' as '${workflowId}'`);
+    } else {
+      workflowId = String(cfg.workflow);
+      workflow = this.registry.get(workflowId);
+      if (!workflow) {
+        throw new Error(`Workflow '${workflowId}' not found in registry`);
+      }
+      logger.info(`Executing workflow '${workflowId}'`);
+    }
+
+    // Prepare inputs - do this BEFORE mock check so we can validate inputs even when mocked
+    // This allows tests to assert that the correct inputs were passed to workflow steps
+    const inputs = await this.prepareInputs(workflow, config, prInfo, dependencyResults);
+
+    // Capture resolved workflow inputs for testing assertions (reuse prompt capture infrastructure)
+    // This allows using `prompts` assertions with `provider: 'workflow'` to verify inputs
+    try {
+      // Serialize inputs to capture for assertions - specifically the context field
+      // which contains the rendered template with dependency outputs
+      const inputsCapture = Object.entries(inputs)
+        .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
+        .join('\n\n');
+      (context as any)?.hooks?.onPromptCaptured?.({
+        step: String(stepName),
+        provider: 'workflow',
+        prompt: inputsCapture,
+      });
+    } catch {
+      // Ignore capture errors - this is only for testing
+    }
+
+    // Validate inputs
+    const validation = this.registry.validateInputs(workflow, inputs);
+    if (!validation.valid) {
+      const errors = validation.errors?.map(e => `${e.path}: ${e.message}`).join(', ');
+      throw new Error(`Invalid workflow inputs: ${errors}`);
+    }
 
     // Test harness support: allow mocking workflow checks as a black box.
     // If a mock is provided for this step, short-circuit nested execution and
     // return a ReviewSummary with optional output field.
+    // NOTE: This happens AFTER input preparation/validation so tests can assert inputs are correct
     try {
-      const stepName = (config as any).checkName || cfg.workflow || cfg.config || 'workflow';
       // test-runner passes hooks on execution context
       const mock = (context as any)?.hooks?.mockForStep?.(String(stepName));
       if (mock !== undefined) {
@@ -88,36 +142,6 @@ export class WorkflowCheckProvider extends CheckProvider {
         return summary;
       }
     } catch {}
-
-    // Resolve workflow definition
-    let workflow: WorkflowDefinition | undefined;
-    let workflowId = cfg.workflow as string | undefined;
-
-    if (isConfigPathMode) {
-      const parentCwd = ((context as any)?._parentContext?.workingDirectory ||
-        (context as any)?.workingDirectory ||
-        process.cwd()) as string;
-      workflow = await this.loadWorkflowFromConfigPath(String(cfg.config), parentCwd);
-      workflowId = workflow.id;
-      logger.info(`Executing workflow from config '${cfg.config}' as '${workflowId}'`);
-    } else {
-      workflowId = String(cfg.workflow);
-      workflow = this.registry.get(workflowId);
-      if (!workflow) {
-        throw new Error(`Workflow '${workflowId}' not found in registry`);
-      }
-      logger.info(`Executing workflow '${workflowId}'`);
-    }
-
-    // Prepare inputs
-    const inputs = await this.prepareInputs(workflow, config, prInfo, dependencyResults);
-
-    // Validate inputs
-    const validation = this.registry.validateInputs(workflow, inputs);
-    if (!validation.valid) {
-      const errors = validation.errors?.map(e => `${e.path}: ${e.message}`).join(', ');
-      throw new Error(`Invalid workflow inputs: ${errors}`);
-    }
 
     // Apply overrides to workflow steps if specified
     const modifiedWorkflow = this.applyOverrides(workflow, config);
@@ -211,6 +235,95 @@ export class WorkflowCheckProvider extends CheckProvider {
       }
     }
 
+    // Extract eventContext for slack/conversation
+    const eventContext = config.eventContext || {};
+
+    // Debug logging for conversation context
+    logger.debug(`[WorkflowProvider] prepareInputs for ${workflow.id}`);
+    logger.debug(
+      `[WorkflowProvider] eventContext keys: ${Object.keys(eventContext).join(', ') || 'none'}`
+    );
+    logger.debug(
+      `[WorkflowProvider] eventContext.slack: ${eventContext.slack ? 'present' : 'absent'}`
+    );
+    logger.debug(
+      `[WorkflowProvider] eventContext.conversation: ${(eventContext as any).conversation ? 'present' : 'absent'}`
+    );
+
+    // Extract slack context (if provided via eventContext.slack)
+    const slack = (() => {
+      try {
+        const anyCtx = eventContext as any;
+        const slackCtx = anyCtx?.slack;
+        if (slackCtx && typeof slackCtx === 'object') return slackCtx;
+      } catch {
+        // ignore
+      }
+      return undefined;
+    })();
+
+    // Extract unified conversation context across transports (Slack & GitHub)
+    const conversation = (() => {
+      try {
+        const anyCtx = eventContext as any;
+        if (anyCtx?.slack?.conversation) return anyCtx.slack.conversation;
+        if (anyCtx?.github?.conversation) return anyCtx.github.conversation;
+        if (anyCtx?.conversation) return anyCtx.conversation;
+      } catch {
+        // ignore
+      }
+      return undefined;
+    })();
+
+    // Debug logging for extracted context
+    logger.debug(`[WorkflowProvider] slack extracted: ${slack ? 'present' : 'absent'}`);
+    logger.debug(
+      `[WorkflowProvider] conversation extracted: ${conversation ? 'present' : 'absent'}`
+    );
+    if (conversation) {
+      logger.debug(
+        `[WorkflowProvider] conversation.messages count: ${Array.isArray((conversation as any).messages) ? (conversation as any).messages.length : 0}`
+      );
+    }
+
+    // Extract output history from config (passed via __outputHistory)
+    const outputHistory = (config as any).__outputHistory as Map<string, unknown[]> | undefined;
+    const outputs_history: Record<string, unknown[]> = {};
+    if (outputHistory) {
+      for (const [k, v] of outputHistory.entries()) {
+        outputs_history[k] = v;
+      }
+    }
+
+    // Build template context with all available data
+    // Extract .output from each dependency result so that outputs['step-name'].field works naturally
+    // (not outputs['step-name'].output.field)
+    const outputsMap: Record<string, unknown> = {};
+    logger.debug(
+      `[WorkflowProvider] dependencyResults: ${dependencyResults ? dependencyResults.size : 'undefined'} entries`
+    );
+    if (dependencyResults) {
+      for (const [key, result] of dependencyResults.entries()) {
+        // Extract the output property, or use the whole result if output is undefined
+        const extracted = (result as any).output ?? result;
+        outputsMap[key] = extracted;
+        // Debug: log what we extracted for each dependency
+        const extractedKeys =
+          extracted && typeof extracted === 'object'
+            ? Object.keys(extracted).join(', ')
+            : 'not-object';
+        logger.debug(`[WorkflowProvider] outputs['${key}']: keys=[${extractedKeys}]`);
+      }
+    }
+    const templateContext = {
+      pr: prInfo,
+      outputs: outputsMap,
+      env: process.env,
+      slack,
+      conversation,
+      outputs_history,
+    };
+
     // Apply user-provided inputs (args)
     const userInputs = config.args || config.workflow_inputs; // Support both for compatibility
     if (userInputs) {
@@ -219,11 +332,14 @@ export class WorkflowCheckProvider extends CheckProvider {
         if (typeof value === 'string') {
           // Check if it's a Liquid template
           if (value.includes('{{') || value.includes('{%')) {
-            inputs[key] = await this.liquid.parseAndRender(value, {
-              pr: prInfo,
-              outputs: dependencyResults ? Object.fromEntries(dependencyResults) : {},
-              env: process.env,
-            });
+            inputs[key] = await this.liquid.parseAndRender(value, templateContext);
+            // Debug: log rendered template value for important inputs
+            if (key === 'text' || key === 'question' || key === 'context') {
+              const rendered = String(inputs[key]);
+              logger.info(
+                `[WorkflowProvider] Rendered '${key}' input (${rendered.length} chars): ${rendered.substring(0, 500)}${rendered.length > 500 ? '...' : ''}`
+              );
+            }
           } else {
             inputs[key] = value;
           }
@@ -231,16 +347,10 @@ export class WorkflowCheckProvider extends CheckProvider {
           // JavaScript expression
           const exprValue = value as { expression: string };
           const sandbox = createSecureSandbox();
-          inputs[key] = compileAndRun(
-            sandbox,
-            exprValue.expression,
-            {
-              pr: prInfo,
-              outputs: dependencyResults ? Object.fromEntries(dependencyResults) : {},
-              env: process.env,
-            },
-            { injectLog: true, logPrefix: `workflow.input.${key}` }
-          );
+          inputs[key] = compileAndRun(sandbox, exprValue.expression, templateContext, {
+            injectLog: true,
+            logPrefix: `workflow.input.${key}`,
+          });
         } else {
           inputs[key] = value;
         }
@@ -367,6 +477,22 @@ export class WorkflowCheckProvider extends CheckProvider {
     try {
       await childMemory.initialize();
     } catch {}
+    // Enhanced debug logging for workspace propagation diagnosis
+    const parentWorkspace = parentContext?.workspace;
+    logger.info(`[WorkflowProvider] Workspace propagation for nested workflow '${workflow.id}':`);
+    logger.info(`[WorkflowProvider]   parentContext exists: ${!!parentContext}`);
+    logger.info(`[WorkflowProvider]   parentContext.workspace exists: ${!!parentWorkspace}`);
+    if (parentWorkspace) {
+      logger.info(
+        `[WorkflowProvider]   parentWorkspace.isEnabled(): ${parentWorkspace.isEnabled?.() ?? 'N/A'}`
+      );
+      const projectCount = parentWorkspace.listProjects?.()?.length ?? 'N/A';
+      logger.info(`[WorkflowProvider]   parentWorkspace project count: ${projectCount}`);
+    } else {
+      logger.warn(
+        `[WorkflowProvider]   NO WORKSPACE from parent - nested checkouts won't be added to workspace!`
+      );
+    }
 
     const childContext = {
       mode: 'state-machine' as const,
@@ -374,7 +500,16 @@ export class WorkflowCheckProvider extends CheckProvider {
       checks: checksMetadata,
       journal: childJournal,
       memory: childMemory,
+      // For nested workflows we continue to execute inside the same logical
+      // working directory as the parent run. When workspace isolation is
+      // enabled on the parent engine, its WorkspaceManager is also propagated
+      // so that nested checks (AI, git-checkout, etc.) see the same isolated
+      // workspace and project symlinks instead of falling back to the Visor
+      // repository root.
       workingDirectory: parentContext?.workingDirectory || process.cwd(),
+      originalWorkingDirectory:
+        parentContext?.originalWorkingDirectory || parentContext?.workingDirectory || process.cwd(),
+      workspace: parentWorkspace,
       // Always use a fresh session for nested workflows to isolate history
       sessionId: uuidv4(),
       event: parentContext?.event || prInfo.eventType,
@@ -500,6 +635,12 @@ export class WorkflowCheckProvider extends CheckProvider {
       }
     } catch {}
 
+    // Create outputs map that directly exposes .output values (not wrapped in { output, issues })
+    // This makes {{ outputs['check-name'] }} work naturally without needing .output
+    const outputsMap = Object.fromEntries(
+      Object.entries(flat).map(([id, result]) => [id, (result as any).output])
+    );
+
     for (const output of workflow.outputs) {
       if (output.value_js) {
         // JavaScript expression
@@ -508,10 +649,9 @@ export class WorkflowCheckProvider extends CheckProvider {
           output.value_js,
           {
             inputs,
-            steps: Object.fromEntries(
-              Object.entries(flat).map(([id, result]) => [id, (result as any).output])
-            ),
-            outputs: flat,
+            outputs: outputsMap,
+            // Keep 'steps' as alias for backwards compatibility
+            steps: outputsMap,
             pr: prInfo,
           },
           { injectLog: true, logPrefix: `workflow.output.${output.name}` }
@@ -520,10 +660,9 @@ export class WorkflowCheckProvider extends CheckProvider {
         // Liquid template
         outputs[output.name] = await this.liquid.parseAndRender(output.value, {
           inputs,
-          steps: Object.fromEntries(
-            Object.entries(flat).map(([id, result]) => [id, (result as any).output])
-          ),
-          outputs: flat,
+          outputs: outputsMap,
+          // Keep 'steps' as alias for backwards compatibility
+          steps: outputsMap,
           pr: prInfo,
         });
       }

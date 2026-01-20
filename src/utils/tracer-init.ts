@@ -76,6 +76,21 @@ export async function initializeTracer(
 
       const tracer = new SimpleAppTracer(telemetry, sessionId);
 
+      // WORKAROUND: Add missing recordEvent method for completionPrompt feature (probe #321)
+      // SimpleAppTracer doesn't have recordEvent but completionPrompt requires it
+      if (typeof (tracer as any).recordEvent !== 'function') {
+        (tracer as any).recordEvent = (name: string, attributes?: Record<string, unknown>) => {
+          // Log completion events to telemetry for debugging
+          try {
+            if ((telemetry as any).record) {
+              (telemetry as any).record({ event: name, ...attributes });
+            }
+          } catch {
+            // Best-effort only
+          }
+        };
+      }
+
       console.error(`📊 Simple tracing enabled, will save to: ${traceFilePath}`);
 
       // If in GitHub Actions, log the path for artifact upload

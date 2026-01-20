@@ -53,7 +53,13 @@ export function projectWorkflowToGraph(
       triggers: step.on || workflow.on || [],
       group: step.group,
       providerType: step.type || 'ai',
-      dependencies: (step.depends_on || []).map(dep => dep),
+      // Normalize depends_on to array (supports string | string[])
+      dependencies: (Array.isArray(step.depends_on)
+        ? step.depends_on
+        : step.depends_on
+          ? [step.depends_on]
+          : []
+      ).map((dep: string) => dep),
     };
   }
 

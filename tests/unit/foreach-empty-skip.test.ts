@@ -90,11 +90,13 @@ describe('forEach Empty Array Skip', () => {
     );
     expect(processStats?.totalRuns).toBe(0);
 
-    // notify-ticket should also NOT run because process-ticket returned empty
+    // notify-ticket SHOULD run even though process-ticket had 0 runs from empty forEach
+    // This is the expected behavior: downstream steps that depend on forEach children
+    // should still execute (with empty/null inputs) to handle the "no items" case
     const notifyStats = result.executionStatistics?.checks!.find(
       c => c.checkName === 'notify-ticket'
     );
-    expect(notifyStats?.totalRuns).toBe(0);
+    expect(notifyStats?.totalRuns).toBe(1);
   });
 
   it('should handle empty array with transform_js', async () => {

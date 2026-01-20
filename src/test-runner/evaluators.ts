@@ -252,6 +252,69 @@ export function evaluatePrompts(
   }
 }
 
+/**
+ * Evaluate workflow_output assertions against computed workflow outputs.
+ * Similar to evaluateOutputs but tests workflow-level outputs (defined in outputs: section)
+ * rather than step outputs.
+ */
+export function evaluateWorkflowOutputs(
+  errors: string[],
+  expect: ExpectBlock,
+  workflowOutputs: Record<string, unknown> | undefined
+): void {
+  const expectations = (expect as any).workflow_output;
+  if (!Array.isArray(expectations) || expectations.length === 0) return;
+  if (!workflowOutputs) {
+    errors.push('workflow_output assertions present but no workflow outputs computed');
+    return;
+  }
+
+  for (const o of expectations) {
+    const path = o.path as string;
+    if (!path) {
+      errors.push('workflow_output assertion missing path');
+      continue;
+    }
+    const v = deepGet(workflowOutputs, path);
+    if (o.equals !== undefined && !deepEqual(v, o.equals)) {
+      errors.push(
+        `Workflow output ${path} expected ${JSON.stringify(o.equals)} but got ${JSON.stringify(v)}`
+      );
+    }
+    if (o.equalsDeep !== undefined && !deepEqual(v, o.equalsDeep)) {
+      errors.push(`Workflow output ${path} deepEquals failed`);
+    }
+    if (o.matches && !parseRegex(o.matches).test(String(v))) {
+      errors.push(`Workflow output ${path} does not match ${o.matches}`);
+    }
+    if (o.contains) {
+      const contents = Array.isArray(o.contains) ? o.contains : [o.contains];
+      const strV = String(v);
+      for (const c of contents) {
+        if (!strV.includes(String(c))) {
+          errors.push(`Workflow output ${path} expected to contain "${c}"`);
+        }
+      }
+    }
+    if (o.not_contains) {
+      const contents = Array.isArray(o.not_contains) ? o.not_contains : [o.not_contains];
+      const strV = String(v);
+      for (const c of contents) {
+        if (strV.includes(String(c))) {
+          errors.push(`Workflow output ${path} should not contain "${c}"`);
+        }
+      }
+    }
+    if (o.contains_unordered) {
+      if (!Array.isArray(v)) {
+        errors.push(`Workflow output ${path} not an array for contains_unordered`);
+      } else if (!containsUnordered(v as unknown[], o.contains_unordered)) {
+        errors.push(`Workflow output ${path} missing elements (unordered)`);
+      }
+    }
+  }
+}
+
 export function evaluateOutputs(
   errors: string[],
   expect: ExpectBlock,
@@ -332,7 +395,8 @@ export function evaluateCase(
   strict: boolean,
   promptsByStep: Record<string, string[]>,
   _results: GroupedResults,
-  outputHistory: Record<string, unknown[]>
+  outputHistory: Record<string, unknown[]>,
+  workflowOutputs?: Record<string, unknown>
 ): string[] {
   const errors: string[] = [];
   const executed = buildExecutedMap(stats);
@@ -350,5 +414,6 @@ export function evaluateCase(
   evaluateNoCalls(errors, expect, executed, recorder, slackRecorder);
   evaluatePrompts(errors, expect, promptsByStep);
   evaluateOutputs(errors, expect, outputHistory);
+  evaluateWorkflowOutputs(errors, expect, workflowOutputs);
   return errors;
 }

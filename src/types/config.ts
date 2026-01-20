@@ -122,6 +122,9 @@ export interface FailureConditionContext {
   /** Environment variables */
   env?: Record<string, string>;
 
+  /** Workflow inputs - values passed to the workflow */
+  inputs?: Record<string, unknown>;
+
   /** Memory accessor for accessing memory store in expressions */
   memory?: {
     get: (key: string, namespace?: string) => unknown;
@@ -356,6 +359,8 @@ export interface AIProviderConfig {
   allowBash?: boolean;
   /** Advanced bash command execution configuration */
   bashConfig?: BashConfig;
+  /** Completion prompt for post-completion validation/review (runs after attempt_completion) */
+  completion_prompt?: string;
 }
 
 /**
@@ -461,8 +466,8 @@ export interface CheckConfig {
   env?: EnvConfig;
   /** Timeout in seconds for command execution (default: 60) */
   timeout?: number;
-  /** Check IDs that this check depends on (optional) */
-  depends_on?: string[];
+  /** Check IDs that this check depends on (optional). Accepts single string or array. */
+  depends_on?: string | string[];
   /** Group name for comment separation (e.g., "code-review", "pr-overview") - optional */
   group?: string;
   /** Schema type for template rendering (e.g., "code-review", "markdown") or inline JSON schema object - optional */
@@ -621,6 +626,46 @@ export interface CheckConfig {
   overrides?: Record<string, Partial<CheckConfig>>;
   /** Map workflow outputs to check outputs */
   output_mapping?: Record<string, string>;
+
+  // Workflow aliases for backward compatibility
+  /** Alias for args - workflow inputs (backward compatibility) */
+  workflow_inputs?: Record<string, unknown>;
+  /** Config file path - alternative to workflow ID (loads a Visor config file as workflow) */
+  config?: string;
+  /** Alias for overrides - workflow step overrides (backward compatibility) */
+  workflow_overrides?: Record<string, Partial<CheckConfig>>;
+
+  /**
+   * Git-checkout provider specific options (optional, only used when type === 'git-checkout').
+   */
+  /** Git reference to checkout (branch, tag, commit SHA) - supports templates */
+  ref?: string;
+  /** Repository URL or owner/repo format (defaults to current repository) */
+  repository?: string;
+  /** GitHub token for private repositories (defaults to GITHUB_TOKEN env) */
+  token?: string;
+  /** Number of commits to fetch (0 for full history, default: 1) */
+  fetch_depth?: number;
+  /** Whether to fetch tags (default: false) */
+  fetch_tags?: boolean;
+  /** Checkout submodules: false, true, or 'recursive' */
+  submodules?: boolean | 'recursive';
+  /** Working directory for the checkout (defaults to temp directory) */
+  working_directory?: string;
+  /** Use git worktree for efficient parallel checkouts (default: true) */
+  use_worktree?: boolean;
+  /** Clean the working directory before checkout (default: true) */
+  clean?: boolean;
+  /** Sparse checkout paths - only checkout specific directories/files */
+  sparse_checkout?: string[];
+  /** Enable Git LFS (Large File Storage) */
+  lfs?: boolean;
+  /** Timeout in ms for cloning the bare repository (default: 300000 = 5 min) */
+  clone_timeout_ms?: number;
+  /** Clean up worktree on failure (default: true) */
+  cleanup_on_failure?: boolean;
+  /** Keep worktree after workflow completion (default: false) */
+  persist_worktree?: boolean;
 }
 
 /**
@@ -1038,6 +1083,36 @@ export interface CustomToolDefinition {
 }
 
 /**
+ * Workflow input definition for standalone reusable workflows
+ */
+export interface WorkflowInput {
+  /** Input parameter name */
+  name: string;
+  /** JSON Schema for the input */
+  schema?: Record<string, unknown>;
+  /** Whether this input is required */
+  required?: boolean;
+  /** Default value if not provided */
+  default?: unknown;
+  /** Human-readable description */
+  description?: string;
+}
+
+/**
+ * Workflow output definition for standalone reusable workflows
+ */
+export interface WorkflowOutput {
+  /** Output name */
+  name: string;
+  /** Human-readable description */
+  description?: string;
+  /** Value using Liquid template syntax (references step outputs) */
+  value?: string;
+  /** Value using JavaScript expression (alternative to value) */
+  value_js?: string;
+}
+
+/**
  * Main Visor configuration
  */
 export interface VisorConfig {
@@ -1051,12 +1126,16 @@ export interface VisorConfig {
   tools?: Record<string, CustomToolDefinition>;
   /** Import workflow definitions from external files or URLs */
   imports?: string[];
+  /** Workflow inputs (for standalone reusable workflows) */
+  inputs?: WorkflowInput[];
+  /** Workflow outputs (for standalone reusable workflows) */
+  outputs?: WorkflowOutput[];
   /** Step configurations (recommended) */
   steps?: Record<string, CheckConfig>;
   /** Check configurations (legacy, use 'steps' instead) - always populated after normalization */
   checks?: Record<string, CheckConfig>;
-  /** Output configuration */
-  output: OutputConfig;
+  /** Output configuration (optional - defaults provided) */
+  output?: OutputConfig;
   /** HTTP server configuration for receiving webhooks */
   http_server?: HttpServerConfig;
   /** Memory storage configuration */
@@ -1092,6 +1171,45 @@ export interface VisorConfig {
     /** Frontend-specific configuration */
     config?: unknown;
   }>;
+  /** Workspace isolation configuration for sandboxed execution */
+  workspace?: WorkspaceConfig;
+  /** Slack configuration */
+  slack?: SlackConfig;
+}
+
+/**
+ * Workspace isolation configuration
+ */
+export interface WorkspaceConfig {
+  /** Enable workspace isolation (default: true when config present) */
+  enabled?: boolean;
+  /** Base path for workspaces (default: /tmp/visor-workspaces) */
+  base_path?: string;
+  /** Clean up workspace on exit (default: true) */
+  cleanup_on_exit?: boolean;
+}
+
+/**
+ * Slack configuration
+ */
+export interface SlackConfig {
+  /** Slack API version */
+  version?: string;
+  /** Mention handling: 'all', 'direct', etc. */
+  mentions?: string;
+  /** Thread handling: 'required', 'optional', etc. */
+  threads?: string;
+  /** Show raw output in Slack responses */
+  show_raw_output?: boolean;
+  /**
+   * Append telemetry identifiers to Slack replies.
+   */
+  telemetry?: SlackTelemetryConfig;
+}
+
+export interface SlackTelemetryConfig {
+  /** Enable telemetry ID suffix in Slack messages */
+  enabled?: boolean;
 }
 
 /**

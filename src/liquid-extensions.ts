@@ -1,3 +1,4 @@
+// eslint-disable-next-line no-restricted-imports -- this is the extensions file that wraps liquidjs
 import { Liquid, TagToken, Context, TopLevelToken, Tag, Value, Emitter } from 'liquidjs';
 import { AsyncLocalStorage } from 'async_hooks';
 import fs from 'fs/promises';
@@ -124,6 +125,26 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
     }
   });
 
+  // Register base64 filter for encoding strings
+  // Usage: {{ "user:password" | base64 }}
+  liquid.registerFilter('base64', (value: unknown) => {
+    if (value == null) return '';
+    const str = String(value);
+    return Buffer.from(str).toString('base64');
+  });
+
+  // Register base64_decode filter for decoding base64 strings
+  // Usage: {{ encoded_value | base64_decode }}
+  liquid.registerFilter('base64_decode', (value: unknown) => {
+    if (value == null) return '';
+    const str = String(value);
+    try {
+      return Buffer.from(str, 'base64').toString('utf-8');
+    } catch {
+      return '[Error: Invalid base64 string]';
+    }
+  });
+
   // Sanitize a label to allowed characters only: [A-Za-z0-9:/]
   liquid.registerFilter('safe_label', (value: unknown) => sanitizeLabel(value));
 
@@ -135,6 +156,53 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
     if (value == null) return '';
     const s = String(value);
     return s.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t');
+  });
+
+  // JSON escape filter - escapes a string for use inside a JSON string value
+  // This escapes special characters like quotes, backslashes, and control characters
+  // Usage: "jql": "{{ myValue | json_escape }}"
+  liquid.registerFilter('json_escape', (value: unknown) => {
+    if (value == null) return '';
+    const s = String(value);
+    // Use JSON.stringify which handles all escaping, then strip the surrounding quotes
+    const jsonStr = JSON.stringify(s);
+    // Remove the first and last character (the quotes added by JSON.stringify)
+    return jsonStr.slice(1, -1);
+  });
+
+  // Shell escape filter - wraps value in single quotes with proper escaping
+  // Usage: {{ value | shell_escape }}
+  // Example: "hello'world" becomes "'hello'\''world'"
+  // This is POSIX-compliant and safe for arbitrary text including mermaid diagrams
+  liquid.registerFilter('shell_escape', (value: unknown) => {
+    if (value == null) return "''";
+    const s = String(value);
+    // Replace single quotes with: end quote, escaped quote, start quote
+    // Then wrap the entire thing in single quotes
+    return "'" + s.replace(/'/g, "'\\''") + "'";
+  });
+
+  // Alias for shell_escape
+  liquid.registerFilter('escape_shell', (value: unknown) => {
+    if (value == null) return "''";
+    const s = String(value);
+    return "'" + s.replace(/'/g, "'\\''") + "'";
+  });
+
+  // Shell escape for double quotes (less safe but sometimes needed)
+  // Usage: {{ value | shell_escape_double }}
+  // Escapes: $, `, \, ", and !
+  liquid.registerFilter('shell_escape_double', (value: unknown) => {
+    if (value == null) return '""';
+    const s = String(value);
+    // Escape characters that have special meaning inside double quotes
+    const escaped = s
+      .replace(/\\/g, '\\\\') // backslash first
+      .replace(/\$/g, '\\$') // dollar sign
+      .replace(/`/g, '\\`') // backticks
+      .replace(/"/g, '\\"') // double quotes
+      .replace(/!/g, '\\!'); // history expansion
+    return '"' + escaped + '"';
   });
 
   // Register author permission filters (from main)

@@ -66,6 +66,16 @@ describe('Slack Frontend summary message threading + update-in-place', () => {
       cfg.frontends.push({ name: 'slack', config: { summary: { enabled: true } } } as any);
     }
     const engine = new StateMachineExecutionEngine();
+    // Inject mock responses for AI checks via execution context hooks
+    (engine as any).setExecutionContext({
+      hooks: {
+        mockForStep: (stepName: string) => {
+          if (stepName === 'route-intent') return { intent: 'chat', topic: 'test' };
+          if (stepName === 'chat-answer') return { text: 'Mock AI response' };
+          return undefined;
+        },
+      },
+    });
     const runner = new SlackSocketRunner(engine, cfg, {
       appToken: 'xapp-test',
       endpoint: '/bots/slack/support',

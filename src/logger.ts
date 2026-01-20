@@ -4,6 +4,7 @@
  * - Supports levels: silent < error < warn < info < verbose < debug
  * - Routes logs to stderr to keep stdout clean for machine-readable output
  */
+import { context as otContext, trace } from './telemetry/lazy-otel';
 
 export type LogLevel = 'silent' | 'error' | 'warn' | 'info' | 'verbose' | 'debug';
 
@@ -79,16 +80,60 @@ class Logger {
     return true;
   }
 
+  private getTraceSuffix(msg: string): string {
+    if (!msg) return '';
+    if (msg.includes('trace_id=') || msg.includes('trace_id:')) return '';
+    try {
+      const span = trace.getSpan(otContext.active()) || trace.getActiveSpan();
+      const ctx = span?.spanContext?.();
+      if (!ctx?.traceId) return '';
+      return ` [trace_id=${ctx.traceId} span_id=${ctx.spanId}]`;
+    } catch {
+      return '';
+    }
+  }
+
   private write(msg: string, level?: LogLevel): void {
     // Always route to stderr to keep stdout clean for results
     try {
+      const suffix = this.getTraceSuffix(msg);
+      const decoratedMsg = suffix ? `${msg}${suffix}` : msg;
       if (this.showTimestamps) {
         const ts = new Date().toISOString();
         const lvl = level ? level : undefined;
-        const prefix = lvl ? `[${ts}] [${lvl}]` : `[${ts}]`;
-        process.stderr.write(`${prefix} ${msg}\n`);
+
+        let tsToken = `[${ts}]`;
+        let lvlToken = lvl ? `[${lvl}]` : '';
+
+        // Add simple ANSI colour when running in a TTY and not emitting
+        // JSON/SARIF. Colours are intentionally minimal and only applied
+        // to the prefix markers, not the full line.
+        if (this.isTTY && !this.isJsonLike) {
+          const reset = '\x1b[0m';
+          const dim = '\x1b[2m';
+          const colours: Record<LogLevel, string> = {
+            silent: '',
+            error: '\x1b[31m', // red
+            warn: '\x1b[33m', // yellow
+            info: '\x1b[36m', // cyan
+            verbose: '\x1b[35m', // magenta
+            debug: '\x1b[90m', // bright black / gray
+          };
+
+          tsToken = `${dim}${tsToken}${reset}`;
+
+          if (lvl) {
+            const colour = colours[lvl] || '';
+            if (colour) {
+              lvlToken = `${colour}${lvlToken}${reset}`;
+            }
+          }
+        }
+
+        const prefix = lvl ? `${tsToken} ${lvlToken}` : tsToken;
+        process.stderr.write(`${prefix} ${decoratedMsg}\n`);
       } else {
-        process.stderr.write(msg + '\n');
+        process.stderr.write(decoratedMsg + '\n');
       }
     } catch {
       // Ignore write errors

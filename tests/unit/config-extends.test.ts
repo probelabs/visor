@@ -564,7 +564,7 @@ describe('Config Extends Functionality', () => {
       expect(config.checks!.security).toBeDefined();
       expect(config.checks!.performance).toBeDefined();
       expect(config.checks!.custom).toBeDefined();
-      expect(config.output.pr_comment.format).toBe('json');
+      expect(config.output!.pr_comment.format).toBe('json');
     });
 
     it('should extend from default configuration', async () => {
@@ -1002,7 +1002,7 @@ describe('Config Extends Functionality', () => {
       expect(loaded.checks!.base).toBeDefined(); // From base
       expect(loaded.checks!.middle).toBeDefined(); // From middle
       expect(loaded.checks!.top).toBeDefined(); // From top
-      expect(loaded.output.pr_comment.format).toBe('json'); // From top
+      expect(loaded.output!.pr_comment.format).toBe('json'); // From top
     });
 
     it('should handle mixed local and remote extends', async () => {
@@ -1079,7 +1079,7 @@ describe('Config Extends Functionality', () => {
       expect(loaded.checks!.local).toBeDefined();
       expect(loaded.checks!.remote).toBeDefined();
       expect(loaded.checks!.child).toBeDefined();
-      expect(loaded.output.pr_comment.format).toBe('json');
+      expect(loaded.output!.pr_comment.format).toBe('json');
     });
 
     it('should handle extends with relative path resolution', async () => {
@@ -1593,9 +1593,9 @@ describe('Config Extends Functionality', () => {
       expect(config.checks!.performance).toBeDefined(); // Added in child
 
       // Verify output
-      expect(config.output.pr_comment.format).toBe('json'); // Overridden
-      expect(config.output.pr_comment.group_by).toBe('file'); // Overridden
-      expect(config.output.pr_comment.collapse).toBe(false); // Overridden
+      expect(config.output!.pr_comment.format).toBe('json'); // Overridden
+      expect(config.output!.pr_comment.group_by).toBe('file'); // Overridden
+      expect(config.output!.pr_comment.collapse).toBe(false); // Overridden
     });
 
     it('should handle configuration with disabled checks removal', async () => {
@@ -1814,7 +1814,7 @@ describe('Config Extends Functionality', () => {
       expect(loaded.checks!.root).toBeDefined(); // From root
       expect(loaded.checks!.level1).toBeDefined(); // From level1
       expect(loaded.checks!.level2).toBeDefined(); // From level2
-      expect(loaded.output.pr_comment.format).toBe('json'); // From level2
+      expect(loaded.output!.pr_comment.format).toBe('json'); // From level2
     });
 
     it('should handle mixed absolute and relative paths in extends array', async () => {
