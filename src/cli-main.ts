@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-// Load environment variables from .env file
-import 'dotenv/config';
+// Load environment variables from .env file (override existing to allow .env to take precedence)
+import * as dotenv from 'dotenv';
+dotenv.config({ override: true, quiet: true });
 
 import { CLI } from './cli';
 import { ConfigManager } from './config';

@@ -2,8 +2,9 @@
 // GitHub event objects have complex dynamic structures that are difficult to fully type
 // Using 'any' for these objects is acceptable as they come from external GitHub webhooks
 
-// Load environment variables from .env file
-import 'dotenv/config';
+// Load environment variables from .env file (override existing to allow .env to take precedence)
+import * as dotenv from 'dotenv';
+dotenv.config({ override: true, quiet: true });
 
 import { Octokit } from '@octokit/rest';
 import { createAppAuth } from '@octokit/auth-app';
