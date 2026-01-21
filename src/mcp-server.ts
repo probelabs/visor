@@ -89,53 +89,108 @@ export const RUN_WORKFLOW_DESCRIPTION =
   'Returns structured results with issues, suggestions, and analysis output.';
 
 /**
- * Resolve a workflow path from user input.
+ * Check if a resolved path is within a base directory (path traversal protection).
+ *
+ * @param resolvedPath - The fully resolved absolute path
+ * @param baseDir - The base directory to check against
+ * @returns true if resolvedPath is within baseDir
+ */
+function isPathWithinDirectory(resolvedPath: string, baseDir: string): boolean {
+  const normalizedResolved = path.normalize(resolvedPath);
+  const normalizedBase = path.normalize(baseDir);
+  // Ensure base ends with separator for proper prefix matching
+  const baseWithSep = normalizedBase.endsWith(path.sep)
+    ? normalizedBase
+    : normalizedBase + path.sep;
+  return normalizedResolved === normalizedBase || normalizedResolved.startsWith(baseWithSep);
+}
+
+/**
+ * Resolve a workflow path from user input with path traversal protection.
  *
  * Resolution order:
- * 1. Absolute path - use directly
- * 2. Relative path with .yaml/.yml extension - resolve from cwd
- * 3. Default workflow name - look in bundled defaults
+ * 1. Default workflow name - look in bundled defaults (safest, checked first)
+ * 2. Relative path with .yaml/.yml extension - resolve from cwd (validated to stay within cwd)
+ * 3. Absolute path - only allowed if within cwd or bundled defaults
  *
  * @param workflow - Path to workflow YAML or default workflow name
  * @returns Resolved absolute path to the workflow file
- * @throws Error if workflow cannot be found
+ * @throws Error if workflow cannot be found or path traversal detected
  */
 export function resolveWorkflowPath(workflow: string): string {
-  // 1. Absolute path - use directly
-  if (path.isAbsolute(workflow)) {
-    if (!fs.existsSync(workflow)) {
-      throw new Error(`Workflow file not found: ${workflow}`);
+  const cwd = process.cwd();
+  const packagedDefaultsDir = path.resolve(__dirname, 'defaults');
+  const localDefaultsDir = path.resolve(cwd, 'defaults');
+
+  // 1. Default workflow name (no extension) - look in bundled defaults first (safest)
+  if (!workflow.endsWith('.yaml') && !workflow.endsWith('.yml') && !path.isAbsolute(workflow)) {
+    // Sanitize: only allow alphanumeric, hyphens, underscores for default names
+    if (!/^[a-zA-Z0-9_-]+$/.test(workflow)) {
+      throw new Error(
+        `Invalid workflow name "${workflow}". ` +
+          `Default workflow names can only contain letters, numbers, hyphens, and underscores.`
+      );
     }
-    return workflow;
+
+    const packaged = path.join(packagedDefaultsDir, `${workflow}.yaml`);
+    const localDev = path.join(localDefaultsDir, `${workflow}.yaml`);
+
+    if (fs.existsSync(packaged)) {
+      return packaged;
+    }
+    if (fs.existsSync(localDev)) {
+      return localDev;
+    }
+
+    const availableDefaults = DEFAULT_WORKFLOWS.join(', ');
+    throw new Error(
+      `Workflow "${workflow}" not found. ` +
+        `Available default workflows: ${availableDefaults}. ` +
+        `You can also provide a path to a custom workflow file (e.g., "./my-workflow.yaml").`
+    );
   }
 
-  // 2. Relative path with extension - resolve from cwd
-  if (workflow.endsWith('.yaml') || workflow.endsWith('.yml')) {
-    const resolved = path.resolve(process.cwd(), workflow);
+  // 2. Relative path with extension - resolve from cwd with traversal protection
+  if (!path.isAbsolute(workflow)) {
+    const resolved = path.resolve(cwd, workflow);
+
+    // Security: Ensure resolved path stays within cwd (prevent ../ traversal)
+    if (!isPathWithinDirectory(resolved, cwd)) {
+      throw new Error(
+        `Path traversal detected: "${workflow}" resolves outside the current directory. ` +
+          `Workflow paths must be within the project directory.`
+      );
+    }
+
     if (!fs.existsSync(resolved)) {
       throw new Error(`Workflow file not found: ${resolved}`);
     }
     return resolved;
   }
 
-  // 3. Default workflow name - look in bundled defaults
-  // First check dist/defaults (for installed package), then defaults/ (for development)
-  const packaged = path.resolve(__dirname, 'defaults', `${workflow}.yaml`);
-  const localDev = path.resolve(process.cwd(), 'defaults', `${workflow}.yaml`);
+  // 3. Absolute path - only allow if within cwd or bundled defaults directory
+  const normalizedWorkflow = path.normalize(workflow);
 
-  if (fs.existsSync(packaged)) {
-    return packaged;
-  }
-  if (fs.existsSync(localDev)) {
-    return localDev;
+  // Check if within current working directory
+  if (isPathWithinDirectory(normalizedWorkflow, cwd)) {
+    if (!fs.existsSync(normalizedWorkflow)) {
+      throw new Error(`Workflow file not found: ${normalizedWorkflow}`);
+    }
+    return normalizedWorkflow;
   }
 
-  // Provide helpful error message
-  const availableDefaults = DEFAULT_WORKFLOWS.join(', ');
+  // Check if within bundled defaults directory
+  if (isPathWithinDirectory(normalizedWorkflow, packagedDefaultsDir)) {
+    if (!fs.existsSync(normalizedWorkflow)) {
+      throw new Error(`Workflow file not found: ${normalizedWorkflow}`);
+    }
+    return normalizedWorkflow;
+  }
+
+  // Absolute path outside allowed directories - reject
   throw new Error(
-    `Workflow "${workflow}" not found. ` +
-      `Available default workflows: ${availableDefaults}. ` +
-      `You can also provide a path to a custom workflow file (e.g., "./my-workflow.yaml").`
+    `Access denied: "${workflow}" is outside the allowed directories. ` +
+      `Absolute paths must be within the current working directory or the bundled defaults.`
   );
 }
 
@@ -412,62 +467,71 @@ export async function executeFixedWorkflow(
  * @param options - Optional configuration for fixed workflow mode
  */
 export async function startMcpServer(options: McpServerOptions = {}): Promise<void> {
-  const server = new McpServer(
-    {
-      name: SERVER_INFO.name,
-      version: SERVER_INFO.version,
-    },
-    {
-      capabilities: {
-        tools: {},
-      },
+  try {
+    // If fixed workflow mode, validate config path at startup
+    let resolvedWorkflowPath: string | undefined;
+    if (options.configPath) {
+      resolvedWorkflowPath = resolveWorkflowPath(options.configPath);
     }
-  );
 
-  // Determine tool name and description
-  const toolName = options.toolName || 'run_workflow';
-  const toolDescription = options.toolDescription || RUN_WORKFLOW_DESCRIPTION;
-
-  // Check if we're in fixed workflow mode
-  if (options.configPath) {
-    // Resolve and validate the workflow path at startup
-    const resolvedWorkflowPath = resolveWorkflowPath(options.configPath);
-
-    // Register the tool without workflow parameter
-    server.tool(
-      toolName,
-      toolDescription,
+    const server = new McpServer(
       {
-        message: FixedWorkflowSchema.shape.message,
-        checks: FixedWorkflowSchema.shape.checks,
-        format: FixedWorkflowSchema.shape.format,
+        name: SERVER_INFO.name,
+        version: SERVER_INFO.version,
       },
-      async args => {
-        return executeFixedWorkflow(args as FixedWorkflowArgs, resolvedWorkflowPath);
+      {
+        capabilities: {
+          tools: {},
+        },
       }
     );
 
-    console.error(`Visor MCP server started with fixed workflow: ${resolvedWorkflowPath}`);
-  } else {
-    // Generic mode - workflow is a tool parameter
-    server.tool(
-      toolName,
-      toolDescription,
-      {
-        workflow: RunWorkflowSchema.shape.workflow,
-        message: RunWorkflowSchema.shape.message,
-        checks: RunWorkflowSchema.shape.checks,
-        format: RunWorkflowSchema.shape.format,
-      },
-      async args => {
-        return executeWorkflow(args as RunWorkflowArgs);
-      }
-    );
+    // Determine tool name and description
+    const toolName = options.toolName || 'run_workflow';
+    const toolDescription = options.toolDescription || RUN_WORKFLOW_DESCRIPTION;
 
-    console.error('Visor MCP server started');
+    // Check if we're in fixed workflow mode
+    if (resolvedWorkflowPath) {
+      // Register the tool without workflow parameter
+      server.tool(
+        toolName,
+        toolDescription,
+        {
+          message: FixedWorkflowSchema.shape.message,
+          checks: FixedWorkflowSchema.shape.checks,
+          format: FixedWorkflowSchema.shape.format,
+        },
+        async args => {
+          return executeFixedWorkflow(args as FixedWorkflowArgs, resolvedWorkflowPath!);
+        }
+      );
+
+      console.error(`Visor MCP server started with fixed workflow: ${resolvedWorkflowPath}`);
+    } else {
+      // Generic mode - workflow is a tool parameter
+      server.tool(
+        toolName,
+        toolDescription,
+        {
+          workflow: RunWorkflowSchema.shape.workflow,
+          message: RunWorkflowSchema.shape.message,
+          checks: RunWorkflowSchema.shape.checks,
+          format: RunWorkflowSchema.shape.format,
+        },
+        async args => {
+          return executeWorkflow(args as RunWorkflowArgs);
+        }
+      );
+
+      console.error('Visor MCP server started');
+    }
+
+    // Connect via stdio transport
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`Failed to start MCP server: ${errorMessage}`);
+    process.exit(1);
   }
-
-  // Connect via stdio transport
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
 }

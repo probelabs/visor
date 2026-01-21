@@ -125,7 +125,18 @@ describe('MCP Server', () => {
     });
 
     describe('absolute paths', () => {
-      it('should return absolute path if file exists', () => {
+      let cwdSpy: jest.SpiedFunction<typeof process.cwd>;
+
+      beforeEach(() => {
+        // Mock cwd to be in tempDir so absolute paths within tempDir are allowed
+        cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(tempDir);
+      });
+
+      afterEach(() => {
+        cwdSpy.mockRestore();
+      });
+
+      it('should return absolute path if file exists within cwd', () => {
         const testFile = path.join(tempDir, 'test-workflow.yaml');
         fs.writeFileSync(testFile, 'version: "1.0"');
 
@@ -140,79 +151,133 @@ describe('MCP Server', () => {
     });
 
     describe('relative paths with extension', () => {
+      let cwdSpy: jest.SpiedFunction<typeof process.cwd>;
+
+      beforeEach(() => {
+        cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(tempDir);
+      });
+
+      afterEach(() => {
+        cwdSpy.mockRestore();
+      });
+
       it('should resolve relative .yaml path from cwd', () => {
-        const originalCwd = process.cwd();
         const testFile = path.join(tempDir, 'relative-test.yaml');
         fs.writeFileSync(testFile, 'version: "1.0"');
 
-        try {
-          process.chdir(tempDir);
-          const result = resolveWorkflowPath('./relative-test.yaml');
-          expect(result).toBe(testFile);
-        } finally {
-          process.chdir(originalCwd);
-        }
+        const result = resolveWorkflowPath('./relative-test.yaml');
+        expect(result).toBe(testFile);
       });
 
       it('should resolve relative .yml path from cwd', () => {
-        const originalCwd = process.cwd();
         const testFile = path.join(tempDir, 'relative-test.yml');
         fs.writeFileSync(testFile, 'version: "1.0"');
 
-        try {
-          process.chdir(tempDir);
-          const result = resolveWorkflowPath('./relative-test.yml');
-          expect(result).toBe(testFile);
-        } finally {
-          process.chdir(originalCwd);
-        }
+        const result = resolveWorkflowPath('./relative-test.yml');
+        expect(result).toBe(testFile);
       });
 
       it('should throw error if relative path file does not exist', () => {
-        const originalCwd = process.cwd();
-
-        try {
-          process.chdir(tempDir);
-          expect(() => resolveWorkflowPath('./non-existent.yaml')).toThrow(
-            'Workflow file not found'
-          );
-        } finally {
-          process.chdir(originalCwd);
-        }
+        expect(() => resolveWorkflowPath('./non-existent.yaml')).toThrow('Workflow file not found');
       });
     });
 
     describe('default workflow names', () => {
       it('should find default workflow in defaults/ directory', () => {
         // This test relies on the actual defaults/ directory in the project
-        const originalCwd = process.cwd();
-        const projectRoot = path.resolve(__dirname, '../..');
-
-        try {
-          process.chdir(projectRoot);
-          // code-review.yaml should exist in defaults/
-          const result = resolveWorkflowPath('code-review');
-          expect(result).toContain('code-review.yaml');
-          expect(fs.existsSync(result)).toBe(true);
-        } finally {
-          process.chdir(originalCwd);
-        }
+        // code-review.yaml should exist in defaults/ (bundled or local)
+        const result = resolveWorkflowPath('code-review');
+        expect(result).toContain('code-review.yaml');
+        expect(fs.existsSync(result)).toBe(true);
       });
 
       it('should throw helpful error for unknown workflow name', () => {
-        const originalCwd = process.cwd();
+        expect(() => resolveWorkflowPath('unknown-workflow')).toThrow(
+          'Workflow "unknown-workflow" not found'
+        );
+        expect(() => resolveWorkflowPath('unknown-workflow')).toThrow(
+          'Available default workflows'
+        );
+      });
+
+      it('should reject workflow names with invalid characters', () => {
+        expect(() => resolveWorkflowPath('workflow/../../../etc/passwd')).toThrow(
+          'Invalid workflow name'
+        );
+        expect(() => resolveWorkflowPath('workflow/subdir')).toThrow('Invalid workflow name');
+        expect(() => resolveWorkflowPath('workflow name')).toThrow('Invalid workflow name');
+      });
+
+      it('should accept valid workflow name characters', () => {
+        // These should fail with "not found" not "invalid name"
+        expect(() => resolveWorkflowPath('valid-name')).toThrow('not found');
+        expect(() => resolveWorkflowPath('valid_name')).toThrow('not found');
+        expect(() => resolveWorkflowPath('ValidName123')).toThrow('not found');
+      });
+    });
+
+    describe('path traversal protection', () => {
+      let cwdSpy: jest.SpiedFunction<typeof process.cwd>;
+
+      beforeEach(() => {
+        cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(tempDir);
+      });
+
+      afterEach(() => {
+        cwdSpy.mockRestore();
+      });
+
+      it('should reject relative paths that traverse outside cwd', () => {
+        // Create a workflow file outside tempDir
+        const parentDir = path.dirname(tempDir);
+        const outsideFile = path.join(parentDir, 'outside-workflow.yaml');
+        fs.writeFileSync(outsideFile, 'version: "1.0"');
 
         try {
-          process.chdir(tempDir);
-          expect(() => resolveWorkflowPath('unknown-workflow')).toThrow(
-            'Workflow "unknown-workflow" not found'
-          );
-          expect(() => resolveWorkflowPath('unknown-workflow')).toThrow(
-            'Available default workflows'
+          expect(() => resolveWorkflowPath('../outside-workflow.yaml')).toThrow(
+            'Path traversal detected'
           );
         } finally {
-          process.chdir(originalCwd);
+          fs.unlinkSync(outsideFile);
         }
+      });
+
+      it('should reject absolute paths outside cwd', () => {
+        // Create a file in a completely different location
+        const otherDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-other-'));
+        const outsideFile = path.join(otherDir, 'workflow.yaml');
+        fs.writeFileSync(outsideFile, 'version: "1.0"');
+
+        try {
+          expect(() => resolveWorkflowPath(outsideFile)).toThrow('Access denied');
+        } finally {
+          fs.rmSync(otherDir, { recursive: true, force: true });
+        }
+      });
+
+      it('should allow absolute paths within cwd', () => {
+        const insideFile = path.join(tempDir, 'inside-workflow.yaml');
+        fs.writeFileSync(insideFile, 'version: "1.0"');
+
+        const result = resolveWorkflowPath(insideFile);
+        expect(result).toBe(insideFile);
+      });
+
+      it('should allow relative paths that stay within cwd', () => {
+        const subDir = path.join(tempDir, 'workflows');
+        fs.mkdirSync(subDir);
+        const insideFile = path.join(subDir, 'my-workflow.yaml');
+        fs.writeFileSync(insideFile, 'version: "1.0"');
+
+        const result = resolveWorkflowPath('./workflows/my-workflow.yaml');
+        expect(result).toBe(insideFile);
+      });
+
+      it('should reject complex traversal attempts', () => {
+        // Various traversal patterns
+        expect(() => resolveWorkflowPath('./valid/../../../etc/passwd.yaml')).toThrow(
+          'Path traversal detected'
+        );
       });
     });
   });
@@ -378,135 +443,82 @@ describe('MCP Server', () => {
     });
 
     it('should call runChecks with resolved workflow path', async () => {
-      const originalCwd = process.cwd();
-      const projectRoot = path.resolve(__dirname, '../..');
+      // Uses default workflow which doesn't need cwd mocking
+      mockRunChecks.mockResolvedValue({
+        repositoryInfo: { isGitRepository: true },
+        reviewSummary: { issues: [] },
+      } as any);
 
-      try {
-        process.chdir(projectRoot);
+      await executeWorkflow({ workflow: 'code-review' });
 
-        mockRunChecks.mockResolvedValue({
-          repositoryInfo: { isGitRepository: true },
-          reviewSummary: { issues: [] },
-        } as any);
-
-        await executeWorkflow({ workflow: 'code-review' });
-
-        expect(mockRunChecks).toHaveBeenCalledTimes(1);
-        const callArgs = mockRunChecks.mock.calls[0][0];
-        expect(callArgs?.configPath).toContain('code-review.yaml');
-      } finally {
-        process.chdir(originalCwd);
-      }
+      expect(mockRunChecks).toHaveBeenCalledTimes(1);
+      const callArgs = mockRunChecks.mock.calls[0][0];
+      expect(callArgs?.configPath).toContain('code-review.yaml');
     });
 
     it('should pass message to execution context', async () => {
-      const originalCwd = process.cwd();
-      const projectRoot = path.resolve(__dirname, '../..');
+      mockRunChecks.mockResolvedValue({} as any);
 
-      try {
-        process.chdir(projectRoot);
+      await executeWorkflow({
+        workflow: 'code-review',
+        message: 'Test human input',
+      });
 
-        mockRunChecks.mockResolvedValue({} as any);
-
-        await executeWorkflow({
-          workflow: 'code-review',
-          message: 'Test human input',
-        });
-
-        const callArgs = mockRunChecks.mock.calls[0][0];
-        expect(callArgs?.executionContext?.cliMessage).toBe('Test human input');
-      } finally {
-        process.chdir(originalCwd);
-      }
+      const callArgs = mockRunChecks.mock.calls[0][0];
+      expect(callArgs?.executionContext?.cliMessage).toBe('Test human input');
     });
 
     it('should pass checks array to runChecks', async () => {
-      const originalCwd = process.cwd();
-      const projectRoot = path.resolve(__dirname, '../..');
+      mockRunChecks.mockResolvedValue({} as any);
 
-      try {
-        process.chdir(projectRoot);
+      await executeWorkflow({
+        workflow: 'code-review',
+        checks: ['security', 'performance'],
+      });
 
-        mockRunChecks.mockResolvedValue({} as any);
-
-        await executeWorkflow({
-          workflow: 'code-review',
-          checks: ['security', 'performance'],
-        });
-
-        const callArgs = mockRunChecks.mock.calls[0][0];
-        expect(callArgs?.checks).toEqual(['security', 'performance']);
-      } finally {
-        process.chdir(originalCwd);
-      }
+      const callArgs = mockRunChecks.mock.calls[0][0];
+      expect(callArgs?.checks).toEqual(['security', 'performance']);
     });
 
     it('should pass format to output options', async () => {
-      const originalCwd = process.cwd();
-      const projectRoot = path.resolve(__dirname, '../..');
+      mockRunChecks.mockResolvedValue({} as any);
 
-      try {
-        process.chdir(projectRoot);
+      await executeWorkflow({
+        workflow: 'code-review',
+        format: 'markdown',
+      });
 
-        mockRunChecks.mockResolvedValue({} as any);
-
-        await executeWorkflow({
-          workflow: 'code-review',
-          format: 'markdown',
-        });
-
-        const callArgs = mockRunChecks.mock.calls[0][0];
-        expect(callArgs?.output?.format).toBe('markdown');
-      } finally {
-        process.chdir(originalCwd);
-      }
+      const callArgs = mockRunChecks.mock.calls[0][0];
+      expect(callArgs?.output?.format).toBe('markdown');
     });
 
     it('should return formatted content on success', async () => {
-      const originalCwd = process.cwd();
-      const projectRoot = path.resolve(__dirname, '../..');
+      const mockResult = {
+        check1: { issues: [{ severity: 'info', message: 'Test' }] },
+      };
+      mockRunChecks.mockResolvedValue(mockResult as any);
 
-      try {
-        process.chdir(projectRoot);
+      const result = await executeWorkflow({
+        workflow: 'code-review',
+        format: 'json',
+      });
 
-        const mockResult = {
-          check1: { issues: [{ severity: 'info', message: 'Test' }] },
-        };
-        mockRunChecks.mockResolvedValue(mockResult as any);
-
-        const result = await executeWorkflow({
-          workflow: 'code-review',
-          format: 'json',
-        });
-
-        expect(result.isError).toBeUndefined();
-        expect(result.content).toHaveLength(1);
-        expect(result.content[0].type).toBe('text');
-        expect(JSON.parse(result.content[0].text)).toEqual(mockResult);
-      } finally {
-        process.chdir(originalCwd);
-      }
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toHaveLength(1);
+      expect(result.content[0].type).toBe('text');
+      expect(JSON.parse(result.content[0].text)).toEqual(mockResult);
     });
 
     it('should return error content when runChecks fails', async () => {
-      const originalCwd = process.cwd();
-      const projectRoot = path.resolve(__dirname, '../..');
+      mockRunChecks.mockRejectedValue(new Error('Execution failed'));
 
-      try {
-        process.chdir(projectRoot);
+      const result = await executeWorkflow({
+        workflow: 'code-review',
+      });
 
-        mockRunChecks.mockRejectedValue(new Error('Execution failed'));
-
-        const result = await executeWorkflow({
-          workflow: 'code-review',
-        });
-
-        expect(result.isError).toBe(true);
-        expect(result.content[0].text).toContain('Error executing workflow');
-        expect(result.content[0].text).toContain('Execution failed');
-      } finally {
-        process.chdir(originalCwd);
-      }
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('Error executing workflow');
+      expect(result.content[0].text).toContain('Execution failed');
     });
 
     it('should return error content when workflow not found', async () => {
@@ -520,43 +532,25 @@ describe('MCP Server', () => {
     });
 
     it('should handle non-Error exceptions', async () => {
-      const originalCwd = process.cwd();
-      const projectRoot = path.resolve(__dirname, '../..');
+      mockRunChecks.mockRejectedValue('String error');
 
-      try {
-        process.chdir(projectRoot);
+      const result = await executeWorkflow({
+        workflow: 'code-review',
+      });
 
-        mockRunChecks.mockRejectedValue('String error');
-
-        const result = await executeWorkflow({
-          workflow: 'code-review',
-        });
-
-        expect(result.isError).toBe(true);
-        expect(result.content[0].text).toContain('String error');
-      } finally {
-        process.chdir(originalCwd);
-      }
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('String error');
     });
 
     it('should default format to json when not provided', async () => {
-      const originalCwd = process.cwd();
-      const projectRoot = path.resolve(__dirname, '../..');
+      mockRunChecks.mockResolvedValue({ test: true } as any);
 
-      try {
-        process.chdir(projectRoot);
+      const result = await executeWorkflow({
+        workflow: 'code-review',
+      });
 
-        mockRunChecks.mockResolvedValue({ test: true } as any);
-
-        const result = await executeWorkflow({
-          workflow: 'code-review',
-        });
-
-        // Should be valid JSON
-        expect(() => JSON.parse(result.content[0].text)).not.toThrow();
-      } finally {
-        process.chdir(originalCwd);
-      }
+      // Should be valid JSON
+      expect(() => JSON.parse(result.content[0].text)).not.toThrow();
     });
   });
 
@@ -589,130 +583,74 @@ describe('MCP Server', () => {
   });
 
   describe('executeFixedWorkflow', () => {
+    // Use a fixed path that exists in the project for testing
+    const projectRoot = path.resolve(__dirname, '../..');
+    const fixedWorkflowPath = path.join(projectRoot, 'defaults', 'code-review.yaml');
+
     beforeEach(() => {
       jest.clearAllMocks();
     });
 
     it('should call runChecks with the fixed workflow path', async () => {
-      const originalCwd = process.cwd();
-      const projectRoot = path.resolve(__dirname, '../..');
-      const fixedWorkflowPath = path.join(projectRoot, 'defaults', 'code-review.yaml');
+      mockRunChecks.mockResolvedValue({} as any);
 
-      try {
-        process.chdir(projectRoot);
+      await executeFixedWorkflow({}, fixedWorkflowPath);
 
-        mockRunChecks.mockResolvedValue({} as any);
-
-        await executeFixedWorkflow({}, fixedWorkflowPath);
-
-        expect(mockRunChecks).toHaveBeenCalledTimes(1);
-        const callArgs = mockRunChecks.mock.calls[0][0];
-        expect(callArgs?.configPath).toBe(fixedWorkflowPath);
-      } finally {
-        process.chdir(originalCwd);
-      }
+      expect(mockRunChecks).toHaveBeenCalledTimes(1);
+      const callArgs = mockRunChecks.mock.calls[0][0];
+      expect(callArgs?.configPath).toBe(fixedWorkflowPath);
     });
 
     it('should pass message to execution context', async () => {
-      const originalCwd = process.cwd();
-      const projectRoot = path.resolve(__dirname, '../..');
-      const fixedWorkflowPath = path.join(projectRoot, 'defaults', 'code-review.yaml');
+      mockRunChecks.mockResolvedValue({} as any);
 
-      try {
-        process.chdir(projectRoot);
+      await executeFixedWorkflow({ message: 'Fixed workflow message' }, fixedWorkflowPath);
 
-        mockRunChecks.mockResolvedValue({} as any);
-
-        await executeFixedWorkflow({ message: 'Fixed workflow message' }, fixedWorkflowPath);
-
-        const callArgs = mockRunChecks.mock.calls[0][0];
-        expect(callArgs?.executionContext?.cliMessage).toBe('Fixed workflow message');
-      } finally {
-        process.chdir(originalCwd);
-      }
+      const callArgs = mockRunChecks.mock.calls[0][0];
+      expect(callArgs?.executionContext?.cliMessage).toBe('Fixed workflow message');
     });
 
     it('should pass checks array to runChecks', async () => {
-      const originalCwd = process.cwd();
-      const projectRoot = path.resolve(__dirname, '../..');
-      const fixedWorkflowPath = path.join(projectRoot, 'defaults', 'code-review.yaml');
+      mockRunChecks.mockResolvedValue({} as any);
 
-      try {
-        process.chdir(projectRoot);
+      await executeFixedWorkflow({ checks: ['security'] }, fixedWorkflowPath);
 
-        mockRunChecks.mockResolvedValue({} as any);
-
-        await executeFixedWorkflow({ checks: ['security'] }, fixedWorkflowPath);
-
-        const callArgs = mockRunChecks.mock.calls[0][0];
-        expect(callArgs?.checks).toEqual(['security']);
-      } finally {
-        process.chdir(originalCwd);
-      }
+      const callArgs = mockRunChecks.mock.calls[0][0];
+      expect(callArgs?.checks).toEqual(['security']);
     });
 
     it('should return formatted content on success', async () => {
-      const originalCwd = process.cwd();
-      const projectRoot = path.resolve(__dirname, '../..');
-      const fixedWorkflowPath = path.join(projectRoot, 'defaults', 'code-review.yaml');
+      const mockResult = {
+        check1: { issues: [{ severity: 'warning', message: 'Test warning' }] },
+      };
+      mockRunChecks.mockResolvedValue(mockResult as any);
 
-      try {
-        process.chdir(projectRoot);
+      const result = await executeFixedWorkflow({ format: 'json' }, fixedWorkflowPath);
 
-        const mockResult = {
-          check1: { issues: [{ severity: 'warning', message: 'Test warning' }] },
-        };
-        mockRunChecks.mockResolvedValue(mockResult as any);
-
-        const result = await executeFixedWorkflow({ format: 'json' }, fixedWorkflowPath);
-
-        expect(result.isError).toBeUndefined();
-        expect(result.content).toHaveLength(1);
-        expect(JSON.parse(result.content[0].text)).toEqual(mockResult);
-      } finally {
-        process.chdir(originalCwd);
-      }
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toHaveLength(1);
+      expect(JSON.parse(result.content[0].text)).toEqual(mockResult);
     });
 
     it('should return error content when runChecks fails', async () => {
-      const originalCwd = process.cwd();
-      const projectRoot = path.resolve(__dirname, '../..');
-      const fixedWorkflowPath = path.join(projectRoot, 'defaults', 'code-review.yaml');
+      mockRunChecks.mockRejectedValue(new Error('Fixed workflow execution failed'));
 
-      try {
-        process.chdir(projectRoot);
+      const result = await executeFixedWorkflow({}, fixedWorkflowPath);
 
-        mockRunChecks.mockRejectedValue(new Error('Fixed workflow execution failed'));
-
-        const result = await executeFixedWorkflow({}, fixedWorkflowPath);
-
-        expect(result.isError).toBe(true);
-        expect(result.content[0].text).toContain('Error executing workflow');
-        expect(result.content[0].text).toContain('Fixed workflow execution failed');
-      } finally {
-        process.chdir(originalCwd);
-      }
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('Error executing workflow');
+      expect(result.content[0].text).toContain('Fixed workflow execution failed');
     });
 
     it('should use markdown format when specified', async () => {
-      const originalCwd = process.cwd();
-      const projectRoot = path.resolve(__dirname, '../..');
-      const fixedWorkflowPath = path.join(projectRoot, 'defaults', 'code-review.yaml');
+      mockRunChecks.mockResolvedValue({
+        'test-check': { issues: [{ severity: 'info', message: 'Test' }] },
+      } as any);
 
-      try {
-        process.chdir(projectRoot);
+      const result = await executeFixedWorkflow({ format: 'markdown' }, fixedWorkflowPath);
 
-        mockRunChecks.mockResolvedValue({
-          'test-check': { issues: [{ severity: 'info', message: 'Test' }] },
-        } as any);
-
-        const result = await executeFixedWorkflow({ format: 'markdown' }, fixedWorkflowPath);
-
-        expect(result.content[0].text).toContain('# Visor Workflow Results');
-        expect(result.content[0].text).toContain('## test-check');
-      } finally {
-        process.chdir(originalCwd);
-      }
+      expect(result.content[0].text).toContain('# Visor Workflow Results');
+      expect(result.content[0].text).toContain('## test-check');
     });
   });
 });
