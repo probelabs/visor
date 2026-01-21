@@ -541,6 +541,25 @@ export async function main(): Promise<void> {
       await handleValidateCommand(filteredArgv, configManager);
       return;
     }
+    // Check for mcp-server subcommand
+    if (filteredArgv.length > 2 && filteredArgv[2] === 'mcp-server') {
+      // Parse MCP server specific arguments
+      const mcpArgs = filteredArgv.slice(3);
+      const getArg = (name: string): string | undefined => {
+        const i = mcpArgs.indexOf(name);
+        return i >= 0 && i + 1 < mcpArgs.length ? mcpArgs[i + 1] : undefined;
+      };
+
+      const mcpOptions: import('./mcp-server').McpServerOptions = {
+        configPath: getArg('--config'),
+        toolName: getArg('--mcp-tool-name'),
+        toolDescription: getArg('--mcp-tool-description'),
+      };
+
+      const { startMcpServer } = await import('./mcp-server');
+      await startMcpServer(mcpOptions);
+      return;
+    }
     // Check for test subcommand
     if (filteredArgv.length > 2 && filteredArgv[2] === 'test') {
       await handleTestCommand(filteredArgv);
