@@ -320,14 +320,13 @@ export class WorktreeManager {
     if (fs.existsSync(worktreePath)) {
       logger.debug(`Worktree already exists: ${worktreePath}`);
 
-      if (options.clean) {
-        logger.debug(`Cleaning existing worktree`);
-        await this.cleanWorktree(worktreePath);
-      }
-
       // Load existing metadata
       const metadata = await this.loadMetadata(worktreePath);
       if (metadata) {
+        if (options.clean) {
+          logger.debug(`Cleaning existing worktree`);
+          await this.cleanWorktree(worktreePath);
+        }
         this.activeWorktrees.set(worktreeId, metadata);
         return {
           id: worktreeId,
@@ -337,6 +336,11 @@ export class WorktreeManager {
           metadata,
           locked: false,
         };
+      } else {
+        // Directory exists but is not a valid worktree (no metadata)
+        // Remove it so we can create a fresh worktree
+        logger.info(`Removing stale directory (no metadata): ${worktreePath}`);
+        await fsp.rm(worktreePath, { recursive: true, force: true });
       }
     }
 
@@ -346,6 +350,11 @@ export class WorktreeManager {
     // with "branch X is already checked out".
     await this.fetchRef(bareRepoPath, ref);
     const commit = await this.getCommitShaForRef(bareRepoPath, ref);
+
+    // Prune stale worktree entries before creating a new one.
+    // This handles the case where a worktree directory was manually deleted
+    // but git still has it registered in its metadata.
+    await this.pruneWorktrees(bareRepoPath);
 
     // Create worktree in detached HEAD state at the resolved commit
     logger.info(`Creating worktree for ${repository}@${ref} (${commit})`);
@@ -388,6 +397,23 @@ export class WorktreeManager {
       metadata,
       locked: false,
     };
+  }
+
+  /**
+   * Prune stale worktree entries from a bare repository.
+   * This removes entries for worktrees whose directories no longer exist.
+   */
+  private async pruneWorktrees(bareRepoPath: string): Promise<void> {
+    logger.debug(`Pruning stale worktrees for ${bareRepoPath}`);
+    const pruneCmd = `git -C ${this.escapeShellArg(bareRepoPath)} worktree prune`;
+    const result = await this.executeGitCommand(pruneCmd, { timeout: 10000 });
+
+    if (result.exitCode !== 0) {
+      logger.warn(`Failed to prune worktrees: ${result.stderr}`);
+      // Don't throw - we can try to continue anyway
+    } else {
+      logger.debug(`Successfully pruned stale worktrees`);
+    }
   }
 
   /**

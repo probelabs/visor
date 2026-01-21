@@ -992,6 +992,7 @@ async function processOnFail(
             target: targetCheck,
             scope: itemScope,
             origin: 'run',
+            sourceCheck: checkId, // The failed check that triggered on_fail.run
           });
         }
       } else {
@@ -1010,6 +1011,7 @@ async function processOnFail(
           target: targetCheck,
           scope,
           origin: 'run',
+          sourceCheck: checkId, // The failed check that triggered on_fail.run
         });
       }
     }
@@ -1061,6 +1063,7 @@ async function processOnFail(
         target: targetCheck,
         scope,
         origin: 'run_js',
+        sourceCheck: checkId, // The failed check that triggered on_fail.run_js
       });
     }
   }

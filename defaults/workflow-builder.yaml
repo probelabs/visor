@@ -1,0 +1,601 @@
+version: "1.0"
+
+# Meta-workflow for building and editing Visor workflows through AI-powered generation
+# Uses an AI router to interpret user intent and determine create vs edit mode.
+#
+# Flow:
+# 1. User describes what they want (natural language)
+# 2. AI router interprets intent, finds existing files if editing
+# 3. Claude CLI generates/edits the workflow (with optional MCP tools)
+# 4. Validation → Lint → Test → Review loop with auto-fix
+#
+# Uses Claude CLI directly via command type (no SDK required).
+#
+# MCP Server Support:
+# Pass mcp_config input to enable MCP tools for Claude (e.g., Probe Agent for codebase exploration)
+# Example: --input mcp_config='{"mcpServers":{"probe":{"command":"npx","args":["@anthropic/probe-agent"]}}}'
+
+id: workflow-builder
+name: Workflow Builder
+description: AI-powered Visor workflow generator and editor with integrated validation
+
+inputs:
+  - name: mcp_config
+    description: Optional MCP server configuration JSON for Claude CLI
+    required: false
+    schema:
+      type: string
+
+routing:
+  max_loops: 10
+
+outputs:
+  - name: workflow_path
+    description: Path to the generated/edited workflow file
+    value: "{{ outputs['interpret-request'].workflow_path }}"
+
+  - name: success
+    description: Whether the workflow was successfully generated/edited
+    value_js: |
+      const review = outputs['review-workflow'];
+      return review && !(review.issues?.some(i =>
+        i.severity === 'critical' || i.severity === 'error'
+      ));
+
+steps:
+  # 1. Get requirements from user
+  get-requirements:
+    type: human-input
+    group: input
+    prompt: |
+      What would you like to do?
+
+      Examples:
+      - "Create a workflow that validates PR titles follow conventional commits"
+      - "Edit defaults/code-review.yaml to add a security check step"
+      - "Add tests to my-workflow.yaml"
+      - "Fix the routing in defaults/task-refinement.yaml"
+
+      Describe your request:
+
+    multiline: true
+    allow_empty: false
+
+  # 2. AI interprets the request and determines mode
+  interpret-request:
+    type: command
+    group: input
+    criticality: internal
+    depends_on: [get-requirements]
+
+    assume:
+      - "outputs['get-requirements']?.text != null"
+
+    guarantee: "output && output.mode && output.workflow_path && output.requirements"
+
+    exec: |
+      cat << 'PROMPT_EOF' | claude -p --output-format json
+      Analyze this user request and determine if they want to CREATE a new workflow
+      or EDIT an existing one.
+
+      User request:
+      {{ outputs['get-requirements'].text }}
+
+      Instructions:
+      1. If the user mentions a specific file path, they want to EDIT that file
+      2. If they say "create", "new", "build" without a file path, they want to CREATE
+      3. If they reference an existing workflow by name (e.g., "code-review workflow"),
+         try to find it - check defaults/*.yaml and *.yaml in current directory
+      4. Extract the core requirements/changes they want
+
+      IMPORTANT PATH RULES:
+      - For CREATE mode: ALWAYS use "./generated-workflow.yaml" as workflow_path
+      - For EDIT mode: Use the actual path to the existing file
+      - Tests should ALWAYS be included inline in the same workflow file (not separate)
+
+      Your response MUST be valid JSON matching this exact schema:
+      {
+        "mode": "create" or "edit",
+        "workflow_path": "./generated-workflow.yaml" (for create) or "path/to/existing.yaml" (for edit),
+        "requirements": "cleaned up requirements string",
+        "existing_workflow_summary": "summary of existing workflow" (only for edit mode)
+      }
+
+      Output ONLY the JSON object, no markdown, no explanation.
+      PROMPT_EOF
+
+    output_format: json
+    timeout: 120000
+
+    # Extract the actual result from Claude CLI's JSON wrapper
+    transform_js: |
+      if (output && output.result) {
+        try {
+          return JSON.parse(output.result);
+        } catch (e) {
+          return { mode: 'create', workflow_path: './generated-workflow.yaml', requirements: output.result };
+        }
+      }
+      return output;
+
+  # 3. Checkout Visor source for context (provides docs and examples)
+  checkout-visor:
+    type: git-checkout
+    group: setup
+    criticality: internal
+    depends_on: [interpret-request]
+
+    assume:
+      - "outputs['interpret-request']?.mode != null"
+
+    repository: probelabs/visor
+    ref: main
+    fetch_depth: 1
+    working_directory: /tmp/visor-context
+
+  # 4. Generate/edit workflow using Claude CLI
+  generate-workflow:
+    type: command
+    group: generation
+    criticality: internal
+    depends_on: [checkout-visor]
+
+    assume:
+      - "outputs['checkout-visor']?.success === true"
+      - "outputs['interpret-request']?.requirements != null"
+
+    guarantee: "output != null"
+    timeout: 600000
+
+    exec: |
+      VISOR_PATH="{{ outputs['checkout-visor'].path | default: '/tmp/visor-context' }}"
+
+      # Build Claude CLI command with optional MCP config
+      CLAUDE_CMD="claude -p --dangerously-skip-permissions --add-dir $VISOR_PATH"
+      {% if inputs.mcp_config %}
+      # Write MCP config to temp file and use it
+      echo '{{ inputs.mcp_config }}' > /tmp/mcp-config.json
+      CLAUDE_CMD="$CLAUDE_CMD --mcp-config /tmp/mcp-config.json"
+      {% endif %}
+
+      cat << 'PROMPT_EOF' | $CLAUDE_CMD
+      {% assign r = outputs['interpret-request'] %}
+      {% assign workflowPath = r.workflow_path | default: './generated-workflow.yaml' %}
+
+      {% if r.mode == 'edit' %}
+      <task>
+      EDIT the existing Visor workflow based on these requirements:
+
+      {{ r.requirements }}
+      </task>
+
+      <existing-workflow>
+      The workflow to edit is at: {{ workflowPath }}
+      {% if r.existing_workflow_summary %}
+      Current structure: {{ r.existing_workflow_summary }}
+      {% endif %}
+      </existing-workflow>
+      {% else %}
+      <task>
+      CREATE a new Visor workflow based on these requirements:
+
+      {{ r.requirements }}
+      </task>
+
+      <output-file>
+      Create the workflow at EXACTLY this path: {{ workflowPath }}
+      DO NOT use any other file name or path!
+      </output-file>
+      {% endif %}
+
+      <instructions>
+      You are an expert Visor workflow developer.
+
+      1. Read the guide: $VISOR_PATH/docs/workflow-creation-guide.md
+      2. Study examples: $VISOR_PATH/defaults/code-review.yaml, $VISOR_PATH/defaults/task-refinement.yaml
+
+      {% if r.mode == 'edit' %}
+      3. READ the existing workflow: {{ workflowPath }}
+      4. Make targeted changes - preserve existing functionality
+      5. Update inline tests if needed (tests: section in the same file)
+      {% else %}
+      3. Create workflow file at EXACTLY this path: {{ workflowPath }}
+      4. Include tests INLINE in the same file using the tests: section
+      {% endif %}
+
+      IMPORTANT: Tests must be included INLINE in the workflow file using a "tests:" section.
+      Do NOT create separate test files. Example structure:
+      ```yaml
+      version: "1.0"
+      steps:
+        my-step:
+          type: log
+          message: "Hello"
+      tests:
+        cases:
+          - name: test-case
+            mocks:
+              my-step: { success: true }
+            expect:
+              calls:
+                - step: my-step
+      ```
+
+      5. Follow style guide: one step/one responsibility, guards, contracts, proper key ordering
+
+      VALIDATION COMMANDS - Run these to verify your work:
+      - Validate: npx @probelabs/visor@latest validate --config {{ workflowPath }}
+      - Lint: npx @probelabs/visor@latest lint --config {{ workflowPath }}
+      - Test: npx @probelabs/visor@latest test --config {{ workflowPath }}
+
+      CRITICAL: After creating/editing, run the validation and lint commands.
+      If there are errors, fix them before finishing.
+      Iterate until validation and lint pass.
+      </instructions>
+      PROMPT_EOF
+
+    on_success:
+      goto: validate-workflow
+
+  # 5. Validate against Visor conventions
+  validate-workflow:
+    type: command
+    group: validation
+    criticality: internal
+    depends_on: [generate-workflow]
+
+    assume:
+      - "outputs['generate-workflow'] != null"
+
+    exec: |
+      {% assign r = outputs['interpret-request'] %}
+      WORKFLOW_PATH="{{ r.workflow_path | default: './generated-workflow.yaml' }}"
+      if [ -f "$WORKFLOW_PATH" ]; then
+        npx @probelabs/visor@latest validate --config "$WORKFLOW_PATH" 2>&1
+      else
+        echo "Error: $WORKFLOW_PATH not found" >&2
+        exit 1
+      fi
+
+    guarantee: "output != null"
+    fail_if: "output.exit_code !== 0"
+
+    on_fail:
+      run: [fix-validation-errors]
+
+    on_success:
+      goto: lint-workflow
+
+  # 6. Fix validation errors using Claude CLI
+  fix-validation-errors:
+    type: command
+    group: fixes
+    criticality: internal
+    depends_on: [validate-workflow]
+
+    assume:
+      - "outputs['interpret-request']?.workflow_path != null || true"
+
+    guarantee: "output != null"
+    timeout: 300000
+
+    exec: |
+      {% assign r = outputs['interpret-request'] %}
+      {% assign workflowPath = r.workflow_path | default: './generated-workflow.yaml' %}
+      cat << 'PROMPT_EOF' | claude -p --dangerously-skip-permissions
+      <task>
+      The workflow validation failed. Fix the issues.
+
+      Workflow path: {{ workflowPath }}
+      </task>
+
+      <instructions>
+      1. Check if {{ workflowPath }} exists - if not, create it
+      2. Read the file to understand current content
+      3. Make targeted fixes - don't rewrite everything
+
+      After fixing, verify with:
+      - npx @probelabs/visor@latest validate --config {{ workflowPath }}
+      - npx @probelabs/visor@latest lint --config {{ workflowPath }}
+
+      Keep iterating until validation passes.
+      </instructions>
+      PROMPT_EOF
+
+    on_success:
+      goto: validate-workflow
+    on_fail:
+      goto: validate-workflow
+
+  # 7. Run linter (alias for validate)
+  lint-workflow:
+    type: command
+    group: validation
+    criticality: internal
+    depends_on: [validate-workflow]
+
+    assume:
+      - "outputs['validate-workflow'] != null"
+
+    exec: |
+      {% assign r = outputs['interpret-request'] %}
+      WORKFLOW_PATH="{{ r.workflow_path | default: './generated-workflow.yaml' }}"
+      if [ -f "$WORKFLOW_PATH" ]; then
+        npx @probelabs/visor@latest lint --config "$WORKFLOW_PATH" 2>&1
+      else
+        echo "Error: $WORKFLOW_PATH not found" >&2
+        exit 1
+      fi
+
+    guarantee: "output != null"
+    fail_if: "output.exit_code !== 0"
+
+    on_fail:
+      run: [fix-lint-errors]
+
+    on_success:
+      goto: run-tests
+
+  # 8. Fix lint errors using Claude CLI
+  fix-lint-errors:
+    type: command
+    group: fixes
+    criticality: internal
+    depends_on: [lint-workflow]
+
+    assume:
+      - "outputs['interpret-request']?.workflow_path != null || true"
+
+    guarantee: "output != null"
+    timeout: 300000
+
+    exec: |
+      {% assign r = outputs['interpret-request'] %}
+      {% assign workflowPath = r.workflow_path | default: './generated-workflow.yaml' %}
+      cat << 'PROMPT_EOF' | claude -p --dangerously-skip-permissions
+      <task>
+      The workflow has lint issues. Fix them.
+
+      Workflow path: {{ workflowPath }}
+      </task>
+
+      <instructions>
+      1. Read {{ workflowPath }} to understand current content
+      2. Fix lint errors - warnings can be left if minor
+      3. Make targeted fixes, don't rewrite everything
+
+      After fixing, verify with:
+      - npx @probelabs/visor@latest lint --config {{ workflowPath }}
+
+      Keep iterating until lint passes.
+      </instructions>
+      PROMPT_EOF
+
+    on_success:
+      goto: lint-workflow
+    on_fail:
+      goto: lint-workflow
+
+  # 9. Run YAML tests
+  run-tests:
+    type: command
+    group: testing
+    criticality: internal
+    depends_on: [lint-workflow]
+
+    assume:
+      - "outputs['lint-workflow'] != null"
+
+    exec: |
+      {% assign r = outputs['interpret-request'] %}
+      WORKFLOW_PATH="{{ r.workflow_path | default: './generated-workflow.yaml' }}"
+      if grep -q "^tests:" "$WORKFLOW_PATH" 2>/dev/null; then
+        npx @probelabs/visor@latest test --config "$WORKFLOW_PATH" 2>&1
+      else
+        echo "Warning: No inline tests found. Skipping test execution."
+        echo '{"skipped": true, "reason": "no tests section in workflow"}'
+      fi
+
+    output_format: text
+    guarantee: "output != null"
+    fail_if: "output.exit_code !== 0"
+
+    on_fail:
+      run: [fix-test-failures]
+
+    on_success:
+      goto: review-workflow
+
+  # 10. Fix test failures using Claude CLI
+  fix-test-failures:
+    type: command
+    group: fixes
+    criticality: internal
+    depends_on: [run-tests]
+
+    assume:
+      - "outputs['interpret-request']?.workflow_path != null || true"
+
+    guarantee: "output != null"
+    timeout: 300000
+
+    exec: |
+      {% assign r = outputs['interpret-request'] %}
+      {% assign workflowPath = r.workflow_path | default: './generated-workflow.yaml' %}
+      cat << 'PROMPT_EOF' | claude -p --dangerously-skip-permissions
+      <task>
+      The workflow tests failed. Analyze and fix.
+
+      Workflow: {{ workflowPath }}
+      Tests are inline in the same file (look for the "tests:" section)
+      </task>
+
+      <instructions>
+      1. Read the workflow file to understand the steps and inline tests
+      2. Analyze the test failures
+      3. Fix either the workflow steps (if logic is wrong) or the inline tests (if expectations are wrong)
+
+      After fixing, verify with:
+      - npx @probelabs/visor@latest test --config {{ workflowPath }}
+
+      Keep iterating until tests pass.
+      </instructions>
+      PROMPT_EOF
+
+    on_success:
+      goto: run-tests
+    on_fail:
+      goto: run-tests
+
+  # 11. Code review the generated workflow
+  review-workflow:
+    type: command
+    group: review
+    criticality: policy
+    depends_on: [run-tests]
+
+    guarantee: "output && Array.isArray(output.issues) && typeof output.summary === 'string' && typeof output.approval === 'boolean'"
+
+    exec: |
+      {% assign r = outputs['interpret-request'] %}
+      {% assign workflowPath = r.workflow_path | default: './generated-workflow.yaml' %}
+      cat << 'PROMPT_EOF' | claude -p --output-format json
+      Review the {% if r.mode == 'edit' %}edited{% else %}generated{% endif %} workflow for:
+
+      1. **Security Issues** - guards, credentials, input sanitization
+      2. **Missing Edge Cases** - failure handling, loop bounds, timeouts
+      3. **Test Coverage** - happy path, failures, meaningful assertions
+      4. **Style Guide** - key ordering, single-responsibility, guards/contracts
+
+      Original requirements:
+      {{ r.requirements }}
+
+      Workflow file: {{ workflowPath }}
+
+      Read the workflow file and provide your review.
+      Be constructive and specific. Flag critical issues.
+
+      Your response MUST be valid JSON matching this exact schema:
+      {
+        "issues": [
+          {
+            "severity": "critical" | "error" | "warning" | "info",
+            "category": "security" | "edge-case" | "coverage" | "style" | "other",
+            "message": "description of the issue",
+            "suggestion": "how to fix it (optional)"
+          }
+        ],
+        "summary": "overall review summary",
+        "approval": true or false (whether the workflow is ready for use)
+      }
+
+      Output ONLY the JSON object, no markdown, no explanation.
+      PROMPT_EOF
+
+    output_format: json
+    timeout: 180000
+
+    # Extract the actual result from Claude CLI's JSON wrapper
+    transform_js: |
+      if (output && output.result) {
+        try {
+          return JSON.parse(output.result);
+        } catch (e) {
+          return { issues: [], summary: output.result, approval: true };
+        }
+      }
+      return output;
+
+    fail_if: "output.issues?.some(i => i.severity === 'critical' || i.severity === 'error')"
+
+    on_fail:
+      run: [apply-review-fixes]
+
+    on_success:
+      goto: finalize
+
+  # 12. Apply review fixes using Claude CLI
+  apply-review-fixes:
+    type: command
+    group: fixes
+    criticality: internal
+    depends_on: [review-workflow]
+
+    if: "outputs['review-workflow']?.issues?.length > 0"
+
+    guarantee: "output != null"
+    timeout: 300000
+
+    exec: |
+      {% assign r = outputs['interpret-request'] %}
+      {% assign review = outputs['review-workflow'] %}
+      {% assign workflowPath = r.workflow_path | default: './generated-workflow.yaml' %}
+      cat << 'PROMPT_EOF' | claude -p --dangerously-skip-permissions
+      <task>
+      Apply these review suggestions to the workflow:
+
+      {% for issue in review.issues %}
+      - [{{ issue.severity | upcase }}] {{ issue.category }}: {{ issue.message }}
+      {% if issue.suggestion %}  Suggestion: {{ issue.suggestion }}{% endif %}
+      {% endfor %}
+
+      Summary: {{ review.summary }}
+      </task>
+
+      <instructions>
+      Fix the issues in {{ workflowPath }} (workflow steps and inline tests are in the same file).
+
+      - Critical/Error issues must be fixed
+      - Warning issues should be addressed if straightforward
+      - Info issues are optional improvements
+      </instructions>
+      PROMPT_EOF
+
+    on_success:
+      goto: run-tests
+    on_fail:
+      goto: run-tests
+
+  # 13. Final output
+  finalize:
+    type: log
+    group: output
+    criticality: info
+    depends_on: [review-workflow]
+
+    message: |
+      {% assign r = outputs['interpret-request'] %}
+      {% assign workflowPath = r.workflow_path | default: './generated-workflow.yaml' %}
+
+      Workflow {% if r.mode == 'edit' %}updated{% else %}created{% endif %} successfully!
+
+      File: {{ workflowPath }}
+      (Tests included inline in the same file)
+
+      Review Summary:
+      {{ outputs['review-workflow'].summary }}
+
+      {% assign issues = outputs['review-workflow'].issues %}
+      {% if issues.size > 0 %}
+      Remaining Notes:
+      {% for issue in issues %}
+      - [{{ issue.severity }}] {{ issue.message }}
+      {% endfor %}
+      {% endif %}
+
+      Next Steps:
+      {% if r.mode == 'edit' %}
+      1. Review the changes made to {{ workflowPath }}
+      2. Run tests: npx @probelabs/visor@latest test --config {{ workflowPath }}
+      3. Commit the changes when satisfied
+      {% else %}
+      1. Review the generated workflow
+      2. Move it to your project's defaults/ or workflows/ directory
+      3. Configure it in your .visor.yaml
+      4. Run it with: npx @probelabs/visor@latest --config {{ workflowPath }}
+      {% endif %}
+
+    level: info
+    include_pr_context: false
+    include_dependencies: false
+    include_metadata: false

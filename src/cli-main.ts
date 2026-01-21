@@ -585,8 +585,8 @@ export async function main(): Promise<void> {
       } catch {}
     } catch {}
 
-    // Check for validate subcommand
-    if (filteredArgv.length > 2 && filteredArgv[2] === 'validate') {
+    // Check for validate subcommand (aliases: validate, lint)
+    if (filteredArgv.length > 2 && ['validate', 'lint'].includes(filteredArgv[2])) {
       const configManager = new ConfigManager();
       await handleValidateCommand(filteredArgv, configManager);
       return;
@@ -1211,22 +1211,39 @@ export async function main(): Promise<void> {
       : options.analyzeBranchDiff || hasCodeReviewSchema;
 
     let repositoryInfo: import('./git-repository-analyzer').GitRepositoryInfo;
+    const requiresGit = includeCodeContext || analyzeBranchDiff;
     try {
       if (!options.debugServer) {
         logger.step('Analyzing repository');
       }
       repositoryInfo = await analyzer.analyzeRepository(includeCodeContext, analyzeBranchDiff);
     } catch (error) {
-      logger.error(
-        '❌ Error analyzing git repository: ' +
-          (error instanceof Error ? error.message : String(error))
-      );
-      logger.warn('💡 Make sure you are in a git repository or initialize one with "git init"');
-      process.exit(1);
+      if (requiresGit) {
+        logger.error(
+          '❌ Error analyzing git repository: ' +
+            (error instanceof Error ? error.message : String(error))
+        );
+        logger.warn('💡 Make sure you are in a git repository or initialize one with "git init"');
+        process.exit(1);
+      }
+      // When git is not required, create a minimal repository info
+      logger.verbose('Running without git repository (code context not needed)');
+      repositoryInfo = {
+        title: 'Standalone Workflow Execution',
+        body: 'Running workflow without git repository context',
+        author: 'system',
+        base: 'main',
+        head: 'HEAD',
+        files: [],
+        totalAdditions: 0,
+        totalDeletions: 0,
+        isGitRepository: false,
+        workingDirectory: process.cwd(),
+      };
     }
 
-    // Check if we're in a git repository
-    if (!repositoryInfo.isGitRepository) {
+    // Check if we're in a git repository (only required when code context is needed)
+    if (requiresGit && !repositoryInfo.isGitRepository) {
       logger.error('❌ Error: Not a git repository. Run "git init" to initialize a repository.');
       process.exit(1);
     }
