@@ -725,7 +725,38 @@ export async function main(): Promise<void> {
         tui.start();
         tui.setRunning(true);
         tuiConsoleRestore = tui.captureConsole();
-        logger.setSink((msg, _level) => tui?.appendLog(msg), { passthrough: false });
+        tui.setAbortHandler(() => {
+          void (async () => {
+            try {
+              logger.setSink(undefined);
+            } catch {}
+            try {
+              if (tuiConsoleRestore) {
+                tuiConsoleRestore();
+                tuiConsoleRestore = null;
+              }
+            } catch {}
+            try {
+              tui?.stop();
+            } catch {}
+            try {
+              await flushNdjson();
+            } catch {}
+            try {
+              await shutdownTelemetry();
+            } catch {}
+            process.exit(130);
+          })();
+        });
+        logger.setSink((msg, _level) => tui?.appendLog(msg), {
+          passthrough: false,
+          errorMode: 'warn',
+          onError: error => {
+            const errMsg = error instanceof Error ? error.message : String(error);
+            console.error(`TUI log sink failed: ${errMsg}`);
+            logger.setSink(undefined);
+          },
+        });
       } catch (error) {
         if (tuiConsoleRestore) {
           tuiConsoleRestore();
@@ -1509,10 +1540,24 @@ export async function main(): Promise<void> {
       await shutdownTelemetry();
     } catch {}
     if (tui) {
-      tui.setRunning(false);
-      logger.setSink(undefined);
-      if (tuiConsoleRestore) tuiConsoleRestore();
-      await tui.waitForExit();
+      try {
+        tui.setRunning(false);
+      } catch {}
+      try {
+        logger.setSink(undefined);
+      } catch {}
+      try {
+        if (tuiConsoleRestore) tuiConsoleRestore();
+      } catch {}
+      try {
+        const holdMs = (() => {
+          const raw = process.env.VISOR_TUI_HOLD_MS;
+          if (!raw) return 60000;
+          const parsed = parseInt(raw, 10);
+          return Number.isFinite(parsed) ? parsed : 60000;
+        })();
+        await tui.waitForExit(holdMs);
+      } catch {}
     }
     process.exit(exitCode);
   } catch (error) {
@@ -1584,10 +1629,24 @@ export async function main(): Promise<void> {
       await shutdownTelemetry();
     } catch {}
     if (tui) {
-      tui.setRunning(false);
-      logger.setSink(undefined);
-      if (tuiConsoleRestore) tuiConsoleRestore();
-      await tui.waitForExit();
+      try {
+        tui.setRunning(false);
+      } catch {}
+      try {
+        logger.setSink(undefined);
+      } catch {}
+      try {
+        if (tuiConsoleRestore) tuiConsoleRestore();
+      } catch {}
+      try {
+        const holdMs = (() => {
+          const raw = process.env.VISOR_TUI_HOLD_MS;
+          if (!raw) return 60000;
+          const parsed = parseInt(raw, 10);
+          return Number.isFinite(parsed) ? parsed : 60000;
+        })();
+        await tui.waitForExit(holdMs);
+      } catch {}
     }
     process.exit(1);
   }

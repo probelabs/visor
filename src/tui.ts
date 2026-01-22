@@ -52,6 +52,7 @@ export class TuiManager {
   private consoleRestore?: () => void;
   private consoleExitHandler?: () => void;
   private processExitHandler?: () => void;
+  private abortHandler?: () => void;
 
   start(): void {
     if (this.screen) return;
@@ -162,8 +163,11 @@ export class TuiManager {
       if (this.exitResolver) this.exitResolver();
     });
     this.screen.key(['C-c'], () => {
+      if (this.abortHandler) {
+        this.abortHandler();
+        return;
+      }
       this.stop();
-      process.exit(130);
     });
 
     this.screen.on('resize', () => {
@@ -291,14 +295,30 @@ export class TuiManager {
     return this.consoleRestore;
   }
 
-  waitForExit(): Promise<void> {
+  waitForExit(timeoutMs?: number): Promise<void> {
     if (!this.screen) return Promise.resolve();
     return new Promise(resolve => {
-      this.exitResolver = () => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
         this.stop();
         resolve();
       };
+      this.exitResolver = finish;
+      if (timeoutMs !== undefined) {
+        if (timeoutMs <= 0) {
+          finish();
+          return;
+        }
+        const timer = setTimeout(finish, timeoutMs);
+        if (typeof timer.unref === 'function') timer.unref();
+      }
     });
+  }
+
+  setAbortHandler(handler?: () => void): void {
+    this.abortHandler = handler;
   }
 
   private updateLayout(): void {
