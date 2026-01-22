@@ -523,6 +523,7 @@ export async function main(): Promise<void> {
   // Declare debugServer at function scope so it's accessible in catch/finally blocks
   let debugServer: DebugVisualizerServer | null = null;
   let tui: TuiManager | null = null;
+  let tuiConsoleRestore: (() => void) | null = null;
 
   try {
     // Preflight: detect obviously stale dist relative to src and warn early.
@@ -719,11 +720,23 @@ export async function main(): Promise<void> {
       process.env.NODE_ENV !== 'test';
 
     if (shouldEnableTui) {
-      tui = new TuiManager();
-      tui.start();
-      tui.setRunning(true);
-      tui.captureConsole();
-      logger.setSink((msg, _level) => tui?.appendLog(msg), { passthrough: false });
+      try {
+        tui = new TuiManager();
+        tui.start();
+        tui.setRunning(true);
+        tuiConsoleRestore = tui.captureConsole();
+        logger.setSink((msg, _level) => tui?.appendLog(msg), { passthrough: false });
+      } catch (error) {
+        if (tuiConsoleRestore) {
+          tuiConsoleRestore();
+          tuiConsoleRestore = null;
+        }
+        logger.setSink(undefined);
+        tui?.stop();
+        tui = null;
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error(`⚠️  Failed to start TUI, falling back to standard output: ${msg}`);
+      }
     } else if (options.tui) {
       const reasons: string[] = [];
       if (!process.stdout.isTTY || !process.stderr.isTTY) reasons.push('non-interactive TTY');
@@ -1497,6 +1510,8 @@ export async function main(): Promise<void> {
     } catch {}
     if (tui) {
       tui.setRunning(false);
+      logger.setSink(undefined);
+      if (tuiConsoleRestore) tuiConsoleRestore();
       await tui.waitForExit();
     }
     process.exit(exitCode);
@@ -1570,6 +1585,8 @@ export async function main(): Promise<void> {
     } catch {}
     if (tui) {
       tui.setRunning(false);
+      logger.setSink(undefined);
+      if (tuiConsoleRestore) tuiConsoleRestore();
       await tui.waitForExit();
     }
     process.exit(1);

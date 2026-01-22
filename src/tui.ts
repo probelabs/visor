@@ -50,6 +50,7 @@ export class TuiManager {
   private pendingChat = '';
   private exitResolver?: () => void;
   private consoleRestore?: () => void;
+  private consoleExitHandler?: () => void;
   private processExitHandler?: () => void;
 
   start(): void {
@@ -268,12 +269,24 @@ export class TuiManager {
     console.warn = (...args: unknown[]) => toLog(...args);
     console.info = (...args: unknown[]) => toLog(...args);
 
+    let restored = false;
     this.consoleRestore = () => {
+      if (restored) return;
+      restored = true;
       console.log = original.log;
       console.error = original.error;
       console.warn = original.warn;
       console.info = original.info;
+      if (this.consoleExitHandler) {
+        process.removeListener('exit', this.consoleExitHandler);
+        this.consoleExitHandler = undefined;
+      }
     };
+
+    this.consoleExitHandler = () => {
+      if (this.consoleRestore) this.consoleRestore();
+    };
+    process.once('exit', this.consoleExitHandler);
 
     return this.consoleRestore;
   }

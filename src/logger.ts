@@ -32,6 +32,8 @@ class Logger {
   private showTimestamps: boolean = true; // default: always show timestamps
   private sink?: (msg: string, level: LogLevel) => void;
   private sinkPassthrough: boolean = true;
+  private sinkErrorMode: 'throw' | 'warn' | 'silent' = 'throw';
+  private sinkErrorHandler?: (error: unknown) => void;
 
   configure(
     opts: {
@@ -68,10 +70,16 @@ class Logger {
 
   setSink(
     sink?: (msg: string, level: LogLevel) => void,
-    opts: { passthrough?: boolean } = {}
+    opts: {
+      passthrough?: boolean;
+      errorMode?: 'throw' | 'warn' | 'silent';
+      onError?: (error: unknown) => void;
+    } = {}
   ): void {
     this.sink = sink;
     this.sinkPassthrough = opts.passthrough !== undefined ? opts.passthrough : true;
+    this.sinkErrorMode = opts.errorMode || 'throw';
+    this.sinkErrorHandler = opts.onError;
   }
 
   private shouldLog(level: LogLevel): boolean {
@@ -105,18 +113,35 @@ class Logger {
 
   private write(msg: string, level?: LogLevel): void {
     // Always route to stderr to keep stdout clean for results
-    try {
-      const suffix = this.getTraceSuffix(msg);
-      const decoratedMsg = suffix ? `${msg}${suffix}` : msg;
-      const lvl = level || 'info';
-      if (this.sink) {
-        try {
-          this.sink(decoratedMsg, lvl);
-        } catch {
-          // ignore sink errors
+    const suffix = this.getTraceSuffix(msg);
+    const decoratedMsg = suffix ? `${msg}${suffix}` : msg;
+    const lvl = level || 'info';
+
+    if (this.sink) {
+      try {
+        this.sink(decoratedMsg, lvl);
+      } catch (error) {
+        if (this.sinkErrorMode === 'warn') {
+          try {
+            if (this.sinkErrorHandler) {
+              this.sinkErrorHandler(error);
+            } else {
+              const errMsg = error instanceof Error ? error.message : String(error);
+              process.stderr.write(`[logger] sink failed: ${errMsg}\n`);
+            }
+          } catch {
+            // ignore secondary failures
+          }
         }
-        if (!this.sinkPassthrough) return;
+        if (this.sinkErrorMode === 'throw') {
+          throw error;
+        }
+        return;
       }
+      if (!this.sinkPassthrough) return;
+    }
+
+    try {
       if (this.showTimestamps) {
         const ts = new Date().toISOString();
         const lvl = level ? level : undefined;
