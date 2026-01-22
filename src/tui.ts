@@ -58,6 +58,13 @@ export class TuiManager {
   private processExitHandler?: () => void;
   private abortHandler?: () => void;
   private promptCleanup?: () => void;
+  private inputPane?: Box;
+  private inputPrompt?: Box;
+  private inputHint?: Box;
+  private inputError?: Box;
+  private inputField?: Textarea | Textbox;
+  private promptActive = false;
+  private promptMultiline = false;
 
   start(): void {
     if (this.screen) return;
@@ -342,6 +349,10 @@ export class TuiManager {
 
     this.setActiveTab('main');
 
+    if (this.promptActive) {
+      throw new Error('Input prompt already active');
+    }
+
     const screen = this.screen;
     const promptText = (options.prompt || 'Please provide input:').trim();
     const placeholder = options.placeholder || '';
@@ -349,8 +360,12 @@ export class TuiManager {
     const allowEmpty = options.allowEmpty ?? false;
     const defaultValue = options.defaultValue;
 
+    this.promptActive = true;
+    this.promptMultiline = multiline;
+
     return new Promise((resolve, reject) => {
       let done = false;
+      let timeoutId: NodeJS.Timeout | undefined;
       const finish = (value?: string, error?: Error) => {
         if (done) return;
         done = true;
@@ -361,80 +376,105 @@ export class TuiManager {
 
       const cleanup = () => {
         if (timeoutId) clearTimeout(timeoutId);
+        this.promptActive = false;
+        this.promptMultiline = false;
         try {
-          modal.destroy();
+          this.inputField?.destroy();
         } catch {}
-        try {
-          if (prevFocus && typeof (prevFocus as any).focus === 'function') {
-            (prevFocus as any).focus();
-          }
-        } catch {}
+        this.inputField = undefined;
+        if (this.inputError) this.inputError.hide();
+        if (this.inputPane) this.inputPane.hide();
+        this.updateLayout();
         this.promptCleanup = undefined;
+        this.outputBox?.focus();
         screen.render();
       };
 
       this.promptCleanup = () => finish(undefined, new Error('Input cancelled'));
 
-      const prevFocus = screen.focused as blessed.Widgets.Node | undefined;
+      if (!this.inputPane && this.mainPane) {
+        this.inputPane = blessed.box({
+          parent: this.mainPane,
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: 6,
+          label: ' Input ',
+          border: { type: 'line' },
+          hidden: true,
+        });
+        this.inputPrompt = blessed.box({
+          parent: this.inputPane,
+          top: 0,
+          left: 1,
+          width: '100%-2',
+          height: 1,
+          tags: false,
+        });
+        this.inputHint = blessed.box({
+          parent: this.inputPane,
+          bottom: 0,
+          left: 1,
+          width: '100%-2',
+          height: 1,
+          style: { fg: 'gray' },
+        });
+        this.inputError = blessed.box({
+          parent: this.inputPane,
+          bottom: 1,
+          left: 1,
+          width: '100%-2',
+          height: 1,
+          style: { fg: 'red' },
+          content: '',
+        });
+        this.inputError.hide();
+      }
 
-      const modalHeight = multiline ? '60%' : 8;
-      const modal = blessed.box({
-        parent: screen,
-        top: 'center',
-        left: 'center',
-        width: '80%',
-        height: modalHeight,
-        label: ' Input ',
-        border: { type: 'line' },
-        style: {
-          fg: 'white',
-          bg: 'black',
-          border: { fg: 'cyan' },
-        },
-      });
+      const inputPane = this.inputPane;
+      if (!inputPane) return finish(undefined, new Error('Input pane unavailable'));
 
-      blessed.box({
-        parent: modal,
-        top: 1,
-        left: 2,
-        width: '100%-4',
-        height: multiline ? 4 : 3,
-        tags: false,
-        content: [promptText, placeholder ? `Hint: ${placeholder}` : ''].filter(Boolean).join('\n'),
-      });
+      if (this.inputPrompt) {
+        this.inputPrompt.setContent(
+          placeholder ? `${promptText}  (${placeholder})` : promptText
+        );
+      }
+      if (this.inputHint) {
+        this.inputHint.setContent(
+          multiline ? 'Ctrl+S to submit | Esc to cancel' : 'Enter to submit | Esc to cancel'
+        );
+      }
+      if (this.inputError) this.inputError.hide();
 
-      const inputTop = multiline ? 5 : 4;
-      const inputHeight = multiline ? '100%-8' : 3;
+      this.updateLayout();
+      inputPane.show();
 
-      const input = (
-        multiline
-          ? blessed.textarea({
-              parent: modal,
-              top: inputTop,
-              left: 2,
-              width: '100%-4',
-              height: inputHeight,
-              inputOnFocus: true,
-              keys: true,
-              mouse: true,
-              vi: true,
-              border: { type: 'line' },
-              style: { fg: 'white', bg: 'black' },
-            })
-          : blessed.textbox({
-              parent: modal,
-              top: inputTop,
-              left: 2,
-              width: '100%-4',
-              height: inputHeight,
-              inputOnFocus: true,
-              keys: true,
-              mouse: true,
-              vi: true,
-              border: { type: 'line' },
-              style: { fg: 'white', bg: 'black' },
-            })
-      ) as Textarea | Textbox;
+      const input = (multiline
+        ? blessed.textarea({
+            parent: inputPane,
+            top: 1,
+            left: 1,
+            width: '100%-2',
+            height: '100%-3',
+            inputOnFocus: true,
+            keys: true,
+            mouse: true,
+            vi: true,
+            style: { fg: 'white', bg: 'black' },
+          })
+        : blessed.textbox({
+            parent: inputPane,
+            top: 1,
+            left: 1,
+            width: '100%-2',
+            height: '100%-3',
+            inputOnFocus: true,
+            keys: true,
+            mouse: true,
+            vi: true,
+            style: { fg: 'white', bg: 'black' },
+          })) as Textarea | Textbox;
+      this.inputField = input;
 
       if (defaultValue) {
         try {
@@ -442,32 +482,13 @@ export class TuiManager {
         } catch {}
       }
 
-      blessed.box({
-        parent: modal,
-        bottom: 0,
-        left: 2,
-        width: '100%-4',
-        height: 1,
-        content: multiline ? 'Ctrl+S to submit | Esc to cancel' : 'Enter to submit | Esc to cancel',
-        style: { fg: 'gray' },
-      });
-
-      const errorLine = blessed.box({
-        parent: modal,
-        bottom: 1,
-        left: 2,
-        width: '100%-4',
-        height: 1,
-        content: '',
-        style: { fg: 'red' },
-      });
-      errorLine.hide();
-
       const submitValue = (value: string) => {
         const trimmed = (value || '').trim();
         if (!trimmed && !allowEmpty && defaultValue === undefined) {
-          errorLine.setContent('Input required.');
-          errorLine.show();
+          if (this.inputError) {
+            this.inputError.setContent('Input required.');
+            this.inputError.show();
+          }
           screen.render();
           input.focus();
           return false;
@@ -476,38 +497,28 @@ export class TuiManager {
         return true;
       };
 
-      const bindCommonKeys = () => {
-        input.key(['escape'], () => finish(undefined, new Error('Input cancelled')));
-        if (multiline) {
-          input.key(['C-s'], () => {
-            try {
-              const val = (input as Textarea).getValue();
-              submitValue(val);
-            } catch (err) {
-              finish(undefined, err instanceof Error ? err : new Error(String(err)));
-            }
-          });
-        }
-      };
+      input.key(['escape'], () => finish(undefined, new Error('Input cancelled')));
+      if (multiline) {
+        input.key(['C-s'], () => {
+          try {
+            submitValue((input as Textarea).getValue());
+          } catch (err) {
+            finish(undefined, err instanceof Error ? err : new Error(String(err)));
+          }
+        });
+      }
 
-      bindCommonKeys();
+      try {
+        (input as any).readInput?.((err: Error | null, value: string) => {
+          if (err) return finish(undefined, err);
+          if (!multiline) {
+            submitValue(value);
+          }
+        });
+      } catch (err) {
+        finish(undefined, err instanceof Error ? err : new Error(String(err)));
+      }
 
-      const readInput = () => {
-        try {
-          (input as any).readInput?.((err: Error | null, value: string) => {
-            if (err) return finish(undefined, err);
-            if (multiline) {
-              submitValue((input as Textarea).getValue());
-            } else {
-              submitValue(value);
-            }
-          });
-        } catch (err) {
-          finish(undefined, err instanceof Error ? err : new Error(String(err)));
-        }
-      };
-
-      let timeoutId: NodeJS.Timeout | undefined;
       if (options.timeout && options.timeout > 0) {
         timeoutId = setTimeout(() => {
           if (defaultValue !== undefined) {
@@ -520,22 +531,42 @@ export class TuiManager {
 
       input.focus();
       screen.render();
-      readInput();
     });
   }
 
   private updateLayout(): void {
     if (!this.mainPane || !this.chatBox || !this.outputBox) return;
 
+    const screenHeight =
+      this.screen && typeof this.screen.height === 'number' ? this.screen.height : 24;
+    const available = Math.max(6, screenHeight - 1);
+    const requestedInput = this.promptActive ? (this.promptMultiline ? 10 : 6) : 0;
+    const maxInput = Math.max(0, available - 3);
+    const inputHeight = this.promptActive ? Math.min(requestedInput, maxInput) : 0;
+    const bodyHeight = Math.max(3, available - inputHeight);
+
     if (this.hasChat) {
       this.chatBox.show();
-      this.chatBox.height = '60%';
-      this.outputBox.top = '60%';
-      this.outputBox.height = '40%';
+      const chatHeight = Math.max(3, Math.floor(bodyHeight * 0.6));
+      const outputHeight = Math.max(3, bodyHeight - chatHeight);
+      this.chatBox.top = 0;
+      this.chatBox.height = chatHeight;
+      this.outputBox.top = chatHeight;
+      this.outputBox.height = outputHeight;
     } else {
       this.chatBox.hide();
       this.outputBox.top = 0;
-      this.outputBox.height = '100%';
+      this.outputBox.height = bodyHeight;
+    }
+
+    if (this.inputPane) {
+      if (this.promptActive && inputHeight > 0) {
+        this.inputPane.top = bodyHeight;
+        this.inputPane.height = inputHeight;
+        this.inputPane.show();
+      } else {
+        this.inputPane.hide();
+      }
     }
   }
 
