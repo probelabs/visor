@@ -725,6 +725,23 @@ export async function main(): Promise<void> {
         tui.start();
         tui.setRunning(true);
         tuiConsoleRestore = tui.captureConsole();
+        executionContext.hooks = executionContext.hooks || {};
+        executionContext.hooks.onHumanInput = async request => {
+          if (!tui) throw new Error('TUI not available');
+          tui.setStatus('Awaiting input...');
+          try {
+            return await tui.promptUser({
+              prompt: request.prompt,
+              placeholder: request.placeholder,
+              multiline: request.multiline,
+              timeout: request.timeout,
+              defaultValue: request.default,
+              allowEmpty: request.allowEmpty,
+            });
+          } finally {
+            tui.setStatus('Running');
+          }
+        };
         tui.setAbortHandler(() => {
           void (async () => {
             try {
@@ -765,6 +782,11 @@ export async function main(): Promise<void> {
         logger.setSink(undefined);
         tui?.stop();
         tui = null;
+        try {
+          if (executionContext.hooks?.onHumanInput) {
+            delete executionContext.hooks.onHumanInput;
+          }
+        } catch {}
         const msg = error instanceof Error ? error.message : String(error);
         console.error(`⚠️  Failed to start TUI, falling back to standard output: ${msg}`);
       }

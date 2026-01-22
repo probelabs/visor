@@ -8,6 +8,10 @@ type Box = blessed.Widgets.BoxElement;
 
 type Log = blessed.Widgets.Log;
 
+type Textbox = blessed.Widgets.TextboxElement;
+
+type Textarea = blessed.Widgets.TextareaElement;
+
 const ANSI_REGEX = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))/g;
 
 function stripAnsi(input: string): string {
@@ -53,6 +57,7 @@ export class TuiManager {
   private consoleExitHandler?: () => void;
   private processExitHandler?: () => void;
   private abortHandler?: () => void;
+  private promptCleanup?: () => void;
 
   start(): void {
     if (this.screen) return;
@@ -195,6 +200,8 @@ export class TuiManager {
   }
 
   stop(): void {
+    if (this.promptCleanup) this.promptCleanup();
+    this.promptCleanup = undefined;
     if (this.consoleRestore) this.consoleRestore();
     this.consoleRestore = undefined;
     if (this.processExitHandler) {
@@ -319,6 +326,202 @@ export class TuiManager {
 
   setAbortHandler(handler?: () => void): void {
     this.abortHandler = handler;
+  }
+
+  async promptUser(options: {
+    prompt: string;
+    placeholder?: string;
+    multiline?: boolean;
+    timeout?: number;
+    defaultValue?: string;
+    allowEmpty?: boolean;
+  }): Promise<string> {
+    if (!this.screen) {
+      throw new Error('TUI not initialized');
+    }
+
+    this.setActiveTab('main');
+
+    const screen = this.screen;
+    const promptText = (options.prompt || 'Please provide input:').trim();
+    const placeholder = options.placeholder || '';
+    const multiline = options.multiline ?? false;
+    const allowEmpty = options.allowEmpty ?? false;
+    const defaultValue = options.defaultValue;
+
+    return new Promise((resolve, reject) => {
+      let done = false;
+      const finish = (value?: string, error?: Error) => {
+        if (done) return;
+        done = true;
+        cleanup();
+        if (error) reject(error);
+        else resolve(value ?? '');
+      };
+
+      const cleanup = () => {
+        if (timeoutId) clearTimeout(timeoutId);
+        try {
+          modal.destroy();
+        } catch {}
+        try {
+          if (prevFocus && typeof (prevFocus as any).focus === 'function') {
+            (prevFocus as any).focus();
+          }
+        } catch {}
+        this.promptCleanup = undefined;
+        screen.render();
+      };
+
+      this.promptCleanup = () => finish(undefined, new Error('Input cancelled'));
+
+      const prevFocus = screen.focused as blessed.Widgets.Node | undefined;
+
+      const modalHeight = multiline ? '60%' : 8;
+      const modal = blessed.box({
+        parent: screen,
+        top: 'center',
+        left: 'center',
+        width: '80%',
+        height: modalHeight,
+        label: ' Input ',
+        border: { type: 'line' },
+        style: {
+          fg: 'white',
+          bg: 'black',
+          border: { fg: 'cyan' },
+        },
+      });
+
+      blessed.box({
+        parent: modal,
+        top: 1,
+        left: 2,
+        width: '100%-4',
+        height: multiline ? 4 : 3,
+        tags: false,
+        content: [promptText, placeholder ? `Hint: ${placeholder}` : ''].filter(Boolean).join('\n'),
+      });
+
+      const inputTop = multiline ? 5 : 4;
+      const inputHeight = multiline ? '100%-8' : 3;
+
+      const input = (
+        multiline
+          ? blessed.textarea({
+              parent: modal,
+              top: inputTop,
+              left: 2,
+              width: '100%-4',
+              height: inputHeight,
+              inputOnFocus: true,
+              keys: true,
+              mouse: true,
+              vi: true,
+              border: { type: 'line' },
+              style: { fg: 'white', bg: 'black' },
+            })
+          : blessed.textbox({
+              parent: modal,
+              top: inputTop,
+              left: 2,
+              width: '100%-4',
+              height: inputHeight,
+              inputOnFocus: true,
+              keys: true,
+              mouse: true,
+              vi: true,
+              border: { type: 'line' },
+              style: { fg: 'white', bg: 'black' },
+            })
+      ) as Textarea | Textbox;
+
+      if (defaultValue) {
+        try {
+          input.setValue(defaultValue);
+        } catch {}
+      }
+
+      blessed.box({
+        parent: modal,
+        bottom: 0,
+        left: 2,
+        width: '100%-4',
+        height: 1,
+        content: multiline ? 'Ctrl+S to submit | Esc to cancel' : 'Enter to submit | Esc to cancel',
+        style: { fg: 'gray' },
+      });
+
+      const errorLine = blessed.box({
+        parent: modal,
+        bottom: 1,
+        left: 2,
+        width: '100%-4',
+        height: 1,
+        content: '',
+        style: { fg: 'red' },
+      });
+      errorLine.hide();
+
+      const submitValue = (value: string) => {
+        const trimmed = (value || '').trim();
+        if (!trimmed && !allowEmpty && defaultValue === undefined) {
+          errorLine.setContent('Input required.');
+          errorLine.show();
+          screen.render();
+          input.focus();
+          return false;
+        }
+        finish(trimmed || defaultValue || '');
+        return true;
+      };
+
+      const bindCommonKeys = () => {
+        input.key(['escape'], () => finish(undefined, new Error('Input cancelled')));
+        if (multiline) {
+          input.key(['C-s'], () => {
+            try {
+              const val = (input as Textarea).getValue();
+              submitValue(val);
+            } catch (err) {
+              finish(undefined, err instanceof Error ? err : new Error(String(err)));
+            }
+          });
+        }
+      };
+
+      bindCommonKeys();
+
+      const readInput = () => {
+        try {
+          (input as any).readInput?.((err: Error | null, value: string) => {
+            if (err) return finish(undefined, err);
+            if (multiline) {
+              submitValue((input as Textarea).getValue());
+            } else {
+              submitValue(value);
+            }
+          });
+        } catch (err) {
+          finish(undefined, err instanceof Error ? err : new Error(String(err)));
+        }
+      };
+
+      let timeoutId: NodeJS.Timeout | undefined;
+      if (options.timeout && options.timeout > 0) {
+        timeoutId = setTimeout(() => {
+          if (defaultValue !== undefined) {
+            return finish(defaultValue);
+          }
+          return finish(undefined, new Error('Input timeout'));
+        }, options.timeout);
+        if (typeof (timeoutId as any).unref === 'function') (timeoutId as any).unref();
+      }
+
+      input.focus();
+      screen.render();
+      readInput();
+    });
   }
 
   private updateLayout(): void {
