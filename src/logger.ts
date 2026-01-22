@@ -30,6 +30,8 @@ class Logger {
   private isJsonLike: boolean = false;
   private isTTY: boolean = typeof process !== 'undefined' ? !!process.stderr.isTTY : false;
   private showTimestamps: boolean = true; // default: always show timestamps
+  private sink?: (msg: string, level: LogLevel) => void;
+  private sinkPassthrough: boolean = true;
 
   configure(
     opts: {
@@ -62,6 +64,14 @@ class Logger {
     const output = opts.outputFormat || process.env.VISOR_OUTPUT_FORMAT || 'table';
     // In JSON/SARIF we suppress non-error logs unless explicitly verbose/debug
     this.isJsonLike = output === 'json' || output === 'sarif';
+  }
+
+  setSink(
+    sink?: (msg: string, level: LogLevel) => void,
+    opts: { passthrough?: boolean } = {}
+  ): void {
+    this.sink = sink;
+    this.sinkPassthrough = opts.passthrough !== undefined ? opts.passthrough : true;
   }
 
   private shouldLog(level: LogLevel): boolean {
@@ -98,6 +108,15 @@ class Logger {
     try {
       const suffix = this.getTraceSuffix(msg);
       const decoratedMsg = suffix ? `${msg}${suffix}` : msg;
+      const lvl = level || 'info';
+      if (this.sink) {
+        try {
+          this.sink(decoratedMsg, lvl);
+        } catch {
+          // ignore sink errors
+        }
+        if (!this.sinkPassthrough) return;
+      }
       if (this.showTimestamps) {
         const ts = new Date().toISOString();
         const lvl = level ? level : undefined;

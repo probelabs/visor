@@ -21,7 +21,7 @@ export interface CliOptions {
   output: OutputFormat;
   /** Path to configuration file */
   configPath?: string;
-  /** Timeout for check operations in milliseconds (default: 600000ms / 10 minutes) */
+  /** Timeout for check operations in milliseconds (default: 1200000ms / 20 minutes) */
   timeout?: number;
   /** Maximum number of checks to run in parallel (default: 3) */
   maxParallelism?: number;
@@ -63,6 +63,8 @@ export interface CliOptions {
   slack?: boolean;
   /** Keep workspace folders after execution (for debugging) */
   keepWorkspace?: boolean;
+  /** Enable interactive TUI (chat + logs tabs) */
+  tui?: boolean;
 }
 
 /**

@@ -72,11 +72,11 @@ describe('AIReviewService', () => {
       expect((service as any).config.timeout).toBe(60000);
     });
 
-    it('should use increased default timeout of 10 minutes', () => {
+    it('should use increased default timeout of 20 minutes', () => {
       process.env.GOOGLE_API_KEY = 'test-key';
 
       const service = new AIReviewService();
-      expect((service as any).config.timeout).toBe(600000); // 10 minutes
+      expect((service as any).config.timeout).toBe(1200000); // 20 minutes
     });
 
     it('should allow custom timeout configuration', () => {

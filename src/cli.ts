@@ -45,7 +45,7 @@ export class CLI {
       .option('--config <path>', 'Path to configuration file')
       .option(
         '--timeout <ms>',
-        'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
+        'Timeout for check operations in milliseconds (default: 1200000ms / 20 minutes)',
         value => parseInt(value, 10)
       )
       .option(
@@ -76,6 +76,7 @@ export class CLI {
         parseInt(value, 10)
       )
       .option('--message <text>', 'Message for human-input checks (inline text or file path)')
+      .option('--tui', 'Enable interactive TUI (chat + logs tabs)')
       .option('--keep-workspace', 'Keep workspace folders after execution (for debugging)')
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
@@ -121,7 +122,7 @@ export class CLI {
         .option('--config <path>', 'Path to configuration file')
         .option(
           '--timeout <ms>',
-          'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
+          'Timeout for check operations in milliseconds (default: 1200000ms / 20 minutes)',
           value => parseInt(value, 10)
         )
         .option(
@@ -155,6 +156,7 @@ export class CLI {
           parseInt(value, 10)
         )
         .option('--message <text>', 'Message for human-input checks (inline text or file path)')
+        .option('--tui', 'Enable interactive TUI (chat + logs tabs)')
         .option('--keep-workspace', 'Keep workspace folders after execution (for debugging)')
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
@@ -227,6 +229,7 @@ export class CLI {
         githubV2: false,
         slack: Boolean(options.slack),
         keepWorkspace: Boolean(options.keepWorkspace),
+        tui: Boolean(options.tui),
       };
     } catch (error: unknown) {
       // Handle commander.js exit overrides for help/version ONLY
@@ -322,7 +325,7 @@ export class CLI {
       .option('--config <path>', 'Path to configuration file')
       .option(
         '--timeout <ms>',
-        'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
+        'Timeout for check operations in milliseconds (default: 1200000ms / 20 minutes)',
         value => parseInt(value, 10)
       )
       .option(
@@ -351,6 +354,7 @@ export class CLI {
       .option('--debug-port <port>', 'Port for debug server (default: 3456)', value =>
         parseInt(value, 10)
       )
+      .option('--tui', 'Enable interactive TUI (chat + logs tabs)')
       .option('--keep-workspace', 'Keep workspace folders after execution (for debugging)')
       .addHelpText('after', this.getExamplesText());
 
