@@ -114,8 +114,6 @@ export class TuiManager {
       border: { type: 'line' },
       scrollable: true,
       alwaysScroll: false,
-      keys: true,
-      vi: true,
       mouse: true,
       tags: false,
       wrap: true,
@@ -134,8 +132,6 @@ export class TuiManager {
       border: { type: 'line' },
       scrollable: true,
       alwaysScroll: false,
-      keys: true,
-      vi: true,
       mouse: true,
       tags: false,
       wrap: true,
@@ -154,8 +150,6 @@ export class TuiManager {
       border: { type: 'line' },
       scrollable: true,
       alwaysScroll: true,
-      keys: true,
-      vi: true,
       mouse: true,
       tags: false,
       wrap: true,
@@ -435,9 +429,7 @@ export class TuiManager {
       if (!inputPane) return finish(undefined, new Error('Input pane unavailable'));
 
       if (this.inputPrompt) {
-        this.inputPrompt.setContent(
-          placeholder ? `${promptText}  (${placeholder})` : promptText
-        );
+        this.inputPrompt.setContent(placeholder ? `${promptText}  (${placeholder})` : promptText);
       }
       if (this.inputHint) {
         this.inputHint.setContent(
@@ -449,31 +441,27 @@ export class TuiManager {
       this.updateLayout();
       inputPane.show();
 
-      const input = (multiline
-        ? blessed.textarea({
-            parent: inputPane,
-            top: 1,
-            left: 1,
-            width: '100%-2',
-            height: '100%-3',
-            inputOnFocus: true,
-            keys: true,
-            mouse: true,
-            vi: true,
-            style: { fg: 'white', bg: 'black' },
-          })
-        : blessed.textbox({
-            parent: inputPane,
-            top: 1,
-            left: 1,
-            width: '100%-2',
-            height: '100%-3',
-            inputOnFocus: true,
-            keys: true,
-            mouse: true,
-            vi: true,
-            style: { fg: 'white', bg: 'black' },
-          })) as Textarea | Textbox;
+      const input = (
+        multiline
+          ? blessed.textarea({
+              parent: inputPane,
+              top: 1,
+              left: 1,
+              width: '100%-2',
+              height: '100%-3',
+              mouse: true,
+              style: { fg: 'white', bg: 'black' },
+            })
+          : blessed.textbox({
+              parent: inputPane,
+              top: 1,
+              left: 1,
+              width: '100%-2',
+              height: '100%-3',
+              mouse: true,
+              style: { fg: 'white', bg: 'black' },
+            })
+      ) as Textarea | Textbox;
       this.inputField = input;
 
       if (defaultValue) {
@@ -529,7 +517,6 @@ export class TuiManager {
         if (typeof (timeoutId as any).unref === 'function') (timeoutId as any).unref();
       }
 
-      input.focus();
       screen.render();
     });
   }
@@ -589,8 +576,8 @@ export class TuiManager {
     this.activeTab = tab;
     if (this.mainPane && this.logsPane) {
       if (tab === 'main') {
-        this.mainPane.show();
         this.logsPane.hide();
+        this.mainPane.show();
         this.outputBox?.focus();
       } else {
         this.mainPane.hide();
@@ -599,6 +586,8 @@ export class TuiManager {
       }
     }
     this.renderTabs();
+    // Force full screen redraw to clear artifacts from tab switching
+    this.screen?.realloc();
     this.screen?.render();
   }
 }

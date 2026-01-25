@@ -401,17 +401,12 @@ export class AIReviewService {
         } catch {}
       }
       // Check if API key is available for real AI models
+      // Note: If no API key, ProbeAgent.initialize() will attempt CLI fallback (claude-code/codex)
       if (!this.config.apiKey) {
-        const errorMessage =
-          'No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY environment variable, or configure AWS credentials for Bedrock (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).';
-
-        // In debug mode, proceed to call the (mocked) provider so tests can assert prompt/session behavior
+        log('⚠️ No API key configured - ProbeAgent will attempt CLI fallback (claude-code/codex)');
         if (debugInfo) {
-          debugInfo.errors = [errorMessage];
-          debugInfo.rawResponse = 'API call attempted in debug without API key (test mode)';
-          // Continue without returning; ProbeAgent is typically mocked under tests.
-        } else {
-          throw new Error(errorMessage);
+          debugInfo.errors = debugInfo.errors || [];
+          debugInfo.errors.push('No API key configured - attempting CLI fallback');
         }
       }
     }
@@ -1904,6 +1899,10 @@ ${'='.repeat(60)}
       }
 
       const agent = new ProbeAgent(options);
+
+      // Initialize agent to enable CLI fallback detection (claude-code/codex)
+      // This must be called before agent.answer() for auto-fallback to work
+      await agent.initialize();
 
       log('🚀 Calling ProbeAgent...');
       // Load and pass the actual schema content if provided (skip for plain schema)

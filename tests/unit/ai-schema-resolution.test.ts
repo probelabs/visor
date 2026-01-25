@@ -8,6 +8,7 @@ jest.mock('@probelabs/probe', () => {
   return {
     // Minimal stub that records arguments and returns schema-shaped JSON
     ProbeAgent: jest.fn().mockImplementation(() => ({
+      initialize: jest.fn().mockResolvedValue(undefined),
       answer: jest.fn().mockImplementation((message: string, images?: unknown, options?: any) => {
         lastAnswerArgs = { message, images, options };
         // Return JSON that is valid for text/overview schemas by default

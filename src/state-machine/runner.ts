@@ -255,6 +255,28 @@ export class StateMachineRunner {
       }
     } catch {}
 
+    // Call onCheckComplete hook for TUI streaming updates
+    if (event.type === 'CheckCompleted') {
+      try {
+        const hook = this.context.executionContext?.hooks?.onCheckComplete;
+        if (typeof hook === 'function') {
+          const checkConfig = this.context.config?.checks?.[event.checkId];
+          hook({
+            checkId: event.checkId,
+            result: event.result,
+            checkConfig: checkConfig
+              ? {
+                  type: checkConfig.type,
+                  group: (checkConfig as any).group,
+                  criticality: (checkConfig as any).criticality,
+                  schema: checkConfig.schema,
+                }
+              : undefined,
+          });
+        }
+      } catch {}
+    }
+
     if (this.context.debug && event.type !== 'StateTransition') {
       logger.debug(`[StateMachine] Event: ${event.type}`);
     }

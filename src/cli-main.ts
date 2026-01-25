@@ -730,7 +730,7 @@ export async function main(): Promise<void> {
           if (!tui) throw new Error('TUI not available');
           tui.setStatus('Awaiting input...');
           try {
-            return await tui.promptUser({
+            const userInput = await tui.promptUser({
               prompt: request.prompt,
               placeholder: request.placeholder,
               multiline: request.multiline,
@@ -738,9 +738,45 @@ export async function main(): Promise<void> {
               defaultValue: request.default,
               allowEmpty: request.allowEmpty,
             });
+            // Append user input to chat content
+            if (userInput && userInput.trim()) {
+              const currentChat = (tui as any).pendingChat || '';
+              const newChat = currentChat
+                ? `${currentChat}\n\n**You:** ${userInput.trim()}`
+                : `**You:** ${userInput.trim()}`;
+              tui.setChatContent(newChat);
+            }
+            return userInput;
           } finally {
             tui.setStatus('Running');
           }
+        };
+        // Hook to update TUI chat content when AI checks complete
+        executionContext.hooks.onCheckComplete = info => {
+          if (!tui) return;
+          const { checkConfig, result } = info;
+          // Only show AI/log checks with group=chat and criticality=info
+          const isAi = checkConfig?.type === 'ai';
+          const isLogChat = checkConfig?.type === 'log' && checkConfig?.group === 'chat';
+          if (!isAi && !isLogChat) return;
+          if (checkConfig?.criticality === 'internal') return;
+
+          // Extract text from result
+          let text: string | undefined;
+          const out = result?.output as any;
+          if (out && typeof out.text === 'string' && out.text.trim().length > 0) {
+            text = out.text.trim();
+          } else if (typeof result?.content === 'string' && result.content.trim().length > 0) {
+            text = result.content.trim();
+          }
+          if (!text) return;
+
+          // Append to chat content
+          const currentChat = (tui as any).pendingChat || '';
+          const newChat = currentChat
+            ? `${currentChat}\n\n---\n\n**Assistant:** ${text}`
+            : `**Assistant:** ${text}`;
+          tui.setChatContent(newChat);
         };
         tui.setAbortHandler(() => {
           void (async () => {
