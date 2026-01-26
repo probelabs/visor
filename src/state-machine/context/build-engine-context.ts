@@ -148,6 +148,8 @@ export async function initializeWorkspace(context: EngineContext): Promise<Engin
       basePath:
         workspaceConfig?.base_path || process.env.VISOR_WORKSPACE_PATH || '/tmp/visor-workspaces',
       cleanupOnExit: keepWorkspace ? false : workspaceConfig?.cleanup_on_exit !== false,
+      name: workspaceConfig?.name || process.env.VISOR_WORKSPACE_NAME,
+      mainProjectName: workspaceConfig?.main_project_name || process.env.VISOR_WORKSPACE_PROJECT,
     });
 
     // Initialize workspace (creates main project worktree)
@@ -157,6 +159,14 @@ export async function initializeWorkspace(context: EngineContext): Promise<Engin
     context.workspace = workspace;
     context.workingDirectory = info.mainProjectPath;
     context.originalWorkingDirectory = originalPath;
+
+    // Export workspace paths for templates/commands
+    try {
+      process.env.VISOR_WORKSPACE_ROOT = info.workspacePath;
+      process.env.VISOR_WORKSPACE_MAIN_PROJECT = info.mainProjectPath;
+      process.env.VISOR_WORKSPACE_MAIN_PROJECT_NAME = info.mainProjectName;
+      process.env.VISOR_ORIGINAL_WORKDIR = originalPath;
+    } catch {}
 
     logger.info(`[Workspace] Initialized workspace: ${info.workspacePath}`);
     logger.debug(`[Workspace] Main project at: ${info.mainProjectPath}`);

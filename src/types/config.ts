@@ -1185,6 +1185,10 @@ export interface WorkspaceConfig {
   enabled?: boolean;
   /** Base path for workspaces (default: /tmp/visor-workspaces) */
   base_path?: string;
+  /** Workspace directory name (defaults to session id) */
+  name?: string;
+  /** Main project folder name inside the workspace (defaults to original directory name) */
+  main_project_name?: string;
   /** Clean up workspace on exit (default: true) */
   cleanup_on_exit?: boolean;
 }

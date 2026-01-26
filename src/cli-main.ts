@@ -685,6 +685,17 @@ export async function main(): Promise<void> {
     if (options.keepWorkspace) {
       process.env.VISOR_KEEP_WORKSPACE = 'true';
     }
+    if (options.workspaceHere) {
+      process.env.VISOR_WORKSPACE_PATH = process.cwd();
+    } else if (options.workspacePath) {
+      process.env.VISOR_WORKSPACE_PATH = options.workspacePath;
+    }
+    if (options.workspaceName) {
+      process.env.VISOR_WORKSPACE_NAME = options.workspaceName;
+    }
+    if (options.workspaceProjectName) {
+      process.env.VISOR_WORKSPACE_PROJECT = options.workspaceProjectName;
+    }
     // Configure centralized logger
     configureLoggerFromCli({
       output: options.output,

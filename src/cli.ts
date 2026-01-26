@@ -45,7 +45,7 @@ export class CLI {
       .option('--config <path>', 'Path to configuration file')
       .option(
         '--timeout <ms>',
-        'Timeout for check operations in milliseconds (default: 1200000ms / 20 minutes)',
+        'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
         value => parseInt(value, 10)
       )
       .option(
@@ -76,8 +76,17 @@ export class CLI {
         parseInt(value, 10)
       )
       .option('--message <text>', 'Message for human-input checks (inline text or file path)')
-      .option('--tui', 'Enable interactive TUI (chat + logs tabs)')
       .option('--keep-workspace', 'Keep workspace folders after execution (for debugging)')
+      .option('--workspace-path <path>', 'Workspace base path (overrides VISOR_WORKSPACE_PATH)')
+      .option('--workspace-here', 'Place workspace under current directory')
+      .option(
+        '--workspace-name <name>',
+        'Workspace directory name (overrides VISOR_WORKSPACE_NAME)'
+      )
+      .option(
+        '--workspace-project-name <name>',
+        'Main project folder name inside workspace (overrides VISOR_WORKSPACE_PROJECT)'
+      )
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
 
@@ -122,7 +131,7 @@ export class CLI {
         .option('--config <path>', 'Path to configuration file')
         .option(
           '--timeout <ms>',
-          'Timeout for check operations in milliseconds (default: 1200000ms / 20 minutes)',
+          'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
           value => parseInt(value, 10)
         )
         .option(
@@ -156,8 +165,17 @@ export class CLI {
           parseInt(value, 10)
         )
         .option('--message <text>', 'Message for human-input checks (inline text or file path)')
-        .option('--tui', 'Enable interactive TUI (chat + logs tabs)')
         .option('--keep-workspace', 'Keep workspace folders after execution (for debugging)')
+        .option('--workspace-path <path>', 'Workspace base path (overrides VISOR_WORKSPACE_PATH)')
+        .option('--workspace-here', 'Place workspace under current directory')
+        .option(
+          '--workspace-name <name>',
+          'Workspace directory name (overrides VISOR_WORKSPACE_NAME)'
+        )
+        .option(
+          '--workspace-project-name <name>',
+          'Main project folder name inside workspace (overrides VISOR_WORKSPACE_PROJECT)'
+        )
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
         .addHelpText('after', this.getExamplesText())
@@ -229,7 +247,10 @@ export class CLI {
         githubV2: false,
         slack: Boolean(options.slack),
         keepWorkspace: Boolean(options.keepWorkspace),
-        tui: Boolean(options.tui),
+        workspacePath: options.workspacePath,
+        workspaceHere: Boolean(options.workspaceHere),
+        workspaceName: options.workspaceName,
+        workspaceProjectName: options.workspaceProjectName,
       };
     } catch (error: unknown) {
       // Handle commander.js exit overrides for help/version ONLY
@@ -325,7 +346,7 @@ export class CLI {
       .option('--config <path>', 'Path to configuration file')
       .option(
         '--timeout <ms>',
-        'Timeout for check operations in milliseconds (default: 1200000ms / 20 minutes)',
+        'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
         value => parseInt(value, 10)
       )
       .option(
@@ -354,8 +375,17 @@ export class CLI {
       .option('--debug-port <port>', 'Port for debug server (default: 3456)', value =>
         parseInt(value, 10)
       )
-      .option('--tui', 'Enable interactive TUI (chat + logs tabs)')
       .option('--keep-workspace', 'Keep workspace folders after execution (for debugging)')
+      .option('--workspace-path <path>', 'Workspace base path (overrides VISOR_WORKSPACE_PATH)')
+      .option('--workspace-here', 'Place workspace under current directory')
+      .option(
+        '--workspace-name <name>',
+        'Workspace directory name (overrides VISOR_WORKSPACE_NAME)'
+      )
+      .option(
+        '--workspace-project-name <name>',
+        'Main project folder name inside workspace (overrides VISOR_WORKSPACE_PROJECT)'
+      )
       .addHelpText('after', this.getExamplesText());
 
     // Get the basic help and append examples manually if addHelpText doesn't work

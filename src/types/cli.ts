@@ -21,7 +21,7 @@ export interface CliOptions {
   output: OutputFormat;
   /** Path to configuration file */
   configPath?: string;
-  /** Timeout for check operations in milliseconds (default: 1200000ms / 20 minutes) */
+  /** Timeout for check operations in milliseconds (default: 600000ms / 10 minutes) */
   timeout?: number;
   /** Maximum number of checks to run in parallel (default: 3) */
   maxParallelism?: number;
@@ -63,8 +63,14 @@ export interface CliOptions {
   slack?: boolean;
   /** Keep workspace folders after execution (for debugging) */
   keepWorkspace?: boolean;
-  /** Enable interactive TUI (chat + logs tabs) */
-  tui?: boolean;
+  /** Set workspace base path (overrides VISOR_WORKSPACE_PATH) */
+  workspacePath?: string;
+  /** Use current working directory as workspace base path */
+  workspaceHere?: boolean;
+  /** Set workspace directory name (overrides VISOR_WORKSPACE_NAME) */
+  workspaceName?: string;
+  /** Set main project folder name inside workspace (overrides VISOR_WORKSPACE_PROJECT) */
+  workspaceProjectName?: string;
 }
 
 /**

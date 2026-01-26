@@ -19,6 +19,10 @@ id: workflow-builder
 name: Workflow Builder
 description: AI-powered Visor workflow generator and editor with integrated validation
 
+workspace:
+  enabled: true
+  base_path: .visor-workspaces
+
 inputs:
   - name: mcp_config
     description: Optional MCP server configuration JSON for Claude CLI
@@ -27,7 +31,7 @@ inputs:
       type: string
 
 routing:
-  max_loops: 10
+  max_loops: 30
 
 outputs:
   - name: workflow_path
@@ -63,7 +67,7 @@ steps:
 
   # 2. AI interprets the request and determines mode
   interpret-request:
-    type: command
+    type: ai
     group: input
     criticality: internal
     depends_on: [get-requirements]
@@ -73,8 +77,9 @@ steps:
 
     guarantee: "output && output.mode && output.workflow_path && output.requirements"
 
-    exec: |
-      cat << 'PROMPT_EOF' | claude -p --output-format json
+    timeout: 120000
+
+    prompt: |
       Analyze this user request and determine if they want to CREATE a new workflow
       or EDIT an existing one.
 
@@ -89,34 +94,27 @@ steps:
       4. Extract the core requirements/changes they want
 
       IMPORTANT PATH RULES:
-      - For CREATE mode: ALWAYS use "./generated-workflow.yaml" as workflow_path
+      - For CREATE mode: ALWAYS use "./generated-workflow.yaml" as workflow_path (MUST be this exact path)
       - For EDIT mode: Use the actual path to the existing file
       - Tests should ALWAYS be included inline in the same workflow file (not separate)
 
-      Your response MUST be valid JSON matching this exact schema:
-      {
-        "mode": "create" or "edit",
-        "workflow_path": "./generated-workflow.yaml" (for create) or "path/to/existing.yaml" (for edit),
-        "requirements": "cleaned up requirements string",
-        "existing_workflow_summary": "summary of existing workflow" (only for edit mode)
-      }
-
-      Output ONLY the JSON object, no markdown, no explanation.
-      PROMPT_EOF
-
-    output_format: json
-    timeout: 120000
-
-    # Extract the actual result from Claude CLI's JSON wrapper
-    transform_js: |
-      if (output && output.result) {
-        try {
-          return JSON.parse(output.result);
-        } catch (e) {
-          return { mode: 'create', workflow_path: './generated-workflow.yaml', requirements: output.result };
-        }
-      }
-      return output;
+    schema:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [create, edit]
+          description: Whether to create new or edit existing workflow
+        workflow_path:
+          type: string
+          description: Path to the workflow file (./generated-workflow.yaml for create)
+        requirements:
+          type: string
+          description: Cleaned up requirements string
+        existing_workflow_summary:
+          type: string
+          description: Summary of existing workflow (only for edit mode)
+      required: [mode, workflow_path, requirements]
 
   # 3. Checkout Visor source for context (provides docs and examples)
   checkout-visor:
@@ -131,7 +129,7 @@ steps:
     repository: probelabs/visor
     ref: new-branch
     fetch_depth: 1
-    working_directory: /tmp/visor-context
+    working_directory: "{% if env.VISOR_WORKSPACE_MAIN_PROJECT %}{{ env.VISOR_WORKSPACE_MAIN_PROJECT }}/.visor-context{% else %}./.visor-context{% endif %}"
 
   # 4. Generate/edit workflow using AI with file editing capabilities
   generate-workflow:
@@ -152,11 +150,12 @@ steps:
       allowBash: true
       bashConfig:
         allow:
-          - "npx @probelabs/visor"
-          - "ls"
-          - "cat"
-          - "head"
-          - "tail"
+          - "npx:*"
+          - "visor:*"
+          - "ls:*"
+          - "cat:*"
+          - "head:*"
+          - "tail:*"
 
     prompt: |
       {% assign r = outputs['interpret-request'] %}
@@ -177,9 +176,22 @@ steps:
 
       {{ r.requirements }}
 
-      Create the workflow at EXACTLY this path: {{ workflowPath }}
-      DO NOT use any other file name or path!
+      Create the workflow at this EXACT path: {{ workflowPath }}
+      The working directory is the workspace project folder; create/edit files there (relative paths resolve inside the workspace).
+
+      CRITICAL: The file MUST be named exactly "{{ workflowPath }}" - no variations!
+      - DO NOT use names like "generated-workflow-fixed.yaml" or "hello-world.yaml"
+      - DO NOT add suffixes like "-fixed", "-v2", "-new"
       {% endif %}
+
+      AVAILABLE TOOLS - You can ONLY use these tools:
+      - `create` - Create a new file. Arguments: file_path (string), content (string)
+      - `edit` - Edit an existing file. Arguments: file_path (string), old_string (string), new_string (string)
+      - `search` - Search for files or content
+      - `bash` - Run shell commands (only npx, visor, ls, cat, head, tail are allowed)
+
+      IMPORTANT: Do NOT try to use tools like "implement", "write", or any other tool name.
+      To create a file, use the `create` tool with file_path and content arguments.
 
       INSTRUCTIONS:
       1. Read the guide: {{ visorPath }}/docs/workflow-creation-guide.md
@@ -187,15 +199,16 @@ steps:
 
       {% if r.mode == 'edit' %}
       3. READ the existing workflow: {{ workflowPath }}
-      4. Make targeted changes - preserve existing functionality
+      4. Make targeted changes using the `edit` tool - preserve existing functionality
       5. Update inline tests if needed (tests: section in the same file)
       {% else %}
-      3. Create workflow file at EXACTLY this path: {{ workflowPath }}
+      3. Use the `create` tool to create the workflow file at EXACTLY: {{ workflowPath }}
       4. Include tests INLINE in the same file using the tests: section
       {% endif %}
 
       IMPORTANT: Tests must be included INLINE in the workflow file using a "tests:" section.
-      Do NOT create separate test files. Example structure:
+      Do NOT create separate test files. Add tests that cover ALL intended use-cases
+      (happy paths, error paths, and edge cases). Example structure:
       ```yaml
       version: "1.0"
       steps:
@@ -214,13 +227,17 @@ steps:
 
       Follow style guide: one step/one responsibility, guards, contracts, proper key ordering.
 
-      VALIDATION COMMANDS - Run these to verify your work:
+      VALIDATION COMMANDS - You may run ONLY these commands to verify your work:
       - Validate: npx @probelabs/visor@latest validate --config {{ workflowPath }}
-      - Lint: npx @probelabs/visor@latest lint --config {{ workflowPath }}
+      - Test: npx @probelabs/visor@latest test --config {{ workflowPath }}
 
-      CRITICAL: After creating/editing, run the validation and lint commands.
-      If there are errors, fix them before finishing.
-      Iterate until validation and lint pass.
+      IMPORTANT: You MUST use "npx @probelabs/visor@latest" - do NOT use just "visor".
+      Only "npx @probelabs/visor" commands are allowed in bash.
+      DO NOT run this agent/workflow directly from this step.
+      Do NOT run validate or lint manually; the workflow will handle validation.
+
+      After creating the file with the `create` tool, run the validate command first, then the test command if needed.
+      If there are errors, fix them using the `edit` tool before finishing.
 
     on_success:
       goto: validate-workflow
@@ -238,6 +255,10 @@ steps:
     exec: |
       {% assign r = outputs['interpret-request'] %}
       WORKFLOW_PATH="{{ r.workflow_path | default: './generated-workflow.yaml' }}"
+      echo "DEBUG: Current directory: $(pwd)"
+      echo "DEBUG: Looking for: $WORKFLOW_PATH"
+      echo "DEBUG: Files in current directory:"
+      ls -la . 2>&1 | head -20
       if [ -f "$WORKFLOW_PATH" ]; then
         npx @probelabs/visor@latest validate --config "$WORKFLOW_PATH" 2>&1
       else
@@ -272,9 +293,10 @@ steps:
       allowBash: true
       bashConfig:
         allow:
-          - "npx @probelabs/visor"
-          - "cat"
-          - "ls"
+          - "npx:*"
+          - "visor:*"
+          - "cat:*"
+          - "ls:*"
 
     prompt: |
       {% assign r = outputs['interpret-request'] %}
@@ -282,19 +304,30 @@ steps:
 
       The workflow validation failed. Fix the issues.
 
-      Workflow path: {{ workflowPath }}
+      CRITICAL: The workflow file MUST be at this EXACT path: {{ workflowPath }}
+      DO NOT create any other file. Only edit {{ workflowPath }}.
 
       Validation output:
       {{ outputs['validate-workflow'].stdout }}
       {{ outputs['validate-workflow'].stderr }}
 
-      Instructions:
-      1. Check if {{ workflowPath }} exists - if not, create it
-      2. Read the file to understand current content
-      3. Make targeted fixes - don't rewrite everything
+      AVAILABLE TOOLS - You can ONLY use these tools:
+      - `create` - Create a new file. Arguments: file_path (string), content (string)
+      - `edit` - Edit an existing file. Arguments: file_path (string), old_string (string), new_string (string)
+      - `search` - Search for files or content
+      - `bash` - Run shell commands (only npx, visor, cat, ls are allowed)
 
-      After fixing, verify with:
-      - npx @probelabs/visor@latest validate --config {{ workflowPath }}
+      Instructions:
+      1. If {{ workflowPath }} doesn't exist, use the `create` tool to create it at EXACTLY that path
+      2. If it exists, read the file to understand current content
+      3. Make targeted fixes using the `edit` tool - don't rewrite everything
+      4. NEVER create a file with a different name like "generated-workflow-fixed.yaml"
+      5. Do NOT run this agent/workflow directly from this step.
+      6. Only the validate and test commands are allowed for verification.
+
+      If you need to verify after fixing, use ONLY these commands:
+      npx @probelabs/visor@latest validate --config {{ workflowPath }}
+      npx @probelabs/visor@latest test --config {{ workflowPath }}
 
       Keep iterating until validation passes.
 
@@ -303,7 +336,7 @@ steps:
     on_fail:
       goto: validate-workflow
 
-  # 7. Run linter (alias for validate)
+  # 7. Run validation (lint subcommand not available in @latest)
   lint-workflow:
     type: command
     group: validation
@@ -317,7 +350,7 @@ steps:
       {% assign r = outputs['interpret-request'] %}
       WORKFLOW_PATH="{{ r.workflow_path | default: './generated-workflow.yaml' }}"
       if [ -f "$WORKFLOW_PATH" ]; then
-        npx @probelabs/visor@latest lint --config "$WORKFLOW_PATH" 2>&1
+        npx @probelabs/visor@latest validate --config "$WORKFLOW_PATH" 2>&1
       else
         echo "Error: $WORKFLOW_PATH not found" >&2
         exit 1
@@ -350,15 +383,16 @@ steps:
       allowBash: true
       bashConfig:
         allow:
-          - "npx @probelabs/visor"
-          - "cat"
-          - "ls"
+          - "npx:*"
+          - "visor:*"
+          - "cat:*"
+          - "ls:*"
 
     prompt: |
       {% assign r = outputs['interpret-request'] %}
       {% assign workflowPath = r.workflow_path | default: './generated-workflow.yaml' %}
 
-      The workflow has lint issues. Fix them.
+      The workflow has validation issues. Fix them.
 
       Workflow path: {{ workflowPath }}
 
@@ -366,15 +400,25 @@ steps:
       {{ outputs['lint-workflow'].stdout }}
       {{ outputs['lint-workflow'].stderr }}
 
+      AVAILABLE TOOLS - You can ONLY use these tools:
+      - `edit` - Edit an existing file. Arguments: file_path (string), old_string (string), new_string (string)
+      - `search` - Search for files or content
+      - `bash` - Run shell commands (only npx, visor, cat, ls are allowed)
+
       Instructions:
       1. Read {{ workflowPath }} to understand current content
-      2. Fix lint errors - warnings can be left if minor
+      2. Fix validation errors using the `edit` tool - warnings can be left if minor
       3. Make targeted fixes, don't rewrite everything
+      4. Do NOT run this agent/workflow directly from this step.
+      5. Only the validate and test commands are allowed for verification.
 
-      After fixing, verify with:
-      - npx @probelabs/visor@latest lint --config {{ workflowPath }}
+      If you need to verify after fixing, use ONLY these commands:
+      npx @probelabs/visor@latest validate --config {{ workflowPath }}
+      npx @probelabs/visor@latest test --config {{ workflowPath }}
 
-      Keep iterating until lint passes.
+      IMPORTANT: Use "npx @probelabs/visor@latest" - NOT just "visor".
+
+      Keep iterating until validation passes.
 
     on_success:
       goto: lint-workflow
@@ -429,9 +473,10 @@ steps:
       allowBash: true
       bashConfig:
         allow:
-          - "npx @probelabs/visor"
-          - "cat"
-          - "ls"
+          - "npx:*"
+          - "visor:*"
+          - "cat:*"
+          - "ls:*"
 
     prompt: |
       {% assign r = outputs['interpret-request'] %}
@@ -446,13 +491,23 @@ steps:
       {{ outputs['run-tests'].stdout }}
       {{ outputs['run-tests'].stderr }}
 
+      AVAILABLE TOOLS - You can ONLY use these tools:
+      - `edit` - Edit an existing file. Arguments: file_path (string), old_string (string), new_string (string)
+      - `search` - Search for files or content
+      - `bash` - Run shell commands (only npx, visor, cat, ls are allowed)
+
       Instructions:
       1. Read the workflow file to understand the steps and inline tests
       2. Analyze the test failures
-      3. Fix either the workflow steps (if logic is wrong) or the inline tests (if expectations are wrong)
+      3. Fix either the workflow steps (if logic is wrong) or the inline tests using the `edit` tool
+      4. Ensure tests cover ALL intended use-cases (happy paths, error paths, edge cases)
+      5. Do NOT run this agent/workflow directly from this step.
+      6. Only the validate and test commands are allowed for verification.
 
-      After fixing, verify with:
-      - npx @probelabs/visor@latest test --config {{ workflowPath }}
+      After fixing, verify with this EXACT command:
+      npx @probelabs/visor@latest test --config {{ workflowPath }}
+
+      IMPORTANT: Use "npx @probelabs/visor@latest" - NOT just "visor".
 
       Keep iterating until tests pass.
 
@@ -463,17 +518,25 @@ steps:
 
   # 11. Code review the generated workflow
   review-workflow:
-    type: command
+    type: ai
     group: review
     criticality: policy
     depends_on: [run-tests]
 
     guarantee: "output && Array.isArray(output.issues) && typeof output.summary === 'string' && typeof output.approval === 'boolean'"
 
-    exec: |
+    timeout: 180000
+
+    ai:
+      allowBash: true
+      bashConfig:
+        allow:
+          - "cat:*"
+
+    prompt: |
       {% assign r = outputs['interpret-request'] %}
       {% assign workflowPath = r.workflow_path | default: './generated-workflow.yaml' %}
-      cat << 'PROMPT_EOF' | claude -p --output-format json
+
       Review the {% if r.mode == 'edit' %}edited{% else %}generated{% endif %} workflow for:
 
       1. **Security Issues** - guards, credentials, input sanitization
@@ -486,39 +549,37 @@ steps:
 
       Workflow file: {{ workflowPath }}
 
-      Read the workflow file and provide your review.
+      First read the workflow file, then provide your review.
       Be constructive and specific. Flag critical issues.
+      Do NOT run this agent/workflow directly from this step.
+      Only the validate and test commands are allowed for verification if you must run one.
 
-      Your response MUST be valid JSON matching this exact schema:
-      {
-        "issues": [
-          {
-            "severity": "critical" | "error" | "warning" | "info",
-            "category": "security" | "edge-case" | "coverage" | "style" | "other",
-            "message": "description of the issue",
-            "suggestion": "how to fix it (optional)"
-          }
-        ],
-        "summary": "overall review summary",
-        "approval": true or false (whether the workflow is ready for use)
-      }
-
-      Output ONLY the JSON object, no markdown, no explanation.
-      PROMPT_EOF
-
-    output_format: json
-    timeout: 180000
-
-    # Extract the actual result from Claude CLI's JSON wrapper
-    transform_js: |
-      if (output && output.result) {
-        try {
-          return JSON.parse(output.result);
-        } catch (e) {
-          return { issues: [], summary: output.result, approval: true };
-        }
-      }
-      return output;
+    schema:
+      type: object
+      properties:
+        issues:
+          type: array
+          items:
+            type: object
+            properties:
+              severity:
+                type: string
+                enum: [critical, error, warning, info]
+              category:
+                type: string
+                enum: [security, edge-case, coverage, style, other]
+              message:
+                type: string
+              suggestion:
+                type: string
+            required: [severity, category, message]
+        summary:
+          type: string
+          description: Overall review summary
+        approval:
+          type: boolean
+          description: Whether the workflow is ready for use
+      required: [issues, summary, approval]
 
     fail_if: "output.issues?.some(i => i.severity === 'critical' || i.severity === 'error')"
 
@@ -526,9 +587,38 @@ steps:
       run: [apply-review-fixes]
 
     on_success:
+      goto: publish-workflow
+
+  # 12. Publish workflow to original working directory
+  publish-workflow:
+    type: command
+    group: output
+    criticality: info
+    depends_on: [review-workflow]
+
+    assume:
+      - "outputs['review-workflow'] != null"
+
+    exec: |
+      {% assign r = outputs['interpret-request'] %}
+      WORKFLOW_PATH="{{ r.workflow_path | default: './generated-workflow.yaml' }}"
+      ORIG_DIR="${VISOR_ORIGINAL_WORKDIR:-$PWD}"
+      if [ -f "$WORKFLOW_PATH" ]; then
+        mkdir -p "$ORIG_DIR"
+        cp "$WORKFLOW_PATH" "$ORIG_DIR/$(basename "$WORKFLOW_PATH")"
+        echo "Copied to $ORIG_DIR/$(basename "$WORKFLOW_PATH")"
+      else
+        echo "Error: $WORKFLOW_PATH not found" >&2
+        exit 1
+      fi
+
+    guarantee: "output != null"
+    fail_if: "output.exit_code !== 0"
+
+    on_success:
       goto: finalize
 
-  # 12. Apply review fixes using AI
+  # 13. Apply review fixes using AI
   apply-review-fixes:
     type: ai
     group: fixes
@@ -545,9 +635,10 @@ steps:
       allowBash: true
       bashConfig:
         allow:
-          - "npx @probelabs/visor"
-          - "cat"
-          - "ls"
+          - "npx:*"
+          - "visor:*"
+          - "cat:*"
+          - "ls:*"
 
     prompt: |
       {% assign r = outputs['interpret-request'] %}
@@ -563,24 +654,32 @@ steps:
 
       Summary: {{ review.summary }}
 
+      AVAILABLE TOOLS - You can ONLY use these tools:
+      - `edit` - Edit an existing file. Arguments: file_path (string), old_string (string), new_string (string)
+      - `search` - Search for files or content
+      - `bash` - Run shell commands (only npx, visor, cat, ls are allowed)
+
       Instructions:
-      Fix the issues in {{ workflowPath }} (workflow steps and inline tests are in the same file).
+      Fix the issues in {{ workflowPath }} using the `edit` tool (workflow steps and inline tests are in the same file).
 
       - Critical/Error issues must be fixed
       - Warning issues should be addressed if straightforward
       - Info issues are optional improvements
+      - Ensure tests cover ALL intended use-cases after changes
+      - Do NOT run this agent/workflow directly from this step
+      - Only the validate and test commands are allowed for verification
 
     on_success:
       goto: run-tests
     on_fail:
       goto: run-tests
 
-  # 13. Final output
+  # 14. Final output
   finalize:
     type: log
     group: output
     criticality: info
-    depends_on: [review-workflow]
+    depends_on: [publish-workflow]
 
     message: |
       {% assign r = outputs['interpret-request'] %}
@@ -590,6 +689,7 @@ steps:
 
       File: {{ workflowPath }}
       (Tests included inline in the same file)
+      Published: {{ outputs['publish-workflow'] | default: 'copy step did not run' }}
 
       Review Summary:
       {{ outputs['review-workflow'].summary }}
