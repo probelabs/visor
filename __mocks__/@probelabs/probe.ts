@@ -4,6 +4,10 @@ export class ProbeAgent {
     // Mock constructor
   }
 
+  async initialize(): Promise<void> {
+    // Mock initialize hook (no-op)
+  }
+
   async answer(message: string, images?: any[], options?: any): Promise<string> {
     // Mock implementation that will be overridden in tests
     return JSON.stringify({
