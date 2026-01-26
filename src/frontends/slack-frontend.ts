@@ -49,6 +49,7 @@ export class SlackFrontend implements Frontend {
   private ackRef: { channel: string; ts: string } | null = null;
   private ackName: string = 'eyes';
   private doneName: string = 'thumbsup';
+  private errorNotified: boolean = false;
 
   constructor(config?: SlackFrontendConfig) {
     this.cfg = config || {};
@@ -94,6 +95,13 @@ export class SlackFrontend implements Frontend {
         await this.maybePostDirectReply(ctx, ev.checkId, ev.result).catch(() => {});
       })
     );
+    this.subs.push(
+      bus.on('CheckErrored', async (env: any) => {
+        const ev = (env && env.payload) || env;
+        const message = ev?.error?.message || 'Execution error';
+        await this.maybePostError(ctx, 'Check failed', message, ev?.checkId).catch(() => {});
+      })
+    );
 
     // On terminal state, replace 👀 with 👍 if we acked an inbound Slack message
     this.subs.push(
@@ -102,6 +110,13 @@ export class SlackFrontend implements Frontend {
         if (ev && (ev.to === 'Completed' || ev.to === 'Error')) {
           await this.finalizeReactions(ctx).catch(() => {});
         }
+      })
+    );
+    this.subs.push(
+      bus.on('Shutdown', async (env: any) => {
+        const ev = (env && env.payload) || env;
+        const message = ev?.error?.message || 'Fatal error';
+        await this.maybePostError(ctx, 'Run failed', message).catch(() => {});
       })
     );
     // Add 👀 acknowledgement as soon as first check is scheduled for Slack-driven runs
@@ -222,6 +237,55 @@ export class SlackFrontend implements Frontend {
       if (channel && ts) return { channel, ts };
     } catch {}
     return null;
+  }
+
+  private isTelemetryEnabled(ctx: FrontendContext): boolean {
+    try {
+      const anyCfg: any = ctx.config || {};
+      const slackCfg: any = anyCfg.slack || {};
+      const telemetryCfg = slackCfg.telemetry ?? (this.cfg as any)?.telemetry;
+      return (
+        telemetryCfg === true ||
+        (telemetryCfg && typeof telemetryCfg === 'object' && telemetryCfg.enabled === true)
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private async maybePostError(
+    ctx: FrontendContext,
+    title: string,
+    message: string,
+    checkId?: string
+  ): Promise<void> {
+    if (this.errorNotified) return;
+    if (!this.isTelemetryEnabled(ctx)) return;
+    const slack = this.getSlack(ctx);
+    if (!slack) return;
+    const payload = this.getInboundSlackPayload(ctx);
+    const ev: any = payload?.event;
+    const channel = String(ev?.channel || '');
+    const threadTs = String(ev?.thread_ts || ev?.ts || ev?.event_ts || '');
+    if (!channel || !threadTs) return;
+
+    let text = `❌ ${title}`;
+    if (checkId) text += `\nCheck: ${checkId}`;
+    if (message) text += `\n${message}`;
+
+    const traceInfo = this.getTraceInfo();
+    if (traceInfo?.traceId) {
+      text += `\n\n\`trace_id: ${traceInfo.traceId}\``;
+    }
+
+    const formattedText = formatSlackText(text);
+    await slack.chat.postMessage({ channel, text: formattedText, thread_ts: threadTs });
+    try {
+      ctx.logger.info(
+        `[slack-frontend] posted error notice to ${channel} thread=${threadTs} check=${checkId || 'run'}`
+      );
+    } catch {}
+    this.errorNotified = true;
   }
 
   private async ensureAcknowledgement(ctx: FrontendContext): Promise<void> {
