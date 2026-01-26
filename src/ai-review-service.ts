@@ -1901,8 +1901,11 @@ ${'='.repeat(60)}
       const agent = new ProbeAgent(options);
 
       // Initialize agent to enable CLI fallback detection (claude-code/codex)
-      // This must be called before agent.answer() for auto-fallback to work
-      await agent.initialize();
+      // This must be called before agent.answer() for auto-fallback to work.
+      // Newer ProbeAgent versions may not expose initialize(); guard to avoid crash.
+      if (typeof (agent as any).initialize === 'function') {
+        await (agent as any).initialize();
+      }
 
       log('🚀 Calling ProbeAgent...');
       // Load and pass the actual schema content if provided (skip for plain schema)
