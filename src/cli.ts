@@ -45,7 +45,7 @@ export class CLI {
       .option('--config <path>', 'Path to configuration file')
       .option(
         '--timeout <ms>',
-        'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
+        'Timeout for check operations in milliseconds (default: 1200000ms / 20 minutes)',
         value => parseInt(value, 10)
       )
       .option(
@@ -76,6 +76,7 @@ export class CLI {
         parseInt(value, 10)
       )
       .option('--message <text>', 'Message for human-input checks (inline text or file path)')
+      .option('--tui', 'Enable interactive TUI (chat + logs tabs)')
       .option('--keep-workspace', 'Keep workspace folders after execution (for debugging)')
       .option('--workspace-path <path>', 'Workspace base path (overrides VISOR_WORKSPACE_PATH)')
       .option('--workspace-here', 'Place workspace under current directory')
@@ -131,7 +132,7 @@ export class CLI {
         .option('--config <path>', 'Path to configuration file')
         .option(
           '--timeout <ms>',
-          'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
+          'Timeout for check operations in milliseconds (default: 1200000ms / 20 minutes)',
           value => parseInt(value, 10)
         )
         .option(
@@ -165,6 +166,7 @@ export class CLI {
           parseInt(value, 10)
         )
         .option('--message <text>', 'Message for human-input checks (inline text or file path)')
+        .option('--tui', 'Enable interactive TUI (chat + logs tabs)')
         .option('--keep-workspace', 'Keep workspace folders after execution (for debugging)')
         .option('--workspace-path <path>', 'Workspace base path (overrides VISOR_WORKSPACE_PATH)')
         .option('--workspace-here', 'Place workspace under current directory')
@@ -246,6 +248,7 @@ export class CLI {
         message: options.message,
         githubV2: false,
         slack: Boolean(options.slack),
+        tui: Boolean(options.tui),
         keepWorkspace: Boolean(options.keepWorkspace),
         workspacePath: options.workspacePath,
         workspaceHere: Boolean(options.workspaceHere),
@@ -346,7 +349,7 @@ export class CLI {
       .option('--config <path>', 'Path to configuration file')
       .option(
         '--timeout <ms>',
-        'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
+        'Timeout for check operations in milliseconds (default: 1200000ms / 20 minutes)',
         value => parseInt(value, 10)
       )
       .option(
@@ -375,6 +378,7 @@ export class CLI {
       .option('--debug-port <port>', 'Port for debug server (default: 3456)', value =>
         parseInt(value, 10)
       )
+      .option('--tui', 'Enable interactive TUI (chat + logs tabs)')
       .option('--keep-workspace', 'Keep workspace folders after execution (for debugging)')
       .option('--workspace-path <path>', 'Workspace base path (overrides VISOR_WORKSPACE_PATH)')
       .option('--workspace-here', 'Place workspace under current directory')

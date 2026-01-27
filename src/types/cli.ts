@@ -61,6 +61,8 @@ export interface CliOptions {
   githubV2?: boolean;
   /** Enable Slack Socket Mode runner */
   slack?: boolean;
+  /** Enable interactive TUI (chat + logs tabs) */
+  tui?: boolean;
   /** Keep workspace folders after execution (for debugging) */
   keepWorkspace?: boolean;
   /** Set workspace base path (overrides VISOR_WORKSPACE_PATH) */
