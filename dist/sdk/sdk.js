@@ -211,6 +211,10 @@ var init_logger = __esm({
       isTTY = typeof process !== "undefined" ? !!process.stderr.isTTY : false;
       showTimestamps = true;
       // default: always show timestamps
+      sink;
+      sinkPassthrough = true;
+      sinkErrorMode = "throw";
+      sinkErrorHandler;
       configure(opts = {}) {
         let lvl = "info";
         if (opts.debug || process.env.VISOR_DEBUG === "true") {
@@ -230,6 +234,12 @@ var init_logger = __esm({
         this.level = lvl;
         const output = opts.outputFormat || process.env.VISOR_OUTPUT_FORMAT || "table";
         this.isJsonLike = output === "json" || output === "sarif";
+      }
+      setSink(sink, opts = {}) {
+        this.sink = sink;
+        this.sinkPassthrough = opts.passthrough !== void 0 ? opts.passthrough : true;
+        this.sinkErrorMode = opts.errorMode || "throw";
+        this.sinkErrorHandler = opts.onError;
       }
       shouldLog(level) {
         const desired = levelToNumber(level);
@@ -253,14 +263,38 @@ var init_logger = __esm({
         }
       }
       write(msg, level) {
+        const suffix = this.getTraceSuffix(msg);
+        const decoratedMsg = suffix ? `${msg}${suffix}` : msg;
+        const lvl = level || "info";
+        if (this.sink) {
+          try {
+            this.sink(decoratedMsg, lvl);
+          } catch (error) {
+            if (this.sinkErrorMode === "warn") {
+              try {
+                if (this.sinkErrorHandler) {
+                  this.sinkErrorHandler(error);
+                } else {
+                  const errMsg = error instanceof Error ? error.message : String(error);
+                  process.stderr.write(`[logger] sink failed: ${errMsg}
+`);
+                }
+              } catch {
+              }
+            }
+            if (this.sinkErrorMode === "throw") {
+              throw error;
+            }
+            return;
+          }
+          if (!this.sinkPassthrough) return;
+        }
         try {
-          const suffix = this.getTraceSuffix(msg);
-          const decoratedMsg = suffix ? `${msg}${suffix}` : msg;
           if (this.showTimestamps) {
             const ts = (/* @__PURE__ */ new Date()).toISOString();
-            const lvl = level ? level : void 0;
+            const lvl2 = level ? level : void 0;
             let tsToken = `[${ts}]`;
-            let lvlToken = lvl ? `[${lvl}]` : "";
+            let lvlToken = lvl2 ? `[${lvl2}]` : "";
             if (this.isTTY && !this.isJsonLike) {
               const reset = "\x1B[0m";
               const dim = "\x1B[2m";
@@ -278,14 +312,14 @@ var init_logger = __esm({
                 // bright black / gray
               };
               tsToken = `${dim}${tsToken}${reset}`;
-              if (lvl) {
-                const colour = colours[lvl] || "";
+              if (lvl2) {
+                const colour = colours[lvl2] || "";
                 if (colour) {
                   lvlToken = `${colour}${lvlToken}${reset}`;
                 }
               }
             }
-            const prefix = lvl ? `${tsToken} ${lvlToken}` : tsToken;
+            const prefix = lvl2 ? `${tsToken} ${lvlToken}` : tsToken;
             process.stderr.write(`${prefix} ${decoratedMsg}
 `);
           } else {
@@ -5757,8 +5791,8 @@ var init_ai_review_service = __esm({
       sessionRegistry;
       constructor(config = {}) {
         this.config = {
-          timeout: 6e5,
-          // Increased timeout to 10 minutes for AI responses
+          timeout: 12e5,
+          // Increased timeout to 20 minutes for AI responses
           ...config
         };
         this.sessionRegistry = SessionRegistry.getInstance();
@@ -5853,12 +5887,10 @@ var init_ai_review_service = __esm({
             }
           }
           if (!this.config.apiKey) {
-            const errorMessage = "No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY environment variable, or configure AWS credentials for Bedrock (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).";
+            log("\u26A0\uFE0F No API key configured - ProbeAgent will attempt CLI fallback (claude-code/codex)");
             if (debugInfo) {
-              debugInfo.errors = [errorMessage];
-              debugInfo.rawResponse = "API call attempted in debug without API key (test mode)";
-            } else {
-              throw new Error(errorMessage);
+              debugInfo.errors = debugInfo.errors || [];
+              debugInfo.errors.push("No API key configured - attempting CLI fallback");
             }
           }
         }
@@ -7010,6 +7042,9 @@ ${"=".repeat(60)}
             options.model = this.config.model;
           }
           const agent = new import_probe2.ProbeAgent(options);
+          if (typeof agent.initialize === "function") {
+            await agent.initialize();
+          }
           log("\u{1F680} Calling ProbeAgent...");
           let schemaString = void 0;
           let effectiveSchema = typeof schema === "object" ? "custom" : schema;
@@ -21548,7 +21583,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
         __outputHistory: outputHistory,
         ai: {
           ...checkConfig.ai || {},
-          timeout: checkConfig.ai?.timeout || 6e5,
+          timeout: checkConfig.ai?.timeout || 12e5,
           debug: !!context2.debug
         }
       };
@@ -22028,7 +22063,7 @@ async function executeInvocation(item, context2, scope, prInfo, dependencyResult
       __outputHistory: outputHistory,
       ai: {
         ...stepConfig.ai || {},
-        timeout: stepConfig.ai?.timeout || 6e5,
+        timeout: stepConfig.ai?.timeout || 12e5,
         debug: !!context2.debug
       }
     };
@@ -22504,7 +22539,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       __outputHistory: outputHistory,
       ai: {
         ...checkConfig.ai || {},
-        timeout: checkConfig.ai?.timeout || 6e5,
+        timeout: checkConfig.ai?.timeout || 12e5,
         debug: !!context2.debug
       }
     };
@@ -23281,7 +23316,7 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
         __outputHistory: outputHistory,
         ai: {
           ...checkConfig.ai || {},
-          timeout: checkConfig.ai?.timeout || 6e5,
+          timeout: checkConfig.ai?.timeout || 12e5,
           debug: !!context2.debug
         }
       };
@@ -24299,7 +24334,7 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
       checksMeta,
       ai: {
         ...checkConfig2.ai || {},
-        timeout: checkConfig2.ai?.timeout || 6e5,
+        timeout: checkConfig2.ai?.timeout || 12e5,
         debug: !!context2.debug
       }
     };
@@ -25372,6 +25407,25 @@ var init_runner = __esm({
             void bus.emit(envelope);
           }
         } catch {
+        }
+        if (event.type === "CheckCompleted") {
+          try {
+            const hook = this.context.executionContext?.hooks?.onCheckComplete;
+            if (typeof hook === "function") {
+              const checkConfig = this.context.config?.checks?.[event.checkId];
+              hook({
+                checkId: event.checkId,
+                result: event.result,
+                checkConfig: checkConfig ? {
+                  type: checkConfig.type,
+                  group: checkConfig.group,
+                  criticality: checkConfig.criticality,
+                  schema: checkConfig.schema
+                } : void 0
+              });
+            }
+          } catch {
+          }
         }
         if (this.context.debug && event.type !== "StateTransition") {
           logger.debug(`[StateMachine] Event: ${event.type}`);
@@ -28381,6 +28435,7 @@ var init_slack_frontend = __esm({
       ackRef = null;
       ackName = "eyes";
       doneName = "thumbsup";
+      errorNotified = false;
       constructor(config) {
         this.cfg = config || {};
       }
@@ -28414,12 +28469,28 @@ var init_slack_frontend = __esm({
           })
         );
         this.subs.push(
+          bus.on("CheckErrored", async (env) => {
+            const ev = env && env.payload || env;
+            const message = ev?.error?.message || "Execution error";
+            await this.maybePostError(ctx, "Check failed", message, ev?.checkId).catch(() => {
+            });
+          })
+        );
+        this.subs.push(
           bus.on("StateTransition", async (env) => {
             const ev = env && env.payload || env;
             if (ev && (ev.to === "Completed" || ev.to === "Error")) {
               await this.finalizeReactions(ctx).catch(() => {
               });
             }
+          })
+        );
+        this.subs.push(
+          bus.on("Shutdown", async (env) => {
+            const ev = env && env.payload || env;
+            const message = ev?.error?.message || "Fatal error";
+            await this.maybePostError(ctx, "Run failed", message).catch(() => {
+            });
           })
         );
         this.subs.push(
@@ -28531,6 +28602,47 @@ var init_slack_frontend = __esm({
         } catch {
         }
         return null;
+      }
+      isTelemetryEnabled(ctx) {
+        try {
+          const anyCfg = ctx.config || {};
+          const slackCfg = anyCfg.slack || {};
+          const telemetryCfg = slackCfg.telemetry ?? this.cfg?.telemetry;
+          return telemetryCfg === true || telemetryCfg && typeof telemetryCfg === "object" && telemetryCfg.enabled === true;
+        } catch {
+          return false;
+        }
+      }
+      async maybePostError(ctx, title, message, checkId) {
+        if (this.errorNotified) return;
+        if (!this.isTelemetryEnabled(ctx)) return;
+        const slack = this.getSlack(ctx);
+        if (!slack) return;
+        const payload = this.getInboundSlackPayload(ctx);
+        const ev = payload?.event;
+        const channel = String(ev?.channel || "");
+        const threadTs = String(ev?.thread_ts || ev?.ts || ev?.event_ts || "");
+        if (!channel || !threadTs) return;
+        let text = `\u274C ${title}`;
+        if (checkId) text += `
+Check: ${checkId}`;
+        if (message) text += `
+${message}`;
+        const traceInfo = this.getTraceInfo();
+        if (traceInfo?.traceId) {
+          text += `
+
+\`trace_id: ${traceInfo.traceId}\``;
+        }
+        const formattedText = formatSlackText(text);
+        await slack.chat.postMessage({ channel, text: formattedText, thread_ts: threadTs });
+        try {
+          ctx.logger.info(
+            `[slack-frontend] posted error notice to ${channel} thread=${threadTs} check=${checkId || "run"}`
+          );
+        } catch {
+        }
+        this.errorNotified = true;
       }
       async ensureAcknowledgement(ctx) {
         if (this.acked) return;

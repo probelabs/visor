@@ -1201,7 +1201,7 @@ interface ExecutionContext {
     workflowInputs?: Record<string, unknown>;
     /** Custom arguments passed from on_init 'with' directive */
     args?: Record<string, unknown>;
-    /** SDK hooks for human input */
+    /** SDK hooks for human input and check completion */
     hooks?: {
         onHumanInput?: (request: HumanInputRequest) => Promise<string>;
         onPromptCaptured?: (info: {
@@ -1210,6 +1210,20 @@ interface ExecutionContext {
             prompt: string;
         }) => void;
         mockForStep?: (step: string) => unknown | undefined;
+        /** Called when a check completes - useful for streaming TUI updates */
+        onCheckComplete?: (info: {
+            checkId: string;
+            result: {
+                output?: unknown;
+                content?: string;
+            };
+            checkConfig?: {
+                type?: string;
+                group?: string;
+                criticality?: string;
+                schema?: unknown;
+            };
+        }) => void;
     };
     /**
      * Optional execution mode hints. The core engine does not read environment
