@@ -38,6 +38,8 @@ export interface WorkspaceConfig {
   enabled: boolean;
   basePath: string;
   cleanupOnExit: boolean;
+  name?: string;
+  mainProjectName?: string;
 }
 
 export interface WorkspaceInfo {
@@ -77,16 +79,23 @@ export class WorkspaceManager {
     this.sessionId = sessionId;
     this.originalPath = originalPath;
 
+    const configuredName = config?.name || process.env.VISOR_WORKSPACE_NAME;
+    const configuredMainProjectName =
+      config?.mainProjectName || process.env.VISOR_WORKSPACE_PROJECT;
+
     // Default configuration
     this.config = {
       enabled: true,
       basePath: process.env.VISOR_WORKSPACE_PATH || '/tmp/visor-workspaces',
       cleanupOnExit: true,
+      name: configuredName,
+      mainProjectName: configuredMainProjectName,
       ...config,
     };
 
     this.basePath = this.config.basePath;
-    this.workspacePath = path.join(this.basePath, sanitizePathComponent(this.sessionId));
+    const workspaceDirName = sanitizePathComponent(this.config.name || this.sessionId);
+    this.workspacePath = path.join(this.basePath, workspaceDirName);
   }
 
   /**
@@ -160,7 +169,10 @@ export class WorkspaceManager {
     logger.debug(`Created workspace directory: ${this.workspacePath}`);
 
     // Extract main project name from original path (sanitize for defense in depth)
-    const mainProjectName = sanitizePathComponent(this.extractProjectName(this.originalPath));
+    const configuredMainProjectName = this.config.mainProjectName;
+    const mainProjectName = sanitizePathComponent(
+      configuredMainProjectName || this.extractProjectName(this.originalPath)
+    );
     this.usedNames.add(mainProjectName);
 
     // Create worktree for main project

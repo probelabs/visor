@@ -320,23 +320,94 @@ export class WorktreeManager {
     if (fs.existsSync(worktreePath)) {
       logger.debug(`Worktree already exists: ${worktreePath}`);
 
-      if (options.clean) {
-        logger.debug(`Cleaning existing worktree`);
-        await this.cleanWorktree(worktreePath);
-      }
-
       // Load existing metadata
       const metadata = await this.loadMetadata(worktreePath);
       if (metadata) {
-        this.activeWorktrees.set(worktreeId, metadata);
-        return {
-          id: worktreeId,
-          path: worktreePath,
-          ref: metadata.ref,
-          commit: metadata.commit,
-          metadata,
-          locked: false,
-        };
+        // Check if the requested ref matches the existing ref
+        if (metadata.ref === ref) {
+          // Same ref - reuse existing worktree
+          if (options.clean) {
+            logger.debug(`Cleaning existing worktree`);
+            await this.cleanWorktree(worktreePath);
+          }
+          this.activeWorktrees.set(worktreeId, metadata);
+          return {
+            id: worktreeId,
+            path: worktreePath,
+            ref: metadata.ref,
+            commit: metadata.commit,
+            metadata,
+            locked: false,
+          };
+        } else {
+          // Different ref requested - update the worktree to the new ref
+          logger.info(
+            `Worktree exists with different ref (${metadata.ref} -> ${ref}), updating...`
+          );
+
+          try {
+            // Get or ensure bare repo exists
+            const bareRepoPath =
+              metadata.bare_repo_path ||
+              (await this.getOrCreateBareRepo(
+                repository,
+                repoUrl,
+                options.token,
+                options.fetchDepth,
+                options.cloneTimeoutMs
+              ));
+
+            // Fetch the new ref and get its commit SHA
+            await this.fetchRef(bareRepoPath, ref);
+            const newCommit = await this.getCommitShaForRef(bareRepoPath, ref);
+
+            // Checkout the new commit in the worktree (detached HEAD)
+            const checkoutCmd = `git -C ${this.escapeShellArg(worktreePath)} checkout --detach ${this.escapeShellArg(newCommit)}`;
+            const checkoutResult = await this.executeGitCommand(checkoutCmd, { timeout: 60000 });
+
+            if (checkoutResult.exitCode !== 0) {
+              throw new Error(`Failed to checkout new ref: ${checkoutResult.stderr}`);
+            }
+
+            // Update metadata with new ref/commit
+            const updatedMetadata: WorktreeMetadata = {
+              ...metadata,
+              ref,
+              commit: newCommit,
+              created_at: new Date().toISOString(),
+            };
+
+            await this.saveMetadata(worktreePath, updatedMetadata);
+
+            if (options.clean) {
+              logger.debug(`Cleaning updated worktree`);
+              await this.cleanWorktree(worktreePath);
+            }
+
+            this.activeWorktrees.set(worktreeId, updatedMetadata);
+            logger.info(`Successfully updated worktree to ${ref} (${newCommit})`);
+
+            return {
+              id: worktreeId,
+              path: worktreePath,
+              ref,
+              commit: newCommit,
+              metadata: updatedMetadata,
+              locked: false,
+            };
+          } catch (error) {
+            // If update fails, remove and recreate
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            logger.warn(`Failed to update worktree, will recreate: ${errorMessage}`);
+            await fsp.rm(worktreePath, { recursive: true, force: true });
+            // Fall through to create new worktree below
+          }
+        }
+      } else {
+        // Directory exists but is not a valid worktree (no metadata)
+        // Remove it so we can create a fresh worktree
+        logger.info(`Removing stale directory (no metadata): ${worktreePath}`);
+        await fsp.rm(worktreePath, { recursive: true, force: true });
       }
     }
 
@@ -346,6 +417,11 @@ export class WorktreeManager {
     // with "branch X is already checked out".
     await this.fetchRef(bareRepoPath, ref);
     const commit = await this.getCommitShaForRef(bareRepoPath, ref);
+
+    // Prune stale worktree entries before creating a new one.
+    // This handles the case where a worktree directory was manually deleted
+    // but git still has it registered in its metadata.
+    await this.pruneWorktrees(bareRepoPath);
 
     // Create worktree in detached HEAD state at the resolved commit
     logger.info(`Creating worktree for ${repository}@${ref} (${commit})`);
@@ -388,6 +464,23 @@ export class WorktreeManager {
       metadata,
       locked: false,
     };
+  }
+
+  /**
+   * Prune stale worktree entries from a bare repository.
+   * This removes entries for worktrees whose directories no longer exist.
+   */
+  private async pruneWorktrees(bareRepoPath: string): Promise<void> {
+    logger.debug(`Pruning stale worktrees for ${bareRepoPath}`);
+    const pruneCmd = `git -C ${this.escapeShellArg(bareRepoPath)} worktree prune`;
+    const result = await this.executeGitCommand(pruneCmd, { timeout: 10000 });
+
+    if (result.exitCode !== 0) {
+      logger.warn(`Failed to prune worktrees: ${result.stderr}`);
+      // Don't throw - we can try to continue anyway
+    } else {
+      logger.debug(`Successfully pruned stale worktrees`);
+    }
   }
 
   /**

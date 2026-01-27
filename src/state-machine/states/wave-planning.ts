@@ -158,14 +158,44 @@ export async function handleWavePlanning(
         eventOverrides.set(target, gotoEvent);
       }
 
+      // Track allowed failed dependencies from on_fail.run triggers
+      // When a check is triggered via on_fail.run, its dependency on the failed check
+      // should be allowed to have failed (that's the whole point of on_fail.run)
+      const sourceCheck = (request as any).sourceCheck as string | undefined;
+      if (sourceCheck && (request as any).origin === 'run') {
+        if (!state.allowedFailedDeps) {
+          state.allowedFailedDeps = new Map<string, Set<string>>();
+        }
+        const allowedSet = state.allowedFailedDeps.get(target) || new Set<string>();
+        allowedSet.add(sourceCheck);
+        state.allowedFailedDeps.set(target, allowedSet);
+        if (context.debug) {
+          logger.info(
+            `[WavePlanning] Allowing ${target} to run despite failed dependency ${sourceCheck}`
+          );
+        }
+      }
+
       // Find all transitive dependencies (parents) of target.
       // Forward-run MUST NOT blindly re-run parent checks that already executed
       // successfully in this run; `depends_on` is an ordering/data contract,
       // not an instruction to re-run ancestors every time a child is targeted.
+      //
+      // IMPORTANT: When origin is 'run' (from on_fail.run), we should NOT re-run
+      // failed dependencies. The whole point of on_fail.run is to execute a fix
+      // step that handles the failure case - the fix step needs access to the
+      // failed output, and should execute BEFORE any retry of the failed check.
+      const origin = (request as any).origin as string | undefined;
       const dependencies = findTransitiveDependencies(target, context);
       for (const dep of dependencies) {
         const stats = state.stats.get(dep);
         const hasSucceeded = !!stats && (stats.successfulRuns || 0) > 0;
+        const hasRun = !!stats && (stats.totalRuns || 0) > 0;
+        // For 'run' origin (on_fail.run), don't re-run dependencies that have already run
+        // (even if they failed). The fix step should execute with the failed output.
+        if (origin === 'run' && hasRun) {
+          continue;
+        }
         if (!hasSucceeded) {
           checksToRun.add(dep);
         }

@@ -170,7 +170,17 @@ export class CommandCheckProvider extends CheckProvider {
     // Test hook: mock output for this step (short-circuit execution)
     try {
       const stepName = (config as any).checkName || 'unknown';
+      if (process.env.VISOR_DEBUG === 'true') {
+        logger.debug(
+          `[Command] Mock check: stepName=${stepName}, context=${!!context}, hooks=${!!context?.hooks}, mockForStep=${!!context?.hooks?.mockForStep}`
+        );
+      }
       const rawMock = context?.hooks?.mockForStep?.(String(stepName));
+      if (process.env.VISOR_DEBUG === 'true') {
+        logger.debug(
+          `[Command] Mock result: ${rawMock !== undefined ? 'found' : 'not found'}, value=${JSON.stringify(rawMock)?.slice(0, 200)}`
+        );
+      }
       if (rawMock !== undefined) {
         // Normalize primitive mocks into object form
         let mock: any;
@@ -214,6 +224,20 @@ export class CommandCheckProvider extends CheckProvider {
               ? m.exit
               : 0
           : 0;
+        // For fail_if consistency, merge exit_code into the output if it's an object
+        // This allows both `output.exit_code !== 0` and `output.failed > 0` patterns to work
+        let outputWithMeta: unknown;
+        if (isCommandMock) {
+          if (out && typeof out === 'object' && !Array.isArray(out)) {
+            // Merge exit_code into the parsed object (without overwriting existing fields)
+            outputWithMeta = { ...(out as object), exit_code: code };
+          } else {
+            // For non-object outputs (string, array), wrap in a structure
+            outputWithMeta = { value: out, exit_code: code };
+          }
+        } else {
+          outputWithMeta = out;
+        }
         if (code !== 0) {
           return {
             issues: [
@@ -226,10 +250,10 @@ export class CommandCheckProvider extends CheckProvider {
                 category: 'logic',
               },
             ],
-            output: out,
+            output: outputWithMeta,
           } as any;
         }
-        return { issues: [], output: out } as any;
+        return { issues: [], output: outputWithMeta } as any;
       }
     } catch {}
 

@@ -55,6 +55,8 @@ export type EngineEvent =
       gotoEvent?: EventTrigger;
       scope?: ScopePath;
       origin?: 'run' | 'goto' | 'run_js' | 'goto_js';
+      /** The source check that triggered this forward-run (for on_fail.run, this is the failed check) */
+      sourceCheck?: string;
     }
   | { type: 'WaveRetry'; reason: 'on_fail' | 'on_finish' | 'external' }
   | { type: 'StateTransition'; from: EngineState; to: EngineState }
@@ -159,6 +161,9 @@ export interface RunState {
   parentContext?: EngineContext;
   // Loop budget tracking for routing (on_success, on_fail, on_finish)
   routingLoopCount: number;
+  // Allowed failed dependencies per check (from on_fail.run triggers)
+  // Maps target check ID -> set of dependency check IDs that are allowed to have failed
+  allowedFailedDeps?: Map<string, Set<string>>;
 }
 
 /**

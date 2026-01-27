@@ -1,0 +1,339 @@
+version: "1.0"
+extends: "./workflow-builder.yaml"
+
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+
+  cases:
+    # Test 1: Create new workflow - happy path
+    - name: create-workflow-happy-path
+      description: Successfully creates a new PR labeling workflow
+      event: manual
+      fixture: local.minimal
+
+      mocks:
+        get-requirements:
+          text: |
+            Create a simple PR labeling workflow that:
+            - Triggers on pr_opened
+            - Uses AI to analyze the PR title and body
+            - Adds appropriate labels (bug, feature, docs, chore)
+
+        interpret-request:
+          mode: create
+          workflow_path: ./generated-workflow.yaml
+          requirements: |
+            Create a PR labeling workflow with AI analysis for pr_opened events.
+
+        checkout-visor:
+          success: true
+          path: /tmp/visor-context
+          ref: main
+          commit: abc123
+          repository: probelabs/visor
+
+        generate-workflow:
+          stdout: "Created workflow at ./generated-workflow.yaml"
+
+        validate-workflow:
+          stdout: "Validation passed"
+          stderr: ""
+          exit_code: 0
+
+        lint-workflow:
+          stdout: "No lint errors"
+          stderr: ""
+          exit_code: 0
+
+        run-tests:
+          stdout: |
+            Running tests...
+            1 test passed
+          stderr: ""
+          exit_code: 0
+
+        review-workflow:
+          issues: []
+          summary: "Workflow looks good. All requirements covered."
+          approval: true
+
+      expect:
+        calls:
+          - step: get-requirements
+            exactly: 1
+          - step: interpret-request
+            exactly: 1
+          - step: checkout-visor
+            exactly: 1
+          - step: generate-workflow
+            exactly: 1
+          - step: validate-workflow
+            exactly: 1
+          - step: lint-workflow
+            exactly: 1
+          - step: run-tests
+            exactly: 1
+          - step: review-workflow
+            exactly: 1
+          - step: finalize
+            exactly: 1
+
+        no_calls:
+          - step: fix-validation-errors
+          - step: fix-lint-errors
+          - step: fix-test-failures
+          - step: apply-review-fixes
+
+        outputs:
+          - step: review-workflow
+            path: approval
+            equals: true
+
+    # Test 2: Edit existing workflow
+    - name: edit-workflow
+      description: Edits an existing workflow to add a new step
+      event: manual
+      fixture: local.minimal
+
+      mocks:
+        get-requirements:
+          text: "Add a security check step to defaults/code-review.yaml"
+
+        interpret-request:
+          mode: edit
+          workflow_path: defaults/code-review.yaml
+          requirements: "Add a security check step to the existing code-review workflow"
+          existing_workflow_summary: "Code review workflow with AI analysis"
+
+        checkout-visor:
+          success: true
+          path: /tmp/visor-context
+
+        generate-workflow:
+          stdout: "Updated workflow with security check"
+
+        validate-workflow:
+          stdout: "Validation passed"
+          exit_code: 0
+
+        lint-workflow:
+          stdout: "No lint errors"
+          stderr: ""
+          exit_code: 0
+
+        run-tests:
+          stdout: "All tests passed"
+          exit_code: 0
+
+        review-workflow:
+          issues: []
+          summary: "Edit looks good"
+          approval: true
+
+      expect:
+        calls:
+          - step: get-requirements
+            exactly: 1
+          - step: interpret-request
+            exactly: 1
+          - step: checkout-visor
+            exactly: 1
+          - step: generate-workflow
+            exactly: 1
+          - step: validate-workflow
+            exactly: 1
+          - step: lint-workflow
+            exactly: 1
+          - step: run-tests
+            exactly: 1
+          - step: review-workflow
+            exactly: 1
+          - step: finalize
+            exactly: 1
+
+        outputs:
+          - step: interpret-request
+            path: mode
+            equals: edit
+
+    # Test 3: Validation failure and recovery
+    - name: validation-failure-recovery
+      description: Handles validation failure and fixes issues
+      event: manual
+      fixture: local.minimal
+
+      mocks:
+        get-requirements:
+          text: "Create a workflow that posts comments"
+
+        interpret-request:
+          mode: create
+          workflow_path: ./generated-workflow.yaml
+          requirements: "Create a workflow that posts comments"
+
+        checkout-visor:
+          success: true
+          path: /tmp/visor-context
+
+        generate-workflow:
+          stdout: "Generated initial workflow"
+
+        validate-workflow[]:
+          - stdout: ""
+            stderr: "Error: Invalid schema at line 15"
+            exit_code: 1
+          - stdout: "Validation passed"
+            stderr: ""
+            exit_code: 0
+
+        fix-validation-errors:
+          stdout: "Fixed the schema error"
+
+        lint-workflow:
+          stdout: "No lint errors"
+          stderr: ""
+          exit_code: 0
+
+        run-tests:
+          stdout: "All tests passed"
+          exit_code: 0
+
+        review-workflow:
+          issues: []
+          summary: "Good workflow"
+          approval: true
+
+      expect:
+        calls:
+          - step: get-requirements
+            exactly: 1
+          - step: interpret-request
+            exactly: 1
+          - step: checkout-visor
+            exactly: 1
+          - step: generate-workflow
+            exactly: 1
+          - step: validate-workflow
+            at_least: 1
+          - step: fix-validation-errors
+            at_least: 1
+          - step: lint-workflow
+            at_least: 1
+          - step: run-tests
+            at_least: 1
+          - step: review-workflow
+            exactly: 1
+          - step: finalize
+            exactly: 1
+
+    # Test 4: Review with critical issues triggers fixes
+    - name: review-critical-issues
+      description: Critical review issues trigger fix cycle
+      event: manual
+      fixture: local.minimal
+
+      mocks:
+        get-requirements:
+          text: "Create a secure workflow"
+
+        interpret-request:
+          mode: create
+          workflow_path: ./generated-workflow.yaml
+          requirements: "Create a secure workflow"
+
+        checkout-visor:
+          success: true
+          path: /tmp/visor-context
+
+        generate-workflow:
+          stdout: "Generated workflow"
+
+        validate-workflow:
+          stdout: "Validation passed"
+          exit_code: 0
+
+        lint-workflow:
+          stdout: "No lint errors"
+          stderr: ""
+          exit_code: 0
+
+        run-tests:
+          stdout: "Tests passed"
+          exit_code: 0
+
+        review-workflow[]:
+          - issues:
+              - severity: critical
+                category: security
+                message: "GitHub token exposed in logs"
+                suggestion: "Remove token from log message"
+            summary: "Critical security issue found"
+            approval: false
+          - issues:
+              - severity: info
+                category: style
+                message: "Could improve step naming"
+            summary: "Security issue fixed"
+            approval: true
+
+        apply-review-fixes:
+          stdout: "Removed token from logs"
+
+      expect:
+        calls:
+          - step: get-requirements
+            exactly: 1
+          - step: interpret-request
+            exactly: 1
+          - step: checkout-visor
+            exactly: 1
+          - step: generate-workflow
+            exactly: 1
+          - step: validate-workflow
+            at_least: 1
+          - step: lint-workflow
+            at_least: 1
+          - step: run-tests
+            at_least: 1
+          - step: review-workflow
+            at_least: 1
+          - step: apply-review-fixes
+            at_least: 1
+          - step: finalize
+            exactly: 1
+
+    # Test 5: Checkout failure scenario
+    - name: checkout-failure
+      description: Handles git checkout failure gracefully
+      event: manual
+      fixture: local.minimal
+
+      mocks:
+        get-requirements:
+          text: "Create a workflow"
+
+        interpret-request:
+          mode: create
+          workflow_path: ./generated-workflow.yaml
+          requirements: "Create a workflow"
+
+        checkout-visor:
+          success: false
+          error: "Failed to clone repository"
+          path: null
+
+      expect:
+        calls:
+          - step: get-requirements
+            exactly: 1
+          - step: interpret-request
+            exactly: 1
+          - step: checkout-visor
+            exactly: 1
+
+        no_calls:
+          - step: generate-workflow
+          - step: validate-workflow
+          - step: finalize

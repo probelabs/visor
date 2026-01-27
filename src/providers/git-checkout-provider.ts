@@ -91,6 +91,58 @@ export class GitCheckoutProvider extends CheckProvider {
     const checkoutConfig = config as unknown as GitCheckoutConfig;
     const issues: ReviewIssue[] = [];
 
+    // Test hook: mock output for this step (short-circuit execution)
+    try {
+      const stepName = (config as any).checkName || 'git-checkout';
+      if (process.env.VISOR_DEBUG === 'true') {
+        logger.debug(
+          `[GitCheckout] Mock check: stepName=${stepName}, context=${!!context}, hooks=${!!context?.hooks}, mockForStep=${!!context?.hooks?.mockForStep}`
+        );
+      }
+      const mock = context?.hooks?.mockForStep?.(String(stepName));
+      if (process.env.VISOR_DEBUG === 'true') {
+        logger.debug(
+          `[GitCheckout] Mock result: ${mock !== undefined ? 'found' : 'not found'}, value=${JSON.stringify(mock)}`
+        );
+      }
+      if (mock !== undefined) {
+        // If mock is a GitCheckoutOutput-like object, use it directly
+        if (mock && typeof mock === 'object') {
+          const mockOutput = mock as Record<string, unknown>;
+          // Handle error/failure mocks
+          if (mockOutput.success === false) {
+            const errorMsg = String(mockOutput.error || 'Mocked checkout failure');
+            if (process.env.VISOR_DEBUG === 'true') {
+              logger.debug(`[GitCheckout] Returning mock failure: ${errorMsg}`);
+            }
+            return {
+              issues: [
+                {
+                  file: 'git-checkout',
+                  line: 0,
+                  ruleId: 'git-checkout/error',
+                  message: `Failed to checkout code: ${errorMsg}`,
+                  severity: 'error',
+                  category: 'logic',
+                },
+              ],
+              output: mockOutput,
+            } as any;
+          }
+          // Success mock
+          if (process.env.VISOR_DEBUG === 'true') {
+            logger.debug(`[GitCheckout] Returning mock success: ${JSON.stringify(mockOutput)}`);
+          }
+          return { issues: [], output: mockOutput } as any;
+        }
+        // Primitive mock - treat as success with path
+        if (process.env.VISOR_DEBUG === 'true') {
+          logger.debug(`[GitCheckout] Returning primitive mock: ${String(mock)}`);
+        }
+        return { issues: [], output: { success: true, path: String(mock) } } as any;
+      }
+    } catch {}
+
     try {
       // Build template context
       const templateContext = this.buildTemplateContext(

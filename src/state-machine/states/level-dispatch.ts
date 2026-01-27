@@ -1709,6 +1709,8 @@ async function executeSingleCheck(
 
   // Dependency gating with continue_on_failure and OR groups ("A|B")
   const failedChecks = (state as any).failedChecks as Set<string> | undefined;
+  // Check for allowed failed dependencies (from on_fail.run triggers)
+  const allowedFailedDeps = state.allowedFailedDeps?.get(checkId);
   const tokens = depList.filter(Boolean) as string[];
   const groupSatisfied = (token: string): boolean => {
     const options = token.includes('|')
@@ -1718,6 +1720,19 @@ async function executeSingleCheck(
           .filter(Boolean)
       : [token];
     for (const opt of options) {
+      // Check if this failed dependency is explicitly allowed (from on_fail.run)
+      // When a check is triggered by on_fail.run, it needs to run even though
+      // its dependency failed - that's the whole point of on_fail.run
+      const isAllowedFailedDep = !!(allowedFailedDeps && allowedFailedDeps.has(opt));
+      if (isAllowedFailedDep) {
+        if (context.debug) {
+          logger.info(
+            `[LevelDispatch] Allowing ${checkId} to run despite failed dependency ${opt} (on_fail.run)`
+          );
+        }
+        return true;
+      }
+
       const depCfg: any = context.config.checks?.[opt];
       const cont = !!(depCfg && depCfg.continue_on_failure === true);
       const st = state.stats.get(opt);

@@ -739,15 +739,23 @@ export class AICheckProvider extends CheckProvider {
           if (info && typeof info.workspacePath === 'string') {
             workspaceRoot = info.workspacePath;
             mainProjectPath = info.mainProjectPath;
-            // Add workspace root
-            folders.push(info.workspacePath);
-            // NOTE: We intentionally do NOT add mainProjectPath (visor2) here.
-            // The main project is the visor installation directory and should
-            // not be exposed to the AI agent - only checked-out external projects
-            // (like tyk, tyk-docs) should be accessible.
           }
         } catch {
           // ignore workspace info errors
+        }
+        // IMPORTANT: Add mainProjectPath FIRST so it becomes allowedFolders[0]
+        // ProbeAgent uses allowedFolders[0] as the base directory for file operations
+        // This ensures files created with relative paths (e.g., ./generated-workflow.yaml)
+        // are written to the main project directory (same cwd as command provider)
+        if (mainProjectPath) {
+          folders.push(mainProjectPath);
+          logger.debug(
+            `[AI Provider] Including main project FIRST in allowedFolders: ${mainProjectPath}`
+          );
+        }
+        // Add workspace root for visibility into workspace structure
+        if (workspaceRoot) {
+          folders.push(workspaceRoot);
         }
         // Collect checked-out projects (these are the user's actual projects)
         const projectPaths: string[] = [];
@@ -763,33 +771,20 @@ export class AICheckProvider extends CheckProvider {
         } catch {
           // ignore project listing errors
         }
-        // SECURITY: Only include mainProjectPath if there are no checked-out projects.
-        // This is a fallback for workflows that don't checkout external repos.
-        // When external projects exist, the AI should focus on those, not visor.
-        if (projectPaths.length === 0 && mainProjectPath) {
-          folders.push(mainProjectPath);
-          logger.debug(
-            `[AI Provider] No external projects - including main project as fallback: ${mainProjectPath}`
-          );
-        } else if (mainProjectPath) {
-          logger.debug(
-            `[AI Provider] Excluding main project (visor) from allowedFolders: ${mainProjectPath}`
-          );
-        }
         const unique = Array.from(new Set(folders.filter(p => typeof p === 'string' && p)));
         if (unique.length > 0 && workspaceRoot) {
           (aiConfig as any).allowedFolders = unique;
-          // Set path and cwd to workspace root - AI will run with cwd set to workspace
+          // Set path, cwd, and workspacePath to mainProjectPath (same as command provider's workingDirectory)
+          // This ensures AI and command providers use the same cwd for relative paths
           // Both are set for compatibility: path for older probe versions, cwd for rc175+
-          (aiConfig as any).path = workspaceRoot;
-          (aiConfig as any).cwd = workspaceRoot;
-          // Also set workspacePath for the AI to know the root
-          (aiConfig as any).workspacePath = workspaceRoot;
+          // NOTE: workspacePath takes priority in ai-review-service.ts, so it must also be mainProjectPath
+          const aiCwd = mainProjectPath || workspaceRoot;
+          (aiConfig as any).path = aiCwd;
+          (aiConfig as any).cwd = aiCwd;
+          (aiConfig as any).workspacePath = aiCwd;
           logger.debug(`[AI Provider] Workspace isolation enabled:`);
-          logger.debug(`[AI Provider]   workspaceRoot (cwd): ${workspaceRoot}`);
-          logger.debug(
-            `[AI Provider]   mainProjectPath (excluded unless fallback): ${mainProjectPath || 'N/A'}`
-          );
+          logger.debug(`[AI Provider]   cwd (mainProjectPath): ${aiCwd}`);
+          logger.debug(`[AI Provider]   workspaceRoot: ${workspaceRoot}`);
           logger.debug(`[AI Provider]   allowedFolders: ${JSON.stringify(unique)}`);
         }
       } else if (parentCtx && typeof parentCtx.workingDirectory === 'string') {
