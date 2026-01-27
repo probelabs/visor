@@ -51,6 +51,7 @@ jobs:
         run: npm test
         env:
           CI: true
+          NODE_OPTIONS: --max-old-space-size=6144
 
       - name: Test CLI
         run: |

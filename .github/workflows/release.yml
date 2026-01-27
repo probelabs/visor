@@ -43,6 +43,7 @@ jobs:
         run: npm test
         env:
           CI: true
+          NODE_OPTIONS: --max-old-space-size=6144
 
       - name: Build package
         run: npm run build
@@ -225,4 +226,3 @@ jobs:
             ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
