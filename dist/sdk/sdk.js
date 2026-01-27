@@ -3355,6 +3355,12 @@ function createMemoryHelpers() {
     }
   };
 }
+function getHistoryLimit() {
+  const raw = process.env.VISOR_TEST_HISTORY_LIMIT || process.env.VISOR_OUTPUT_HISTORY_LIMIT;
+  if (!raw) return void 0;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : void 0;
+}
 function formatScopeLabel(scope) {
   if (!scope || scope.length === 0) return "";
   return scope.map((item) => `${item.check}:${item.index}`).join("|");
@@ -4168,6 +4174,7 @@ async function processOnFail(checkId, scope, result, checkConfig, context2, stat
 async function evaluateRunJs(runJs, checkId, checkConfig, result, context2, _state) {
   try {
     const sandbox = createSecureSandbox();
+    const historyLimit = getHistoryLimit();
     const snapshotId = context2.journal.beginSnapshot();
     const contextView = new (init_snapshot_store(), __toCommonJS(snapshot_store_exports)).ContextView(
       context2.journal,
@@ -4192,7 +4199,8 @@ async function evaluateRunJs(runJs, checkId, checkConfig, result, context2, _sta
       try {
         const history = contextView.getHistory(checkIdFromJournal);
         if (history && history.length > 0) {
-          outputsHistory[checkIdFromJournal] = history.map(
+          const trimmed = historyLimit && history.length > historyLimit ? history.slice(history.length - historyLimit) : history;
+          outputsHistory[checkIdFromJournal] = trimmed.map(
             (r) => r.output !== void 0 ? r.output : r
           );
         }
@@ -4274,6 +4282,7 @@ async function evaluateGoto(gotoJs, gotoStatic, checkId, checkConfig, result, co
   if (gotoJs) {
     try {
       const sandbox = createSecureSandbox();
+      const historyLimit = getHistoryLimit();
       const snapshotId = context2.journal.beginSnapshot();
       const contextView = new (init_snapshot_store(), __toCommonJS(snapshot_store_exports)).ContextView(
         context2.journal,
@@ -4298,7 +4307,8 @@ async function evaluateGoto(gotoJs, gotoStatic, checkId, checkConfig, result, co
         try {
           const history = contextView.getHistory(checkIdFromJournal);
           if (history && history.length > 0) {
-            outputsHistory[checkIdFromJournal] = history.map(
+            const trimmed = historyLimit && history.length > historyLimit ? history.slice(history.length - historyLimit) : history;
+            outputsHistory[checkIdFromJournal] = trimmed.map(
               (r) => r.output !== void 0 ? r.output : r
             );
           }
@@ -4401,6 +4411,7 @@ async function evaluateTransitions(transitions, checkId, checkConfig, result, co
   if (!transitions || transitions.length === 0) return void 0;
   try {
     const sandbox = createSecureSandbox();
+    const historyLimit = getHistoryLimit();
     const snapshotId = context2.journal.beginSnapshot();
     const ContextView2 = (init_snapshot_store(), __toCommonJS(snapshot_store_exports)).ContextView;
     const view = new ContextView2(context2.journal, context2.sessionId, snapshotId, [], void 0);
@@ -4417,7 +4428,10 @@ async function evaluateTransitions(transitions, checkId, checkConfig, result, co
       try {
         const hist = view.getHistory(cid);
         if (hist && hist.length > 0) {
-          outputsHistory[cid] = hist.map((r) => r.output !== void 0 ? r.output : r);
+          const trimmed = historyLimit && hist.length > historyLimit ? hist.slice(hist.length - historyLimit) : hist;
+          outputsHistory[cid] = trimmed.map(
+            (r) => r.output !== void 0 ? r.output : r
+          );
         }
       } catch {
       }
@@ -4575,8 +4589,15 @@ var history_snapshot_exports = {};
 __export(history_snapshot_exports, {
   buildOutputHistoryFromJournal: () => buildOutputHistoryFromJournal
 });
+function getHistoryLimit2() {
+  const raw = process.env.VISOR_TEST_HISTORY_LIMIT || process.env.VISOR_OUTPUT_HISTORY_LIMIT;
+  if (!raw) return void 0;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : void 0;
+}
 function buildOutputHistoryFromJournal(context2) {
   const outputHistory = /* @__PURE__ */ new Map();
+  const limit = getHistoryLimit2();
   try {
     const snapshot = context2.journal.beginSnapshot();
     const allEntries = context2.journal.readVisible(context2.sessionId, snapshot, void 0);
@@ -4598,7 +4619,13 @@ function buildOutputHistoryFromJournal(context2) {
         }
       } catch {
       }
-      if (payload !== void 0) outputHistory.get(checkId).push(payload);
+      if (payload !== void 0) {
+        const arr = outputHistory.get(checkId);
+        arr.push(payload);
+        if (limit && arr.length > limit) {
+          arr.splice(0, arr.length - limit);
+        }
+      }
     }
   } catch (error) {
     logger.debug(`[LevelDispatch] Error building output history: ${error}`);
@@ -23059,8 +23086,15 @@ function recordOnFinishRoutingEvent(args) {
   if (args.gotoEvent) attrs.goto_event = args.gotoEvent;
   addEvent("visor.routing", attrs);
 }
+function getHistoryLimit3() {
+  const raw = process.env.VISOR_TEST_HISTORY_LIMIT || process.env.VISOR_OUTPUT_HISTORY_LIMIT;
+  if (!raw) return void 0;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : void 0;
+}
 function buildOutputHistoryFromJournal2(context2) {
   const outputHistory = /* @__PURE__ */ new Map();
+  const limit = getHistoryLimit3();
   try {
     const snapshot = context2.journal.beginSnapshot();
     const allEntries = context2.journal.readVisible(context2.sessionId, snapshot, void 0);
@@ -23070,7 +23104,13 @@ function buildOutputHistoryFromJournal2(context2) {
         outputHistory.set(checkId, []);
       }
       const payload = entry.result.output !== void 0 ? entry.result.output : entry.result;
-      if (payload !== void 0) outputHistory.get(checkId).push(payload);
+      if (payload !== void 0) {
+        const arr = outputHistory.get(checkId);
+        arr.push(payload);
+        if (limit && arr.length > limit) {
+          arr.splice(0, arr.length - limit);
+        }
+      }
     }
   } catch (error) {
     logger.debug(`[LevelDispatch] Error building output history: ${error}`);
