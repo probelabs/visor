@@ -3,7 +3,7 @@ import {
   check_provider_registry_exports,
   init_check_provider_registry,
   init_runner
-} from "./chunk-MGTL6XOL.mjs";
+} from "./chunk-NVIJO5QO.mjs";
 import "./chunk-NAW3DB3I.mjs";
 import {
   commandExecutor,
@@ -14,12 +14,12 @@ import "./chunk-J6EVEXC2.mjs";
 import {
   ConfigManager,
   init_config
-} from "./chunk-YTUKHHOA.mjs";
+} from "./chunk-CUNPH6TR.mjs";
 import "./chunk-O5EZDNYL.mjs";
 import {
   ExecutionJournal,
   init_snapshot_store
-} from "./chunk-MMBIP74R.mjs";
+} from "./chunk-Q4HOAG2X.mjs";
 import "./chunk-SWEEZ5D5.mjs";
 import "./chunk-BOVFH3LI.mjs";
 import "./chunk-ZYAUYXSW.mjs";
@@ -72,14 +72,19 @@ var init_workspace_manager = __esm({
       constructor(sessionId, originalPath, config) {
         this.sessionId = sessionId;
         this.originalPath = originalPath;
+        const configuredName = config?.name || process.env.VISOR_WORKSPACE_NAME;
+        const configuredMainProjectName = config?.mainProjectName || process.env.VISOR_WORKSPACE_PROJECT;
         this.config = {
           enabled: true,
           basePath: process.env.VISOR_WORKSPACE_PATH || "/tmp/visor-workspaces",
           cleanupOnExit: true,
+          name: configuredName,
+          mainProjectName: configuredMainProjectName,
           ...config
         };
         this.basePath = this.config.basePath;
-        this.workspacePath = path.join(this.basePath, sanitizePathComponent(this.sessionId));
+        const workspaceDirName = sanitizePathComponent(this.config.name || this.sessionId);
+        this.workspacePath = path.join(this.basePath, workspaceDirName);
       }
       /**
        * Get or create a WorkspaceManager instance for a session
@@ -136,7 +141,10 @@ var init_workspace_manager = __esm({
         logger.info(`Initializing workspace: ${this.workspacePath}`);
         await fsp.mkdir(this.workspacePath, { recursive: true });
         logger.debug(`Created workspace directory: ${this.workspacePath}`);
-        const mainProjectName = sanitizePathComponent(this.extractProjectName(this.originalPath));
+        const configuredMainProjectName = this.config.mainProjectName;
+        const mainProjectName = sanitizePathComponent(
+          configuredMainProjectName || this.extractProjectName(this.originalPath)
+        );
         this.usedNames.add(mainProjectName);
         const mainProjectPath = path.join(this.workspacePath, mainProjectName);
         const isGitRepo = await this.isGitRepository(this.originalPath);
@@ -413,12 +421,21 @@ async function initializeWorkspace(context) {
     const workspace = WorkspaceManager.getInstance(context.sessionId, originalPath, {
       enabled: true,
       basePath: workspaceConfig?.base_path || process.env.VISOR_WORKSPACE_PATH || "/tmp/visor-workspaces",
-      cleanupOnExit: keepWorkspace ? false : workspaceConfig?.cleanup_on_exit !== false
+      cleanupOnExit: keepWorkspace ? false : workspaceConfig?.cleanup_on_exit !== false,
+      name: workspaceConfig?.name || process.env.VISOR_WORKSPACE_NAME,
+      mainProjectName: workspaceConfig?.main_project_name || process.env.VISOR_WORKSPACE_PROJECT
     });
     const info = await workspace.initialize();
     context.workspace = workspace;
     context.workingDirectory = info.mainProjectPath;
     context.originalWorkingDirectory = originalPath;
+    try {
+      process.env.VISOR_WORKSPACE_ROOT = info.workspacePath;
+      process.env.VISOR_WORKSPACE_MAIN_PROJECT = info.mainProjectPath;
+      process.env.VISOR_WORKSPACE_MAIN_PROJECT_NAME = info.mainProjectName;
+      process.env.VISOR_ORIGINAL_WORKDIR = originalPath;
+    } catch {
+    }
     logger.info(`[Workspace] Initialized workspace: ${info.workspacePath}`);
     logger.debug(`[Workspace] Main project at: ${info.mainProjectPath}`);
     if (keepWorkspace) {
@@ -549,7 +566,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       try {
         const map = options?.webhookContext?.webhookData;
         if (map) {
-          const { CheckProviderRegistry } = await import("./check-provider-registry-QRCIKE5E.mjs");
+          const { CheckProviderRegistry } = await import("./check-provider-registry-Q7JQWWBL.mjs");
           const reg = CheckProviderRegistry.getInstance();
           const p = reg.getProvider("http_input");
           if (p && typeof p.setWebhookContext === "function") p.setWebhookContext(map);
@@ -662,7 +679,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       logger.info("[StateMachine] Using state machine engine");
     }
     if (!config) {
-      const { ConfigManager: ConfigManager2 } = await import("./config-EYYRRVCB.mjs");
+      const { ConfigManager: ConfigManager2 } = await import("./config-MK4XTU45.mjs");
       const configManager = new ConfigManager2();
       config = await configManager.getDefaultConfig();
       logger.debug("[StateMachine] Using default configuration (no config provided)");

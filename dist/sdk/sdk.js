@@ -1197,22 +1197,41 @@ async function handleWavePlanning(context2, state, transition) {
       if (gotoEvent) {
         eventOverrides.set(target, gotoEvent);
       }
+      const sourceCheck = request.sourceCheck;
+      if (sourceCheck && request.origin === "run") {
+        if (!state.allowedFailedDeps) {
+          state.allowedFailedDeps = /* @__PURE__ */ new Map();
+        }
+        const allowedSet = state.allowedFailedDeps.get(target) || /* @__PURE__ */ new Set();
+        allowedSet.add(sourceCheck);
+        state.allowedFailedDeps.set(target, allowedSet);
+        if (context2.debug) {
+          logger.info(
+            `[WavePlanning] Allowing ${target} to run despite failed dependency ${sourceCheck}`
+          );
+        }
+      }
+      const origin = request.origin;
       const dependencies = findTransitiveDependencies(target, context2);
       for (const dep of dependencies) {
         const stats = state.stats.get(dep);
         const hasSucceeded = !!stats && (stats.successfulRuns || 0) > 0;
+        const hasRun = !!stats && (stats.totalRuns || 0) > 0;
+        if (origin === "run" && hasRun) {
+          continue;
+        }
         if (!hasSucceeded) {
           checksToRun.add(dep);
         }
       }
       let shouldIncludeDependents = true;
       try {
-        const origin = request.origin;
+        const origin2 = request.origin;
         const cfg = context2.config.checks?.[target];
         const targetType = String(cfg?.type || "").toLowerCase();
         const execCtx = context2.executionContext || {};
         const hasWebhook = !!execCtx.webhookContext;
-        if (hasWebhook && (origin === "goto" || origin === "goto_js") && targetType === "human-input") {
+        if (hasWebhook && (origin2 === "goto" || origin2 === "goto_js") && targetType === "human-input") {
           shouldIncludeDependents = false;
         }
       } catch {
@@ -3936,7 +3955,9 @@ async function processOnFail(checkId, scope, result, checkConfig, context2, stat
             type: "ForwardRunRequested",
             target: targetCheck,
             scope: itemScope,
-            origin: "run"
+            origin: "run",
+            sourceCheck: checkId
+            // The failed check that triggered on_fail.run
           });
         }
       } else {
@@ -3953,7 +3974,9 @@ async function processOnFail(checkId, scope, result, checkConfig, context2, stat
           type: "ForwardRunRequested",
           target: targetCheck,
           scope,
-          origin: "run"
+          origin: "run",
+          sourceCheck: checkId
+          // The failed check that triggered on_fail.run
         });
       }
     }
@@ -3996,7 +4019,9 @@ async function processOnFail(checkId, scope, result, checkConfig, context2, stat
         type: "ForwardRunRequested",
         target: targetCheck,
         scope,
-        origin: "run_js"
+        origin: "run_js",
+        sourceCheck: checkId
+        // The failed check that triggered on_fail.run_js
       });
     }
   }
@@ -9334,9 +9359,17 @@ var init_ai_check_provider = __esm({
               if (info && typeof info.workspacePath === "string") {
                 workspaceRoot = info.workspacePath;
                 mainProjectPath = info.mainProjectPath;
-                folders.push(info.workspacePath);
               }
             } catch {
+            }
+            if (mainProjectPath) {
+              folders.push(mainProjectPath);
+              logger.debug(
+                `[AI Provider] Including main project FIRST in allowedFolders: ${mainProjectPath}`
+              );
+            }
+            if (workspaceRoot) {
+              folders.push(workspaceRoot);
             }
             const projectPaths = [];
             try {
@@ -9349,27 +9382,16 @@ var init_ai_check_provider = __esm({
               }
             } catch {
             }
-            if (projectPaths.length === 0 && mainProjectPath) {
-              folders.push(mainProjectPath);
-              logger.debug(
-                `[AI Provider] No external projects - including main project as fallback: ${mainProjectPath}`
-              );
-            } else if (mainProjectPath) {
-              logger.debug(
-                `[AI Provider] Excluding main project (visor) from allowedFolders: ${mainProjectPath}`
-              );
-            }
             const unique = Array.from(new Set(folders.filter((p) => typeof p === "string" && p)));
             if (unique.length > 0 && workspaceRoot) {
               aiConfig.allowedFolders = unique;
-              aiConfig.path = workspaceRoot;
-              aiConfig.cwd = workspaceRoot;
-              aiConfig.workspacePath = workspaceRoot;
+              const aiCwd = mainProjectPath || workspaceRoot;
+              aiConfig.path = aiCwd;
+              aiConfig.cwd = aiCwd;
+              aiConfig.workspacePath = aiCwd;
               logger.debug(`[AI Provider] Workspace isolation enabled:`);
-              logger.debug(`[AI Provider]   workspaceRoot (cwd): ${workspaceRoot}`);
-              logger.debug(
-                `[AI Provider]   mainProjectPath (excluded unless fallback): ${mainProjectPath || "N/A"}`
-              );
+              logger.debug(`[AI Provider]   cwd (mainProjectPath): ${aiCwd}`);
+              logger.debug(`[AI Provider]   workspaceRoot: ${workspaceRoot}`);
               logger.debug(`[AI Provider]   allowedFolders: ${JSON.stringify(unique)}`);
             }
           } else if (parentCtx && typeof parentCtx.workingDirectory === "string") {
@@ -11999,7 +12021,17 @@ var init_command_check_provider = __esm({
         }
         try {
           const stepName = config.checkName || "unknown";
+          if (process.env.VISOR_DEBUG === "true") {
+            logger.debug(
+              `[Command] Mock check: stepName=${stepName}, context=${!!context2}, hooks=${!!context2?.hooks}, mockForStep=${!!context2?.hooks?.mockForStep}`
+            );
+          }
           const rawMock = context2?.hooks?.mockForStep?.(String(stepName));
+          if (process.env.VISOR_DEBUG === "true") {
+            logger.debug(
+              `[Command] Mock result: ${rawMock !== void 0 ? "found" : "not found"}, value=${JSON.stringify(rawMock)?.slice(0, 200)}`
+            );
+          }
           if (rawMock !== void 0) {
             let mock;
             if (typeof rawMock === "number") {
@@ -12024,6 +12056,16 @@ var init_command_check_provider = __esm({
               out = mock;
             }
             const code = isCommandMock ? typeof m.exit_code === "number" ? m.exit_code : typeof m.exit === "number" ? m.exit : 0 : 0;
+            let outputWithMeta;
+            if (isCommandMock) {
+              if (out && typeof out === "object" && !Array.isArray(out)) {
+                outputWithMeta = { ...out, exit_code: code };
+              } else {
+                outputWithMeta = { value: out, exit_code: code };
+              }
+            } else {
+              outputWithMeta = out;
+            }
             if (code !== 0) {
               return {
                 issues: [
@@ -12036,10 +12078,10 @@ var init_command_check_provider = __esm({
                     category: "logic"
                   }
                 ],
-                output: out
+                output: outputWithMeta
               };
             }
-            return { issues: [], output: out };
+            return { issues: [], output: outputWithMeta };
           }
         } catch {
         }
@@ -17452,7 +17494,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -17468,7 +17510,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -18098,7 +18140,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -18113,13 +18155,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845>>": {
+        "Record<string,Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-40845>": {
+        "Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044>": {
           type: "object",
           additionalProperties: false
         },
@@ -18689,6 +18731,14 @@ var init_config_schema = __esm({
             base_path: {
               type: "string",
               description: "Base path for workspaces (default: /tmp/visor-workspaces)"
+            },
+            name: {
+              type: "string",
+              description: "Workspace directory name (defaults to session id)"
+            },
+            main_project_name: {
+              type: "string",
+              description: "Main project folder name inside the workspace (defaults to original directory name)"
             },
             cleanup_on_exit: {
               type: "boolean",
@@ -20670,25 +20720,76 @@ var init_worktree_manager = __esm({
         }
         if (fs14.existsSync(worktreePath)) {
           logger.debug(`Worktree already exists: ${worktreePath}`);
-          if (options.clean) {
-            logger.debug(`Cleaning existing worktree`);
-            await this.cleanWorktree(worktreePath);
-          }
           const metadata2 = await this.loadMetadata(worktreePath);
           if (metadata2) {
-            this.activeWorktrees.set(worktreeId, metadata2);
-            return {
-              id: worktreeId,
-              path: worktreePath,
-              ref: metadata2.ref,
-              commit: metadata2.commit,
-              metadata: metadata2,
-              locked: false
-            };
+            if (metadata2.ref === ref) {
+              if (options.clean) {
+                logger.debug(`Cleaning existing worktree`);
+                await this.cleanWorktree(worktreePath);
+              }
+              this.activeWorktrees.set(worktreeId, metadata2);
+              return {
+                id: worktreeId,
+                path: worktreePath,
+                ref: metadata2.ref,
+                commit: metadata2.commit,
+                metadata: metadata2,
+                locked: false
+              };
+            } else {
+              logger.info(
+                `Worktree exists with different ref (${metadata2.ref} -> ${ref}), updating...`
+              );
+              try {
+                const bareRepoPath2 = metadata2.bare_repo_path || await this.getOrCreateBareRepo(
+                  repository,
+                  repoUrl,
+                  options.token,
+                  options.fetchDepth,
+                  options.cloneTimeoutMs
+                );
+                await this.fetchRef(bareRepoPath2, ref);
+                const newCommit = await this.getCommitShaForRef(bareRepoPath2, ref);
+                const checkoutCmd = `git -C ${this.escapeShellArg(worktreePath)} checkout --detach ${this.escapeShellArg(newCommit)}`;
+                const checkoutResult = await this.executeGitCommand(checkoutCmd, { timeout: 6e4 });
+                if (checkoutResult.exitCode !== 0) {
+                  throw new Error(`Failed to checkout new ref: ${checkoutResult.stderr}`);
+                }
+                const updatedMetadata = {
+                  ...metadata2,
+                  ref,
+                  commit: newCommit,
+                  created_at: (/* @__PURE__ */ new Date()).toISOString()
+                };
+                await this.saveMetadata(worktreePath, updatedMetadata);
+                if (options.clean) {
+                  logger.debug(`Cleaning updated worktree`);
+                  await this.cleanWorktree(worktreePath);
+                }
+                this.activeWorktrees.set(worktreeId, updatedMetadata);
+                logger.info(`Successfully updated worktree to ${ref} (${newCommit})`);
+                return {
+                  id: worktreeId,
+                  path: worktreePath,
+                  ref,
+                  commit: newCommit,
+                  metadata: updatedMetadata,
+                  locked: false
+                };
+              } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                logger.warn(`Failed to update worktree, will recreate: ${errorMessage}`);
+                await fsp.rm(worktreePath, { recursive: true, force: true });
+              }
+            }
+          } else {
+            logger.info(`Removing stale directory (no metadata): ${worktreePath}`);
+            await fsp.rm(worktreePath, { recursive: true, force: true });
           }
         }
         await this.fetchRef(bareRepoPath, ref);
         const commit = await this.getCommitShaForRef(bareRepoPath, ref);
+        await this.pruneWorktrees(bareRepoPath);
         logger.info(`Creating worktree for ${repository}@${ref} (${commit})`);
         const createCmd = `git -C ${this.escapeShellArg(
           bareRepoPath
@@ -20720,6 +20821,20 @@ var init_worktree_manager = __esm({
           metadata,
           locked: false
         };
+      }
+      /**
+       * Prune stale worktree entries from a bare repository.
+       * This removes entries for worktrees whose directories no longer exist.
+       */
+      async pruneWorktrees(bareRepoPath) {
+        logger.debug(`Pruning stale worktrees for ${bareRepoPath}`);
+        const pruneCmd = `git -C ${this.escapeShellArg(bareRepoPath)} worktree prune`;
+        const result = await this.executeGitCommand(pruneCmd, { timeout: 1e4 });
+        if (result.exitCode !== 0) {
+          logger.warn(`Failed to prune worktrees: ${result.stderr}`);
+        } else {
+          logger.debug(`Successfully pruned stale worktrees`);
+        }
       }
       /**
        * Fetch a specific ref in bare repository
@@ -21081,6 +21196,53 @@ var init_git_checkout_provider = __esm({
       async execute(prInfo, config, dependencyResults, context2) {
         const checkoutConfig = config;
         const issues = [];
+        try {
+          const stepName = config.checkName || "git-checkout";
+          if (process.env.VISOR_DEBUG === "true") {
+            logger.debug(
+              `[GitCheckout] Mock check: stepName=${stepName}, context=${!!context2}, hooks=${!!context2?.hooks}, mockForStep=${!!context2?.hooks?.mockForStep}`
+            );
+          }
+          const mock = context2?.hooks?.mockForStep?.(String(stepName));
+          if (process.env.VISOR_DEBUG === "true") {
+            logger.debug(
+              `[GitCheckout] Mock result: ${mock !== void 0 ? "found" : "not found"}, value=${JSON.stringify(mock)}`
+            );
+          }
+          if (mock !== void 0) {
+            if (mock && typeof mock === "object") {
+              const mockOutput = mock;
+              if (mockOutput.success === false) {
+                const errorMsg = String(mockOutput.error || "Mocked checkout failure");
+                if (process.env.VISOR_DEBUG === "true") {
+                  logger.debug(`[GitCheckout] Returning mock failure: ${errorMsg}`);
+                }
+                return {
+                  issues: [
+                    {
+                      file: "git-checkout",
+                      line: 0,
+                      ruleId: "git-checkout/error",
+                      message: `Failed to checkout code: ${errorMsg}`,
+                      severity: "error",
+                      category: "logic"
+                    }
+                  ],
+                  output: mockOutput
+                };
+              }
+              if (process.env.VISOR_DEBUG === "true") {
+                logger.debug(`[GitCheckout] Returning mock success: ${JSON.stringify(mockOutput)}`);
+              }
+              return { issues: [], output: mockOutput };
+            }
+            if (process.env.VISOR_DEBUG === "true") {
+              logger.debug(`[GitCheckout] Returning primitive mock: ${String(mock)}`);
+            }
+            return { issues: [], output: { success: true, path: String(mock) } };
+          }
+        } catch {
+        }
         try {
           const templateContext = this.buildTemplateContext(
             prInfo,
@@ -24092,10 +24254,20 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
   const dependencies = checkConfig?.depends_on || [];
   const depList = Array.isArray(dependencies) ? dependencies : [dependencies];
   const failedChecks = state.failedChecks;
+  const allowedFailedDeps = state.allowedFailedDeps?.get(checkId);
   const tokens = depList.filter(Boolean);
   const groupSatisfied = (token) => {
     const options = token.includes("|") ? token.split("|").map((s) => s.trim()).filter(Boolean) : [token];
     for (const opt of options) {
+      const isAllowedFailedDep = !!(allowedFailedDeps && allowedFailedDeps.has(opt));
+      if (isAllowedFailedDep) {
+        if (context2.debug) {
+          logger.info(
+            `[LevelDispatch] Allowing ${checkId} to run despite failed dependency ${opt} (on_fail.run)`
+          );
+        }
+        return true;
+      }
       const depCfg = context2.config.checks?.[opt];
       const cont = !!(depCfg && depCfg.continue_on_failure === true);
       const st = state.stats.get(opt);
@@ -26176,14 +26348,19 @@ var init_workspace_manager = __esm({
       constructor(sessionId, originalPath, config) {
         this.sessionId = sessionId;
         this.originalPath = originalPath;
+        const configuredName = config?.name || process.env.VISOR_WORKSPACE_NAME;
+        const configuredMainProjectName = config?.mainProjectName || process.env.VISOR_WORKSPACE_PROJECT;
         this.config = {
           enabled: true,
           basePath: process.env.VISOR_WORKSPACE_PATH || "/tmp/visor-workspaces",
           cleanupOnExit: true,
+          name: configuredName,
+          mainProjectName: configuredMainProjectName,
           ...config
         };
         this.basePath = this.config.basePath;
-        this.workspacePath = path18.join(this.basePath, sanitizePathComponent(this.sessionId));
+        const workspaceDirName = sanitizePathComponent(this.config.name || this.sessionId);
+        this.workspacePath = path18.join(this.basePath, workspaceDirName);
       }
       /**
        * Get or create a WorkspaceManager instance for a session
@@ -26240,7 +26417,10 @@ var init_workspace_manager = __esm({
         logger.info(`Initializing workspace: ${this.workspacePath}`);
         await fsp2.mkdir(this.workspacePath, { recursive: true });
         logger.debug(`Created workspace directory: ${this.workspacePath}`);
-        const mainProjectName = sanitizePathComponent(this.extractProjectName(this.originalPath));
+        const configuredMainProjectName = this.config.mainProjectName;
+        const mainProjectName = sanitizePathComponent(
+          configuredMainProjectName || this.extractProjectName(this.originalPath)
+        );
         this.usedNames.add(mainProjectName);
         const mainProjectPath = path18.join(this.workspacePath, mainProjectName);
         const isGitRepo = await this.isGitRepository(this.originalPath);
@@ -26516,12 +26696,21 @@ async function initializeWorkspace(context2) {
     const workspace = WorkspaceManager.getInstance(context2.sessionId, originalPath, {
       enabled: true,
       basePath: workspaceConfig?.base_path || process.env.VISOR_WORKSPACE_PATH || "/tmp/visor-workspaces",
-      cleanupOnExit: keepWorkspace ? false : workspaceConfig?.cleanup_on_exit !== false
+      cleanupOnExit: keepWorkspace ? false : workspaceConfig?.cleanup_on_exit !== false,
+      name: workspaceConfig?.name || process.env.VISOR_WORKSPACE_NAME,
+      mainProjectName: workspaceConfig?.main_project_name || process.env.VISOR_WORKSPACE_PROJECT
     });
     const info = await workspace.initialize();
     context2.workspace = workspace;
     context2.workingDirectory = info.mainProjectPath;
     context2.originalWorkingDirectory = originalPath;
+    try {
+      process.env.VISOR_WORKSPACE_ROOT = info.workspacePath;
+      process.env.VISOR_WORKSPACE_MAIN_PROJECT = info.mainProjectPath;
+      process.env.VISOR_WORKSPACE_MAIN_PROJECT_NAME = info.mainProjectName;
+      process.env.VISOR_ORIGINAL_WORKDIR = originalPath;
+    } catch {
+    }
     logger.info(`[Workspace] Initialized workspace: ${info.workspacePath}`);
     logger.debug(`[Workspace] Main project at: ${info.mainProjectPath}`);
     if (keepWorkspace) {
