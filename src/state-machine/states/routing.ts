@@ -154,6 +154,13 @@ function createMemoryHelpers() {
   };
 }
 
+function getHistoryLimit(): number | undefined {
+  const raw = process.env.VISOR_TEST_HISTORY_LIMIT || process.env.VISOR_OUTPUT_HISTORY_LIMIT;
+  if (!raw) return undefined;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
 type RoutingTrigger = 'on_success' | 'on_fail' | 'on_finish';
 type RoutingAction = 'run' | 'goto' | 'retry';
 type RoutingSource = 'run' | 'run_js' | 'goto' | 'goto_js' | 'transitions' | 'retry';
@@ -1252,6 +1259,7 @@ async function evaluateRunJs(
 ): Promise<string[]> {
   try {
     const sandbox = createSecureSandbox();
+    const historyLimit = getHistoryLimit();
 
     // Build outputs record and outputs_history
     const snapshotId = context.journal.beginSnapshot();
@@ -1287,8 +1295,12 @@ async function evaluateRunJs(
       try {
         const history = contextView.getHistory(checkIdFromJournal);
         if (history && history.length > 0) {
+          const trimmed =
+            historyLimit && history.length > historyLimit
+              ? history.slice(history.length - historyLimit)
+              : history;
           // Extract outputs from history (prefer output field if available)
-          outputsHistory[checkIdFromJournal] = history.map((r: any) =>
+          outputsHistory[checkIdFromJournal] = trimmed.map((r: any) =>
             r.output !== undefined ? r.output : r
           );
         }
@@ -1392,6 +1404,7 @@ export async function evaluateGoto(
   if (gotoJs) {
     try {
       const sandbox = createSecureSandbox();
+      const historyLimit = getHistoryLimit();
 
       // Build outputs record and outputs_history from the full session snapshot.
       // Do not filter by event here — on_finish (especially forEach post-children) may
@@ -1429,8 +1442,12 @@ export async function evaluateGoto(
         try {
           const history = contextView.getHistory(checkIdFromJournal);
           if (history && history.length > 0) {
+            const trimmed =
+              historyLimit && history.length > historyLimit
+                ? history.slice(history.length - historyLimit)
+                : history;
             // Extract outputs from history (prefer output field if available)
-            outputsHistory[checkIdFromJournal] = history.map((r: any) =>
+            outputsHistory[checkIdFromJournal] = trimmed.map((r: any) =>
               r.output !== undefined ? r.output : r
             );
           }
@@ -1572,6 +1589,7 @@ export async function evaluateTransitions(
   if (!transitions || transitions.length === 0) return undefined;
   try {
     const sandbox = createSecureSandbox();
+    const historyLimit = getHistoryLimit();
 
     // Build outputs record and outputs_history from the full session snapshot
     const snapshotId = context.journal.beginSnapshot();
@@ -1590,7 +1608,13 @@ export async function evaluateTransitions(
       try {
         const hist = view.getHistory(cid);
         if (hist && hist.length > 0) {
-          outputsHistory[cid] = hist.map((r: any) => (r.output !== undefined ? r.output : r));
+          const trimmed =
+            historyLimit && hist.length > historyLimit
+              ? hist.slice(hist.length - historyLimit)
+              : hist;
+          outputsHistory[cid] = trimmed.map((r: any) =>
+            r.output !== undefined ? r.output : r
+          );
         }
       } catch {}
     }

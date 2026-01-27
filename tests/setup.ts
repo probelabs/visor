@@ -1,4 +1,14 @@
 // Test setup file to configure mocks and prevent external API calls
+import { MemoryStore } from '../src/memory-store';
+import { SessionRegistry } from '../src/session-registry';
+
+// Default test caps to reduce memory pressure (can be overridden by env)
+if (!process.env.VISOR_TEST_PROMPT_MAX_CHARS) {
+  process.env.VISOR_TEST_PROMPT_MAX_CHARS = process.env.CI === 'true' ? '4000' : '8000';
+}
+if (!process.env.VISOR_TEST_HISTORY_LIMIT) {
+  process.env.VISOR_TEST_HISTORY_LIMIT = process.env.CI === 'true' ? '200' : '500';
+}
 
 // Mock child_process.spawn globally to prevent real process spawns while leaving other methods intact
 jest.mock('child_process', () => {
@@ -62,6 +72,14 @@ afterEach(() => {
   // Ensure leaked git vars are cleared after each test
   const gitVars = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_PREFIX', 'GIT_COMMON_DIR'];
   for (const k of gitVars) delete (process.env as NodeJS.ProcessEnv)[k];
+
+  // Clear global singletons between tests to avoid cross-test memory leaks
+  try {
+    MemoryStore.resetInstance();
+  } catch {}
+  try {
+    SessionRegistry.getInstance().clearAllSessions();
+  } catch {}
 });
 
 // Set global Jest timeout for all tests

@@ -25,4 +25,6 @@ module.exports = {
   detectOpenHandles: true,
   // Speed up test execution
   maxWorkers: process.env.CI ? 2 : '50%',
+  // Recycle workers if they retain too much memory
+  workerIdleMemoryLimit: process.env.CI ? '1024MB' : undefined,
 };

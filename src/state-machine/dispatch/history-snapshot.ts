@@ -1,6 +1,13 @@
 import type { EngineContext } from '../../types/engine';
 import { logger } from '../../logger';
 
+function getHistoryLimit(): number | undefined {
+  const raw = process.env.VISOR_TEST_HISTORY_LIMIT || process.env.VISOR_OUTPUT_HISTORY_LIMIT;
+  if (!raw) return undefined;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
 /**
  * Build output history Map from journal for template rendering
  * This matches the format expected by AI providers.
@@ -8,6 +15,7 @@ import { logger } from '../../logger';
  */
 export function buildOutputHistoryFromJournal(context: EngineContext): Map<string, unknown[]> {
   const outputHistory = new Map<string, unknown[]>();
+  const limit = getHistoryLimit();
 
   try {
     const snapshot = context.journal.beginSnapshot();
@@ -41,7 +49,13 @@ export function buildOutputHistoryFromJournal(context: EngineContext): Map<strin
           continue;
         }
       } catch {}
-      if (payload !== undefined) outputHistory.get(checkId)!.push(payload);
+      if (payload !== undefined) {
+        const arr = outputHistory.get(checkId)!;
+        arr.push(payload);
+        if (limit && arr.length > limit) {
+          arr.splice(0, arr.length - limit);
+        }
+      }
     }
   } catch (error) {
     logger.debug(`[LevelDispatch] Error building output history: ${error}`);

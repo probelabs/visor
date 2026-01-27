@@ -6,6 +6,7 @@ import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
 import type { PRInfo } from '../pr-analyzer';
 import { RecordingOctokit } from './recorders/github-recorder';
 import { MemoryStore } from '../memory-store';
+import { SessionRegistry } from '../session-registry';
 import { setGlobalRecorder } from './recorders/global-recorder';
 // import { FixtureLoader } from './fixture-loader';
 import { type ExpectBlock } from './assertions';
@@ -34,6 +35,15 @@ export type TestSuite = {
 export interface DiscoverOptions {
   testsPath?: string; // File, directory, or glob pattern
   cwd?: string;
+}
+function ensureTestEnvDefaults(): void {
+  if (!process.env.VISOR_TEST_MODE) process.env.VISOR_TEST_MODE = 'true';
+  if (!process.env.VISOR_TEST_PROMPT_MAX_CHARS) {
+    process.env.VISOR_TEST_PROMPT_MAX_CHARS = process.env.CI === 'true' ? '4000' : '8000';
+  }
+  if (!process.env.VISOR_TEST_HISTORY_LIMIT) {
+    process.env.VISOR_TEST_HISTORY_LIMIT = process.env.CI === 'true' ? '200' : '500';
+  }
 }
 /**
  * Very small glob-to-RegExp converter supporting **, *, and ?
@@ -180,6 +190,7 @@ export async function runSuites(
     }>;
   }>;
 }> {
+  ensureTestEnvDefaults();
   const perSuite: Array<{
     file: string;
     failures: number;
@@ -338,6 +349,10 @@ export class VisorTestRunner {
     // Always clear in-memory store between cases to prevent cross-case leakage
     try {
       MemoryStore.resetInstance();
+    } catch {}
+    // Always clear AI sessions between cases to prevent cross-case leakage
+    try {
+      SessionRegistry.getInstance().clearAllSessions();
     } catch {}
     // Always use StateMachineExecutionEngine
     const engine = new StateMachineExecutionEngine(undefined as any, recorder as unknown as any);
@@ -751,8 +766,11 @@ export class VisorTestRunner {
     const ghRec = defaultsAny?.github_recorder as
       | { error_code?: number; timeout_ms?: number }
       | undefined;
+    const envPromptCapRaw = process.env.VISOR_TEST_PROMPT_MAX_CHARS;
+    const envPromptCap = envPromptCapRaw ? parseInt(envPromptCapRaw, 10) : undefined;
     const defaultPromptCap: number | undefined =
-      options.promptMaxChars ||
+      options.promptMaxChars ??
+      (Number.isFinite(envPromptCap as number) ? (envPromptCap as number) : undefined) ??
       (typeof defaultsAny?.prompt_max_chars === 'number'
         ? defaultsAny.prompt_max_chars
         : undefined);
@@ -1223,6 +1241,10 @@ export class VisorTestRunner {
         // Clear in-memory store before each stage to avoid leakage across stages
         try {
           MemoryStore.resetInstance();
+        } catch {}
+        // Clear AI sessions before each stage to avoid leakage across stages
+        try {
+          SessionRegistry.getInstance().clearAllSessions();
         } catch {}
         // Prepare default tag filters for this flow (inherit suite defaults)
         const parseTags = (v: unknown): string[] | undefined => {
