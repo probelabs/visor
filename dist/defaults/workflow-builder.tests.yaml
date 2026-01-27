@@ -58,6 +58,10 @@ tests:
           issues: []
           summary: "Workflow looks good. All requirements covered."
           approval: true
+        publish-workflow:
+          stdout: "Copied to ./generated-workflow.yaml"
+          stderr: ""
+          exit_code: 0
 
       expect:
         calls:
@@ -76,6 +80,8 @@ tests:
           - step: run-tests
             exactly: 1
           - step: review-workflow
+            exactly: 1
+          - step: publish-workflow
             exactly: 1
           - step: finalize
             exactly: 1
@@ -131,6 +137,10 @@ tests:
           issues: []
           summary: "Edit looks good"
           approval: true
+        publish-workflow:
+          stdout: "Copied to defaults/code-review.yaml"
+          stderr: ""
+          exit_code: 0
 
       expect:
         calls:
@@ -149,6 +159,8 @@ tests:
           - step: run-tests
             exactly: 1
           - step: review-workflow
+            exactly: 1
+          - step: publish-workflow
             exactly: 1
           - step: finalize
             exactly: 1
@@ -204,6 +216,10 @@ tests:
           issues: []
           summary: "Good workflow"
           approval: true
+        publish-workflow:
+          stdout: "Copied to ./generated-workflow.yaml"
+          stderr: ""
+          exit_code: 0
 
       expect:
         calls:
@@ -224,6 +240,8 @@ tests:
           - step: run-tests
             at_least: 1
           - step: review-workflow
+            exactly: 1
+          - step: publish-workflow
             exactly: 1
           - step: finalize
             exactly: 1
@@ -280,6 +298,10 @@ tests:
 
         apply-review-fixes:
           stdout: "Removed token from logs"
+        publish-workflow:
+          stdout: "Copied to ./generated-workflow.yaml"
+          stderr: ""
+          exit_code: 0
 
       expect:
         calls:
@@ -301,6 +323,8 @@ tests:
             at_least: 1
           - step: apply-review-fixes
             at_least: 1
+          - step: publish-workflow
+            exactly: 1
           - step: finalize
             exactly: 1
 

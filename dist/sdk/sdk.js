@@ -9559,10 +9559,15 @@ ${processedPrompt}` : processedPrompt;
           const stepName = config.checkName || "unknown";
           const mock = sessionInfo?.hooks?.mockForStep?.(String(stepName));
           if (mock !== void 0) {
-            if (mock && typeof mock === "object" && ("issues" in mock || "content" in mock)) {
-              return mock;
-            }
-            return { issues: [], output: mock };
+            const ms = mock;
+            const issuesArr = Array.isArray(ms?.issues) ? ms.issues : [];
+            const out = ms && typeof ms === "object" && "output" in ms ? ms.output : ms;
+            const summary = {
+              issues: issuesArr,
+              output: out,
+              ...typeof ms?.content === "string" ? { content: String(ms.content) } : {}
+            };
+            return summary;
           }
         } catch {
         }
