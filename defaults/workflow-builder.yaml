@@ -254,7 +254,7 @@ steps:
 
     exec: |
       {% assign r = outputs['interpret-request'] %}
-      WORKFLOW_PATH="{{ r.workflow_path | default: './generated-workflow.yaml' }}"
+      WORKFLOW_PATH={{ r.workflow_path | default: './generated-workflow.yaml' | shell_escape }}
       echo "DEBUG: Current directory: $(pwd)"
       echo "DEBUG: Looking for: $WORKFLOW_PATH"
       echo "DEBUG: Files in current directory:"
@@ -348,7 +348,7 @@ steps:
 
     exec: |
       {% assign r = outputs['interpret-request'] %}
-      WORKFLOW_PATH="{{ r.workflow_path | default: './generated-workflow.yaml' }}"
+      WORKFLOW_PATH={{ r.workflow_path | default: './generated-workflow.yaml' | shell_escape }}
       if [ -f "$WORKFLOW_PATH" ]; then
         npx @probelabs/visor@latest validate --config "$WORKFLOW_PATH" 2>&1
       else
@@ -437,8 +437,8 @@ steps:
 
     exec: |
       {% assign r = outputs['interpret-request'] %}
-      WORKFLOW_PATH="{{ r.workflow_path | default: './generated-workflow.yaml' }}"
-      if grep -q "^tests:" "$WORKFLOW_PATH" 2>/dev/null; then
+      WORKFLOW_PATH={{ r.workflow_path | default: './generated-workflow.yaml' | shell_escape }}
+      if grep -q "^tests:" -- "$WORKFLOW_PATH" 2>/dev/null; then
         npx @probelabs/visor@latest test --config "$WORKFLOW_PATH" 2>&1
       else
         echo "Warning: No inline tests found. Skipping test execution."
@@ -601,7 +601,7 @@ steps:
 
     exec: |
       {% assign r = outputs['interpret-request'] %}
-      WORKFLOW_PATH="{{ r.workflow_path | default: './generated-workflow.yaml' }}"
+      WORKFLOW_PATH={{ r.workflow_path | default: './generated-workflow.yaml' | shell_escape }}
       ORIG_DIR="${VISOR_ORIGINAL_WORKDIR:-$PWD}"
       if [ -f "$WORKFLOW_PATH" ]; then
         mkdir -p "$ORIG_DIR"
