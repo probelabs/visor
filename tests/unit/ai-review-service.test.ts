@@ -72,11 +72,11 @@ describe('AIReviewService', () => {
       expect((service as any).config.timeout).toBe(60000);
     });
 
-    it('should use increased default timeout of 10 minutes', () => {
+    it('should use increased default timeout of 20 minutes', () => {
       process.env.GOOGLE_API_KEY = 'test-key';
 
       const service = new AIReviewService();
-      expect((service as any).config.timeout).toBe(600000); // 10 minutes
+      expect((service as any).config.timeout).toBe(1200000); // 20 minutes
     });
 
     it('should allow custom timeout configuration', () => {
@@ -109,11 +109,25 @@ describe('AIReviewService', () => {
       totalDeletions: 5,
     };
 
-    it('should throw error when no API key is available', async () => {
+    it('should throw error when no API key or CLI fallback is available', async () => {
+      // When no API key is set and CLI fallback is not available,
+      // ProbeAgent.initialize() will throw an error
+      MockedProbeAgent.mockImplementation(
+        () =>
+          ({
+            initialize: jest
+              .fn()
+              .mockRejectedValue(
+                new Error('No API key provided and neither claude nor codex command found.')
+              ),
+            answer: jest.fn(),
+          }) as any
+      );
+
       const service = new AIReviewService();
 
       await expect(service.executeReview(mockPRInfo, 'security')).rejects.toThrow(
-        'No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY environment variable, or configure AWS credentials for Bedrock (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).'
+        'No API key provided and neither claude nor codex command found.'
       );
     });
 
@@ -141,6 +155,7 @@ describe('AIReviewService', () => {
       MockedProbeAgent.mockImplementation(
         () =>
           ({
+            initialize: jest.fn().mockResolvedValue(undefined),
             answer: mockAnswer,
           }) as any
       );
@@ -172,6 +187,7 @@ describe('AIReviewService', () => {
       MockedProbeAgent.mockImplementation(
         () =>
           ({
+            initialize: jest.fn().mockResolvedValue(undefined),
             answer: mockAnswer,
           }) as any
       );
@@ -191,6 +207,7 @@ describe('AIReviewService', () => {
       MockedProbeAgent.mockImplementation(
         () =>
           ({
+            initialize: jest.fn().mockResolvedValue(undefined),
             answer: mockAnswer,
           }) as any
       );
@@ -362,7 +379,21 @@ describe('AIReviewService', () => {
   });
 
   describe('Error Handling', () => {
-    it('should require API key for executeReview', async () => {
+    it('should require API key or CLI fallback for executeReview', async () => {
+      // When no API key is set and CLI fallback is not available,
+      // ProbeAgent.initialize() will throw an error
+      MockedProbeAgent.mockImplementation(
+        () =>
+          ({
+            initialize: jest
+              .fn()
+              .mockRejectedValue(
+                new Error('No API key provided and neither claude nor codex command found.')
+              ),
+            answer: jest.fn(),
+          }) as any
+      );
+
       const service = new AIReviewService();
       const prInfo: PRInfo = {
         number: 1,
@@ -377,7 +408,7 @@ describe('AIReviewService', () => {
       };
 
       await expect(service.executeReview(prInfo, 'security')).rejects.toThrow(
-        'No API key configured. Please set GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY environment variable, or configure AWS credentials for Bedrock (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).'
+        'No API key provided and neither claude nor codex command found.'
       );
     });
 

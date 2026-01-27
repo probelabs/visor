@@ -41,6 +41,7 @@ function createPRInfoWithDiff(diff: string, overrides?: Partial<PRInfo>): PRInfo
 
 // Mock ProbeAgent
 const mockProbeAgent = {
+  initialize: jest.fn().mockResolvedValue(undefined),
   answer: jest.fn(),
 };
 

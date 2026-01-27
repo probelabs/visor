@@ -179,7 +179,7 @@ async function executeInvocation(
       __outputHistory: outputHistory,
       ai: {
         ...(stepConfig.ai || {}),
-        timeout: stepConfig.ai?.timeout || 600000,
+        timeout: stepConfig.ai?.timeout || 1200000,
         debug: !!context.debug,
       },
     };

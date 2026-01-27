@@ -6,6 +6,7 @@ import { CheckExecutionEngine } from '../../src/check-execution-engine';
 
 // Mock ProbeAgent
 const mockProbeAgent = {
+  initialize: jest.fn().mockResolvedValue(undefined),
   answer: jest.fn(),
   history: [],
   options: {},

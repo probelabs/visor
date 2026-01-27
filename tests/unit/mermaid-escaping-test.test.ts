@@ -5,6 +5,7 @@ import { PRInfo } from '../../src/pr-analyzer';
 // Mock ProbeAgent to return specific responses
 jest.mock('@probelabs/probe', () => ({
   ProbeAgent: jest.fn().mockImplementation(() => ({
+    initialize: jest.fn().mockResolvedValue(undefined),
     answer: jest.fn(),
   })),
 }));
@@ -17,6 +18,7 @@ describe('Mermaid Backtick Escaping Issues', () => {
     // Set up ProbeAgent mock
     const { ProbeAgent } = require('@probelabs/probe');
     mockProbeAgent = {
+      initialize: jest.fn().mockResolvedValue(undefined),
       answer: jest.fn(),
     };
     (ProbeAgent as jest.Mock).mockImplementation(() => mockProbeAgent);

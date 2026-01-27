@@ -705,7 +705,7 @@ async function executeCheckWithForEachItems(
         __outputHistory: outputHistory,
         ai: {
           ...(checkConfig.ai || {}),
-          timeout: checkConfig.ai?.timeout || 600000,
+          timeout: checkConfig.ai?.timeout || 1200000,
           debug: !!context.debug,
         },
       };
@@ -2019,7 +2019,7 @@ async function executeSingleCheck(
       checksMeta,
       ai: {
         ...(checkConfig.ai || {}),
-        timeout: checkConfig.ai?.timeout || 600000,
+        timeout: checkConfig.ai?.timeout || 1200000,
         debug: !!context.debug,
       },
     };

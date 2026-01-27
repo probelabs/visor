@@ -8,6 +8,7 @@ import os from 'os';
 
 // Mock ProbeAgent
 const mockProbeAgent = {
+  initialize: jest.fn().mockResolvedValue(undefined),
   answer: jest.fn(),
   history: [],
   options: {},

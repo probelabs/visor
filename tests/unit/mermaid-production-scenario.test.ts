@@ -8,6 +8,7 @@ import * as fs from 'fs/promises';
 // Mock ProbeAgent to return specific responses
 jest.mock('@probelabs/probe', () => ({
   ProbeAgent: jest.fn().mockImplementation(() => ({
+    initialize: jest.fn().mockResolvedValue(undefined),
     answer: jest.fn(),
   })),
 }));
@@ -21,6 +22,7 @@ describe('Mermaid Production Scenario - Exact Replication', () => {
     // Set up ProbeAgent mock
     const { ProbeAgent } = require('@probelabs/probe');
     mockProbeAgent = {
+      initialize: jest.fn().mockResolvedValue(undefined),
       answer: jest.fn(),
     };
     (ProbeAgent as jest.Mock).mockImplementation(() => mockProbeAgent);

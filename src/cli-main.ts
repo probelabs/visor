@@ -11,6 +11,8 @@ import { OutputFormatters, AnalysisResult } from './output-formatters';
 import { CheckResult, GroupedCheckResults } from './reviewer';
 import { PRInfo } from './pr-analyzer';
 import { logger, configureLoggerFromCli } from './logger';
+import { TuiManager } from './tui';
+import { extractTextFromJson } from './utils/json-text-extractor';
 import * as fs from 'fs';
 import * as path from 'path';
 import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
@@ -468,12 +470,60 @@ async function handleTestCommand(argv: string[]): Promise<void> {
   }
 }
 
+function buildChatTranscript(
+  groupedResults: GroupedCheckResults,
+  config: import('./types/config').VisorConfig
+): string {
+  const messages: string[] = [];
+  const checks = config.checks || {};
+  const separator = '\n\n' + '-'.repeat(60) + '\n\n';
+
+  for (const checkResults of Object.values(groupedResults)) {
+    for (const result of checkResults) {
+      const checkCfg: any = (checks as any)[result.checkName] || {};
+      const providerType = typeof checkCfg.type === 'string' ? checkCfg.type : '';
+      const group = (checkCfg.group as string) || result.group || '';
+      const schema = checkCfg.schema;
+      const isChatGroup = group === 'chat';
+      const isAi = providerType === 'ai';
+      const isLog = providerType === 'log';
+      const isSimpleSchema =
+        typeof schema === 'string' ? ['plain', 'text', 'markdown'].includes(schema) : false;
+
+      let text = extractTextFromJson(result.output);
+
+      if (!text && isAi && typeof result.content === 'string') {
+        if (isSimpleSchema || schema === undefined || schema === null) {
+          text = result.content.trim();
+        }
+      }
+
+      if (!text && isLog && isChatGroup && typeof result.content === 'string') {
+        text = result.content.trim();
+      }
+
+      if (!text && isChatGroup && typeof result.content === 'string') {
+        text = result.content.trim();
+      }
+
+      if (!text || text.trim().length === 0) continue;
+
+      const header = result.checkName ? result.checkName : 'chat';
+      messages.push(`${header}\n${text.trim()}`);
+    }
+  }
+
+  return messages.join(separator);
+}
+
 /**
  * Main CLI entry point for Visor
  */
 export async function main(): Promise<void> {
   // Declare debugServer at function scope so it's accessible in catch/finally blocks
   let debugServer: DebugVisualizerServer | null = null;
+  let tui: TuiManager | null = null;
+  let tuiConsoleRestore: (() => void) | null = null;
 
   try {
     // Preflight: detect obviously stale dist relative to src and warn early.
@@ -659,6 +709,131 @@ export async function main(): Promise<void> {
     if (options.version) {
       console.log(cli.getVersion());
       process.exit(0);
+    }
+
+    const shouldEnableTui =
+      Boolean(options.tui) &&
+      Boolean(process.stdout.isTTY) &&
+      Boolean(process.stderr.isTTY) &&
+      !options.debugServer &&
+      !options.slack &&
+      process.env.NODE_ENV !== 'test';
+
+    if (shouldEnableTui) {
+      try {
+        tui = new TuiManager();
+        tui.start();
+        tui.setRunning(true);
+        tuiConsoleRestore = tui.captureConsole();
+        executionContext.hooks = executionContext.hooks || {};
+        executionContext.hooks.onHumanInput = async request => {
+          if (!tui) throw new Error('TUI not available');
+          tui.setStatus('Awaiting input...');
+          try {
+            const userInput = await tui.promptUser({
+              prompt: request.prompt,
+              placeholder: request.placeholder,
+              multiline: request.multiline,
+              timeout: request.timeout,
+              defaultValue: request.default,
+              allowEmpty: request.allowEmpty,
+            });
+            // Append user input to chat content
+            if (userInput && userInput.trim()) {
+              const currentChat = (tui as any).pendingChat || '';
+              const newChat = currentChat
+                ? `${currentChat}\n\n**You:** ${userInput.trim()}`
+                : `**You:** ${userInput.trim()}`;
+              tui.setChatContent(newChat);
+            }
+            return userInput;
+          } finally {
+            tui.setStatus('Running');
+          }
+        };
+        // Hook to update TUI chat content when AI checks complete
+        executionContext.hooks.onCheckComplete = info => {
+          if (!tui) return;
+          const { checkConfig, result } = info;
+          // Only show AI/log checks with group=chat and criticality=info
+          const isAi = checkConfig?.type === 'ai';
+          const isLogChat = checkConfig?.type === 'log' && checkConfig?.group === 'chat';
+          if (!isAi && !isLogChat) return;
+          if (checkConfig?.criticality === 'internal') return;
+
+          // Extract text from result
+          let text: string | undefined;
+          const out = result?.output as any;
+          if (out && typeof out.text === 'string' && out.text.trim().length > 0) {
+            text = out.text.trim();
+          } else if (typeof result?.content === 'string' && result.content.trim().length > 0) {
+            text = result.content.trim();
+          }
+          if (!text) return;
+
+          // Append to chat content
+          const currentChat = (tui as any).pendingChat || '';
+          const newChat = currentChat
+            ? `${currentChat}\n\n---\n\n**Assistant:** ${text}`
+            : `**Assistant:** ${text}`;
+          tui.setChatContent(newChat);
+        };
+        tui.setAbortHandler(() => {
+          void (async () => {
+            try {
+              logger.setSink(undefined);
+            } catch {}
+            try {
+              if (tuiConsoleRestore) {
+                tuiConsoleRestore();
+                tuiConsoleRestore = null;
+              }
+            } catch {}
+            try {
+              tui?.stop();
+            } catch {}
+            try {
+              await flushNdjson();
+            } catch {}
+            try {
+              await shutdownTelemetry();
+            } catch {}
+            process.exit(130);
+          })();
+        });
+        logger.setSink((msg, _level) => tui?.appendLog(msg), {
+          passthrough: false,
+          errorMode: 'warn',
+          onError: error => {
+            const errMsg = error instanceof Error ? error.message : String(error);
+            console.error(`TUI log sink failed: ${errMsg}`);
+            logger.setSink(undefined);
+          },
+        });
+      } catch (error) {
+        if (tuiConsoleRestore) {
+          tuiConsoleRestore();
+          tuiConsoleRestore = null;
+        }
+        logger.setSink(undefined);
+        tui?.stop();
+        tui = null;
+        try {
+          if (executionContext.hooks?.onHumanInput) {
+            delete executionContext.hooks.onHumanInput;
+          }
+        } catch {}
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error(`⚠️  Failed to start TUI, falling back to standard output: ${msg}`);
+      }
+    } else if (options.tui) {
+      const reasons: string[] = [];
+      if (!process.stdout.isTTY || !process.stderr.isTTY) reasons.push('non-interactive TTY');
+      if (options.debugServer) reasons.push('--debug-server');
+      if (options.slack) reasons.push('--slack');
+      if (process.env.NODE_ENV === 'test') reasons.push('test mode');
+      const suffix = reasons.length > 0 ? ` (${reasons.join(', ')})` : '';
+      console.error(`TUI requested but disabled${suffix}.`);
     }
 
     // Configure logger based on output format and verbosity
@@ -1296,6 +1471,12 @@ export async function main(): Promise<void> {
       }
     }
 
+    if (tui) {
+      const chatTranscript = buildChatTranscript(groupedResultsToUse, config);
+      tui.setChatContent(chatTranscript);
+      tui.setOutput(output);
+    }
+
     // Emit or save output
     if (options.outputFile) {
       try {
@@ -1309,7 +1490,7 @@ export async function main(): Promise<void> {
         );
         process.exit(1);
       }
-    } else if (!debugServer) {
+    } else if (!debugServer && !tui) {
       // Only print to console if debug server is not active
       console.log(output);
     }
@@ -1416,6 +1597,26 @@ export async function main(): Promise<void> {
     try {
       await shutdownTelemetry();
     } catch {}
+    if (tui) {
+      try {
+        tui.setRunning(false);
+      } catch {}
+      try {
+        logger.setSink(undefined);
+      } catch {}
+      try {
+        if (tuiConsoleRestore) tuiConsoleRestore();
+      } catch {}
+      try {
+        const holdMs = (() => {
+          const raw = process.env.VISOR_TUI_HOLD_MS;
+          if (!raw) return 60000;
+          const parsed = parseInt(raw, 10);
+          return Number.isFinite(parsed) ? parsed : 60000;
+        })();
+        await tui.waitForExit(holdMs);
+      } catch {}
+    }
     process.exit(exitCode);
   } catch (error) {
     // Import error classes dynamically to avoid circular dependencies
@@ -1485,6 +1686,26 @@ export async function main(): Promise<void> {
     try {
       await shutdownTelemetry();
     } catch {}
+    if (tui) {
+      try {
+        tui.setRunning(false);
+      } catch {}
+      try {
+        logger.setSink(undefined);
+      } catch {}
+      try {
+        if (tuiConsoleRestore) tuiConsoleRestore();
+      } catch {}
+      try {
+        const holdMs = (() => {
+          const raw = process.env.VISOR_TUI_HOLD_MS;
+          if (!raw) return 60000;
+          const parsed = parseInt(raw, 10);
+          return Number.isFinite(parsed) ? parsed : 60000;
+        })();
+        await tui.waitForExit(holdMs);
+      } catch {}
+    }
     process.exit(1);
   }
 }
