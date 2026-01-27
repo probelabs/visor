@@ -22,9 +22,11 @@ module.exports = {
   testTimeout: 10000, // Reduced from 30s to 10s for faster CI
   // Prevent Jest from hanging on async operations
   forceExit: true,
-  detectOpenHandles: true,
+  detectOpenHandles: process.env.CI ? false : true,
   // Speed up test execution
-  maxWorkers: process.env.CI ? 2 : '50%',
+  maxWorkers: process.env.CI ? 1 : '50%',
+  // Use child processes on CI for better memory reclamation
+  workerThreads: process.env.CI ? false : true,
   // Recycle workers if they retain too much memory
-  workerIdleMemoryLimit: process.env.CI ? '1024MB' : undefined,
+  workerIdleMemoryLimit: process.env.CI ? '512MB' : undefined,
 };
