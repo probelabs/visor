@@ -142,11 +142,12 @@ describe('EnvironmentResolver', () => {
     });
 
     test('should handle async callbacks', async () => {
+      jest.useFakeTimers();
       const envConfig = {
         ASYNC_VAR: '${{ env.TEST_API_KEY }}',
       };
 
-      const result = await EnvironmentResolver.withTemporaryEnv(envConfig, async () => {
+      const resultPromise = EnvironmentResolver.withTemporaryEnv(envConfig, async () => {
         expect(process.env.ASYNC_VAR).toBe('test-api-key-123');
 
         // Simulate async work
@@ -156,8 +157,12 @@ describe('EnvironmentResolver', () => {
         return 'async-result';
       });
 
+      await jest.advanceTimersByTimeAsync(10);
+      const result = await resultPromise;
+
       expect(result).toBe('async-result');
       expect(process.env.ASYNC_VAR).toBeUndefined();
+      jest.useRealTimers();
     });
 
     test('should restore environment even if callback throws', () => {

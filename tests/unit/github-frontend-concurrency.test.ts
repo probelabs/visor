@@ -8,6 +8,7 @@ describe('GitHubFrontend Concurrency', () => {
   let updateCalls: Array<{ group: string; timestamp: number }> = [];
 
   beforeEach(() => {
+    jest.useFakeTimers();
     updateCalls = [];
 
     // Mock CommentManager
@@ -66,6 +67,10 @@ describe('GitHubFrontend Concurrency', () => {
     frontend.minUpdateDelayMs = 100;
   });
 
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('should serialize concurrent updates to the same group', async () => {
     // Access private method via reflection for testing
     const updateMethod = (frontend as any).updateGroupedComment.bind(frontend);
@@ -79,7 +84,9 @@ describe('GitHubFrontend Concurrency', () => {
       updateMethod(mockContext, mockComments, 'test-group'),
     ];
 
-    await Promise.all(updates);
+    const updatesDone = Promise.all(updates);
+    await jest.runAllTimersAsync();
+    await updatesDone;
 
     const totalTime = Date.now() - startTime;
 
@@ -107,10 +114,12 @@ describe('GitHubFrontend Concurrency', () => {
     const startTime = Date.now();
 
     // Simulate concurrent updates to different groups
-    await Promise.all([
+    const updatesDone = Promise.all([
       updateMethod(mockContext, mockComments, 'group-1'),
       updateMethod(mockContext, mockComments, 'group-2'),
     ]);
+    await jest.runAllTimersAsync();
+    await updatesDone;
 
     const totalTime = Date.now() - startTime;
 
@@ -129,10 +138,14 @@ describe('GitHubFrontend Concurrency', () => {
     const startTime = Date.now();
 
     // Sequential updates should respect minUpdateDelayMs
-    await updateMethod(mockContext, mockComments, 'test-group');
+    const firstUpdate = updateMethod(mockContext, mockComments, 'test-group');
+    await jest.runAllTimersAsync();
+    await firstUpdate;
     const firstUpdateTime = Date.now() - startTime;
 
-    await updateMethod(mockContext, mockComments, 'test-group');
+    const secondUpdate = updateMethod(mockContext, mockComments, 'test-group');
+    await jest.runAllTimersAsync();
+    await secondUpdate;
     const secondUpdateTime = Date.now() - startTime;
 
     const timeBetweenUpdates = secondUpdateTime - firstUpdateTime;

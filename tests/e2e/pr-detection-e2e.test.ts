@@ -775,6 +775,7 @@ describe('PR Detection E2E Tests', () => {
     });
 
     test('should timeout on slow API responses', async () => {
+      jest.useFakeTimers();
       let slowResponseTimer: NodeJS.Timeout | undefined;
       let raceTimeout: NodeJS.Timeout | undefined;
 
@@ -793,18 +794,20 @@ describe('PR Detection E2E Tests', () => {
       // For now, we'll just verify it doesn't hang
       const startTime = Date.now();
 
+      const race = Promise.race([
+        prDetector.detectPRNumber(
+          PUSH_EVENT_TO_FEATURE_BRANCH as GitHubEventContext,
+          MOCK_REPO_INFO.owner,
+          MOCK_REPO_INFO.name
+        ),
+        new Promise((_, reject) => {
+          raceTimeout = setTimeout(() => reject(new Error('Test timeout')), 1000);
+        }),
+      ]);
+      const raceExpectation = expect(race).rejects.toThrow('Test timeout');
       try {
-        await Promise.race([
-          prDetector.detectPRNumber(
-            PUSH_EVENT_TO_FEATURE_BRANCH as GitHubEventContext,
-            MOCK_REPO_INFO.owner,
-            MOCK_REPO_INFO.name
-          ),
-          new Promise((_, reject) => {
-            raceTimeout = setTimeout(() => reject(new Error('Test timeout')), 1000);
-          }),
-        ]);
-      } catch {
+        await jest.advanceTimersByTimeAsync(1000);
+        await raceExpectation;
         const elapsed = Date.now() - startTime;
         expect(elapsed).toBeLessThan(2000); // Should fail fast
       } finally {
@@ -814,6 +817,7 @@ describe('PR Detection E2E Tests', () => {
         if (raceTimeout) {
           clearTimeout(raceTimeout);
         }
+        jest.useRealTimers();
       }
     });
   });
