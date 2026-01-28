@@ -740,6 +740,8 @@ export class AICheckProvider extends CheckProvider {
             workspaceRoot = info.workspacePath;
             mainProjectPath = info.mainProjectPath;
             // Add workspace root first so allowedFolders[0] is the workspace root.
+            // This keeps compatibility with ProbeAgent's legacy default cwd behavior,
+            // while we also set explicit path/cwd below.
             folders.push(info.workspacePath);
             // NOTE: We intentionally do NOT add mainProjectPath here.
             // Inclusion of the main project is controlled below via
@@ -777,6 +779,11 @@ export class AICheckProvider extends CheckProvider {
         }
         const unique = Array.from(new Set(folders.filter(p => typeof p === 'string' && p)));
         if (unique.length > 0 && workspaceRoot) {
+          if (unique[0] !== workspaceRoot) {
+            logger.warn(
+              `[AI Provider] allowedFolders[0] is not workspaceRoot; tooling defaults may be mis-scoped`
+            );
+          }
           (aiConfig as any).allowedFolders = unique;
           // Use workspace root as cwd so tools default to the workspace root.
           // Both are set for compatibility: path for older probe versions, cwd for rc175+.
