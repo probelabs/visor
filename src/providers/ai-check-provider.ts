@@ -739,23 +739,14 @@ export class AICheckProvider extends CheckProvider {
           if (info && typeof info.workspacePath === 'string') {
             workspaceRoot = info.workspacePath;
             mainProjectPath = info.mainProjectPath;
+            // Add workspace root first so allowedFolders[0] is the workspace root.
+            folders.push(info.workspacePath);
+            // NOTE: We intentionally do NOT add mainProjectPath here.
+            // Inclusion of the main project is controlled below via
+            // workspace.include_main_project / VISOR_WORKSPACE_INCLUDE_MAIN_PROJECT.
           }
         } catch {
           // ignore workspace info errors
-        }
-        // IMPORTANT: Add mainProjectPath FIRST so it becomes allowedFolders[0]
-        // ProbeAgent uses allowedFolders[0] as the base directory for file operations
-        // This ensures files created with relative paths (e.g., ./generated-workflow.yaml)
-        // are written to the main project directory (same cwd as command provider)
-        if (mainProjectPath) {
-          folders.push(mainProjectPath);
-          logger.debug(
-            `[AI Provider] Including main project FIRST in allowedFolders: ${mainProjectPath}`
-          );
-        }
-        // Add workspace root for visibility into workspace structure
-        if (workspaceRoot) {
-          folders.push(workspaceRoot);
         }
         // Collect checked-out projects (these are the user's actual projects)
         const projectPaths: string[] = [];
@@ -771,19 +762,30 @@ export class AICheckProvider extends CheckProvider {
         } catch {
           // ignore project listing errors
         }
+        // Only include the main project when explicitly enabled.
+        const workspaceCfg = parentCtx?.config?.workspace as
+          | { include_main_project?: boolean }
+          | undefined;
+        const includeMainProject =
+          workspaceCfg?.include_main_project === true ||
+          process.env.VISOR_WORKSPACE_INCLUDE_MAIN_PROJECT === 'true';
+        if (includeMainProject && mainProjectPath) {
+          folders.push(mainProjectPath);
+          logger.debug(`[AI Provider] Including main project (enabled): ${mainProjectPath}`);
+        } else if (mainProjectPath) {
+          logger.debug(`[AI Provider] Excluding main project (disabled): ${mainProjectPath}`);
+        }
         const unique = Array.from(new Set(folders.filter(p => typeof p === 'string' && p)));
         if (unique.length > 0 && workspaceRoot) {
           (aiConfig as any).allowedFolders = unique;
-          // Set path, cwd, and workspacePath to mainProjectPath (same as command provider's workingDirectory)
-          // This ensures AI and command providers use the same cwd for relative paths
-          // Both are set for compatibility: path for older probe versions, cwd for rc175+
-          // NOTE: workspacePath takes priority in ai-review-service.ts, so it must also be mainProjectPath
-          const aiCwd = mainProjectPath || workspaceRoot;
+          // Use workspace root as cwd so tools default to the workspace root.
+          // Both are set for compatibility: path for older probe versions, cwd for rc175+.
+          const aiCwd = workspaceRoot;
           (aiConfig as any).path = aiCwd;
           (aiConfig as any).cwd = aiCwd;
           (aiConfig as any).workspacePath = aiCwd;
           logger.debug(`[AI Provider] Workspace isolation enabled:`);
-          logger.debug(`[AI Provider]   cwd (mainProjectPath): ${aiCwd}`);
+          logger.debug(`[AI Provider]   cwd (workspaceRoot): ${aiCwd}`);
           logger.debug(`[AI Provider]   workspaceRoot: ${workspaceRoot}`);
           logger.debug(`[AI Provider]   allowedFolders: ${JSON.stringify(unique)}`);
         }

@@ -147,12 +147,14 @@ When multiple checkouts have the same repo name:
 ```typescript
 // Environment variable
 VISOR_WORKSPACE_PATH=/custom/path  // Override base path
+VISOR_WORKSPACE_INCLUDE_MAIN_PROJECT=true  // Optional: expose main project to AI tools
 
 // Future: config file option
 workspace:
   enabled: true
   base_path: /tmp/visor-workspaces
   cleanup_on_exit: true
+  include_main_project: false  # Optional: expose main project to AI tools
 ```
 
 ## Files to Create/Modify
