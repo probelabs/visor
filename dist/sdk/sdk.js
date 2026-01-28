@@ -4429,9 +4429,7 @@ async function evaluateTransitions(transitions, checkId, checkConfig, result, co
         const hist = view.getHistory(cid);
         if (hist && hist.length > 0) {
           const trimmed = historyLimit && hist.length > historyLimit ? hist.slice(hist.length - historyLimit) : hist;
-          outputsHistory[cid] = trimmed.map(
-            (r) => r.output !== void 0 ? r.output : r
-          );
+          outputsHistory[cid] = trimmed.map((r) => r.output !== void 0 ? r.output : r);
         }
       } catch {
       }
@@ -7069,18 +7067,18 @@ ${"=".repeat(60)}
           try {
             const cfgAny = this.config;
             const allowedFolders = cfgAny.allowedFolders;
-            const workspacePath = cfgAny.workspacePath || cfgAny.path || Array.isArray(allowedFolders) && allowedFolders[0];
+            const preferredPath = cfgAny.workspacePath || (Array.isArray(allowedFolders) && allowedFolders.length > 0 ? allowedFolders[0] : void 0) || cfgAny.path;
             if (Array.isArray(allowedFolders) && allowedFolders.length > 0) {
               options.allowedFolders = allowedFolders;
-              if (!options.path && workspacePath) {
-                options.path = workspacePath;
+              if (!options.path && preferredPath) {
+                options.path = preferredPath;
               }
               log(`\u{1F5C2}\uFE0F ProbeAgent workspace config:`);
               log(`   path (cwd): ${options.path}`);
               log(`   allowedFolders[0]: ${allowedFolders[0]}`);
-            } else if (workspacePath) {
-              options.path = workspacePath;
-              log(`\u{1F5C2}\uFE0F ProbeAgent path: ${workspacePath} (no allowedFolders)`);
+            } else if (preferredPath) {
+              options.path = preferredPath;
+              log(`\u{1F5C2}\uFE0F ProbeAgent path: ${preferredPath} (no allowedFolders)`);
             }
           } catch {
           }
@@ -9386,17 +9384,9 @@ var init_ai_check_provider = __esm({
               if (info && typeof info.workspacePath === "string") {
                 workspaceRoot = info.workspacePath;
                 mainProjectPath = info.mainProjectPath;
+                folders.push(info.workspacePath);
               }
             } catch {
-            }
-            if (mainProjectPath) {
-              folders.push(mainProjectPath);
-              logger.debug(
-                `[AI Provider] Including main project FIRST in allowedFolders: ${mainProjectPath}`
-              );
-            }
-            if (workspaceRoot) {
-              folders.push(workspaceRoot);
             }
             const projectPaths = [];
             try {
@@ -9409,15 +9399,28 @@ var init_ai_check_provider = __esm({
               }
             } catch {
             }
+            const workspaceCfg = parentCtx?.config?.workspace;
+            const includeMainProject = workspaceCfg?.include_main_project === true || process.env.VISOR_WORKSPACE_INCLUDE_MAIN_PROJECT === "true";
+            if (includeMainProject && mainProjectPath) {
+              folders.push(mainProjectPath);
+              logger.debug(`[AI Provider] Including main project (enabled): ${mainProjectPath}`);
+            } else if (mainProjectPath) {
+              logger.debug(`[AI Provider] Excluding main project (disabled): ${mainProjectPath}`);
+            }
             const unique = Array.from(new Set(folders.filter((p) => typeof p === "string" && p)));
             if (unique.length > 0 && workspaceRoot) {
+              if (unique[0] !== workspaceRoot) {
+                logger.warn(
+                  `[AI Provider] allowedFolders[0] is not workspaceRoot; tooling defaults may be mis-scoped`
+                );
+              }
               aiConfig.allowedFolders = unique;
-              const aiCwd = mainProjectPath || workspaceRoot;
+              const aiCwd = workspaceRoot;
               aiConfig.path = aiCwd;
               aiConfig.cwd = aiCwd;
               aiConfig.workspacePath = aiCwd;
               logger.debug(`[AI Provider] Workspace isolation enabled:`);
-              logger.debug(`[AI Provider]   cwd (mainProjectPath): ${aiCwd}`);
+              logger.debug(`[AI Provider]   cwd (workspaceRoot): ${aiCwd}`);
               logger.debug(`[AI Provider]   workspaceRoot: ${workspaceRoot}`);
               logger.debug(`[AI Provider]   allowedFolders: ${JSON.stringify(unique)}`);
             }
@@ -17526,7 +17529,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41156%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -17542,7 +17545,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41156%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -18172,7 +18175,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41156%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -18187,13 +18190,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044>>": {
+        "Record<string,Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-41156>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41156%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044>": {
+        "Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-41156>": {
           type: "object",
           additionalProperties: false
         },
@@ -18775,6 +18778,10 @@ var init_config_schema = __esm({
             cleanup_on_exit: {
               type: "boolean",
               description: "Clean up workspace on exit (default: true)"
+            },
+            include_main_project: {
+              type: "boolean",
+              description: "Include main project worktree in AI allowed folders (default: false)"
             }
           },
           additionalProperties: false,
