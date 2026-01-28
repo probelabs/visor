@@ -19,6 +19,8 @@ module.exports = {
     'node_modules/(?!(@octokit|@actions|@kie|@probelabs|open)/)',
   ],
   setupFilesAfterEnv: ['<rootDir>/tests/setup.ts'],
+  // Log per-test heap usage in CI (or when explicitly enabled)
+  logHeapUsage: process.env.CI === 'true' || process.env.VISOR_LOG_HEAP === 'true',
   testTimeout: 10000, // Reduced from 30s to 10s for faster CI
   // Prevent Jest from hanging on async operations
   forceExit: true,
@@ -28,5 +30,5 @@ module.exports = {
   // Use child processes on CI for better memory reclamation
   workerThreads: process.env.CI ? false : true,
   // Recycle workers if they retain too much memory
-  workerIdleMemoryLimit: process.env.CI ? '512MB' : undefined,
+  workerIdleMemoryLimit: process.env.CI ? '256MB' : undefined,
 };
