@@ -450,13 +450,18 @@ describe('AICheckProvider', () => {
       expect(capturedConfig).toMatchObject({
         provider: 'google',
         model: 'gemini-2.5-pro',
-        // Workspace root should be used as primary working directory for tools
-        path: '/tmp/ws-123',
+        // Main project path should be used as primary working directory for tools
+        path: '/tmp/ws-123/main-project',
       });
 
       // allowedFolders should contain the workspace plus all project paths, de-duped
       expect(capturedConfig.allowedFolders).toEqual(
-        expect.arrayContaining(['/tmp/ws-123', '/tmp/ws-123/tyk', '/tmp/ws-123/tyk-docs'])
+        expect.arrayContaining([
+          '/tmp/ws-123/main-project',
+          '/tmp/ws-123',
+          '/tmp/ws-123/tyk',
+          '/tmp/ws-123/tyk-docs',
+        ])
       );
     });
   });

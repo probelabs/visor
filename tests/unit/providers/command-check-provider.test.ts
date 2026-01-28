@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { CommandCheckProvider } from '../../../src/providers/command-check-provider';
 import { CheckProviderConfig } from '../../../src/providers/check-provider.interface';
 import { PRInfo } from '../../../src/pr-analyzer';

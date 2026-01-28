@@ -30,6 +30,21 @@ jest.mock('../../src/utils/command-executor', () => ({
   },
 }));
 
+jest.mock('../../src/state-machine/context/build-engine-context', () => {
+  const actual = jest.requireActual('../../src/state-machine/context/build-engine-context');
+  return {
+    ...actual,
+    initializeWorkspace: jest.fn(async (context: any) => actual.initializeWorkspace(context)),
+  };
+});
+
+const mockBuildEngineContext = jest.requireMock(
+  '../../src/state-machine/context/build-engine-context'
+) as {
+  initializeWorkspace: jest.MockedFunction<(context: any) => Promise<any>>;
+};
+const mockInitializeWorkspace = mockBuildEngineContext.initializeWorkspace;
+
 describe('resumeFromSnapshot workspace initialization', () => {
   const testBasePath = '/tmp/test-resume-workspace';
   const testWorkingDir = '/tmp/test-resume-working';
@@ -64,12 +79,6 @@ describe('resumeFromSnapshot workspace initialization', () => {
     // Import the real implementation
     const { resumeFromSnapshot, StateMachineExecutionEngine } = await import(
       '../../src/state-machine-execution-engine'
-    );
-
-    // Spy on initializeWorkspace
-    const initWorkspaceSpy = jest.spyOn(
-      await import('../../src/state-machine/context/build-engine-context'),
-      'initializeWorkspace'
     );
 
     const engine = new StateMachineExecutionEngine(testWorkingDir);
@@ -119,15 +128,15 @@ describe('resumeFromSnapshot workspace initialization', () => {
     }
 
     // Verify that initializeWorkspace was called
-    expect(initWorkspaceSpy).toHaveBeenCalled();
+    expect(mockInitializeWorkspace).toHaveBeenCalled();
 
     // The context passed to initializeWorkspace should have workspace config
-    const callArg = initWorkspaceSpy.mock.calls[0][0];
+    const callArg = mockInitializeWorkspace.mock.calls[0][0];
     expect(callArg).toBeDefined();
     expect(callArg.config).toBeDefined();
     expect((callArg.config as any).workspace?.enabled).toBe(true);
 
-    initWorkspaceSpy.mockRestore();
+    mockInitializeWorkspace.mockClear();
   });
 
   test('resumeFromSnapshot creates workspace when config enables it', async () => {
