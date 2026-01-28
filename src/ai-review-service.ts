@@ -1857,21 +1857,23 @@ ${'='.repeat(60)}
       try {
         const cfgAny: any = this.config as any;
         const allowedFolders = cfgAny.allowedFolders as string[] | undefined;
-        const workspacePath =
+        const preferredPath =
           cfgAny.workspacePath ||
-          cfgAny.path ||
-          (Array.isArray(allowedFolders) && allowedFolders[0]);
+          (Array.isArray(allowedFolders) && allowedFolders.length > 0
+            ? allowedFolders[0]
+            : undefined) ||
+          cfgAny.path;
         if (Array.isArray(allowedFolders) && allowedFolders.length > 0) {
           (options as any).allowedFolders = allowedFolders;
-          if (!options.path && workspacePath) {
-            (options as any).path = workspacePath;
+          if (!options.path && preferredPath) {
+            (options as any).path = preferredPath;
           }
           log(`🗂️ ProbeAgent workspace config:`);
           log(`   path (cwd): ${(options as any).path}`);
           log(`   allowedFolders[0]: ${allowedFolders[0]}`);
-        } else if (workspacePath) {
-          (options as any).path = workspacePath;
-          log(`🗂️ ProbeAgent path: ${workspacePath} (no allowedFolders)`);
+        } else if (preferredPath) {
+          (options as any).path = preferredPath;
+          log(`🗂️ ProbeAgent path: ${preferredPath} (no allowedFolders)`);
         }
       } catch {
         // Best-effort only; fall back to ProbeAgent defaults on error.

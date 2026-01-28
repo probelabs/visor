@@ -742,9 +742,8 @@ export class AICheckProvider extends CheckProvider {
             // Add workspace root
             folders.push(info.workspacePath);
             // NOTE: We intentionally do NOT add mainProjectPath (visor2) here.
-            // The main project is the visor installation directory and should
-            // not be exposed to the AI agent - only checked-out external projects
-            // (like tyk, tyk-docs) should be accessible.
+            // Inclusion of the main project is controlled below via
+            // workspace.include_main_project / VISOR_WORKSPACE_INCLUDE_MAIN_PROJECT.
           }
         } catch {
           // ignore workspace info errors
@@ -763,18 +762,18 @@ export class AICheckProvider extends CheckProvider {
         } catch {
           // ignore project listing errors
         }
-        // SECURITY: Only include mainProjectPath if there are no checked-out projects.
-        // This is a fallback for workflows that don't checkout external repos.
-        // When external projects exist, the AI should focus on those, not visor.
-        if (projectPaths.length === 0 && mainProjectPath) {
+        // Only include the main project when explicitly enabled.
+        const workspaceCfg = parentCtx?.config?.workspace as
+          | { include_main_project?: boolean }
+          | undefined;
+        const includeMainProject =
+          workspaceCfg?.include_main_project === true ||
+          process.env.VISOR_WORKSPACE_INCLUDE_MAIN_PROJECT === 'true';
+        if (includeMainProject && mainProjectPath) {
           folders.push(mainProjectPath);
-          logger.debug(
-            `[AI Provider] No external projects - including main project as fallback: ${mainProjectPath}`
-          );
+          logger.debug(`[AI Provider] Including main project (enabled): ${mainProjectPath}`);
         } else if (mainProjectPath) {
-          logger.debug(
-            `[AI Provider] Excluding main project (visor) from allowedFolders: ${mainProjectPath}`
-          );
+          logger.debug(`[AI Provider] Excluding main project (disabled): ${mainProjectPath}`);
         }
         const unique = Array.from(new Set(folders.filter(p => typeof p === 'string' && p)));
         if (unique.length > 0 && workspaceRoot) {
