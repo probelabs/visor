@@ -119,7 +119,7 @@ Configuration supports:
 - Use `debug: true` in action inputs for detailed AI interaction logs
 - Test with different AI providers by setting appropriate environment variables
 - The binary name is `visor` (as defined in package.json bin field)
-- Tests use Jest with TypeScript support via ts-jest
+- Tests use Jest with TypeScript support via @swc/jest
 
 ### Debugging Techniques
 
