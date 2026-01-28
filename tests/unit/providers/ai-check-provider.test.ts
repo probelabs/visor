@@ -450,19 +450,138 @@ describe('AICheckProvider', () => {
       expect(capturedConfig).toMatchObject({
         provider: 'google',
         model: 'gemini-2.5-pro',
-        // Main project path should be used as primary working directory for tools
-        path: '/tmp/ws-123/main-project',
+        // Workspace root should be used as primary working directory for tools
+        path: '/tmp/ws-123',
       });
 
-      // allowedFolders should contain the workspace plus all project paths, de-duped
+      // allowedFolders should contain the workspace root plus all project paths, de-duped
       expect(capturedConfig.allowedFolders).toEqual(
-        expect.arrayContaining([
-          '/tmp/ws-123/main-project',
-          '/tmp/ws-123',
-          '/tmp/ws-123/tyk',
-          '/tmp/ws-123/tyk-docs',
-        ])
+        expect.arrayContaining(['/tmp/ws-123', '/tmp/ws-123/tyk', '/tmp/ws-123/tyk-docs'])
       );
+    });
+
+    it('excludes main project by default when include_main_project is not set', async () => {
+      const mockReview = { overallScore: 90, totalIssues: 0, criticalIssues: 0, comments: [] };
+      const mockService = { executeReview: jest.fn().mockResolvedValue(mockReview) };
+
+      let capturedConfig: any;
+      (AIReviewService as any).AIReviewService = jest.fn().mockImplementation(config => {
+        capturedConfig = config;
+        return mockService;
+      });
+
+      const workspace = {
+        isEnabled: () => true,
+        getWorkspaceInfo: () => ({
+          workspacePath: '/tmp/ws-123',
+          mainProjectPath: '/tmp/ws-123/main-project',
+        }),
+        listProjects: () => [{ name: 'tyk', path: '/tmp/ws-123/tyk' }],
+      };
+
+      const execContext: any = {
+        _parentContext: {
+          workspace,
+          config: {},
+        },
+      };
+
+      const config: CheckProviderConfig = {
+        type: 'ai',
+        prompt: 'code_help',
+        ai: { provider: 'google', model: 'gemini-2.5-pro' },
+      };
+
+      await provider.execute(mockPRInfo, config, undefined, execContext);
+
+      expect(capturedConfig.allowedFolders).toEqual(
+        expect.arrayContaining(['/tmp/ws-123', '/tmp/ws-123/tyk'])
+      );
+      expect(capturedConfig.allowedFolders).not.toEqual(
+        expect.arrayContaining(['/tmp/ws-123/main-project'])
+      );
+    });
+
+    it('includes main project when workspace.include_main_project is true', async () => {
+      const mockReview = { overallScore: 90, totalIssues: 0, criticalIssues: 0, comments: [] };
+      const mockService = { executeReview: jest.fn().mockResolvedValue(mockReview) };
+
+      let capturedConfig: any;
+      (AIReviewService as any).AIReviewService = jest.fn().mockImplementation(config => {
+        capturedConfig = config;
+        return mockService;
+      });
+
+      const workspace = {
+        isEnabled: () => true,
+        getWorkspaceInfo: () => ({
+          workspacePath: '/tmp/ws-123',
+          mainProjectPath: '/tmp/ws-123/main-project',
+        }),
+        listProjects: () => [{ name: 'tyk', path: '/tmp/ws-123/tyk' }],
+      };
+
+      const execContext: any = {
+        _parentContext: {
+          workspace,
+          config: { workspace: { include_main_project: true } },
+        },
+      };
+
+      const config: CheckProviderConfig = {
+        type: 'ai',
+        prompt: 'code_help',
+        ai: { provider: 'google', model: 'gemini-2.5-pro' },
+      };
+
+      await provider.execute(mockPRInfo, config, undefined, execContext);
+
+      expect(capturedConfig.allowedFolders).toEqual(
+        expect.arrayContaining(['/tmp/ws-123', '/tmp/ws-123/main-project', '/tmp/ws-123/tyk'])
+      );
+    });
+
+    it('includes main project when VISOR_WORKSPACE_INCLUDE_MAIN_PROJECT is true', async () => {
+      const mockReview = { overallScore: 90, totalIssues: 0, criticalIssues: 0, comments: [] };
+      const mockService = { executeReview: jest.fn().mockResolvedValue(mockReview) };
+
+      let capturedConfig: any;
+      (AIReviewService as any).AIReviewService = jest.fn().mockImplementation(config => {
+        capturedConfig = config;
+        return mockService;
+      });
+
+      const workspace = {
+        isEnabled: () => true,
+        getWorkspaceInfo: () => ({
+          workspacePath: '/tmp/ws-123',
+          mainProjectPath: '/tmp/ws-123/main-project',
+        }),
+        listProjects: () => [{ name: 'tyk', path: '/tmp/ws-123/tyk' }],
+      };
+
+      const execContext: any = {
+        _parentContext: {
+          workspace,
+          config: { workspace: { include_main_project: false } },
+        },
+      };
+
+      process.env.VISOR_WORKSPACE_INCLUDE_MAIN_PROJECT = 'true';
+
+      const config: CheckProviderConfig = {
+        type: 'ai',
+        prompt: 'code_help',
+        ai: { provider: 'google', model: 'gemini-2.5-pro' },
+      };
+
+      await provider.execute(mockPRInfo, config, undefined, execContext);
+
+      expect(capturedConfig.allowedFolders).toEqual(
+        expect.arrayContaining(['/tmp/ws-123', '/tmp/ws-123/main-project', '/tmp/ws-123/tyk'])
+      );
+
+      delete process.env.VISOR_WORKSPACE_INCLUDE_MAIN_PROJECT;
     });
   });
 

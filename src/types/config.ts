@@ -1191,6 +1191,8 @@ export interface WorkspaceConfig {
   main_project_name?: string;
   /** Clean up workspace on exit (default: true) */
   cleanup_on_exit?: boolean;
+  /** Include main project worktree in AI allowed folders (default: false) */
+  include_main_project?: boolean;
 }
 
 /**

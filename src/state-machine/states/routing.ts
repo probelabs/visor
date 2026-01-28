@@ -1612,9 +1612,7 @@ export async function evaluateTransitions(
             historyLimit && hist.length > historyLimit
               ? hist.slice(hist.length - historyLimit)
               : hist;
-          outputsHistory[cid] = trimmed.map((r: any) =>
-            r.output !== undefined ? r.output : r
-          );
+          outputsHistory[cid] = trimmed.map((r: any) => (r.output !== undefined ? r.output : r));
         }
       } catch {}
     }
