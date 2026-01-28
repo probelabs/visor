@@ -782,11 +782,12 @@ describe('PR Detection E2E Tests', () => {
       // Mock a slow response
       mockOctokit.rest.pulls.list.mockImplementationOnce(
         () =>
-          new Promise(resolve =>
-            (slowResponseTimer = setTimeout(
-              () => resolve({ data: MOCK_API_RESPONSES.singlePR }),
-              10000
-            ))
+          new Promise(
+            resolve =>
+              (slowResponseTimer = setTimeout(
+                () => resolve({ data: MOCK_API_RESPONSES.singlePR }),
+                10000
+              ))
           ) as any
       );
 
