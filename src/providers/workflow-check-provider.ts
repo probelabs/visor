@@ -315,6 +315,9 @@ export class WorkflowCheckProvider extends CheckProvider {
         logger.debug(`[WorkflowProvider] outputs['${key}']: keys=[${extractedKeys}]`);
       }
     }
+    // Get parent workflow inputs from config (for nested workflow template access)
+    const parentInputs = (config as any).workflowInputs || {};
+
     const templateContext = {
       pr: prInfo,
       outputs: outputsMap,
@@ -322,6 +325,8 @@ export class WorkflowCheckProvider extends CheckProvider {
       slack,
       conversation,
       outputs_history,
+      // Include parent workflow inputs for templates like {{ inputs.question }}
+      inputs: parentInputs,
     };
 
     // Apply user-provided inputs (args)
@@ -353,9 +358,23 @@ export class WorkflowCheckProvider extends CheckProvider {
           });
         } else {
           inputs[key] = value;
+          // Debug: log non-string inputs like arrays
+          if (Array.isArray(value)) {
+            logger.debug(`[WorkflowProvider] Input '${key}' is array with ${value.length} items`);
+          } else if (typeof value === 'object') {
+            logger.debug(
+              `[WorkflowProvider] Input '${key}' is object with keys: ${Object.keys(value).join(', ')}`
+            );
+          }
         }
       }
     }
+
+    // Debug: log all input keys and types for troubleshooting
+    const inputSummary = Object.entries(inputs)
+      .map(([k, v]) => `${k}:${Array.isArray(v) ? `array[${v.length}]` : typeof v}`)
+      .join(', ');
+    logger.debug(`[WorkflowProvider] Final inputs: ${inputSummary}`);
 
     return inputs;
   }

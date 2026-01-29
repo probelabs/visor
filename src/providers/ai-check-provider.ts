@@ -698,7 +698,9 @@ export class AICheckProvider extends CheckProvider {
     try {
       if (process.env.VISOR_DEBUG === 'true') {
         logger.debug(`[schema-render] Rendering schema with Liquid templates`);
-        logger.debug(`[schema-render] inputs.projects count: ${Array.isArray((templateContext as any).inputs?.projects) ? (templateContext as any).inputs.projects.length : 'N/A'}`);
+        logger.debug(
+          `[schema-render] inputs.projects count: ${Array.isArray((templateContext as any).inputs?.projects) ? (templateContext as any).inputs.projects.length : 'N/A'}`
+        );
       }
 
       const renderedStr = await this.liquidEngine.parseAndRender(schemaStr, templateContext);
@@ -717,7 +719,9 @@ export class AICheckProvider extends CheckProvider {
         return schema;
       }
     } catch (error) {
-      logger.error(`[schema-render] Failed to render schema template: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      logger.error(
+        `[schema-render] Failed to render schema template: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
       // Return original schema if rendering fails
       return schema;
     }
