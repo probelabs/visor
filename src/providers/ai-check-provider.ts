@@ -713,17 +713,34 @@ export class AICheckProvider extends CheckProvider {
         }
         return parsed;
       } catch (parseError) {
-        logger.error(`[schema-render] Failed to parse rendered schema as JSON: ${parseError}`);
-        logger.error(`[schema-render] Rendered string was: ${renderedStr.substring(0, 500)}`);
-        // Return original schema if parsing fails
-        return schema;
+        const errorMsg = parseError instanceof Error ? parseError.message : String(parseError);
+        // Log full rendered string for debugging (up to 2000 chars to avoid log flooding)
+        const preview = renderedStr.length > 2000 ? renderedStr.substring(0, 2000) + '...[truncated]' : renderedStr;
+        logger.error(`[schema-render] JSON_PARSE_ERROR: Failed to parse rendered schema as JSON`);
+        logger.error(`[schema-render] Parse error: ${errorMsg}`);
+        logger.error(`[schema-render] Original schema type: ${typeof schema}`);
+        logger.error(`[schema-render] Rendered output (${renderedStr.length} chars):\n${preview}`);
+        // Throw error to make configuration issues visible rather than silently falling back
+        throw new Error(
+          `Schema template rendered invalid JSON: ${errorMsg}. ` +
+            `Check Liquid template syntax. Rendered output starts with: "${renderedStr.substring(0, 100)}..."`
+        );
       }
     } catch (error) {
-      logger.error(
-        `[schema-render] Failed to render schema template: ${error instanceof Error ? error.message : 'Unknown error'}`
+      // Re-throw JSON parse errors (already formatted above)
+      if (error instanceof Error && error.message.includes('Schema template rendered invalid JSON')) {
+        throw error;
+      }
+      // Handle Liquid rendering errors
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      logger.error(`[schema-render] LIQUID_RENDER_ERROR: Failed to render schema template`);
+      logger.error(`[schema-render] Error: ${errorMsg}`);
+      logger.error(`[schema-render] Original schema: ${schemaStr.substring(0, 500)}${schemaStr.length > 500 ? '...[truncated]' : ''}`);
+      // Throw error to make template syntax issues visible
+      throw new Error(
+        `Schema Liquid template error: ${errorMsg}. ` +
+          `Check template syntax in schema definition.`
       );
-      // Return original schema if rendering fails
-      return schema;
     }
   }
 

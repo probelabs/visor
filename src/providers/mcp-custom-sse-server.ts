@@ -125,17 +125,29 @@ export class CustomToolsSSEServer implements CustomMCPServer {
 
     // Convert Map to Record for CustomToolExecutor (only for non-workflow tools)
     const toolsRecord: Record<string, CustomToolDefinition> = {};
+    const workflowToolNames: string[] = [];
     for (const [name, tool] of tools.entries()) {
       // Skip workflow tools - they're handled separately
       if (!isWorkflowTool(tool)) {
         toolsRecord[name] = tool;
+      } else {
+        workflowToolNames.push(name);
       }
+    }
+
+    // Warn if workflow tools are present but no context is provided
+    if (workflowToolNames.length > 0 && !workflowContext) {
+      logger.warn(
+        `[CustomToolsSSEServer:${sessionId}] ${workflowToolNames.length} workflow tool(s) registered but no workflowContext provided. ` +
+          `Tools [${workflowToolNames.join(', ')}] will fail at runtime. ` +
+          `Pass workflowContext to enable workflow tool execution.`
+      );
     }
 
     this.toolExecutor = new CustomToolExecutor(toolsRecord);
 
     if (this.debug) {
-      const workflowToolCount = Array.from(tools.values()).filter(isWorkflowTool).length;
+      const workflowToolCount = workflowToolNames.length;
       const regularToolCount = tools.size - workflowToolCount;
       logger.debug(
         `[CustomToolsSSEServer:${sessionId}] Initialized with ${regularToolCount} regular tools and ${workflowToolCount} workflow tools`
