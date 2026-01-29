@@ -3,6 +3,12 @@ import { CustomToolExecutor } from './custom-tool-executor';
 import { logger } from '../logger';
 import http from 'http';
 import { EventEmitter } from 'events';
+import {
+  isWorkflowTool,
+  executeWorkflowAsTool,
+  WorkflowToolDefinition,
+  WorkflowToolContext,
+} from './workflow-tool-executor';
 
 /**
  * MCP Protocol message types
@@ -102,22 +108,38 @@ export class CustomToolsSSEServer implements CustomMCPServer {
   private debug: boolean;
   private eventBus: EventEmitter;
   private messageQueue: Map<string, MCPMessage[]> = new Map();
+  private tools: Map<string, CustomToolDefinition>;
+  private workflowContext?: WorkflowToolContext;
 
-  constructor(tools: Map<string, CustomToolDefinition>, sessionId: string, debug: boolean = false) {
+  constructor(
+    tools: Map<string, CustomToolDefinition>,
+    sessionId: string,
+    debug: boolean = false,
+    workflowContext?: WorkflowToolContext
+  ) {
     this.sessionId = sessionId;
     this.debug = debug;
     this.eventBus = new EventEmitter();
+    this.tools = tools;
+    this.workflowContext = workflowContext;
 
-    // Convert Map to Record for CustomToolExecutor
+    // Convert Map to Record for CustomToolExecutor (only for non-workflow tools)
     const toolsRecord: Record<string, CustomToolDefinition> = {};
     for (const [name, tool] of tools.entries()) {
-      toolsRecord[name] = tool;
+      // Skip workflow tools - they're handled separately
+      if (!isWorkflowTool(tool)) {
+        toolsRecord[name] = tool;
+      }
     }
 
     this.toolExecutor = new CustomToolExecutor(toolsRecord);
 
     if (this.debug) {
-      logger.debug(`[CustomToolsSSEServer:${sessionId}] Initialized with ${tools.size} tools`);
+      const workflowToolCount = Array.from(tools.values()).filter(isWorkflowTool).length;
+      const regularToolCount = tools.size - workflowToolCount;
+      logger.debug(
+        `[CustomToolsSSEServer:${sessionId}] Initialized with ${regularToolCount} regular tools and ${workflowToolCount} workflow tools`
+      );
     }
   }
 
@@ -242,6 +264,8 @@ export class CustomToolsSSEServer implements CustomMCPServer {
    * Handle incoming HTTP requests
    */
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const url = new URL(req.url || '/', `http://localhost:${this.port}`);
+
     // Handle CORS preflight
     if (req.method === 'OPTIONS') {
       this.handleCORS(res);
@@ -250,13 +274,92 @@ export class CustomToolsSSEServer implements CustomMCPServer {
       return;
     }
 
-    // Only accept POST requests to /sse
-    if (req.method !== 'POST' || req.url !== '/sse') {
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Not found' }));
+    // GET /sse - Establish SSE connection (MCP standard pattern)
+    if (req.method === 'GET' && url.pathname === '/sse') {
+      this.handleSSEConnection(req, res);
       return;
     }
 
+    // POST /sse - Combined SSE connection with initial message (legacy pattern for tests)
+    if (req.method === 'POST' && url.pathname === '/sse') {
+      await this.handleLegacySSEPost(req, res);
+      return;
+    }
+
+    // POST /message - Handle MCP messages (MCP standard pattern)
+    if (req.method === 'POST' && url.pathname === '/message') {
+      await this.handleMessage(req, res);
+      return;
+    }
+
+    // Not found
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Not found' }));
+  }
+
+  /**
+   * Handle legacy POST /sse pattern (connection + message in one request)
+   * This maintains backward compatibility with tests
+   */
+  private async handleLegacySSEPost(
+    req: http.IncomingMessage,
+    res: http.ServerResponse
+  ): Promise<void> {
+    // Setup SSE headers
+    this.handleCORS(res);
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+
+    // Create connection
+    const connectionId = `conn-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+    const connection: SSEConnection = {
+      response: res,
+      id: connectionId,
+    };
+    this.connections.add(connection);
+
+    if (this.debug) {
+      logger.debug(
+        `[CustomToolsSSEServer:${this.sessionId}] Legacy SSE POST connection: ${connectionId}`
+      );
+    }
+
+    // Parse request body and handle message
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+    });
+
+    req.on('end', async () => {
+      try {
+        if (body.trim()) {
+          const message = JSON.parse(body) as MCPMessage;
+          await this.handleMCPMessage(connection, message);
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        if (this.debug) {
+          logger.error(
+            `[CustomToolsSSEServer:${this.sessionId}] Error in legacy SSE POST: ${errorMsg}`
+          );
+        }
+        this.sendErrorResponse(connection, null, -32700, 'Parse error', { error: errorMsg });
+      }
+    });
+
+    // Handle disconnect
+    req.on('close', () => {
+      this.connections.delete(connection);
+    });
+  }
+
+  /**
+   * Handle SSE connection establishment (GET /sse)
+   */
+  private handleSSEConnection(req: http.IncomingMessage, res: http.ServerResponse): void {
     // Setup SSE headers
     this.handleCORS(res);
     res.writeHead(200, {
@@ -266,7 +369,7 @@ export class CustomToolsSSEServer implements CustomMCPServer {
     });
 
     // Create connection ID
-    const connectionId = `conn-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const connectionId = `conn-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
 
     // Register connection
     const connection: SSEConnection = {
@@ -279,8 +382,12 @@ export class CustomToolsSSEServer implements CustomMCPServer {
       logger.debug(`[CustomToolsSSEServer:${this.sessionId}] New SSE connection: ${connectionId}`);
     }
 
-    // Send initial endpoint message
-    this.sendSSE(connection, 'endpoint', `http://localhost:${this.port}/message`);
+    // Send initial endpoint message with session ID for message routing
+    this.sendSSE(
+      connection,
+      'endpoint',
+      `http://localhost:${this.port}/message?sessionId=${connectionId}`
+    );
 
     // Handle client disconnect
     req.on('close', () => {
@@ -289,8 +396,36 @@ export class CustomToolsSSEServer implements CustomMCPServer {
       }
       this.connections.delete(connection);
     });
+  }
 
-    // Parse request body for MCP messages
+  /**
+   * Handle MCP message (POST /message)
+   */
+  private async handleMessage(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const url = new URL(req.url || '/', `http://localhost:${this.port}`);
+    const sessionId = url.searchParams.get('sessionId');
+
+    // Find the connection for this session
+    let connection: SSEConnection | undefined;
+    for (const conn of this.connections) {
+      if (conn.id === sessionId) {
+        connection = conn;
+        break;
+      }
+    }
+
+    if (!connection) {
+      // If no specific connection found, use the first available (for backwards compatibility)
+      connection = this.connections.values().next().value;
+    }
+
+    if (!connection) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'No active SSE connection' }));
+      return;
+    }
+
+    // Parse request body
     let body = '';
     req.on('data', chunk => {
       body += chunk.toString();
@@ -299,15 +434,30 @@ export class CustomToolsSSEServer implements CustomMCPServer {
     req.on('end', async () => {
       try {
         const message = JSON.parse(body) as MCPMessage;
-        await this.handleMCPMessage(connection, message);
+
+        if (this.debug) {
+          logger.debug(
+            `[CustomToolsSSEServer:${this.sessionId}] Received message: ${JSON.stringify(message)}`
+          );
+        }
+
+        await this.handleMCPMessage(connection!, message);
+
+        // Acknowledge the POST request
+        this.handleCORS(res);
+        res.writeHead(202, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'accepted' }));
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
         if (this.debug) {
           logger.error(
-            `[CustomToolsSSEServer:${this.sessionId}] Error parsing request: ${errorMsg}`
+            `[CustomToolsSSEServer:${this.sessionId}] Error parsing message: ${errorMsg}`
           );
         }
-        this.sendErrorResponse(connection, null, -32700, 'Parse error', { error: errorMsg });
+        this.sendErrorResponse(connection!, null, -32700, 'Parse error', { error: errorMsg });
+
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Parse error', details: errorMsg }));
       }
     });
   }
@@ -399,13 +549,20 @@ export class CustomToolsSSEServer implements CustomMCPServer {
    * Handle tools/list MCP request
    */
   private async handleToolsList(id: number | string): Promise<MCPToolsListResponse> {
-    const tools = this.toolExecutor.getTools();
+    // Get all tools from the tools map (includes both regular and workflow tools)
+    const allTools = Array.from(this.tools.values());
+
+    if (this.debug) {
+      logger.debug(
+        `[CustomToolsSSEServer:${this.sessionId}] Listing ${allTools.length} tools: ${allTools.map(t => t.name).join(', ')}`
+      );
+    }
 
     return {
       jsonrpc: '2.0',
       id,
       result: {
-        tools: tools.map(tool => ({
+        tools: allTools.map(tool => ({
           name: tool.name,
           description: tool.description || `Execute ${tool.name}`,
           inputSchema: tool.inputSchema || {
@@ -433,8 +590,35 @@ export class CustomToolsSSEServer implements CustomMCPServer {
         );
       }
 
-      // Execute the tool
-      const result = await this.toolExecutor.execute(toolName, args);
+      let result: unknown;
+
+      // Check if this is a workflow tool
+      const tool = this.tools.get(toolName);
+      if (tool && isWorkflowTool(tool)) {
+        // Execute workflow tool
+        if (!this.workflowContext) {
+          throw new Error(
+            `Workflow tool '${toolName}' requires workflow context but none was provided`
+          );
+        }
+
+        if (this.debug) {
+          logger.debug(
+            `[CustomToolsSSEServer:${this.sessionId}] Executing workflow tool: ${toolName}`
+          );
+        }
+
+        const workflowTool = tool as WorkflowToolDefinition;
+        result = await executeWorkflowAsTool(
+          workflowTool.__workflowId,
+          args,
+          this.workflowContext,
+          workflowTool.__argsOverrides
+        );
+      } else {
+        // Execute regular custom tool
+        result = await this.toolExecutor.execute(toolName, args);
+      }
 
       // Format result as MCP response
       const resultText = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
