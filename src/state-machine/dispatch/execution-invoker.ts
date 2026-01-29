@@ -565,6 +565,14 @@ export async function executeSingleCheck(
     const provider = providerRegistry.getProviderOrThrow(providerType);
 
     const outputHistory = buildOutputHistoryFromJournal(context);
+    // Determine workflow inputs - check config first (for nested workflows),
+    // then fall back to context sources (for standalone workflow execution)
+    const workflowInputs =
+      (checkConfig as any).workflowInputs ||
+      (context.config as any)?.workflow_inputs ||
+      (context.executionContext as any)?.workflowInputs ||
+      undefined;
+
     const providerConfig: any = {
       type: providerType,
       checkName: checkId,
@@ -580,6 +588,8 @@ export async function executeSingleCheck(
       ...checkConfig,
       eventContext: (context.prInfo as any)?.eventContext || {},
       __outputHistory: outputHistory,
+      // Propagate workflow inputs for template access via {{ inputs.* }}
+      workflowInputs,
       ai: {
         ...(checkConfig.ai || {}),
         timeout: checkConfig.ai?.timeout || 1200000,
