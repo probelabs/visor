@@ -515,12 +515,37 @@ export class WorktreeManager {
    *
    * This runs after fetchRef so that <ref> should resolve to either a
    * local branch, tag, or remote-tracking ref.
+   *
+   * If the ref is "main" or "master" and doesn't exist, automatically
+   * falls back to the other common default branch name.
    */
   private async getCommitShaForRef(bareRepoPath: string, ref: string): Promise<string> {
     const cmd = `git -C ${this.escapeShellArg(bareRepoPath)} rev-parse ${this.escapeShellArg(ref)}`;
     const result = await this.executeGitCommand(cmd);
 
     if (result.exitCode !== 0) {
+      // If main/master doesn't exist, try the other common default branch
+      const fallbackRefs: Record<string, string> = {
+        main: 'master',
+        master: 'main',
+      };
+
+      const fallbackRef = fallbackRefs[ref];
+      if (fallbackRef) {
+        logger.debug(`Ref '${ref}' not found, trying fallback '${fallbackRef}'`);
+
+        // Fetch the fallback ref
+        await this.fetchRef(bareRepoPath, fallbackRef);
+
+        const fallbackCmd = `git -C ${this.escapeShellArg(bareRepoPath)} rev-parse ${this.escapeShellArg(fallbackRef)}`;
+        const fallbackResult = await this.executeGitCommand(fallbackCmd);
+
+        if (fallbackResult.exitCode === 0) {
+          logger.info(`Using fallback branch '${fallbackRef}' instead of '${ref}'`);
+          return fallbackResult.stdout.trim();
+        }
+      }
+
       throw new Error(`Failed to get commit SHA for ref ${ref}: ${result.stderr}`);
     }
 
