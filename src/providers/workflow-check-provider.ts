@@ -10,6 +10,7 @@ import { WorkflowExecutor } from '../workflow-executor';
 import { logger } from '../logger';
 import { WorkflowDefinition, WorkflowExecutionContext } from '../types/workflow';
 import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
+import { generateHumanId } from '../utils/human-id';
 // eslint-disable-next-line no-restricted-imports -- needed for Liquid type
 import { Liquid } from 'liquidjs';
 
@@ -461,7 +462,6 @@ export class WorkflowCheckProvider extends CheckProvider {
     const { StateMachineRunner } = require('../state-machine/runner');
     const { ExecutionJournal } = require('../snapshot-store');
     const { MemoryStore } = require('../memory-store');
-    const { v4: uuidv4 } = require('uuid');
 
     // Extract parent context if available
     const parentContext = (context as any)?._parentContext;
@@ -530,7 +530,7 @@ export class WorkflowCheckProvider extends CheckProvider {
         parentContext?.originalWorkingDirectory || parentContext?.workingDirectory || process.cwd(),
       workspace: parentWorkspace,
       // Always use a fresh session for nested workflows to isolate history
-      sessionId: uuidv4(),
+      sessionId: generateHumanId(),
       event: parentContext?.event || prInfo.eventType,
       debug: parentContext?.debug || false,
       maxParallelism: parentContext?.maxParallelism,

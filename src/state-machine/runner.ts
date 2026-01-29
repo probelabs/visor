@@ -12,7 +12,7 @@ import type {
   EngineState,
   SerializedError,
 } from '../types/engine';
-import { v4 as uuidv4 } from 'uuid';
+import { generateHumanId } from '../utils/human-id';
 import type { EventEnvelope } from '../event-bus/types';
 import { logger } from '../logger';
 import type { ExecutionResult } from '../types/execution';
@@ -243,7 +243,7 @@ export class StateMachineRunner {
       const bus: any = (this.context as any).eventBus;
       if (bus && typeof bus.emit === 'function') {
         const envelope: EventEnvelope<EngineEvent> = {
-          id: uuidv4(),
+          id: generateHumanId(),
           version: 1,
           timestamp: new Date().toISOString(),
           runId: this.context.sessionId,
