@@ -1,5 +1,17 @@
 # Enhanced Failure Condition System for Visor
 
+> **Status: Partially Outdated**
+>
+> This document was written during initial implementation and some details are now outdated.
+> For current usage, see:
+> - [fail-if.md](./fail-if.md) - Primary documentation for failure conditions (recommended)
+> - [failure-conditions-schema.md](./failure-conditions-schema.md) - Configuration schema reference
+>
+> Key differences from current implementation:
+> - Integration is now via `StateMachineExecutionEngine` (not `CheckExecutionEngine`)
+> - The simpler `fail_if` syntax is now the recommended approach
+> - Additional helper functions exist (see fail-if.md for complete list)
+
 This document provides a complete overview of the enhanced failure condition configuration system implemented for the Visor code review tool.
 
 ## Overview
@@ -18,9 +30,9 @@ The enhanced failure condition system allows users to define flexible, powerful 
    - TypeScript interfaces for failure conditions
    - Context object definition for expression evaluation
 
-3. **CheckExecutionEngine Integration** (`src/check-execution-engine.ts`)
-   - Integration with existing check execution pipeline
-   - Automated evaluation after check completion
+3. **StateMachineExecutionEngine Integration** (`src/state-machine-execution-engine.ts`)
+   - Integration with the state machine execution pipeline
+   - Automated evaluation after check completion via `evaluateFailureConditions()` method
 
 ## Configuration Schema
 
@@ -85,10 +97,19 @@ The context object available to all JavaScript expressions (evaluated in a secur
 
 ## Available Helper Functions
 
+> **Note**: This list is incomplete. See [fail-if.md](./fail-if.md#helper-functions) for the complete and current list of helper functions.
+
 ### Issue Analysis
 - `hasIssueWith(issues, field, value)` - Check if any issue has field matching value
 - `countIssues(issues, field, value)` - Count issues with field matching value
 - `hasFileWith(issues, text)` - Check if any issue file path contains text
+
+### Additional helpers (not listed here)
+- String helpers: `contains()`, `startsWith()`, `endsWith()`, `length()`
+- Control helpers: `always()`, `success()`, `failure()`
+- Debug helper: `log()` for debugging expressions
+- Permission helpers: `hasMinPermission()`, `isOwner()`, `isMember()`, etc.
+- Memory accessor: `memory.get()`, `memory.has()`, `memory.list()`, `memory.getAll()`
 
 ## Example Use Cases
 
@@ -157,13 +178,15 @@ failure_conditions:
 
 ## Integration Points
 
-### CheckExecutionEngine
+### StateMachineExecutionEngine
 ```typescript
 // Evaluate conditions after check completion
 const results = await engine.evaluateFailureConditions(
   checkName,
   reviewSummary,
-  config
+  config,
+  previousOutputs,
+  authorAssociation
 );
 
 // Check if execution should halt
@@ -171,6 +194,8 @@ if (FailureConditionEvaluator.shouldHaltExecution(results)) {
   // Handle execution halt
 }
 ```
+
+> **Note**: The integration was originally in `CheckExecutionEngine` but has been migrated to `StateMachineExecutionEngine` as part of the engine refactor.
 
 ### GitHub Action Integration
 Failure conditions can be used to:
@@ -269,3 +294,12 @@ steps:
 The enhanced failure condition system provides a flexible, powerful foundation for implementing custom quality gates and policies in Visor. By leveraging JavaScript expressions (evaluated in a secure sandbox) with comprehensive context access, teams can create sophisticated review workflows that adapt to their specific needs and standards.
 
 The system maintains full backward compatibility while opening new possibilities for automated code quality enforcement and intelligent review assistance.
+
+## Related Documentation
+
+- [fail-if.md](./fail-if.md) - **Primary documentation** for failure conditions (recommended starting point)
+- [failure-conditions-schema.md](./failure-conditions-schema.md) - Configuration schema reference
+- [author-permissions.md](./author-permissions.md) - Permission helper functions
+- [debugging.md](./debugging.md) - Using `log()` and debugging techniques
+- [memory.md](./memory.md) - Memory store access in expressions
+- [configuration.md](./configuration.md) - Full configuration reference

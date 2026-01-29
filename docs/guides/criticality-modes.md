@@ -1,4 +1,4 @@
-# Criticality Modes — External, Control‑Plane, Policy, Non‑Critical
+# Criticality Modes — external, internal, policy, info
 
 This document explains what each criticality mode means, how to declare it, the engine defaults it enables, and how core constructs (if, assume, guarantee, fail_if, transitions, retries, loop budgets) behave per mode. All examples use block‑style YAML.
 
@@ -26,13 +26,15 @@ checks:
     criticality: internal   # external | internal | policy | info
 ```
 
-If the field is omitted, the engine may infer a default (mutating → external; forEach parent or on_* goto/run → control‑plane; policy gates → policy; else non‑critical). You can override any default on a per‑check basis.
+If the field is omitted, the engine defaults to `policy`. You can override this default on a per‑check basis.
 
 ### Mode selection — quick checklist
-- Does this step mutate external state? → external
-- Does it steer execution (fan‑out, transitions/goto, sets flags for other guards)? → internal
-- Does it enforce permissions/policy/compliance and gate external steps? → policy
-- Otherwise, is it read‑only/pure and low‑risk? → info
+- Does this step mutate external state (GitHub ops, HTTP POST/PUT, file writes)? → `external`
+- Does it steer execution (fan‑out, transitions/goto, sets flags for other guards)? → `internal`
+- Does it enforce permissions/policy/compliance and gate external steps? → `policy`
+- Otherwise, is it read‑only/pure and low‑risk? → `info`
+
+**Note:** When `criticality` is omitted, the engine defaults to `policy`.
 
 If in doubt, start with info and promote to policy/internal/external when you add gating, routing, or side‑effects.
 
@@ -80,9 +82,9 @@ checks:
 
 ---
 
-## Control‑Plane
+## Internal (Control‑Plane)
 
-Steers execution (decides what runs next and how often). Examples: forEach parents, steps with on_* transitions/goto/run, memory/flags used by conditions.
+Steers execution (decides what runs next and how often). Examples: forEach parents, steps with on_* transitions/goto/run, memory/flags used by conditions. Use `criticality: internal` to designate these steps.
 
 Defaults
 - Contracts required (route integrity): meaningful `assume` and `guarantee`.
@@ -126,7 +128,7 @@ checks:
     exec: node scripts/fix.js
 ```
 
-### When to pick CONTROL‑PLANE (real‑life)
+### When to pick INTERNAL (real‑life)
 - A forEach parent that fans out work to child steps (e.g., facts, files, services, directories, modules).
 - An aggregator that computes a run decision (`all_valid`, `needs_retry`, `next_targets`) and routes via transitions.
 - A small `memory`/`log`/`script` step that sets flags used by `if/assume/guarantee` on other checks (e.g., `needs_retry=true`).
@@ -175,13 +177,13 @@ checks:
 
 ---
 
-## Non‑Critical
+## Info (Non‑Critical)
 
-Pure/read‑only compute where failures don’t risk unsafe behavior.
+Pure/read‑only compute where failures don't risk unsafe behavior. Use `criticality: info` to designate these steps.
 
 Defaults
 - Contracts recommended (not mandatory).
-- Gating: `continue_on_failure: true` allowed if safe.
+- Gating: `continue_on_failure` defaults to `true` when `criticality: info` is set (dependents may run even if this step fails).
 - Retries: bounded; can be slightly looser.
 
 Example — summary step that won’t block the pipeline
@@ -197,7 +199,7 @@ checks:
     fail_if: "(output.errors || []).length > 0"
 ```
 
-### When to pick NON‑CRITICAL (real‑life)
+### When to pick INFO (real‑life)
 - Read‑only analysis and summaries (lint, style, performance hints, PR summary) where failure should not block critical tasks.
 - Exploratory AI steps that help humans but don’t gate or mutate (draft review comments in dry‑run; heuristics, suggestions).
 - Any leaf computation whose outputs aren’t consumed by control‑plane or external steps.

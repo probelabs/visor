@@ -1,6 +1,6 @@
-## 📋 Schema-Template System
+## Schema-Template System
 
-Visor pairs JSON Schemas (data shape) with Liquid templates (rendering) so outputs are predictable, auditable, and GitHub‑native.
+Visor pairs JSON Schemas (data shape) with Liquid templates (rendering) so outputs are predictable, auditable, and GitHub-native.
 
 ### Overview
 - Schema validates check output at runtime (via AJV)
@@ -20,15 +20,22 @@ steps:
   overview:
     type: ai
     group: summary
-    schema: text
+    schema: overview
     prompt: "Summarize PR in markdown"
 ```
 
 ### Built-in Schemas
-- code-review: structured findings with severity, file, line → native annotations
-- text: free‑form markdown content (no annotations)
+
+| Schema | Description | Output Structure |
+|--------|-------------|------------------|
+| `code-review` | Structured findings with severity, file, line | `{ issues: [...] }` with GitHub annotations |
+| `plain` | Free-form markdown/text content | `{ content: "..." }` |
+| `overview` | PR summary with optional metadata tags | `{ text: "...", tags: {...} }` |
+| `issue-assistant` | Issue triage with intent classification | `{ text: "...", intent: "...", labels: [...] }` |
 
 ### Grouping
+
+Checks with the same `group` value are consolidated into a single GitHub comment:
 
 ```yaml
 steps:
@@ -38,31 +45,60 @@ steps:
   assistant:  { group: dynamic } # always creates a new comment
 ```
 
+The special `dynamic` group creates a unique comment for each execution.
+
 ### Custom Schemas
 
-```yaml
-schemas:
-  custom-metrics:
-    file: ./schemas/metrics.json
+You can use custom schemas in three ways:
 
+**1. File path reference:**
+```yaml
 steps:
   metrics:
-    schema: custom-metrics
+    schema: ./schemas/metrics.json
     group: metrics
+```
+
+**2. Inline JSON Schema object:**
+```yaml
+steps:
+  custom-check:
+    schema:
+      type: object
+      required: [result]
+      properties:
+        result:
+          type: string
+```
+
+**3. With custom template:**
+```yaml
+steps:
+  metrics:
+    schema: ./schemas/metrics.json
+    template:
+      file: ./templates/metrics.liquid
+    # Or inline template content:
+    # template:
+    #   content: "{{ output.result }}"
 ```
 
 ### GitHub Checks API Compatibility
 
 For status checks and annotations, use structured output with `issues[]` having:
-- severity: critical | error | warning | info
-- file, line, message
+- `severity`: `warning` | `error` | `critical`
+- `file`: path relative to repository root
+- `line`: line number (required)
+- `message`: description of the issue
 
-Unstructured (none/plain) → posted as-is, no status checks.
+Optional fields: `endLine`, `ruleId`, `category`, `suggestion`, `replacement`.
+
+Unstructured schemas (`plain`) are posted as-is without status check annotations.
 
 ### Enhanced Prompts
-- Smart auto‑detection, Liquid templating, file‑based prompts
+- Smart auto-detection, Liquid templating, file-based prompts
 - Template context: `pr`, `files`, `event`, `outputs`, `utils`
 - See [Liquid Templates Guide](./liquid-templates.md) for available variables and filters
 
-See full examples in `defaults/.visor.yaml`.
+See full examples in `defaults/visor.yaml`.
 

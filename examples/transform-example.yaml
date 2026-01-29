@@ -87,6 +87,9 @@ steps:
   # Example 7: Extract nested array from API response
   fetch-pr-comments:
     type: http_client
+    criticality: external
+    assume: "pr.repo && pr.number"
+    schema: plain
     url: "https://api.github.com/repos/{{ pr.repo }}/pulls/{{ pr.number }}/comments"
     transform: |
       [

@@ -1,7 +1,10 @@
 # Debug Visualizer Implementation Progress
 
+> **Note**: This is a historical progress tracking document from the debug visualizer RFC implementation.
+> The implementation is largely complete (Milestones 1-5). See [debug-visualizer.md](debug-visualizer.md) for current usage documentation.
+
 **Last Updated**: 2025-10-17
-**Status**: 🟢 **5 of 6 Milestones Complete (83%)**
+**Status**: 5 of 6 Milestones Complete (83%)
 
 ---
 
@@ -111,7 +114,7 @@ From `tests/e2e/state-capture-e2e.test.ts`:
 - 🔄 At least one `state.snapshot` event is present (pending snapshot integration)
 - ✅ All tests pass
 
-**Full Details**: [MILESTONE1-COMPLETE.md](../MILESTONE1-COMPLETE.md)
+**Full Details**: See milestone details below.
 
 ---
 
@@ -158,7 +161,7 @@ From `tests/e2e/state-capture-e2e.test.ts`:
 - ✅ Timeline events are in chronological order
 - ✅ All tests pass (26/26 = 100%)
 
-**Full Details**: [MILESTONE2-COMPLETE.md](../MILESTONE2-COMPLETE.md)
+**Full Details**: See milestone details below.
 
 ---
 
@@ -205,11 +208,10 @@ From `tests/e2e/state-capture-e2e.test.ts`:
 - **Output**: Check results and outputs
 - **Events**: All span events with timestamps and attributes
 
-✅ **Created testing documentation** (`tests/fixtures/traces/README.md`)
-- Manual testing guide
-- Feature checklist
-- Browser compatibility notes
-- Expected behavior documentation
+**Testing with fixtures** (`tests/fixtures/traces/`)
+- `sample-trace.ndjson` - Complete execution trace
+- `error-trace.ndjson` - Error scenario trace
+- `empty-trace.ndjson` - Empty file for error handling
 
 ✅ **Embedded trace reader**
 - Inline implementation of all trace-reader functions
@@ -237,7 +239,7 @@ From `tests/e2e/state-capture-e2e.test.ts`:
 - ✅ Loading spinner
 - ✅ Responsive design
 
-**Full Details**: [MILESTONE3-COMPLETE.md](../MILESTONE3-COMPLETE.md)
+**Full Details**: See milestone details below.
 
 ---
 
@@ -431,20 +433,19 @@ Build completed successfully:
 ### Next Steps
 
 Ready to proceed to Milestone 5 (Time-Travel Debugging) or Milestone 6 (CLI Viewer).
-**Full Details**: [MILESTONE4-INTEGRATION-GUIDE.md](../MILESTONE4-INTEGRATION-GUIDE.md)
 
 ---
 
 ## Overall Progress Summary
 
-**Milestones Completed**: 4 of 6 (67%)
+**Milestones Completed**: 5 of 6 (83%)
 
 ```
 Milestone 1: State Capture Foundation     ████████████████████ 100% ✅
 Milestone 2: Trace File Reader           ████████████████████ 100% ✅
 Milestone 3: Static UI Viewer            ████████████████████ 100% ✅
-Milestone 4: Live Streaming Server       ████████████████████ 100% ✅ JUST COMPLETED!
-Milestone 5: Time-Travel Debugging       ░░░░░░░░░░░░░░░░░░░░   0% 📋
+Milestone 4: Live Streaming Server       ████████████████████ 100% ✅
+Milestone 5: Time-Travel Debugging       ████████████████████ 100% ✅
 Milestone 6: Production Ready            ░░░░░░░░░░░░░░░░░░░░   0% 📋
 ```
 

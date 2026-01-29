@@ -1,5 +1,7 @@
 # Visor Engine Plan: Use `goto` for Looping on Failures
 
+**Status: IMPLEMENTED** (Core features complete; `one_shot` tag not yet implemented)
+
 This document captures the plan to simplify looping by using `goto` in `on_fail` and letting the engine re‑run the dependent chain deterministically.
 
 ## Background
@@ -34,7 +36,7 @@ The engine should handle re‑running the necessary chain; YAML should not list 
 
 4) Loop safety and predictability
 - Keep `routing.max_loops` budget (already implemented).
-- Respect `one_shot` tag: skip re‑running steps with `tags: [one_shot]` that already executed in this run.
+- **NOT YET IMPLEMENTED**: Respect `one_shot` tag: skip re‑running steps with `tags: [one_shot]` that already executed in this run.
 - Maintain per‑run statistics to avoid duplicate scheduling within a wave.
 
 5) Forward‑run details
@@ -81,16 +83,23 @@ Pattern B (single hop to anchor):
 
 ## Code Pointers
 
-File: `src/check-execution-engine.ts`
-- `executeWithRouting` — handles `on_fail.run/goto` and `on_success.run/goto`:
-  - Unify forward‑run behavior for `goto` across origins.
-  - Current forward‑run logic lives in the `on_success.goto` branch (search for comments near topological ordering and `forwardSet`).
-- `runNamedCheck` — respects `if` conditions and records stats; ensure forward‑run uses consistent overlays/results.
-- Guards: `routing.max_loops`, `oncePerRun`/`one_shot` behavior, execution statistics.
+**Note:** The implementation now uses a state machine architecture. The original
+`check-execution-engine.ts` is a compatibility layer that re-exports from
+`state-machine-execution-engine.ts`.
 
-Suggested refactor:
-- Introduce `scheduleForwardRun(target, scope, opts)` used by all `goto` sites.
-- Extract subgraph building + topo sort into a helper for reuse.
+Key files in `src/state-machine/states/`:
+- `routing.ts` — handles `on_fail.run/goto` and `on_success.run/goto`:
+  - `processOnSuccess()` and `processOnFail()` emit `ForwardRunRequested` events
+  - Both use the same `evaluateGoto()` helper for unified behavior
+- `wave-planning.ts` — processes forward-run requests:
+  - Builds dependency subgraph and computes topological order
+  - Detects cycles in forward-run dependency subset
+  - Queues levels for execution
+- `level-dispatch.ts` — executes checks and respects `if` conditions
+
+Guards:
+- `routing.max_loops` budget is enforced in `routing.ts` via `checkLoopBudget()`
+- Per-wave deduplication handled in `wave-planning.ts`
 
 ## Telemetry / Debug
 - Add concise debug logs for `goto` forward‑run across all origins: target, number of dependents, topological order.
@@ -111,3 +120,7 @@ Suggested refactor:
 - Single‑run multi‑refine test passes with exact counts.
 - Flow multi‑refine tests pass.
 - No regression in existing suites; loop budget respected.
+
+**Test Coverage:**
+- `tests/integration/goto-forward-run-integration.test.ts` — verifies goto + goto_event forward-run
+- `tests/unit/forward-goto-cycle-detection.test.ts` — verifies cycle detection in forward-run subset

@@ -1,5 +1,11 @@
 # Engine State Machine (v2) Research
 
+> **Status: COMPLETED**
+>
+> This planning document describes the state machine engine implementation. All milestones (M0-M4) have been completed. The state machine is now the default engine, and `CheckExecutionEngine` in `src/check-execution-engine.ts` is a compatibility wrapper that re-exports `StateMachineExecutionEngine`.
+>
+> **Note:** Line references in section 1 ("Current Engine Map") are historical and refer to the legacy implementation that has since been refactored into `src/state-machine/`. See `src/state-machine/runner.ts` and `src/state-machine/states/` for the current implementation.
+
 This note captures the current execution flow of the Visor engine, the surfaces where a feature flag can live, and an initial proposal for a bespoke state-machine-based Runner v2. The user-provided research artifact referenced in the request is not available inside this workspace yet, so there are a few open questions that we should fill in once we can read it.
 
 > Safety Model & Criticality (Summary)
@@ -296,12 +302,13 @@ Execution steps:
 3. Emit telemetry (`engine.contract.assume_failed`, `engine.contract.guarantee_failed`) so CI and runtime monitoring can flag contract regressions.
 
 By lifting control flow into `transitions` and correctness rules into `assume`/`guarantee`, we make configurations statically analyzable, reduce reliance on imperative `goto_js`, and move closer to NASA-inspired static validation goals while still honoring legacy constructs for advanced scenarios.
-## 5. Routing and Loops (spec to impl status)
+
+## 6. Routing and Loops (spec to impl status)
 
 - on_success/on_fail evaluate `run`, `run_js`, and `goto` (with optional `goto_event`).
 - on_finish for forEach parents is processed after children complete; loop budget enforced.
 
-### 5.1 Declarative transitions (implemented)
+### 6.1 Declarative transitions (implemented)
 
 In addition to `goto`/`goto_js`, checks can use declarative transitions on `on_success`, `on_fail`, and `on_finish`:
 
@@ -318,7 +325,7 @@ on_finish:
 - Backward compatible: if `transitions` is omitted or none match, the engine falls back to `goto_js/goto`.
 - Helpers available: `outputs`, `outputs_history`, `output`, `event`, `memory`, plus `any/all/none/count`.
 
-### 5.2 Assume/Guarantee contracts (implemented)
+### 6.2 Assume/Guarantee contracts (implemented)
 
 Per-check contracts:
 

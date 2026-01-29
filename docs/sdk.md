@@ -119,6 +119,8 @@ try {
 
 ## API
 
+### Functions
+
 - `loadConfig(configOrPath?: string | Partial<VisorConfig>, options?: { strict?: boolean }): Promise<VisorConfig>`
   - Loads and validates a config from an object, file path, or discovers defaults
   - Accepts config objects (validates and applies defaults) or file paths
@@ -126,26 +128,58 @@ try {
   - Set `options.strict` to treat warnings as errors
 - `resolveChecks(checkIds: string[], config: VisorConfig | undefined): string[]`
   - Expands check IDs to include dependencies in the correct order.
+  - Detects and throws on circular dependencies.
 - `runChecks(options: RunOptions): Promise<AnalysisResult>`
   - Runs checks programmatically. Thin wrapper around the engine's `executeChecks`.
 
 ### Types
 
-- `RunOptions`
-  - `config?: VisorConfig` | `configPath?: string`
-  - `checks?: string[]`
-  - `cwd?: string`
-  - `timeoutMs?: number`
-  - `output?: { format?: 'table'|'json'|'markdown'|'sarif' }`
-  - `debug?: boolean`
-  - `maxParallelism?: number`
-  - `failFast?: boolean`
-  - `tagFilter?: { include?: string[]; exclude?: string[] }`
+All types below are exported from `@probelabs/visor/sdk`.
+
+- `VisorOptions` (base options used by `RunOptions`)
+  - `cwd?: string` - Working directory for execution
+  - `debug?: boolean` - Enable debug mode
+  - `maxParallelism?: number` - Maximum parallel checks
+  - `failFast?: boolean` - Stop on first failure
+  - `tagFilter?: TagFilter` - Filter checks by tags
+
+- `RunOptions` (extends `VisorOptions`)
+  - `config?: VisorConfig` - Config object (mutually exclusive with `configPath`)
+  - `configPath?: string` - Path to config file (mutually exclusive with `config`)
+  - `checks?: string[]` - Check IDs to run (default: all checks from config)
+  - `timeoutMs?: number` - Execution timeout in milliseconds
+  - `output?: { format?: 'table'|'json'|'markdown'|'sarif' }` - Output format
   - `strictValidation?: boolean` - Treat config warnings (unknown keys) as errors (default: false)
+  - `executionContext?: ExecutionContext` - Execution context for providers (hooks, CLI state, etc.)
 
 - `AnalysisResult`
-  - `reviewSummary.issues: Issue[]`
-  - `executionTime: number`, `timestamp: string`, `checksExecuted: string[]`
+  - `reviewSummary: ReviewSummary` - Contains `issues: Issue[]` and scoring
+  - `executionTime: number` - Total execution time in ms
+  - `timestamp: string` - ISO timestamp
+  - `checksExecuted: string[]` - List of executed check IDs
+  - `repositoryInfo: GitRepositoryInfo` - Repository metadata
+  - `executionStatistics?: ExecutionStatistics` - Detailed per-check statistics (optional)
+  - `debug?: DebugInfo` - Debug information when debug mode enabled (optional)
+  - `failureConditions?: FailureConditionResult[]` - Failure condition results (optional)
+
+- `ExecutionContext` - Context passed to check providers
+  - `cliMessage?: string` - CLI message value (from `--message` argument)
+  - `hooks?: VisorHooks` - SDK hooks for human input and check completion
+  - `workflowInputs?: Record<string, unknown>` - Inputs when executing within a workflow
+  - `args?: Record<string, unknown>` - Custom arguments from `on_init` directives
+
+- `HumanInputRequest` - Request object for human input hooks
+  - `checkId: string` - Check ID requesting input
+  - `prompt: string` - Prompt to display
+  - `placeholder?: string` - Placeholder text
+  - `allowEmpty: boolean` - Whether empty input is allowed
+  - `multiline: boolean` - Whether multiline input is supported
+  - `timeout?: number` - Timeout in milliseconds
+  - `default?: string` - Default value
+
+- `TagFilter` - Tag filtering configuration
+  - `include?: string[]` - Tags to include (ANY match)
+  - `exclude?: string[]` - Tags to exclude (ANY match)
 
 Refer to `src/types/config.ts` for `VisorConfig`, `Issue`, and related types.
 

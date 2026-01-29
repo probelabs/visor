@@ -1,6 +1,8 @@
-## 🔧 Pluggable Architecture
+## Pluggable Architecture
 
-Visor supports multiple provider types (ai, mcp, http, http_client, log, command, github, claude-code). You can also add custom providers.
+Visor supports multiple provider types. You can also add custom providers.
+
+**Built-in Providers:** ai, mcp, command, script, http, http_input, http_client, log, memory, noop, github, human-input, workflow, git-checkout, claude-code
 
 ### Custom Provider Skeleton (TypeScript)
 
@@ -58,6 +60,21 @@ steps:
 
 [Learn more](./command-provider.md)
 
+#### Script Provider (`type: script`)
+Execute JavaScript in a secure sandbox with access to PR context, outputs, and memory.
+
+```yaml
+steps:
+  analyze:
+    type: script
+    content: |
+      const issues = outputs['lint-check'] || [];
+      memory.set('issue_count', issues.length);
+      return { total: issues.length };
+```
+
+[Learn more](./script.md)
+
 #### HTTP Client Provider (`type: http_client`)
 Make HTTP requests to external APIs.
 
@@ -85,17 +102,53 @@ steps:
 
 [Learn more](./http.md)
 
-#### Logger Provider (`type: logger`)
+#### HTTP Input Provider (`type: http_input`)
+Receive and process HTTP webhook input data for use by dependent checks.
+
+```yaml
+steps:
+  webhook-data:
+    type: http_input
+    endpoint: /webhook/incoming
+```
+
+[Learn more](./http.md)
+
+#### Log Provider (`type: log`)
 Log messages for debugging and workflow visibility.
 
 ```yaml
 steps:
   debug:
-    type: logger
+    type: log
     message: "PR #{{ pr.number }}: {{ fileCount }} files changed"
 ```
 
 [Learn more](./debugging.md)
+
+#### Memory Provider (`type: memory`)
+Persistent key-value storage across checks for stateful workflows.
+
+```yaml
+steps:
+  init-counter:
+    type: memory
+    operation: set
+    key: retry_count
+    value: 0
+```
+
+[Learn more](./memory.md)
+
+#### Noop Provider (`type: noop`)
+No-operation provider for command orchestration and dependency triggering.
+
+```yaml
+steps:
+  trigger-all:
+    type: noop
+    depends_on: [check1, check2, check3]
+```
 
 #### GitHub Provider (`type: github`)
 Interact with GitHub API for labels, comments, and status checks.
@@ -109,6 +162,44 @@ steps:
 ```
 
 [Learn more](./github-ops.md)
+
+#### Human Input Provider (`type: human-input`)
+Pause workflow execution to request input from a human user.
+
+```yaml
+steps:
+  approval:
+    type: human-input
+    prompt: "Approve deployment? (yes/no)"
+```
+
+[Learn more](./human-input-provider.md)
+
+#### Workflow Provider (`type: workflow`)
+Execute reusable workflow definitions as steps.
+
+```yaml
+steps:
+  security-scan:
+    type: workflow
+    workflow: security-scan
+    args:
+      severity_threshold: high
+```
+
+[Learn more](./workflows.md)
+
+#### Git Checkout Provider (`type: git-checkout`)
+Checkout code from git repositories using efficient worktree management.
+
+```yaml
+steps:
+  checkout:
+    type: git-checkout
+    ref: "{{ pr.head }}"
+```
+
+[Learn more](./providers/git-checkout.md)
 
 #### Claude Code Provider (`type: claude-code`)
 Use Claude Code SDK with MCP tools and advanced agent capabilities.

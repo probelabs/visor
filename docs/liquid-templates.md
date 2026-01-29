@@ -103,6 +103,20 @@ The `json` filter serializes objects to JSON strings, useful for debugging or pa
 # Debug output object
 {{ outputs | json }}
 
+# Debug specific check output
+{{ outputs.security | json }}
+
+# Pass to command safely
+echo '{{ pr | json }}' | jq .
+
+# Create JSON payload
+{
+  "title": {{ pr.title | json }},
+  "files": {{ files | json }},
+  "outputs": {{ outputs | json }}
+}
+```
+
 ### Author Permission Filters
 
 > **📖 For complete documentation, see [Author Permissions Guide](./author-permissions.md)**
@@ -165,20 +179,6 @@ Ticket key: {{ outputs['fetch-tickets'].tickets[0].key }}
 
 If the underlying value is plain text, it behaves as a normal string.
 
-# Debug specific check output
-{{ outputs.security | json }}
-
-# Pass to command safely
-echo '{{ pr | json }}' | jq .
-
-# Create JSON payload
-{
-  "title": {{ pr.title | json }},
-  "files": {{ files | json }},
-  "outputs": {{ outputs | json }}
-}
-```
-
 ### String Filters
 
 ```liquid
@@ -196,6 +196,78 @@ echo '{{ pr | json }}' | jq .
 {{ files | first }}             # First file
 {{ files | last }}              # Last file
 {{ files | map: "filename" }}   # Array of filenames
+```
+
+### Encoding Filters
+
+```liquid
+# Base64 encoding/decoding
+{{ "user:password" | base64 }}           # Encode to base64
+{{ encoded_value | base64_decode }}       # Decode from base64
+
+# JSON escaping (for use inside JSON string values)
+"jql": "{{ myValue | json_escape }}"
+```
+
+### Shell Escaping Filters
+
+For safely passing values to shell commands:
+
+```liquid
+# Single-quote escaping (recommended, POSIX-compliant)
+{{ value | shell_escape }}         # "hello'world" becomes "'hello'\''world'"
+{{ value | escape_shell }}         # Alias for shell_escape
+
+# Double-quote escaping (less safe, use when needed)
+{{ value | shell_escape_double }}  # Escapes $, `, \, ", and !
+```
+
+### Utility Filters
+
+```liquid
+# Safe nested access using dot-path
+{{ obj | get: 'a.b.c' }}           # Access nested property safely
+
+# Check if value is non-empty
+{% if items | not_empty %}         # True for non-empty arrays/strings/objects
+  Has items
+{% endif %}
+
+# Pick first non-empty value
+{{ a | coalesce: b, c }}           # Returns first non-empty value
+
+# Expression-based array filtering (Shopify-style)
+{{ items | where_exp: 'i', 'i.is_valid == true' }}
+
+# String manipulation
+{{ value | unescape_newlines }}    # Convert "\n" to actual newlines
+```
+
+### Label Sanitization Filters
+
+For safely formatting labels (only allows `[A-Za-z0-9:/\- ]`):
+
+```liquid
+{{ label | safe_label }}           # Sanitize a single label
+{{ labels | safe_label_list }}     # Sanitize an array of labels
+```
+
+### Memory Store Filters
+
+Access the persistent memory store from templates:
+
+```liquid
+# Get a value from memory
+{{ "my-key" | memory_get }}
+{{ "my-key" | memory_get: "namespace" }}
+
+# Check if a key exists
+{% if "my-key" | memory_has %}
+  Key exists in memory
+{% endif %}
+
+# List all keys in a namespace
+{{ "namespace" | memory_list }}
 ```
 
 ### Chat History Helper

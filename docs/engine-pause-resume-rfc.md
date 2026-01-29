@@ -1,10 +1,10 @@
 # RFC: Proper Pause/Resume for State-Machine Engine (Event‑Bus + Snapshots)
 
-Status: draft
+Status: implemented
 
 Owner: visor engine
 
-Last updated: 2025-11-20
+Last updated: 2026-01-28
 
 ## Summary
 
@@ -165,19 +165,19 @@ We will add first‑class pause/resume to the state‑machine engine so long‑r
 ## Work Items
 
 - Runner
-  - [ ] Add `deserializeRunState()`
-  - [ ] Add `runner.setState()`
+  - [x] Add `runner.setState()` - Implemented in `src/state-machine/runner.ts`
+  - [~] Add `deserializeRunState()` - Not needed; resume uses fresh run with journal hydration
 - Engine
-  - [ ] Add `resumeFromSnapshot()`
-  - [ ] On HumanInputRequested → `saveSnapshotToFile()` (path via threadKey+checkId)
+  - [x] Add `resumeFromSnapshot()` - Implemented in `src/state-machine-execution-engine.ts`
+  - [x] On HumanInputRequested → `saveSnapshotToFile()` (path via threadKey+checkId)
 - Slack
-  - [ ] PromptState stores `snapshotPath` alongside prompt metadata
-  - [ ] Socket runner loads snapshot and calls `resumeFromSnapshot()` on reply
+  - [x] PromptState stores `snapshotPath` alongside prompt metadata - Implemented in `src/slack/prompt-state.ts`
+  - [x] Socket runner loads snapshot and calls `resumeFromSnapshot()` on reply - Implemented in `src/slack/socket-runner.ts`
 - Tests
-  - [ ] Unit: serialize/deserialize round‑trip
-  - [ ] Integration: pause/resume end‑to‑end (Slack fixture), snapshot deletion
+  - [x] Unit: workspace initialization test in `tests/unit/resume-from-snapshot-workspace.test.ts`
+  - [x] Integration: pause/resume tests in `tests/integration/slack-pause-resume-e2e.test.ts` and `tests/integration/slack-resume-from-snapshot.test.ts`
 - Docs
-  - [ ] Update Slack integration docs and human‑input provider docs
+  - [x] Human-input provider docs mention workflow pausing in `docs/human-input-provider.md`
 
 ## Alternatives Considered
 

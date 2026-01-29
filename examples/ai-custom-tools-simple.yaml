@@ -45,10 +45,9 @@ steps:
       You have access to custom security scanning tools.
       Use check-secrets to scan for hardcoded credentials.
       Use grep-pattern to find dangerous function calls.
+    # Use ai_custom_tools to reference custom tools defined in this file
+    ai_custom_tools: [check-secrets, grep-pattern]
     ai_mcp_servers:
-      # Use "tools:" to reference custom tools - they'll be served via ephemeral SSE!
-      custom-tools:
-        tools: [check-secrets, grep-pattern]  # ← Magic happens here!
       # You can still combine with external MCP servers
       filesystem:
         command: npx

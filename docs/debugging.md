@@ -10,6 +10,8 @@ This guide provides comprehensive debugging techniques and tools to help trouble
 - [Common Debugging Patterns](#common-debugging-patterns)
 - [Author Permission Functions](#author-permission-functions)
 - [Troubleshooting Tips](#troubleshooting-tips)
+- [Tracing with OpenTelemetry](#tracing-with-opentelemetry)
+- [Debug Visualizer](#debug-visualizer)
 
 ## Debug Mode
 
@@ -423,18 +425,23 @@ steps:
 Set these environment variables for additional debug output:
 
 ```bash
-# Show all debug output
+# Enable verbose debug output (used in diff processing and other internals)
 export DEBUG=1
+# or
+export VERBOSE=1
 
-# Show Liquid template rendering
-export DEBUG_TEMPLATES=1
+# Enable telemetry and tracing
+export VISOR_TELEMETRY_ENABLED=true
+export VISOR_TELEMETRY_SINK=file  # or otlp, console
 
-# Show command execution details
-export DEBUG_COMMANDS=1
+# Set trace output directory
+export VISOR_TRACE_DIR=output/traces
 
-# Show dependency resolution
-export DEBUG_DEPS=1
+# For headless/CI environments (skip auto-opening browser)
+export VISOR_NOBROWSER=true
 ```
+
+See [Telemetry Setup](./telemetry-setup.md) for detailed configuration of tracing and metrics.
 
 ## Common Issues and Solutions
 
@@ -628,9 +635,67 @@ steps:
       outputs["security-scan"].criticalIssues === 0
 ```
 
+## Tracing with OpenTelemetry
+
+Visor supports OpenTelemetry tracing for deep execution visibility. Enable tracing to see:
+
+- **Root span**: `visor.run` - one per CLI/Slack execution
+- **State spans**: `engine.state.*` with `wave`, `wave_kind`, `session_id` attributes
+- **Check spans**: `visor.check.<checkId>` with `visor.check.id`, `visor.check.type`, `visor.foreach.index` (for map fanout)
+- **Routing decisions**: `visor.routing` events with `trigger`, `action`, `source`, `target`, `scope`, `goto_event`
+- **Wave visibility**: `engine.state.level_dispatch` includes `level_size` and `level_checks_preview`
+
+### Quick Start with Jaeger
+
+```bash
+# Start Jaeger locally
+docker run -d --name jaeger \
+  -p 16686:16686 \
+  -p 4318:4318 \
+  jaegertracing/all-in-one:latest
+
+# Run Visor with tracing enabled
+VISOR_TELEMETRY_ENABLED=true \
+VISOR_TELEMETRY_SINK=otlp \
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces \
+visor --config .visor.yaml
+
+# View traces at http://localhost:16686
+```
+
+For complete tracing setup and configuration, see [Telemetry Setup](./telemetry-setup.md).
+
+## Debug Visualizer
+
+Visor includes a built-in debug visualizer - a lightweight HTTP server that streams OpenTelemetry spans during execution and provides control endpoints for pause/resume/stop.
+
+### Starting the Debug Visualizer
+
+```bash
+# Start with debug server
+visor --config .visor.yaml --debug-server --debug-port 3456
+
+# For CI/headless environments
+VISOR_NOBROWSER=true visor --config .visor.yaml --debug-server --debug-port 3456
+```
+
+### Control Endpoints
+
+- `GET /api/status` - Execution state and readiness
+- `GET /api/spans` - Current in-memory spans (live view)
+- `POST /api/start` - Begin execution
+- `POST /api/pause` - Pause scheduling (in-flight work continues)
+- `POST /api/resume` - Resume scheduling
+- `POST /api/stop` - Stop scheduling new work
+- `POST /api/reset` - Clear spans and return to idle
+
+For complete debug visualizer documentation, see [Debug Visualizer](./debug-visualizer.md).
+
 ## Further Reading
 
 - [Liquid Templates Guide](./liquid-templates.md) - Template syntax and variables
 - [Command Provider Documentation](./command-provider.md) - Command execution and transforms
 - [Configuration Reference](./configuration.md) - Full configuration options
-- [GitHub Actions Integration](./github-actions.md) - CI/CD debugging
+- [Telemetry Setup](./telemetry-setup.md) - OpenTelemetry tracing and metrics
+- [Debug Visualizer](./debug-visualizer.md) - Live execution visualization
+- [Output History](./output-history.md) - Tracking outputs across loop iterations

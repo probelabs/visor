@@ -61,9 +61,9 @@ checks:
       # Prefer .text to read the string payload
       git tag v{{ outputs['get-version'].text | default: outputs['get-version'] }}
       git push origin v{{ outputs['get-version'].text | default: outputs['get-version'] }}
+```
 
 > See also: [Default Output Schema](./default-output-schema.md)
-```
 
 ## Input Methods
 
@@ -99,19 +99,13 @@ curl https://api.example.com/approval | visor --check approval
 Use a custom hook for programmatic input:
 
 ```typescript
-import { runChecks, HumanInputCheckProvider } from '@probelabs/visor';
+import { runChecks } from '@probelabs/visor/sdk';
 
 // Option 1: Using deprecated static method (backward compatible)
-HumanInputCheckProvider.setHooks({
-  onHumanInput: async (request) => {
-    console.log(`Prompt: ${request.prompt}`);
-    return 'yes';
-  }
-});
+// Note: HumanInputCheckProvider is not exported from the SDK;
+// use executionContext instead (recommended)
 
-await runChecks({ config });
-
-// Option 2: Using new ExecutionContext (recommended)
+// Option 2: Using ExecutionContext (recommended)
 await runChecks({
   config,
   executionContext: {
@@ -132,8 +126,8 @@ interface HumanInputRequest {
   checkId: string;        // Check name/ID
   prompt: string;         // Prompt text
   placeholder?: string;   // Placeholder text
-  allowEmpty?: boolean;   // Allow empty input
-  multiline?: boolean;    // Multiline mode
+  allowEmpty: boolean;    // Allow empty input
+  multiline: boolean;     // Multiline mode
   timeout?: number;       // Timeout in milliseconds
   default?: string;       // Default value
 }
@@ -225,7 +219,7 @@ See [examples/calculator-sdk-real.ts](../examples/calculator-sdk-real.ts) for a 
 ### Basic SDK Usage
 
 ```typescript
-import { runChecks } from '@probelabs/visor';
+import { runChecks } from '@probelabs/visor/sdk';
 
 const config = {
   version: '1.0',
@@ -254,25 +248,23 @@ const result = await runChecks({
 ### With CLI Message
 
 ```typescript
-import { CheckExecutionEngine } from '@probelabs/visor';
+import { runChecks } from '@probelabs/visor/sdk';
 
-const engine = new CheckExecutionEngine();
-
-// Set execution context
-engine.setExecutionContext({
-  cliMessage: 'yes'  // Simulates --message flag
-});
-
-const result = await engine.executeChecks({
+const result = await runChecks({
+  config,
   checks: ['approval'],
-  config
+  executionContext: {
+    cliMessage: 'yes'  // Simulates --message flag
+  }
 });
 ```
 
 ### Automated Testing
 
 ```typescript
-const testInputs = {
+import { runChecks } from '@probelabs/visor/sdk';
+
+const testInputs: Record<string, string> = {
   'get-number1': '42',
   'get-number2': '7',
   'get-operation': '+'
@@ -331,22 +323,14 @@ The new ExecutionContext pattern eliminates global state:
 
 ### From Static API to ExecutionContext
 
-**Old way (still works but deprecated):**
+**Old way (deprecated, internal use only):**
 
-```typescript
-import { HumanInputCheckProvider, runChecks } from '@probelabs/visor';
-
-HumanInputCheckProvider.setHooks({
-  onHumanInput: async (request) => 'yes'
-});
-
-await runChecks({ config });
-```
+The static `HumanInputCheckProvider.setHooks()` method is deprecated and not exported from the public SDK. If you were using it directly by importing from internal paths, migrate to the new pattern.
 
 **New way (recommended):**
 
 ```typescript
-import { runChecks } from '@probelabs/visor';
+import { runChecks } from '@probelabs/visor/sdk';
 
 await runChecks({
   config,

@@ -1,8 +1,21 @@
 # RFC: Enhanced Execution Logging & Statistics
 
-**Status:** Implemented
+**Status:** Implemented (with architectural changes)
 **Date:** 2025-10-04
 **Version:** 1.0
+
+> **Note (January 2026):** This RFC has been implemented, but the underlying architecture
+> has evolved significantly since the original design. The `CheckExecutionEngine` class
+> described below has been replaced by `StateMachineExecutionEngine` (see
+> `src/state-machine-execution-engine.ts`). Statistics tracking is now handled via:
+> - `src/types/execution.ts` - Type definitions for `CheckExecutionStats` and `ExecutionStatistics`
+> - `src/state-machine/dispatch/stats-manager.ts` - Runtime statistics collection
+> - `src/state-machine/execution/summary.ts` - Result aggregation
+>
+> The data structures remain largely compatible with the RFC specification, with some
+> additions like `skippedRuns`, `providerDurationMs`, and additional skip reasons
+> (`forEach_empty`, `assume`). The formatting methods (`formatStatusColumn`,
+> `formatDetailsColumn`) remain in the engine class for test compatibility.
 
 ## Summary
 
@@ -285,6 +298,5 @@ Potential future improvements:
 
 ## References
 
-- Implementation PR: [Link to PR]
-- Related Issues: Enhanced logging visibility (#XX)
-- Documentation: Updated in CLAUDE.md and README.md
+- Implementation: See `src/state-machine-execution-engine.ts`, `src/types/execution.ts`, and `src/state-machine/dispatch/stats-manager.ts`
+- Tests: `tests/unit/execution-statistics.test.ts`, `tests/unit/execution-statistics-formatting.test.ts`, `tests/integration/execution-statistics-integration.test.ts`

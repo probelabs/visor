@@ -1,23 +1,31 @@
 # Fact Validator Implementation Plan
 
-## 🎯 CURRENT STATUS: 50% COMPLETE
+> **Note (2026-01-28)**: This is a historical planning document. The core `on_finish` hook
+> infrastructure has been implemented and refactored since this plan was written.
+> Implementation has moved from `src/check-execution-engine.ts` to a dedicated module at
+> `src/engine/on-finish/orchestrator.ts` and `src/engine/on-finish/utils.ts`. Method names
+> like `executeCheckInline()` and `handleOnFinishHooks()` mentioned below no longer exist.
+> The test file references may also be outdated. See the actual source files for current
+> implementation details.
 
-**Last Updated:** 2025-10-16
+## 🎯 CURRENT STATUS: 50% COMPLETE (Phases 1-4 done, Phases 5-6 pending)
+
+**Last Updated:** 2025-10-16 (see note above for 2026 status)
 
 ### Implementation Status
 
 | Component | Status | Files |
 |-----------|--------|-------|
-| **Phase 1: Infrastructure** | ✅ COMPLETE | `src/types/config.ts`, `src/config.ts`, `src/check-execution-engine.ts` |
-| **Phase 2: Execution** | ✅ COMPLETE | `src/check-execution-engine.ts` (lines 283-748) |
+| **Phase 1: Infrastructure** | ✅ COMPLETE | `src/types/config.ts`, `src/config.ts` |
+| **Phase 2: Execution** | ✅ COMPLETE | `src/engine/on-finish/orchestrator.ts`, `src/engine/on-finish/utils.ts` |
 | **Phase 3: Configuration** | ✅ COMPLETE | `examples/fact-validator.yaml` |
-| **Phase 4: Documentation** | ⏳ PENDING | - |
-| **Phase 5: Testing** | ⏳ PENDING | - |
+| **Phase 4: Documentation** | ✅ COMPLETE | `docs/failure-routing.md`, `docs/dependencies.md`, `docs/foreach-dependency-propagation.md` |
+| **Phase 5: Testing** | 🚧 PARTIAL | `tests/engine/foreach-on-finish.engine.test.ts`, `tests/unit/on-finish-validation.test.ts` |
 | **Phase 6: Deployment** | ⏳ PENDING | - |
 
 ### Test Results
 
-✅ **1438 tests passing, 0 failures**
+✅ **16 on_finish-specific tests passing** (as of 2026-01-28)
 
 ### What's Working
 
@@ -613,10 +621,10 @@ if (check.on_finish && !check.forEach) {
 
 ### Documentation Updates
 
-1. **`docs/failure-routing.md`**: Add `on_finish` section
-2. **`docs/dependencies.md`**: Explain `on_finish` with forEach
-3. **`examples/foreach-on-finish.yaml`**: Complete working example
-4. **`docs/foreach-dependency-propagation.md`**: Update with `on_finish`
+1. **`docs/failure-routing.md`**: Add `on_finish` section ✅
+2. **`docs/dependencies.md`**: Explain `on_finish` with forEach ✅
+3. **`examples/fact-validator.yaml`**: Complete working example ✅
+4. **`docs/foreach-dependency-propagation.md`**: Update with `on_finish` ✅
 
 ## Testing Strategy
 

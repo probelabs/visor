@@ -229,6 +229,19 @@ steps:
     on: [pr_opened, pr_updated]
 ```
 
+### Using Config Path
+
+Alternatively, reference a config file directly instead of a pre-registered workflow:
+
+```yaml
+steps:
+  external_workflow:
+    type: workflow
+    config: ./other-workflow.yaml  # Path to workflow config file
+    args:
+      param1: value1
+```
+
 ### With Output Mapping
 
 Map workflow outputs to check outputs:
@@ -263,6 +276,18 @@ steps:
       sql_injection:  # Override the 'sql_injection' step
         ai_model: claude-3-opus-20240229
 ```
+
+### Workflow Step Configuration Reference
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `workflow` | string | Workflow ID from imported workflow (required if not using `config`) |
+| `config` | string | Path to workflow config file (alternative to `workflow`) |
+| `args` | object | Input parameter values to pass to the workflow |
+| `overrides` | object | Override specific step configurations within the workflow |
+| `output_mapping` | object | Map workflow output names to check output names |
+| `timeout` | number | Maximum execution time in milliseconds |
+| `env` | object | Environment variables to set for workflow execution |
 
 ## Advanced Features
 
@@ -300,32 +325,45 @@ steps:
 
 ### Workflow Composition
 
-Workflows can use other workflows:
+Workflows can use other workflows. Create a parent workflow file that imports and uses child workflows:
 
 ```yaml
-workflows:
-  comprehensive-check:
-    steps:
-      security:
-        type: workflow
-        workflow: security-scan
-        workflow_inputs:
-          severity_threshold: "{{ inputs.security_level }}"
+# comprehensive-check.yaml
+id: comprehensive-check
+name: Comprehensive Check
+version: "1.0"
 
-      quality:
-        type: workflow
-        workflow: code-quality
-        workflow_inputs:
-          language: "{{ inputs.language }}"
+inputs:
+  - name: security_level
+    schema:
+      type: string
+    default: medium
+  - name: language
+    schema:
+      type: string
+    required: true
 
-      aggregate:
-        type: script
-        content: |
-          return {
-            passed: steps.security.output.passed && steps.quality.output.passed,
-            score: (steps.security.output.score + steps.quality.output.score) / 2
-          };
-        depends_on: [security, quality]
+steps:
+  security:
+    type: workflow
+    workflow: security-scan
+    args:
+      severity_threshold: "{{ inputs.security_level }}"
+
+  quality:
+    type: workflow
+    workflow: code-quality
+    args:
+      language: "{{ inputs.language }}"
+
+  aggregate:
+    type: script
+    content: |
+      return {
+        passed: outputs['security'].passed && outputs['quality'].passed,
+        score: (outputs['security'].score + outputs['quality'].score) / 2
+      };
+    depends_on: [security, quality]
 ```
 
 ## Examples
@@ -470,7 +508,38 @@ examples:
 
 ### 6. Test Your Workflows
 
-Create test configurations to validate workflows:
+You can include inline tests in workflow files that are automatically stripped when the workflow is imported:
+
+```yaml
+# my-workflow.yaml
+id: my-workflow
+name: My Workflow
+version: "1.0"
+
+inputs:
+  - name: test_param
+    schema:
+      type: string
+
+steps:
+  process:
+    type: script
+    content: |
+      return { result: inputs.test_param, score: 85 };
+
+# Inline tests - NOT imported when used as component
+tests:
+  basic-test:
+    type: script
+    content: |
+      const output = outputs['process'];
+      if (output.result !== "test_value") throw new Error("Result mismatch");
+      if (output.score < 0 || output.score > 100) throw new Error("Score out of range");
+      return { passed: true };
+    depends_on: [process]
+```
+
+Alternatively, create a separate test config:
 
 ```yaml
 # test-workflow.yaml
@@ -478,15 +547,16 @@ steps:
   test_workflow:
     type: workflow
     workflow: my-workflow
-    workflow_inputs:
+    args:
       test_param: "test_value"
 
   validate_output:
     type: script
     content: |
-      const output = outputs.test_workflow;
-      assert(output.result !== undefined, "Result is required");
-      assert(output.score >= 0 && output.score <= 100, "Score out of range");
+      const output = outputs['test_workflow'];
+      if (output.result === undefined) throw new Error("Result is required");
+      if (output.score < 0 || output.score > 100) throw new Error("Score out of range");
+      return { valid: true };
     depends_on: [test_workflow]
 ```
 
@@ -496,22 +566,22 @@ Complete workflow schema:
 
 ```typescript
 interface WorkflowDefinition {
-  id: string;                    // Unique identifier
-  name: string;                   // Display name
-  description?: string;           // Description
+  id: string;                    // Unique identifier (required)
+  name: string;                  // Display name (required)
+  description?: string;          // Description
   version?: string;              // Semantic version
   tags?: string[];               // Categorization tags
   category?: string;             // Category (security, quality, etc.)
 
   inputs?: WorkflowInputParam[]; // Input parameters
   outputs?: WorkflowOutputParam[]; // Output parameters
-  steps: Record<string, WorkflowStep>; // Workflow steps
+  steps: Record<string, WorkflowStep>; // Workflow steps (required)
 
-  on?: EventTrigger[];          // Events that can trigger this workflow
+  on?: EventTrigger[];           // Events that can trigger this workflow
   defaults?: Partial<CheckConfig>; // Default config for steps
-  reusable?: boolean;            // Can be used as component
+  tests?: Record<string, CheckConfig>; // Inline tests (NOT imported when used as component)
 
-  author?: {                    // Author information
+  author?: {                     // Author information
     name?: string;
     email?: string;
     url?: string;
@@ -521,6 +591,8 @@ interface WorkflowDefinition {
   examples?: WorkflowExample[];  // Usage examples
 }
 ```
+
+**Note:** The `tests` field allows you to include inline test cases in a workflow file. When the workflow is imported via `imports`, the tests are stripped out and NOT executed. Tests only run when the workflow file is executed directly or via `visor test`.
 
 ## Integration with CI/CD
 
@@ -540,19 +612,36 @@ jobs:
         uses: your-org/visor-action@v1
         with:
           config: .visor.yaml
-          workflow_imports: |
-            ./workflows/*.yaml
-            https://workflows.example.com/shared/*.yaml
+```
+
+In your `.visor.yaml`, use the `imports` field to include workflow files:
+
+```yaml
+# .visor.yaml
+version: "1.0"
+
+# Import workflow definitions
+imports:
+  - ./workflows/*.yaml
+  - https://workflows.example.com/shared/security.yaml
+
+steps:
+  run-security:
+    type: workflow
+    workflow: security-scan
+    args:
+      level: high
 ```
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Workflow not found**: Ensure the workflow is registered via `workflows` or `workflow_imports`
+1. **Workflow not found**: Ensure the workflow is imported via the `imports` field in your config, or use the `config` property to reference the file path directly
 2. **Input validation failed**: Check that inputs match the defined schema
 3. **Circular dependencies**: Ensure workflow steps don't have circular `depends_on`
 4. **Output computation error**: Verify JavaScript expressions and Liquid templates are valid
+5. **Tests running unexpectedly**: When importing workflows, `tests` blocks are automatically stripped; if tests are running, check if you're executing the workflow file directly
 
 ### Debug Mode
 
@@ -567,3 +656,11 @@ This will show:
 - Input validation results
 - Step execution order
 - Output computation values
+
+## See Also
+
+- [Workflow Creation Guide](workflow-creation-guide.md) - Comprehensive guide with all check types and patterns
+- [Configuration](configuration.md) - Main configuration reference
+- [Event Triggers](event-triggers.md) - Configuring when workflows run
+- [Liquid Templates](liquid-templates.md) - Template syntax for dynamic values
+- [Debugging](debugging.md) - Debugging techniques for workflows

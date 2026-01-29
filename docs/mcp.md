@@ -78,6 +78,7 @@ steps:
         github:
           command: "npx"
           args: ["-y", "@modelcontextprotocol/server-github"]
+```
 
 #### Claude Code Provider (check-level)
 
@@ -106,6 +107,27 @@ steps:
 - For Claude Code checks (`type: claude-code`), Visor passes `claude_code.mcpServers` configuration directly to the Claude Code SDK via the query object. The SDK manages all server operations internally.
 
 Tip: run with `--debug` to see how many MCP servers were configured for a check.
+
+#### MCP Server Configuration Options
+
+Each MCP server entry supports:
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| `command` | string | Yes | Command to execute (e.g., `npx`, `node`, `python`) |
+| `args` | string[] | No | Arguments to pass to the command |
+| `env` | object | No | Environment variables for the MCP server |
+
+Example with all options:
+
+```yaml
+ai_mcp_servers:
+  my_server:
+    command: "node"
+    args: ["./mcp-servers/custom-server.js", "--port", "3000"]
+    env:
+      API_KEY: "${MY_API_KEY}"
+      DEBUG: "true"
 ```
 
 #### Available MCP Servers
@@ -121,4 +143,8 @@ Tip: run with `--debug` to see how many MCP servers were configured for a check.
 - [Basic MCP with Probe](../examples/ai-with-mcp.yaml) - Code analysis with multiple MCP servers
 - [Jira Workflow Automation](../examples/jira-workflow-mcp.yaml) - Complete Jira integration examples
 - [Simple Jira Analysis](../examples/jira-simple-example.yaml) - Basic JQL → analyze → label workflow
-- [Setup Guide](../examples/JIRA_MCP_SETUP.md) - Detailed Jira MCP configuration instructions
+
+#### Related Documentation
+
+- [MCP Provider](./mcp-provider.md) - Standalone MCP tool execution (direct tool calls without AI)
+- [Custom Tools](./custom-tools.md) - Define custom tools for use with MCP

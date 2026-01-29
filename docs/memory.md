@@ -254,15 +254,20 @@ steps:
 - `memory.list(namespace?)` - List keys
 - `memory.has(key, namespace?)` - Check if key exists
 - `memory.getAll(namespace?)` - Get all key-value pairs
-- `memory.listNamespaces()` - List all namespaces
 
 **Context available in script content:**
-- `memory` - Memory operations object
+- `memory` - Memory operations object (see available operations above)
 - `pr` - PR information (number, title, author, etc.)
 - `outputs` - Previous check outputs (current values)
 - `outputs.history` - All previous outputs from each check (arrays). See [Output History](./output-history.md)
+- `outputs_history` - Alias for `outputs.history` (top-level access)
+- `inputs` - Workflow inputs (when running inside a workflow)
+- `args` - Arguments passed via `with:` directive in `on_init`
 - `env` - Environment variables
 - `log(...args)` - Debug logging function
+- `escapeXml(str)` - Escape string for XML output
+- `btoa(str)` - Base64 encode a string
+- `atob(str)` - Base64 decode a string
 
 ## Namespaces
 

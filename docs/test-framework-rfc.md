@@ -1,7 +1,8 @@
 # Visor Integration Test Framework (RFC)
 
-Status: In Progress
+Status: Implemented
 Date: 2025-10-27
+Last Updated: 2026-01-28
 Owners: @probelabs/visor
 
 ## Summary
@@ -17,15 +18,15 @@ Key ideas:
   (Docs use a “fact validation” workflow as an example pattern only; it is not a built‑in feature.)
 
 Developer Guides
-- Getting started: docs/testing/getting-started.md
-- DSL reference: docs/testing/dsl-reference.md
-- Flows: docs/testing/flows.md
-- Fixtures & mocks: docs/testing/fixtures-and-mocks.md
-- Assertions: docs/testing/assertions.md
-- Cookbook: docs/testing/cookbook.md
-- CLI & reporters: docs/testing/cli.md
-- CI integration: docs/testing/ci.md
-- Troubleshooting: docs/testing/troubleshooting.md
+- Getting started: [testing/getting-started.md](testing/getting-started.md)
+- DSL reference: [testing/dsl-reference.md](testing/dsl-reference.md)
+- Flows: [testing/flows.md](testing/flows.md)
+- Fixtures & mocks: [testing/fixtures-and-mocks.md](testing/fixtures-and-mocks.md)
+- Assertions: [testing/assertions.md](testing/assertions.md)
+- Cookbook: [testing/cookbook.md](testing/cookbook.md)
+- CLI & reporters: [testing/cli.md](testing/cli.md)
+- CI integration: [testing/ci.md](testing/ci.md)
+- Troubleshooting: [testing/troubleshooting.md](testing/troubleshooting.md)
 
 ## Progress Update (Oct 29, 2025)
 
@@ -64,7 +65,7 @@ Next steps (milestones excerpt)
 ## File Layout
 
 - Base config (unchanged): `defaults/.visor.yaml` (regular steps live here).
-- Test suite (new): `defaults/.visor.tests.yaml`
+- Test suite (new): `defaults/visor.tests.yaml`
   - `extends: ".visor.yaml"` to inherit the base checks.
   - Contains `tests.defaults`, `tests.fixtures`, `tests.cases`.
 
@@ -226,16 +227,16 @@ tests:
 ## CLI Usage
 
 - Discover tests:
-  - `node dist/index.js test --config defaults/.visor.tests.yaml --list`
+  - `node dist/index.js test --config defaults/visor.tests.yaml --list`
 - Validate test file shape (schema):
-  - `node dist/index.js test --config defaults/.visor.tests.yaml --validate`
+  - `node dist/index.js test --config defaults/visor.tests.yaml --validate`
 - Run all tests with compact progress (default):
-  - `node dist/index.js test --config defaults/.visor.tests.yaml`
+  - `node dist/index.js test --config defaults/visor.tests.yaml`
 - Run a single case:
-  - `node dist/index.js test --config defaults/.visor.tests.yaml --only label-flow`
+  - `node dist/index.js test --config defaults/visor.tests.yaml --only label-flow`
 - Run a single stage in a flow (by name or 1‑based index):
-  - `node dist/index.js test --config defaults/.visor.tests.yaml --only pr-review-e2e-flow#facts-invalid`
-  - `node dist/index.js test --config defaults/.visor.tests.yaml --only pr-review-e2e-flow#3`
+  - `node dist/index.js test --config defaults/visor.tests.yaml --only pr-review-e2e-flow#facts-invalid`
+  - `node dist/index.js test --config defaults/visor.tests.yaml --only pr-review-e2e-flow#3`
 - Emit artifacts:
   - JSON: `--json output/visor-tests.json`
   - JUnit: `--report junit:output/visor-tests.xml`
@@ -433,9 +434,9 @@ expect:
 ## CLI
 
 ```
-visor test --config defaults/.visor.tests.yaml         # run all cases
-visor test --config defaults/.visor.tests.yaml --only pr-review-e2e-flow
-visor test --config defaults/.visor.tests.yaml --list  # list case names
+visor test --config defaults/visor.tests.yaml         # run all cases
+visor test --config defaults/visor.tests.yaml --only pr-review-e2e-flow
+visor test --config defaults/visor.tests.yaml --list  # list case names
 ```
 
 Exit codes:
@@ -459,7 +460,7 @@ The runner prints a concise, human‑friendly summary optimized for scanning:
   - First mismatch shows an inline diff (expected vs actual substring/regex or value), with a clear hint to fix.
 - Flow cases show each stage nested under the parent with roll‑up status.
 - Summary footer with pass/fail counts, slowest cases, and a hint to rerun focused:
-  - e.g., visor test --config defaults/.visor.tests.yaml --only security-fail-if
+  - e.g., visor test --config defaults/visor.tests.yaml --only security-fail-if
 
 Color, symbols, and truncation rules mirror our main CLI:
 - Green checks for passes, red crosses for failures, yellow for skipped.
@@ -496,7 +497,7 @@ Progress Tracker
 - Milestone 7 — CLI reporters/UX polish — DONE (2025-10-27)
 - Milestone 8 — Validation and helpful errors — DONE (2025-10-27)
 - Milestone 9 — Coverage and perf — DONE (2025-10-27)
-- Milestone 10 — Docs, examples, migration — PENDING
+- Milestone 10 — Docs, examples, migration — DONE (2026-01-28)
 
 Progress Update — 2025-10-29
 - FlowStage refactor: each stage now recomputes prompts/output‑history deltas and execution statistics after any fallback run that executes “missing” expected steps. Coverage tables reflect the final state of the stage.
@@ -513,7 +514,7 @@ Progress Update — 2025-10-28
 
 Milestone 0 — DSL freeze and scaffolding (0.5 week) — DONE 2025-10-27
 - Finalize DSL keys: tests.defaults, fixtures, cases, flow, fixture, mocks, expect.{calls,prompts,outputs,fail,strict_violation}. ✅
-- Rename use_fixture → fixture across examples (done in this RFC and defaults/.visor.tests.yaml). ✅
+- Rename use_fixture → fixture across examples (done in this RFC and defaults/visor.tests.yaml). ✅
 - Create module skeletons: ✅
   - src/test-runner/index.ts (entry + orchestration)
   - src/test-runner/fixture-loader.ts (builtin + overrides)
@@ -526,7 +527,7 @@ Milestone 0 — DSL freeze and scaffolding (0.5 week) — DONE 2025-10-27
 Progress Notes
 - Discovery works against any .visor.tests.yaml (general-purpose, not tied to defaults).
 - Recording Octokit records arbitrary rest ops without hardcoding method lists.
-- defaults/.visor.tests.yaml updated to consistent count grammar and fixed indentation issues.
+- defaults/visor.tests.yaml updated to consistent count grammar and fixed indentation issues.
 
 Milestone 1 — MVP runner and single‑event cases (1 week) — DONE 2025-10-27 (non‑flow)
 - CLI: add visor test [--config path] [--only name] [--bail] [--list]. ✅
@@ -543,12 +544,12 @@ Notes
 
 Verification
 - Build CLI + SDK: npm run build — success.
-- Discovery: visor test --config defaults/.visor.tests.yaml --list — lists suite and cases.
+- Discovery: visor test --config defaults/visor.tests.yaml --list — lists suite and cases.
 - Run single cases:
-  - visor test --config defaults/.visor.tests.yaml --only label-flow — PASS
-  - visor test --config defaults/.visor.tests.yaml --only issue-triage — PASS
-  - visor test --config defaults/.visor.tests.yaml --only security-fail-if — PASS
-  - visor test --config defaults/.visor.tests.yaml --only strict-mode-example — PASS
+  - visor test --config defaults/visor.tests.yaml --only label-flow — PASS
+  - visor test --config defaults/visor.tests.yaml --only issue-triage — PASS
+  - visor test --config defaults/visor.tests.yaml --only security-fail-if — PASS
+  - visor test --config defaults/visor.tests.yaml --only strict-mode-example — PASS
 - Behavior observed:
   - Strict mode enforced (steps executed but not asserted would fail). 
   - GitHub ops recorded by default with dynamic recorder, no network calls.
@@ -606,7 +607,7 @@ Milestone 8 — Validation and helpful errors (0.5 week) — DONE 2025-10-27
 Usage:
 
 ```
-visor test --validate --config defaults/.visor.tests.yaml
+visor test --validate --config defaults/visor.tests.yaml
 ```
 
 Example error output:
@@ -626,12 +627,12 @@ Milestone 9 — Coverage and perf (0.5 week) — DONE 2025-10-27
 Usage examples:
 
 ```
-visor test --config defaults/.visor.tests.yaml --max-parallel 4
-visor test --config defaults/.visor.tests.yaml --prompt-max-chars 16000
+visor test --config defaults/visor.tests.yaml --max-parallel 4
+visor test --config defaults/visor.tests.yaml --prompt-max-chars 16000
 ```
 
-Milestone 10 — Docs, examples, and migration (0.5 week) — IN PROGRESS 2025-10-31
-- Update README to link the RFC and defaults/.visor.tests.yaml.
+Milestone 10 — Docs, examples, and migration (0.5 week) — DONE 2026-01-28
+- Update README to link the RFC and defaults/visor.tests.yaml.
 - Document built-in fixtures catalog and examples.
 - Migration note: how to move from embedded tests and from `returns` to new mocks.
 - Document `depends_on` ANY‑OF (pipe) groups with examples (done).
@@ -650,7 +651,7 @@ Success Metrics
 
 ## Compatibility & Migration
 
-- Tests moved from `defaults/.visor.yaml` into `defaults/.visor.tests.yaml` with `extends: ".visor.yaml"`.
+- Tests moved from `defaults/.visor.yaml` into `defaults/visor.tests.yaml` with `extends: ".visor.yaml"`.
 - Old `mocks.*.returns` is replaced by direct values (object/array/string).
 - You no longer need `run: steps` in tests; cases are integration‑driven by `event + fixture`.
 - `no_other_calls` is unnecessary with strict mode; it’s implied and enforced.
@@ -671,7 +672,7 @@ Success Metrics
 
 ## Appendix: Example Suite
 
-See `defaults/.visor.tests.yaml` in the repo for a complete, multi‑event example covering:
+See `defaults/visor.tests.yaml` in the repo for a complete, multi‑event example covering:
 - PR opened → overview + labels
 - Standard PR comment → no action
 - `/visor` comment → reply

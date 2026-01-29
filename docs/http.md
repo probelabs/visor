@@ -39,6 +39,8 @@ Note: The HTTP server is automatically disabled when running in GitHub Actions t
 
 ### Check Types for HTTP Integration
 
+> **Important:** HTTP steps that interact with external services should declare `criticality: external` and include `assume`/`guarantee` contracts for safety. See [Criticality Modes](./guides/criticality-modes.md) for details.
+
 #### 1. HTTP Input (Webhook Receiver)
 Receive data from configured webhook endpoints:
 
@@ -46,6 +48,9 @@ Receive data from configured webhook endpoints:
 steps:
   github-webhook:
     type: http_input
+    criticality: external  # Receives from external system
+    assume: "true"         # Precondition guard (required for critical steps)
+    schema: plain          # Output contract
     endpoint: "/webhook/github"
     on: [webhook_received]
     transform: |
@@ -55,6 +60,15 @@ steps:
       }
 ```
 
+**HTTP Input Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `endpoint` | Webhook endpoint path (must match http_server endpoints) | Required |
+| `on` | Event triggers (typically `[webhook_received]`) | - |
+| `transform` | Liquid template to transform received webhook data | - |
+| `group` | Grouping category for the step | - |
+
 #### 2. HTTP Output (Send Data)
 Send check results to external services:
 
@@ -62,18 +76,33 @@ Send check results to external services:
 steps:
   notify-external:
     type: http
+    criticality: external  # Sends to external system
+    assume: "outputs['security-check']"  # Only run if dependency succeeded
+    schema: plain
     depends_on: [security-check]
     url: "https://api.example.com/notify"
     method: POST
     headers:
       Content-Type: "application/json"
       Authorization: "Bearer ${API_TOKEN}"
+    timeout: 30000  # Optional timeout in milliseconds (default: 30000)
     body: |
       {
         "results": {{ outputs['security-check'] | json }},
         "timestamp": "{{ 'now' | date: '%Y-%m-%d %H:%M:%S' }}"
       }
 ```
+
+**HTTP Output Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `url` | Target URL | Required |
+| `body` | Request body template (Liquid) | Required |
+| `method` | HTTP method | POST |
+| `headers` | Request headers (supports env var substitution) | {} |
+| `timeout` | Request timeout in milliseconds | 30000 |
+| `metadata` | Additional metadata available in templates | {} |
 
 #### 3. HTTP Client (Fetch Data)
 Fetch data from external APIs:
@@ -82,15 +111,57 @@ Fetch data from external APIs:
 steps:
   fetch-config:
     type: http_client
+    criticality: external  # Fetches from external system
+    assume: "env.API_TOKEN"  # Require API token to be set
+    schema: plain
     url: "https://api.example.com/config"
     method: GET
     headers:
       Authorization: "Bearer ${API_TOKEN}"
+    timeout: 30000  # Optional timeout in milliseconds (default: 30000)
     transform: |
       {
         "settings": {{ response.data | json }},
         "fetched_at": "{{ 'now' | date: '%Y-%m-%d' }}"
       }
+```
+
+**HTTP Client Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `url` | Target URL (supports Liquid templates and env vars) | Required |
+| `method` | HTTP method (GET, POST, PUT, DELETE, etc.) | GET |
+| `headers` | Request headers (supports env var substitution) | {} |
+| `body` | Request body for POST/PUT (supports Liquid templates) | - |
+| `timeout` | Request timeout in milliseconds | 30000 |
+| `transform` | Liquid template to transform response | - |
+| `transform_js` | JavaScript expression to transform response | - |
+| `output_file` | Download response to file instead of returning data | - |
+| `skip_if_exists` | Skip download if file exists (caching) | true |
+
+**File Download Example:**
+
+```yaml
+steps:
+  download-artifact:
+    type: http_client
+    url: "https://example.com/artifacts/{{ pr.number }}.zip"
+    output_file: "./downloads/artifact.zip"
+    skip_if_exists: true  # Use cached file if exists
+```
+
+**JavaScript Transform Example:**
+
+```yaml
+steps:
+  fetch-and-transform:
+    type: http_client
+    url: "https://api.example.com/data"
+    transform_js: |
+      // Access response via 'output' variable
+      const items = output.items || [];
+      return items.filter(i => i.status === 'active');
 ```
 
 #### 4. Log Provider (Debugging & Monitoring)
@@ -102,7 +173,7 @@ steps:
     type: log
     group: debugging
     level: info
-    message: "🚀 Starting code review for PR #{{ pr.number }} by {{ pr.author }}"
+    message: "Starting code review for PR #{{ pr.number }} by {{ pr.author }}"
     include_pr_context: true
     include_dependencies: false
     include_metadata: true
@@ -113,7 +184,7 @@ steps:
     level: debug
     depends_on: [security-check]
     message: |
-      📊 Dependency results summary:
+      Dependency results summary:
       {% if dependencies %}
       - Security check found {{ dependencies['security-check'].issueCount }} issues
       {% else %}
@@ -125,7 +196,31 @@ steps:
     type: log
     group: monitoring
     level: warn
-    message: "⚠️ Large PR detected: {{ pr.totalAdditions }} lines added"
+    message: "Large PR detected: {{ pr.totalAdditions }} lines added"
+```
+
+**Log Provider Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `message` | Log message template (Liquid) | Required |
+| `level` | Log level: `debug`, `info`, `warn`, `error` | info |
+| `group` | Grouping category (e.g., `debugging`, `monitoring`, `chat`) | - |
+| `include_pr_context` | Include PR details in output | true |
+| `include_dependencies` | Include dependency results in output | true |
+| `include_metadata` | Include execution metadata in output | true |
+
+**Chat Group Example:**
+
+When `group: chat` is set, the log provider exposes a structured `output.text` field for chat-style integrations:
+
+```yaml
+steps:
+  chat-response:
+    type: log
+    group: chat
+    level: info
+    message: "Analysis complete for PR #{{ pr.number }}"
 ```
 
 ### Cron Scheduling
@@ -195,6 +290,10 @@ auth:
   type: basic
   username: "${HTTP_USERNAME}"
   password: "${HTTP_PASSWORD}"
+
+# No Authentication (not recommended for production)
+auth:
+  type: none
 ```
 
 #### HMAC Authentication Details

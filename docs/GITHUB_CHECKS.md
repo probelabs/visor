@@ -1,13 +1,13 @@
 # GitHub Checks API Integration
 
-Visor now supports GitHub Checks API integration, allowing each configured check to appear as a separate check run in the GitHub PR interface with proper status reporting and issue annotations.
+Visor supports GitHub Checks API integration, allowing each configured check to appear as a separate check run in the GitHub PR interface with proper status reporting and issue annotations.
 
 ## Features
 
 - **Individual Check Runs**: Each configured check appears as a separate GitHub check run
 - **Real-time Status Updates**: Check runs show "in progress" while executing and complete with success/failure
 - **Issue Annotations**: Issues are displayed as inline annotations on the PR files
-- **Failure Conditions**: Support for custom failure conditions using simple expressions
+- **Failure Conditions**: Support for custom failure conditions using `fail_if` expressions (see [Fail If](fail-if.md))
 - **Configurable**: Can be enabled/disabled via action inputs or configuration
 - **Permission Handling**: Gracefully handles insufficient permissions with helpful error messages
 
@@ -58,13 +58,20 @@ fail_if: "criticalIssues > 0"
 
 ## Failure Conditions
 
-Use simple expressions to define when checks should fail:
+Use `fail_if` expressions to define when checks should fail. For comprehensive documentation, see [Fail If](fail-if.md).
 
-### Available Variables
+### Quick Reference
+
+**Primary context variables:**
+- `output`: The current check's structured output (includes `issues` array and provider-specific fields)
+- `outputs`: Map of dependency outputs keyed by check name
+
+**Legacy variables (backward compatibility):**
 - `totalIssues`: Total number of issues found
 - `criticalIssues`: Number of critical severity issues
 - `errorIssues`: Number of error severity issues
 - `warningIssues`: Number of warning severity issues
+- `infoIssues`: Number of info severity issues
 
 ### Examples
 ```yaml
@@ -72,6 +79,7 @@ fail_if: "criticalIssues > 0"           # Fail if any critical issues
 fail_if: "errorIssues > 5"             # Fail if more than 5 errors
 fail_if: "totalIssues > 10"            # Fail if more than 10 total issues
 fail_if: "criticalIssues + errorIssues > 3"  # Fail if critical + error > 3
+fail_if: "output.error"                 # Fail if output contains error flag
 ```
 
 ## GitHub Permissions
@@ -278,3 +286,9 @@ If you're currently using Visor with only PR comments:
 4. **Test in staging**: Verify checks appear correctly before production use
 
 The integration is designed to be backward-compatible - existing configurations continue to work with the addition of GitHub checks.
+
+## Related Documentation
+
+- [Fail If](fail-if.md) - Comprehensive guide to failure condition expressions
+- [Action Reference](action-reference.md) - Full GitHub Action inputs and outputs reference
+- [Troubleshooting](troubleshooting.md) - Common issues and solutions

@@ -25,14 +25,16 @@ The previous behavior de‑duplicated a step when re‑routed in the same event,
 - Skip static `on_success.goto` chains when the target produced fatal issues (including `fail_if`).
 - For `origin='on_fail'`, schedule only direct dependents of the failed target; skip dependents when any direct dep has fatal issues.
 
-4) One‑shot opt‑in
-- `tags: [one_shot]` prevents a terminal step (e.g., `finish`) from running more than once per grouped run.
+4) One‑shot opt‑in (NOT YET IMPLEMENTED)
+- `tags: [one_shot]` would prevent a terminal step (e.g., `finish`) from running more than once per grouped run.
+- Status: Planned but not yet implemented in codebase.
 
 5) Test‑visible history
 - `executeChecks` now attaches `reviewSummary.history` with a safe snapshot of per‑step outputs history for deterministic testing (no I/O).
 
 6) Task‑refinement agent (manual‑only)
 - `defaults/task-refinement.yaml` uses `ask` → `refine` loop with `fail_if` and `on_fail/on_success` only; no `repeatable`, no `goto_js`, no `schedule`.
+- The `finish` step uses an `if` guard to prevent re-execution (workaround for unimplemented `one_shot` tag).
 - Embedded tests: one‑pass and multi‑turn pass locally.
 
 ## Removed

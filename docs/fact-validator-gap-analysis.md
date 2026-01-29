@@ -1,7 +1,18 @@
 # on_finish Hook - Implementation Status
 
+> **Note (2026-01-28)**: This is a **historical planning document** from October 2025.
+> The `on_finish` feature has been implemented but the codebase has since been refactored.
+> Some file paths and line numbers in this document are outdated.
+>
+> **Current implementation locations:**
+> - Core logic: `src/engine/on-finish/orchestrator.ts`, `src/engine/on-finish/utils.ts`
+> - State machine integration: `src/state-machine/states/level-dispatch.ts`, `src/state-machine/dispatch/foreach-processor.ts`
+> - Tests: `tests/engine/foreach-on-finish.engine.test.ts`, `tests/e2e/on-finish-*.test.ts`
+>
+> For current usage documentation, see `docs/failure-routing.md` and `docs/foreach-dependency-propagation.md`.
+
 **Last Updated:** 2025-10-16
-**Status:** ✅ FEATURE COMPLETE (Infrastructure Ready)
+**Status:** ✅ FEATURE COMPLETE (Infrastructure Ready) - See note above for current locations
 
 ## What Was Built
 

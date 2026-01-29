@@ -12,7 +12,7 @@ steps:
     type: mcp
     transport: stdio
     command: npx
-    args: ["-y", "@semgrep/mcp"]
+    command_args: ["-y", "@semgrep/mcp"]
     method: scan
     methodArgs:
       paths: "{{ files | map: 'filename' | json }}"
@@ -27,7 +27,7 @@ steps:
     type: mcp
     transport: stdio
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-github"]
+    command_args: ["-y", "@modelcontextprotocol/server-github"]
     method: search_issues
     methodArgs:
       query: "{{ pr.title | split: ' ' | slice: 0, 3 | join: ' ' }}"
@@ -54,7 +54,7 @@ steps:
     type: mcp
     transport: stdio
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-puppeteer"]
+    command_args: ["-y", "@modelcontextprotocol/server-puppeteer"]
     method: navigate
     # Only run on markdown/doc files
     if: "files.some(f => f.filename.endsWith('.md'))"
@@ -85,7 +85,7 @@ steps:
     type: mcp
     transport: stdio
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-postgres"]
+    command_args: ["-y", "@modelcontextprotocol/server-postgres"]
     # Only run if SQL files changed
     if: "files.some(f => f.filename.includes('migrations/'))"
     method: query
@@ -114,7 +114,7 @@ steps:
     type: mcp
     transport: stdio
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+    command_args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
     method: read_file
     forEach:
       items: "{{ files | map: 'filename' | json }}"
@@ -153,7 +153,7 @@ steps:
     depends_on: [count-critical-issues]
     transport: stdio
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-slack"]
+    command_args: ["-y", "@modelcontextprotocol/server-slack"]
     # Only notify if critical issues found
     if: "outputs['semgrep-security-scan']?.issues?.filter(i => i.severity === 'error').length > 0"
     method: post_message
@@ -171,7 +171,7 @@ steps:
     type: mcp
     transport: stdio
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-git", "."]
+    command_args: ["-y", "@modelcontextprotocol/server-git", "."]
     method: log
     # Only check if sensitive files changed
     if: "files.some(f => f.filename.match(/(env|secret|key|password)/))"
@@ -199,7 +199,7 @@ steps:
     type: mcp
     transport: stdio
     command: npx
-    args: ["-y", "@mendable/firecrawl-mcp"]
+    command_args: ["-y", "@mendable/firecrawl-mcp"]
     # Only run on API-related changes
     if: "files.some(f => f.filename.includes('api/') || f.filename.includes('swagger'))"
     method: scrape
@@ -227,7 +227,7 @@ steps:
     type: mcp
     transport: stdio
     command: npx
-    args: ["-y", "@atlassian/mcp-server-jira"]
+    command_args: ["-y", "@atlassian/mcp-server-jira"]
     method: get_issue
     argsTransform: |
       {
@@ -268,7 +268,7 @@ steps:
     type: mcp
     transport: stdio
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-brave-search"]
+    command_args: ["-y", "@modelcontextprotocol/server-brave-search"]
     # Only run if package files changed
     if: "files.some(f => f.filename.match(/package\\.json|requirements\\.txt|go\\.mod/))"
     method: search

@@ -13,6 +13,7 @@ steps:
     type: git-checkout
     ref: "{{ pr.head }}"
     criticality: internal
+    assume: "pr.head"  # Ensure PR head ref exists before checkout
 
   # Run tests on the checked out code
   test:
@@ -21,6 +22,7 @@ steps:
     exec: npm test
     working_directory: "{{ outputs.checkout.path }}"
     assume: "outputs.checkout.success"
+    schema: plain
     criticality: internal
 
   # Build the project
@@ -29,4 +31,6 @@ steps:
     depends_on: [test]
     exec: npm run build
     working_directory: "{{ outputs.checkout.path }}"
+    assume: "outputs.test"
+    schema: plain
     criticality: internal

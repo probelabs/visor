@@ -17,12 +17,14 @@ steps:
     type: git-checkout
     ref: "{{ pr.head }}"
     criticality: internal
+    assume: "pr.head"  # Ensure PR head ref exists
 
   # Checkout PR base branch
   checkout-base:
     type: git-checkout
     ref: "{{ pr.base }}"
     criticality: internal
+    assume: "pr.base"  # Ensure PR base ref exists
 
   # Run tests on head branch
   test-head:
@@ -31,6 +33,8 @@ steps:
     exec: npm test
     working_directory: "{{ outputs['checkout-head'].path }}"
     continue_on_failure: true
+    assume: "outputs['checkout-head']"
+    schema: plain
     criticality: internal
 
   # Run tests on base branch
@@ -40,6 +44,8 @@ steps:
     exec: npm test
     working_directory: "{{ outputs['checkout-base'].path }}"
     continue_on_failure: true
+    assume: "outputs['checkout-base']"
+    schema: plain
     criticality: internal
 
   # Compare results

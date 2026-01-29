@@ -5,7 +5,7 @@ This doc clarifies how `forEach` output is validated, how it affects dependent c
 ## Valid and invalid outputs
 
 - `transform_js` or provider output must resolve to a value. If it is `undefined`, the engine emits an error:
-  - Issue: `forEach/undefined_output`
+  - Issue: `forEach/execution_error`
   - Effect: direct dependents are skipped (`dependency_failed`).
 - If the value is an array, the engine iterates items.
 - If the value is a string, the engine tries to JSON.parse it; if it parses to an array, that array is used; otherwise it treats the string as a single item.
@@ -19,7 +19,7 @@ This doc clarifies how `forEach` output is validated, how it affects dependent c
 forEach: no items from "fetch-tickets", skipping check...
 ```
 
-- `undefined`: invalid — treated as a configuration/transform error. The engine emits a `forEach/undefined_output` issue and skips direct dependents.
+- `undefined`: invalid — treated as a configuration/transform error. The engine emits a `forEach/execution_error` issue and skips direct dependents.
 
 ## Example
 
@@ -38,7 +38,7 @@ steps:
 ```
 
 - If `tickets` is `[]`, `analyze-ticket` is effectively skipped (no per‑item execution).
-- If `transform_js` returns `undefined`, the engine raises `forEach/undefined_output` and `analyze-ticket` is skipped due to a failed dependency.
+- If `transform_js` returns `undefined`, the engine raises `forEach/execution_error` and `analyze-ticket` is skipped due to a failed dependency.
 
 ## Output Access and History with forEach
 
@@ -62,7 +62,8 @@ steps:
     depends_on: [process-items]
     content: |
       // Access all forEach iteration results
-      const allProcessed = outputs.history['process-items'];  # or outputs_history['process-items']
+      // Also available as: outputs_history['process-items']
+      const allProcessed = outputs.history['process-items'];
       return { totalProcessed: allProcessed.length };
 ```
 
@@ -168,25 +169,40 @@ checks:
     group: '...'
   },
   attempt: 1,           // Attempt number for this check
-  loop: 2,              // Loop number in routing
+  loop: 0,              // Loop number in routing (starts at 0)
   outputs: {
     'extract-facts': [...],     // The forEach array
     'validate-fact': [...],     // Latest dependent results
+    history: {...}              // Same as outputs_history
   },
-  outputs.history: {
+  outputs_history: {
     'extract-facts': [[...], ...],  // Historical forEach outputs
     'validate-fact': [[...], ...],  // ALL iteration results
   },
-  forEach: {
-    total: 3,           // Number of items processed
-    successful: 3,      // Successful iterations
-    failed: 0,          // Failed iterations
-    items: [...]        // The forEach items array
+  outputs_raw: {
+    'extract-facts': [...],     // Raw outputs without history
   },
-  memory,               // Memory access functions
-  pr,                   // PR metadata
+  forEach: {
+    items: 3            // Number of items in the forEach array
+  },
+  memory: {             // Memory access functions
+    get: (key, ns?) => value,
+    has: (key, ns?) => boolean,
+    getAll: (ns?) => object,
+    set: (key, value, ns?) => void,
+    clear: (ns?) => void,
+    increment: (key, amount?, ns?) => number
+  },
+  pr: {                 // PR metadata
+    number: 123,
+    title: '...',
+    author: '...',
+    branch: '...',
+    base: '...'
+  },
   files,                // Changed files
-  env                   // Environment variables
+  env,                  // Environment variables
+  event: { name: '...' } // Event that triggered execution
 }
 ```
 
@@ -256,7 +272,7 @@ checks:
         log('Validation complete:', {
           allValid,
           attempt,
-          forEach: forEach.total + ' facts checked'
+          items: forEach.items + ' facts checked'
         });
 
         if (allValid) {
@@ -392,7 +408,7 @@ This is the **only way** to aggregate across multiple dependent checks after for
 2. **Use outputs.history**: Access all iteration results with `outputs.history['check-name']`
 3. **Store in Memory**: Pass aggregated state to `goto_js` and downstream checks via memory
 4. **Limit Retries**: Track attempt counts in memory to prevent infinite loops
-5. **Handle Empty Arrays**: Check `forEach.total` or array length before processing
+5. **Handle Empty Arrays**: Check `forEach.items` or array length before processing
 6. **Log Decisions**: Use `log()` in JavaScript to debug routing decisions
 7. **Check Multiple Dependents**: Perfect for scenarios with multiple dependent checks
 
@@ -447,6 +463,7 @@ const results = outputs.history['validate-fact'];
 - [Dependencies](./dependencies.md) - `on_finish` with forEach propagation patterns
 - [Output History](./output-history.md) - Accessing historical outputs across iterations
 - [examples/fact-validator.yaml](../examples/fact-validator.yaml) - Complete working example
+
 ## Fan-out Control for Routing (Phase 5)
 
 When routing from a forEach context, you can opt into per‑item runs without writing manual loops:

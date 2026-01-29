@@ -1160,8 +1160,8 @@ ${bodyWithReturn}
       let ruleId: string;
 
       if (isTimeout) {
-        const timeoutSeconds = (config.timeout as number) || 60;
-        detailedMessage = `Command execution timed out after ${timeoutSeconds} seconds`;
+        const timeoutMs = (config.timeout as number) || 60000;
+        detailedMessage = `Command execution timed out after ${timeoutMs} milliseconds`;
         if (stderrOutput) {
           detailedMessage += `\n\nStderr output:\n${stderrOutput}`;
         }
@@ -1394,7 +1394,7 @@ ${bodyWithReturn}
       // Quote unquoted keys: {key: ...} or ,key: ...
       s = s.replace(/([\{,]\s*)([A-Za-z_][A-Za-z0-9_-]*)\s*:/g, '$1"$2":');
       // Quote bareword values except true/false/null and numbers
-      s = s.replace(/:\s*([A-Za-z_][A-Za-z0-9_-]*)\s*(?=[,}])/g, (m, word) => {
+      s = s.replace(/:\s*([A-Za-z_][A-Za-z0-9_-]*)\s*(?=[,}])/g, (_match, word) => {
         const lw = String(word).toLowerCase();
         if (lw === 'true' || lw === 'false' || lw === 'null') return `:${lw}`;
         return `:"${word}"`;
@@ -1418,9 +1418,6 @@ ${bodyWithReturn}
 
   private getSafeEnvironmentVariables(): Record<string, string> {
     const safeVars: Record<string, string> = {};
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const allowedPrefixes: string[] = []; // replaced by buildSandboxEnv
-
     const { buildSandboxEnv } = require('../utils/env-exposure');
     const merged = buildSandboxEnv(process.env);
     for (const [key, value] of Object.entries(merged)) {

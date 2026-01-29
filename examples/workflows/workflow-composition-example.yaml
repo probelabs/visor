@@ -24,6 +24,8 @@ checks:
   use_calculator:
     type: workflow
     workflow: calculator
+    criticality: internal
+    assume: "outputs.parent_state_setup"
     depends_on: [parent_state_setup]
     args:
       operation: multiply
@@ -80,6 +82,8 @@ checks:
   use_calculator_again:
     type: workflow
     workflow: calculator
+    criticality: internal
+    assume: "outputs.test_state_isolation"
     depends_on: [test_state_isolation]
     args:
       operation: add

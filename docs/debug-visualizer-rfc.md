@@ -399,7 +399,6 @@ cat output/traces/run-*.ndjson | jq '.attributes | select(."visor.check.input.co
 - ✅ `tests/unit/telemetry/state-capture.test.ts` (246 lines)
 - ✅ `tests/e2e/state-capture-e2e.test.ts` (195 lines)
 - ✅ Integration in 3 providers + execution engine
-- ✅ [MILESTONE1-COMPLETE.md](../MILESTONE1-COMPLETE.md) - Full summary
 
 ---
 
@@ -562,8 +561,6 @@ open output/traces/index.html
 - ✅ `src/telemetry/opentelemetry.ts` (updated) - Debug exporter support
 - ✅ `src/debug-visualizer/ui/index.html` (updated) - WebSocket client
 - ✅ `package.json` (updated) - Dependencies and build script
-- ✅ `MILESTONE4-INTEGRATION-GUIDE.md` - Integration documentation
-- ✅ `MILESTONE4-COMPLETE.md` - Completion summary
 
 **Dependencies Installed**:
 - ✅ ws@^8.18.3
@@ -602,14 +599,18 @@ open "output/traces/index.html?trace=run-2025-10-17.ndjson"
 # 7. Arrow keys step forward/backward
 ```
 
-**Success Criteria**:
-- [ ] Timeline scrubber updates graph to show state at selected time
-- [ ] Play button animates execution from start to finish
-- [ ] Can pause at any point and inspect state
-- [ ] Diff view highlights changes between timepoints
-- [ ] State snapshot markers are clickable
-- [ ] Keyboard shortcuts work correctly
-- [ ] Performance: smooth scrubbing with 1000+ spans
+**Success Criteria**: ✅ ALL MET
+- [x] Timeline scrubber updates graph to show state at selected time
+- [x] Play button animates execution from start to finish
+- [x] Can pause at any point and inspect state
+- [x] Diff view highlights changes between timepoints
+- [x] State snapshot markers are clickable
+- [x] Keyboard shortcuts work correctly
+- [x] Performance: smooth scrubbing with 1000+ spans
+
+**Deliverables**:
+- ✅ `src/debug-visualizer/ui/index.html` (updated) - Timeline component, styles, and JavaScript engine
+- ✅ `tests/unit/debug-visualizer/time-travel.test.ts` - 17 comprehensive unit tests
 
 ---
 
@@ -662,10 +663,10 @@ The debug visualizer is complete when:
 2. [x] **Data Layer**: Can parse traces and rebuild execution tree ✅ M2 DONE
 3. [x] **Visualization**: Can see execution graph in browser ✅ M3 DONE
 4. [x] **Real-time**: Can stream live execution ✅ M4 DONE
-5. [ ] **Time-Travel**: Can scrub timeline and see historical state (M5)
+5. [x] **Time-Travel**: Can scrub timeline and see historical state ✅ M5 DONE
 6. [ ] **Production**: Polished UI with docs and tests (M6)
 
-### Current Status: 🟢 Milestone 4 of 6 Complete (67%)
+### Current Status: 🟢 Milestone 5 of 6 Complete (83%)
 
 ## Open Questions
 

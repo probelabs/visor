@@ -144,7 +144,7 @@ visor --tags github
 visor --tags github,security
 ```
 
-In the test runner, you can mirror this behavior with the tests DSL:
+In the test runner, you can mirror this behavior with the tests DSL (see [Testing DSL Reference](./testing/dsl-reference.md)):
 
 ```yaml
 # defaults/.visor.tests.yaml
@@ -156,26 +156,40 @@ tests:
 
 #### Environment-Specific Execution
 
+Create separate config files for each environment:
+
 ```yaml
-# Development environment - fast feedback
-development:
-  extends: .visor.yaml
-  tag_filter:
-    include: ["local", "fast"]
-    exclude: ["experimental"]
+# .visor.dev.yaml - Development environment (fast feedback)
+version: "1.0"
+extends: .visor.yaml
+tag_filter:
+  include: ["local", "fast"]
+  exclude: ["experimental"]
+```
 
-# Staging environment - balanced
-staging:
-  extends: .visor.yaml
-  tag_filter:
-    include: ["remote", "security", "performance"]
-    exclude: ["experimental"]
+```yaml
+# .visor.staging.yaml - Staging environment (balanced)
+version: "1.0"
+extends: .visor.yaml
+tag_filter:
+  include: ["remote", "security", "performance"]
+  exclude: ["experimental"]
+```
 
-# Production environment - comprehensive
-production:
-  extends: .visor.yaml
-  tag_filter:
-    include: ["remote", "comprehensive", "critical"]
+```yaml
+# .visor.prod.yaml - Production environment (comprehensive)
+version: "1.0"
+extends: .visor.yaml
+tag_filter:
+  include: ["remote", "comprehensive", "critical"]
+```
+
+Then use the appropriate config file:
+
+```bash
+visor --config .visor.dev.yaml      # Development
+visor --config .visor.staging.yaml  # Staging
+visor --config .visor.prod.yaml     # Production
 ```
 
 #### Multi-Stage Pipeline
@@ -248,6 +262,24 @@ steps:
 - Examples: `local`, `test-env`, `feature_flag`, `v2`
 - Invalid: `-invalid`, `@special`, `tag with spaces`
 
+### SDK Usage
+
+Tag filtering is also available when using Visor programmatically via the SDK:
+
+```typescript
+import { run } from '@probelabs/visor';
+
+const result = await run({
+  config: './visor.yaml',
+  tagFilter: {
+    include: ['local', 'fast'],
+    exclude: ['experimental']
+  }
+});
+```
+
+See [SDK Documentation](./sdk.md) for complete API reference.
+
 ### Best Practices
 
 1. Use consistent naming conventions across your organization
@@ -256,3 +288,11 @@ steps:
 4. Avoid over-tagging to reduce confusion
 5. Use tag combinations for fine-grained control
 6. Test tag filters before deploying broadly
+
+### Related Documentation
+
+- [Configuration](./configuration.md) - Full configuration reference
+- [CLI Commands](./commands.md) - CLI flag reference including `--tags` and `--exclude-tags`
+- [GitHub Action Reference](./action-reference.md) - GitHub Action inputs for tag filtering
+- [Testing DSL Reference](./testing/dsl-reference.md) - Tag filtering in test suites
+- [SDK Documentation](./sdk.md) - Programmatic tag filtering

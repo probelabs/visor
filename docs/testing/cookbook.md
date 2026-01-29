@@ -86,70 +86,93 @@ Copy‑pasteable recipes for common scenarios.
   fixture: gh.issue_comment.visor_help
   env: { ENABLE_FACT_VALIDATION: "true" }
   mocks:
-    comment-assistant: { text: "We rely on defaults/.visor.yaml line 11 for max_parallelism=4.", intent: comment_reply }
+    comment-assistant: { text: "We rely on defaults/visor.yaml line 11 for max_parallelism=4.", intent: comment_reply }
     extract-facts:
       - { id: f1, category: Configuration, claim: "max_parallelism defaults to 4", verifiable: true }
     validate-fact[]:
-      - { fact_id: f1, is_valid: true, confidence: high, evidence: "defaults/.visor.yaml:11" }
+      - { fact_id: f1, claim: "max_parallelism defaults to 4", is_valid: true, confidence: high, evidence: "defaults/visor.yaml:11" }
   expect:
     calls:
+      - step: comment-assistant
+        exactly: 1
       - step: extract-facts
         exactly: 1
       - step: validate-fact
         at_least: 1
-      - step: aggregate-validations
-        exactly: 1
 ```
 
 ## 6) Facts invalid (correction reply)
+
+When a fact is invalid, the correction flow triggers a re-run. Due to goto forward-running dependents, `extract-facts` and `validate-fact` also run again.
 
 ```yaml
 - name: facts-invalid
   event: issue_comment
   fixture: gh.issue_comment.visor_help
   env: { ENABLE_FACT_VALIDATION: "true" }
+  routing:
+    max_loops: 1
   mocks:
-    comment-assistant: { text: "We rely on defaults/.visor.yaml line 11 for max_parallelism=4.", intent: comment_reply }
+    comment-assistant: { text: "We rely on defaults/visor.yaml line 11 for max_parallelism=4.", intent: comment_reply }
     extract-facts:
       - { id: f1, category: Configuration, claim: "max_parallelism defaults to 4", verifiable: true }
     validate-fact[]:
-      - { fact_id: f1, is_valid: false, confidence: high, evidence: "defaults/.visor.yaml:11", correction: "max_parallelism defaults to 3" }
+      - { fact_id: f1, claim: "max_parallelism defaults to 4", is_valid: false, confidence: high, evidence: "defaults/visor.yaml:11 does not set 4", correction: "max_parallelism defaults to 3" }
   expect:
     calls:
       - step: comment-assistant
         exactly: 2
-      - step: aggregate-validations
+      - step: extract-facts
+        exactly: 2
+      - step: validate-fact
+        exactly: 2
+      - step: aggregate
         exactly: 1
-    prompts:
-      - step: comment-assistant
-        index: last
-        contains: ["<previous_response>", "Correction: max_parallelism defaults to 3"]
+    outputs:
+      - step: validate-fact
+        where: { path: fact_id, equals: f1 }
+        path: correction
+        equals: "max_parallelism defaults to 3"
 ```
 
 ## 7) Two facts (one invalid)
+
+With two facts extracted where only one is invalid, the correction pass runs for the invalid fact. Due to goto forward-running dependents, `extract-facts` and `validate-fact` run again on retry.
 
 ```yaml
 - name: facts-two-items
   event: issue_comment
   fixture: gh.issue_comment.visor_help
   env: { ENABLE_FACT_VALIDATION: "true" }
+  routing:
+    max_loops: 1
   mocks:
-    comment-assistant: { text: "We rely on defaults/.visor.yaml for concurrency defaults.", intent: comment_reply }
+    comment-assistant: { text: "We rely on defaults/visor.yaml for concurrency defaults.", intent: comment_reply }
     extract-facts:
       - { id: f1, category: Configuration, claim: "max_parallelism defaults to 4", verifiable: true }
       - { id: f2, category: Feature,       claim: "Fast mode is enabled by default", verifiable: true }
     validate-fact[]:
-      - { fact_id: f1, is_valid: false, confidence: high, evidence: "defaults/.visor.yaml:11", correction: "max_parallelism defaults to 3" }
-      - { fact_id: f2, is_valid: true,  confidence: high, evidence: "src/config.ts:FAST_MODE=true" }
+      - { fact_id: f1, claim: "max_parallelism defaults to 4", is_valid: false, confidence: high, evidence: "defaults/visor.yaml:11", correction: "max_parallelism defaults to 3" }
+      - { fact_id: f2, claim: "Fast mode is enabled by default", is_valid: true,  confidence: high, evidence: "src/config.ts:FAST_MODE=true" }
   expect:
     calls:
-      - step: validate-fact
-        exactly: 2
-    prompts:
       - step: comment-assistant
-        index: last
-        contains: ["max_parallelism defaults to 4", "Correction: max_parallelism defaults to 3"]
-        not_contains: ["Fast mode is enabled by default"]
+        exactly: 2
+      - step: extract-facts
+        exactly: 2
+      - step: validate-fact
+        exactly: 4
+      - step: aggregate
+        exactly: 1
+    outputs:
+      - step: validate-fact
+        where: { path: fact_id, equals: f1 }
+        path: is_valid
+        equals: false
+      - step: validate-fact
+        where: { path: fact_id, equals: f2 }
+        path: is_valid
+        equals: true
 ```
 
 ## 8) GitHub negative mode
@@ -170,3 +193,13 @@ Copy‑pasteable recipes for common scenarios.
       message_contains: "github/op_failed"
 ```
 
+## Related Documentation
+
+- [Getting Started](./getting-started.md) - Introduction to the test framework
+- [DSL Reference](./dsl-reference.md) - Complete test YAML schema
+- [Assertions](./assertions.md) - Available assertion types
+- [Fixtures and Mocks](./fixtures-and-mocks.md) - Managing test data
+- [Flows](./flows.md) - Multi-stage test flows
+- [CLI](./cli.md) - Test runner command line options
+- [CI Integration](./ci.md) - Running tests in CI pipelines
+- [Troubleshooting](./troubleshooting.md) - Common issues and solutions
