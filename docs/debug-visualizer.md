@@ -5,9 +5,10 @@ The Debug Visualizer is a lightweight HTTP server that streams OpenTelemetry spa
 ## Quick Start
 
 - Start the CLI with the debug server:
-  - `node dist/index.js --config <path/to/.visor.yaml> --mode cli --output json --debug-server --debug-port 3456`
+  - `visor --config <path/to/.visor.yaml> --output json --debug-server --debug-port 3456`
+  - Or using the development build: `node dist/cli-main.js --config <path/to/.visor.yaml> --output json --debug-server --debug-port 3456`
   - The server starts at `http://localhost:3456`. In headless CI, set `VISOR_NOBROWSER=true` to skip auto‑open.
-- Click “Start Execution” in the UI or POST `POST /api/start` (see below) to begin.
+- Click "Start Execution" in the UI or POST `/api/start` (see below) to begin.
 
 ## Control Endpoints
 
@@ -56,6 +57,23 @@ The Debug Visualizer is a lightweight HTTP server that streams OpenTelemetry spa
 }
 ```
 
+### Config shape (`GET /api/config`)
+```json
+{
+  "config": { /* loaded configuration object */ },
+  "timestamp": "2025-01-01T00:00:00.000Z"
+}
+```
+
+### Results shape (`GET /api/results`)
+```json
+{
+  "results": { /* check results by check name */ },
+  "timestamp": "2025-01-01T00:00:00.000Z",
+  "executionState": "stopped"
+}
+```
+
 ## Pause/Stop Semantics
 
 The engine checks a “pause gate” at key scheduling points:
@@ -81,14 +99,14 @@ Effects:
 ## CLI Examples
 
 - Start server headless on port 40000 and begin automatically from script:
-  - `VISOR_NOBROWSER=true node dist/index.js --config .visor.yaml --mode cli --output json --debug-server --debug-port 40000`
+  - `VISOR_NOBROWSER=true visor --config .visor.yaml --output json --debug-server --debug-port 40000`
   - Then: `curl -sSf -X POST http://localhost:40000/api/start`.
 - Pause/Resume/Stop from a terminal:
   - `curl -sSf -X POST http://localhost:40000/api/pause`
   - `curl -sSf -X POST http://localhost:40000/api/resume`
   - `curl -sSf -X POST http://localhost:40000/api/stop`
 - Inspect spans/status:
-  - `curl -sSf http://localhost:40000/api/status | jq`  
+  - `curl -sSf http://localhost:40000/api/status | jq`
   - `curl -sSf http://localhost:40000/api/spans | jq '.total'`
 
 ## Spans & State Capture
@@ -109,6 +127,13 @@ You can parse NDJSON via the built‑in trace reader (`src/debug-visualizer/trac
 
 ## Troubleshooting
 
-- Server started but CLI doesn’t proceed: send `POST /api/start` or set a start timeout with `VISOR_DEBUG_START_TIMEOUT_MS`.
+- Server started but CLI doesn't proceed: send `POST /api/start` or set a start timeout with `VISOR_DEBUG_START_TIMEOUT_MS`.
 - No spans in file: confirm `VISOR_TELEMETRY_ENABLED=true` and `VISOR_TELEMETRY_SINK=file`. Check `VISOR_TRACE_DIR` exists.
 - Duplicate OpenTelemetry context warning: benign; initialization is guarded, but concurrent runs can still log a warning.
+
+## Related Documentation
+
+- [Debugging Guide](./debugging.md) — Comprehensive debugging techniques and tools
+- [Telemetry Setup](./telemetry-setup.md) — Configuring OpenTelemetry tracing and metrics
+- [Engine Pause/Resume RFC](./engine-pause-resume-rfc.md) — Design rationale for pause/resume semantics
+- [Debug Visualizer RFC](./debug-visualizer-rfc.md) — Original design specification

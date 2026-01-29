@@ -1,7 +1,7 @@
 # Snapshot + Scope Execution Model — Plan & Tracker
 
-Status: In progress
-Last updated: 2025-10-20
+Status: Nearly Complete (Phases 0-4 done; Phase 5 pending)
+Last updated: 2025-11
 
 This document captures an incremental plan to simplify Visor’s execution model using snapshot isolation (MVCC‑style) and scope‑aware output resolution, while preserving today’s routing semantics and recently added `on_finish` behavior (PR #146).
 
@@ -13,7 +13,7 @@ It also lists a set of quick wins we can land immediately to polish PR #146 and 
 
 Priority scale: P0 = must‑have next; P1 = important; P2 = nice‑to‑have.
 
-Overall progress: ~85% complete (Phases 0–3 done; Phases 2 and 4 now complete; Phase 5 pending).
+Overall progress: ~90% complete (Phases 0-4 done; Phase 5 pending).
 
 | Phase | Priority | Status | % Complete | Notes |
 |---|---|---:|---:|---|
@@ -176,10 +176,11 @@ Acceptance
 Target: by 2025-11-01
 
 Phase 4 — Remove Per‑Iteration Map Cloning
-- [ ] Delete special “override resultsMap per iteration” code; rely on `ContextView` unwrapping.
+- [x] Delete special "override resultsMap per iteration" code; rely on `ContextView` unwrapping.
+- [x] Refactored to state-machine-execution-engine.ts with ScopePath + snapshot-based visibility in foreach-processor.ts
 
 Acceptance
-- [ ] Unit: forEach dependent checks still see the correct per‑item output.
+- [x] Unit: forEach dependent checks still see the correct per‑item output (verified via snapshot-store tests and routing-integration tests).
 
 Target: by 2025-11-04
 

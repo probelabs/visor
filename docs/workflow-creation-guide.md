@@ -100,6 +100,8 @@ Available events:
 - `issue_opened` - Issue created
 - `issue_comment` - Comment on issue or PR
 - `manual` - CLI execution (no event)
+- `schedule` - Scheduled/cron-triggered execution
+- `webhook_received` - HTTP webhook was received (via http_input provider)
 
 ---
 
@@ -246,7 +248,7 @@ Output structure: `{ text: string, ts: number }`
 
 ### 5. Log Check (`type: log`)
 
-Output messages to the console/log.
+Output messages to the console/log. Useful for debugging workflows and displaying execution information.
 
 ```yaml
 steps:
@@ -261,11 +263,13 @@ steps:
       - {{ item.name }}: {{ item.status }}
       {% endfor %}
 
-    level: info               # info, warn, error, debug
+    level: info               # debug, info, warn, error
     include_pr_context: false
     include_dependencies: false
     include_metadata: false
 ```
+
+Note: The type must be `log` (not `logger`).
 
 ### 6. Script Check (`type: script`)
 
@@ -617,9 +621,62 @@ steps:
     type: ai
     depends_on: [initial-analysis]
     reuse_ai_session: initial-analysis
-    session_mode: clone        # or 'continue'
+    session_mode: clone        # or 'append'
     prompt: "Now look for security issues in what we discussed"
 ```
+
+Session modes:
+- `clone` (default): Copy the conversation history to a new session
+- `append`: Share the conversation history (subsequent messages append to the same session)
+
+### Transform Output (`transform`, `transform_js`)
+
+Transform step outputs before they're consumed by dependent steps:
+
+```yaml
+steps:
+  fetch-data:
+    type: http_client
+    url: "https://api.example.com/data"
+    # Liquid transform
+    transform: |
+      {% assign items = response.data.items %}
+      {{ items | json }}
+    # OR JavaScript transform (alternative)
+    transform_js: |
+      const data = JSON.parse(output);
+      return data.items.filter(i => i.active);
+```
+
+### Init Hook (`on_init`)
+
+Run preprocessing steps before a step executes:
+
+```yaml
+steps:
+  ai-review:
+    type: ai
+    on_init:
+      run:
+        # Invoke a tool to enrich context
+        - tool: fetch-jira
+          with:
+            issue_key: "{{ pr.body | regex_search: '[A-Z]+-[0-9]+' }}"
+          as: jira_context
+        # Or invoke another step
+        - step: enrich-context
+          as: extra_context
+    prompt: |
+      Review the code with this context:
+      JIRA: {{ outputs['jira_context'] | json }}
+```
+
+The `on_init` hook allows:
+- `run`: Array of tool invocations, step invocations, or workflow invocations
+- `run_js`: Dynamic computation of what to run
+- `transitions`: Declarative routing rules
+
+See [on_init Hook RFC](./rfc/on_init-hook.md) for detailed documentation.
 
 ---
 
@@ -1271,4 +1328,45 @@ visor test --list
 
 # Validate tests only
 visor test --validate
+
+# Simulate event
+visor --config workflow.yaml --event pr_opened
 ```
+
+---
+
+## Related Documentation
+
+For more detailed information on specific topics:
+
+### Core Concepts
+- [Configuration Reference](./configuration.md) - Full configuration options
+- [Event Triggers](./event-triggers.md) - Event types and filtering
+- [Dependencies](./dependencies.md) - Dependency patterns and execution order
+- [Failure Routing](./failure-routing.md) - Retry, remediation, and routing
+
+### Providers
+- [AI Configuration](./ai-configuration.md) - AI provider settings
+- [Claude Code](./claude-code.md) - Claude Code provider details
+- [MCP Provider](./mcp-provider.md) - MCP tool integration
+- [Command Provider](./command-provider.md) - Shell command execution
+- [HTTP Provider](./http.md) - HTTP client and webhooks
+- [Git Checkout](./providers/git-checkout.md) - Repository checkout
+- [Memory](./memory.md) - State persistence
+- [Script](./script.md) - JavaScript execution
+
+### Testing
+- [Testing Getting Started](./testing/getting-started.md) - Quick start for testing
+- [Testing DSL Reference](./testing/dsl-reference.md) - Complete test syntax
+- [Fixtures and Mocks](./testing/fixtures-and-mocks.md) - Test data setup
+- [Assertions](./testing/assertions.md) - Assertion syntax
+
+### Advanced Topics
+- [Workflow Style Guide](./guides/workflow-style-guide.md) - Best practices
+- [Criticality Modes](./guides/criticality-modes.md) - Safety levels
+- [Fault Management](./guides/fault-management-and-contracts.md) - Contracts and guards
+- [on_init Hook](./rfc/on_init-hook.md) - Context preprocessing
+- [Output History](./output-history.md) - Accessing historical outputs
+- [Tag Filtering](./tag-filtering.md) - Selective execution
+- [Liquid Templates](./liquid-templates.md) - Template syntax
+- [Debugging](./debugging.md) - Troubleshooting workflows

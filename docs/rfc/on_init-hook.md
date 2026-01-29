@@ -1,9 +1,20 @@
 # RFC: `on_init` Lifecycle Hook for Context Preprocessing
 
-**Status:** Proposal
+**Status:** Implemented
 **Author:** Visor Team
 **Created:** 2024-01-XX
-**Updated:** 2024-01-XX
+**Updated:** 2025-01-28
+
+---
+
+## Implementation Notes
+
+This RFC has been implemented. Key implementation files:
+- Type definitions: `src/types/config.ts` (OnInitConfig, OnInitToolInvocation, etc.)
+- Handler implementation: `src/state-machine/dispatch/on-init-handlers.ts`
+- Integration with execution: `src/state-machine/dispatch/execution-invoker.ts`
+- Tests: `tests/integration/on-init-flow.test.ts`
+- Example: `examples/on-init-import-demo.yaml`
 
 ---
 
@@ -1204,11 +1215,13 @@ on_init:
 
 ## 13. References
 
-- [Existing `on_success` implementation](src/state-machine/states/routing.ts#599)
-- [Existing `on_fail` implementation](src/state-machine/states/routing.ts#816)
-- [Existing `on_finish` implementation](src/state-machine/states/routing.ts#231)
+- [Existing `on_success` implementation](src/state-machine/states/routing.ts) (search for `Process on_success routing`)
+- [Existing `on_fail` implementation](src/state-machine/states/routing.ts) (search for `Process on_fail routing`)
+- [Existing `on_finish` implementation](src/state-machine/states/routing.ts) (search for `Process on_finish routing`)
 - [Workflow provider](src/providers/workflow-check-provider.ts)
 - [Custom tool executor](src/providers/custom-tool-executor.ts)
+- [on_init handler implementation](src/state-machine/dispatch/on-init-handlers.ts)
+- [on_init type definitions](src/types/config.ts) (search for `OnInitConfig`)
 
 ---
 

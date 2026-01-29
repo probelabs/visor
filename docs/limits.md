@@ -9,13 +9,14 @@ This feature protects workflows from accidental infinite loops by capping how ma
 
 ### Configuration
 
-Global (default is 50 if omitted):
+Global limits (defaults shown):
 
 ```yaml
 version: "1.0"
 
 limits:
-  max_runs_per_check: 50  # Applies to every step unless overridden
+  max_runs_per_check: 50   # Applies to every step unless overridden
+  max_workflow_depth: 3    # Maximum nesting depth for nested workflows
 ```
 
 Per-step override:
@@ -47,9 +48,23 @@ steps:
 
 ### How this differs from `routing.max_loops`
 
-- `routing.max_loops` caps routing transitions (e.g., goto/retry waves) per scope.
-- `limits.max_runs_per_check` caps actual step executions per step (also per scope for `forEach`).
-- Both guard rails can be used together: set a modest routing budget (e.g., 5–10) and leave the execution cap at the default (50) or tailor per step.
+- `routing.max_loops` caps routing transitions (e.g., goto/retry waves) per scope. Default: 10.
+- `limits.max_runs_per_check` caps actual step executions per step (also per scope for `forEach`). Default: 50.
+- `limits.max_workflow_depth` caps nested workflow invocations. Default: 3.
+- Both execution and routing guard rails can be used together: set a modest routing budget (e.g., 5-10) and leave the execution cap at the default (50) or tailor per step.
+
+### Workflow Depth Limit
+
+The `max_workflow_depth` setting prevents infinite recursion when workflows call other workflows:
+
+```yaml
+limits:
+  max_workflow_depth: 3  # Maximum nesting depth (default: 3)
+```
+
+When the depth limit is exceeded, the workflow provider throws an error. This protects against:
+- Accidentally creating recursive workflow chains
+- Runaway nested workflow invocations
 
 ### Recommendations
 

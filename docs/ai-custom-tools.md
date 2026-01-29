@@ -55,7 +55,11 @@ This feature allows AI checks to use custom shell-based tools defined in your Vi
 
 ## Configuration
 
-### Basic Example
+There are two methods to expose custom tools to AI checks. Both methods create an ephemeral SSE MCP server automatically.
+
+### Method 1: Using `ai_custom_tools` (Recommended)
+
+The simplest approach is to use the `ai_custom_tools` field:
 
 ```yaml
 version: "1.0"
@@ -82,11 +86,39 @@ steps:
       Use the grep-pattern tool to find potential security issues.
       Search for: eval, exec, dangerouslySetInnerHTML
     ai_custom_tools:
-      - grep-pattern  # ← Enable custom tool for this AI check
+      - grep-pattern  # Enable custom tool for this AI check
     ai:
       provider: anthropic
       model: claude-3-5-sonnet-20241022
 ```
+
+### Method 2: Using `tools:` within `ai_mcp_servers`
+
+Alternatively, you can define custom tools within the `ai_mcp_servers` block:
+
+```yaml
+steps:
+  security-review:
+    type: ai
+    prompt: |
+      Use the grep-pattern tool to find potential security issues.
+    ai_mcp_servers:
+      my-custom-tools:
+        tools: [grep-pattern]  # Creates ephemeral SSE server
+    ai:
+      provider: anthropic
+      model: claude-3-5-sonnet-20241022
+```
+
+**Choose `ai_custom_tools` when:**
+- You want simple, explicit configuration
+- You are combining custom tools with external MCP servers
+
+**Choose `tools:` in `ai_mcp_servers` when:**
+- You want to give a meaningful name to your tool server
+- You prefer all MCP configuration in one place
+
+### Basic Example
 
 ### Advanced Example with Multiple Tools
 
@@ -191,6 +223,7 @@ steps:
 - `transform_js`: JavaScript expression to transform the output
 - `cwd`: Working directory for command execution
 - `env`: Environment variables to set
+- `outputSchema`: JSON Schema for validating/documenting tool output (informational)
 
 ### Input Schema
 
@@ -344,34 +377,18 @@ See `examples/ai-custom-tools-example.yaml` for a comprehensive example with:
 
 ## Testing
 
-Run the manual test to verify functionality:
+The custom tools SSE server is covered by automated tests. Run the test suite:
 
 ```bash
-npx ts-node manual-test-simple.ts
+npm test -- --testPathPattern=mcp-custom-sse-server
 ```
 
-Expected output:
-```
-============================================================
-🧪 CustomToolsSSEServer - Quick Manual Test
-============================================================
-
-1️⃣  Starting SSE server...
-   ✅ Server running on http://localhost:58869/sse
-
-2️⃣  Calling echo-tool with message...
-   ✅ Response: ✅ Tool works: Hello from custom tools!
-
-3️⃣  Calling pwd-tool...
-   ✅ Working directory: /path/to/project
-
-4️⃣  Testing error handling (invalid tool)...
-   ✅ Error correctly returned: Internal error
-
-============================================================
-✅ ALL TESTS PASSED! Feature is working correctly! 🎉
-============================================================
-```
+This runs the unit tests in `tests/unit/mcp-custom-sse-server.test.ts` which verify:
+- Server startup and port binding
+- Tool listing via MCP protocol
+- Tool execution with arguments
+- Error handling for invalid tools
+- Server cleanup
 
 ## Future Enhancements
 
@@ -383,10 +400,16 @@ Potential improvements:
 - Persistent MCP servers (optional)
 - Tool metrics and monitoring
 
+## Related Documentation
+
+- [AI Custom Tools - Simple Guide](./ai-custom-tools-usage.md) - Quick start guide with minimal examples
+- [Custom Tools](./custom-tools.md) - Complete reference for defining custom tools
+- [MCP Provider](./mcp-provider.md) - Using MCP protocol with external servers
+
 ## Support
 
 For issues or questions:
 - Check troubleshooting section above
 - Enable debug mode for detailed logs
 - Review test files in `tests/unit/mcp-custom-sse-server.test.ts`
-- See examples in `examples/ai-custom-tools-example.yaml`
+- See examples in `examples/ai-custom-tools-example.yaml` and `examples/ai-custom-tools-simple.yaml`

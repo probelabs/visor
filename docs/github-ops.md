@@ -28,16 +28,17 @@ steps:
 ```
 
 Notes:
-- Empty strings are ignored automatically; no `value_js` needed to filter them out.
+- Empty strings are automatically ignored.
+- Values can be a JSON array (rendered via Liquid) or newline-separated list, which will be flattened automatically.
 
 ### Issues (Errors) Emitted
 
-When the provider cannot perform an operation, it returns a synthetic issue in the check’s output:
+When the provider cannot perform an operation, it returns a synthetic issue in the check's output:
 
-- `github/missing_token` — no token available
+- `github/missing_octokit` — no authenticated Octokit instance available in event context
 - `github/missing_context` — missing owner/repo/PR number
 - `github/unsupported_op` — unknown `op`
-- `github/value_js_error` — exception thrown while evaluating `value_js`
+- `github/liquid_render_error` — exception thrown while rendering Liquid template in `values`
 - `github/op_failed` — Octokit call failed (includes error message)
 
 These issues are visible in tables/markdown output and will not abort the whole workflow; use `fail_if` to control behavior.
@@ -84,6 +85,6 @@ steps:
 
 ## Tips
 
-- Combine Liquid and `value_js` to build dynamic, multi‑label operations safely.
+- Use Liquid templates in `values` to build dynamic, multi-label operations safely.
 - Use `tags: [github]` to run these checks only in Actions (paired with `--tags github`).
 - Pair with `if:` conditions to gate on prior outputs, e.g., apply labels only when `outputs.overview.tags.label` exists.

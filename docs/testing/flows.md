@@ -2,7 +2,7 @@
 
 > Model realistic user journeys across multiple external events in one case.
 
-A flow case defines a `flow:` array of stages. Each stage has its own `event`, `fixture`, optional `env` and `mocks`, plus `expect`.
+A flow case defines a `flow:` array of stages. Each stage has its own `event`, `fixture`, and optional settings like `env`, `mocks`, `routing`, `tags`, `github_recorder`, plus `expect`.
 
 ```yaml
 - name: pr-review-e2e-flow
@@ -35,8 +35,9 @@ A flow case defines a `flow:` array of stages. Each stage has its own `event`, `
 
 ## Stage selection and deltas
 
-- Run a single stage: `--only case#stage` (name substring) or `--only case#N` (1‑based index).
-- Coverage, prompts, outputs, and provider calls are computed per‑stage as deltas from the previous stage.
+- Run a single stage: `--only case#stage` (name substring match, case-insensitive) or `--only case#N` (1-based index).
+  - Examples: `--only pr-review-e2e-flow#facts-invalid`, `--only pr-review-e2e-flow#3`
+- Coverage, prompts, outputs, and provider calls are computed per-stage as deltas from the previous stage.
 - The same engine instance is reused across stages, so memory and output history carry over.
 
 ## Ordering and `on_finish`
@@ -81,12 +82,66 @@ flow:
           contains: ["<previous_response>", "Correction:"]
 ```
 
-## Stage-local mocks and env
+## Stage-local configuration
+
+### Mocks and env
 
 - Stage mocks override flow-level defaults: the runner merges `{...flow.mocks, ...stage.mocks}`.
 - `env:` applies only for the stage and is restored afterward.
+
+### Routing overrides
+
+Per-stage routing settings override the base config for that stage only:
+
+```yaml
+flow:
+  - name: correction-loop
+    event: issue_comment
+    routing:
+      max_loops: 10    # allow more iterations for this stage
+    # ...
+```
+
+### Tag filtering
+
+Tags can be specified at flow-level and/or per-stage. They are merged with suite defaults:
+
+```yaml
+- name: my-flow
+  tags: "github"          # flow-level include filter
+  exclude_tags: "slow"    # flow-level exclude filter
+  flow:
+    - name: stage-one
+      tags: "security"    # additional per-stage filter
+      # ...
+```
+
+### GitHub recorder overrides
+
+Simulate GitHub API errors or timeouts per-stage:
+
+```yaml
+flow:
+  - name: api-error-stage
+    event: pr_opened
+    github_recorder:
+      error_code: 429     # simulate rate limit
+    # ...
+```
 
 ## Debugging flows
 
 - Set `VISOR_DEBUG=true` to print stage headers, selected checks, and internal debug lines from the engine.
 - To reduce noise, limit the run to a stage: `VISOR_DEBUG=true visor test --only pr-review-e2e-flow#facts-invalid`.
+- Use the CLI `--debug` flag as a shorthand: `visor test --debug --only case#stage`.
+
+## Related Documentation
+
+- [Getting Started](./getting-started.md) - Introduction to the test framework
+- [DSL Reference](./dsl-reference.md) - Complete test YAML schema
+- [Assertions](./assertions.md) - Available assertion types
+- [Fixtures and Mocks](./fixtures-and-mocks.md) - Managing test data
+- [Cookbook](./cookbook.md) - Copy-pasteable test recipes
+- [CLI](./cli.md) - Test runner command line options
+- [CI Integration](./ci.md) - Running tests in CI pipelines
+- [Troubleshooting](./troubleshooting.md) - Common issues and solutions

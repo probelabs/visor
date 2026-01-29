@@ -63,10 +63,83 @@ Example configurations demonstrating various Visor features and use cases.
 ### Basic Examples
 - **`quick-start-tags.yaml`** - Simple configuration showing basic tag usage
 - **`visor-with-tags.yaml`** - Comprehensive configuration with all tag features
- - **`routing-basic.yaml`** - Failure routing with retry + goto ancestor
- - **`routing-on-success.yaml`** - on_success post-steps + single jump-back
- - **`routing-foreach.yaml`** - forEach remediation with run + retry
- - **`routing-dynamic-js.yaml`** - Dynamic routing via goto_js/run_js
+- **`enhanced-config.yaml`** - Enhanced configuration with advanced features
+
+### Routing Examples
+- **`routing-basic.yaml`** - Failure routing with retry + goto ancestor
+- **`routing-on-success.yaml`** - on_success post-steps + single jump-back
+- **`routing-foreach.yaml`** - forEach remediation with run + retry
+- **`routing-dynamic-js.yaml`** - Dynamic routing via goto_js/run_js
+- **`routing-goto-event.yaml`** - Goto routing with event handling
+
+### Control Flow Examples
+- **`if-conditions.yaml`** - Conditional execution with if statements
+- **`for-loop-example.yaml`** - Loop iteration patterns
+- **`forEach-example.yaml`** - ForEach iteration over collections
+- **`transform-example.yaml`** - Data transformation between steps
+
+### AI Provider Examples
+- **`ai-custom-tools-example.yaml`** - AI with custom shell-based tools via ephemeral MCP servers
+- **`ai-custom-tools-simple.yaml`** - Simplified AI custom tools example
+- **`ai-retry-fallback-config.yaml`** - AI with retry and fallback providers
+- **`ai-with-bash.yaml`** - AI check combined with bash command execution
+- **`ai-with-mcp.yaml`** - AI check with MCP tool integration
+- **`bedrock-config.yaml`** - AWS Bedrock AI provider configuration
+- **`claude-code-config.yaml`** - Claude Code SDK integration with MCP tools
+- **`fact-validator.yaml`** - AI-based fact validation workflow
+
+### MCP & Tools Examples
+- **`mcp-provider-example.yaml`** - MCP provider with stdio/SSE/HTTP transports
+- **`custom-tools-example.yaml`** - Custom tool definitions
+- **`tools-library.yaml`** - Reusable tool library (git, docker, npm, testing, code quality tools)
+- **`reusable-tools.yaml`** - Patterns for reusable tool definitions
+- **`project-with-tools.yaml`** - Project configuration with integrated tools
+
+### Memory & State Examples
+- **`memory-counter.yaml`** - Basic memory counter implementation
+- **`memory-error-collection.yaml`** - Collecting errors in memory across steps
+- **`memory-exec-js.yaml`** - JavaScript execution within memory provider
+- **`memory-namespace-isolation.yaml`** - Memory namespace isolation between workflows
+- **`memory-retry-counter.yaml`** - Retry logic with memory-based counter tracking
+- **`memory-state-machine.yaml`** - State machine implementation using memory
+
+### Human Input Examples
+- **`human-input-example.yaml`** - Interactive human-in-the-loop patterns
+- **`basic-human-input.yaml`** - Basic human input workflow
+- **`calculator-config.yaml`** - Interactive calculator with memory and validation
+
+### HTTP & Webhooks Examples
+- **`http-integration-config.yaml`** - HTTP API integration patterns
+- **`https-server-config.yaml`** - HTTPS server configuration
+- **`webhook-pipeline-config.yaml`** - Multi-pipeline webhook system (GitHub, JIRA integration)
+- **`cron-webhook-config.yaml`** - Scheduled cron triggers with webhooks
+
+### Git Operations Examples
+- **`git-checkout-basic.yaml`** - Basic git checkout operations
+- **`git-checkout-compare.yaml`** - Git checkout with comparison workflows
+- **`git-checkout-cross-repo.yaml`** - Cross-repository git operations
+
+### Failure Handling Examples
+- **`fail-if-simple.yaml`** - Simple fail_if conditions
+- **`failure-conditions-basic.yaml`** - Basic failure condition patterns
+- **`failure-conditions-advanced.yaml`** - Advanced failure handling with complex conditions
+- **`failure-conditions-github-style.yaml`** - GitHub-style failure conditions
+- **`failure-conditions-migration.yaml`** - Migration patterns for failure conditions
+
+### Integration Examples
+- **`jira-simple-example.yaml`** - Simple JIRA integration
+- **`jira-single-issue-workflow.yaml`** - Single JIRA issue workflow
+- **`jira-workflow-mcp.yaml`** - JIRA workflow with MCP tools
+- **`slack-simple-chat.yaml`** - Slack bot simple chat integration
+
+### Session & Import Examples
+- **`session-reuse-config.yaml`** - Session reuse configuration
+- **`session-reuse-self.yaml`** - Self-referencing session reuse patterns
+- **`on-init-import-demo.yaml`** - On-init hooks with imports
+- **`reusable-workflows.yaml`** - Reusable workflow patterns
+
+### Output Examples
+- **`outputs-raw-basic.yaml`** - Raw output formatting
 
 ### GitHub Actions Workflows
 - **`github-workflow-with-tags.yml`** - Progressive code review workflow using tags
@@ -76,6 +149,12 @@ Example configurations demonstrating various Visor features and use cases.
 - **`environments/visor.dev.yaml`** - Development environment (fast, local checks)
 - **`environments/visor.staging.yaml`** - Staging environment (balanced checks)
 - **`environments/visor.prod.yaml`** - Production environment (comprehensive validation)
+
+### Reusable Workflows (`workflows/` directory)
+- **`workflows/calculator-workflow.yaml`** - Reusable calculator workflow with inputs/outputs
+- **`workflows/code-quality.yaml`** - Code quality workflow (linting, complexity, formatting)
+- **`workflows/quick-pr-check.yaml`** - Quick PR validation workflow
+- **`workflows/workflow-composition-example.yaml`** - Workflow composition and state isolation demo
 
 ## 🚀 Quick Start
 
@@ -268,6 +347,92 @@ steps:
 - Set default `tag_filter` in config to avoid repetition
 - Use environment-specific configs with `extends` for DRY principles
 - Test tag filters with `--debug` to see which checks run
+
+## 🔌 Integration Examples
+
+### Slack Integration
+
+```bash
+# Run Slack bot (requires SLACK_BOT_TOKEN, SLACK_APP_TOKEN env vars)
+visor --config examples/slack-simple-chat.yaml
+```
+
+### JIRA Integration
+
+```bash
+# Simple JIRA workflow
+visor --config examples/jira-simple-example.yaml
+
+# JIRA with MCP tools
+visor --config examples/jira-workflow-mcp.yaml
+```
+
+### Webhook Pipelines
+
+```bash
+# Multi-pipeline webhook server
+visor --config examples/webhook-pipeline-config.yaml
+
+# Cron-triggered webhooks
+visor --config examples/cron-webhook-config.yaml
+```
+
+## 🧠 Memory & State Examples
+
+```bash
+# Basic memory counter
+visor --config examples/memory-counter.yaml
+
+# State machine with memory
+visor --config examples/memory-state-machine.yaml
+
+# Retry logic with counter
+visor --config examples/memory-retry-counter.yaml
+```
+
+## 🤖 AI Provider Examples
+
+```bash
+# AI with custom tools (ephemeral MCP servers)
+visor --config examples/ai-custom-tools-example.yaml
+
+# AI with bash execution
+visor --config examples/ai-with-bash.yaml
+
+# AWS Bedrock provider
+visor --config examples/bedrock-config.yaml --provider bedrock
+
+# Claude Code SDK integration
+visor --config examples/claude-code-config.yaml
+```
+
+## 🔧 MCP & Tools Examples
+
+```bash
+# MCP provider with different transports
+visor --config examples/mcp-provider-example.yaml
+
+# Custom tools
+visor --config examples/custom-tools-example.yaml
+```
+
+## 🔄 Reusable Workflows
+
+Import and compose workflows:
+
+```bash
+# Use the calculator workflow
+visor --config examples/workflows/calculator-workflow.yaml --input "num1=10" --input "num2=5" --input "operation=add"
+
+# Code quality workflow
+visor --config examples/workflows/code-quality.yaml --input "language=typescript"
+
+# Quick PR check
+visor --config examples/workflows/quick-pr-check.yaml --input "pr_type=feature"
+
+# Workflow composition example (imports calculator-workflow)
+visor --config examples/workflows/workflow-composition-example.yaml
+```
 
 ## 📚 Further Reading
 

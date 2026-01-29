@@ -1,7 +1,9 @@
 # RFC: Git Checkout Step Provider
 
 ## Status
-**Accepted** - Implementation in progress
+**Implemented** - Feature is complete and available for use
+
+See [Git Checkout Provider Documentation](/docs/providers/git-checkout.md) for usage instructions.
 
 ### Decision Record
 - **Date**: 2025-11-21

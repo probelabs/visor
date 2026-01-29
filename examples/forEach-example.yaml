@@ -85,6 +85,9 @@ steps:
   # Complex example: Process webhook data
   get-jira-tickets:
     type: http_client
+    criticality: external
+    assume: "pr.number"
+    schema: plain
     url: "https://api.example.com/jira/tickets?pr={{ pr.number }}"
     transform: |
       {{ data.issues | json }}
@@ -93,6 +96,9 @@ steps:
 
   update-each-ticket:
     type: http
+    criticality: external
+    assume: "outputs['get-jira-tickets']"
+    schema: plain
     url: "https://api.example.com/jira/ticket/{{ outputs.get-jira-tickets.id }}"
     body: |
       {

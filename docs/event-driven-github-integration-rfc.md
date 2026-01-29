@@ -1,7 +1,8 @@
 # RFC: Event-Driven Integrations via Frontends (GitHub, Slack, …)
 
-**Status**: Proposed
+**Status**: Implemented (Phases 1-2 Complete)
 **Created**: 2025-11-19
+**Updated**: 2026-01-28
 **Author**: Architecture Planning
 
 ## Abstract
@@ -710,24 +711,32 @@ Kept intentionally small after adopting defaults above:
 ## Implementation Checklist
 
 ### Phase 1: Foundation
-- [ ] Implement `EventBus` class with subscription management
-- [ ] Add `eventBus` optional parameter to `StateMachineRunner`
-- [ ] Modify `emitEvent()` to publish to event bus
+- [x] Implement `EventBus` class with subscription management (`src/event-bus/event-bus.ts`)
+- [x] Implement `EventEnvelope` and `IntegrationEvent` types (`src/event-bus/types.ts`)
+- [x] Add `eventBus` optional parameter to `StateMachineRunner` (via `EngineContext`)
+- [x] Implement `FrontendsHost` with `Frontend` API (`src/frontends/host.ts`)
+- [x] Implement `NdjsonSink` frontend (`src/frontends/ndjson-sink.ts`)
 - [ ] Add unit tests for `EventBus`
 
-### Phase 2: GitHub Adapter
-- [ ] Implement `GitHubEventAdapter` with request handlers
-- [ ] Add feature flag `experimental.eventDrivenGitHub`
-- [ ] Wire up adapter in `state-machine-execution-engine.ts`
+### Phase 2: GitHub Frontend
+- [x] Implement `GitHubFrontend` with request handlers (`src/frontends/github-frontend.ts`)
+- [x] Wire up adapter in `state-machine-execution-engine.ts`
+- [x] Implement comment grouping with section markers
+- [x] Implement debounce/coalescing for comment updates
+- [x] Implement mutex-based serialization for updates
+- [ ] Add feature flag `experimental.eventDrivenGitHub` (skipped - frontends are enabled by default)
 - [ ] Add integration tests for dual-mode operation
 
-### Phase 3: Multi-Platform Examples
-- [ ] Implement `SlackEventAdapter` (example)
+### Phase 3: Multi-Platform Frontends
+- [x] Implement `SlackFrontend` with direct replies (`src/frontends/slack-frontend.ts`)
+- [x] Slack reaction management (acknowledgement and completion)
+- [x] Mermaid diagram rendering and upload
+- [x] Human input prompt handling via prompt-state
 - [ ] Implement `MetricsEventAdapter` (example)
 - [ ] Document adapter API and patterns
 
 ### Phase 4: Migration (Breaking Change)
-- [ ] Remove `gitHubChecks` from `EngineContext`
+- [ ] Remove `gitHubChecks` from `EngineContext` (legacy DI still present for backward compatibility)
 - [ ] Make `eventBus` required parameter
 - [ ] Update all state handlers to emit events
 - [ ] Update all tests to new pattern

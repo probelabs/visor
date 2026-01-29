@@ -117,7 +117,7 @@ steps:
 ```
 
 ```yaml
-checks:
+steps:
   parse-issue:   { type: noop }
   parse-comment: { type: noop }
   triage:        { type: noop, depends_on: ["parse-issue|parse-comment"] }
@@ -132,6 +132,56 @@ Rules:
 
 Tip: When targeting a leaf in ad‑hoc runs (e.g., `visor --check final`), include one member of each pipe group explicitly (e.g., `--check a --check final`) to make intent unambiguous. In normal runs Visor computes the plan automatically from your config.
 
+### AI Session Reuse
+
+For AI checks that depend on other AI checks, you can reuse the parent's conversation session to maintain context:
+
+```yaml
+steps:
+  initial-analysis:
+    type: ai
+    prompt: "Analyze this code for issues..."
+
+  follow-up:
+    type: ai
+    depends_on: [initial-analysis]
+    reuse_ai_session: true  # Reuses session from first dependency
+    prompt: "Based on your analysis, suggest fixes..."
+```
+
+Options:
+- `reuse_ai_session: true` - Reuse session from first dependency
+- `reuse_ai_session: "step-name"` - Reuse session from specific step
+- `session_mode: 'clone'` - Copy conversation history (default)
+- `session_mode: 'append'` - Share conversation history (modifications visible to both)
+
+When using ANY-OF dependencies (`depends_on: ["a|b"]`), the session is taken from whichever dependency completes first.
+
+### Fanout Control
+
+When a step is triggered via routing (`on_success.run`, `on_fail.run`) from a forEach scope, you can control how it schedules:
+
+```yaml
+steps:
+  process-items:
+    type: command
+    forEach: true
+    exec: echo '["a","b","c"]'
+
+  validate-item:
+    depends_on: [process-items]
+    fanout: map  # Run once per forEach item (fan-out)
+
+  aggregate-results:
+    depends_on: [process-items]
+    fanout: reduce  # Run once at parent scope (aggregation)
+    # Alias: reduce: true
+```
+
+- `fanout: 'map'` - Schedule once per forEach item (fan-out behavior)
+- `fanout: 'reduce'` - Schedule a single run at parent scope (aggregation)
+- `reduce: true` - Alias for `fanout: 'reduce'`
+
 ### Error Handling
 
 - Cycle detection and missing dependency validation
@@ -145,7 +195,7 @@ When a check has `forEach: true`, it outputs an array and all its dependent chec
 ### Basic Flow
 
 ```yaml
-checks:
+steps:
   extract-items:
     type: ai
     forEach: true
@@ -167,7 +217,7 @@ checks:
 The `on_finish` hook runs **once** after all dependent checks complete all their iterations, making it perfect for aggregating results and making routing decisions:
 
 ```yaml
-checks:
+steps:
   extract-facts:
     type: ai
     forEach: true
@@ -214,33 +264,37 @@ checks:
 
 ### Accessing forEach Results
 
-Inside `on_finish` hooks, you have access to all iteration results via `outputs.history`:
+Inside `on_finish` hooks, you have access to all iteration results. The context provides these variables:
 
 ```javascript
 // In on_finish.goto_js or on_finish.run_js
-{
-  outputs: {
-    'extract-facts': [...],  // The forEach array
-    'validate-fact': [...],  // Latest results (for compatibility)
-  },
-  outputs.history: {
-    'validate-fact': [[...], ...], // ALL results from ALL iterations
-  },
-  forEach: {
-    total: 3,       // Total forEach items
-    successful: 3,  // Number of successful iterations
-    failed: 0,      // Number of failed iterations
-    items: [...]    // The forEach items array
-  }
-}
+// Available variables:
+outputs['extract-facts']           // The forEach array (latest value)
+outputs['validate-fact']           // Latest result from validate-fact
+outputs.history['validate-fact']   // ALL results from ALL iterations (array)
+outputs_history['validate-fact']   // Alias for outputs.history
+outputs_raw['extract-facts']       // Aggregate value (full array)
+
+// forEach metadata
+forEach.total        // Total forEach items
+forEach.successful   // Number of successful iterations
+forEach.failed       // Number of failed iterations
+forEach.items        // The forEach items array
+
+// Memory access
+memory.get('key', 'namespace')
+memory.set('key', value, 'namespace')
+memory.increment('key', amount, 'namespace')
 ```
+
+Note: `outputs.history` and `outputs_history` are aliases - both provide access to the full history array for each check.
 
 ### Complete Example: Multi-Dependent Aggregation
 
 The real power of `on_finish` is aggregating results from **multiple** dependent checks:
 
 ```yaml
-checks:
+steps:
   # Step 1: Extract claims from AI response
   extract-claims:
     type: ai
@@ -340,7 +394,7 @@ This is the **only way** to aggregate across multiple dependent checks in a forE
 **Example showing the difference:**
 
 ```yaml
-checks:
+steps:
   extract-items:
     type: command
     forEach: true

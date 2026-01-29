@@ -22,16 +22,29 @@ Visor can be triggered in two main modes:
 When running as a GitHub Action, Visor responds to these events:
 
 ### Pull Request Events (`pull_request`)
-- **Actions**: `opened`, `synchronize`, `edited`
+- **Actions**: `opened`, `synchronize`, `edited`, `closed`
 - **Trigger mapping**:
   - `opened` → `pr_opened`
   - `synchronize` / `edited` → `pr_updated`
+  - `closed` → `pr_closed`
 - **Log format**:
   ```
   🤖 Mode: GitHub Action
   📂 Repository: owner/repo
   📋 Event: pull_request (action: opened)
   🎯 Trigger: pr_opened
+  🔀 Context: Pull Request #123
+  ```
+
+### Pull Request Review Events (`pull_request_review`)
+- **Actions**: `submitted`, `edited`, `dismissed`
+- **Trigger mapping**: `pr_updated`
+- **Log format**:
+  ```
+  🤖 Mode: GitHub Action
+  📂 Repository: owner/repo
+  📋 Event: pull_request_review (action: submitted)
+  🎯 Trigger: pr_updated
   🔀 Context: Pull Request #123
   ```
 
@@ -51,6 +64,7 @@ When running as a GitHub Action, Visor responds to these events:
 - **Actions**: `created`, `edited`
 - **Trigger mapping**: `issue_comment`
 - **Context**: Can be on either a Pull Request or an Issue
+- **Note**: The EventMapper class may treat PR comments as `pr_updated` for advanced routing, but the GitHub Action entry point maps all issue comments to `issue_comment`.
 - **Log format** (on PR):
   ```
   🤖 Mode: GitHub Action
@@ -66,6 +80,28 @@ When running as a GitHub Action, Visor responds to these events:
   📋 Event: issue_comment (action: created)
   🎯 Trigger: issue_comment
   💬 Context: Comment on Issue #456
+  ```
+
+### Schedule Events (`schedule`)
+- **Trigger mapping**: `schedule`
+- **Use case**: Cron-triggered workflows
+- **Log format**:
+  ```
+  🤖 Mode: GitHub Action
+  📂 Repository: owner/repo
+  📋 Event: schedule
+  🎯 Trigger: schedule
+  ```
+
+### Workflow Dispatch Events (`workflow_dispatch`)
+- **Trigger mapping**: `schedule` (treated as scheduled execution)
+- **Use case**: Manual workflow triggers
+- **Log format**:
+  ```
+  🤖 Mode: GitHub Action
+  📂 Repository: owner/repo
+  📋 Event: workflow_dispatch
+  🎯 Trigger: schedule
   ```
 
 ## Example Logs
@@ -135,9 +171,24 @@ This is **normal and correct** - it means:
    ✓ Skipping bot's own comment to prevent recursion. Author: probelabs[bot], Type: Bot, Has markers: true
    ```
 
+## Available Event Triggers
+
+The complete list of event triggers that can be used in the `on` field:
+
+| Trigger | Description |
+|---------|-------------|
+| `pr_opened` | Pull request was opened |
+| `pr_updated` | Pull request was updated (synchronize, edited, or review submitted) |
+| `pr_closed` | Pull request was closed (merged or dismissed) |
+| `issue_opened` | Issue was opened |
+| `issue_comment` | Comment on an issue (not a PR) |
+| `manual` | Manual CLI invocation |
+| `schedule` | Scheduled execution (cron or workflow_dispatch) |
+| `webhook_received` | HTTP webhook was received (via http_input provider) |
+
 ## Configuration
 
-Checks are configured to run on specific triggers using the `on` field:
+Steps are configured to run on specific triggers using the `on` field:
 
 ```yaml
 steps:
@@ -150,13 +201,24 @@ steps:
     on: [issue_comment, issue_opened]  # Runs on issue events
     type: ai
     # ... rest of config
+
+  scheduled-report:
+    on: [schedule]  # Only runs on scheduled triggers
+    type: ai
+    schedule: "0 9 * * 1"  # Every Monday at 9am
+    # ... rest of config
+
+  webhook-handler:
+    on: [webhook_received]  # Only runs when webhook is received
+    type: http_input
+    # ... rest of config
 ```
 
-If `on` is not specified, the check can run on any event type.
+If `on` is not specified, the check can run on any event type (except `manual`-only checks when using `--event all`).
 
 ### Using goto_event to simulate a different trigger for a jump
 
-Sometimes you want to “re-run” an ancestor step as if a different event happened (e.g., from an `issue_comment` flow you want to re-execute a PR step under `pr_updated`). Use `goto_event` together with `goto`:
+Sometimes you want to "re-run" an ancestor step as if a different event happened (e.g., from an `issue_comment` flow you want to re-execute a PR step under `pr_updated`). Use `goto_event` together with `goto` in `on_success` or `on_fail` blocks:
 
 ```yaml
 steps:
@@ -173,7 +235,14 @@ steps:
       goto_event: pr_updated  # simulate PR update for the inline jump
 ```
 
-During that inline execution, event filtering and `if:` expressions see the simulated event. The current step is then re-run once. For a full PR re-run from an issue comment, synthesize a PR event and re-invoke the action entrypoint (see failure-routing docs for details).
+During that inline execution, event filtering and `if:` expressions see the simulated event. The current step is then re-run once.
+
+The `goto_event` field accepts any valid `EventTrigger` value:
+- `pr_opened`, `pr_updated`, `pr_closed`
+- `issue_opened`, `issue_comment`
+- `manual`, `schedule`, `webhook_received`
+
+For complete documentation on failure routing, retry policies, and loop control, see [Failure Routing](./failure-routing.md).
 
 ## CLI Event Simulation
 
@@ -188,11 +257,20 @@ visor --event pr_updated
 # Simulate a PR opened event
 visor --event pr_opened
 
+# Simulate a PR closed event
+visor --event pr_closed
+
 # Simulate an issue comment event
 visor --event issue_comment
 
 # Simulate an issue opened event
 visor --event issue_opened
+
+# Simulate a manual trigger (runs checks with on: [manual])
+visor --event manual
+
+# Simulate a scheduled trigger
+visor --event schedule
 
 # Run all checks regardless of event filters (default)
 visor --event all
@@ -215,10 +293,13 @@ visor --check security --event pr_updated
 
 | Flag | Behavior | Use Case |
 |------|----------|----------|
-| `--event pr_updated` | Only runs checks with `on: [pr_updated]` | Test PR update scenario locally |
 | `--event pr_opened` | Only runs checks with `on: [pr_opened]` | Test PR opened scenario |
+| `--event pr_updated` | Only runs checks with `on: [pr_updated]` | Test PR update scenario locally |
+| `--event pr_closed` | Only runs checks with `on: [pr_closed]` | Test PR close/merge scenario |
+| `--event issue_opened` | Only runs checks with `on: [issue_opened]` | Test issue opened scenario |
 | `--event issue_comment` | Only runs checks with `on: [issue_comment]` | Test comment assistant |
 | `--event manual` | Only runs checks with `on: [manual]` | Test manual-triggered checks |
+| `--event schedule` | Only runs checks with `on: [schedule]` | Test scheduled/cron checks |
 | `--event all` | Runs all checks (except manual-only) | Default behavior, ignores `on:` filters |
 | (no flag) | Auto-detects based on schema | Smart default |
 
@@ -290,3 +371,11 @@ visor --event issue_comment
 ```bash
 visor --event all  # or just: visor
 ```
+
+## Related Documentation
+
+- [Configuration](./configuration.md) - Full configuration reference including check types
+- [CI/CLI Mode](./ci-cli-mode.md) - Running Visor in CI environments
+- [Failure Routing](./failure-routing.md) - Auto-fix loops and `goto_event` usage
+- [Commands](./commands.md) - CLI commands and PR comment commands
+- [Tag Filtering](./tag-filtering.md) - Selective check execution with tags

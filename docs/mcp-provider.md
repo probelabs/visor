@@ -13,7 +13,7 @@ Unlike the AI provider's MCP support (which enhances AI models with additional t
 
 ## Transport Types
 
-The MCP provider supports three transport mechanisms:
+The MCP provider supports four transport mechanisms:
 
 ### 1. stdio (default)
 
@@ -25,7 +25,7 @@ steps:
     type: mcp
     transport: stdio
     command: npx
-    args: ["-y", "@probelabs/probe@latest", "mcp"]
+    command_args: ["-y", "@probelabs/probe@latest", "mcp"]
     method: search_code
     methodArgs:
       query: "TODO"
@@ -33,7 +33,7 @@ steps:
 
 **Configuration:**
 - `command` (required): Command to execute
-- `args` (optional): Array of command arguments
+- `command_args` (optional): Array of command arguments
 - `env` (optional): Environment variables
 - `workingDirectory` (optional): Working directory for the command
 
@@ -85,6 +85,37 @@ steps:
 
 **Note:** HTTP transport supports stateful sessions. The server may generate a session ID if not provided.
 
+### 4. Custom (YAML-defined tools)
+
+Use custom tools defined in your YAML configuration. See [Custom Tools](./custom-tools.md) for full documentation.
+
+```yaml
+tools:
+  my-grep-tool:
+    name: my-grep-tool
+    description: Search for patterns in code
+    inputSchema:
+      type: object
+      properties:
+        pattern:
+          type: string
+      required: [pattern]
+    exec: 'grep -rn "{{ args.pattern }}" src/'
+
+steps:
+  search-patterns:
+    type: mcp
+    transport: custom
+    method: my-grep-tool
+    methodArgs:
+      pattern: "TODO"
+```
+
+**Configuration:**
+- `transport: custom`
+- `method`: Name of the tool defined in `tools:` section
+- `methodArgs`: Arguments to pass to the tool
+
 ## Method Arguments
 
 ### Static Arguments
@@ -96,7 +127,7 @@ steps:
   search-todos:
     type: mcp
     command: npx
-    args: ["-y", "@probelabs/probe@latest", "mcp"]
+    command_args: ["-y", "@probelabs/probe@latest", "mcp"]
     method: search_code
     methodArgs:
       query: "TODO"
@@ -112,7 +143,7 @@ steps:
   dynamic-search:
     type: mcp
     command: npx
-    args: ["-y", "@probelabs/probe@latest", "mcp"]
+    command_args: ["-y", "@probelabs/probe@latest", "mcp"]
     method: search_code
     argsTransform: |
       {
@@ -139,7 +170,7 @@ steps:
   format-results:
     type: mcp
     command: npx
-    args: ["-y", "@probelabs/probe@latest", "mcp"]
+    command_args: ["-y", "@probelabs/probe@latest", "mcp"]
     method: search_code
     methodArgs:
       query: "FIXME"
@@ -163,7 +194,7 @@ steps:
   js-transform:
     type: mcp
     command: npx
-    args: ["-y", "@probelabs/probe@latest", "mcp"]
+    command_args: ["-y", "@probelabs/probe@latest", "mcp"]
     method: search_code
     methodArgs:
       query: "TODO"
@@ -249,7 +280,7 @@ steps:
     type: mcp
     depends_on: [fetch-data]
     command: npx
-    args: ["-y", "@probelabs/probe@latest", "mcp"]
+    command_args: ["-y", "@probelabs/probe@latest", "mcp"]
     method: analyze
     argsTransform: |
       {
@@ -273,7 +304,7 @@ Outputs are available as:
 **stdio transport:**
 - `transport: stdio` (optional, default)
 - `command` - Command to execute
-- `args` - Command arguments (optional)
+- `command_args` - Command arguments (optional)
 - `env` - Environment variables (optional)
 - `workingDirectory` - Working directory (optional)
 
@@ -295,7 +326,9 @@ Outputs are available as:
 - `transform` - Liquid template for output transformation (optional)
 - `transform_js` - JavaScript expression for output transformation (optional)
 
-### General
+### General (Check-Level Options)
+
+These options are available to all check types, not just MCP:
 
 - `timeout` - Timeout in seconds (default: 60)
 - `depends_on` - Array of check names this depends on
@@ -303,6 +336,7 @@ Outputs are available as:
 - `on` - Event filter (pr_opened, pr_updated, etc.)
 - `tags` - Array of tags for filtering
 - `group` - Comment group name
+- `forEach` - Run check for each item in a collection (see examples)
 
 ## Real-World Examples
 
@@ -317,7 +351,7 @@ steps:
   semgrep-scan:
     type: mcp
     command: npx
-    args: ["-y", "@semgrep/mcp"]
+    command_args: ["-y", "@semgrep/mcp"]
     method: scan
     methodArgs:
       paths: "{{ files | map: 'filename' | json }}"
@@ -333,7 +367,7 @@ steps:
   check-duplicates:
     type: mcp
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-github"]
+    command_args: ["-y", "@modelcontextprotocol/server-github"]
     method: search_issues
     methodArgs:
       query: "{{ pr.title }}"
@@ -359,7 +393,7 @@ steps:
   validate-schema:
     type: mcp
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-postgres"]
+    command_args: ["-y", "@modelcontextprotocol/server-postgres"]
     if: "files.some(f => f.filename.includes('migrations/'))"
     method: query
     methodArgs:
@@ -387,7 +421,7 @@ steps:
   jira-check:
     type: mcp
     command: npx
-    args: ["-y", "@atlassian/mcp-server-jira"]
+    command_args: ["-y", "@atlassian/mcp-server-jira"]
     method: get_issue
     argsTransform: |
       {
@@ -416,13 +450,13 @@ steps:
     type: mcp
     depends_on: [semgrep-scan]
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-slack"]
+    command_args: ["-y", "@modelcontextprotocol/server-slack"]
     if: "outputs['semgrep-scan']?.issues?.filter(i => i.severity === 'error').length > 0"
     method: post_message
     argsTransform: |
       {
         "channel": "#security-alerts",
-        "text": "🚨 PR #{{ pr.number }} has critical security issues"
+        "text": "Security Alert: PR #{{ pr.number }} has critical security issues"
       }
 ```
 
@@ -435,7 +469,7 @@ steps:
   check-licenses:
     type: mcp
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+    command_args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
     method: read_file
     forEach:
       items: "{{ files | map: 'filename' | json }}"
@@ -468,7 +502,7 @@ steps:
   validate-links:
     type: mcp
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-puppeteer"]
+    command_args: ["-y", "@modelcontextprotocol/server-puppeteer"]
     if: "files.some(f => f.filename.endsWith('.md'))"
     method: navigate
     methodArgs:
@@ -496,7 +530,7 @@ steps:
   check-cves:
     type: mcp
     command: npx
-    args: ["-y", "@modelcontextprotocol/server-brave-search"]
+    command_args: ["-y", "@modelcontextprotocol/server-brave-search"]
     if: "files.some(f => f.filename.match(/package\\.json|requirements\\.txt/))"
     method: search
     argsTransform: |

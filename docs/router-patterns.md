@@ -71,19 +71,25 @@ Here, the router (`route-intent`) is connected to the branch (`capabilities-answ
 - as a data dependency: `capabilities-answer.depends_on: [route-intent]`
 - as a control‑flow source: `route-intent.on_success.transitions → capabilities-answer`
 
-### Why this is a problem
+### Why this can be a problem
 
 When `route-intent` finishes, `transitions` fire and emit a `ForwardRunRequested(target='capabilities-answer')`.
 
 WavePlanning then:
 
 1. Builds the forward‑run subset starting from the target.
-2. Adds **all transitive dependencies** of that target via `depends_on`.
+2. Adds transitive dependencies of that target via `depends_on`.
    - `capabilities-answer.depends_on: [route-intent]`
    - `route-intent.depends_on: [ask]`
-3. Schedules a wave that re‑runs `route-intent` (and `ask`), then `capabilities-answer`.
+3. **However**, the engine now skips re‑running dependencies that have already succeeded in the current run.
 
-Each time `route-intent` re‑runs, its `transitions` fire again, enqueueing another forward‑run to `capabilities-answer`, which again pulls `route-intent` in as a dependency. This repeats until `routing.max_loops` is hit.
+**Note**: The engine's forward‑run planner was updated to deduplicate successful runs. Dependencies that have `successfulRuns > 0` are not re‑scheduled. This means the "double‑edge" pattern no longer causes runaway loops in most cases.
+
+**When it still matters**:
+
+- **Explicit loops via `goto`**: When a leaf step uses `goto: ask`, that *is* an intentional re‑run. The router will execute again on each loop iteration, which is expected behavior controlled by `routing.max_loops`.
+- **Failed dependencies**: If a dependency failed (not succeeded), it will be re‑run. This can cause unexpected behavior if the failure was intentional.
+- **Clarity**: Even though the engine handles deduplication, having both `depends_on` and `transitions` edges to the same step creates conceptual ambiguity about intent.
 
 **Symptoms:**
 
@@ -101,9 +107,9 @@ This is exactly the pattern we saw in the Slack org‑assistant flow when:
 
 ---
 
-## Recommended pattern: router as pure control‑plane
+## Recommended patterns
 
-### Core idea
+### Pattern A: Router as pure control‑plane (no branch dependencies)
 
 Treat router checks as **control‑plane only**:
 
@@ -112,9 +118,29 @@ Treat router checks as **control‑plane only**:
   - Uses `on_success.transitions` to select branches.
 - Branches:
   - **Do not** `depends_on` the router.
-  - Instead, they **read** the router’s output from `outputs['router']` and gate with `if` / `assume`.
+  - Instead, they **read** the router's output from `outputs['router']` and gate with `if` / `assume`.
 
-This gives a clean, acyclic structure:
+This pattern avoids any ambiguity about the relationship between router and branches.
+
+### Pattern B: Router with branch dependencies (common pattern)
+
+In practice, many workflows use `depends_on` on branches to ensure ordering and data access:
+
+- Router:
+  - `depends_on` its true *inputs* (e.g. `ask`, context fetch steps).
+  - Uses `on_success.transitions` to select branches.
+- Branches:
+  - **Do** `depends_on: [router]` for explicit ordering.
+  - Also use `if` guards to skip when not selected.
+
+This pattern is safe because the engine's forward‑run planner skips re‑running dependencies that already succeeded. See `examples/slack-simple-chat.yaml` for a working implementation.
+
+### Choosing between patterns
+
+- **Pattern A** is cleaner when branches don't actually need router output (pure control‑flow).
+- **Pattern B** is more explicit and is the common pattern in real workflows where branches need access to router fields like `output.intent` or `output.project`.
+
+#### Example: Pattern A (no branch dependencies)
 
 ```yaml
 ask:
@@ -125,9 +151,6 @@ route-intent:
   type: ai
   group: chat
   depends_on: [ask]
-  ai:
-    disableTools: true
-    allowedTools: []
   schema:
     type: object
     properties:
@@ -147,9 +170,6 @@ capabilities-answer:
   group: chat
   # no depends_on: [route-intent]
   if: "outputs['route-intent']?.intent === 'capabilities'"
-  ai:
-    disableTools: true
-    allowedTools: []
   prompt: |
     Explain briefly what you can help with.
   on_success:
@@ -167,19 +187,67 @@ chat-answer:
     goto: ask
 ```
 
-**Engine behavior:**
+#### Example: Pattern B (with branch dependencies)
+
+This is the pattern used in `examples/slack-simple-chat.yaml`:
+
+```yaml
+ask:
+  type: human-input
+  group: chat
+
+route-intent:
+  type: ai
+  group: chat
+  depends_on: [ask]
+  schema:
+    type: object
+    properties:
+      intent:
+        type: string
+        enum: [chat, capabilities]
+    required: [intent]
+  on_success:
+    transitions:
+      - when: "output.intent === 'capabilities'"
+        to: capabilities-answer
+      - when: "output.intent === 'chat'"
+        to: chat-answer
+
+capabilities-answer:
+  type: ai
+  group: chat
+  depends_on: [route-intent]  # explicit dependency
+  if: "outputs['route-intent']?.intent === 'capabilities'"
+  prompt: |
+    Explain briefly what you can help with.
+  on_success:
+    goto: ask
+
+chat-answer:
+  type: ai
+  group: chat
+  depends_on: [route-intent]  # explicit dependency
+  if: "outputs['route-intent']?.intent === 'chat'"
+  prompt: |
+    You are a concise, friendly assistant.
+    Latest user message: {{ outputs['ask'].text }}
+  on_success:
+    goto: ask
+```
+
+**Engine behavior (both patterns):**
 
 - Initial wave:
   - DAG: `ask` → `route-intent`
   - Router runs once, then emits transitions.
 - Forward‑run for `capabilities-answer`:
-  - Only includes the branch and any *real* dependencies the branch declares (e.g. context fetch, project status).
-  - Does **not** pull `route-intent` back in, because the branch no longer `depends_on` it.
+  - In Pattern A: Only the branch runs (no dependencies to pull in).
+  - In Pattern B: The branch depends on `route-intent`, but since it already succeeded, it is **not** re‑run.
 - Loops:
   - `capabilities-answer` closing to `ask` via `goto: ask` is explicit and controlled.
-  - Router still runs once per loop cycle (when `ask` completes), but is not re‑run just because the branch was targeted by a transition.
-
-This pattern avoids the “router as both dependency and transition source” cycle that caused loops in Slack.
+  - Router runs once per loop cycle (when `ask` completes and flows to `route-intent`).
+  - Loop count is controlled by `routing.max_loops`.
 
 ---
 
@@ -207,7 +275,9 @@ project-status-answer:
 
 ### Use `transitions` / `goto` for control‑flow
 
-Examples:
+There are three routing hooks: `on_success`, `on_fail`, and `on_finish`.
+
+**`on_success`** — Fires when the check completes without fatal issues:
 
 ```yaml
 route-intent:
@@ -229,8 +299,33 @@ project-deploy-answer:
         to: project-deploy-confirm
 ```
 
-- Router edges are expressed only via `transitions`.
-- Inner “deployment helper” loop is controlled by transitions on `done`.
+**`on_fail`** — Fires when the check fails (fatal issues or `fail_if` triggered):
+
+```yaml
+validate-input:
+  type: ai
+  fail_if: "output.valid === false"
+  on_fail:
+    goto: ask  # Loop back for retry
+    # or use transitions:
+    # transitions:
+    #   - when: "output.error === 'auth'"
+    #     to: auth-handler
+```
+
+**`on_finish`** — Fires regardless of success/failure:
+
+```yaml
+cleanup-step:
+  type: command
+  on_finish:
+    run: log-completion  # Always run logging
+```
+
+**`goto` vs `run`**:
+
+- `goto`: Preempts remaining work and jumps to the target. Used for loops and error recovery.
+- `run`: Schedules the target after current wave completes. Used for side-effects like logging.
 
 ### Use `if` and `assume` for semantics, not wiring
 
@@ -255,42 +350,44 @@ Guidelines:
 
 ---
 
-## Migration: from router‑as‑dependency to router‑as‑control‑plane
+## Migration and testing best practices
 
-If you have existing workflows where:
+### When to migrate
 
-- router checks use `on_success.transitions`, and
-- branches also `depends_on` the router, and
-- leaf steps loop back via `goto: <entry-step>`,
+If you have existing workflows with unexpected loop counts or router re‑runs, consider these options:
 
-then you’re in the “double‑edge” pattern and may hit the same kind of loops we saw in Slack.
+1. **Keep Pattern B** (branches depend on router) — This is safe with the current engine. Just ensure you have:
+   - `if` guards on branches
+   - `routing.max_loops` set appropriately
+   - Test assertions for expected call counts
 
-### Migration steps
+2. **Migrate to Pattern A** (branches don't depend on router) — This is cleaner if branches don't actually need router output.
 
-1. **Identify router checks**  
+### Migration steps (if needed)
+
+1. **Identify router checks**
    - Look for AI/script steps that:
      - read from a single human‑input or transport context, and
      - fan‑out into multiple branches via `transitions`.
 
-2. **Remove router from branch `depends_on`**  
+2. **Remove router from branch `depends_on`** (optional)
    - For each branch:
-     - Remove `depends_on: [router]`.
+     - Remove `depends_on: [router]` if you don't need explicit ordering.
      - Keep other dependencies (e.g. context fetch, sub‑routers).
 
-3. **Add `if` / `assume` guards on branches**
-   - Replace router‑dependency semantics with guards:
+3. **Ensure `if` guards on branches**
+   - All branches should have guards regardless of pattern:
 
    ```yaml
    chat-answer:
-     # was: depends_on: [route-intent]
      if: "outputs['route-intent']?.intent === 'chat'"
    ```
 
 4. **Keep explicit loops**
    - Leave `goto: ask` and inner loops (`project-deploy-confirm` ↔ `project-deploy-answer`) as they are.
-   - The loop behavior remains explicit and is no longer entangled with router dependencies.
+   - The loop behavior is explicit and controlled by `routing.max_loops`.
 
-5. **Increase `routing.max_loops` and add strict call expectations**
+5. **Add strict call expectations in tests**
    - In YAML tests, set a reasonable `routing.max_loops` (e.g. 5–10).
    - Assert `exactly` call counts for:
      - router(s),
@@ -328,12 +425,27 @@ Once most configs follow this pattern, engine‑level improvements (e.g. smarter
   - Use routers (`route-intent`, `project-intent`, …) as control‑plane steps:
     - `depends_on` only real inputs,
     - route with `transitions`.
-  - Keep branches free of router `depends_on`; gate them with `if` / `assume`.
-  - Use `depends_on` only for real data dependencies.
+  - Use `if` guards on branches to skip when not selected by the router.
+  - Use `depends_on` for real data dependencies (including router → branch when you need the router's output).
   - Use `goto`/`transitions` for loops and control‑flow.
+  - Set `routing.max_loops` and add strict call count expectations in tests.
+
+- **Acceptable**:
+  - Having `depends_on: [router]` on branches when you need explicit ordering or access to router output — the engine deduplicates successful runs.
 
 - **Avoid**:
-  - Wiring the same edge both via `depends_on` and `transitions`.
-  - Using `assume` as a routing mechanism.
+  - Relying on implicit re‑runs of routers (use explicit `goto` for loops).
+  - Using `assume` as a routing mechanism (use `if` or `transitions` instead).
 
-Following this pattern produces clearer configs, avoids accidental router loops, and matches how the state‑machine’s forward‑run planner is intended to be used.***
+Following these patterns produces clearer configs, leverages the engine's forward‑run deduplication, and makes loop behavior explicit and testable.
+
+---
+
+## Related documentation
+
+- [Recipes](./recipes.md) — General routing patterns and chat examples
+- [Fault Management and Contracts](./guides/fault-management-and-contracts.md) — `assume`, `guarantee`, and criticality
+- [Criticality Modes](./guides/criticality-modes.md) — When to use `internal`, `external`, `policy`, `info`
+- [Loop Routing Refactor](./loop-routing-refactor.md) — Technical details on forward-run deduplication
+- [Human Input Provider](./human-input-provider.md) — Chat loops and `human-input` type
+- [Debugging Guide](./debugging.md) — Tracing routing decisions with OpenTelemetry

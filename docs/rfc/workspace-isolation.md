@@ -1,5 +1,21 @@
 # Isolated Workspace with Full Run Separation
 
+## Status
+**Implemented** - Feature is complete and available for use
+
+### Decision Record
+- **Date**: 2025 (exact date not recorded)
+- **Decision**: Implement isolated workspaces using git worktrees in `/tmp`
+- **Rationale**: Provides full isolation between parallel visor runs, avoids git-in-git issues, and enables human-readable project paths within the workspace
+
+### Implementation Files
+- `src/utils/workspace-manager.ts` - Core WorkspaceManager class
+- `src/state-machine/context/build-engine-context.ts` - Workspace initialization via `initializeWorkspace()`
+- `src/providers/git-checkout-provider.ts` - Integration to add projects to workspace
+- `src/types/engine.ts` - Added `workspace` and `originalWorkingDirectory` to EngineContext
+- `src/types/git-checkout.ts` - Added `workspace_path` to GitCheckoutOutput
+- `tests/unit/workspace-manager.test.ts` - Unit tests
+
 ## Goal
 
 Provide **full isolation between parallel visor runs** with human-readable project names. Each run gets its own workspace in `/tmp` containing worktrees for all projects, ensuring no interference between concurrent executions.

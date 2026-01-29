@@ -77,7 +77,8 @@ steps:
     on_success:
       run: [notify]
       goto_js: |
-        return attempt === 1 ? 'unit' : null;  # only once
+        // Jump back only once using history length as proxy for attempt count
+        return outputs.history['build'].length === 1 ? 'unit' : null;
   notify: { type: command, exec: "echo notify" }
 ```
 
@@ -117,10 +118,45 @@ Per-step actions:
   - `retry`: `{ max, backoff: { mode: fixed|exponential, delay_ms } }`
   - `run`: `[step-id, …]`
   - `goto`: `step-id` (ancestor-only)
+  - `goto_event`: event to simulate during goto (e.g., `pr_updated`)
   - `run_js`: JS returning `string[]`
   - `goto_js`: JS returning `string | null`
+  - `transitions`: declarative transition rules (see below)
 - `on_success`:
-  - `run`, `goto`, `run_js`, `goto_js` (same types and constraints as above)
+  - `run`, `goto`, `goto_event`, `run_js`, `goto_js`, `transitions` (same types and constraints as above)
+- `on_finish` (forEach checks only):
+  - `run`, `goto`, `goto_event`, `run_js`, `goto_js`, `transitions` (same types and constraints as above)
+
+### Declarative Transitions
+
+The `transitions` field provides a declarative alternative to `goto_js`. It is an array of rules evaluated in order; the first matching rule wins:
+
+```yaml
+steps:
+  validate:
+    type: ai
+    on_success:
+      transitions:
+        - when: "outputs['validate'].score >= 90"
+          to: publish
+        - when: "outputs['validate'].score >= 70"
+          to: review
+        - when: "true"  # default fallback
+          to: reject
+```
+
+Each rule has:
+- `when`: JavaScript expression evaluated in the same sandbox as `goto_js`
+- `to`: target step ID, or `null` to explicitly skip goto
+- `goto_event`: optional event override (same as `goto_event` above)
+
+Helper functions available in `when` expressions:
+- `any(arr, pred)` - returns true if any element matches predicate
+- `all(arr, pred)` - returns true if all elements match predicate
+- `none(arr, pred)` - returns true if no element matches predicate
+- `count(arr, pred)` - returns count of elements matching predicate
+
+When `transitions` is present, it takes precedence over `goto_js` and `goto`.
 
 ## Semantics
 
@@ -128,7 +164,7 @@ Per-step actions:
 - Run: on failure (or success), run listed steps first; if successful, the failed step is re-attempted once (failure path).
 - Goto (ancestor-only): jump back to a previously executed dependency, then continue forward. On success, Visor re-runs the current step once after the jump.
 - Loop safety: `routing.max_loops` counts all routing transitions (runs, gotos, retries). Exceeding it aborts the current scope with a clear error. For a hard cap on repeated executions of the same step, see [Execution Limits](./limits.md).
-- forEach: each item is isolated with its own loop/attempt counters; `*_js` receives `{ foreach: { index, total, parent } }`.
+- forEach: each item is isolated with its own loop/attempt counters; `*_js` in on_finish context receives forEach metadata (see [Available Context in on_finish](#available-context-in-on_finish)).
 
 ### Fan‑out vs. Reduce (Phase 5)
 
@@ -214,7 +250,8 @@ steps:
     on: [pr_opened, pr_updated]
     on_success:
       goto_js: |
-        return attempt === 1 ? 'overview' : null
+        // Jump back only once using history length as proxy for attempt count
+        return outputs.history['quality'].length === 1 ? 'overview' : null
       goto_event: pr_updated
 ```
 
@@ -225,10 +262,15 @@ When to use goto_event vs. full re-run:
 ## Dynamic JS (safe, sync only)
 
 - `goto_js` / `run_js` are evaluated in a sandbox with:
-  - Read-only context: `{ step, attempt, loop, error, foreach, outputs, pr, files, env }`
+  - Read-only context: `{ step, outputs, outputs_history, outputs_raw, output, memory, event, forEach }`
   - `outputs` contains current values, `outputs.history` contains arrays of all previous values (see [Output History](./output-history.md))
+  - `outputs_raw` provides aggregate/parent values (e.g., full array from forEach parent)
+  - `memory` provides read/write access to the memory store (get, set, has, getAll, increment, clear)
+  - `log()` function available for debugging (outputs with `Debug:` prefix)
   - Pure sync execution; no IO, no async, no timers, no require/process.
   - Time and size limits (short wall time; small code/output caps) — evaluation failures fall back to static routing.
+
+Note: The `on_finish` context is richer and additionally includes `attempt`, `loop`, `pr`, `files`, and `env`.
 
 Return types:
 - `goto_js`: a `string` (step id) or `null`/`undefined` to skip.
@@ -236,9 +278,10 @@ Return types:
 
 ## Guardrails & Tips
 
-- Keep `max_loops` small (5–10). Add retries sparingly and prefer remediation over blind loops.
+- Keep `max_loops` small (5-10). Add retries sparingly and prefer remediation over blind loops.
 - Restrict `goto` to ancestors to preserve dependency semantics and avoid hard-to-reason paths.
-- For expensive remediations, put them behind `run_js` conditions keyed to `error.message`/`stderr`.
+- For expensive remediations, put them behind `run_js` conditions keyed to `output` or `outputs.history` values.
+- Use `outputs.history['check-name'].length` as a proxy for attempt count in `goto_js`/`run_js`.
 - In CI, you can override defaults with CLI flags (future): `--on-fail-max-loops`, `--retry-max`.
 
 ## on_finish Hook (forEach Aggregation & Routing)
@@ -289,30 +332,44 @@ The `on_finish` hooks have access to the complete execution context:
 {
   step: { id: 'extract-facts', tags: [...], group: '...' },
   attempt: 1,              // Current attempt number for this check
-  loop: 2,                 // Current loop number in routing
+  loop: 0,                 // Current loop number in routing
   outputs: {
-    'extract-facts': [...], // Array of forEach items
-    'validate-fact': [...], // Array of ALL dependent results
+    'extract-facts': [...],   // Array of forEach items
+    'validate-fact': [...],   // Array of ALL dependent results
+    history: { ... }          // Alias for outputs_history
   },
-  outputs.history: {
+  outputs_history: {
     'extract-facts': [[...], ...], // Cross-loop history
     'validate-fact': [[...], ...], // All results from all iterations
   },
-  // Alias (also available):
-  outputs_history: {
-    'extract-facts': [[...], ...],
-    'validate-fact': [[...], ...],
+  outputs_raw: {
+    'extract-facts': [...],   // Aggregate/parent values
+    'validate-fact': [...],
   },
   forEach: {
-    total: 3,              // Total number of items
-    successful: 3,         // Number of successful iterations
-    failed: 0,             // Number of failed iterations
-    items: [...]           // The forEach items array
+    items: 3,              // Number of forEach items
+    last_wave_size: 3,     // Items in the last wave (when forEach parent)
+    last_items: [...],     // The forEach items array (when forEach parent)
+    is_parent: true        // Indicates this check is a forEach parent
   },
-  memory,                  // Memory access functions
-  pr,                      // PR metadata
-  files,                   // Changed files
-  env                      // Environment variables
+  memory: {                // Memory access functions
+    get: (key, ns?) => ...,
+    set: (key, value, ns?) => ...,
+    has: (key, ns?) => ...,
+    getAll: (ns?) => ...,
+    increment: (key, amount?, ns?) => ...,
+    clear: (ns?) => ...
+  },
+  pr: {                    // PR metadata
+    number: 123,
+    title: '...',
+    author: '...',
+    branch: '...',
+    base: '...'
+  },
+  files: [...],            // Changed files
+  env: { ... },            // Environment variables (filtered for safety)
+  event: { name: '...' }   // Event that triggered execution
 }
 ```
 

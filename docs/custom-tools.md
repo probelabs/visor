@@ -141,14 +141,39 @@ Custom tools are designed to be fully compatible with the Model Context Protocol
 
 ## Using Custom Tools
 
-Once defined, custom tools can be used in any MCP block by setting `transport: custom`:
+### In AI Steps
+
+Use `ai_custom_tools` to expose custom tools to AI providers via an ephemeral MCP server. See [AI Custom Tools](./ai-custom-tools.md) for complete documentation.
+
+```yaml
+steps:
+  ai-review:
+    type: ai
+    prompt: |
+      Use the available tools to analyze the code for issues.
+    ai_custom_tools:
+      - grep-pattern
+      - file-stats
+    ai:
+      provider: anthropic
+      model: claude-3-5-sonnet-20241022
+```
+
+### In MCP Steps
+
+Custom tools can also be used directly in MCP steps by setting `transport: custom`. The MCP provider supports four transport types:
+
+- `stdio` - Spawn an MCP server as a subprocess (default)
+- `sse` - Connect to an MCP server via Server-Sent Events (legacy)
+- `http` - Connect via Streamable HTTP transport
+- `custom` - Execute YAML-defined custom tools directly
 
 ```yaml
 steps:
   my-check:
     type: mcp
-    transport: custom              # Use custom transport
-    method: my-tool                 # Tool name
+    transport: custom              # Use custom transport for YAML-defined tools
+    method: my-tool                 # Tool name (must be defined in tools: section)
     methodArgs:                     # Tool arguments
       param1: "value1"
       param2: 42
@@ -160,17 +185,23 @@ Tools have access to a rich template context through Liquid templates:
 
 ### In `exec` and `stdin`:
 - `{{ args }}` - The arguments passed to the tool
-- `{{ pr }}` - Pull request information (number, title, author, etc.)
+- `{{ input }}` - Alias for `args` (same object)
+- `{{ pr }}` - Pull request information:
+  - `{{ pr.number }}` - PR number
+  - `{{ pr.title }}` - PR title
+  - `{{ pr.author }}` - PR author
+  - `{{ pr.branch }}` - Head branch name
+  - `{{ pr.base }}` - Base branch name
 - `{{ files }}` - List of files in the PR
 - `{{ outputs }}` - Outputs from previous checks
 - `{{ env }}` - Environment variables
 
 ### In `transform` and `transform_js`:
 - All of the above, plus:
-- `{{ output }}` - The raw command output
-- `{{ stdout }}` - Standard output
-- `{{ stderr }}` - Standard error
-- `{{ exitCode }}` - Command exit code
+- `{{ output }}` - The raw command output (or parsed JSON if `parseJson: true`)
+- `{{ stdout }}` - Standard output (raw string)
+- `{{ stderr }}` - Standard error (raw string)
+- `{{ exitCode }}` - Command exit code (number)
 
 ## Examples
 

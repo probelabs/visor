@@ -37,12 +37,17 @@ Use this top‑down order for every step. Omit sections that don’t apply.
 - `if`
 
 4) Provider Configuration (Only fields for the given type)
-- ai: `prompt`, `ai.{model,provider,tools,…}`
-- command: `exec`, `args`, `cwd`, `shell`
-- script: `content` or `file`
+- ai: `prompt`, `ai.{model,provider,tools,…}`, `ai_custom_tools`
+- command: `exec`, `stdin`, `cwd`, `timeout`
+- script: `content`
 - github: `op`, `values`
-- http/http_client/http_input: `url`, `method`, `body`, `headers`
-- log/memory/workflow/noop: minimal fields
+- http/http_client/http_input: `url`, `method`, `body`, `headers`, `endpoint`, `transform`
+- mcp: `transport`, `url`, `command`, `command_args`, `methodArgs`
+- log: `message`, `level`
+- memory: `operation`, `key`, `value`, `namespace`
+- workflow: `workflow`, `args`, `overrides`, `output_mapping`
+- git-checkout: `ref`, `repository`, `working_directory`
+- noop/human-input/claude-code: minimal fields
 
 5) Contracts (Post‑Exec)
 - `schema` (renderer name or JSON Schema)
@@ -53,6 +58,7 @@ Use this top‑down order for every step. Omit sections that don’t apply.
 - `continue_on_failure`
 
 7) Routing & Transitions
+- `on_init`
 - `on_success`
 - `on_fail`
 - `on_finish`
@@ -170,6 +176,7 @@ apply-issue-labels:
 
 ## YAML Style
 
+- Use `steps:` (preferred) or `checks:` as the top‑level key for step definitions.
 - Prefer block arrays/lists over inline `[]` unless trivially short.
 - Quote JS expressions in `assume`/`if` using double quotes.
 - Use `|` for multiline `prompt`/`content`; avoid trailing whitespace.
@@ -218,7 +225,9 @@ apply-overview-labels:
 
 ## References
 
-- Fault Management & Contracts
-- Criticality Modes
-- Dependencies & Routing
+- [Fault Management & Contracts](./fault-management-and-contracts.md) — safety checklist, behavior matrix, examples
+- [Criticality Modes](./criticality-modes.md) — external, internal, policy, info definitions and defaults
+- [Dependencies & Routing](../dependencies.md) — dependency patterns, fanout, session reuse
+- [Failure Routing](../failure-routing.md) — on_fail, on_success, on_finish hooks
+- [Output History](../output-history.md) — accessing historical outputs in expressions
 

@@ -119,28 +119,31 @@ npx -y @probelabs/visor@latest --check all --output json --output-file visor-res
 Create a `.visor.yaml` file in your project root:
 
 ```yaml
-project:
-  name: my-project
-  language: typescript
+version: "1"
 
-steps:
-  - type: ai
-    prompt: security
-  - type: ai
-    prompt: performance
-    
-output:
-  format: table
-  verbose: false
+checks:
+  security-review:
+    type: ai
+    schema: code-review
+    prompt: |
+      Review the code for security vulnerabilities.
 
-## Structured outputs and schemas (unified `schema`)
+  performance-review:
+    type: ai
+    schema: code-review
+    prompt: |
+      Review the code for performance issues.
+```
 
-Use a single `schema` field:
+For complete configuration options, see the [Configuration Guide](./configuration.md).
 
-- Strings (e.g., `code-review` or `markdown`) select the renderer/template and do not imply validation.
-- Objects (JSON Schema) validate the produced `output` after execution for any provider (ai, command, script, http).
+### Structured Outputs and Schemas
 
-Examples:
+Use a `schema` field to control output format and validation:
+
+- **String schemas** (e.g., `code-review`, `markdown`) select a rendering template
+- **Object schemas** (JSON Schema) validate the produced `output`
+
 ```yaml
 checks:
   summary:
@@ -159,30 +162,9 @@ checks:
       required: [ok, items]
     prompt: |
       Return JSON with ok and items...
-
-  parse:
-    type: command
-    exec: node scripts/parse.js
-    schema:
-      type: object
-      properties:
-        count: { type: integer }
-      required: [count]
-
-  aggregate:
-    type: script
-    content: |
-      return { all_valid: true };
-    schema:
-      type: object
-      properties:
-        all_valid: { type: boolean }
-      required: [all_valid]
-      additionalProperties: false
 ```
 
-Note: `output_schema` is deprecated and kept for backward compatibility. Prefer `schema` as a JSON object for validation.
-```
+> **Note**: `output_schema` is deprecated. Use `schema` instead.
 
 ## Environment Variables
 
@@ -196,6 +178,73 @@ export ANTHROPIC_API_KEY=your-key-here
 export OPENAI_API_KEY=your-key-here
 ```
 
+## Subcommands
+
+Visor supports several subcommands for different workflows:
+
+### validate / lint
+
+Validate your configuration file before running:
+
+```bash
+visor validate --config .visor.yaml
+visor lint --config .visor.yaml  # alias
+```
+
+### test
+
+Run YAML-based test suites:
+
+```bash
+visor test                              # Discover and run all test suites
+visor test --config tests/             # Run tests in a directory
+visor test --only "my-test-case"       # Run specific test case
+visor test --bail                       # Stop on first failure
+```
+
+See the [Test Framework documentation](./testing/getting-started.md) for details.
+
+### code-review / review
+
+Run the built-in code review workflow:
+
+```bash
+visor code-review                       # Review current branch changes
+visor review                            # alias
+```
+
+### mcp-server
+
+Start Visor as an MCP (Model Context Protocol) server:
+
+```bash
+visor mcp-server --config .visor.yaml
+```
+
+## CLI Options Reference
+
+| Option | Description |
+|--------|-------------|
+| `-c, --check <type>` | Specify check(s) to run (can be used multiple times) |
+| `-o, --output <format>` | Output format: `table`, `json`, `markdown`, `sarif` |
+| `--output-file <path>` | Write output to file instead of stdout |
+| `--config <path>` | Path to configuration file |
+| `--timeout <ms>` | Timeout in milliseconds (default: 1200000 / 20 min) |
+| `--max-parallelism <n>` | Max parallel checks (default: 3) |
+| `--debug` | Enable debug mode |
+| `-v, --verbose` | Increase verbosity |
+| `-q, --quiet` | Reduce output to warnings/errors |
+| `--fail-fast` | Stop on first failure |
+| `--tags <tags>` | Run checks with these tags (comma-separated) |
+| `--exclude-tags <tags>` | Skip checks with these tags |
+| `--event <type>` | Simulate event: `pr_opened`, `pr_updated`, `manual`, etc. |
+| `--analyze-branch-diff` | Analyze diff vs base branch |
+| `--tui` | Enable interactive TUI mode |
+| `--debug-server` | Start debug visualizer |
+| `--message <text>` | Message for human-input checks |
+
+For complete CLI documentation, see the [CI/CLI Mode Guide](./ci-cli-mode.md).
+
 ## CI/CD Integration
 
 Add to your GitHub Actions workflow:
@@ -206,3 +255,27 @@ Add to your GitHub Actions workflow:
   env:
     GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
 ```
+
+### SARIF Output for GitHub Code Scanning
+
+```yaml
+- name: Run Security Scan
+  run: npx -y @probelabs/visor@latest --check security --output sarif --output-file results.sarif
+  env:
+    OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+- name: Upload SARIF
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: results.sarif
+```
+
+For complete CI/CD examples, see the [CI/CLI Mode Guide](./ci-cli-mode.md).
+
+## Related Documentation
+
+- [Configuration Guide](./configuration.md) - Complete configuration reference
+- [AI Configuration](./ai-configuration.md) - AI provider setup and options
+- [CI/CLI Mode Guide](./ci-cli-mode.md) - GitHub Actions and CI integration
+- [Test Framework](./testing/getting-started.md) - Writing and running tests
+- [Troubleshooting](./troubleshooting.md) - Common issues and solutions

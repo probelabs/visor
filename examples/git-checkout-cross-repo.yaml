@@ -13,6 +13,7 @@ steps:
     ref: "{{ pr.head }}"
     token: "{{ env.GITHUB_TOKEN }}"
     criticality: internal
+    assume: "env.GITHUB_TOKEN"  # Ensure token is available
 
   # Checkout shared library repository
   checkout-lib:
@@ -21,6 +22,7 @@ steps:
     ref: main
     token: "{{ env.GITHUB_TOKEN }}"
     criticality: internal
+    assume: "env.GITHUB_TOKEN"  # Ensure token is available
 
   # Checkout test utilities repository
   checkout-test-utils:
@@ -29,6 +31,7 @@ steps:
     ref: v2.0.0
     token: "{{ env.GITHUB_TOKEN }}"
     criticality: internal
+    assume: "env.GITHUB_TOKEN"  # Ensure token is available
 
   # Install dependencies in all repositories
   install-deps:
@@ -43,6 +46,8 @@ steps:
 
       echo "Installing dependencies for test utils..."
       cd "{{ outputs['checkout-test-utils'].path }}" && npm install
+    assume: "outputs['checkout-app'] && outputs['checkout-lib'] && outputs['checkout-test-utils']"
+    schema: plain
     criticality: internal
 
   # Run integration tests
@@ -54,6 +59,8 @@ steps:
       export TEST_UTILS_PATH="{{ outputs['checkout-test-utils'].path }}"
       npm run test:integration
     working_directory: "{{ outputs['checkout-app'].path }}"
+    assume: "outputs['install-deps']"
+    schema: plain
     criticality: internal
 
   # Generate integration report

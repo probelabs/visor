@@ -35,8 +35,9 @@ Common issues and how to fix them quickly.
 
 ## How do I see more logs?
 
-- Set `VISOR_DEBUG=true`.
-- To isolate the problem, run a single stage: `visor test --only case#stage`.
+- Use the `--debug` CLI flag or set `VISOR_DEBUG=true`.
+- To isolate the problem, run a single stage: `visor test --only case#stage` (name substring match) or `--only case#N` (1-based index).
+- Example: `visor test --debug --only pr-review-e2e-flow#facts-invalid`
 
 ## Pause at “on_finish: no result found … — skip”
 
@@ -53,3 +54,39 @@ What we changed: we added an early return in `handleOnFinishHooks` when there ar
 Downsides: none functionally. The only trade‑off is that debug visibility is slightly reduced in that specific “no parents ran” case; enable `VISOR_DEBUG=true` if you need to trace the discovery step regardless.
 
 Guarantee: if a check executed and defines `on_finish`, `on_finish` still executes for that check once its forEach finishes. The early return only triggers when no eligible parent produced results in the run.
+
+## Mock structure does not match expected output
+
+- Ensure mock shapes match what the step schema expects. For AI steps with a schema, provide structured fields directly (not wrapped in `returns:`).
+- For command/HTTP provider steps, include `stdout`, `exit_code`, `status`, or `body` as appropriate.
+- Review [Fixtures and Mocks](./fixtures-and-mocks.md) for detailed mock examples.
+
+## Flow stage fails unexpectedly
+
+- Each stage computes coverage as a delta from the previous stage. If a step from a prior stage executes again, you need to account for it in the current stage's `expect.calls`.
+- Check that mocks are merged correctly: stage mocks override flow-level mocks (`{...flow.mocks, ...stage.mocks}`).
+- Use `--only case#stage` to isolate and debug a single stage.
+
+## CI test runs slower than expected
+
+- Ensure `ai_provider: mock` is set in `tests.defaults` for offline, fast execution.
+- Use `--max-parallel` to run cases concurrently within a suite.
+- Use `--max-suites` when running multiple test files.
+- Consider `--prompt-max-chars` to reduce memory usage for large diffs.
+
+## Tests pass locally but fail in CI
+
+- Check for environment variable differences. CI auto-detects and adjusts some defaults (e.g., `VISOR_TEST_PROMPT_MAX_CHARS`).
+- Ensure fixtures don't depend on local file paths or network access.
+- Run with `--debug` in CI to capture more diagnostic output.
+
+## Related Documentation
+
+- [Getting Started](./getting-started.md) - Introduction to the test framework
+- [DSL Reference](./dsl-reference.md) - Complete test YAML schema
+- [Assertions](./assertions.md) - Available assertion types
+- [Fixtures and Mocks](./fixtures-and-mocks.md) - Managing test data
+- [Flows](./flows.md) - Multi-stage test flows
+- [Cookbook](./cookbook.md) - Copy-pasteable test recipes
+- [CLI](./cli.md) - Test runner command line options
+- [CI Integration](./ci.md) - Running tests in CI pipelines

@@ -731,8 +731,11 @@ Highlights
 - permission-check (policy) gates external actions without itself mutating external systems.
 - post-comment (external) uses both `if` (early prune) and `assume` (preflight) plus a `guarantee` after posting.
 - summarize shows a non‑critical step with soft failure handling via `continue_on_failure: true`.
-```
-- JSON Schema validation (unified `schema`)
-  - `schema: <string>` selects layout/renderer (no validation).
-  - `schema: <object>` is a JSON Schema; the engine validates `output` for any provider (ai/command/script/http). Violations create `contract/schema_validation_failed` and follow criticality rules.
-  - `output_schema` is deprecated; keep it only for backward compatibility.
+
+## JSON Schema Validation (unified `schema`)
+
+The `schema` field has been unified to handle both template selection and output validation:
+
+- `schema: <string>` selects a layout/renderer (e.g., `'code-review'`, `'markdown'`) for template rendering.
+- `schema: <object>` is a JSON Schema; the engine validates `output` for any provider (ai/command/script/http). Violations create `contract/schema_validation_failed` issues and follow criticality rules.
+- `output_schema` is deprecated; keep it only for backward compatibility. When both `schema` (object) and `output_schema` are present, `schema` takes precedence for validation.

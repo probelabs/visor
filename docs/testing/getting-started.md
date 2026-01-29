@@ -4,10 +4,10 @@ This is the developer-facing guide for writing and running integration tests for
 
 ## TL;DR
 
-- Put your tests in `defaults/.visor.tests.yaml`.
+- Put your tests in `defaults/visor.tests.yaml`.
 - Reference your base config with `extends: ".visor.yaml"`.
 - Use built-in GitHub fixtures like `gh.pr_open.minimal`.
-- Run with `visor test --config defaults/.visor.tests.yaml`.
+- Run with `visor test --config defaults/visor.tests.yaml`.
 - Validate only with `visor test --validate`.
 
 ```yaml
@@ -78,16 +78,17 @@ Run `visor test --validate` to get precise YAML-path errors and suggestions:
 ```
 ❌ Tests file has 2 error(s):
    • tests.cases[0].expext: must NOT have additional properties (Did you mean "expect"?)
-   • tests.cases[3].event: must be equal to one of the allowed values (allowed: manual, pr_opened, pr_updated, pr_closed, issue_opened, issue_comment)
+   • tests.cases[3].event: must be equal to one of the allowed values (allowed: manual, pr_opened, pr_updated, pr_closed, issue_opened, issue_comment, schedule, webhook_received)
 ```
 
-Next steps:
-- Core reference: `docs/testing/dsl-reference.md`
-- Flows: `docs/testing/flows.md`
-- Mocks & fixtures: `docs/testing/fixtures-and-mocks.md`
-- Assertions: `docs/testing/assertions.md`
-- Cookbook: `docs/testing/cookbook.md`
-- CLI & reporters: `docs/testing/cli.md`
-- CI integration: `docs/testing/ci.md`
-- Troubleshooting: `docs/testing/troubleshooting.md`
-- Browse `defaults/.visor.tests.yaml` for full examples.
+## Next Steps
+
+- [DSL Reference](./dsl-reference.md) - Complete test YAML schema
+- [Flows](./flows.md) - Multi-stage test flows
+- [Fixtures and Mocks](./fixtures-and-mocks.md) - Managing test data
+- [Assertions](./assertions.md) - Available assertion types
+- [Cookbook](./cookbook.md) - Common patterns and recipes
+- [CLI and Reporters](./cli.md) - Command-line options and output formats
+- [CI Integration](./ci.md) - Running tests in CI pipelines
+- [Troubleshooting](./troubleshooting.md) - Common issues and solutions
+- Browse `defaults/visor.tests.yaml` for full examples.

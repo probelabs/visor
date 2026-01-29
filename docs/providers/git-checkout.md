@@ -40,10 +40,11 @@ steps:
     token: "{{ env.GITHUB_TOKEN }}"
 
     # Optional: Fetch configuration
-    fetch_depth: 1                    # Shallow clone depth (default: 1)
+    fetch_depth: 1                    # Shallow clone depth (default: full history)
     fetch_tags: false                 # Fetch tags (default: false)
     submodules: false                 # Checkout submodules (default: false)
                                       # Can be: true, false, or 'recursive'
+    clone_timeout_ms: 300000          # Clone timeout in milliseconds (default: 300000 = 5 min)
 
     # Optional: Working directory (auto-generated if not specified)
     working_directory: /tmp/my-checkout
@@ -80,6 +81,7 @@ The provider returns the following output structure:
   worktree_id: string,      // Unique worktree identifier
   repository: string,       // Repository that was checked out
   is_worktree: boolean,     // Whether this is a worktree
+  workspace_path?: string,  // Human-readable path within workspace (when workspace isolation is enabled)
   error?: string,           // Error message if failed
 }
 ```
@@ -367,20 +369,20 @@ export VISOR_WORKTREE_PATH=/custom/path/to/worktrees
 
 This takes precedence over the config file.
 
-### CLI Commands for Worktree Management
+### Automatic Worktree Cleanup
+
+Worktrees are automatically cleaned up in the following scenarios:
+
+- **On process exit**: When the visor process terminates normally
+- **On SIGINT/SIGTERM**: When the process receives interrupt signals (Ctrl+C)
+- **Age-based cleanup**: Worktrees older than `max_age_hours` are removed on subsequent runs
+- **Stale process cleanup**: Worktrees from dead processes are automatically removed
+
+To manually clean up worktrees, you can remove the `.visor/worktrees/` directory:
 
 ```bash
-# List all worktrees
-visor worktree list
-
-# Cleanup stale worktrees
-visor worktree cleanup
-
-# Cleanup all worktrees for a repository
-visor worktree cleanup --repo=owner/repo
-
-# Cleanup all worktrees (careful!)
-visor worktree cleanup --all
+# Remove all worktrees for current project
+rm -rf .visor/worktrees/
 ```
 
 ## Best Practices
@@ -580,10 +582,10 @@ Typical performance (example repository: 100MB):
 
 - Configure `max_age_hours` to prevent disk exhaustion
 - Use timeouts to prevent hanging checkouts
-- Monitor disk usage in `/tmp/visor-worktrees/`
+- Monitor disk usage in `.visor/worktrees/` (or custom `VISOR_WORKTREE_PATH`)
 
 ## Related Documentation
 
-- [Command Provider](./command.md) - Execute commands in checked out code
-- [Workflow Provider](./workflow.md) - Compose multi-step workflows
+- [Command Provider](../command-provider.md) - Execute commands in checked out code
+- [Workflows](../workflows.md) - Compose multi-step workflows
 - [Configuration Reference](../configuration.md) - Full configuration options

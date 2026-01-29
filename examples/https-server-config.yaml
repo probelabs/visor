@@ -56,6 +56,9 @@ steps:
 
   github-webhook:
     type: http_input
+    criticality: external
+    assume: "true"
+    schema: plain
     endpoint: "/webhook/github"
     on: [webhook_received]
     transform: |
@@ -68,6 +71,9 @@ steps:
 
   jenkins-webhook:
     type: http_input
+    criticality: external
+    assume: "true"
+    schema: plain
     endpoint: "/webhook/jenkins"
     on: [webhook_received]
     transform: |
@@ -80,6 +86,9 @@ steps:
 
   datadog-alert:
     type: http_input
+    criticality: external
+    assume: "true"
+    schema: plain
     endpoint: "/webhook/datadog"
     on: [webhook_received]
     transform: |
@@ -136,6 +145,9 @@ steps:
   # Send to secure internal API using HTTPS
   internal-api-notification:
     type: http
+    criticality: external
+    assume: "outputs['github-analysis'] && outputs['jenkins-build-analysis']"
+    schema: plain
     depends_on: [github-analysis, jenkins-build-analysis]
     url: "https://internal-api.example.com/notifications"
     method: POST
@@ -156,6 +168,9 @@ steps:
   # Fetch from secure API endpoint
   secure-api-fetch:
     type: http_client
+    criticality: external
+    assume: "true"
+    schema: plain
     url: "https://secure-api.example.com/data"
     method: GET
     headers:

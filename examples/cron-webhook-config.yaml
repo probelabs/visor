@@ -42,6 +42,9 @@ steps:
   # Send security scan results to Slack
   security-to-slack:
     type: http
+    criticality: external
+    assume: "outputs['nightly-security-scan']"
+    schema: plain
     depends_on: [nightly-security-scan]
     url: "${SLACK_WEBHOOK_URL}"  # Read from SLACK_WEBHOOK_URL environment variable
     method: POST
@@ -103,6 +106,9 @@ steps:
   # Webhook input for deployment notifications
   deployment-webhook:
     type: http_input
+    criticality: external
+    assume: "true"
+    schema: plain
     endpoint: "/deploy"
     on: [webhook_received]
 
@@ -129,6 +135,9 @@ steps:
   # Send deployment analysis to ops team
   notify-ops-team:
     type: http
+    criticality: external
+    assume: "outputs['post-deploy-validation']"
+    schema: plain
     depends_on: [post-deploy-validation]
     url: "${OPS_WEBHOOK_URL}"  # Read from OPS_WEBHOOK_URL environment variable
     method: POST
@@ -154,6 +163,9 @@ steps:
   # CI completion webhook input
   ci-completion:
     type: http_input
+    criticality: external
+    assume: "true"
+    schema: plain
     endpoint: "/ci-complete"
     transform: |
       {
@@ -196,6 +208,9 @@ steps:
   # Send monitoring alerts
   monitoring-alert:
     type: http
+    criticality: external
+    assume: "outputs['business-hours-monitor']"
+    schema: plain
     depends_on: [business-hours-monitor]
     url: "${ALERT_WEBHOOK_URL}"  # Read from ALERT_WEBHOOK_URL environment variable
     body: |

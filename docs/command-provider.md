@@ -29,12 +29,18 @@ steps:
 | `transform` | string | No | Liquid template to transform output |
 | `transform_js` | string | No | JavaScript expression to transform output (evaluated in sandbox) |
 | `env` | object | No | Environment variables to pass to the command |
-| `timeout` | number | No | Command timeout in seconds (default: 60) |
+| `timeout` | number | No | Command timeout in milliseconds (default: 60000, i.e., 60 seconds) |
 | `depends_on` | array | No | Other checks this depends on |
 | `forEach` | object | No | Run command for each item in a collection |
 | `group` | string | No | Group name for organizing results |
 | `on` | array | No | Events that trigger this check |
+| `if` | string | No | Condition expression - check runs only if true |
+| `fail_if` | string | No | Condition expression - check fails if true |
+| `on_fail` | object | No | Failure routing configuration (retry, goto, run) |
+| `on_success` | object | No | Success routing configuration |
+| `continue_on_failure` | boolean | No | Allow dependents to run even if this step fails |
 | `tags` | array | No | Tags for filtering checks |
+| `output_format` | string | No | Output parsing hint: `"json"` or `"text"` |
 
 ## Auto‑JSON Access (no JSON.parse needed)
 
@@ -304,26 +310,26 @@ steps:
 
 ### Timeout Configuration
 
-Configure longer timeouts for commands that take more time:
+Configure longer timeouts for commands that take more time. Timeout is specified in milliseconds:
 
 ```yaml
 steps:
   build-project:
     type: command
     exec: "npm run build"
-    timeout: 300  # 5 minutes
+    timeout: 300000  # 5 minutes (300,000 ms)
     group: build
 
   quick-lint:
     type: command
     exec: "eslint src/"
-    timeout: 30   # 30 seconds
+    timeout: 30000   # 30 seconds (30,000 ms)
     group: quality
 
   long-test-suite:
     type: command
     exec: "npm run test:e2e"
-    timeout: 600  # 10 minutes
+    timeout: 600000  # 10 minutes (600,000 ms)
     group: testing
 ```
 
@@ -337,7 +343,7 @@ steps:
   outdated-deps:
     type: command
     exec: "npm outdated --json || true"
-    timeout: 120  # 2 minutes for npm operations
+    timeout: 120000  # 2 minutes (120,000 ms) for npm operations
     group: dependencies
     tags: [dependencies, maintenance]
 
@@ -351,7 +357,7 @@ steps:
         echo '{"vulnerabilities": {}}'
       fi
     depends_on: [outdated-deps]
-    timeout: 180  # 3 minutes for audit
+    timeout: 180000  # 3 minutes (180,000 ms) for audit
     transform: |
       {
         "critical": {{ output.metadata.vulnerabilities.critical | default: 0 }},
@@ -366,12 +372,12 @@ steps:
 
 The command provider handles errors gracefully:
 
-1. **Command failures** - Non-zero exit codes are captured as errors
-2. **Timeout** - Commands timeout after 60 seconds by default
+1. **Command failures** - Non-zero exit codes are captured as errors (`ruleId: command/execution_error`)
+2. **Timeout** - Commands timeout after 60 seconds (60000ms) by default (`ruleId: command/timeout`)
 3. **Buffer limits** - Output is limited to 10MB
-4. **Transform errors** - Invalid transforms are reported as issues
+4. **Transform errors** - Invalid Liquid or JavaScript transforms are reported as issues (`ruleId: command/transform_error` or `command/transform_js_error`)
 
-Example error output:
+Example error output for execution failure:
 ```json
 {
   "issues": [
@@ -380,6 +386,22 @@ Example error output:
       "line": 0,
       "ruleId": "command/execution_error",
       "message": "Command execution failed: npm test exited with code 1",
+      "severity": "error",
+      "category": "logic"
+    }
+  ]
+}
+```
+
+Example error output for timeout:
+```json
+{
+  "issues": [
+    {
+      "file": "command",
+      "line": 0,
+      "ruleId": "command/timeout",
+      "message": "Command execution timed out after 60000 milliseconds",
       "severity": "error",
       "category": "logic"
     }
@@ -480,7 +502,7 @@ steps:
 
 3. **Secrets Management**:
    ```yaml
-   checks:
+   steps:
      # BAD - Don't echo secrets
      bad-secret:
        type: command
@@ -494,7 +516,7 @@ steps:
 
 4. **File System Access** - Commands run with the same permissions as the visor process:
    ```yaml
-   checks:
+   steps:
      # Be careful with file operations
      file-check:
        type: command
@@ -508,7 +530,7 @@ steps:
          cat "$FILE"
    ```
 
-5. **Timeout Protection** - Commands timeout after 60 seconds by default (configurable via `timeout` field)
+5. **Timeout Protection** - Commands timeout after 60000 milliseconds (60 seconds) by default (configurable via `timeout` field in milliseconds)
 6. **Output Limits** - Command output is limited to 10MB to prevent memory exhaustion
 
 ## Integration with Other Providers
@@ -556,4 +578,4 @@ steps:
 
 ## Comparison with Script Provider
 
-Note: There is no "script" provider. The `command` provider is used for executing shell commands. If you see references to a "script" type in error messages or old documentation, use `type: command` instead.
+The `script` provider executes JavaScript in a secure sandbox, while the `command` provider executes shell commands. Use `command` for running external tools and shell commands; use `script` for JavaScript logic with direct access to PR context, outputs, and memory helpers. See [Script Provider](./script.md) for details.

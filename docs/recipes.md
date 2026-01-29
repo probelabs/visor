@@ -179,16 +179,15 @@ Quick reference:
 - `role_map: 'step=role,other=role'` as a compact override
 
 See also:
-- `docs/human-input-provider.md`
-- `docs/liquid-templates.md` (Chat History Helper)
-- `docs/output-history.md`
-- `examples/slack-simple-chat.yaml`
+- [human-input-provider.md](./human-input-provider.md)
+- [liquid-templates.md](./liquid-templates.md) (Chat History Helper)
+- [output-history.md](./output-history.md)
+- [examples/slack-simple-chat.yaml](../examples/slack-simple-chat.yaml)
 
 ### Advanced routing & contracts (general patterns)
 
 #### Inner loops vs. closing the loop
 
-- **Close the loop**: Leaf steps use `on_success: goto: <entry-step>` to end the workflow and return to a single top-level `human-input`. Each new event (Slack message, webhook, CLI run) starts a fresh execution.
 - **Close the loop**: Leaf steps use `on_success: goto: <entry-step>` to end the workflow and return to a single top-level `human-input`. Each new event (Slack message, webhook, CLI run) starts a fresh execution.
 - **Inner loop**: Add a local `human-input` and route inside a sub‑flow:
   - Example shape: `router → section-confirm → section-answer → section-confirm`.
@@ -208,7 +207,7 @@ See also:
         to: project-intent
   ```
 - Reserve `goto_js` / `run_js` for legacy or very dynamic use cases.
-- More details: `docs/guides/fault-management-and-contracts.md`, `docs/loop-routing-refactor.md`.
+- More details: [fault-management-and-contracts.md](./guides/fault-management-and-contracts.md), [loop-routing-refactor.md](./loop-routing-refactor.md).
 
 - Pattern A — central router + transitions (explicit routing):
   - Use a single “router” step that sets control fields (e.g. `output.intent`, `output.kind`).
@@ -281,7 +280,7 @@ See also:
 - Use `assume` for preconditions about upstream state (memory, env, `outputs[...]`).
 - Use `guarantee` for postconditions about this step’s own output (shape, control flags, size caps).
 - For `info` steps, contracts are recommended but optional; keep `assume` + `guarantee` adjacent when present.
-- More details: `docs/guides/criticality-modes.md`, `docs/guides/fault-management-and-contracts.md`.
+- More details: [criticality-modes.md](./guides/criticality-modes.md), [fault-management-and-contracts.md](./guides/fault-management-and-contracts.md).
 
 #### JSON Schemas instead of `schema: plain`
 
@@ -469,6 +468,6 @@ The real error messages and responses help identify whether the issue is with yo
 
 ### More examples
 
-- `docs/NPM_USAGE.md` – CLI usage and flags
-- `GITHUB_CHECKS.md` – Checks, outputs, and workflow integration
+- [docs/NPM_USAGE.md](./NPM_USAGE.md) – CLI usage and flags
+- [docs/GITHUB_CHECKS.md](./GITHUB_CHECKS.md) – Checks, outputs, and workflow integration
 - `examples/` – MCP, Jira, and advanced configs

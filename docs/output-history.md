@@ -14,11 +14,13 @@ When checks execute multiple times (through `goto` loops, `retry` attempts, or `
 
 ## Structure
 
-The `outputs` variable has two main parts:
+The `outputs` variable has several parts:
 
 ```javascript
-outputs['check-name']          // Current/latest value from this check
-outputs.history['check-name']  // Array of ALL previous values from this check
+outputs['check-name']               // Current/latest value from this check
+outputs.history['check-name']       // Array of ALL previous values from this check
+outputs_raw['check-name']           // Aggregate value (e.g., full array from forEach parent)
+outputs_history_stage['check-name'] // Stage-scoped history slice (for test framework)
 ```
 
 ### Current vs History
@@ -32,6 +34,15 @@ outputs.history['check-name']  // Array of ALL previous values from this check
   - Array of all outputs in chronological order
   - First element is from first execution, last is most recent
   - Useful for tracking progress, calculating totals, comparing changes
+
+- **`outputs_raw['check-name']`** - Aggregate/parent value
+  - Returns the full aggregate value (e.g., the entire array from a forEach parent)
+  - Useful when you need the complete collection inside a per-item iteration
+  - See [forEach Dependency Propagation](./foreach-dependency-propagation.md) for details
+
+- **`outputs_history_stage['check-name']`** - Stage-scoped history
+  - Used by the test framework to track outputs within a test stage
+  - Contains only outputs since the stage began
 
 ## Usage Examples
 
@@ -309,9 +320,15 @@ If a check hasn't executed yet, or has no output:
 - `outputs.history['check-name']` = `[]` (empty array, not undefined)
 - Always safe to check `.length` or iterate
 
-### Failed Executions
+### Skipped Executions
 
-Failed executions that throw errors are NOT added to history. Only successful outputs are tracked.
+Skipped executions are NOT added to history. Executions can be skipped due to:
+- `if` condition evaluating to false
+- Dependency failures (when a required dependency failed)
+- Empty forEach parent (when the array to iterate is empty)
+- Explicit `assume` declarations
+
+Only successful outputs from actually executed checks are tracked in history.
 
 ### forEach Iterations
 
@@ -367,6 +384,20 @@ log('Average iteration time:', durations.reduce((a,b) => a+b, 0) / durations.len
 - For very long-running loops (100+ iterations), consider periodically clearing or summarizing
 - Use `max_loops` configuration to prevent infinite loops
 
+### History Limit Environment Variables
+
+You can limit the size of output history using environment variables:
+
+```bash
+# Limit history to last N entries per check
+export VISOR_OUTPUT_HISTORY_LIMIT=100
+
+# For tests (takes precedence over VISOR_OUTPUT_HISTORY_LIMIT)
+export VISOR_TEST_HISTORY_LIMIT=200
+```
+
+When set, history arrays are automatically trimmed to keep only the most recent entries, preventing memory issues in long-running workflows.
+
 ## Related Documentation
 
 - [Liquid Templates](./liquid-templates.md) - Using history in templates
@@ -380,4 +411,3 @@ log('Average iteration time:', durations.reduce((a,b) => a+b, 0) / durations.len
 See the test files for complete working examples:
 - `tests/unit/output-history.test.ts` - Basic history functionality
 - `tests/integration/output-history-integration.test.ts` - Complex loop scenarios
-- `tests/unit/goto-current-output.test.ts` - Verifying current vs history values

@@ -7,8 +7,8 @@ Visor supports multiple AI providers. Configure one via environment variables.
 | Provider | Env Var | Example Models |
 |----------|---------|----------------|
 | Google Gemini | `GOOGLE_API_KEY` | `gemini-2.0-flash-exp`, `gemini-1.5-pro` |
-| Anthropic Claude | `ANTHROPIC_API_KEY` | `claude-3-opus`, `claude-3-sonnet` |
-| OpenAI GPT | `OPENAI_API_KEY` | `gpt-4`, `gpt-4-turbo`, `gpt-3.5-turbo` |
+| Anthropic Claude | `ANTHROPIC_API_KEY` | `claude-3-5-sonnet-latest`, `claude-3-opus-latest` |
+| OpenAI GPT | `OPENAI_API_KEY` | `gpt-4o`, `gpt-4-turbo`, `gpt-4` |
 | AWS Bedrock | AWS credentials (see below) | `anthropic.claude-sonnet-4-20250514-v1:0` (default) |
 
 ### GitHub Actions Setup
@@ -122,10 +122,12 @@ Visor exposes Probe’s prompt controls to adjust the agent’s behavior for a g
 Accepted keys
 - Under `ai:`
   - `prompt_type`: string — Probe persona/family, e.g., `engineer`, `code-review`, `architect`.
-  - `custom_prompt`: string — Baseline/system prompt prepended by the SDK.
+  - `system_prompt`: string — Baseline/system prompt prepended by the SDK (preferred).
+  - `custom_prompt`: string — Alias for `system_prompt` (deprecated, use `system_prompt` instead).
 - At the check level (aliases if you prefer not to nest):
   - `ai_prompt_type`: string
-  - `ai_custom_prompt`: string
+  - `ai_system_prompt`: string (preferred)
+  - `ai_custom_prompt`: string (deprecated alias for `ai_system_prompt`)
   - `ai_persona`: string — optional hint we prepend as a first line: `Persona: <value>`.
 
 Examples
@@ -138,7 +140,7 @@ steps:
       provider: anthropic
       model: claude-3-5-sonnet-latest
       prompt_type: engineer
-      custom_prompt: |
+      system_prompt: |
         You are a specialist in analyzing security vulnerabilities.
         Focus on injection, authn/z, crypto, and data exposure.
     schema: code-review
@@ -148,14 +150,13 @@ steps:
   quick-architect-check:
     type: ai
     ai_prompt_type: architect     # check-level alias
-    ai_custom_prompt: "Favor modular boundaries and low coupling."
+    ai_system_prompt: "Favor modular boundaries and low coupling."
     prompt: "Assess high-level design risks in the diff"
 ```
 
 Notes
 - If `prompt_type` is omitted and a `schema` is provided, Visor defaults to `code-review`.
 - `ai_persona` is a lightweight hint added as a first line; prefer `prompt_type` when integrating with Probe personas.
-```
 
 #### AWS Bedrock Specific Configuration
 
@@ -280,7 +281,7 @@ steps:
     prompt: "Fix the security vulnerabilities found in the code"
     ai:
       provider: anthropic
-      model: claude-3-opus
+      model: claude-3-opus-latest
       allowEdit: true  # Enable Edit and Create tools
 
   read-only-review:
@@ -394,7 +395,7 @@ steps:
       - Cryptographic weaknesses
     ai:
       provider: anthropic
-      model: claude-3-opus
+      model: claude-3-opus-latest
       enableDelegate: true  # Enable task delegation to subagents
 
   focused-sql-injection-check:
@@ -434,7 +435,7 @@ steps:
     prompt: "Analyze the project structure and git status"
     ai:
       provider: anthropic
-      model: claude-3-opus
+      model: claude-3-opus-latest
       allowBash: true  # Simple one-line enable
 ```
 
@@ -527,9 +528,96 @@ steps:
 
 **Security Note:** Bash command execution respects existing security boundaries and permissions. Commands run with the same privileges as the Visor process. Always review and test bash configurations before deploying to production environments.
 
+#### Retry Configuration (`retry`)
+
+Configure automatic retries for AI provider calls when transient errors occur:
+
+```yaml
+steps:
+  resilient-review:
+    type: ai
+    prompt: "Analyze code for security vulnerabilities"
+    ai:
+      provider: anthropic
+      retry:
+        maxRetries: 3           # Maximum retry attempts (0-50)
+        initialDelay: 1000      # Initial delay in ms (0-60000)
+        maxDelay: 30000         # Maximum delay cap in ms (0-300000)
+        backoffFactor: 2        # Exponential backoff multiplier (1-10)
+        retryableErrors:        # Custom error patterns to retry on
+          - "rate limit"
+          - "timeout"
+```
+
+**Configuration Options:**
+
+- **`maxRetries`** (number): Maximum retry attempts. Default varies by provider.
+- **`initialDelay`** (number): Initial delay between retries in milliseconds.
+- **`maxDelay`** (number): Maximum delay cap to prevent excessive waits.
+- **`backoffFactor`** (number): Multiplier for exponential backoff between retries.
+- **`retryableErrors`** (string[]): Custom error message patterns that should trigger retries.
+
+#### Fallback Configuration (`fallback`)
+
+Configure fallback providers when the primary AI provider fails:
+
+```yaml
+steps:
+  fault-tolerant-review:
+    type: ai
+    prompt: "Review code for quality issues"
+    ai:
+      provider: anthropic
+      model: claude-3-5-sonnet-latest
+      fallback:
+        strategy: custom        # 'same-model', 'same-provider', 'any', or 'custom'
+        maxTotalAttempts: 5     # Maximum attempts across all providers
+        auto: true              # Auto-detect fallbacks from available env vars
+        providers:              # Custom fallback chain
+          - provider: openai
+            model: gpt-4o
+          - provider: google
+            model: gemini-2.0-flash-exp
+```
+
+**Configuration Options:**
+
+- **`strategy`** (string): Fallback strategy:
+  - `same-model`: Retry with the same model
+  - `same-provider`: Try different models from the same provider
+  - `any`: Try any available provider
+  - `custom`: Use the specified providers list
+- **`providers`** (array): Array of fallback provider configurations
+- **`maxTotalAttempts`** (number): Maximum total attempts across all providers
+- **`auto`** (boolean): Automatically detect and use fallback providers from environment variables
+
+#### Completion Prompt (`completion_prompt`)
+
+Run a validation or review prompt after the AI completes its primary task:
+
+```yaml
+steps:
+  validated-review:
+    type: ai
+    prompt: "Analyze the codebase for security issues"
+    ai:
+      provider: anthropic
+      completion_prompt: |
+        Review your analysis above. Verify that:
+        1. All findings have specific file and line references
+        2. Severity levels are appropriate
+        3. Recommendations are actionable
+        If any issues are found, revise your response.
+```
+
+**When to use completion prompts:**
+- Validate AI output meets quality standards
+- Self-review for accuracy and completeness
+- Ensure proper formatting of responses
+
 ### Fallback Behavior
 
 If no key is configured, Visor falls back to fast, heuristic checks (simple patterns, basic style/perf). For best results, set a provider.
 
 ### MCP (Tools) Support
-See docs/mcp.md for adding MCP servers (Probe, Jira, Filesystem, etc.).
+See [mcp.md](./mcp.md) for adding MCP servers (Probe, Jira, Filesystem, etc.).

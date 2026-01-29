@@ -1,28 +1,32 @@
 # Default Output Schema and Timestamps
 
-Visor normalizes check outputs to make prompts and history handling predictable. There are exactly two modes:
+Visor adds timestamps to check outputs to make history handling predictable.
 
-1) Checks with a schema (e.g., `schema: {...}` on the check)
-- The provider's output shape is respected.
-- If the final output is an Object (map), Visor injects a `ts` field (milliseconds since epoch) if it is missing.
-- If the final output is a primitive or an array, it is passed through unchanged (no wrapping, no `ts`).
+## Timestamp Injection
 
-2) Checks without a schema
-- Visor uses a default schema: `{ text: string, ts: number }`.
-- If the provider returned a primitive (string/number/boolean), it is wrapped into `{ text, ts }`.
-- If it returned an Object, Visor injects `ts` if it is missing.
-- If it returned an array, it is passed through unchanged.
+When a check completes successfully:
+- If the output is a plain **Object** (not an array, not null), Visor injects a `ts` field (milliseconds since epoch) if it is missing.
+- If the output is a **primitive** (string, number, boolean), **array**, or **null**, it is passed through unchanged (no wrapping, no `ts`).
 
-This normalization happens after the provider returns and before outputs are recorded into `outputs` and `outputs_history`.
+This injection happens after the provider returns and before outputs are recorded into `outputs` and `outputs_history`.
 
-Why this exists
-- Prompts and templates can reliably access `.text` and `.ts` for no‑schema checks (e.g., human‑input), and can still trust custom shapes for schema’d checks.
-- `ts` allows you to sort/merge histories across steps without bespoke engines or roles.
+## Provider-Specific Defaults
 
-Practical tips
-- Human input defaults to `{ text, ts }`. In Liquid, read `outputs_history.ask[i].text` safely with a fallback: `{% if u.text %}{{ u.text }}{% else %}{{ u }}{% endif %}` for legacy mocks.
-- For schema’d AI checks, add `ts` to your schema if you want it persisted by validators; otherwise Visor will add it at runtime (not validated).
-- Arrays are passed through untouched; if you need timestamps per item, include them in your own schema.
+Some providers return structured output by default:
+- **human-input**: Returns `{ text: string, ts: number }` directly from the provider (not via central normalization).
+- **Other providers**: Return whatever their implementation produces; Visor only adds `ts` to objects.
 
-Related
-- See `docs/human-input-provider.md` for default output shape of human input.
+## Why Timestamps Exist
+
+- `ts` allows you to sort/merge histories across steps without custom logic.
+- Providers that need structured output (like human-input) implement it directly.
+
+## Practical Tips
+
+- Human input always returns `{ text, ts }`. In Liquid, access via `outputs['my-check'].text`.
+- For AI checks with custom schemas, add `ts` to your schema if you want it persisted by validators; otherwise Visor adds it at runtime (not validated).
+- Arrays are passed through untouched; if you need timestamps per item, include them in your schema.
+
+## Related
+
+- See [Human Input Provider](./human-input-provider.md) for the default output shape of human input.
