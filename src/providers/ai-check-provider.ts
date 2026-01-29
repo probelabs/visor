@@ -17,6 +17,12 @@ import {
 import { CustomToolsSSEServer } from './mcp-custom-sse-server';
 import { CustomToolDefinition } from '../types/config';
 import { logger } from '../logger';
+import {
+  resolveWorkflowToolFromItem,
+  isWorkflowToolReference,
+  WorkflowToolReference,
+  WorkflowToolContext,
+} from './workflow-tool-executor';
 
 /**
  * AI-powered check provider using probe agent
@@ -547,7 +553,17 @@ export class AICheckProvider extends CheckProvider {
       if (process.env.VISOR_DEBUG === 'true') {
         const outKeys = Object.keys((templateContext as any).outputs || {}).join(', ');
         const histKeys = Object.keys((templateContext as any).outputs_history || {}).join(', ');
-        console.error(`[prompt-ctx] outputs.keys=${outKeys} hist.keys=${histKeys}`);
+        const inputsKeys = Object.keys((templateContext as any).inputs || {}).join(', ');
+        console.error(
+          `[prompt-ctx] outputs.keys=${outKeys} hist.keys=${histKeys} inputs.keys=${inputsKeys}`
+        );
+        // Log projects specifically if present
+        const projects = (templateContext as any).inputs?.projects;
+        if (projects) {
+          console.error(
+            `[prompt-ctx] inputs.projects has ${Array.isArray(projects) ? projects.length : 'N/A'} items`
+          );
+        }
       }
     } catch {}
 
@@ -588,6 +604,122 @@ export class AICheckProvider extends CheckProvider {
         console.error('\n[prompt-error] ' + msg + '\n' + snippet);
       } catch {}
       throw new Error(msg);
+    }
+  }
+
+  /**
+   * Render Liquid templates in schema definitions
+   * Supports dynamic enum values and other template-driven schema properties
+   */
+  private async renderSchema(
+    schema: string | Record<string, unknown> | undefined,
+    prInfo: PRInfo,
+    _eventContext?: Record<string, unknown>,
+    dependencyResults?: Map<string, ReviewSummary>,
+    outputHistory?: Map<string, unknown[]>,
+    args?: Record<string, unknown>,
+    workflowInputs?: Record<string, unknown>
+  ): Promise<string | Record<string, unknown> | undefined> {
+    if (!schema) return schema;
+
+    let schemaStr: string;
+
+    if (typeof schema === 'string') {
+      // Check if string schema contains Liquid templates
+      if (!schema.includes('{{') && !schema.includes('{%')) {
+        // No Liquid templates, return as-is (could be a schema reference like 'code-review')
+        return schema;
+      }
+      // String schema with Liquid templates (e.g., JSON string in YAML)
+      schemaStr = schema;
+    } else {
+      // For object schemas, check if they contain Liquid templates
+      schemaStr = JSON.stringify(schema);
+      if (!schemaStr.includes('{{') && !schemaStr.includes('{%')) {
+        // No Liquid templates, return as-is
+        return schema;
+      }
+    }
+
+    // Build the same template context as renderPromptTemplate
+    const outputsRaw: Record<string, unknown> = {};
+    if (dependencyResults) {
+      for (const [k, v] of dependencyResults.entries()) {
+        if (typeof k !== 'string') continue;
+        if (k.endsWith('-raw')) {
+          const name = k.slice(0, -4);
+          const summary = v as ReviewSummary & { output?: unknown };
+          outputsRaw[name] = summary.output !== undefined ? summary.output : summary;
+        }
+      }
+    }
+
+    const templateContext = {
+      pr: {
+        number: prInfo.number,
+        title: prInfo.title,
+        body: prInfo.body,
+        author: prInfo.author,
+        baseBranch: prInfo.base,
+        headBranch: prInfo.head,
+        isIncremental: prInfo.isIncremental,
+        filesChanged: prInfo.files?.map(f => f.filename) || [],
+        totalAdditions: prInfo.files?.reduce((sum, f) => sum + f.additions, 0) || 0,
+        totalDeletions: prInfo.files?.reduce((sum, f) => sum + f.deletions, 0) || 0,
+        totalChanges: prInfo.files?.reduce((sum, f) => sum + f.changes, 0) || 0,
+        base: prInfo.base,
+        head: prInfo.head,
+      },
+      files: prInfo.files || [],
+      description: prInfo.body || '',
+      outputs: dependencyResults
+        ? Object.fromEntries(
+            Array.from(dependencyResults.entries()).map(([checkName, result]) => [
+              checkName,
+              (() => {
+                const summary = result as ReviewSummary & { output?: unknown };
+                return summary.output !== undefined ? summary.output : summary;
+              })(),
+            ])
+          )
+        : {},
+      outputs_history: (() => {
+        const hist: Record<string, unknown[]> = {};
+        if (outputHistory) {
+          for (const [k, v] of outputHistory.entries()) hist[k] = v;
+        }
+        return hist;
+      })(),
+      outputs_raw: outputsRaw,
+      args: args || {},
+      inputs: workflowInputs || {},
+    };
+
+    try {
+      if (process.env.VISOR_DEBUG === 'true') {
+        logger.debug(`[schema-render] Rendering schema with Liquid templates`);
+        logger.debug(`[schema-render] inputs.projects count: ${Array.isArray((templateContext as any).inputs?.projects) ? (templateContext as any).inputs.projects.length : 'N/A'}`);
+      }
+
+      const renderedStr = await this.liquidEngine.parseAndRender(schemaStr, templateContext);
+
+      // Parse the rendered JSON back to an object
+      try {
+        const parsed = JSON.parse(renderedStr);
+        if (process.env.VISOR_DEBUG === 'true') {
+          logger.debug(`[schema-render] Successfully rendered schema`);
+        }
+        return parsed;
+      } catch (parseError) {
+        logger.error(`[schema-render] Failed to parse rendered schema as JSON: ${parseError}`);
+        logger.error(`[schema-render] Rendered string was: ${renderedStr.substring(0, 500)}`);
+        // Return original schema if parsing fails
+        return schema;
+      }
+    } catch (error) {
+      logger.error(`[schema-render] Failed to render schema template: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Return original schema if rendering fails
+      return schema;
     }
   }
 
@@ -861,7 +993,7 @@ export class AICheckProvider extends CheckProvider {
     // 4. Setup custom tools SSE server if MCP servers reference custom tools
     // Check for both ai_custom_tools (new format) and tools: in MCP servers (reuse existing)
     let customToolsServer: CustomToolsSSEServer | null = null;
-    let customToolsToLoad: string[] = [];
+    let customToolsToLoad: Array<string | WorkflowToolReference> = [];
     let customToolsServerName: string | null = null;
 
     // Option 1: Check for ai_custom_tools (backward compatible)
@@ -872,6 +1004,7 @@ export class AICheckProvider extends CheckProvider {
     }
 
     // Option 2: Check if any MCP server uses "tools:" format (preferred - reuses ai_mcp_servers)
+    // Note: This format only supports string tool names, not workflow references
     for (const [serverName, serverConfig] of Object.entries(mcpServers)) {
       if ((serverConfig as any).tools && Array.isArray((serverConfig as any).tools)) {
         customToolsToLoad = (serverConfig as any).tools as string[];
@@ -882,14 +1015,26 @@ export class AICheckProvider extends CheckProvider {
 
     if (customToolsToLoad.length > 0 && customToolsServerName && !config.ai?.disableTools) {
       try {
-        // Load custom tools from global config
+        // Load custom tools from global config (now supports workflows too)
         const customTools = this.loadCustomTools(customToolsToLoad, config);
 
         if (customTools.size > 0) {
           const sessionId = (config as any).checkName || `ai-check-${Date.now()}`;
           const debug = aiConfig.debug || process.env.VISOR_DEBUG === 'true';
 
-          customToolsServer = new CustomToolsSSEServer(customTools, sessionId, debug);
+          // Build workflow context for workflow tools
+          const workflowContext: WorkflowToolContext = {
+            prInfo,
+            outputs: _dependencyResults,
+            executionContext: sessionInfo as import('./check-provider.interface').ExecutionContext,
+          };
+
+          customToolsServer = new CustomToolsSSEServer(
+            customTools,
+            sessionId,
+            debug,
+            workflowContext
+          );
           const port = await customToolsServer.start();
 
           if (debug) {
@@ -1005,6 +1150,17 @@ export class AICheckProvider extends CheckProvider {
       (config as any).workflowInputs as Record<string, unknown> | undefined
     );
 
+    // Process schema with Liquid templates (supports dynamic enum values)
+    const processedSchema = await this.renderSchema(
+      config.schema as string | Record<string, unknown> | undefined,
+      prInfo,
+      ctxWithStage,
+      _dependencyResults,
+      (config as any).__outputHistory as Map<string, unknown[]> | undefined,
+      (sessionInfo as any)?.args,
+      (config as any).workflowInputs as Record<string, unknown> | undefined
+    );
+
     // Optional persona (vendor extension): ai.ai_persona or ai_persona.
     // This is a light-weight preamble, not a rewriting of the user's prompt.
     const aiAny = (config.ai || {}) as any;
@@ -1027,7 +1183,7 @@ export class AICheckProvider extends CheckProvider {
       const finalPromptCapture = await (serviceForCapture as any).buildCustomPrompt(
         prInfo,
         finalPrompt,
-        config.schema,
+        processedSchema,
         {
           checkName: (config as any).checkName,
           skipPRContext: (config.ai as any)?.skip_code_context === true,
@@ -1074,8 +1230,8 @@ export class AICheckProvider extends CheckProvider {
     } catch {}
     const service = new AIReviewService(aiConfig);
 
-    // Pass the custom prompt and schema - no fallbacks
-    const schema = config.schema as string | Record<string, unknown> | undefined;
+    // Use the processed schema (with Liquid templates rendered)
+    const schema = processedSchema;
 
     // Removed verbose AICheckProvider console diagnostics; rely on logger.debug when needed
 
@@ -1253,9 +1409,10 @@ export class AICheckProvider extends CheckProvider {
   }
 
   /**
-   * Get custom tool names from check configuration
+   * Get custom tool items from check configuration
+   * Returns an array of tool items (string names or workflow references)
    */
-  private getCustomToolsForAI(config: CheckProviderConfig): string[] {
+  private getCustomToolsForAI(config: CheckProviderConfig): Array<string | WorkflowToolReference> {
     const aiCustomTools = (config as any).ai_custom_tools;
 
     if (!aiCustomTools) {
@@ -1263,10 +1420,18 @@ export class AICheckProvider extends CheckProvider {
     }
 
     if (Array.isArray(aiCustomTools)) {
-      return aiCustomTools.filter(name => typeof name === 'string');
+      // Filter to only string names and workflow references
+      return aiCustomTools.filter(
+        item => typeof item === 'string' || isWorkflowToolReference(item)
+      );
     }
 
     if (typeof aiCustomTools === 'string') {
+      return [aiCustomTools];
+    }
+
+    // Support single workflow reference object
+    if (isWorkflowToolReference(aiCustomTools)) {
       return [aiCustomTools];
     }
 
@@ -1274,10 +1439,11 @@ export class AICheckProvider extends CheckProvider {
   }
 
   /**
-   * Load custom tools from global configuration
+   * Load custom tools from global configuration and workflow registry
+   * Supports both traditional custom tools and workflow-as-tool references
    */
   private loadCustomTools(
-    toolNames: string[],
+    toolItems: Array<string | WorkflowToolReference>,
     config: CheckProviderConfig
   ): Map<string, CustomToolDefinition> {
     const tools = new Map<string, CustomToolDefinition>();
@@ -1287,23 +1453,42 @@ export class AICheckProvider extends CheckProvider {
       | Record<string, CustomToolDefinition>
       | undefined;
 
-    if (!globalTools) {
-      logger.warn(
-        `[AICheckProvider] ai_custom_tools specified but no global tools found in configuration`
-      );
-      return tools;
-    }
-
-    for (const toolName of toolNames) {
-      const tool = globalTools[toolName];
-      if (!tool) {
-        logger.warn(`[AICheckProvider] Custom tool not found: ${toolName}`);
+    for (const item of toolItems) {
+      // First, try to resolve as a workflow tool
+      const workflowTool = resolveWorkflowToolFromItem(item);
+      if (workflowTool) {
+        logger.debug(`[AICheckProvider] Loaded workflow '${workflowTool.name}' as custom tool`);
+        tools.set(workflowTool.name, workflowTool);
         continue;
       }
 
-      // Ensure tool has a name
-      tool.name = tool.name || toolName;
-      tools.set(toolName, tool);
+      // If it's not a workflow, try to load from global tools
+      if (typeof item === 'string') {
+        // Check global tools
+        if (globalTools && globalTools[item]) {
+          const tool = globalTools[item];
+          tool.name = tool.name || item;
+          tools.set(item, tool);
+          continue;
+        }
+
+        // Not found in either location
+        logger.warn(
+          `[AICheckProvider] Custom tool '${item}' not found in global tools or workflow registry`
+        );
+      } else if (isWorkflowToolReference(item)) {
+        // Workflow reference that wasn't found in registry
+        logger.warn(
+          `[AICheckProvider] Workflow '${item.workflow}' referenced but not found in registry`
+        );
+      }
+    }
+
+    // Warn if no tools were loaded but items were specified
+    if (tools.size === 0 && toolItems.length > 0 && !globalTools) {
+      logger.warn(
+        `[AICheckProvider] ai_custom_tools specified but no global tools found in configuration and no workflows matched`
+      );
     }
 
     return tools;
