@@ -364,7 +364,7 @@ interface CheckConfig {
     claude_code?: ClaudeCodeConfig;
     /** Environment variables for this check */
     env?: EnvConfig;
-    /** Timeout in seconds for command execution (default: 60) */
+    /** Timeout in milliseconds for command execution (default: 60000, i.e., 60 seconds) */
     timeout?: number;
     /** Check IDs that this check depends on (optional). Accepts single string or array. */
     depends_on?: string | string[];

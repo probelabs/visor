@@ -12863,8 +12863,8 @@ ${bodyWithReturn}
           let detailedMessage;
           let ruleId;
           if (isTimeout) {
-            const timeoutSeconds = config.timeout || 60;
-            detailedMessage = `Command execution timed out after ${timeoutSeconds} seconds`;
+            const timeoutMs = config.timeout || 6e4;
+            detailedMessage = `Command execution timed out after ${timeoutMs} milliseconds`;
             if (stderrOutput) {
               detailedMessage += `
 
@@ -13068,7 +13068,7 @@ ${stderrOutput}` : `Command execution failed: ${errorMessage}`;
           let s = candidate.trim();
           s = s.replace(/'/g, '"');
           s = s.replace(/([\{,]\s*)([A-Za-z_][A-Za-z0-9_-]*)\s*:/g, '$1"$2":');
-          s = s.replace(/:\s*([A-Za-z_][A-Za-z0-9_-]*)\s*(?=[,}])/g, (m, word) => {
+          s = s.replace(/:\s*([A-Za-z_][A-Za-z0-9_-]*)\s*(?=[,}])/g, (_match, word) => {
             const lw = String(word).toLowerCase();
             if (lw === "true" || lw === "false" || lw === "null") return `:${lw}`;
             return `:"${word}"`;
@@ -13090,7 +13090,6 @@ ${stderrOutput}` : `Command execution failed: ${errorMessage}`;
       }
       getSafeEnvironmentVariables() {
         const safeVars = {};
-        const allowedPrefixes = [];
         const { buildSandboxEnv: buildSandboxEnv2 } = (init_env_exposure(), __toCommonJS(env_exposure_exports));
         const merged = buildSandboxEnv2(process.env);
         for (const [key, value] of Object.entries(merged)) {
@@ -17275,7 +17274,7 @@ var init_config_schema = __esm({
             },
             timeout: {
               type: "number",
-              description: "Timeout in seconds for command execution (default: 60)"
+              description: "Timeout in milliseconds for command execution (default: 60000, i.e., 60 seconds)"
             },
             depends_on: {
               anyOf: [
@@ -17529,7 +17528,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41156%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -17545,7 +17544,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41156%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -18175,7 +18174,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41156%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -18190,13 +18189,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-41156>>": {
+        "Record<string,Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41156%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-41156>": {
+        "Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182>": {
           type: "object",
           additionalProperties: false
         },
