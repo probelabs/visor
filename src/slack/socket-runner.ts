@@ -226,15 +226,14 @@ export class SlackSocketRunner {
     const text = String(ev.text || '');
     const hasBotMention = !!this.botUserId && text.includes(`<@${String(this.botUserId)}>`);
 
-    // In public channels (C*) and private channels (G*), only react to app_mention
-    // events or explicit mentions so we don't trigger on every message in a thread.
-    // In 1:1 DMs we allow plain
-    // message events when mentions=all.
+    // In public (C*) and private (G*) channels, require an explicit bot mention
+    // so we don't trigger on every message in a thread.
+    // In 1:1 DMs we allow plain message events when mentions=all.
     if (!isDmLike) {
-      if (type !== 'app_mention' && !hasBotMention) {
+      if (!hasBotMention) {
         if (process.env.VISOR_DEBUG === 'true') {
           logger.debug(
-            `[SlackSocket] Dropping public message: type=${type} hasBotMention=${hasBotMention}`
+            `[SlackSocket] Dropping channel message: type=${type} hasBotMention=${hasBotMention}`
           );
         }
         return;
