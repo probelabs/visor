@@ -5,6 +5,7 @@
 import { WorkflowRegistry } from '../../src/workflow-registry';
 import { WorkflowDefinition } from '../../src/types/workflow';
 import * as fs from 'fs';
+import * as path from 'path';
 import * as yaml from 'js-yaml';
 
 // Mock fs and fetch
@@ -454,6 +455,47 @@ steps:
       expect(results[1].valid).toBe(true);
       expect(registry.has('workflow1')).toBe(true);
       expect(registry.has('workflow2')).toBe(true);
+    });
+
+    it('should recursively import nested workflow imports', async () => {
+      const basePath = '/repo';
+      const engineerPath = path.resolve(basePath, 'engineer.yaml');
+      const tykPath = path.resolve(basePath, 'tyk-code-talk.yaml');
+      const codeTalkPath = path.resolve(basePath, 'code-talk.yaml');
+
+      const engineerYaml = yaml.dump({
+        id: 'engineer',
+        name: 'Engineer',
+        imports: ['./tyk-code-talk.yaml'],
+        steps: { step1: { type: 'ai', prompt: 'Test' } },
+      });
+
+      const tykYaml = yaml.dump({
+        id: 'tyk-code-talk',
+        name: 'Tyk Code Talk',
+        imports: ['./code-talk.yaml'],
+        steps: { step1: { type: 'ai', prompt: 'Test' } },
+      });
+
+      const codeTalkYaml = yaml.dump({
+        id: 'code-talk',
+        name: 'Code Talk',
+        steps: { step1: { type: 'ai', prompt: 'Test' } },
+      });
+
+      (fs.promises.readFile as jest.Mock).mockImplementation((filePath: string) => {
+        if (filePath === engineerPath) return Promise.resolve(engineerYaml);
+        if (filePath === tykPath) return Promise.resolve(tykYaml);
+        if (filePath === codeTalkPath) return Promise.resolve(codeTalkYaml);
+        return Promise.reject(new Error(`Unexpected path: ${filePath}`));
+      });
+
+      const results = await registry.import('./engineer.yaml', { basePath });
+
+      expect(results.filter(r => r.valid)).toHaveLength(3);
+      expect(registry.has('engineer')).toBe(true);
+      expect(registry.has('tyk-code-talk')).toBe(true);
+      expect(registry.has('code-talk')).toBe(true);
     });
   });
 

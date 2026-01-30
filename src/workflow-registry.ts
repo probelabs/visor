@@ -138,17 +138,59 @@ export class WorkflowRegistry {
     source: string,
     options?: WorkflowImportOptions
   ): Promise<WorkflowValidationResult[]> {
+    return this.importInternal(source, options, new Set<string>());
+  }
+
+  private async importInternal(
+    source: string,
+    options: WorkflowImportOptions | undefined,
+    visited: Set<string>
+  ): Promise<WorkflowValidationResult[]> {
     const results: WorkflowValidationResult[] = [];
 
     try {
       // Load the workflow file
-      const content = await this.loadWorkflowContent(source, options?.basePath);
-      const data = this.parseWorkflowContent(content, source);
+      const { content, resolvedSource, importBasePath } = await this.loadWorkflowContent(
+        source,
+        options?.basePath
+      );
+      const visitKey = resolvedSource || source;
+      if (visited.has(visitKey)) {
+        return results;
+      }
+      visited.add(visitKey);
+
+      const data = this.parseWorkflowContent(content, resolvedSource || source);
+
+      // Process top-level imports if present
+      const topImports = !Array.isArray(data) ? (data as any)?.imports : undefined;
+      if (Array.isArray(topImports)) {
+        for (const childSource of topImports) {
+          const childResults = await this.importInternal(
+            childSource,
+            { ...options, basePath: importBasePath },
+            visited
+          );
+          results.push(...childResults);
+        }
+      }
 
       // Handle both single workflow and multiple workflows
       const workflows: WorkflowDefinition[] = Array.isArray(data) ? data : [data];
 
       for (const workflow of workflows) {
+        const workflowImports = (workflow as any)?.imports;
+        if (Array.isArray(workflowImports)) {
+          for (const childSource of workflowImports) {
+            const childResults = await this.importInternal(
+              childSource,
+              { ...options, basePath: importBasePath },
+              visited
+            );
+            results.push(...childResults);
+          }
+        }
+
         // Validate if requested
         if (options?.validate !== false) {
           const validation = this.validateWorkflow(workflow);
@@ -169,12 +211,13 @@ export class WorkflowRegistry {
           }
         }
 
-        // Strip out 'tests' field before registering - tests are only for standalone execution
-        const workflowWithoutTests = { ...workflow };
-        delete (workflowWithoutTests as any).tests;
+        // Strip out fields before registering
+        const workflowWithoutExtras = { ...workflow };
+        delete (workflowWithoutExtras as any).tests;
+        delete (workflowWithoutExtras as any).imports;
 
-        // Register the workflow (without tests)
-        const result = this.register(workflowWithoutTests, source, { override: options?.override });
+        // Register the workflow (without tests/imports)
+        const result = this.register(workflowWithoutExtras, source, { override: options?.override });
         results.push(result);
       }
     } catch (error) {
@@ -367,21 +410,39 @@ export class WorkflowRegistry {
   /**
    * Load workflow content from file or URL
    */
-  private async loadWorkflowContent(source: string, basePath?: string): Promise<string> {
+  private async loadWorkflowContent(
+    source: string,
+    basePath?: string
+  ): Promise<{ content: string; resolvedSource: string; importBasePath?: string }> {
+    const baseIsUrl = basePath?.startsWith('http://') || basePath?.startsWith('https://');
+
     // Handle URLs
     if (source.startsWith('http://') || source.startsWith('https://')) {
       const response = await fetch(source);
       if (!response.ok) {
         throw new Error(`Failed to fetch workflow from ${source}: ${response.statusText}`);
       }
-      return await response.text();
+      const importBasePath = new URL('.', source).toString();
+      return { content: await response.text(), resolvedSource: source, importBasePath };
+    }
+
+    // Handle relative URLs when basePath is a URL
+    if (baseIsUrl) {
+      const resolvedUrl = new URL(source, basePath).toString();
+      const response = await fetch(resolvedUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch workflow from ${resolvedUrl}: ${response.statusText}`);
+      }
+      const importBasePath = new URL('.', resolvedUrl).toString();
+      return { content: await response.text(), resolvedSource: resolvedUrl, importBasePath };
     }
 
     // Handle file paths
     const filePath = path.isAbsolute(source)
       ? source
       : path.resolve(basePath || process.cwd(), source);
-    return await fs.readFile(filePath, 'utf-8');
+    const content = await fs.readFile(filePath, 'utf-8');
+    return { content, resolvedSource: filePath, importBasePath: path.dirname(filePath) };
   }
 
   /**
