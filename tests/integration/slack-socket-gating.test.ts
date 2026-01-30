@@ -10,14 +10,20 @@ describe('Slack socket gating (mentions / channel types)', () => {
     checks: { ask: { type: 'human-input' as any, on: ['manual'] } },
   } as any;
 
-  function mkEnv(opts: { type: string; channel: string; ts?: string; text?: string }) {
-    const { type, channel } = opts;
+  function mkEnv(opts: {
+    type: string;
+    channel: string;
+    ts?: string;
+    text?: string;
+    subtype?: string;
+  }) {
+    const { type, channel, subtype } = opts;
     const ts = opts.ts || '1700.123';
     const text = opts.text || 'Hello bot!';
     return {
       type: 'events_api',
       envelope_id: `env-${channel}-${type}-${ts}`,
-      payload: { event: { type, channel, ts, text } },
+      payload: { event: { type, channel, ts, text, subtype } },
     };
   }
 
@@ -73,13 +79,28 @@ describe('Slack socket gating (mentions / channel types)', () => {
     );
     expect(spy).not.toHaveBeenCalled();
 
+    // Bot message with explicit mention should be accepted
+    (runner as any).botUserId = 'UFAKEBOT';
+    await (runner as any).handleMessage(
+      JSON.stringify(
+        mkEnv({
+          type: 'message',
+          subtype: 'bot_message',
+          channel: 'C1',
+          ts: '1800.15',
+          text: '<@UFAKEBOT> hi from bot',
+        })
+      )
+    );
+    expect(spy).toHaveBeenCalledTimes(1);
+
     // app_mention in same channel should be accepted
     await (runner as any).handleMessage(
       JSON.stringify(
         mkEnv({ type: 'app_mention', channel: 'C1', ts: '1800.2', text: '<@UFAKEBOT> hi' })
       )
     );
-    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledTimes(2);
     spy.mockRestore();
   });
 
