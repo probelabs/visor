@@ -221,12 +221,14 @@ export class SlackSocketRunner {
 
     // Gating: mentions / DM vs channel
     const channelId = String(ev.channel || '');
-    const isDmLike = channelId.startsWith('D') || channelId.startsWith('G');
+    // Only treat 1:1 DMs (D*) as DM-like; private channels/MPIMs (G*) require mentions.
+    const isDmLike = channelId.startsWith('D');
     const text = String(ev.text || '');
     const hasBotMention = !!this.botUserId && text.includes(`<@${String(this.botUserId)}>`);
 
-    // In public channels (C*), only react to app_mention events so we don't
-    // trigger on every message in a thread. In DMs/MPIMs we allow plain
+    // In public channels (C*) and private channels (G*), only react to app_mention
+    // events or explicit mentions so we don't trigger on every message in a thread.
+    // In 1:1 DMs we allow plain
     // message events when mentions=all.
     if (!isDmLike) {
       if (type !== 'app_mention' && !hasBotMention) {
