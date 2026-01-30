@@ -21,6 +21,7 @@ import {
   type Scope,
 } from './on-init-handlers';
 import { createSecureSandbox, compileAndRun } from '../../utils/sandbox';
+import { resolveWorkflowInputs } from '../context/workflow-inputs';
 
 /**
  * Normalize on_init.run items to array format
@@ -565,13 +566,8 @@ export async function executeSingleCheck(
     const provider = providerRegistry.getProviderOrThrow(providerType);
 
     const outputHistory = buildOutputHistoryFromJournal(context);
-    // Determine workflow inputs - check config first (for nested workflows),
-    // then fall back to context sources (for standalone workflow execution)
-    const workflowInputs =
-      (checkConfig as any).workflowInputs ||
-      (context.config as any)?.workflow_inputs ||
-      (context.executionContext as any)?.workflowInputs ||
-      undefined;
+    // Resolve workflow inputs from config or context (centralized logic)
+    const workflowInputs = resolveWorkflowInputs(checkConfig, context);
 
     const providerConfig: any = {
       type: providerType,

@@ -115,27 +115,39 @@ export function workflowInputsToJsonSchema(
 
 /**
  * Create a synthetic tool definition from a workflow
+ *
+ * Note: This function creates a new schema object and does not mutate the input.
  */
 export function createWorkflowToolDefinition(
   workflow: WorkflowDefinition,
   argsOverrides?: Record<string, unknown>
 ): WorkflowToolDefinition {
-  const inputSchema = workflowInputsToJsonSchema(workflow.inputs);
+  const baseSchema = workflowInputsToJsonSchema(workflow.inputs);
+
+  // Create a copy of the schema to avoid mutating the original
+  // This ensures the same workflow can be used to create multiple tool definitions
+  let inputSchema = baseSchema;
 
   // Remove properties that are pre-filled via argsOverrides
-  if (argsOverrides && inputSchema && typeof inputSchema === 'object') {
-    const properties = inputSchema.properties as Record<string, unknown> | undefined;
-    if (properties) {
-      for (const key of Object.keys(argsOverrides)) {
-        delete properties[key];
-      }
+  if (argsOverrides && baseSchema && typeof baseSchema === 'object') {
+    const baseProperties = baseSchema.properties as Record<string, unknown> | undefined;
+    const baseRequired = baseSchema.required as string[] | undefined;
+
+    // Create shallow copies to avoid mutation
+    const filteredProperties = baseProperties ? { ...baseProperties } : {};
+    for (const key of Object.keys(argsOverrides)) {
+      delete filteredProperties[key];
     }
-    const required = inputSchema.required as string[] | undefined;
-    if (required) {
-      (inputSchema as { required?: string[] }).required = required.filter(
-        (r: string) => !argsOverrides[r]
-      );
-    }
+
+    const filteredRequired = baseRequired
+      ? baseRequired.filter((r: string) => !argsOverrides[r])
+      : undefined;
+
+    inputSchema = {
+      ...baseSchema,
+      properties: filteredProperties,
+      required: filteredRequired && filteredRequired.length > 0 ? filteredRequired : undefined,
+    };
   }
 
   return {

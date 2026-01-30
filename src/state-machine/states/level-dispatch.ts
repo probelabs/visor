@@ -30,6 +30,7 @@ import { withActiveSpan, setSpanAttributes, addEvent } from '../../telemetry/tra
 import { emitMermaidFromMarkdown } from '../../utils/mermaid-telemetry';
 import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from '../../telemetry/fallback-ndjson';
 import { FailureConditionEvaluator } from '../../failure-condition-evaluator';
+import { resolveWorkflowInputs } from '../context/workflow-inputs';
 
 /**
  * Map check name to focus for AI provider
@@ -701,13 +702,8 @@ async function executeCheckWithForEachItems(
       // Build output history for template rendering
       const outputHistory = buildOutputHistoryFromJournal(context);
 
-      // Determine workflow inputs - check config first (for nested workflows),
-      // then fall back to context sources (for standalone workflow execution)
-      const workflowInputs =
-        (checkConfig as any).workflowInputs ||
-        (context.config as any)?.workflow_inputs ||
-        (context.executionContext as any)?.workflowInputs ||
-        undefined;
+      // Resolve workflow inputs from config or context (centralized logic)
+      const workflowInputs = resolveWorkflowInputs(checkConfig, context);
 
       // Build provider configuration
       const providerConfig: CheckProviderConfig = {
@@ -2038,13 +2034,8 @@ async function executeSingleCheck(
     // Build output history for template rendering
     const outputHistory = buildOutputHistoryFromJournal(context);
 
-    // Determine workflow inputs - check config first (for nested workflows),
-    // then fall back to context sources (for standalone workflow execution)
-    const workflowInputs =
-      (checkConfig as any).workflowInputs ||
-      (context.config as any)?.workflow_inputs ||
-      (context.executionContext as any)?.workflowInputs ||
-      undefined;
+    // Resolve workflow inputs from config or context (centralized logic)
+    const workflowInputs = resolveWorkflowInputs(checkConfig, context);
 
     // Build provider configuration
     const providerConfig: CheckProviderConfig = {

@@ -237,6 +237,37 @@ describe('workflow-tool-executor', () => {
 
       expect(tool.inputSchema?.required).toEqual(['required2']);
     });
+
+    it('should not mutate the original workflow when using argsOverrides', () => {
+      const workflow: WorkflowDefinition = {
+        id: 'mutation-test-workflow',
+        name: 'Mutation Test',
+        inputs: [
+          { name: 'param1', schema: { type: 'string' } },
+          { name: 'param2', schema: { type: 'string' } },
+        ],
+        steps: {},
+      };
+
+      // Create first tool with overrides
+      const tool1 = createWorkflowToolDefinition(workflow, { param1: 'value1' });
+
+      // Create second tool with different overrides
+      const tool2 = createWorkflowToolDefinition(workflow, { param2: 'value2' });
+
+      // Verify tool1 doesn't have param1 but has param2
+      expect(tool1.inputSchema?.properties).not.toHaveProperty('param1');
+      expect(tool1.inputSchema?.properties).toHaveProperty('param2');
+
+      // Verify tool2 doesn't have param2 but has param1
+      expect(tool2.inputSchema?.properties).toHaveProperty('param1');
+      expect(tool2.inputSchema?.properties).not.toHaveProperty('param2');
+
+      // Verify the original workflow still has both inputs
+      expect(workflow.inputs).toHaveLength(2);
+      expect(workflow.inputs?.[0].name).toBe('param1');
+      expect(workflow.inputs?.[1].name).toBe('param2');
+    });
   });
 
   describe('isWorkflowTool', () => {
