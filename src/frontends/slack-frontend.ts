@@ -93,6 +93,8 @@ export class SlackFrontend implements Frontend {
         const ev = (env && env.payload) || env;
         // For chat-style AI checks, post direct replies into the Slack thread
         await this.maybePostDirectReply(ctx, ev.checkId, ev.result).catch(() => {});
+        // Post execution failure notices when a check completes with fatal issues
+        await this.maybePostExecutionFailure(ctx, ev.checkId, ev.result).catch(() => {});
       })
     );
     this.subs.push(
@@ -260,7 +262,6 @@ export class SlackFrontend implements Frontend {
     checkId?: string
   ): Promise<void> {
     if (this.errorNotified) return;
-    if (!this.isTelemetryEnabled(ctx)) return;
     const slack = this.getSlack(ctx);
     if (!slack) return;
     const payload = this.getInboundSlackPayload(ctx);
@@ -273,9 +274,11 @@ export class SlackFrontend implements Frontend {
     if (checkId) text += `\nCheck: ${checkId}`;
     if (message) text += `\n${message}`;
 
-    const traceInfo = this.getTraceInfo();
-    if (traceInfo?.traceId) {
-      text += `\n\n\`trace_id: ${traceInfo.traceId}\``;
+    if (this.isTelemetryEnabled(ctx)) {
+      const traceInfo = this.getTraceInfo();
+      if (traceInfo?.traceId) {
+        text += `\n\n\`trace_id: ${traceInfo.traceId}\``;
+      }
     }
 
     const formattedText = formatSlackText(text);
@@ -286,6 +289,45 @@ export class SlackFrontend implements Frontend {
       );
     } catch {}
     this.errorNotified = true;
+  }
+
+  private isExecutionFailureIssue(issue: any): boolean {
+    const ruleId = String(issue?.ruleId || '');
+    const msg = String(issue?.message || '');
+    const msgLower = msg.toLowerCase();
+    return (
+      ruleId.endsWith('/error') ||
+      ruleId.includes('/execution_error') ||
+      ruleId.includes('timeout') ||
+      ruleId.includes('sandbox_runner_error') ||
+      msgLower.includes('timed out') ||
+      msg.includes('Command execution failed')
+    );
+  }
+
+  private async maybePostExecutionFailure(
+    ctx: FrontendContext,
+    checkId: string,
+    result: { issues?: any[] }
+  ): Promise<void> {
+    try {
+      if (this.errorNotified) return;
+      const cfg: any = ctx.config || {};
+      const checkCfg: any = cfg.checks?.[checkId];
+      if (!checkCfg) return;
+      if (checkCfg.criticality === 'internal') return;
+      const issues = (result as any)?.issues;
+      if (!Array.isArray(issues) || issues.length === 0) return;
+
+      const failureIssue = issues.find(issue => this.isExecutionFailureIssue(issue));
+      if (!failureIssue) return;
+
+      const msg =
+        typeof failureIssue.message === 'string' && failureIssue.message.trim().length > 0
+          ? failureIssue.message.trim()
+          : `Execution failed (${String(failureIssue.ruleId || 'unknown')})`;
+      await this.maybePostError(ctx, 'Check failed', msg, checkId);
+    } catch {}
   }
 
   private async ensureAcknowledgement(ctx: FrontendContext): Promise<void> {

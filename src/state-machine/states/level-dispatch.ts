@@ -966,6 +966,7 @@ async function executeCheckWithForEachItems(
         return (
           ruleId.endsWith('/error') || // System errors
           ruleId.includes('/execution_error') || // Command failures
+          ruleId.includes('timeout') || // Timeouts
           ruleId.endsWith('_fail_if') // fail_if triggered
         );
       });
@@ -1112,6 +1113,7 @@ async function executeCheckWithForEachItems(
               return (
                 ruleId.endsWith('/error') ||
                 ruleId.includes('/execution_error') ||
+                ruleId.includes('timeout') ||
                 ruleId.endsWith('_fail_if')
               );
             });
@@ -2912,6 +2914,7 @@ function shouldFailFast(
  * Fatal issues are those indicating the check itself failed to execute properly:
  * - ruleId ends with '/error' (system errors, exceptions)
  * - ruleId contains '/execution_error' (command failures)
+ * - ruleId contains 'timeout' (timeouts)
  * - ruleId ends with '_fail_if' (fail_if condition triggered)
  *
  * Regular error/critical severity issues (e.g., security vulnerabilities found in code)
@@ -2928,6 +2931,7 @@ function hasFatalIssues(result: ReviewSummary): boolean {
     return (
       ruleId.endsWith('/error') || // System errors
       ruleId.includes('/execution_error') || // Command failures
+      ruleId.includes('timeout') || // Timeouts
       (ruleId.endsWith('_fail_if') && ruleId !== 'global_fail_if') // check-level fail_if only
     );
   });
@@ -2995,6 +2999,7 @@ function updateStats(
       return (
         ruleId.endsWith('/error') || // System errors, exceptions
         ruleId.includes('/execution_error') || // Command failures
+        ruleId.includes('timeout') || // Timeouts
         (ruleId.endsWith('_fail_if') && ruleId !== 'global_fail_if') // check-level fail_if only
       );
     });

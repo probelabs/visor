@@ -117,4 +117,59 @@ describe('WorktreeManager', () => {
       expect(cmd).not.toMatch(/worktree add .* main['"]?$/);
     }
   });
+
+  it('refreshes existing worktree when ref advances', async () => {
+    const { commandExecutor } = require('../../src/utils/command-executor');
+    const execMock = commandExecutor.execute as jest.Mock;
+
+    const repo = 'TykTechnologies/tyk-docs';
+    const repoUrl = `https://github.com/${repo}.git`;
+    const ref = 'main';
+
+    const reposDir = `${basePath}/repos`;
+    const worktreesDir = `${basePath}/worktrees`;
+    fs.mkdirSync(reposDir, { recursive: true });
+    fs.mkdirSync(worktreesDir, { recursive: true });
+
+    const bareRepoPath = `${reposDir}/${repo.replace(/\//g, '-')}.git`;
+    fs.mkdirSync(bareRepoPath, { recursive: true });
+
+    const worktreePath = `${worktreesDir}/existing-worktree`;
+    fs.mkdirSync(worktreePath, { recursive: true });
+    fs.writeFileSync(
+      `${worktreePath}/.visor-metadata.json`,
+      JSON.stringify({
+        worktree_id: 'existing-id',
+        created_at: new Date().toISOString(),
+        workflow_id: 'wf',
+        ref,
+        commit: 'oldsha',
+        repository: repo,
+        pid: process.pid,
+        cleanup_on_exit: true,
+        bare_repo_path: bareRepoPath,
+        worktree_path: worktreePath,
+      })
+    );
+
+    execMock.mockImplementation(async (cmd: string) => {
+      if (cmd.includes('remote get-url')) {
+        return { stdout: repoUrl, stderr: '', exitCode: 0 };
+      }
+      if (cmd.includes('rev-parse')) {
+        return { stdout: 'newsha\n', stderr: '', exitCode: 0 };
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    });
+
+    const manager = WorktreeManager.getInstance();
+
+    await manager.createWorktree(repo, repoUrl, ref, { workingDirectory: worktreePath });
+
+    const calls = execMock.mock.calls.map((c: any[]) => c[0] as string);
+    const checkoutCall = calls.find(
+      cmd => cmd.includes('checkout --detach') && cmd.includes('newsha')
+    );
+    expect(checkoutCall).toBeDefined();
+  });
 });
