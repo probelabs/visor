@@ -540,9 +540,9 @@ export class VisorTestRunner {
           );
           computed[outputDef.name] = fn(steps, outputs, results);
         } else if (outputDef.value) {
-          // Evaluate Liquid template
-          const { Liquid } = require('liquidjs');
-          const engine = new Liquid();
+          // Evaluate Liquid template with extended filters and tags
+          const { createExtendedLiquid } = require('../liquid-extensions');
+          const engine = createExtendedLiquid();
           const rendered = engine.parseAndRenderSync(outputDef.value, { steps, outputs, results });
           // Try to parse as JSON, otherwise keep as string
           try {

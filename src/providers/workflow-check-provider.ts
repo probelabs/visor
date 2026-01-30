@@ -13,6 +13,7 @@ import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import { generateHumanId } from '../utils/human-id';
 // eslint-disable-next-line no-restricted-imports -- needed for Liquid type
 import { Liquid } from 'liquidjs';
+import { createExtendedLiquid } from '../liquid-extensions';
 
 /**
  * Provider that executes workflows as checks
@@ -26,7 +27,7 @@ export class WorkflowCheckProvider extends CheckProvider {
     super();
     this.registry = WorkflowRegistry.getInstance();
     this.executor = new WorkflowExecutor();
-    this.liquid = new Liquid();
+    this.liquid = createExtendedLiquid();
   }
 
   getName(): string {
