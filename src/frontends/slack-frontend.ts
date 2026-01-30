@@ -294,11 +294,10 @@ export class SlackFrontend implements Frontend {
     if (!ref) return;
     const slack = this.getSlack(ctx);
     if (!slack) return;
-    // Skip ack for bot messages to avoid loops
+    // Skip ack for our own bot messages to avoid loops (allow other bots)
     try {
       const payload = this.getInboundSlackPayload(ctx);
       const ev: any = payload?.event;
-      if (ev?.subtype === 'bot_message') return;
       // If we can resolve bot user id, skip if the sender is the bot
       try {
         const botId = await slack.getBotUserId?.();

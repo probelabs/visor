@@ -177,9 +177,9 @@ export class SlackSocketRunner {
     const ev = p.event || {};
     const type = ev.type as string;
 
-    // Ignore bot messages and edited/changed events to prevent loops
+    // Ignore edited/changed events to prevent loops
     if (ev.subtype && ev.subtype !== 'thread_broadcast') return;
-    if (ev.bot_id) return;
+    // Only skip our own bot messages, allow other bots to trigger Visor
     if (this.botUserId && ev.user && String(ev.user) === String(this.botUserId)) return;
 
     // Info-level receipt log for observability

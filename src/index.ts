@@ -516,12 +516,13 @@ async function handleEvent(
   }
 
   // Check if this is a bot comment that we should skip
+  // Only skip Visor's own bot accounts and comments with Visor markers
+  // Allow other bots to trigger Visor for integration purposes
   const comment: CommentLike | undefined = context.event?.comment;
   const shouldSkipBotComment =
     comment &&
     (comment.user?.login === 'visor[bot]' ||
       comment.user?.login === 'github-actions[bot]' ||
-      comment.user?.type === 'Bot' ||
       (comment.body && comment.body.includes('<!-- visor-comment-id:')));
 
   // Extract context for reactions
@@ -984,11 +985,9 @@ async function handleIssueComment(
   }
 
   // Prevent recursion: skip if comment is from visor itself
-  // Check both comment author && content markers
+  // Only skip Visor's own bot accounts, allow other bots to trigger Visor
   const isVisorBot =
-    comment.user?.login === 'visor[bot]' ||
-    comment.user?.login === 'github-actions[bot]' ||
-    comment.user?.type === 'Bot';
+    comment.user?.login === 'visor[bot]' || comment.user?.login === 'github-actions[bot]';
 
   const hasVisorMarkers =
     comment.body &&
