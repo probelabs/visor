@@ -771,13 +771,19 @@ export async function executeSingleCheck(
     try {
       logger.info(`[LevelDispatch] Calling handleRouting for ${checkId}`);
     } catch {}
-    await handleRouting(context, state, transition, emitEvent, {
+    const wasHalted = await handleRouting(context, state, transition, emitEvent, {
       checkId,
       scope,
       result: enrichedResult,
       checkConfig: checkConfig as CheckConfig,
       success: !hasFatalIssues(enrichedResult),
     });
+
+    // If execution was halted, return the current result (with halt issue added)
+    if (wasHalted) {
+      logger.info(`[LevelDispatch] Execution halted after routing for ${checkId}`);
+      return enrichedResult;
+    }
 
     try {
       const commitResult: any = {

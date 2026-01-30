@@ -419,12 +419,13 @@ export async function executeCheckWithForEachItems(
   try {
     logger.info(`[LevelDispatch] Calling handleRouting for ${checkId}`);
   } catch {}
+  let wasHalted = false;
   try {
     state.completedChecks.add(checkId);
     const currentWaveCompletions = (state as any).currentWaveCompletions as Set<string> | undefined;
     if (currentWaveCompletions) currentWaveCompletions.add(checkId);
 
-    await handleRouting(context, state, transition, emitEvent, {
+    wasHalted = await handleRouting(context, state, transition, emitEvent, {
       checkId,
       scope: [],
       result: aggregatedResult as any,
@@ -433,6 +434,12 @@ export async function executeCheckWithForEachItems(
     });
   } catch (error) {
     logger.warn(`[LevelDispatch] Routing error for aggregated forEach ${checkId}: ${error}`);
+  }
+
+  // If execution was halted, return the aggregated result (with halt issue added)
+  if (wasHalted) {
+    logger.info(`[LevelDispatch] Execution halted after routing for aggregated forEach ${checkId}`);
+    return aggregatedResult as ReviewSummary;
   }
 
   try {
