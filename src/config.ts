@@ -453,7 +453,7 @@ export class ConfigManager {
    */
   private async convertWorkflowToConfig(
     workflowData: any,
-    _basePath: string
+    basePath: string
   ): Promise<Partial<VisorConfig>> {
     const { WorkflowRegistry } = await import('./workflow-registry');
     const registry = WorkflowRegistry.getInstance();
@@ -462,12 +462,37 @@ export class ConfigManager {
     const workflowId = workflowData.id;
     logger.info(`Detected standalone workflow file: ${workflowId}`);
 
+    // Process imports first so dependencies are available
+    if (workflowData.imports && Array.isArray(workflowData.imports)) {
+      for (const source of workflowData.imports) {
+        try {
+          const results = await registry.import(source, { basePath, validate: true });
+          for (const result of results) {
+            if (!result.valid && result.errors) {
+              const errors = result.errors.map(e => `  ${e.path}: ${e.message}`).join('\n');
+              throw new Error(`Failed to import workflow from '${source}':\n${errors}`);
+            }
+          }
+          logger.info(`Imported workflows from: ${source}`);
+        } catch (err: unknown) {
+          // If the workflow already exists, log a warning but don't fail
+          const errMsg = err instanceof Error ? err.message : String(err);
+          if (errMsg.includes('already exists')) {
+            logger.debug(`Workflow from '${source}' already imported, skipping`);
+          } else {
+            throw err;
+          }
+        }
+      }
+    }
+
     // Extract tests before modifying workflowData
     const tests = workflowData.tests || {};
 
-    // Create a clean workflow definition (without tests)
+    // Create a clean workflow definition (without tests and imports)
     const workflowDefinition = { ...workflowData };
     delete workflowDefinition.tests;
+    delete workflowDefinition.imports;
 
     // Register the workflow itself
     const result = registry.register(workflowDefinition, 'standalone', { override: true });

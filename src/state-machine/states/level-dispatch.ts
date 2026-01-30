@@ -30,6 +30,7 @@ import { withActiveSpan, setSpanAttributes, addEvent } from '../../telemetry/tra
 import { emitMermaidFromMarkdown } from '../../utils/mermaid-telemetry';
 import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from '../../telemetry/fallback-ndjson';
 import { FailureConditionEvaluator } from '../../failure-condition-evaluator';
+import { resolveWorkflowInputs } from '../context/workflow-inputs';
 
 /**
  * Map check name to focus for AI provider
@@ -701,6 +702,9 @@ async function executeCheckWithForEachItems(
       // Build output history for template rendering
       const outputHistory = buildOutputHistoryFromJournal(context);
 
+      // Resolve workflow inputs from config or context (centralized logic)
+      const workflowInputs = resolveWorkflowInputs(checkConfig, context);
+
       // Build provider configuration
       const providerConfig: CheckProviderConfig = {
         type: providerType,
@@ -717,6 +721,8 @@ async function executeCheckWithForEachItems(
         ...checkConfig,
         eventContext: (context.prInfo as any)?.eventContext || {},
         __outputHistory: outputHistory,
+        // Propagate workflow inputs for template access via {{ inputs.* }}
+        workflowInputs,
         ai: {
           ...(checkConfig.ai || {}),
           timeout: checkConfig.ai?.timeout || 1200000,
@@ -2028,6 +2034,9 @@ async function executeSingleCheck(
     // Build output history for template rendering
     const outputHistory = buildOutputHistoryFromJournal(context);
 
+    // Resolve workflow inputs from config or context (centralized logic)
+    const workflowInputs = resolveWorkflowInputs(checkConfig, context);
+
     // Build provider configuration
     const providerConfig: CheckProviderConfig = {
       type: providerType,
@@ -2046,6 +2055,8 @@ async function executeSingleCheck(
       // Expose history and checks metadata for template helpers
       __outputHistory: outputHistory,
       checksMeta,
+      // Propagate workflow inputs for template access via {{ inputs.* }}
+      workflowInputs,
       ai: {
         ...(checkConfig.ai || {}),
         timeout: checkConfig.ai?.timeout || 1200000,

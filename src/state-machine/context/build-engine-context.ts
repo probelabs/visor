@@ -3,7 +3,7 @@ import type { PRInfo } from '../../pr-analyzer';
 import type { EngineContext, CheckMetadata } from '../../types/engine';
 import { ExecutionJournal } from '../../snapshot-store';
 import { MemoryStore } from '../../memory-store';
-import { v4 as uuidv4 } from 'uuid';
+import { generateHumanId } from '../../utils/human-id';
 import { logger } from '../../logger';
 import type { VisorConfig as VCfg, CheckConfig as CfgCheck } from '../../types/config';
 import { WorkspaceManager } from '../../utils/workspace-manager';
@@ -107,7 +107,7 @@ export function buildEngineContextForRun(
     memory,
     workingDirectory,
     originalWorkingDirectory: workingDirectory,
-    sessionId: uuidv4(),
+    sessionId: generateHumanId(),
     event: prInfo.eventType,
     debug,
     maxParallelism,

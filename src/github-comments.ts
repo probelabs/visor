@@ -1,5 +1,5 @@
 import { Octokit } from '@octokit/rest';
-import { v4 as uuidv4 } from 'uuid';
+import { generateShortHumanId } from './utils/human-id';
 import { logger } from './logger';
 import { generateFooter } from './footer';
 
@@ -262,7 +262,7 @@ ${content}
    * Generate unique comment ID
    */
   private generateCommentId(): string {
-    return uuidv4().substring(0, 8);
+    return generateShortHumanId();
   }
 
   /**

@@ -10,6 +10,7 @@ import { WorkflowExecutor } from '../workflow-executor';
 import { logger } from '../logger';
 import { WorkflowDefinition, WorkflowExecutionContext } from '../types/workflow';
 import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
+import { generateHumanId } from '../utils/human-id';
 // eslint-disable-next-line no-restricted-imports -- needed for Liquid type
 import { Liquid } from 'liquidjs';
 
@@ -315,6 +316,9 @@ export class WorkflowCheckProvider extends CheckProvider {
         logger.debug(`[WorkflowProvider] outputs['${key}']: keys=[${extractedKeys}]`);
       }
     }
+    // Get parent workflow inputs from config (for nested workflow template access)
+    const parentInputs = (config as any).workflowInputs || {};
+
     const templateContext = {
       pr: prInfo,
       outputs: outputsMap,
@@ -322,6 +326,8 @@ export class WorkflowCheckProvider extends CheckProvider {
       slack,
       conversation,
       outputs_history,
+      // Include parent workflow inputs for templates like {{ inputs.question }}
+      inputs: parentInputs,
     };
 
     // Apply user-provided inputs (args)
@@ -353,9 +359,23 @@ export class WorkflowCheckProvider extends CheckProvider {
           });
         } else {
           inputs[key] = value;
+          // Debug: log non-string inputs like arrays
+          if (Array.isArray(value)) {
+            logger.debug(`[WorkflowProvider] Input '${key}' is array with ${value.length} items`);
+          } else if (typeof value === 'object') {
+            logger.debug(
+              `[WorkflowProvider] Input '${key}' is object with keys: ${Object.keys(value).join(', ')}`
+            );
+          }
         }
       }
     }
+
+    // Debug: log all input keys and types for troubleshooting
+    const inputSummary = Object.entries(inputs)
+      .map(([k, v]) => `${k}:${Array.isArray(v) ? `array[${v.length}]` : typeof v}`)
+      .join(', ');
+    logger.debug(`[WorkflowProvider] Final inputs: ${inputSummary}`);
 
     return inputs;
   }
@@ -442,7 +462,6 @@ export class WorkflowCheckProvider extends CheckProvider {
     const { StateMachineRunner } = require('../state-machine/runner');
     const { ExecutionJournal } = require('../snapshot-store');
     const { MemoryStore } = require('../memory-store');
-    const { v4: uuidv4 } = require('uuid');
 
     // Extract parent context if available
     const parentContext = (context as any)?._parentContext;
@@ -511,7 +530,7 @@ export class WorkflowCheckProvider extends CheckProvider {
         parentContext?.originalWorkingDirectory || parentContext?.workingDirectory || process.cwd(),
       workspace: parentWorkspace,
       // Always use a fresh session for nested workflows to isolate history
-      sessionId: uuidv4(),
+      sessionId: generateHumanId(),
       event: parentContext?.event || prInfo.eventType,
       debug: parentContext?.debug || false,
       maxParallelism: parentContext?.maxParallelism,
@@ -759,9 +778,41 @@ export class WorkflowCheckProvider extends CheckProvider {
   ): Promise<WorkflowDefinition> {
     const path = require('node:path');
     const fs = require('node:fs');
+    const yaml = require('js-yaml');
     const resolved = path.isAbsolute(sourcePath) ? sourcePath : path.resolve(baseDir, sourcePath);
     if (!fs.existsSync(resolved)) {
       throw new Error(`Workflow config not found at: ${resolved}`);
+    }
+
+    // First, read raw YAML to check for imports
+    const rawContent = fs.readFileSync(resolved, 'utf8');
+    const rawData = yaml.load(rawContent) as Record<string, any>;
+
+    // Process imports if present (before loading the full config)
+    if (rawData.imports && Array.isArray(rawData.imports)) {
+      const configDir = path.dirname(resolved);
+      for (const source of rawData.imports) {
+        try {
+          const results = await this.registry.import(source, {
+            basePath: configDir,
+            validate: true,
+          });
+          for (const result of results) {
+            if (!result.valid && result.errors) {
+              const errors = result.errors.map((e: any) => `  ${e.path}: ${e.message}`).join('\n');
+              throw new Error(`Failed to import workflow from '${source}':\n${errors}`);
+            }
+          }
+          logger.info(`Imported workflows from: ${source}`);
+        } catch (err: any) {
+          // If the workflow already exists, log a warning but don't fail
+          if (err.message?.includes('already exists')) {
+            logger.debug(`Workflow from '${source}' already imported, skipping`);
+          } else {
+            throw err;
+          }
+        }
+      }
     }
 
     const { ConfigManager } = require('../config');

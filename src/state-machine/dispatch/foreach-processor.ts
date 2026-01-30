@@ -8,6 +8,7 @@ import { buildOutputHistoryFromJournal } from './history-snapshot';
 import { buildDependencyResultsWithScope } from './dependency-gating';
 import { updateStats, hasFatalIssues } from './stats-manager';
 import { handleRouting, checkLoopBudget, evaluateGoto } from '../states/routing';
+import { resolveWorkflowInputs } from '../context/workflow-inputs';
 
 /**
  * Execute a check once per forEach item (map fanout path).
@@ -156,6 +157,9 @@ export async function executeCheckWithForEachItems(
 
       const outputHistory = buildOutputHistoryFromJournal(context);
 
+      // Resolve workflow inputs from config or context (centralized logic)
+      const workflowInputs = resolveWorkflowInputs(checkConfig, context);
+
       const providerConfig: CheckProviderConfig = {
         type: providerType,
         checkName: checkId,
@@ -181,6 +185,8 @@ export async function executeCheckWithForEachItems(
         ...checkConfig,
         eventContext: (context.prInfo as any)?.eventContext || {},
         __outputHistory: outputHistory,
+        // Propagate workflow inputs for template access via {{ inputs.* }}
+        workflowInputs,
         ai: {
           ...(checkConfig.ai || {}),
           timeout: checkConfig.ai?.timeout || 1200000,

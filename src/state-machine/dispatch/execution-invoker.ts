@@ -21,6 +21,7 @@ import {
   type Scope,
 } from './on-init-handlers';
 import { createSecureSandbox, compileAndRun } from '../../utils/sandbox';
+import { resolveWorkflowInputs } from '../context/workflow-inputs';
 
 /**
  * Normalize on_init.run items to array format
@@ -565,6 +566,9 @@ export async function executeSingleCheck(
     const provider = providerRegistry.getProviderOrThrow(providerType);
 
     const outputHistory = buildOutputHistoryFromJournal(context);
+    // Resolve workflow inputs from config or context (centralized logic)
+    const workflowInputs = resolveWorkflowInputs(checkConfig, context);
+
     const providerConfig: any = {
       type: providerType,
       checkName: checkId,
@@ -580,6 +584,8 @@ export async function executeSingleCheck(
       ...checkConfig,
       eventContext: (context.prInfo as any)?.eventContext || {},
       __outputHistory: outputHistory,
+      // Propagate workflow inputs for template access via {{ inputs.* }}
+      workflowInputs,
       ai: {
         ...(checkConfig.ai || {}),
         timeout: checkConfig.ai?.timeout || 1200000,
