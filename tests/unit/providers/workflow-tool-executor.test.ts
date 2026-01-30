@@ -311,9 +311,7 @@ describe('workflow-tool-executor', () => {
     });
 
     it('should return true for workflow reference with args', () => {
-      expect(
-        isWorkflowToolReference({ workflow: 'my-workflow', args: { foo: 'bar' } })
-      ).toBe(true);
+      expect(isWorkflowToolReference({ workflow: 'my-workflow', args: { foo: 'bar' } })).toBe(true);
     });
 
     it('should return false for string', () => {
