@@ -194,6 +194,7 @@ function recordRoutingEvent(args: {
 
 /**
  * Handle routing state - evaluate conditions and decide next actions
+ * @returns true if execution was halted (caller should stop processing)
  */
 export async function handleRouting(
   context: EngineContext,
@@ -201,18 +202,49 @@ export async function handleRouting(
   transition: (newState: EngineState) => void,
   emitEvent: (event: EngineEvent) => void,
   routingContext: RoutingContext
-): Promise<void> {
+): Promise<boolean> {
   const { checkId, scope, result, checkConfig, success } = routingContext;
 
   // Always log routing entry for debugging E2E expectations
   logger.info(`[Routing] Evaluating routing for check: ${checkId}, success: ${success}`);
 
-  // Step 1: Evaluate fail_if conditions
-  const failIfTriggered = await evaluateFailIf(checkId, result, checkConfig, context, state);
+  // Step 1: Evaluate fail_if and failure_conditions
+  const failureResult = await evaluateFailIf(checkId, result, checkConfig, context, state);
 
-  if (failIfTriggered) {
+  // Step 1.5: Check if we need to halt execution immediately
+  if (failureResult.haltExecution) {
+    logger.error(
+      `[Routing] HALTING EXECUTION due to critical failure in ${checkId}: ${failureResult.haltMessage}`
+    );
+
+    // Add halt issue to result for reporting
+    const haltIssue: ReviewIssue = {
+      file: 'system',
+      line: 0,
+      ruleId: `${checkId}_halt_execution`,
+      message: `Execution halted: ${failureResult.haltMessage || 'Critical failure condition met'}`,
+      severity: 'error',
+      category: 'logic',
+    };
+    result.issues = [...(result.issues || []), haltIssue];
+
+    // Emit Shutdown event to stop the workflow
+    emitEvent({
+      type: 'Shutdown',
+      error: {
+        message: failureResult.haltMessage || `Execution halted by check ${checkId}`,
+        name: 'HaltExecution',
+      },
+    });
+
+    // Transition to Error state
+    transition('Error');
+    return true; // Signal that execution was halted
+  }
+
+  if (failureResult.failed) {
     if (context.debug) {
-      logger.info(`[Routing] fail_if triggered for ${checkId}`);
+      logger.info(`[Routing] fail_if/failure_conditions triggered for ${checkId}`);
     }
 
     // Treat as failure for routing purposes
@@ -244,6 +276,7 @@ export async function handleRouting(
 
   // Transition back to WavePlanning to process queued events
   transition('WavePlanning');
+  return false; // Execution continues normally
 }
 
 /**
@@ -511,25 +544,40 @@ async function processOnFinish(
 }
 
 /**
- * Evaluate fail_if conditions for a check
+ * Result of evaluating failure conditions
  */
-// Returns true only when a check-level fail_if is triggered.
+interface FailureEvaluationResult {
+  /** Whether any failure condition was triggered */
+  failed: boolean;
+  /** Whether execution should halt immediately */
+  haltExecution: boolean;
+  /** Message describing the halt reason (if haltExecution is true) */
+  haltMessage?: string;
+}
+
+/**
+ * Evaluate fail_if and failure_conditions for a check
+ */
+// Returns { failed, haltExecution } to indicate if check failed and if execution should halt.
 // Global fail_if records an issue for summary/reporting but MUST NOT gate routing.
+// failure_conditions with halt_execution: true will trigger workflow halt.
 async function evaluateFailIf(
   checkId: string,
   result: ReviewSummary,
   checkConfig: CheckConfig,
   context: EngineContext,
   state: RunState
-): Promise<boolean> {
+): Promise<FailureEvaluationResult> {
   const config = context.config;
 
   // Check for fail_if at global or check level
   const globalFailIf = config.fail_if;
   const checkFailIf = checkConfig.fail_if;
+  const globalFailureConditions = config.failure_conditions;
+  const checkFailureConditions = checkConfig.failure_conditions;
 
-  if (!globalFailIf && !checkFailIf) {
-    return false; // No fail_if conditions
+  if (!globalFailIf && !checkFailIf && !globalFailureConditions && !checkFailureConditions) {
+    return { failed: false, haltExecution: false }; // No failure conditions
   }
 
   const evaluator = new FailureConditionEvaluator();
@@ -559,6 +607,10 @@ async function evaluateFailIf(
 
   const checkSchema = typeof checkConfig.schema === 'object' ? 'custom' : checkConfig.schema || '';
   const checkGroup = checkConfig.group || '';
+
+  let anyFailed = false;
+  let shouldHalt = false;
+  let haltMessage: string | undefined;
 
   // Evaluate global fail_if (non-gating)
   if (globalFailIf) {
@@ -623,7 +675,7 @@ async function evaluateFailIf(
         };
 
         result.issues = [...(result.issues || []), failIssue];
-        return true;
+        anyFailed = true;
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -631,7 +683,59 @@ async function evaluateFailIf(
     }
   }
 
-  return false;
+  // Evaluate failure_conditions (both global and check-level)
+  // These support halt_execution: true
+  if (globalFailureConditions || checkFailureConditions) {
+    try {
+      const conditionResults = await evaluator.evaluateConditions(
+        checkId,
+        checkSchema,
+        checkGroup,
+        result,
+        globalFailureConditions,
+        checkFailureConditions,
+        outputsRecord
+      );
+
+      // Check for triggered conditions
+      for (const condResult of conditionResults) {
+        if (condResult.failed) {
+          logger.warn(
+            `[Routing] Failure condition '${condResult.conditionName}' triggered for ${checkId}: ${condResult.expression}`
+          );
+
+          // Add issue to result
+          const failIssue: ReviewIssue = {
+            file: 'system',
+            line: 0,
+            ruleId: `${checkId}_${condResult.conditionName}`,
+            message: condResult.message || `Failure condition met: ${condResult.expression}`,
+            severity: condResult.severity || 'error',
+            category: 'logic',
+          };
+
+          result.issues = [...(result.issues || []), failIssue];
+          anyFailed = true;
+
+          // Check if this condition requires halting execution
+          if (condResult.haltExecution) {
+            shouldHalt = true;
+            haltMessage =
+              condResult.message ||
+              `Execution halted: condition '${condResult.conditionName}' triggered`;
+            logger.error(
+              `[Routing] HALT EXECUTION triggered by '${condResult.conditionName}' for ${checkId}`
+            );
+          }
+        }
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.error(`[Routing] Error evaluating failure_conditions: ${msg}`);
+    }
+  }
+
+  return { failed: anyFailed, haltExecution: shouldHalt, haltMessage };
 }
 
 /**

@@ -340,8 +340,13 @@ export async function handleLevelDispatch(
   // Clear current level tracking
   state.currentLevelChecks.clear();
 
-  // Transition back to WavePlanning
-  transition('WavePlanning');
+  // Only transition to WavePlanning if we're not already in Error state
+  // (halt_execution may have triggered Error state during routing)
+  if (state.currentState !== 'Error') {
+    transition('WavePlanning');
+  } else {
+    logger.info('[LevelDispatch] Skipping transition to WavePlanning - already in Error state');
+  }
 }
 
 /**
@@ -1287,13 +1292,14 @@ async function executeCheckWithForEachItems(
   try {
     logger.info(`[LevelDispatch] Calling handleRouting for ${checkId}`);
   } catch {}
+  let wasHalted = false;
   try {
     // Mark completion prior to routing so guards see this as completed in the wave
     state.completedChecks.add(checkId);
     const currentWaveCompletions = (state as any).currentWaveCompletions as Set<string> | undefined;
     if (currentWaveCompletions) currentWaveCompletions.add(checkId);
 
-    await handleRouting(context, state, transition, emitEvent, {
+    wasHalted = await handleRouting(context, state, transition, emitEvent, {
       checkId,
       scope: [],
       result: aggregatedResult as any,
@@ -1302,6 +1308,12 @@ async function executeCheckWithForEachItems(
     });
   } catch (error) {
     logger.warn(`[LevelDispatch] Routing error for aggregated forEach ${checkId}: ${error}`);
+  }
+
+  // If execution was halted, return the aggregated result (with halt issue added)
+  if (wasHalted) {
+    logger.info(`[LevelDispatch] Execution halted after routing for aggregated ${checkId}`);
+    return aggregatedResult as ReviewSummary;
   }
 
   try {
@@ -2522,13 +2534,42 @@ async function executeSingleCheck(
     try {
       logger.info(`[LevelDispatch] Calling handleRouting for ${checkId}`);
     } catch {}
-    await handleRouting(context, state, transition, emitEvent, {
+    const wasHalted = await handleRouting(context, state, transition, emitEvent, {
       checkId,
       scope,
       result: enrichedResult,
       checkConfig: checkConfig as CheckConfig,
       success: !hasFatalIssues(enrichedResult),
     });
+
+    // If execution was halted by halt_execution, commit the result (with halt issue) then return
+    if (wasHalted) {
+      logger.info(
+        `[LevelDispatch] Execution halted after routing for ${checkId}, stopping level dispatch`
+      );
+      // Still commit the result so the halt issue is captured in the final summary
+      try {
+        const commitResult: any = {
+          ...enrichedResult,
+          ...(renderedContent ? { content: renderedContent } : {}),
+          ...((result as any).output !== undefined
+            ? outputWithTimestamp !== undefined
+              ? { output: outputWithTimestamp }
+              : { output: (result as any).output }
+            : {}),
+        };
+        context.journal.commitEntry({
+          sessionId: context.sessionId,
+          checkId,
+          result: commitResult,
+          event: context.event || 'manual',
+          scope,
+        });
+      } catch (error) {
+        logger.warn(`[LevelDispatch] Failed to commit halt result to journal: ${error}`);
+      }
+      return enrichedResult;
+    }
 
     // NOW store in journal with routing-side mutations included (e.g., fail_if issues)
     // Rebuild the commit payload from the possibly mutated enrichedResult so new issues are captured.

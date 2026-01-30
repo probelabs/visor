@@ -466,7 +466,8 @@ export const configSchema = {
         },
         timeout: {
           type: 'number',
-          description: 'Timeout in seconds for command execution (default: 60)',
+          description:
+            'Timeout in milliseconds for command execution (default: 60000, i.e., 60 seconds)',
         },
         depends_on: {
           anyOf: [
@@ -740,7 +741,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -757,7 +758,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1395,7 +1396,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1410,14 +1411,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044>>':
+    'Record<string,Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-11359-23556-src_types_config.ts-0-41044>': {
+    'Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182>': {
       type: 'object',
       additionalProperties: false,
     },
@@ -2006,6 +2007,10 @@ export const configSchema = {
         cleanup_on_exit: {
           type: 'boolean',
           description: 'Clean up workspace on exit (default: true)',
+        },
+        include_main_project: {
+          type: 'boolean',
+          description: 'Include main project worktree in AI allowed folders (default: false)',
         },
       },
       additionalProperties: false,
