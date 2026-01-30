@@ -30,6 +30,143 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
+// src/utils/human-id.ts
+function randomSuffix() {
+  const chars = "abcdefghjkmnpqrstuvwxyz23456789";
+  let result = "";
+  for (let i = 0; i < 4; i++) {
+    result += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return result;
+}
+function generateHumanId() {
+  const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+  const noun = nouns[Math.floor(Math.random() * nouns.length)];
+  const suffix = randomSuffix();
+  return `${adj}-${noun}-${suffix}`;
+}
+function generateShortHumanId() {
+  const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+  const noun = nouns[Math.floor(Math.random() * nouns.length)];
+  return `${adj}-${noun}`;
+}
+var adjectives, nouns;
+var init_human_id = __esm({
+  "src/utils/human-id.ts"() {
+    "use strict";
+    adjectives = [
+      "bold",
+      "calm",
+      "cool",
+      "dark",
+      "fast",
+      "gold",
+      "green",
+      "happy",
+      "kind",
+      "loud",
+      "mild",
+      "neat",
+      "nice",
+      "pink",
+      "pure",
+      "quick",
+      "rare",
+      "rich",
+      "safe",
+      "slim",
+      "soft",
+      "tall",
+      "tidy",
+      "tiny",
+      "warm",
+      "wise",
+      "young",
+      "able",
+      "blue",
+      "brave",
+      "busy",
+      "clean",
+      "crisp",
+      "eager",
+      "fair",
+      "fresh",
+      "glad",
+      "grand",
+      "keen",
+      "lush",
+      "prime",
+      "proud",
+      "sharp",
+      "sleek",
+      "smart",
+      "solid",
+      "swift",
+      "vivid",
+      "wild",
+      "witty",
+      "zesty"
+    ];
+    nouns = [
+      "ant",
+      "bat",
+      "bear",
+      "bee",
+      "bird",
+      "bull",
+      "cat",
+      "cow",
+      "crab",
+      "crow",
+      "deer",
+      "dog",
+      "dove",
+      "duck",
+      "eagle",
+      "elk",
+      "fish",
+      "fox",
+      "frog",
+      "goat",
+      "hawk",
+      "hare",
+      "horse",
+      "jay",
+      "lark",
+      "lion",
+      "lynx",
+      "mole",
+      "moth",
+      "mouse",
+      "newt",
+      "owl",
+      "panda",
+      "pig",
+      "puma",
+      "rat",
+      "raven",
+      "seal",
+      "shark",
+      "sheep",
+      "sloth",
+      "snail",
+      "snake",
+      "spider",
+      "swan",
+      "tiger",
+      "toad",
+      "trout",
+      "viper",
+      "wasp",
+      "whale",
+      "wolf",
+      "wren",
+      "yak",
+      "zebra"
+    ];
+  }
+});
+
 // src/telemetry/lazy-otel.ts
 function getOtelApi() {
   if (otelApiAttempted) return otelApi;
@@ -3381,10 +3518,33 @@ function recordRoutingEvent(args) {
 async function handleRouting(context2, state, transition, emitEvent, routingContext) {
   const { checkId, scope, result, checkConfig, success } = routingContext;
   logger.info(`[Routing] Evaluating routing for check: ${checkId}, success: ${success}`);
-  const failIfTriggered = await evaluateFailIf(checkId, result, checkConfig, context2, state);
-  if (failIfTriggered) {
+  const failureResult = await evaluateFailIf(checkId, result, checkConfig, context2, state);
+  if (failureResult.haltExecution) {
+    logger.error(
+      `[Routing] HALTING EXECUTION due to critical failure in ${checkId}: ${failureResult.haltMessage}`
+    );
+    const haltIssue = {
+      file: "system",
+      line: 0,
+      ruleId: `${checkId}_halt_execution`,
+      message: `Execution halted: ${failureResult.haltMessage || "Critical failure condition met"}`,
+      severity: "error",
+      category: "logic"
+    };
+    result.issues = [...result.issues || [], haltIssue];
+    emitEvent({
+      type: "Shutdown",
+      error: {
+        message: failureResult.haltMessage || `Execution halted by check ${checkId}`,
+        name: "HaltExecution"
+      }
+    });
+    transition("Error");
+    return true;
+  }
+  if (failureResult.failed) {
     if (context2.debug) {
-      logger.info(`[Routing] fail_if triggered for ${checkId}`);
+      logger.info(`[Routing] fail_if/failure_conditions triggered for ${checkId}`);
     }
     await processOnFail(checkId, scope, result, checkConfig, context2, state, emitEvent);
   } else if (success) {
@@ -3402,6 +3562,7 @@ async function handleRouting(context2, state, transition, emitEvent, routingCont
     await processOnFinish(checkId, scope, result, checkConfig, context2, state, emitEvent);
   }
   transition("WavePlanning");
+  return false;
 }
 async function processOnFinish(checkId, scope, result, checkConfig, context2, state, emitEvent) {
   const onFinish = checkConfig.on_finish;
@@ -3615,8 +3776,10 @@ async function evaluateFailIf(checkId, result, checkConfig, context2, state) {
   const config = context2.config;
   const globalFailIf = config.fail_if;
   const checkFailIf = checkConfig.fail_if;
-  if (!globalFailIf && !checkFailIf) {
-    return false;
+  const globalFailureConditions = config.failure_conditions;
+  const checkFailureConditions = checkConfig.failure_conditions;
+  if (!globalFailIf && !checkFailIf && !globalFailureConditions && !checkFailureConditions) {
+    return { failed: false, haltExecution: false };
   }
   const evaluator = new FailureConditionEvaluator();
   const outputsRecord = {};
@@ -3640,6 +3803,9 @@ async function evaluateFailIf(checkId, result, checkConfig, context2, state) {
   }
   const checkSchema = typeof checkConfig.schema === "object" ? "custom" : checkConfig.schema || "";
   const checkGroup = checkConfig.group || "";
+  let anyFailed = false;
+  let shouldHalt = false;
+  let haltMessage;
   if (globalFailIf) {
     try {
       const failed = await evaluator.evaluateSimpleCondition(
@@ -3688,14 +3854,54 @@ async function evaluateFailIf(checkId, result, checkConfig, context2, state) {
           category: "logic"
         };
         result.issues = [...result.issues || [], failIssue];
-        return true;
+        anyFailed = true;
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       logger.error(`[Routing] Error evaluating check fail_if: ${msg}`);
     }
   }
-  return false;
+  if (globalFailureConditions || checkFailureConditions) {
+    try {
+      const conditionResults = await evaluator.evaluateConditions(
+        checkId,
+        checkSchema,
+        checkGroup,
+        result,
+        globalFailureConditions,
+        checkFailureConditions,
+        outputsRecord
+      );
+      for (const condResult of conditionResults) {
+        if (condResult.failed) {
+          logger.warn(
+            `[Routing] Failure condition '${condResult.conditionName}' triggered for ${checkId}: ${condResult.expression}`
+          );
+          const failIssue = {
+            file: "system",
+            line: 0,
+            ruleId: `${checkId}_${condResult.conditionName}`,
+            message: condResult.message || `Failure condition met: ${condResult.expression}`,
+            severity: condResult.severity || "error",
+            category: "logic"
+          };
+          result.issues = [...result.issues || [], failIssue];
+          anyFailed = true;
+          if (condResult.haltExecution) {
+            shouldHalt = true;
+            haltMessage = condResult.message || `Execution halted: condition '${condResult.conditionName}' triggered`;
+            logger.error(
+              `[Routing] HALT EXECUTION triggered by '${condResult.conditionName}' for ${checkId}`
+            );
+          }
+        }
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.error(`[Routing] Error evaluating failure_conditions: ${msg}`);
+    }
+  }
+  return { failed: anyFailed, haltExecution: shouldHalt, haltMessage };
 }
 function checkLoopBudget(context2, state, origin, action) {
   const maxLoops = context2.config.routing?.max_loops ?? DEFAULT_MAX_LOOPS;
@@ -4579,6 +4785,25 @@ var init_mermaid_telemetry = __esm({
     fs3 = __toESM(require("fs"));
     path3 = __toESM(require("path"));
     MERMAID_RE = /```mermaid\s*\n([\s\S]*?)\n```/gi;
+  }
+});
+
+// src/state-machine/context/workflow-inputs.ts
+function resolveWorkflowInputs(checkConfig, context2) {
+  if (checkConfig?.workflowInputs) {
+    return checkConfig.workflowInputs;
+  }
+  if (context2.config?.workflow_inputs) {
+    return context2.config.workflow_inputs;
+  }
+  if (context2.executionContext?.workflowInputs) {
+    return context2.executionContext.workflowInputs;
+  }
+  return void 0;
+}
+var init_workflow_inputs = __esm({
+  "src/state-machine/context/workflow-inputs.ts"() {
+    "use strict";
   }
 });
 
@@ -8498,6 +8723,5386 @@ var init_custom_tool_executor = __esm({
   }
 });
 
+// src/workflow-registry.ts
+var workflow_registry_exports = {};
+__export(workflow_registry_exports, {
+  WorkflowRegistry: () => WorkflowRegistry
+});
+var import_fs, path8, yaml, import_ajv2, import_ajv_formats, WorkflowRegistry;
+var init_workflow_registry = __esm({
+  "src/workflow-registry.ts"() {
+    "use strict";
+    import_fs = require("fs");
+    path8 = __toESM(require("path"));
+    yaml = __toESM(require("js-yaml"));
+    init_logger();
+    init_dependency_resolver();
+    import_ajv2 = __toESM(require("ajv"));
+    import_ajv_formats = __toESM(require("ajv-formats"));
+    WorkflowRegistry = class _WorkflowRegistry {
+      static instance;
+      workflows = /* @__PURE__ */ new Map();
+      ajv;
+      constructor() {
+        this.ajv = new import_ajv2.default({ allErrors: true, strict: false });
+        (0, import_ajv_formats.default)(this.ajv);
+      }
+      /**
+       * Get the singleton instance of the workflow registry
+       */
+      static getInstance() {
+        if (!_WorkflowRegistry.instance) {
+          _WorkflowRegistry.instance = new _WorkflowRegistry();
+        }
+        return _WorkflowRegistry.instance;
+      }
+      /**
+       * Register a workflow definition
+       */
+      register(workflow, source = "inline", options) {
+        const validation = this.validateWorkflow(workflow);
+        if (!validation.valid) {
+          return validation;
+        }
+        if (this.workflows.has(workflow.id) && !options?.override) {
+          return {
+            valid: false,
+            errors: [
+              {
+                path: "id",
+                message: `Workflow with ID '${workflow.id}' already exists`,
+                value: workflow.id
+              }
+            ]
+          };
+        }
+        this.workflows.set(workflow.id, {
+          definition: workflow,
+          source,
+          registeredAt: /* @__PURE__ */ new Date(),
+          usage: {
+            count: 0
+          }
+        });
+        logger.debug(`Registered workflow '${workflow.id}' from ${source}`);
+        return { valid: true };
+      }
+      /**
+       * Get a workflow by ID
+       */
+      get(id) {
+        const entry = this.workflows.get(id);
+        if (entry) {
+          entry.usage = entry.usage || { count: 0 };
+          entry.usage.count++;
+          entry.usage.lastUsed = /* @__PURE__ */ new Date();
+        }
+        return entry?.definition;
+      }
+      /**
+       * Check if a workflow exists
+       */
+      has(id) {
+        return this.workflows.has(id);
+      }
+      /**
+       * List all registered workflows
+       */
+      list() {
+        return Array.from(this.workflows.values()).map((entry) => entry.definition);
+      }
+      /**
+       * Get workflow metadata
+       */
+      getMetadata(id) {
+        return this.workflows.get(id);
+      }
+      /**
+       * Remove a workflow from the registry
+       */
+      unregister(id) {
+        return this.workflows.delete(id);
+      }
+      /**
+       * Clear all workflows
+       */
+      clear() {
+        this.workflows.clear();
+      }
+      /**
+       * Import workflows from a file or URL
+       */
+      async import(source, options) {
+        const results = [];
+        try {
+          const content = await this.loadWorkflowContent(source, options?.basePath);
+          const data = this.parseWorkflowContent(content, source);
+          const workflows = Array.isArray(data) ? data : [data];
+          for (const workflow of workflows) {
+            if (options?.validate !== false) {
+              const validation = this.validateWorkflow(workflow);
+              if (!validation.valid) {
+                results.push(validation);
+                continue;
+              }
+              if (options?.validators) {
+                for (const validator of options.validators) {
+                  const customValidation = validator(workflow);
+                  if (!customValidation.valid) {
+                    results.push(customValidation);
+                    continue;
+                  }
+                }
+              }
+            }
+            const workflowWithoutTests = { ...workflow };
+            delete workflowWithoutTests.tests;
+            const result = this.register(workflowWithoutTests, source, { override: options?.override });
+            results.push(result);
+          }
+        } catch (error) {
+          results.push({
+            valid: false,
+            errors: [
+              {
+                path: "source",
+                message: `Failed to import workflows from '${source}': ${error instanceof Error ? error.message : String(error)}`,
+                value: source
+              }
+            ]
+          });
+        }
+        return results;
+      }
+      /**
+       * Import multiple workflow sources
+       */
+      async importMany(sources, options) {
+        const results = /* @__PURE__ */ new Map();
+        for (const source of sources) {
+          const importResults = await this.import(source, options);
+          results.set(source, importResults);
+        }
+        return results;
+      }
+      /**
+       * Validate a workflow definition
+       */
+      validateWorkflow(workflow) {
+        const errors = [];
+        const warnings = [];
+        if (!workflow.id) {
+          errors.push({ path: "id", message: "Workflow ID is required" });
+        }
+        if (!workflow.name) {
+          errors.push({ path: "name", message: "Workflow name is required" });
+        }
+        if (!workflow.steps || Object.keys(workflow.steps).length === 0) {
+          errors.push({ path: "steps", message: "Workflow must have at least one step" });
+        }
+        if (workflow.inputs) {
+          for (let i = 0; i < workflow.inputs.length; i++) {
+            const input = workflow.inputs[i];
+            if (!input.name) {
+              errors.push({ path: `inputs[${i}].name`, message: "Input parameter name is required" });
+            }
+            if (!input.schema) {
+              warnings.push({
+                path: `inputs[${i}].schema`,
+                message: "Input parameter schema is recommended"
+              });
+            }
+          }
+        }
+        if (workflow.outputs) {
+          for (let i = 0; i < workflow.outputs.length; i++) {
+            const output = workflow.outputs[i];
+            if (!output.name) {
+              errors.push({ path: `outputs[${i}].name`, message: "Output parameter name is required" });
+            }
+            if (!output.value && !output.value_js) {
+              errors.push({
+                path: `outputs[${i}]`,
+                message: "Output parameter must have either value or value_js"
+              });
+            }
+          }
+        }
+        for (const [stepId, step] of Object.entries(workflow.steps || {})) {
+          if (step.depends_on) {
+            for (const dep of step.depends_on) {
+              if (!workflow.steps[dep]) {
+                errors.push({
+                  path: `steps.${stepId}.depends_on`,
+                  message: `Step '${stepId}' depends on non-existent step '${dep}'`,
+                  value: dep
+                });
+              }
+            }
+          }
+          if (step.inputs) {
+            for (const [inputName, mapping] of Object.entries(step.inputs)) {
+              if (typeof mapping === "object" && mapping !== null && "source" in mapping) {
+                const typedMapping = mapping;
+                if (typedMapping.source === "step" && !typedMapping.stepId) {
+                  errors.push({
+                    path: `steps.${stepId}.inputs.${inputName}`,
+                    message: 'Step input mapping with source "step" must have stepId'
+                  });
+                }
+                if (typedMapping.source === "param") {
+                  const paramExists = workflow.inputs?.some((p) => p.name === typedMapping.value);
+                  if (!paramExists) {
+                    errors.push({
+                      path: `steps.${stepId}.inputs.${inputName}`,
+                      message: `Step input references non-existent parameter '${typedMapping.value}'`,
+                      value: typedMapping.value
+                    });
+                  }
+                }
+              }
+            }
+          }
+        }
+        const circularDeps = this.detectCircularDependencies(workflow);
+        if (circularDeps.length > 0) {
+          errors.push({
+            path: "steps",
+            message: `Circular dependencies detected: ${circularDeps.join(" -> ")}`
+          });
+        }
+        return {
+          valid: errors.length === 0,
+          errors: errors.length > 0 ? errors : void 0,
+          warnings: warnings.length > 0 ? warnings : void 0
+        };
+      }
+      /**
+       * Validate input values against workflow input schema
+       */
+      validateInputs(workflow, inputs) {
+        const errors = [];
+        if (!workflow.inputs) {
+          return { valid: true };
+        }
+        for (const param of workflow.inputs) {
+          if (param.required !== false && !(param.name in inputs) && param.default === void 0) {
+            errors.push({
+              path: `inputs.${param.name}`,
+              message: `Required input '${param.name}' is missing`
+            });
+          }
+        }
+        for (const param of workflow.inputs) {
+          if (param.name in inputs && param.schema) {
+            const value = inputs[param.name];
+            const valid = this.validateAgainstSchema(value, param.schema);
+            if (!valid.valid) {
+              errors.push({
+                path: `inputs.${param.name}`,
+                message: valid.error || "Invalid input value",
+                value
+              });
+            }
+          }
+        }
+        return {
+          valid: errors.length === 0,
+          errors: errors.length > 0 ? errors : void 0
+        };
+      }
+      /**
+       * Load workflow content from file or URL
+       */
+      async loadWorkflowContent(source, basePath) {
+        if (source.startsWith("http://") || source.startsWith("https://")) {
+          const response = await fetch(source);
+          if (!response.ok) {
+            throw new Error(`Failed to fetch workflow from ${source}: ${response.statusText}`);
+          }
+          return await response.text();
+        }
+        const filePath = path8.isAbsolute(source) ? source : path8.resolve(basePath || process.cwd(), source);
+        return await import_fs.promises.readFile(filePath, "utf-8");
+      }
+      /**
+       * Parse workflow content (YAML or JSON)
+       */
+      parseWorkflowContent(content, source) {
+        try {
+          return JSON.parse(content);
+        } catch {
+          try {
+            return yaml.load(content);
+          } catch (error) {
+            throw new Error(
+              `Failed to parse workflow file ${source}: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
+        }
+      }
+      /**
+       * Detect circular dependencies in workflow steps using DependencyResolver
+       */
+      detectCircularDependencies(workflow) {
+        const dependencies = {};
+        for (const [stepId, step] of Object.entries(workflow.steps || {})) {
+          const rawDeps = step.depends_on;
+          dependencies[stepId] = Array.isArray(rawDeps) ? rawDeps : rawDeps ? [rawDeps] : [];
+        }
+        try {
+          const graph = DependencyResolver.buildDependencyGraph(dependencies);
+          if (graph.hasCycles && graph.cycleNodes) {
+            return graph.cycleNodes;
+          }
+          return [];
+        } catch {
+          return [];
+        }
+      }
+      /**
+       * Validate a value against a JSON schema
+       */
+      validateAgainstSchema(value, schema) {
+        try {
+          const validate = this.ajv.compile(schema);
+          const valid = validate(value);
+          if (!valid) {
+            const errors = validate.errors?.map((e) => `${e.instancePath || "/"}: ${e.message}`).join(", ");
+            return { valid: false, error: errors };
+          }
+          return { valid: true };
+        } catch (error) {
+          return { valid: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+    };
+  }
+});
+
+// src/workflow-executor.ts
+var import_liquidjs2, WorkflowExecutor;
+var init_workflow_executor = __esm({
+  "src/workflow-executor.ts"() {
+    "use strict";
+    init_check_provider_registry();
+    init_dependency_resolver();
+    init_logger();
+    init_sandbox();
+    import_liquidjs2 = require("liquidjs");
+    WorkflowExecutor = class {
+      providerRegistry = null;
+      liquid;
+      constructor() {
+        this.liquid = new import_liquidjs2.Liquid();
+      }
+      /**
+       * Lazy-load the provider registry to avoid circular dependency during initialization
+       */
+      getProviderRegistry() {
+        if (!this.providerRegistry) {
+          this.providerRegistry = CheckProviderRegistry.getInstance();
+        }
+        return this.providerRegistry;
+      }
+      /**
+       * Execute a workflow
+       */
+      async execute(workflow, executionContext, runOptions) {
+        const startTime = Date.now();
+        executionContext.metadata = {
+          startTime,
+          status: "running"
+        };
+        try {
+          const executionOrder = this.resolveExecutionOrder(workflow);
+          logger.debug(`Workflow ${workflow.id} execution order: ${executionOrder.join(" -> ")}`);
+          const stepResults = /* @__PURE__ */ new Map();
+          const stepSummaries = [];
+          for (const stepId of executionOrder) {
+            const step = workflow.steps[stepId];
+            if (step.if) {
+              const shouldRun = this.evaluateCondition(step.if, {
+                inputs: executionContext.inputs,
+                outputs: Object.fromEntries(stepResults),
+                pr: runOptions.prInfo
+              });
+              if (!shouldRun) {
+                logger.info(`Skipping step '${stepId}' due to condition: ${step.if}`);
+                stepSummaries.push({
+                  stepId,
+                  status: "skipped"
+                });
+                continue;
+              }
+            }
+            const stepConfig = await this.prepareStepConfig(
+              step,
+              stepId,
+              executionContext,
+              stepResults,
+              workflow
+            );
+            try {
+              logger.info(`Executing workflow step '${stepId}'`);
+              const stepContext = {
+                ...runOptions.context,
+                workflowInputs: executionContext.inputs
+              };
+              const result = await this.executeStep(
+                stepConfig,
+                runOptions.prInfo,
+                stepResults,
+                stepContext
+              );
+              stepResults.set(stepId, result);
+              stepSummaries.push({
+                stepId,
+                status: "success",
+                issues: result.issues,
+                output: result.output
+              });
+            } catch (error) {
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              logger.error(`Step '${stepId}' failed: ${errorMessage}`);
+              stepSummaries.push({
+                stepId,
+                status: "failed",
+                output: { error: errorMessage }
+              });
+              if (!runOptions.options?.continueOnError) {
+                throw new Error(`Workflow step '${stepId}' failed: ${errorMessage}`);
+              }
+            }
+          }
+          const outputs = await this.computeOutputs(
+            workflow,
+            executionContext,
+            stepResults,
+            runOptions.prInfo
+          );
+          executionContext.outputs = outputs;
+          const aggregated = this.aggregateResults(stepResults);
+          const endTime = Date.now();
+          executionContext.metadata.endTime = endTime;
+          executionContext.metadata.duration = endTime - startTime;
+          executionContext.metadata.status = "completed";
+          return {
+            success: true,
+            score: aggregated.score,
+            confidence: aggregated.confidence,
+            issues: aggregated.issues,
+            comments: aggregated.comments,
+            output: outputs,
+            status: "completed",
+            duration: endTime - startTime,
+            stepSummaries
+          };
+        } catch (error) {
+          const endTime = Date.now();
+          executionContext.metadata.endTime = endTime;
+          executionContext.metadata.duration = endTime - startTime;
+          executionContext.metadata.status = "failed";
+          executionContext.metadata.error = error instanceof Error ? error.message : String(error);
+          return {
+            success: false,
+            status: "failed",
+            duration: endTime - startTime,
+            error: error instanceof Error ? error.message : String(error)
+          };
+        }
+      }
+      /**
+       * Resolve step execution order based on dependencies
+       */
+      resolveExecutionOrder(workflow) {
+        const dependencies = {};
+        for (const [stepId, step] of Object.entries(workflow.steps)) {
+          const rawDeps = step.depends_on;
+          dependencies[stepId] = Array.isArray(rawDeps) ? rawDeps : rawDeps ? [rawDeps] : [];
+        }
+        const graph = DependencyResolver.buildDependencyGraph(dependencies);
+        if (graph.hasCycles) {
+          throw new Error(
+            `Circular dependency detected in workflow steps: ${graph.cycleNodes?.join(" -> ")}`
+          );
+        }
+        const order = [];
+        for (const group of graph.executionOrder) {
+          order.push(...group.parallel);
+        }
+        return order;
+      }
+      /**
+       * Prepare step configuration with input mappings
+       */
+      async prepareStepConfig(step, stepId, executionContext, stepResults, workflow) {
+        const config = {
+          ...step,
+          type: step.type || "ai",
+          checkName: `${executionContext.instanceId}:${stepId}`
+        };
+        if (step.inputs) {
+          for (const [inputName, mapping] of Object.entries(step.inputs)) {
+            const value = await this.resolveInputMapping(
+              mapping,
+              executionContext,
+              stepResults,
+              workflow
+            );
+            config[inputName] = value;
+          }
+        }
+        return config;
+      }
+      /**
+       * Resolve input mapping to actual value
+       */
+      async resolveInputMapping(mapping, executionContext, stepResults, _workflow) {
+        if (typeof mapping === "string") {
+          return executionContext.inputs[mapping];
+        }
+        if (typeof mapping === "object" && mapping !== null && "source" in mapping) {
+          const typedMapping = mapping;
+          switch (typedMapping.source) {
+            case "param":
+              return executionContext.inputs[String(typedMapping.value)];
+            case "step":
+              if (!typedMapping.stepId) {
+                throw new Error("Step input mapping requires stepId");
+              }
+              const stepResult = stepResults.get(typedMapping.stepId);
+              if (!stepResult) {
+                throw new Error(`Step '${typedMapping.stepId}' has not been executed yet`);
+              }
+              const output = stepResult.output;
+              if (typedMapping.outputParam && output) {
+                return output[typedMapping.outputParam];
+              }
+              return output;
+            case "constant":
+              return typedMapping.value;
+            case "expression":
+              if (!typedMapping.expression) {
+                throw new Error("Expression mapping requires expression field");
+              }
+              const sandbox = createSecureSandbox();
+              return compileAndRun(
+                sandbox,
+                typedMapping.expression,
+                {
+                  inputs: executionContext.inputs,
+                  outputs: Object.fromEntries(stepResults),
+                  steps: Object.fromEntries(
+                    Array.from(stepResults.entries()).map(([id, result]) => [
+                      id,
+                      result.output
+                    ])
+                  )
+                },
+                { injectLog: true, logPrefix: "workflow.input.expression" }
+              );
+            default:
+              throw new Error(`Unknown input mapping source: ${typedMapping.source}`);
+          }
+        }
+        if (typeof mapping === "object" && mapping !== null && "template" in mapping) {
+          const typedMapping = mapping;
+          if (typedMapping.template) {
+            return await this.liquid.parseAndRender(typedMapping.template, {
+              inputs: executionContext.inputs,
+              outputs: Object.fromEntries(stepResults)
+            });
+          }
+        }
+        return mapping;
+      }
+      /**
+       * Execute a single step
+       */
+      async executeStep(config, prInfo, dependencyResults, context2) {
+        const provider = await this.getProviderRegistry().getProvider(config.type);
+        if (!provider) {
+          throw new Error(`Provider '${config.type}' not found`);
+        }
+        return await provider.execute(prInfo, config, dependencyResults, context2);
+      }
+      /**
+       * Compute workflow outputs
+       */
+      async computeOutputs(workflow, executionContext, stepResults, prInfo) {
+        const outputs = {};
+        if (!workflow.outputs) {
+          return outputs;
+        }
+        for (const output of workflow.outputs) {
+          if (output.value_js) {
+            const sandbox = createSecureSandbox();
+            outputs[output.name] = compileAndRun(
+              sandbox,
+              output.value_js,
+              {
+                inputs: executionContext.inputs,
+                steps: Object.fromEntries(
+                  Array.from(stepResults.entries()).map(([id, result]) => [id, result.output])
+                ),
+                outputs: Object.fromEntries(stepResults),
+                pr: prInfo
+              },
+              { injectLog: true, logPrefix: `workflow.output.${output.name}` }
+            );
+          } else if (output.value) {
+            outputs[output.name] = await this.liquid.parseAndRender(output.value, {
+              inputs: executionContext.inputs,
+              steps: Object.fromEntries(
+                Array.from(stepResults.entries()).map(([id, result]) => [id, result.output])
+              ),
+              outputs: Object.fromEntries(stepResults),
+              pr: prInfo
+            });
+          }
+        }
+        return outputs;
+      }
+      /**
+       * Aggregate results from all steps
+       */
+      aggregateResults(stepResults) {
+        let totalScore = 0;
+        let scoreCount = 0;
+        const allIssues = [];
+        const allComments = [];
+        let minConfidence = "high";
+        for (const result of stepResults.values()) {
+          const extResult = result;
+          if (typeof extResult.score === "number") {
+            totalScore += extResult.score;
+            scoreCount++;
+          }
+          if (result.issues) {
+            allIssues.push(...result.issues);
+          }
+          if (extResult.comments) {
+            allComments.push(...extResult.comments);
+          }
+          if (extResult.confidence) {
+            if (extResult.confidence === "low" || extResult.confidence === "medium" && minConfidence === "high") {
+              minConfidence = extResult.confidence;
+            }
+          }
+        }
+        return {
+          score: scoreCount > 0 ? Math.round(totalScore / scoreCount) : 0,
+          confidence: minConfidence,
+          issues: allIssues,
+          comments: allComments
+        };
+      }
+      /**
+       * Evaluate a condition expression
+       */
+      evaluateCondition(condition, context2) {
+        try {
+          const sandbox = createSecureSandbox();
+          const result = compileAndRun(sandbox, condition, context2, {
+            injectLog: true,
+            logPrefix: "workflow.condition"
+          });
+          return Boolean(result);
+        } catch (error) {
+          logger.warn(`Failed to evaluate condition '${condition}': ${error}`);
+          return false;
+        }
+      }
+    };
+  }
+});
+
+// src/state-machine/workflow-projection.ts
+var workflow_projection_exports = {};
+__export(workflow_projection_exports, {
+  buildWorkflowScope: () => buildWorkflowScope,
+  extractParentScope: () => extractParentScope,
+  getWorkflowIdFromScope: () => getWorkflowIdFromScope,
+  isWorkflowStep: () => isWorkflowStep,
+  projectWorkflowToGraph: () => projectWorkflowToGraph,
+  validateWorkflowDepth: () => validateWorkflowDepth
+});
+function projectWorkflowToGraph(workflow, workflowInputs, _parentCheckId) {
+  if (!workflow.steps || Object.keys(workflow.steps).length === 0) {
+    throw new Error(`Workflow '${workflow.id}' has no steps`);
+  }
+  const checks = {};
+  const checksMetadata = {};
+  for (const [stepId, step] of Object.entries(workflow.steps)) {
+    const scopedCheckId = stepId;
+    checks[scopedCheckId] = {
+      type: step.type || "ai",
+      ...step,
+      // Store workflow inputs in the check config so they're accessible
+      workflowInputs,
+      // Mark this as a workflow step
+      _workflowStep: true,
+      _workflowId: workflow.id,
+      _stepId: stepId
+    };
+    checksMetadata[scopedCheckId] = {
+      tags: step.tags || workflow.tags || [],
+      triggers: step.on || workflow.on || [],
+      group: step.group,
+      providerType: step.type || "ai",
+      // Normalize depends_on to array (supports string | string[])
+      dependencies: (Array.isArray(step.depends_on) ? step.depends_on : step.depends_on ? [step.depends_on] : []).map((dep) => dep)
+    };
+  }
+  const config = {
+    checks,
+    version: "1.0",
+    output: {
+      pr_comment: {
+        format: "table",
+        group_by: "check",
+        collapse: false
+      }
+    }
+  };
+  if (logger.isDebugEnabled?.()) {
+    logger.debug(
+      `[WorkflowProjection] Projected workflow '${workflow.id}' with ${Object.keys(checks).length} steps`
+    );
+  }
+  return { config, checks: checksMetadata };
+}
+function validateWorkflowDepth(currentDepth, maxDepth, workflowId) {
+  if (currentDepth >= maxDepth) {
+    throw new Error(
+      `Workflow nesting depth limit exceeded (${maxDepth}) for workflow '${workflowId}'. This may indicate a circular workflow reference or excessive nesting.`
+    );
+  }
+}
+function buildWorkflowScope(parentScope, workflowCheckId, stepId, foreachIndex) {
+  const scope = parentScope ? [...parentScope] : [];
+  scope.push({
+    check: `${workflowCheckId}:${stepId}`,
+    index: foreachIndex ?? 0
+  });
+  return scope;
+}
+function extractParentScope(scopedCheckId) {
+  const lastColonIndex = scopedCheckId.lastIndexOf(":");
+  if (lastColonIndex === -1) {
+    return null;
+  }
+  return {
+    parentCheckId: scopedCheckId.substring(0, lastColonIndex),
+    stepId: scopedCheckId.substring(lastColonIndex + 1)
+  };
+}
+function isWorkflowStep(checkId) {
+  return checkId.includes(":");
+}
+function getWorkflowIdFromScope(scopedCheckId) {
+  const parts = scopedCheckId.split(":");
+  if (parts.length >= 2) {
+    return parts[0];
+  }
+  return null;
+}
+var init_workflow_projection = __esm({
+  "src/state-machine/workflow-projection.ts"() {
+    "use strict";
+    init_logger();
+  }
+});
+
+// src/utils/config-merger.ts
+var config_merger_exports = {};
+__export(config_merger_exports, {
+  ConfigMerger: () => ConfigMerger
+});
+var ConfigMerger;
+var init_config_merger = __esm({
+  "src/utils/config-merger.ts"() {
+    "use strict";
+    ConfigMerger = class {
+      /**
+       * Merge two configurations with child overriding parent
+       * @param parent - Base configuration
+       * @param child - Configuration to merge on top
+       * @returns Merged configuration
+       */
+      merge(parent, child) {
+        const result = this.deepCopy(parent);
+        if (child.version !== void 0) result.version = child.version;
+        if (child.ai_model !== void 0) result.ai_model = child.ai_model;
+        if (child.ai_provider !== void 0) result.ai_provider = child.ai_provider;
+        if (child.max_parallelism !== void 0) result.max_parallelism = child.max_parallelism;
+        if (child.fail_fast !== void 0) result.fail_fast = child.fail_fast;
+        if (child.fail_if !== void 0) result.fail_if = child.fail_if;
+        if (child.failure_conditions !== void 0)
+          result.failure_conditions = child.failure_conditions;
+        if (child.env) {
+          result.env = this.mergeObjects(parent.env || {}, child.env);
+        }
+        if (child.output) {
+          result.output = this.mergeOutputConfig(parent.output, child.output);
+        }
+        if (child.checks) {
+          result.checks = this.mergeChecks(parent.checks || {}, child.checks);
+        }
+        if (child.steps) {
+          const parentSteps = parent.steps || {};
+          const childSteps = child.steps || {};
+          result.steps = this.mergeChecks(parentSteps, childSteps);
+        }
+        if (child.tools) {
+          result.tools = this.mergeObjects(parent.tools || {}, child.tools);
+        }
+        if (child.imports) {
+          const parentImports = parent.imports || [];
+          const childImports = child.imports || [];
+          result.imports = [.../* @__PURE__ */ new Set([...parentImports, ...childImports])];
+        }
+        return result;
+      }
+      /**
+       * Deep copy an object
+       */
+      deepCopy(obj) {
+        if (obj === null || obj === void 0) {
+          return obj;
+        }
+        if (obj instanceof Date) {
+          return new Date(obj.getTime());
+        }
+        if (obj instanceof Array) {
+          const copy = [];
+          for (const item of obj) {
+            copy.push(this.deepCopy(item));
+          }
+          return copy;
+        }
+        if (obj instanceof Object) {
+          const copy = {};
+          for (const key in obj) {
+            if (Object.prototype.hasOwnProperty.call(obj, key)) {
+              copy[key] = this.deepCopy(obj[key]);
+            }
+          }
+          return copy;
+        }
+        return obj;
+      }
+      /**
+       * Merge two objects (child overrides parent)
+       */
+      mergeObjects(parent, child) {
+        const result = { ...parent };
+        for (const key in child) {
+          if (Object.prototype.hasOwnProperty.call(child, key)) {
+            const parentValue = parent[key];
+            const childValue = child[key];
+            if (childValue === null || childValue === void 0) {
+              delete result[key];
+            } else if (typeof parentValue === "object" && typeof childValue === "object" && !Array.isArray(parentValue) && !Array.isArray(childValue) && parentValue !== null && childValue !== null) {
+              result[key] = this.mergeObjects(
+                parentValue,
+                childValue
+              );
+            } else {
+              result[key] = this.deepCopy(childValue);
+            }
+          }
+        }
+        return result;
+      }
+      /**
+       * Merge output configurations
+       */
+      mergeOutputConfig(parent, child) {
+        if (!child) return parent;
+        if (!parent) return child;
+        const result = this.deepCopy(parent);
+        if (child.pr_comment) {
+          result.pr_comment = this.mergeObjects(
+            parent.pr_comment || {},
+            child.pr_comment
+          );
+        }
+        if (child.file_comment !== void 0) {
+          if (child.file_comment === null) {
+            delete result.file_comment;
+          } else {
+            result.file_comment = this.mergeObjects(
+              parent.file_comment || {},
+              child.file_comment
+            );
+          }
+        }
+        if (child.github_checks !== void 0) {
+          if (child.github_checks === null) {
+            delete result.github_checks;
+          } else {
+            result.github_checks = this.mergeObjects(
+              parent.github_checks || {},
+              child.github_checks
+            );
+          }
+        }
+        return result;
+      }
+      /**
+       * Merge check configurations with special handling
+       */
+      mergeChecks(parent, child) {
+        const result = {};
+        for (const [checkName, checkConfig] of Object.entries(parent)) {
+          result[checkName] = this.deepCopy(checkConfig);
+        }
+        for (const [checkName, childConfig] of Object.entries(child)) {
+          const parentConfig = parent[checkName];
+          if (!parentConfig) {
+            const copiedConfig = this.deepCopy(childConfig);
+            if (!copiedConfig.type) {
+              copiedConfig.type = "ai";
+            }
+            if (!copiedConfig.on) {
+              copiedConfig.on = ["manual"];
+            }
+            if (copiedConfig.appendPrompt !== void 0) {
+              if (!copiedConfig.prompt) {
+                copiedConfig.prompt = copiedConfig.appendPrompt;
+              } else {
+                copiedConfig.prompt = copiedConfig.prompt + "\n\n" + copiedConfig.appendPrompt;
+              }
+              delete copiedConfig.appendPrompt;
+            }
+            result[checkName] = copiedConfig;
+          } else {
+            result[checkName] = this.mergeCheckConfig(parentConfig, childConfig);
+          }
+        }
+        return result;
+      }
+      /**
+       * Merge individual check configurations
+       */
+      mergeCheckConfig(parent, child) {
+        const result = this.deepCopy(parent);
+        if (child.type !== void 0) result.type = child.type;
+        if (!result.type) {
+          result.type = "ai";
+        }
+        if (child.prompt !== void 0) result.prompt = child.prompt;
+        if (child.appendPrompt !== void 0) {
+          if (result.prompt) {
+            result.prompt = result.prompt + "\n\n" + child.appendPrompt;
+          } else {
+            result.prompt = child.appendPrompt;
+          }
+          delete result.appendPrompt;
+        }
+        if (child.exec !== void 0) result.exec = child.exec;
+        if (child.stdin !== void 0) result.stdin = child.stdin;
+        if (child.url !== void 0) result.url = child.url;
+        if (child.focus !== void 0) result.focus = child.focus;
+        if (child.command !== void 0) result.command = child.command;
+        if (child.ai_model !== void 0) result.ai_model = child.ai_model;
+        if (child.ai_provider !== void 0) result.ai_provider = child.ai_provider;
+        if (child.group !== void 0) result.group = child.group;
+        if (child.schema !== void 0) result.schema = child.schema;
+        if (child.if !== void 0) result.if = child.if;
+        if (child.reuse_ai_session !== void 0) result.reuse_ai_session = child.reuse_ai_session;
+        if (child.fail_if !== void 0) result.fail_if = child.fail_if;
+        if (child.failure_conditions !== void 0)
+          result.failure_conditions = child.failure_conditions;
+        if (child.on !== void 0) {
+          if (Array.isArray(child.on) && child.on.length === 0) {
+            result.on = [];
+          } else {
+            result.on = [...child.on];
+          }
+        }
+        if (!result.on) {
+          result.on = ["manual"];
+        }
+        if (child.triggers !== void 0) {
+          result.triggers = child.triggers ? [...child.triggers] : void 0;
+        }
+        if (child.depends_on !== void 0) {
+          result.depends_on = child.depends_on ? [...child.depends_on] : void 0;
+        }
+        if (child.env) {
+          result.env = this.mergeObjects(
+            parent.env || {},
+            child.env
+          );
+        }
+        if (child.ai) {
+          result.ai = this.mergeObjects(
+            parent.ai || {},
+            child.ai
+          );
+        }
+        if (child.template) {
+          result.template = this.mergeObjects(
+            parent.template || {},
+            child.template
+          );
+        }
+        return result;
+      }
+      /**
+       * Check if a check is disabled (has empty 'on' array)
+       */
+      isCheckDisabled(check) {
+        return Array.isArray(check.on) && check.on.length === 0;
+      }
+      /**
+       * Remove disabled checks from the configuration
+       */
+      removeDisabledChecks(config) {
+        if (!config.checks) return config;
+        const result = this.deepCopy(config);
+        const enabledChecks = {};
+        for (const [checkName, checkConfig] of Object.entries(result.checks)) {
+          if (!this.isCheckDisabled(checkConfig)) {
+            enabledChecks[checkName] = checkConfig;
+          } else {
+            console.log(`\u2139\uFE0F  Check '${checkName}' is disabled (empty 'on' array)`);
+          }
+        }
+        result.checks = enabledChecks;
+        return result;
+      }
+    };
+  }
+});
+
+// src/utils/config-loader.ts
+var fs8, path9, yaml2, ConfigLoader;
+var init_config_loader = __esm({
+  "src/utils/config-loader.ts"() {
+    "use strict";
+    fs8 = __toESM(require("fs"));
+    path9 = __toESM(require("path"));
+    yaml2 = __toESM(require("js-yaml"));
+    ConfigLoader = class {
+      constructor(options = {}) {
+        this.options = options;
+        this.options = {
+          allowRemote: true,
+          cacheTTL: 5 * 60 * 1e3,
+          // 5 minutes
+          timeout: 30 * 1e3,
+          // 30 seconds
+          maxDepth: 10,
+          allowedRemotePatterns: [],
+          // Empty by default for security
+          projectRoot: this.findProjectRoot(),
+          ...options
+        };
+      }
+      cache = /* @__PURE__ */ new Map();
+      loadedConfigs = /* @__PURE__ */ new Set();
+      /**
+       * Determine the source type from a string
+       */
+      getSourceType(source) {
+        if (source === "default") {
+          return "default" /* DEFAULT */;
+        }
+        if (source.startsWith("http://") || source.startsWith("https://")) {
+          return "remote" /* REMOTE */;
+        }
+        return "local" /* LOCAL */;
+      }
+      /**
+       * Fetch configuration from any source
+       */
+      async fetchConfig(source, currentDepth = 0) {
+        if (currentDepth >= (this.options.maxDepth || 10)) {
+          throw new Error(
+            `Maximum extends depth (${this.options.maxDepth}) exceeded. Check for circular dependencies.`
+          );
+        }
+        const normalizedSource = this.normalizeSource(source);
+        if (this.loadedConfigs.has(normalizedSource)) {
+          throw new Error(
+            `Circular dependency detected: ${normalizedSource} is already in the extends chain`
+          );
+        }
+        const sourceType = this.getSourceType(source);
+        try {
+          this.loadedConfigs.add(normalizedSource);
+          switch (sourceType) {
+            case "default" /* DEFAULT */:
+              return await this.fetchDefaultConfig();
+            case "remote" /* REMOTE */:
+              if (!this.options.allowRemote) {
+                throw new Error(
+                  "Remote extends are disabled. Enable with --allow-remote-extends or remove VISOR_NO_REMOTE_EXTENDS environment variable."
+                );
+              }
+              return await this.fetchRemoteConfig(source);
+            case "local" /* LOCAL */:
+              return await this.fetchLocalConfig(source);
+            default:
+              throw new Error(`Unknown configuration source: ${source}`);
+          }
+        } finally {
+          this.loadedConfigs.delete(normalizedSource);
+        }
+      }
+      /**
+       * Normalize source path/URL for comparison
+       */
+      normalizeSource(source) {
+        const sourceType = this.getSourceType(source);
+        switch (sourceType) {
+          case "default" /* DEFAULT */:
+            return "default";
+          case "remote" /* REMOTE */:
+            return source.toLowerCase();
+          case "local" /* LOCAL */:
+            const basePath = this.options.baseDir || process.cwd();
+            return path9.resolve(basePath, source);
+          default:
+            return source;
+        }
+      }
+      /**
+       * Load configuration from local file system
+       */
+      async fetchLocalConfig(filePath) {
+        const basePath = this.options.baseDir || process.cwd();
+        const resolvedPath = path9.resolve(basePath, filePath);
+        this.validateLocalPath(resolvedPath);
+        try {
+          const content = fs8.readFileSync(resolvedPath, "utf8");
+          const config = yaml2.load(content);
+          if (!config || typeof config !== "object") {
+            throw new Error(`Invalid YAML in configuration file: ${resolvedPath}`);
+          }
+          if (config.include && !config.extends) {
+            const inc = config.include;
+            config.extends = Array.isArray(inc) ? inc : [inc];
+            delete config.include;
+          }
+          const previousBaseDir = this.options.baseDir;
+          this.options.baseDir = path9.dirname(resolvedPath);
+          try {
+            if (config.extends) {
+              const processedConfig = await this.processExtends(config);
+              return processedConfig;
+            }
+            return config;
+          } finally {
+            this.options.baseDir = previousBaseDir;
+          }
+        } catch (error) {
+          if (error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+            throw new Error(`Configuration file not found: ${resolvedPath}`);
+          }
+          if (error instanceof Error) {
+            throw new Error(`Failed to load configuration from ${resolvedPath}: ${error.message}`);
+          }
+          throw error;
+        }
+      }
+      /**
+       * Fetch configuration from remote URL
+       */
+      async fetchRemoteConfig(url) {
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+          throw new Error(`Invalid URL: ${url}. Only HTTP and HTTPS protocols are supported.`);
+        }
+        this.validateRemoteURL(url);
+        const cacheEntry = this.cache.get(url);
+        if (cacheEntry && Date.now() - cacheEntry.timestamp < cacheEntry.ttl) {
+          const outputFormat2 = process.env.VISOR_OUTPUT_FORMAT;
+          const logFn2 = outputFormat2 === "json" || outputFormat2 === "sarif" ? console.error : console.log;
+          logFn2(`\u{1F4E6} Using cached configuration from: ${url}`);
+          return cacheEntry.config;
+        }
+        const outputFormat = process.env.VISOR_OUTPUT_FORMAT;
+        const logFn = outputFormat === "json" || outputFormat === "sarif" ? console.error : console.log;
+        logFn(`\u2B07\uFE0F  Fetching remote configuration from: ${url}`);
+        const controller = new AbortController();
+        const timeoutMs = this.options.timeout ?? 3e4;
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetch(url, {
+            signal: controller.signal,
+            headers: {
+              "User-Agent": "Visor/1.0"
+            }
+          });
+          if (!response.ok) {
+            throw new Error(`Failed to fetch config: ${response.status} ${response.statusText}`);
+          }
+          const content = await response.text();
+          const config = yaml2.load(content);
+          if (!config || typeof config !== "object") {
+            throw new Error(`Invalid YAML in remote configuration: ${url}`);
+          }
+          this.cache.set(url, {
+            config,
+            timestamp: Date.now(),
+            ttl: this.options.cacheTTL || 5 * 60 * 1e3
+          });
+          if (config.extends) {
+            return await this.processExtends(config);
+          }
+          return config;
+        } catch (error) {
+          if (error instanceof Error) {
+            if (error.name === "AbortError") {
+              throw new Error(`Timeout fetching configuration from ${url} (${timeoutMs}ms)`);
+            }
+            throw new Error(`Failed to fetch remote configuration from ${url}: ${error.message}`);
+          }
+          throw error;
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      }
+      /**
+       * Load bundled default configuration
+       */
+      async fetchDefaultConfig() {
+        const possiblePaths = [
+          // Only support new non-dot filename
+          path9.join(__dirname, "defaults", "visor.yaml"),
+          // When running from source
+          path9.join(__dirname, "..", "..", "defaults", "visor.yaml"),
+          // Try via package root
+          this.findPackageRoot() ? path9.join(this.findPackageRoot(), "defaults", "visor.yaml") : "",
+          // GitHub Action environment variable
+          process.env.GITHUB_ACTION_PATH ? path9.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml") : "",
+          process.env.GITHUB_ACTION_PATH ? path9.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml") : ""
+        ].filter((p) => p);
+        let defaultConfigPath;
+        for (const possiblePath of possiblePaths) {
+          if (fs8.existsSync(possiblePath)) {
+            defaultConfigPath = possiblePath;
+            break;
+          }
+        }
+        if (defaultConfigPath) {
+          console.error(`\u{1F4E6} Loading bundled default configuration from ${defaultConfigPath}`);
+          const content = fs8.readFileSync(defaultConfigPath, "utf8");
+          let config = yaml2.load(content);
+          if (!config || typeof config !== "object") {
+            throw new Error("Invalid default configuration");
+          }
+          if (config.include && !config.extends) {
+            const inc = config.include;
+            config.extends = Array.isArray(inc) ? inc : [inc];
+            delete config.include;
+          }
+          config = this.normalizeStepsAndChecks(config);
+          if (config.extends) {
+            const previousBaseDir = this.options.baseDir;
+            try {
+              this.options.baseDir = path9.dirname(defaultConfigPath);
+              return await this.processExtends(config);
+            } finally {
+              this.options.baseDir = previousBaseDir;
+            }
+          }
+          return config;
+        }
+        console.warn("\u26A0\uFE0F  Bundled default configuration not found, using minimal defaults");
+        return {
+          version: "1.0",
+          checks: {},
+          output: {
+            pr_comment: {
+              format: "markdown",
+              group_by: "check",
+              collapse: true
+            }
+          }
+        };
+      }
+      /**
+       * Process extends directive in a configuration
+       */
+      async processExtends(config) {
+        if (!config.extends) {
+          return config;
+        }
+        const extends_ = Array.isArray(config.extends) ? config.extends : [config.extends];
+        const { extends: _extendsField, ...configWithoutExtends } = config;
+        const parentConfigs = [];
+        for (const source of extends_) {
+          const parentConfig = await this.fetchConfig(source, this.loadedConfigs.size);
+          parentConfigs.push(parentConfig);
+        }
+        const { ConfigMerger: ConfigMerger2 } = await Promise.resolve().then(() => (init_config_merger(), config_merger_exports));
+        const merger = new ConfigMerger2();
+        let mergedParents = {};
+        for (const parentConfig of parentConfigs) {
+          mergedParents = merger.merge(mergedParents, parentConfig);
+        }
+        return merger.merge(mergedParents, configWithoutExtends);
+      }
+      /**
+       * Find project root directory (for security validation)
+       */
+      findProjectRoot() {
+        try {
+          const { execSync } = require("child_process");
+          const gitRoot = execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim();
+          if (gitRoot) return gitRoot;
+        } catch {
+        }
+        const packageRoot = this.findPackageRoot();
+        if (packageRoot) return packageRoot;
+        return process.cwd();
+      }
+      /**
+       * Validate remote URL against allowlist
+       */
+      validateRemoteURL(url) {
+        const allowedPatterns = this.options.allowedRemotePatterns || [];
+        if (allowedPatterns.length === 0) {
+          return;
+        }
+        const isAllowed = allowedPatterns.some((pattern) => url.startsWith(pattern));
+        if (!isAllowed) {
+          throw new Error(
+            `Security error: URL ${url} is not in the allowed list. Allowed patterns: ${allowedPatterns.join(", ")}`
+          );
+        }
+      }
+      /**
+       * Validate local path against traversal attacks
+       */
+      validateLocalPath(resolvedPath) {
+        const projectRoot = this.options.projectRoot || process.cwd();
+        const normalizedPath = path9.normalize(resolvedPath);
+        const normalizedRoot = path9.normalize(projectRoot);
+        if (!normalizedPath.startsWith(normalizedRoot)) {
+          throw new Error(
+            `Security error: Path traversal detected. Cannot access files outside project root: ${projectRoot}`
+          );
+        }
+        const sensitivePatterns = [
+          "/etc/passwd",
+          "/etc/shadow",
+          "/.ssh/",
+          "/.aws/",
+          "/.env",
+          "/private/"
+        ];
+        const lowerPath = normalizedPath.toLowerCase();
+        for (const pattern of sensitivePatterns) {
+          if (lowerPath.includes(pattern)) {
+            throw new Error(`Security error: Cannot access potentially sensitive file: ${pattern}`);
+          }
+        }
+      }
+      /**
+       * Find package root directory
+       */
+      findPackageRoot() {
+        let currentDir = __dirname;
+        const root = path9.parse(currentDir).root;
+        while (currentDir !== root) {
+          const packageJsonPath = path9.join(currentDir, "package.json");
+          if (fs8.existsSync(packageJsonPath)) {
+            try {
+              const packageJson = JSON.parse(fs8.readFileSync(packageJsonPath, "utf8"));
+              if (packageJson.name === "@probelabs/visor") {
+                return currentDir;
+              }
+            } catch {
+            }
+          }
+          currentDir = path9.dirname(currentDir);
+        }
+        return null;
+      }
+      /**
+       * Clear the configuration cache
+       */
+      clearCache() {
+        this.cache.clear();
+      }
+      /**
+       * Reset the loaded configs tracking (for testing)
+       */
+      reset() {
+        this.loadedConfigs.clear();
+        this.clearCache();
+      }
+      /**
+       * Normalize 'checks' and 'steps' keys for backward compatibility
+       * Ensures both keys are present and contain the same data
+       */
+      normalizeStepsAndChecks(config) {
+        if (config.steps && config.checks) {
+          const merged = { ...config.checks, ...config.steps };
+          config.checks = merged;
+          config.steps = merged;
+        } else if (config.steps && !config.checks) {
+          config.checks = config.steps;
+        } else if (config.checks && !config.steps) {
+          config.steps = config.checks;
+        }
+        return config;
+      }
+    };
+  }
+});
+
+// src/generated/config-schema.ts
+var config_schema_exports = {};
+__export(config_schema_exports, {
+  configSchema: () => configSchema,
+  default: () => config_schema_default
+});
+var configSchema, config_schema_default;
+var init_config_schema = __esm({
+  "src/generated/config-schema.ts"() {
+    "use strict";
+    configSchema = {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      $ref: "#/definitions/VisorConfigSchema",
+      definitions: {
+        VisorConfigSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            hooks: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E"
+            },
+            version: {
+              type: "string",
+              description: "Configuration version"
+            },
+            extends: {
+              anyOf: [
+                {
+                  type: "string"
+                },
+                {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                }
+              ],
+              description: 'Extends from other configurations - can be file path, HTTP(S) URL, or "default"'
+            },
+            include: {
+              anyOf: [
+                {
+                  type: "string"
+                },
+                {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                }
+              ],
+              description: "Alias for extends - include from other configurations (backward compatibility)"
+            },
+            tools: {
+              $ref: "#/definitions/Record%3Cstring%2CCustomToolDefinition%3E",
+              description: "Custom tool definitions that can be used in MCP blocks"
+            },
+            imports: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Import workflow definitions from external files or URLs"
+            },
+            inputs: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/WorkflowInput"
+              },
+              description: "Workflow inputs (for standalone reusable workflows)"
+            },
+            outputs: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/WorkflowOutput"
+              },
+              description: "Workflow outputs (for standalone reusable workflows)"
+            },
+            steps: {
+              $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E",
+              description: "Step configurations (recommended)"
+            },
+            checks: {
+              $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E",
+              description: "Check configurations (legacy, use 'steps' instead) - always populated after normalization"
+            },
+            output: {
+              $ref: "#/definitions/OutputConfig",
+              description: "Output configuration (optional - defaults provided)"
+            },
+            http_server: {
+              $ref: "#/definitions/HttpServerConfig",
+              description: "HTTP server configuration for receiving webhooks"
+            },
+            memory: {
+              $ref: "#/definitions/MemoryConfig",
+              description: "Memory storage configuration"
+            },
+            env: {
+              $ref: "#/definitions/EnvConfig",
+              description: "Global environment variables"
+            },
+            ai_model: {
+              type: "string",
+              description: "Global AI model setting"
+            },
+            ai_provider: {
+              type: "string",
+              description: "Global AI provider setting"
+            },
+            ai_mcp_servers: {
+              $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
+              description: "Global MCP servers configuration for AI checks"
+            },
+            max_parallelism: {
+              type: "number",
+              description: "Maximum number of checks to run in parallel (default: 3)"
+            },
+            fail_fast: {
+              type: "boolean",
+              description: "Stop execution when any check fails (default: false)"
+            },
+            fail_if: {
+              type: "string",
+              description: "Simple global fail condition - fails if expression evaluates to true"
+            },
+            failure_conditions: {
+              $ref: "#/definitions/FailureConditions",
+              description: "Global failure conditions - optional (deprecated, use fail_if)"
+            },
+            tag_filter: {
+              $ref: "#/definitions/TagFilter",
+              description: "Tag filter for selective check execution"
+            },
+            routing: {
+              $ref: "#/definitions/RoutingDefaults",
+              description: "Optional routing defaults for retry/goto/run policies"
+            },
+            limits: {
+              $ref: "#/definitions/LimitsConfig",
+              description: "Global execution limits"
+            },
+            frontends: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  name: {
+                    type: "string",
+                    description: "Frontend name, e.g., 'ndjson-sink', 'github'"
+                  },
+                  config: {
+                    description: "Frontend-specific configuration"
+                  }
+                },
+                required: ["name"],
+                additionalProperties: false
+              },
+              description: "Optional integrations: event-driven frontends (e.g., ndjson-sink, github)"
+            },
+            workspace: {
+              $ref: "#/definitions/WorkspaceConfig",
+              description: "Workspace isolation configuration for sandboxed execution"
+            },
+            slack: {
+              $ref: "#/definitions/SlackConfig",
+              description: "Slack configuration"
+            }
+          },
+          required: ["version"],
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        "Record<string,unknown>": {
+          type: "object",
+          additionalProperties: {}
+        },
+        "Record<string,CustomToolDefinition>": {
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/CustomToolDefinition"
+          }
+        },
+        CustomToolDefinition: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "Tool name - used to reference the tool in MCP blocks"
+            },
+            description: {
+              type: "string",
+              description: "Description of what the tool does"
+            },
+            inputSchema: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  const: "object"
+                },
+                properties: {
+                  $ref: "#/definitions/Record%3Cstring%2Cunknown%3E"
+                },
+                required: {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                },
+                additionalProperties: {
+                  type: "boolean"
+                }
+              },
+              required: ["type"],
+              additionalProperties: false,
+              description: "Input schema for the tool (JSON Schema format)",
+              patternProperties: {
+                "^x-": {}
+              }
+            },
+            exec: {
+              type: "string",
+              description: "Command to execute - supports Liquid template"
+            },
+            stdin: {
+              type: "string",
+              description: "Optional stdin input - supports Liquid template"
+            },
+            transform: {
+              type: "string",
+              description: "Transform the raw output - supports Liquid template"
+            },
+            transform_js: {
+              type: "string",
+              description: "Transform the output using JavaScript - alternative to transform"
+            },
+            cwd: {
+              type: "string",
+              description: "Working directory for command execution"
+            },
+            env: {
+              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
+              description: "Environment variables for the command"
+            },
+            timeout: {
+              type: "number",
+              description: "Timeout in milliseconds"
+            },
+            parseJson: {
+              type: "boolean",
+              description: "Whether to parse output as JSON automatically"
+            },
+            outputSchema: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Expected output schema for validation"
+            }
+          },
+          required: ["name", "exec"],
+          additionalProperties: false,
+          description: "Custom tool definition for use in MCP blocks",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        "Record<string,string>": {
+          type: "object",
+          additionalProperties: {
+            type: "string"
+          }
+        },
+        WorkflowInput: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "Input parameter name"
+            },
+            schema: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "JSON Schema for the input"
+            },
+            required: {
+              type: "boolean",
+              description: "Whether this input is required"
+            },
+            default: {
+              description: "Default value if not provided"
+            },
+            description: {
+              type: "string",
+              description: "Human-readable description"
+            }
+          },
+          required: ["name"],
+          additionalProperties: false,
+          description: "Workflow input definition for standalone reusable workflows",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        WorkflowOutput: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "Output name"
+            },
+            description: {
+              type: "string",
+              description: "Human-readable description"
+            },
+            value: {
+              type: "string",
+              description: "Value using Liquid template syntax (references step outputs)"
+            },
+            value_js: {
+              type: "string",
+              description: "Value using JavaScript expression (alternative to value)"
+            }
+          },
+          required: ["name"],
+          additionalProperties: false,
+          description: "Workflow output definition for standalone reusable workflows",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        "Record<string,CheckConfig>": {
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/CheckConfig"
+          }
+        },
+        CheckConfig: {
+          type: "object",
+          properties: {
+            type: {
+              $ref: "#/definitions/ConfigCheckType",
+              description: "Type of check to perform (defaults to 'ai' if not specified)"
+            },
+            prompt: {
+              type: "string",
+              description: "AI prompt for the check - can be inline string or file path (auto-detected) - required for AI checks"
+            },
+            appendPrompt: {
+              type: "string",
+              description: "Additional prompt to append when extending configurations - merged with parent prompt"
+            },
+            exec: {
+              type: "string",
+              description: "Command execution with Liquid template support - required for command checks"
+            },
+            stdin: {
+              type: "string",
+              description: "Stdin input for tools with Liquid template support - optional for tool checks"
+            },
+            url: {
+              type: "string",
+              description: "HTTP URL - required for http output checks"
+            },
+            body: {
+              type: "string",
+              description: "HTTP body template (Liquid) - required for http output checks"
+            },
+            method: {
+              type: "string",
+              description: "HTTP method (defaults to POST)"
+            },
+            headers: {
+              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
+              description: "HTTP headers"
+            },
+            endpoint: {
+              type: "string",
+              description: "HTTP endpoint path - required for http_input checks"
+            },
+            transform: {
+              type: "string",
+              description: "Transform template for http_input data (Liquid) - optional"
+            },
+            transform_js: {
+              type: "string",
+              description: "Transform using JavaScript expressions (evaluated in secure sandbox) - optional"
+            },
+            content: {
+              type: "string",
+              description: "Script content to execute for script checks"
+            },
+            schedule: {
+              type: "string",
+              description: 'Cron schedule expression (e.g., "0 2 * * *") - optional for any check type'
+            },
+            focus: {
+              type: "string",
+              description: "Focus area for the check (security/performance/style/architecture/all) - optional"
+            },
+            command: {
+              type: "string",
+              description: 'Command that triggers this check (e.g., "review", "security-scan") - optional'
+            },
+            on: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/EventTrigger"
+              },
+              description: "Events that trigger this check (defaults to ['manual'] if not specified)"
+            },
+            triggers: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "File patterns that trigger this check (optional)"
+            },
+            ai: {
+              $ref: "#/definitions/AIProviderConfig",
+              description: "AI provider configuration (optional)"
+            },
+            ai_model: {
+              type: "string",
+              description: "AI model to use for this check - overrides global setting"
+            },
+            ai_provider: {
+              type: "string",
+              description: "AI provider to use for this check - overrides global setting"
+            },
+            ai_persona: {
+              type: "string",
+              description: "Optional persona hint, prepended to the prompt as 'Persona: <value>'"
+            },
+            ai_prompt_type: {
+              type: "string",
+              description: "Probe promptType for this check (underscore style)"
+            },
+            ai_system_prompt: {
+              type: "string",
+              description: "System prompt for this check (underscore style)"
+            },
+            ai_custom_prompt: {
+              type: "string",
+              description: "Legacy customPrompt (underscore style) \u2014 deprecated, use ai_system_prompt"
+            },
+            ai_mcp_servers: {
+              $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
+              description: "MCP servers for this AI check - overrides global setting"
+            },
+            ai_custom_tools: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "List of custom tool names to expose to this AI check via ephemeral SSE MCP server"
+            },
+            claude_code: {
+              $ref: "#/definitions/ClaudeCodeConfig",
+              description: "Claude Code configuration (for claude-code type checks)"
+            },
+            env: {
+              $ref: "#/definitions/EnvConfig",
+              description: "Environment variables for this check"
+            },
+            timeout: {
+              type: "number",
+              description: "Timeout in milliseconds for command execution (default: 60000, i.e., 60 seconds)"
+            },
+            depends_on: {
+              anyOf: [
+                {
+                  type: "string"
+                },
+                {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                }
+              ],
+              description: "Check IDs that this check depends on (optional). Accepts single string or array."
+            },
+            group: {
+              type: "string",
+              description: 'Group name for comment separation (e.g., "code-review", "pr-overview") - optional'
+            },
+            schema: {
+              anyOf: [
+                {
+                  type: "string"
+                },
+                {
+                  $ref: "#/definitions/Record%3Cstring%2Cunknown%3E"
+                }
+              ],
+              description: 'Schema type for template rendering (e.g., "code-review", "markdown") or inline JSON schema object - optional'
+            },
+            output_schema: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Optional JSON Schema to validate the produced output. If omitted and `schema` is an object, the engine will treat that object as the output_schema for validation purposes while still using string schemas (e.g., 'code-review') for template selection."
+            },
+            template: {
+              $ref: "#/definitions/CustomTemplateConfig",
+              description: "Custom template configuration - optional"
+            },
+            if: {
+              type: "string",
+              description: "Condition to determine if check should run - runs if expression evaluates to true"
+            },
+            reuse_ai_session: {
+              type: ["string", "boolean"],
+              description: "Check name to reuse AI session from, or true to use first dependency (only works with depends_on)"
+            },
+            session_mode: {
+              type: "string",
+              enum: ["clone", "append"],
+              description: "How to reuse AI session: 'clone' (default, copy history) or 'append' (share history)"
+            },
+            fail_if: {
+              type: "string",
+              description: "Simple fail condition - fails check if expression evaluates to true"
+            },
+            failure_conditions: {
+              $ref: "#/definitions/FailureConditions",
+              description: "Check-specific failure conditions - optional (deprecated, use fail_if)"
+            },
+            tags: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: 'Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"])'
+            },
+            criticality: {
+              type: "string",
+              enum: ["external", "internal", "policy", "info"],
+              description: "Operational criticality of this step. Drives default safety policies (contracts, retries, loop budgets) at load time. Behavior can still be overridden explicitly per step via on_*, fail_if, assume/guarantee, etc.\n\n- 'external': interacts with external systems (side effects). Highest safety.\n- 'internal': modifies CI/config/state but not prod. High safety.\n- 'policy': organizational checks (linting, style, doc). Moderate safety.\n- 'info': informational checks. Lowest safety."
+            },
+            continue_on_failure: {
+              type: "boolean",
+              description: "Allow dependents to run even if this step fails. Defaults to false (dependents are gated when this step fails). Similar to GitHub Actions' continue-on-error."
+            },
+            forEach: {
+              type: "boolean",
+              description: "Process output as array and run dependent checks for each item"
+            },
+            fanout: {
+              type: "string",
+              enum: ["map", "reduce"],
+              description: "Control scheduling behavior when this check is triggered via routing (run/goto) from a forEach scope.\n- 'map': schedule once per item (fan-out) using item scopes.\n- 'reduce': schedule a single run at the parent scope (aggregation). If unset, the current default is a single run (reduce) for backward compatibility."
+            },
+            reduce: {
+              type: "boolean",
+              description: "Alias for fanout: 'reduce'"
+            },
+            on_init: {
+              $ref: "#/definitions/OnInitConfig",
+              description: "Init routing configuration for this check (runs before execution/preprocessing)"
+            },
+            on_fail: {
+              $ref: "#/definitions/OnFailConfig",
+              description: "Failure routing configuration for this check (retry/goto/run)"
+            },
+            on_success: {
+              $ref: "#/definitions/OnSuccessConfig",
+              description: "Success routing configuration for this check (post-actions and optional goto)"
+            },
+            on_finish: {
+              $ref: "#/definitions/OnFinishConfig",
+              description: "Finish routing configuration for forEach checks (runs after ALL iterations complete)"
+            },
+            assume: {
+              anyOf: [
+                {
+                  type: "string"
+                },
+                {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                }
+              ],
+              description: "Preconditions that must hold before executing the check. If any expression evaluates to false, the check is skipped (skipReason='assume')."
+            },
+            guarantee: {
+              anyOf: [
+                {
+                  type: "string"
+                },
+                {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                }
+              ],
+              description: 'Postconditions that should hold after executing the check. Expressions are evaluated against the produced result/output; violations are recorded as error issues with ruleId "contract/guarantee_failed".'
+            },
+            max_runs: {
+              type: "number",
+              description: "Hard cap on how many times this check may execute within a single engine run. Overrides global limits.max_runs_per_check. Set to 0 or negative to disable for this step."
+            },
+            message: {
+              type: "string",
+              description: "Message template for log checks"
+            },
+            level: {
+              type: "string",
+              enum: ["debug", "info", "warn", "error"],
+              description: "Log level for log checks"
+            },
+            include_pr_context: {
+              type: "boolean",
+              description: "Include PR context in log output"
+            },
+            include_dependencies: {
+              type: "boolean",
+              description: "Include dependency summaries in log output"
+            },
+            include_metadata: {
+              type: "boolean",
+              description: "Include execution metadata in log output"
+            },
+            output_format: {
+              type: "string",
+              enum: ["json", "text"],
+              description: "Output parsing hint for command provider (optional) When set to 'json', command stdout is expected to be JSON. When 'text', treat as plain text. Note: command provider attempts JSON parsing heuristically; this flag mainly suppresses schema warnings and may be used by providers to alter parsing behavior in the future."
+            },
+            operation: {
+              type: "string",
+              enum: ["get", "set", "append", "increment", "delete", "clear", "list"],
+              description: "Memory operation to perform. Use `type: 'script'` for custom JavaScript."
+            },
+            key: {
+              type: "string",
+              description: "Key for memory operation"
+            },
+            value: {
+              description: "Value for set/append operations"
+            },
+            value_js: {
+              type: "string",
+              description: "JavaScript expression to compute value dynamically"
+            },
+            namespace: {
+              type: "string",
+              description: "Override namespace for this check"
+            },
+            op: {
+              type: "string",
+              description: "GitHub operation to perform (e.g., 'labels.add', 'labels.remove', 'comment.create')"
+            },
+            values: {
+              anyOf: [
+                {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                },
+                {
+                  type: "string"
+                }
+              ],
+              description: "Values for GitHub operations (can be array or single value)"
+            },
+            transport: {
+              type: "string",
+              enum: ["stdio", "sse", "http"],
+              description: "Transport type for MCP: stdio (default), sse (legacy), or http (streamable HTTP)"
+            },
+            methodArgs: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Arguments to pass to the MCP method (supports Liquid templates)"
+            },
+            argsTransform: {
+              type: "string",
+              description: "Transform template for method arguments (Liquid)"
+            },
+            sessionId: {
+              type: "string",
+              description: "Session ID for HTTP transport (optional, server may generate one)"
+            },
+            command_args: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Command arguments (for stdio transport in MCP checks)"
+            },
+            workingDirectory: {
+              type: "string",
+              description: "Working directory (for stdio transport in MCP checks)"
+            },
+            placeholder: {
+              type: "string",
+              description: "Placeholder text to show in input field"
+            },
+            allow_empty: {
+              type: "boolean",
+              description: "Allow empty input (default: false)"
+            },
+            multiline: {
+              type: "boolean",
+              description: "Support multiline input (default: false)"
+            },
+            default: {
+              type: "string",
+              description: "Default value if timeout occurs or empty input when allow_empty is true"
+            },
+            workflow: {
+              type: "string",
+              description: "Workflow ID or path to workflow file"
+            },
+            args: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Arguments/inputs for the workflow"
+            },
+            overrides: {
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E",
+              description: "Override specific step configurations in the workflow"
+            },
+            output_mapping: {
+              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
+              description: "Map workflow outputs to check outputs"
+            },
+            workflow_inputs: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Alias for args - workflow inputs (backward compatibility)"
+            },
+            config: {
+              type: "string",
+              description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
+            },
+            workflow_overrides: {
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E",
+              description: "Alias for overrides - workflow step overrides (backward compatibility)"
+            },
+            ref: {
+              type: "string",
+              description: "Git reference to checkout (branch, tag, commit SHA) - supports templates"
+            },
+            repository: {
+              type: "string",
+              description: "Repository URL or owner/repo format (defaults to current repository)"
+            },
+            token: {
+              type: "string",
+              description: "GitHub token for private repositories (defaults to GITHUB_TOKEN env)"
+            },
+            fetch_depth: {
+              type: "number",
+              description: "Number of commits to fetch (0 for full history, default: 1)"
+            },
+            fetch_tags: {
+              type: "boolean",
+              description: "Whether to fetch tags (default: false)"
+            },
+            submodules: {
+              anyOf: [
+                {
+                  type: "boolean"
+                },
+                {
+                  type: "string",
+                  const: "recursive"
+                }
+              ],
+              description: "Checkout submodules: false, true, or 'recursive'"
+            },
+            working_directory: {
+              type: "string",
+              description: "Working directory for the checkout (defaults to temp directory)"
+            },
+            use_worktree: {
+              type: "boolean",
+              description: "Use git worktree for efficient parallel checkouts (default: true)"
+            },
+            clean: {
+              type: "boolean",
+              description: "Clean the working directory before checkout (default: true)"
+            },
+            sparse_checkout: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Sparse checkout paths - only checkout specific directories/files"
+            },
+            lfs: {
+              type: "boolean",
+              description: "Enable Git LFS (Large File Storage)"
+            },
+            clone_timeout_ms: {
+              type: "number",
+              description: "Timeout in ms for cloning the bare repository (default: 300000 = 5 min)"
+            },
+            cleanup_on_failure: {
+              type: "boolean",
+              description: "Clean up worktree on failure (default: true)"
+            },
+            persist_worktree: {
+              type: "boolean",
+              description: "Keep worktree after workflow completion (default: false)"
+            }
+          },
+          additionalProperties: false,
+          description: "Configuration for a single check",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        ConfigCheckType: {
+          type: "string",
+          enum: [
+            "ai",
+            "command",
+            "script",
+            "http",
+            "http_input",
+            "http_client",
+            "noop",
+            "log",
+            "memory",
+            "github",
+            "claude-code",
+            "mcp",
+            "human-input",
+            "workflow",
+            "git-checkout"
+          ],
+          description: "Valid check types in configuration"
+        },
+        EventTrigger: {
+          type: "string",
+          enum: [
+            "pr_opened",
+            "pr_updated",
+            "pr_closed",
+            "issue_opened",
+            "issue_comment",
+            "manual",
+            "schedule",
+            "webhook_received"
+          ],
+          description: "Valid event triggers for checks"
+        },
+        AIProviderConfig: {
+          type: "object",
+          properties: {
+            provider: {
+              type: "string",
+              enum: ["google", "anthropic", "openai", "bedrock", "mock"],
+              description: "AI provider to use"
+            },
+            model: {
+              type: "string",
+              description: "Model name to use"
+            },
+            apiKey: {
+              type: "string",
+              description: "API key (usually from environment variables)"
+            },
+            timeout: {
+              type: "number",
+              description: "Request timeout in milliseconds"
+            },
+            debug: {
+              type: "boolean",
+              description: "Enable debug mode"
+            },
+            prompt_type: {
+              type: "string",
+              description: "Probe promptType to use (e.g., engineer, code-review, architect)"
+            },
+            system_prompt: {
+              type: "string",
+              description: "System prompt (baseline preamble). Replaces legacy custom_prompt."
+            },
+            custom_prompt: {
+              type: "string",
+              description: "Probe customPrompt (baseline/system prompt) \u2014 deprecated, use system_prompt"
+            },
+            skip_code_context: {
+              type: "boolean",
+              description: "Skip adding code context (diffs, files, PR info) to the prompt"
+            },
+            skip_slack_context: {
+              type: "boolean",
+              description: "Skip adding Slack conversation context to the prompt (when running under Slack)"
+            },
+            skip_transport_context: {
+              type: "boolean",
+              description: "Skip adding transport-specific context (e.g., GitHub PR/issue XML, Slack conversation XML) to the prompt. When true, this behaves like setting both skip_code_context and skip_slack_context to true, unless those are explicitly overridden."
+            },
+            mcpServers: {
+              $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
+              description: "MCP servers configuration"
+            },
+            enableDelegate: {
+              type: "boolean",
+              description: "Enable the delegate tool for task distribution to subagents"
+            },
+            retry: {
+              $ref: "#/definitions/AIRetryConfig",
+              description: "Retry configuration for this provider"
+            },
+            fallback: {
+              $ref: "#/definitions/AIFallbackConfig",
+              description: "Fallback configuration for provider failures"
+            },
+            allowEdit: {
+              type: "boolean",
+              description: "Enable Edit and Create tools for file modification (disabled by default for security)"
+            },
+            allowedTools: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Filter allowed tools - supports whitelist, exclusion (!prefix), or raw AI mode (empty array)"
+            },
+            disableTools: {
+              type: "boolean",
+              description: "Disable all tools for raw AI mode (alternative to allowedTools: [])"
+            },
+            allowBash: {
+              type: "boolean",
+              description: "Enable bash command execution (shorthand for bashConfig.enabled)"
+            },
+            bashConfig: {
+              $ref: "#/definitions/BashConfig",
+              description: "Advanced bash command execution configuration"
+            },
+            completion_prompt: {
+              type: "string",
+              description: "Completion prompt for post-completion validation/review (runs after attempt_completion)"
+            }
+          },
+          additionalProperties: false,
+          description: "AI provider configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        "Record<string,McpServerConfig>": {
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/McpServerConfig"
+          }
+        },
+        McpServerConfig: {
+          type: "object",
+          properties: {
+            command: {
+              type: "string",
+              description: "Command to execute for the MCP server"
+            },
+            args: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Arguments to pass to the command"
+            },
+            env: {
+              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
+              description: "Environment variables for the MCP server"
+            }
+          },
+          required: ["command"],
+          additionalProperties: false,
+          description: "MCP Server configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        AIRetryConfig: {
+          type: "object",
+          properties: {
+            maxRetries: {
+              type: "number",
+              description: "Maximum retry attempts (0-50)"
+            },
+            initialDelay: {
+              type: "number",
+              description: "Initial delay in milliseconds (0-60000)"
+            },
+            maxDelay: {
+              type: "number",
+              description: "Maximum delay cap in milliseconds (0-300000)"
+            },
+            backoffFactor: {
+              type: "number",
+              description: "Exponential backoff multiplier (1-10)"
+            },
+            retryableErrors: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Custom error patterns to retry on"
+            }
+          },
+          additionalProperties: false,
+          description: "Retry configuration for AI provider calls",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        AIFallbackConfig: {
+          type: "object",
+          properties: {
+            strategy: {
+              type: "string",
+              enum: ["same-model", "same-provider", "any", "custom"],
+              description: "Fallback strategy: 'same-model', 'same-provider', 'any', or 'custom'"
+            },
+            providers: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/AIFallbackProviderConfig"
+              },
+              description: "Array of fallback provider configurations"
+            },
+            maxTotalAttempts: {
+              type: "number",
+              description: "Maximum total attempts across all providers"
+            },
+            auto: {
+              type: "boolean",
+              description: "Enable automatic fallback using available environment variables"
+            }
+          },
+          additionalProperties: false,
+          description: "Fallback configuration for AI providers",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        AIFallbackProviderConfig: {
+          type: "object",
+          properties: {
+            provider: {
+              type: "string",
+              enum: ["google", "anthropic", "openai", "bedrock"],
+              description: "AI provider to use"
+            },
+            model: {
+              type: "string",
+              description: "Model name to use"
+            },
+            apiKey: {
+              type: "string",
+              description: "API key for this provider"
+            },
+            maxRetries: {
+              type: "number",
+              description: "Per-provider retry override"
+            },
+            region: {
+              type: "string",
+              description: "AWS region (for Bedrock)"
+            },
+            accessKeyId: {
+              type: "string",
+              description: "AWS access key ID (for Bedrock)"
+            },
+            secretAccessKey: {
+              type: "string",
+              description: "AWS secret access key (for Bedrock)"
+            }
+          },
+          required: ["provider", "model"],
+          additionalProperties: false,
+          description: "Fallback provider configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        BashConfig: {
+          type: "object",
+          properties: {
+            allow: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Array of permitted command patterns (e.g., ['ls', 'git status'])"
+            },
+            deny: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Array of blocked command patterns (e.g., ['rm -rf', 'sudo'])"
+            },
+            noDefaultAllow: {
+              type: "boolean",
+              description: "Disable default safe command list (use with caution)"
+            },
+            noDefaultDeny: {
+              type: "boolean",
+              description: "Disable default dangerous command blocklist (use with extreme caution)"
+            },
+            timeout: {
+              type: "number",
+              description: "Execution timeout in milliseconds"
+            },
+            workingDirectory: {
+              type: "string",
+              description: "Default working directory for command execution"
+            }
+          },
+          additionalProperties: false,
+          description: "Bash command execution configuration for ProbeAgent Note: Use 'allowBash: true' in AIProviderConfig to enable bash execution",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        ClaudeCodeConfig: {
+          type: "object",
+          properties: {
+            allowedTools: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "List of allowed tools for Claude Code to use"
+            },
+            maxTurns: {
+              type: "number",
+              description: "Maximum number of turns in conversation"
+            },
+            systemPrompt: {
+              type: "string",
+              description: "System prompt for Claude Code"
+            },
+            mcpServers: {
+              $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
+              description: "MCP servers configuration"
+            },
+            subagent: {
+              type: "string",
+              description: "Path to subagent script"
+            },
+            enableDelegate: {
+              type: "boolean",
+              description: "Enable the delegate tool for task distribution to subagents"
+            },
+            hooks: {
+              type: "object",
+              properties: {
+                onStart: {
+                  type: "string",
+                  description: "Called when check starts"
+                },
+                onEnd: {
+                  type: "string",
+                  description: "Called when check ends"
+                },
+                onError: {
+                  type: "string",
+                  description: "Called when check encounters an error"
+                }
+              },
+              additionalProperties: false,
+              description: "Event hooks for lifecycle management",
+              patternProperties: {
+                "^x-": {}
+              }
+            }
+          },
+          additionalProperties: false,
+          description: "Claude Code configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        EnvConfig: {
+          type: "object",
+          additionalProperties: {
+            type: ["string", "number", "boolean"]
+          },
+          description: "Environment variable reference configuration"
+        },
+        CustomTemplateConfig: {
+          type: "object",
+          properties: {
+            file: {
+              type: "string",
+              description: "Path to custom template file (relative to config file or absolute)"
+            },
+            content: {
+              type: "string",
+              description: "Raw template content as string"
+            }
+          },
+          additionalProperties: false,
+          description: "Custom template configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        FailureConditions: {
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/FailureCondition"
+          },
+          description: "Collection of failure conditions"
+        },
+        FailureCondition: {
+          anyOf: [
+            {
+              $ref: "#/definitions/SimpleFailureCondition"
+            },
+            {
+              $ref: "#/definitions/ComplexFailureCondition"
+            }
+          ],
+          description: "Failure condition - can be a simple expression string or complex object"
+        },
+        SimpleFailureCondition: {
+          type: "string",
+          description: "Simple failure condition - just an expression string"
+        },
+        ComplexFailureCondition: {
+          type: "object",
+          properties: {
+            condition: {
+              type: "string",
+              description: "Expression to evaluate using Function Constructor"
+            },
+            message: {
+              type: "string",
+              description: "Human-readable message when condition is met"
+            },
+            severity: {
+              $ref: "#/definitions/FailureConditionSeverity",
+              description: "Severity level of the failure"
+            },
+            halt_execution: {
+              type: "boolean",
+              description: "Whether this condition should halt execution"
+            }
+          },
+          required: ["condition"],
+          additionalProperties: false,
+          description: "Complex failure condition with additional metadata",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        FailureConditionSeverity: {
+          type: "string",
+          enum: ["error", "warning", "info"],
+          description: "Failure condition severity levels"
+        },
+        OnInitConfig: {
+          type: "object",
+          properties: {
+            run: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/OnInitRunItem"
+              },
+              description: "Items to run before this check executes"
+            },
+            run_js: {
+              type: "string",
+              description: "Dynamic init items: JS expression returning OnInitRunItem[]"
+            },
+            transitions: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/TransitionRule"
+              },
+              description: "Declarative transitions (optional, for advanced use cases)"
+            }
+          },
+          additionalProperties: false,
+          description: "Init routing configuration per check Runs BEFORE the check executes (preprocessing/setup)",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        OnInitRunItem: {
+          anyOf: [
+            {
+              $ref: "#/definitions/OnInitToolInvocation"
+            },
+            {
+              $ref: "#/definitions/OnInitStepInvocation"
+            },
+            {
+              $ref: "#/definitions/OnInitWorkflowInvocation"
+            },
+            {
+              type: "string"
+            }
+          ],
+          description: "Unified on_init run item - can be tool, step, workflow, or plain string"
+        },
+        OnInitToolInvocation: {
+          type: "object",
+          properties: {
+            tool: {
+              type: "string",
+              description: "Tool name (must exist in tools: section)"
+            },
+            with: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Arguments to pass to the tool (Liquid templates supported)"
+            },
+            as: {
+              type: "string",
+              description: "Custom output name (defaults to tool name)"
+            }
+          },
+          required: ["tool"],
+          additionalProperties: false,
+          description: "Invoke a custom tool (from tools: section)",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        OnInitStepInvocation: {
+          type: "object",
+          properties: {
+            step: {
+              type: "string",
+              description: "Step name (must exist in steps: section)"
+            },
+            with: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Arguments to pass to the step (Liquid templates supported)"
+            },
+            as: {
+              type: "string",
+              description: "Custom output name (defaults to step name)"
+            }
+          },
+          required: ["step"],
+          additionalProperties: false,
+          description: "Invoke a helper step (regular check)",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        OnInitWorkflowInvocation: {
+          type: "object",
+          properties: {
+            workflow: {
+              type: "string",
+              description: "Workflow ID or path"
+            },
+            with: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Workflow inputs (Liquid templates supported)"
+            },
+            as: {
+              type: "string",
+              description: "Custom output name (defaults to workflow name)"
+            },
+            overrides: {
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E",
+              description: "Step overrides"
+            },
+            output_mapping: {
+              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
+              description: "Output mapping"
+            }
+          },
+          required: ["workflow"],
+          additionalProperties: false,
+          description: "Invoke a reusable workflow",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        "Record<string,Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182>>": {
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E"
+          }
+        },
+        "Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182>": {
+          type: "object",
+          additionalProperties: false
+        },
+        TransitionRule: {
+          type: "object",
+          properties: {
+            when: {
+              type: "string",
+              description: "JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule."
+            },
+            to: {
+              type: ["string", "null"],
+              description: "Target step ID, or null to explicitly prevent goto."
+            },
+            goto_event: {
+              $ref: "#/definitions/EventTrigger",
+              description: "Optional event override when performing goto."
+            }
+          },
+          required: ["when"],
+          additionalProperties: false,
+          description: "Declarative transition rule for on_* blocks.",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        OnFailConfig: {
+          type: "object",
+          properties: {
+            retry: {
+              $ref: "#/definitions/RetryPolicy",
+              description: "Retry policy"
+            },
+            run: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Remediation steps to run before reattempt"
+            },
+            goto: {
+              type: "string",
+              description: "Jump back to an ancestor step (by id)"
+            },
+            goto_event: {
+              $ref: "#/definitions/EventTrigger",
+              description: "Simulate a different event when performing goto (e.g., 'pr_updated')"
+            },
+            goto_js: {
+              type: "string",
+              description: "Dynamic goto: JS expression returning step id or null"
+            },
+            run_js: {
+              type: "string",
+              description: "Dynamic remediation list: JS expression returning string[]"
+            },
+            transitions: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/TransitionRule"
+              },
+              description: "Declarative transitions. Evaluated in order; first matching rule wins. If a rule's `to` is null, no goto occurs. When omitted or none match, the engine falls back to goto_js/goto for backward compatibility."
+            }
+          },
+          additionalProperties: false,
+          description: "Failure routing configuration per check",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        RetryPolicy: {
+          type: "object",
+          properties: {
+            max: {
+              type: "number",
+              description: "Maximum retry attempts (excluding the first attempt)"
+            },
+            backoff: {
+              $ref: "#/definitions/BackoffPolicy",
+              description: "Backoff policy"
+            }
+          },
+          additionalProperties: false,
+          description: "Retry policy for a step",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        BackoffPolicy: {
+          type: "object",
+          properties: {
+            mode: {
+              type: "string",
+              enum: ["fixed", "exponential"],
+              description: "Backoff mode"
+            },
+            delay_ms: {
+              type: "number",
+              description: "Initial delay in milliseconds"
+            }
+          },
+          additionalProperties: false,
+          description: "Backoff policy for retries",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        OnSuccessConfig: {
+          type: "object",
+          properties: {
+            run: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Post-success steps to run"
+            },
+            goto: {
+              type: "string",
+              description: "Optional jump back to ancestor step (by id)"
+            },
+            goto_event: {
+              $ref: "#/definitions/EventTrigger",
+              description: "Simulate a different event when performing goto (e.g., 'pr_updated')"
+            },
+            goto_js: {
+              type: "string",
+              description: "Dynamic goto: JS expression returning step id or null"
+            },
+            run_js: {
+              type: "string",
+              description: "Dynamic post-success steps: JS expression returning string[]"
+            },
+            transitions: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/TransitionRule"
+              },
+              description: "Declarative transitions (see OnFailConfig.transitions)."
+            }
+          },
+          additionalProperties: false,
+          description: "Success routing configuration per check",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        OnFinishConfig: {
+          type: "object",
+          properties: {
+            run: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Post-finish steps to run"
+            },
+            goto: {
+              type: "string",
+              description: "Optional jump back to ancestor step (by id)"
+            },
+            goto_event: {
+              $ref: "#/definitions/EventTrigger",
+              description: "Simulate a different event when performing goto (e.g., 'pr_updated')"
+            },
+            goto_js: {
+              type: "string",
+              description: "Dynamic goto: JS expression returning step id or null"
+            },
+            run_js: {
+              type: "string",
+              description: "Dynamic post-finish steps: JS expression returning string[]"
+            },
+            transitions: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/TransitionRule"
+              },
+              description: "Declarative transitions (see OnFailConfig.transitions)."
+            }
+          },
+          additionalProperties: false,
+          description: "Finish routing configuration for forEach checks Runs once after ALL iterations of forEach and ALL dependent checks complete",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        OutputConfig: {
+          type: "object",
+          properties: {
+            pr_comment: {
+              $ref: "#/definitions/PrCommentOutput",
+              description: "PR comment configuration"
+            },
+            file_comment: {
+              $ref: "#/definitions/FileCommentOutput",
+              description: "File comment configuration (optional)"
+            },
+            github_checks: {
+              $ref: "#/definitions/GitHubCheckOutput",
+              description: "GitHub check runs configuration (optional)"
+            },
+            suppressionEnabled: {
+              type: "boolean",
+              description: "Whether to enable issue suppression via visor-disable comments (default: true)"
+            }
+          },
+          required: ["pr_comment"],
+          additionalProperties: false,
+          description: "Output configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        PrCommentOutput: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+              description: "Whether PR comments are enabled"
+            },
+            format: {
+              $ref: "#/definitions/ConfigOutputFormat",
+              description: "Format of the output"
+            },
+            group_by: {
+              $ref: "#/definitions/GroupByOption",
+              description: "How to group the results"
+            },
+            collapse: {
+              type: "boolean",
+              description: "Whether to collapse sections by default"
+            },
+            debug: {
+              $ref: "#/definitions/DebugConfig",
+              description: "Debug mode configuration (optional)"
+            }
+          },
+          required: ["format", "group_by", "collapse"],
+          additionalProperties: false,
+          description: "PR comment output configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        ConfigOutputFormat: {
+          type: "string",
+          enum: ["table", "json", "markdown", "sarif"],
+          description: "Valid output formats"
+        },
+        GroupByOption: {
+          type: "string",
+          enum: ["check", "file", "severity", "group"],
+          description: "Valid grouping options"
+        },
+        DebugConfig: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+              description: "Enable debug mode"
+            },
+            includePrompts: {
+              type: "boolean",
+              description: "Include AI prompts in debug output"
+            },
+            includeRawResponses: {
+              type: "boolean",
+              description: "Include raw AI responses in debug output"
+            },
+            includeTiming: {
+              type: "boolean",
+              description: "Include timing information"
+            },
+            includeProviderInfo: {
+              type: "boolean",
+              description: "Include provider information"
+            }
+          },
+          required: [
+            "enabled",
+            "includePrompts",
+            "includeRawResponses",
+            "includeTiming",
+            "includeProviderInfo"
+          ],
+          additionalProperties: false,
+          description: "Debug mode configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        FileCommentOutput: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+              description: "Whether file comments are enabled"
+            },
+            inline: {
+              type: "boolean",
+              description: "Whether to show inline comments"
+            }
+          },
+          required: ["enabled", "inline"],
+          additionalProperties: false,
+          description: "File comment output configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        GitHubCheckOutput: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+              description: "Whether GitHub check runs are enabled"
+            },
+            per_check: {
+              type: "boolean",
+              description: "Whether to create individual check runs per configured check"
+            },
+            name_prefix: {
+              type: "string",
+              description: "Custom name prefix for check runs"
+            }
+          },
+          required: ["enabled", "per_check"],
+          additionalProperties: false,
+          description: "GitHub Check Runs output configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        HttpServerConfig: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+              description: "Whether HTTP server is enabled"
+            },
+            port: {
+              type: "number",
+              description: "Port to listen on"
+            },
+            host: {
+              type: "string",
+              description: "Host/IP to bind to (defaults to 0.0.0.0)"
+            },
+            tls: {
+              $ref: "#/definitions/TlsConfig",
+              description: "TLS/SSL configuration for HTTPS"
+            },
+            auth: {
+              $ref: "#/definitions/HttpAuthConfig",
+              description: "Authentication configuration"
+            },
+            endpoints: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/HttpEndpointConfig"
+              },
+              description: "HTTP endpoints configuration"
+            }
+          },
+          required: ["enabled", "port"],
+          additionalProperties: false,
+          description: "HTTP server configuration for receiving webhooks",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        TlsConfig: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+              description: "Enable TLS/HTTPS"
+            },
+            cert: {
+              type: "string",
+              description: "Path to TLS certificate file or certificate content"
+            },
+            key: {
+              type: "string",
+              description: "Path to TLS key file or key content"
+            },
+            ca: {
+              type: "string",
+              description: "Path to CA certificate file or CA content (optional)"
+            },
+            rejectUnauthorized: {
+              type: "boolean",
+              description: "Reject unauthorized connections (default: true)"
+            }
+          },
+          required: ["enabled"],
+          additionalProperties: false,
+          description: "TLS/SSL configuration for HTTPS server",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        HttpAuthConfig: {
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              enum: ["bearer_token", "hmac", "basic", "none"],
+              description: "Authentication type"
+            },
+            secret: {
+              type: "string",
+              description: "Secret or token for authentication"
+            },
+            username: {
+              type: "string",
+              description: "Username for basic auth"
+            },
+            password: {
+              type: "string",
+              description: "Password for basic auth"
+            }
+          },
+          required: ["type"],
+          additionalProperties: false,
+          description: "HTTP server authentication configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        HttpEndpointConfig: {
+          type: "object",
+          properties: {
+            path: {
+              type: "string",
+              description: "Path for the webhook endpoint"
+            },
+            transform: {
+              type: "string",
+              description: "Optional transform template (Liquid) for the received data"
+            },
+            name: {
+              type: "string",
+              description: "Optional name/ID for this endpoint"
+            }
+          },
+          required: ["path"],
+          additionalProperties: false,
+          description: "HTTP server endpoint configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        MemoryConfig: {
+          type: "object",
+          properties: {
+            storage: {
+              type: "string",
+              enum: ["memory", "file"],
+              description: 'Storage mode: "memory" (in-memory, default) or "file" (persistent)'
+            },
+            format: {
+              type: "string",
+              enum: ["json", "csv"],
+              description: "Storage format (only for file storage, default: json)"
+            },
+            file: {
+              type: "string",
+              description: "File path (required if storage: file)"
+            },
+            namespace: {
+              type: "string",
+              description: 'Default namespace (default: "default")'
+            },
+            auto_load: {
+              type: "boolean",
+              description: "Auto-load on startup (default: true if storage: file)"
+            },
+            auto_save: {
+              type: "boolean",
+              description: "Auto-save after operations (default: true if storage: file)"
+            }
+          },
+          additionalProperties: false,
+          description: "Memory storage configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        TagFilter: {
+          type: "object",
+          properties: {
+            include: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Tags that checks must have to be included (ANY match)"
+            },
+            exclude: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Tags that will exclude checks if present (ANY match)"
+            }
+          },
+          additionalProperties: false,
+          description: "Tag filter configuration for selective check execution",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        RoutingDefaults: {
+          type: "object",
+          properties: {
+            max_loops: {
+              type: "number",
+              description: "Per-scope cap on routing transitions (success + failure)"
+            },
+            defaults: {
+              type: "object",
+              properties: {
+                on_fail: {
+                  $ref: "#/definitions/OnFailConfig"
+                }
+              },
+              additionalProperties: false,
+              description: "Default policies applied to checks (step-level overrides take precedence)",
+              patternProperties: {
+                "^x-": {}
+              }
+            }
+          },
+          additionalProperties: false,
+          description: "Global routing defaults",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        LimitsConfig: {
+          type: "object",
+          properties: {
+            max_runs_per_check: {
+              type: "number",
+              description: "Maximum number of executions per check within a single engine run. Applies to each distinct scope independently for forEach item executions. Set to 0 or negative to disable. Default: 50."
+            },
+            max_workflow_depth: {
+              type: "number",
+              description: "Maximum nesting depth for workflows executed by the state machine engine. Nested workflows are invoked by the workflow provider; this limit prevents accidental infinite recursion. Default: 3."
+            }
+          },
+          additionalProperties: false,
+          description: "Global engine limits",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        WorkspaceConfig: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+              description: "Enable workspace isolation (default: true when config present)"
+            },
+            base_path: {
+              type: "string",
+              description: "Base path for workspaces (default: /tmp/visor-workspaces)"
+            },
+            name: {
+              type: "string",
+              description: "Workspace directory name (defaults to session id)"
+            },
+            main_project_name: {
+              type: "string",
+              description: "Main project folder name inside the workspace (defaults to original directory name)"
+            },
+            cleanup_on_exit: {
+              type: "boolean",
+              description: "Clean up workspace on exit (default: true)"
+            },
+            include_main_project: {
+              type: "boolean",
+              description: "Include main project worktree in AI allowed folders (default: false)"
+            }
+          },
+          additionalProperties: false,
+          description: "Workspace isolation configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        SlackConfig: {
+          type: "object",
+          properties: {
+            version: {
+              type: "string",
+              description: "Slack API version"
+            },
+            mentions: {
+              type: "string",
+              description: "Mention handling: 'all', 'direct', etc."
+            },
+            threads: {
+              type: "string",
+              description: "Thread handling: 'required', 'optional', etc."
+            },
+            show_raw_output: {
+              type: "boolean",
+              description: "Show raw output in Slack responses"
+            },
+            telemetry: {
+              $ref: "#/definitions/SlackTelemetryConfig",
+              description: "Append telemetry identifiers to Slack replies."
+            }
+          },
+          additionalProperties: false,
+          description: "Slack configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        SlackTelemetryConfig: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+              description: "Enable telemetry ID suffix in Slack messages"
+            }
+          },
+          additionalProperties: false,
+          patternProperties: {
+            "^x-": {}
+          }
+        }
+      }
+    };
+    config_schema_default = configSchema;
+  }
+});
+
+// src/config.ts
+var config_exports = {};
+__export(config_exports, {
+  ConfigManager: () => ConfigManager,
+  VALID_EVENT_TRIGGERS: () => VALID_EVENT_TRIGGERS
+});
+var yaml3, fs9, path10, import_simple_git, import_ajv3, import_ajv_formats2, VALID_EVENT_TRIGGERS, ConfigManager, __ajvValidate, __ajvErrors;
+var init_config = __esm({
+  "src/config.ts"() {
+    "use strict";
+    yaml3 = __toESM(require("js-yaml"));
+    fs9 = __toESM(require("fs"));
+    path10 = __toESM(require("path"));
+    init_logger();
+    import_simple_git = __toESM(require("simple-git"));
+    init_config_loader();
+    init_config_merger();
+    import_ajv3 = __toESM(require("ajv"));
+    import_ajv_formats2 = __toESM(require("ajv-formats"));
+    init_sandbox();
+    VALID_EVENT_TRIGGERS = [
+      "pr_opened",
+      "pr_updated",
+      "pr_closed",
+      "issue_opened",
+      "issue_comment",
+      "manual",
+      "schedule",
+      "webhook_received"
+    ];
+    ConfigManager = class {
+      validCheckTypes = [
+        "ai",
+        "claude-code",
+        "mcp",
+        "command",
+        "script",
+        "http",
+        "http_input",
+        "http_client",
+        "memory",
+        "noop",
+        "log",
+        "github",
+        "human-input",
+        "workflow",
+        "git-checkout"
+      ];
+      validEventTriggers = [...VALID_EVENT_TRIGGERS];
+      validOutputFormats = ["table", "json", "markdown", "sarif"];
+      validGroupByOptions = ["check", "file", "severity", "group"];
+      /**
+       * Load configuration from a file
+       */
+      async loadConfig(configPath, options = {}) {
+        const { validate = true, mergeDefaults = true, allowedRemotePatterns } = options;
+        const resolvedPath = path10.isAbsolute(configPath) ? configPath : path10.resolve(process.cwd(), configPath);
+        try {
+          let configContent;
+          try {
+            configContent = fs9.readFileSync(resolvedPath, "utf8");
+          } catch (readErr) {
+            if (readErr && (readErr.code === "ENOENT" || readErr.code === "ENOTDIR")) {
+              throw new Error(`Configuration file not found: ${resolvedPath}`);
+            }
+            throw new Error(
+              `Failed to read configuration file ${resolvedPath}: ${readErr?.message || String(readErr)}`
+            );
+          }
+          let parsedConfig;
+          try {
+            parsedConfig = yaml3.load(configContent);
+          } catch (yamlError) {
+            const errorMessage = yamlError instanceof Error ? yamlError.message : String(yamlError);
+            throw new Error(`Invalid YAML syntax in ${resolvedPath}: ${errorMessage}`);
+          }
+          if (!parsedConfig || typeof parsedConfig !== "object") {
+            throw new Error("Configuration file must contain a valid YAML object");
+          }
+          const extendsValue = parsedConfig.extends || parsedConfig.include;
+          if (extendsValue) {
+            const loaderOptions = {
+              baseDir: path10.dirname(resolvedPath),
+              allowRemote: this.isRemoteExtendsAllowed(),
+              maxDepth: 10,
+              allowedRemotePatterns
+            };
+            const loader = new ConfigLoader(loaderOptions);
+            const merger = new ConfigMerger();
+            const extends_ = Array.isArray(extendsValue) ? extendsValue : [extendsValue];
+            const { extends: _, include: __, ...configWithoutExtends } = parsedConfig;
+            let mergedConfig = {};
+            for (const source of extends_) {
+              console.log(`\u{1F4E6} Extending from: ${source}`);
+              const parentConfig = await loader.fetchConfig(source);
+              mergedConfig = merger.merge(mergedConfig, parentConfig);
+            }
+            parsedConfig = merger.merge(mergedConfig, configWithoutExtends);
+            parsedConfig = merger.removeDisabledChecks(parsedConfig);
+          }
+          if (parsedConfig.id && typeof parsedConfig.id === "string") {
+            parsedConfig = await this.convertWorkflowToConfig(parsedConfig, path10.dirname(resolvedPath));
+          }
+          parsedConfig = this.normalizeStepsAndChecks(parsedConfig, !!extendsValue);
+          await this.loadWorkflows(parsedConfig, path10.dirname(resolvedPath));
+          if (validate) {
+            this.validateConfig(parsedConfig);
+          }
+          let finalConfig = parsedConfig;
+          if (mergeDefaults) {
+            finalConfig = this.mergeWithDefaults(parsedConfig);
+          }
+          return finalConfig;
+        } catch (error) {
+          if (error instanceof Error) {
+            if (error.message.includes("not found") || error.message.includes("Invalid YAML") || error.message.includes("extends") || error.message.includes("EACCES") || error.message.includes("EISDIR")) {
+              throw error;
+            }
+            if (error.message.includes("ENOENT")) {
+              throw new Error(`Configuration file not found: ${resolvedPath}`);
+            }
+            if (error.message.includes("EPERM")) {
+              throw new Error(`Permission denied reading configuration file: ${resolvedPath}`);
+            }
+            throw new Error(`Failed to read configuration file ${resolvedPath}: ${error.message}`);
+          }
+          throw error;
+        }
+      }
+      /**
+       * Load configuration from an in-memory object (used by the test runner to
+       * handle co-located config + tests without writing temp files).
+       */
+      async loadConfigFromObject(obj, options = {}) {
+        const { validate = true, mergeDefaults = true, allowedRemotePatterns, baseDir } = options;
+        try {
+          let parsedConfig = JSON.parse(JSON.stringify(obj || {}));
+          if (!parsedConfig || typeof parsedConfig !== "object") {
+            throw new Error("Configuration must be a YAML/JSON object");
+          }
+          const extendsValue = parsedConfig.extends || parsedConfig.include;
+          if (extendsValue) {
+            const loaderOptions = {
+              baseDir: baseDir || process.cwd(),
+              allowRemote: this.isRemoteExtendsAllowed(),
+              maxDepth: 10,
+              allowedRemotePatterns
+            };
+            const loader = new ConfigLoader(loaderOptions);
+            const extends_ = Array.isArray(extendsValue) ? extendsValue : [extendsValue];
+            const { extends: _, include: __, ...configWithoutExtends } = parsedConfig;
+            let mergedConfig = {};
+            for (const source of extends_) {
+              console.log(`\u{1F4E6} Extending from: ${source}`);
+              const parentConfig = await loader.fetchConfig(String(source));
+              mergedConfig = new ConfigMerger().merge(mergedConfig, parentConfig);
+            }
+            parsedConfig = new ConfigMerger().merge(mergedConfig, configWithoutExtends);
+            parsedConfig = new ConfigMerger().removeDisabledChecks(parsedConfig);
+          }
+          if (parsedConfig.id && typeof parsedConfig.id === "string") {
+            parsedConfig = await this.convertWorkflowToConfig(parsedConfig, baseDir || process.cwd());
+          }
+          parsedConfig = this.normalizeStepsAndChecks(parsedConfig, !!extendsValue);
+          await this.loadWorkflows(parsedConfig, baseDir || process.cwd());
+          if (validate) this.validateConfig(parsedConfig);
+          let finalConfig = parsedConfig;
+          if (mergeDefaults) finalConfig = this.mergeWithDefaults(parsedConfig);
+          return finalConfig;
+        } catch (error) {
+          if (error instanceof Error) throw new Error(`Failed to load configuration: ${error.message}`);
+          throw error;
+        }
+      }
+      /**
+       * Find and load configuration from default locations
+       */
+      async findAndLoadConfig(options = {}) {
+        const gitRoot = await this.findGitRepositoryRoot();
+        const searchDirs = [gitRoot, process.cwd()].filter(Boolean);
+        for (const baseDir of searchDirs) {
+          const candidates = ["visor.yaml", "visor.yml", ".visor.yaml", ".visor.yml"].map(
+            (p) => path10.join(baseDir, p)
+          );
+          for (const p of candidates) {
+            try {
+              const st = fs9.statSync(p);
+              if (!st.isFile()) continue;
+              const isLegacy = path10.basename(p).startsWith(".");
+              if (isLegacy) {
+                if (process.env.VISOR_STRICT_CONFIG_NAME === "true") {
+                  const rel = path10.relative(baseDir, p);
+                  throw new Error(
+                    `Legacy config detected: ${rel}. Please rename to visor.yaml (or visor.yml).`
+                  );
+                }
+                return this.loadConfig(p, options);
+              }
+              return this.loadConfig(p, options);
+            } catch (e) {
+              if (e && e.code === "ENOENT") continue;
+              if (e) throw e;
+            }
+          }
+        }
+        const bundledConfig = this.loadBundledDefaultConfig();
+        if (bundledConfig) {
+          return bundledConfig;
+        }
+        return this.getDefaultConfig();
+      }
+      /**
+       * Find the git repository root directory
+       */
+      async findGitRepositoryRoot() {
+        try {
+          const git = (0, import_simple_git.default)();
+          const isRepo = await git.checkIsRepo();
+          if (!isRepo) {
+            return null;
+          }
+          const rootDir = await git.revparse(["--show-toplevel"]);
+          return rootDir.trim();
+        } catch {
+          return null;
+        }
+      }
+      /**
+       * Get default configuration
+       */
+      async getDefaultConfig() {
+        return {
+          version: "1.0",
+          steps: {},
+          checks: {},
+          // Keep for backward compatibility
+          max_parallelism: 3,
+          output: {
+            pr_comment: {
+              format: "markdown",
+              group_by: "check",
+              collapse: true
+            }
+          }
+        };
+      }
+      /**
+       * Load bundled default configuration from the package
+       */
+      loadBundledDefaultConfig() {
+        try {
+          const possiblePaths = [];
+          if (typeof __dirname !== "undefined") {
+            possiblePaths.push(
+              path10.join(__dirname, "defaults", "visor.yaml"),
+              path10.join(__dirname, "..", "defaults", "visor.yaml")
+            );
+          }
+          const pkgRoot = this.findPackageRoot();
+          if (pkgRoot) {
+            possiblePaths.push(path10.join(pkgRoot, "defaults", "visor.yaml"));
+          }
+          if (process.env.GITHUB_ACTION_PATH) {
+            possiblePaths.push(
+              path10.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml"),
+              path10.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml")
+            );
+          }
+          let bundledConfigPath;
+          for (const possiblePath of possiblePaths) {
+            if (fs9.existsSync(possiblePath)) {
+              bundledConfigPath = possiblePath;
+              break;
+            }
+          }
+          if (bundledConfigPath) {
+            console.error(`\u{1F4E6} Loading bundled default configuration from ${bundledConfigPath}`);
+            const readAndParse = (p) => {
+              const raw = fs9.readFileSync(p, "utf8");
+              const obj = yaml3.load(raw);
+              if (!obj || typeof obj !== "object") return {};
+              if (obj.include && !obj.extends) {
+                const inc = obj.include;
+                obj.extends = Array.isArray(inc) ? inc : [inc];
+                delete obj.include;
+              }
+              return obj;
+            };
+            const baseDir = path10.dirname(bundledConfigPath);
+            const merger = new (init_config_merger(), __toCommonJS(config_merger_exports)).ConfigMerger();
+            const loadWithExtendsSync = (p) => {
+              const current = readAndParse(p);
+              const extVal = current.extends || current.include;
+              if (current.extends !== void 0) delete current.extends;
+              if (current.include !== void 0) delete current.include;
+              if (!extVal) return current;
+              const list = Array.isArray(extVal) ? extVal : [extVal];
+              let acc = {};
+              for (const src of list) {
+                const rel = typeof src === "string" ? src : String(src);
+                const abs = path10.isAbsolute(rel) ? rel : path10.resolve(baseDir, rel);
+                const parentCfg = loadWithExtendsSync(abs);
+                acc = merger.merge(acc, parentCfg);
+              }
+              return merger.merge(acc, current);
+            };
+            let parsedConfig = loadWithExtendsSync(bundledConfigPath);
+            parsedConfig = this.normalizeStepsAndChecks(parsedConfig);
+            this.validateConfig(parsedConfig);
+            return this.mergeWithDefaults(parsedConfig);
+          }
+        } catch (error) {
+          console.warn(
+            "Failed to load bundled default config:",
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+        return null;
+      }
+      /**
+       * Find the root directory of the Visor package
+       */
+      findPackageRoot() {
+        let currentDir = __dirname;
+        while (currentDir !== path10.dirname(currentDir)) {
+          const packageJsonPath = path10.join(currentDir, "package.json");
+          if (fs9.existsSync(packageJsonPath)) {
+            try {
+              const packageJson = JSON.parse(fs9.readFileSync(packageJsonPath, "utf8"));
+              if (packageJson.name === "@probelabs/visor") {
+                return currentDir;
+              }
+            } catch {
+            }
+          }
+          currentDir = path10.dirname(currentDir);
+        }
+        return null;
+      }
+      /**
+       * Convert a workflow definition file to a visor config
+       * When a workflow YAML is run standalone, register the workflow and use its tests as checks
+       */
+      async convertWorkflowToConfig(workflowData, basePath) {
+        const { WorkflowRegistry: WorkflowRegistry2 } = await Promise.resolve().then(() => (init_workflow_registry(), workflow_registry_exports));
+        const registry = WorkflowRegistry2.getInstance();
+        const workflowId = workflowData.id;
+        logger.info(`Detected standalone workflow file: ${workflowId}`);
+        if (workflowData.imports && Array.isArray(workflowData.imports)) {
+          for (const source of workflowData.imports) {
+            try {
+              const results = await registry.import(source, { basePath, validate: true });
+              for (const result2 of results) {
+                if (!result2.valid && result2.errors) {
+                  const errors = result2.errors.map((e) => `  ${e.path}: ${e.message}`).join("\n");
+                  throw new Error(`Failed to import workflow from '${source}':
+${errors}`);
+                }
+              }
+              logger.info(`Imported workflows from: ${source}`);
+            } catch (err) {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              if (errMsg.includes("already exists")) {
+                logger.debug(`Workflow from '${source}' already imported, skipping`);
+              } else {
+                throw err;
+              }
+            }
+          }
+        }
+        const tests = workflowData.tests || {};
+        const workflowDefinition = { ...workflowData };
+        delete workflowDefinition.tests;
+        delete workflowDefinition.imports;
+        const result = registry.register(workflowDefinition, "standalone", { override: true });
+        if (!result.valid && result.errors) {
+          const errors = result.errors.map((e) => `  ${e.path}: ${e.message}`).join("\n");
+          throw new Error(`Failed to register workflow '${workflowId}':
+${errors}`);
+        }
+        logger.info(`Registered workflow '${workflowId}' for standalone execution`);
+        const workflowSteps = workflowData.steps || {};
+        const visorConfig = {
+          version: "1.0",
+          steps: workflowSteps,
+          checks: workflowSteps,
+          tests
+          // Preserve test harness config (may be empty if stripped by test runner)
+        };
+        if (workflowData.outputs) {
+          visorConfig.outputs = workflowData.outputs;
+        }
+        if (workflowData.inputs) {
+          visorConfig.inputs = workflowData.inputs;
+        }
+        logger.debug(
+          `Standalone workflow config has ${Object.keys(workflowSteps).length} workflow steps as checks`
+        );
+        logger.debug(`Workflow step names: ${Object.keys(workflowSteps).join(", ")}`);
+        logger.debug(`Config keys after conversion: ${Object.keys(visorConfig).join(", ")}`);
+        return visorConfig;
+      }
+      /**
+       * Load and register workflows from configuration
+       */
+      async loadWorkflows(config, basePath) {
+        if (!config.imports || config.imports.length === 0) {
+          return;
+        }
+        const { WorkflowRegistry: WorkflowRegistry2 } = await Promise.resolve().then(() => (init_workflow_registry(), workflow_registry_exports));
+        const registry = WorkflowRegistry2.getInstance();
+        for (const source of config.imports) {
+          const results = await registry.import(source, { basePath, validate: true });
+          for (const result of results) {
+            if (!result.valid && result.errors) {
+              const errors = result.errors.map((e) => `  ${e.path}: ${e.message}`).join("\n");
+              throw new Error(`Failed to import workflow from '${source}':
+${errors}`);
+            }
+          }
+          logger.info(`Imported workflows from: ${source}`);
+        }
+      }
+      /**
+       * Normalize 'checks' and 'steps' keys for backward compatibility
+       * Ensures both keys are present and contain the same data
+       */
+      normalizeStepsAndChecks(config, preferChecks = false) {
+        if (config.steps && config.checks) {
+          if (preferChecks) {
+            const merged = { ...config.steps, ...config.checks };
+            config.steps = merged;
+            config.checks = merged;
+          } else {
+            config.checks = config.steps;
+            config.steps = config.steps;
+          }
+        } else if (config.steps && !config.checks) {
+          config.checks = config.steps;
+        } else if (config.checks && !config.steps) {
+          config.steps = config.checks;
+        }
+        return config;
+      }
+      /**
+       * Merge configuration with CLI options
+       */
+      mergeWithCliOptions(config, cliOptions) {
+        const mergedConfig = { ...config };
+        if (cliOptions.maxParallelism !== void 0) {
+          mergedConfig.max_parallelism = cliOptions.maxParallelism;
+        }
+        if (cliOptions.failFast !== void 0) {
+          mergedConfig.fail_fast = cliOptions.failFast;
+        }
+        return {
+          config: mergedConfig,
+          cliChecks: cliOptions.checks || [],
+          cliOutput: cliOptions.output || "table"
+        };
+      }
+      /**
+       * Load configuration with environment variable overrides
+       */
+      async loadConfigWithEnvOverrides() {
+        const environmentOverrides = {};
+        if (process.env.VISOR_CONFIG_PATH) {
+          environmentOverrides.configPath = process.env.VISOR_CONFIG_PATH;
+        }
+        if (process.env.VISOR_OUTPUT_FORMAT) {
+          environmentOverrides.outputFormat = process.env.VISOR_OUTPUT_FORMAT;
+        }
+        let config;
+        if (environmentOverrides.configPath) {
+          try {
+            config = await this.loadConfig(environmentOverrides.configPath);
+          } catch {
+            config = await this.findAndLoadConfig();
+          }
+        } else {
+          config = await this.findAndLoadConfig();
+        }
+        return { config, environmentOverrides };
+      }
+      /**
+       * Validate configuration against schema
+       * @param config The config to validate
+       * @param strict If true, treat warnings as errors (default: false)
+       */
+      validateConfig(config, strict = false) {
+        const errors = [];
+        const warnings = [];
+        this.validateWithAjvSchema(config, errors, warnings);
+        if (!config.version) {
+          errors.push({
+            field: "version",
+            message: "Missing required field: version"
+          });
+        }
+        if (!config.checks && !config.steps) {
+          errors.push({
+            field: "checks/steps",
+            message: 'Missing required field: either "checks" or "steps" must be defined. "steps" is recommended for new configurations.'
+          });
+        }
+        const checksToValidate = config.checks || config.steps;
+        if (checksToValidate) {
+          for (const [checkName, checkConfig] of Object.entries(checksToValidate)) {
+            if (!checkConfig.type) {
+              checkConfig.type = "ai";
+            }
+            this.validateCheckConfig(checkName, checkConfig, errors, config, warnings);
+            if (checkConfig.ai_mcp_servers) {
+              this.validateMcpServersObject(
+                checkConfig.ai_mcp_servers,
+                `checks.${checkName}.ai_mcp_servers`,
+                errors,
+                warnings
+              );
+            }
+            if (checkConfig.ai?.mcpServers) {
+              this.validateMcpServersObject(
+                checkConfig.ai.mcpServers,
+                `checks.${checkName}.ai.mcpServers`,
+                errors,
+                warnings
+              );
+            }
+            if (checkConfig.ai_mcp_servers && checkConfig.ai?.mcpServers) {
+              const lower = Object.keys(checkConfig.ai_mcp_servers);
+              const higher = Object.keys(checkConfig.ai.mcpServers);
+              const overridden = lower.filter((k) => higher.includes(k));
+              warnings.push({
+                field: `checks.${checkName}.ai.mcpServers`,
+                message: overridden.length > 0 ? `Both ai_mcp_servers and ai.mcpServers are set; ai.mcpServers overrides these servers: ${overridden.join(
+                  ", "
+                )}` : "Both ai_mcp_servers and ai.mcpServers are set; ai.mcpServers takes precedence for this check."
+              });
+            }
+            try {
+              const anyCheck = checkConfig;
+              const aiObj = anyCheck.ai || void 0;
+              const hasBareMcpAtCheck = Object.prototype.hasOwnProperty.call(anyCheck, "mcpServers");
+              const hasAiMcp = aiObj && Object.prototype.hasOwnProperty.call(aiObj, "mcpServers");
+              const hasClaudeCodeMcp = anyCheck.claude_code && typeof anyCheck.claude_code === "object" && Object.prototype.hasOwnProperty.call(
+                anyCheck.claude_code,
+                "mcpServers"
+              );
+              if (checkConfig.type === "ai") {
+                if (hasBareMcpAtCheck) {
+                  warnings.push({
+                    field: `checks.${checkName}.mcpServers`,
+                    message: "'mcpServers' at the check root is ignored for type 'ai'. Use 'ai.mcpServers' or 'ai_mcp_servers' instead.",
+                    value: anyCheck.mcpServers
+                  });
+                }
+                if (hasClaudeCodeMcp) {
+                  warnings.push({
+                    field: `checks.${checkName}.claude_code.mcpServers`,
+                    message: "'claude_code.mcpServers' is ignored for type 'ai'. Use 'ai.mcpServers' or 'ai_mcp_servers' instead."
+                  });
+                }
+              }
+              if (checkConfig.type === "claude-code") {
+                if (hasAiMcp || checkConfig.ai_mcp_servers) {
+                  warnings.push({
+                    field: hasAiMcp ? `checks.${checkName}.ai.mcpServers` : `checks.${checkName}.ai_mcp_servers`,
+                    message: "For type 'claude-code', MCP must be configured under 'claude_code.mcpServers'. 'ai.mcpServers' and 'ai_mcp_servers' are ignored for this check."
+                  });
+                }
+              }
+            } catch {
+            }
+          }
+        }
+        if (config.ai_mcp_servers) {
+          this.validateMcpServersObject(config.ai_mcp_servers, "ai_mcp_servers", errors, warnings);
+        }
+        if (config.output) {
+          this.validateOutputConfig(config.output, errors);
+        }
+        if (config.http_server) {
+          this.validateHttpServerConfig(
+            config.http_server,
+            errors
+          );
+        }
+        if (config.max_parallelism !== void 0) {
+          if (typeof config.max_parallelism !== "number" || config.max_parallelism < 1 || !Number.isInteger(config.max_parallelism)) {
+            errors.push({
+              field: "max_parallelism",
+              message: "max_parallelism must be a positive integer (minimum 1)",
+              value: config.max_parallelism
+            });
+          }
+        }
+        if (config.tag_filter) {
+          this.validateTagFilter(config.tag_filter, errors);
+        }
+        if (strict && warnings.length > 0) {
+          errors.push(...warnings);
+        }
+        if (errors.length > 0) {
+          throw new Error(errors[0].message);
+        }
+        if (!strict && warnings.length > 0) {
+          for (const w of warnings) {
+            logger.warn(`\u26A0\uFE0F  Config warning [${w.field}]: ${w.message}`);
+          }
+        }
+      }
+      /**
+       * Validate individual check configuration
+       */
+      validateCheckConfig(checkName, checkConfig, errors, config, _warnings) {
+        if (!checkConfig.type) {
+          checkConfig.type = "ai";
+        }
+        if (checkConfig.type === "logger") {
+          checkConfig.type = "log";
+        }
+        if (!this.validCheckTypes.includes(checkConfig.type)) {
+          errors.push({
+            field: `checks.${checkName}.type`,
+            message: `Invalid check type "${checkConfig.type}". Must be: ${this.validCheckTypes.join(", ")}`,
+            value: checkConfig.type
+          });
+        }
+        if (checkConfig.type === "ai" && !checkConfig.prompt) {
+          errors.push({
+            field: `checks.${checkName}.prompt`,
+            message: `Invalid check configuration for "${checkName}": missing prompt (required for AI checks)`
+          });
+        }
+        try {
+          const externalTypes = /* @__PURE__ */ new Set(["github", "http", "http_client", "http_input", "workflow"]);
+          if (externalTypes.has(checkConfig.type) && !checkConfig.criticality) {
+            errors.push({
+              field: `checks.${checkName}.criticality`,
+              message: `Missing required criticality for step "${checkName}" (type: ${checkConfig.type}). Set criticality: 'external' or 'internal' to enable safe defaults for side-effecting steps.`
+            });
+          }
+        } catch {
+        }
+        try {
+          const crit = checkConfig.criticality || "policy";
+          const isCritical = crit === "external" || crit === "internal";
+          if (isCritical) {
+            const hasAssume = typeof checkConfig.assume === "string" || Array.isArray(checkConfig.assume) && checkConfig.assume.length > 0;
+            const hasIf = typeof checkConfig.if === "string" && checkConfig.if.trim().length > 0;
+            if (!hasAssume && !hasIf) {
+              errors.push({
+                field: `checks.${checkName}.assume`,
+                message: `Critical step "${checkName}" (criticality: ${crit}) requires a precondition: set 'assume:' (preferred) or 'if:' to guard execution.`
+              });
+            }
+            const outputProviders = /* @__PURE__ */ new Set([
+              "ai",
+              "script",
+              "command",
+              "http",
+              "http_client",
+              "http_input"
+            ]);
+            if (outputProviders.has(checkConfig.type)) {
+              const hasSchema = typeof checkConfig.schema !== "undefined";
+              const hasGuarantee = typeof checkConfig.guarantee === "string" && checkConfig.guarantee.trim().length > 0;
+              if (!hasSchema && !hasGuarantee) {
+                errors.push({
+                  field: `checks.${checkName}.schema/guarantee`,
+                  message: `Critical step "${checkName}" (type: ${checkConfig.type}) requires an output contract: provide 'schema:' (renderer name or JSON Schema) or 'guarantee:' expression.`
+                });
+              }
+            }
+          }
+        } catch {
+        }
+        if (checkConfig.type === "command" && !checkConfig.exec) {
+          errors.push({
+            field: `checks.${checkName}.exec`,
+            message: `Invalid check configuration for "${checkName}": missing exec field (required for command checks)`
+          });
+        }
+        if (checkConfig.type === "http") {
+          if (!checkConfig.url) {
+            errors.push({
+              field: `checks.${checkName}.url`,
+              message: `Invalid check configuration for "${checkName}": missing url field (required for http checks)`
+            });
+          }
+          if (!checkConfig.body) {
+            errors.push({
+              field: `checks.${checkName}.body`,
+              message: `Invalid check configuration for "${checkName}": missing body field (required for http checks)`
+            });
+          }
+        }
+        if (checkConfig.type === "http_input" && !checkConfig.endpoint) {
+          errors.push({
+            field: `checks.${checkName}.endpoint`,
+            message: `Invalid check configuration for "${checkName}": missing endpoint field (required for http_input checks)`
+          });
+        }
+        try {
+          const hasObjSchema = checkConfig?.schema && typeof checkConfig.schema === "object";
+          const hasOutputSchema = checkConfig?.output_schema && typeof checkConfig.output_schema === "object";
+          if (hasObjSchema && hasOutputSchema) {
+            (_warnings || errors).push({
+              field: `checks.${checkName}.schema`,
+              message: `Both 'schema' (object) and 'output_schema' are set; 'schema' will be used for validation. 'output_schema' is deprecated.`
+            });
+          }
+        } catch {
+        }
+        if (checkConfig.type === "http_client" && !checkConfig.url) {
+          errors.push({
+            field: `checks.${checkName}.url`,
+            message: `Invalid check configuration for "${checkName}": missing url field (required for http_client checks)`
+          });
+        }
+        if (checkConfig.schedule) {
+          const cronParts = checkConfig.schedule.split(" ");
+          if (cronParts.length < 5 || cronParts.length > 6) {
+            errors.push({
+              field: `checks.${checkName}.schedule`,
+              message: `Invalid cron expression for "${checkName}": ${checkConfig.schedule}`,
+              value: checkConfig.schedule
+            });
+          }
+        }
+        if (checkConfig.on) {
+          if (!Array.isArray(checkConfig.on)) {
+            errors.push({
+              field: `checks.${checkName}.on`,
+              message: `Invalid check configuration for "${checkName}": 'on' field must be an array`
+            });
+          } else {
+            for (const event of checkConfig.on) {
+              if (!this.validEventTriggers.includes(event)) {
+                errors.push({
+                  field: `checks.${checkName}.on`,
+                  message: `Invalid event "${event}". Must be one of: ${this.validEventTriggers.join(", ")}`,
+                  value: event
+                });
+              }
+            }
+          }
+        }
+        if (checkConfig.reuse_ai_session !== void 0) {
+          const reuseValue = checkConfig.reuse_ai_session;
+          const isString = typeof reuseValue === "string";
+          const isBoolean = typeof reuseValue === "boolean";
+          const isSelf = reuseValue === "self";
+          if (!isString && !isBoolean) {
+            errors.push({
+              field: `checks.${checkName}.reuse_ai_session`,
+              message: `Invalid reuse_ai_session value for "${checkName}": must be string (check name) or boolean`,
+              value: reuseValue
+            });
+          } else if (isString && !isSelf) {
+            const targetCheckName = reuseValue;
+            if (!config?.checks || !config.checks[targetCheckName]) {
+              errors.push({
+                field: `checks.${checkName}.reuse_ai_session`,
+                message: `Check "${checkName}" references non-existent check "${targetCheckName}" for session reuse`,
+                value: reuseValue
+              });
+            }
+          } else if (reuseValue === true) {
+            if (!checkConfig.depends_on || !Array.isArray(checkConfig.depends_on) || checkConfig.depends_on.length === 0) {
+              errors.push({
+                field: `checks.${checkName}.reuse_ai_session`,
+                message: `Check "${checkName}" has reuse_ai_session=true but missing or empty depends_on. Session reuse requires dependency on another check.`,
+                value: reuseValue
+              });
+            }
+          }
+        }
+        if (checkConfig.session_mode !== void 0) {
+          if (checkConfig.session_mode !== "clone" && checkConfig.session_mode !== "append") {
+            errors.push({
+              field: `checks.${checkName}.session_mode`,
+              message: `Invalid session_mode value for "${checkName}": must be 'clone' or 'append'`,
+              value: checkConfig.session_mode
+            });
+          }
+          if (!checkConfig.reuse_ai_session) {
+            errors.push({
+              field: `checks.${checkName}.session_mode`,
+              message: `Check "${checkName}" has session_mode but no reuse_ai_session. session_mode requires reuse_ai_session to be set.`,
+              value: checkConfig.session_mode
+            });
+          }
+        }
+        if (checkConfig.tags !== void 0) {
+          if (!Array.isArray(checkConfig.tags)) {
+            errors.push({
+              field: `checks.${checkName}.tags`,
+              message: `Invalid tags value for "${checkName}": must be an array of strings`,
+              value: checkConfig.tags
+            });
+          } else {
+            const validTagPattern = /^[a-zA-Z0-9][a-zA-Z0-9-_]*$/;
+            checkConfig.tags.forEach((tag, index) => {
+              if (typeof tag !== "string") {
+                errors.push({
+                  field: `checks.${checkName}.tags[${index}]`,
+                  message: `Invalid tag at index ${index} for "${checkName}": must be a string`,
+                  value: tag
+                });
+              } else if (!validTagPattern.test(tag)) {
+                errors.push({
+                  field: `checks.${checkName}.tags[${index}]`,
+                  message: `Invalid tag "${tag}" for "${checkName}": tags must be alphanumeric with hyphens or underscores (start with alphanumeric)`,
+                  value: tag
+                });
+              }
+            });
+          }
+        }
+        if (checkConfig.on_finish !== void 0) {
+          if (!checkConfig.forEach) {
+            errors.push({
+              field: `checks.${checkName}.on_finish`,
+              message: `Check "${checkName}" has on_finish but forEach is not true. on_finish is only valid on forEach checks.`,
+              value: checkConfig.on_finish
+            });
+          }
+        }
+        try {
+          const transformJs = checkConfig.transform_js;
+          if (typeof transformJs === "string" && transformJs.trim().length > 0) {
+            const result = validateJsSyntax(transformJs);
+            if (!result.valid) {
+              errors.push({
+                field: `checks.${checkName}.transform_js`,
+                message: `JavaScript syntax error in "${checkName}" transform_js: ${result.error}`,
+                value: transformJs.slice(0, 100) + (transformJs.length > 100 ? "..." : "")
+              });
+            }
+          }
+          if (checkConfig.type === "script") {
+            const content = checkConfig.content;
+            if (typeof content === "string" && content.trim().length > 0) {
+              const result = validateJsSyntax(content);
+              if (!result.valid) {
+                errors.push({
+                  field: `checks.${checkName}.content`,
+                  message: `JavaScript syntax error in "${checkName}" script: ${result.error}`,
+                  value: content.slice(0, 100) + (content.length > 100 ? "..." : "")
+                });
+              }
+            }
+          }
+        } catch {
+        }
+      }
+      /**
+       * Validate MCP servers object shape and values (basic shape only)
+       */
+      validateMcpServersObject(mcpServers, fieldPrefix, errors, _warnings) {
+        if (typeof mcpServers !== "object" || mcpServers === null) {
+          errors.push({
+            field: fieldPrefix,
+            message: `${fieldPrefix} must be an object mapping server names to { command, args?, env? }`,
+            value: mcpServers
+          });
+          return;
+        }
+        for (const [serverName, cfg] of Object.entries(mcpServers)) {
+          const pathStr = `${fieldPrefix}.${serverName}`;
+          if (!cfg || typeof cfg !== "object") {
+            errors.push({ field: pathStr, message: `${pathStr} must be an object`, value: cfg });
+            continue;
+          }
+          const { command, args, env } = cfg;
+          if (typeof command !== "string" || command.trim() === "") {
+            errors.push({
+              field: `${pathStr}.command`,
+              message: `${pathStr}.command must be a non-empty string`,
+              value: command
+            });
+          }
+          if (args !== void 0 && !Array.isArray(args)) {
+            errors.push({
+              field: `${pathStr}.args`,
+              message: `${pathStr}.args must be an array of strings`,
+              value: args
+            });
+          }
+          if (env !== void 0) {
+            if (typeof env !== "object" || env === null) {
+              errors.push({
+                field: `${pathStr}.env`,
+                message: `${pathStr}.env must be an object of string values`,
+                value: env
+              });
+            } else {
+              for (const [k, v] of Object.entries(env)) {
+                if (typeof v !== "string") {
+                  errors.push({
+                    field: `${pathStr}.env.${k}`,
+                    message: `${pathStr}.env.${k} must be a string`,
+                    value: v
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+      /**
+       * Validate configuration using generated JSON Schema via Ajv, if available.
+       * Adds to errors/warnings but does not throw directly.
+       */
+      validateWithAjvSchema(config, errors, warnings) {
+        try {
+          if (!__ajvValidate) {
+            try {
+              const jsonPath = path10.resolve(__dirname, "generated", "config-schema.json");
+              const jsonSchema = require(jsonPath);
+              if (jsonSchema) {
+                const ajv = new import_ajv3.default({ allErrors: true, allowUnionTypes: true, strict: false });
+                (0, import_ajv_formats2.default)(ajv);
+                const validate = ajv.compile(jsonSchema);
+                __ajvValidate = (data) => validate(data);
+                __ajvErrors = () => validate.errors;
+              }
+            } catch {
+            }
+            if (!__ajvValidate) {
+              try {
+                const mod = (init_config_schema(), __toCommonJS(config_schema_exports));
+                const schema = mod?.configSchema || mod?.default || mod;
+                if (schema) {
+                  const ajv = new import_ajv3.default({ allErrors: true, allowUnionTypes: true, strict: false });
+                  (0, import_ajv_formats2.default)(ajv);
+                  const validate = ajv.compile(schema);
+                  __ajvValidate = (data) => validate(data);
+                  __ajvErrors = () => validate.errors;
+                } else {
+                  return;
+                }
+              } catch {
+                return;
+              }
+            }
+          }
+          const ok = __ajvValidate(config);
+          const errs = __ajvErrors ? __ajvErrors() : null;
+          if (!ok && Array.isArray(errs)) {
+            for (const e of errs) {
+              const pathStr = e.instancePath ? e.instancePath.replace(/^\//, "").replace(/\//g, ".") : "";
+              const msg = e.message || "Invalid configuration";
+              if (e.keyword === "additionalProperties") {
+                const addl = e.params && e.params.additionalProperty || "unknown";
+                const fullField = pathStr ? `${pathStr}.${addl}` : addl;
+                const topLevel = !pathStr;
+                if (topLevel && (addl === "tests" || addl === "slack")) {
+                  continue;
+                }
+                warnings.push({
+                  field: fullField || "config",
+                  message: topLevel ? `Unknown top-level key '${addl}' will be ignored.` : `Unknown key '${addl}' will be ignored`
+                });
+              } else {
+                logger.debug(`Ajv note [${pathStr || "config"}]: ${msg}`);
+              }
+            }
+          }
+        } catch (err) {
+          logger.debug(`Ajv validation skipped: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      // Unknown-key warnings are fully handled by Ajv using the generated schema
+      // Unknown-key hints are produced by Ajv (additionalProperties=false)
+      /**
+       * Validate tag filter configuration
+       */
+      validateTagFilter(tagFilter, errors) {
+        const validTagPattern = /^[a-zA-Z0-9][a-zA-Z0-9-_]*$/;
+        if (tagFilter.include !== void 0) {
+          if (!Array.isArray(tagFilter.include)) {
+            errors.push({
+              field: "tag_filter.include",
+              message: "tag_filter.include must be an array of strings",
+              value: tagFilter.include
+            });
+          } else {
+            tagFilter.include.forEach((tag, index) => {
+              if (typeof tag !== "string") {
+                errors.push({
+                  field: `tag_filter.include[${index}]`,
+                  message: `Invalid tag at index ${index}: must be a string`,
+                  value: tag
+                });
+              } else if (!validTagPattern.test(tag)) {
+                errors.push({
+                  field: `tag_filter.include[${index}]`,
+                  message: `Invalid tag "${tag}": tags must be alphanumeric with hyphens or underscores`,
+                  value: tag
+                });
+              }
+            });
+          }
+        }
+        if (tagFilter.exclude !== void 0) {
+          if (!Array.isArray(tagFilter.exclude)) {
+            errors.push({
+              field: "tag_filter.exclude",
+              message: "tag_filter.exclude must be an array of strings",
+              value: tagFilter.exclude
+            });
+          } else {
+            tagFilter.exclude.forEach((tag, index) => {
+              if (typeof tag !== "string") {
+                errors.push({
+                  field: `tag_filter.exclude[${index}]`,
+                  message: `Invalid tag at index ${index}: must be a string`,
+                  value: tag
+                });
+              } else if (!validTagPattern.test(tag)) {
+                errors.push({
+                  field: `tag_filter.exclude[${index}]`,
+                  message: `Invalid tag "${tag}": tags must be alphanumeric with hyphens or underscores`,
+                  value: tag
+                });
+              }
+            });
+          }
+        }
+      }
+      /**
+       * Validate HTTP server configuration
+       */
+      validateHttpServerConfig(httpServerConfig, errors) {
+        if (typeof httpServerConfig.enabled !== "boolean") {
+          errors.push({
+            field: "http_server.enabled",
+            message: "http_server.enabled must be a boolean",
+            value: httpServerConfig.enabled
+          });
+        }
+        if (httpServerConfig.enabled === true) {
+          if (typeof httpServerConfig.port !== "number" || httpServerConfig.port < 1 || httpServerConfig.port > 65535) {
+            errors.push({
+              field: "http_server.port",
+              message: "http_server.port must be a number between 1 and 65535",
+              value: httpServerConfig.port
+            });
+          }
+          if (httpServerConfig.auth) {
+            const auth = httpServerConfig.auth;
+            const validAuthTypes = ["bearer_token", "hmac", "basic", "none"];
+            if (!auth.type || !validAuthTypes.includes(auth.type)) {
+              errors.push({
+                field: "http_server.auth.type",
+                message: `Invalid auth type. Must be one of: ${validAuthTypes.join(", ")}`,
+                value: auth.type
+              });
+            }
+          }
+          if (httpServerConfig.tls && typeof httpServerConfig.tls === "object") {
+            const tls = httpServerConfig.tls;
+            if (tls.enabled === true) {
+              if (!tls.cert) {
+                errors.push({
+                  field: "http_server.tls.cert",
+                  message: "TLS certificate is required when TLS is enabled"
+                });
+              }
+              if (!tls.key) {
+                errors.push({
+                  field: "http_server.tls.key",
+                  message: "TLS key is required when TLS is enabled"
+                });
+              }
+            }
+          }
+          if (httpServerConfig.endpoints && Array.isArray(httpServerConfig.endpoints)) {
+            for (let i = 0; i < httpServerConfig.endpoints.length; i++) {
+              const endpoint = httpServerConfig.endpoints[i];
+              if (!endpoint.path || typeof endpoint.path !== "string") {
+                errors.push({
+                  field: `http_server.endpoints[${i}].path`,
+                  message: "Endpoint path must be a string",
+                  value: endpoint.path
+                });
+              }
+            }
+          }
+        }
+      }
+      /**
+       * Validate output configuration
+       */
+      validateOutputConfig(outputConfig, errors) {
+        if (outputConfig.pr_comment) {
+          const prComment = outputConfig.pr_comment;
+          if (typeof prComment.format === "string" && !this.validOutputFormats.includes(prComment.format)) {
+            errors.push({
+              field: "output.pr_comment.format",
+              message: `Invalid output format "${prComment.format}". Must be one of: ${this.validOutputFormats.join(", ")}`,
+              value: prComment.format
+            });
+          }
+          if (typeof prComment.group_by === "string" && !this.validGroupByOptions.includes(prComment.group_by)) {
+            errors.push({
+              field: "output.pr_comment.group_by",
+              message: `Invalid group_by option "${prComment.group_by}". Must be one of: ${this.validGroupByOptions.join(", ")}`,
+              value: prComment.group_by
+            });
+          }
+        }
+      }
+      /**
+       * Check if remote extends are allowed
+       */
+      isRemoteExtendsAllowed() {
+        if (process.env.VISOR_NO_REMOTE_EXTENDS === "true" || process.env.VISOR_NO_REMOTE_EXTENDS === "1") {
+          return false;
+        }
+        return true;
+      }
+      /**
+       * Merge configuration with default values
+       */
+      mergeWithDefaults(config) {
+        const defaultConfig = {
+          version: "1.0",
+          checks: {},
+          max_parallelism: 3,
+          output: {
+            pr_comment: {
+              format: "markdown",
+              group_by: "check",
+              collapse: true
+            }
+          }
+        };
+        const merged = { ...defaultConfig, ...config };
+        if (merged.output) {
+          merged.output.pr_comment = {
+            ...defaultConfig.output.pr_comment,
+            ...merged.output.pr_comment
+          };
+        } else {
+          merged.output = defaultConfig.output;
+        }
+        return merged;
+      }
+    };
+    __ajvValidate = null;
+    __ajvErrors = null;
+  }
+});
+
+// src/providers/workflow-check-provider.ts
+var workflow_check_provider_exports = {};
+__export(workflow_check_provider_exports, {
+  WorkflowCheckProvider: () => WorkflowCheckProvider
+});
+var import_liquidjs3, WorkflowCheckProvider;
+var init_workflow_check_provider = __esm({
+  "src/providers/workflow-check-provider.ts"() {
+    "use strict";
+    init_check_provider_interface();
+    init_workflow_registry();
+    init_workflow_executor();
+    init_logger();
+    init_sandbox();
+    init_human_id();
+    import_liquidjs3 = require("liquidjs");
+    WorkflowCheckProvider = class extends CheckProvider {
+      registry;
+      executor;
+      liquid;
+      constructor() {
+        super();
+        this.registry = WorkflowRegistry.getInstance();
+        this.executor = new WorkflowExecutor();
+        this.liquid = new import_liquidjs3.Liquid();
+      }
+      getName() {
+        return "workflow";
+      }
+      getDescription() {
+        return "Executes reusable workflow definitions as checks";
+      }
+      async validateConfig(config) {
+        const cfg = config;
+        if (!cfg.workflow && !cfg.config) {
+          logger.error('Workflow provider requires either "workflow" (id) or "config" (path)');
+          return false;
+        }
+        if (cfg.workflow) {
+          if (!this.registry.has(cfg.workflow)) {
+            logger.error(`Workflow '${cfg.workflow}' not found in registry`);
+            return false;
+          }
+        }
+        return true;
+      }
+      async execute(prInfo, config, dependencyResults, context2) {
+        const cfg = config;
+        const isConfigPathMode = !!cfg.config && !cfg.workflow;
+        const stepName = config.checkName || cfg.workflow || cfg.config || "workflow";
+        let workflow;
+        let workflowId = cfg.workflow;
+        if (isConfigPathMode) {
+          const parentCwd = context2?._parentContext?.originalWorkingDirectory || context2?._parentContext?.workingDirectory || context2?.originalWorkingDirectory || context2?.workingDirectory || process.cwd();
+          workflow = await this.loadWorkflowFromConfigPath(String(cfg.config), parentCwd);
+          workflowId = workflow.id;
+          logger.info(`Executing workflow from config '${cfg.config}' as '${workflowId}'`);
+        } else {
+          workflowId = String(cfg.workflow);
+          workflow = this.registry.get(workflowId);
+          if (!workflow) {
+            throw new Error(`Workflow '${workflowId}' not found in registry`);
+          }
+          logger.info(`Executing workflow '${workflowId}'`);
+        }
+        const inputs = await this.prepareInputs(workflow, config, prInfo, dependencyResults);
+        try {
+          const inputsCapture = Object.entries(inputs).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join("\n\n");
+          context2?.hooks?.onPromptCaptured?.({
+            step: String(stepName),
+            provider: "workflow",
+            prompt: inputsCapture
+          });
+        } catch {
+        }
+        const validation = this.registry.validateInputs(workflow, inputs);
+        if (!validation.valid) {
+          const errors = validation.errors?.map((e) => `${e.path}: ${e.message}`).join(", ");
+          throw new Error(`Invalid workflow inputs: ${errors}`);
+        }
+        try {
+          const mock = context2?.hooks?.mockForStep?.(String(stepName));
+          if (mock !== void 0) {
+            const ms = mock;
+            const issuesArr = Array.isArray(ms?.issues) ? ms.issues : [];
+            const out = ms && typeof ms === "object" && "output" in ms ? ms.output : ms;
+            const summary2 = {
+              issues: issuesArr,
+              output: out,
+              ...typeof ms?.content === "string" ? { content: String(ms.content) } : {}
+            };
+            return summary2;
+          }
+        } catch {
+        }
+        const modifiedWorkflow = this.applyOverrides(workflow, config);
+        const engineMode = context2?._engineMode;
+        if (engineMode === "state-machine") {
+          logger.info(`[WorkflowProvider] Delegating workflow '${workflowId}' to state machine engine`);
+          return await this.executeViaStateMachine(
+            modifiedWorkflow,
+            inputs,
+            config,
+            prInfo,
+            dependencyResults,
+            context2
+          );
+        }
+        const executionContext = {
+          instanceId: `${workflowId}-${Date.now()}`,
+          parentCheckId: config.checkName,
+          inputs,
+          stepResults: /* @__PURE__ */ new Map()
+        };
+        const result = await this.executor.execute(modifiedWorkflow, executionContext, {
+          prInfo,
+          dependencyResults,
+          context: context2
+        });
+        const outputs = this.mapOutputs(result, config.output_mapping);
+        const summary = {
+          issues: result.issues || []
+        };
+        summary.score = result.score || 0;
+        summary.confidence = result.confidence || "medium";
+        summary.comments = result.comments || [];
+        summary.output = outputs;
+        summary.content = this.formatWorkflowResult(workflow, result, outputs);
+        return summary;
+      }
+      getSupportedConfigKeys() {
+        return [
+          "workflow",
+          "config",
+          "args",
+          "overrides",
+          "output_mapping",
+          "timeout",
+          "env",
+          "checkName"
+        ];
+      }
+      async isAvailable() {
+        return true;
+      }
+      getRequirements() {
+        return [];
+      }
+      /**
+       * Prepare inputs for workflow execution
+       */
+      async prepareInputs(workflow, config, prInfo, dependencyResults) {
+        const inputs = {};
+        if (workflow.inputs) {
+          for (const param of workflow.inputs) {
+            if (param.default !== void 0) {
+              inputs[param.name] = param.default;
+            }
+          }
+        }
+        const eventContext = config.eventContext || {};
+        logger.debug(`[WorkflowProvider] prepareInputs for ${workflow.id}`);
+        logger.debug(
+          `[WorkflowProvider] eventContext keys: ${Object.keys(eventContext).join(", ") || "none"}`
+        );
+        logger.debug(
+          `[WorkflowProvider] eventContext.slack: ${eventContext.slack ? "present" : "absent"}`
+        );
+        logger.debug(
+          `[WorkflowProvider] eventContext.conversation: ${eventContext.conversation ? "present" : "absent"}`
+        );
+        const slack = (() => {
+          try {
+            const anyCtx = eventContext;
+            const slackCtx = anyCtx?.slack;
+            if (slackCtx && typeof slackCtx === "object") return slackCtx;
+          } catch {
+          }
+          return void 0;
+        })();
+        const conversation = (() => {
+          try {
+            const anyCtx = eventContext;
+            if (anyCtx?.slack?.conversation) return anyCtx.slack.conversation;
+            if (anyCtx?.github?.conversation) return anyCtx.github.conversation;
+            if (anyCtx?.conversation) return anyCtx.conversation;
+          } catch {
+          }
+          return void 0;
+        })();
+        logger.debug(`[WorkflowProvider] slack extracted: ${slack ? "present" : "absent"}`);
+        logger.debug(
+          `[WorkflowProvider] conversation extracted: ${conversation ? "present" : "absent"}`
+        );
+        if (conversation) {
+          logger.debug(
+            `[WorkflowProvider] conversation.messages count: ${Array.isArray(conversation.messages) ? conversation.messages.length : 0}`
+          );
+        }
+        const outputHistory = config.__outputHistory;
+        const outputs_history = {};
+        if (outputHistory) {
+          for (const [k, v] of outputHistory.entries()) {
+            outputs_history[k] = v;
+          }
+        }
+        const outputsMap = {};
+        logger.debug(
+          `[WorkflowProvider] dependencyResults: ${dependencyResults ? dependencyResults.size : "undefined"} entries`
+        );
+        if (dependencyResults) {
+          for (const [key, result] of dependencyResults.entries()) {
+            const extracted = result.output ?? result;
+            outputsMap[key] = extracted;
+            const extractedKeys = extracted && typeof extracted === "object" ? Object.keys(extracted).join(", ") : "not-object";
+            logger.debug(`[WorkflowProvider] outputs['${key}']: keys=[${extractedKeys}]`);
+          }
+        }
+        const parentInputs = config.workflowInputs || {};
+        const templateContext = {
+          pr: prInfo,
+          outputs: outputsMap,
+          env: process.env,
+          slack,
+          conversation,
+          outputs_history,
+          // Include parent workflow inputs for templates like {{ inputs.question }}
+          inputs: parentInputs
+        };
+        const userInputs = config.args || config.workflow_inputs;
+        if (userInputs) {
+          for (const [key, value] of Object.entries(userInputs)) {
+            if (typeof value === "string") {
+              if (value.includes("{{") || value.includes("{%")) {
+                inputs[key] = await this.liquid.parseAndRender(value, templateContext);
+                if (key === "text" || key === "question" || key === "context") {
+                  const rendered = String(inputs[key]);
+                  logger.info(
+                    `[WorkflowProvider] Rendered '${key}' input (${rendered.length} chars): ${rendered.substring(0, 500)}${rendered.length > 500 ? "..." : ""}`
+                  );
+                }
+              } else {
+                inputs[key] = value;
+              }
+            } else if (typeof value === "object" && value !== null && "expression" in value) {
+              const exprValue = value;
+              const sandbox = createSecureSandbox();
+              inputs[key] = compileAndRun(sandbox, exprValue.expression, templateContext, {
+                injectLog: true,
+                logPrefix: `workflow.input.${key}`
+              });
+            } else {
+              inputs[key] = value;
+              if (Array.isArray(value)) {
+                logger.debug(`[WorkflowProvider] Input '${key}' is array with ${value.length} items`);
+              } else if (typeof value === "object") {
+                logger.debug(
+                  `[WorkflowProvider] Input '${key}' is object with keys: ${Object.keys(value).join(", ")}`
+                );
+              }
+            }
+          }
+        }
+        const inputSummary = Object.entries(inputs).map(([k, v]) => `${k}:${Array.isArray(v) ? `array[${v.length}]` : typeof v}`).join(", ");
+        logger.debug(`[WorkflowProvider] Final inputs: ${inputSummary}`);
+        return inputs;
+      }
+      /**
+       * Apply overrides to workflow steps
+       */
+      applyOverrides(workflow, config) {
+        const overrideConfig = config.overrides || config.workflow_overrides;
+        if (!overrideConfig) {
+          return workflow;
+        }
+        const modified = JSON.parse(JSON.stringify(workflow));
+        for (const [stepId, overrides] of Object.entries(overrideConfig)) {
+          if (modified.steps[stepId]) {
+            modified.steps[stepId] = {
+              ...modified.steps[stepId],
+              ...overrides
+            };
+          } else {
+            logger.warn(`Cannot override non-existent step '${stepId}' in workflow '${workflow.id}'`);
+          }
+        }
+        return modified;
+      }
+      /**
+       * Map workflow outputs to check outputs
+       */
+      mapOutputs(result, outputMapping) {
+        if (!outputMapping) {
+          return result.output || {};
+        }
+        const mapped = {};
+        const workflowOutputs = result.output || {};
+        for (const [checkOutput, workflowOutput] of Object.entries(outputMapping)) {
+          if (workflowOutput in workflowOutputs) {
+            mapped[checkOutput] = workflowOutputs[workflowOutput];
+          } else if (workflowOutput.includes(".")) {
+            const parts = workflowOutput.split(".");
+            let value = workflowOutputs;
+            for (const part of parts) {
+              value = value?.[part];
+              if (value === void 0) break;
+            }
+            mapped[checkOutput] = value;
+          }
+        }
+        return mapped;
+      }
+      /**
+       * Format workflow execution result for display
+       */
+      /**
+       * Execute workflow via state machine engine (M3: nested workflows)
+       */
+      async executeViaStateMachine(workflow, inputs, config, prInfo, dependencyResults, context2) {
+        const {
+          projectWorkflowToGraph: projectWorkflowToGraph2,
+          validateWorkflowDepth: validateWorkflowDepth2
+        } = (init_workflow_projection(), __toCommonJS(workflow_projection_exports));
+        const { StateMachineRunner: StateMachineRunner2 } = (init_runner(), __toCommonJS(runner_exports));
+        const { ExecutionJournal: ExecutionJournal2 } = (init_snapshot_store(), __toCommonJS(snapshot_store_exports));
+        const { MemoryStore: MemoryStore2 } = (init_memory_store(), __toCommonJS(memory_store_exports));
+        const parentContext = context2?._parentContext;
+        const parentState = context2?._parentState;
+        const currentDepth = parentState?.flags?.currentWorkflowDepth || 0;
+        const maxDepth = parentState?.flags?.maxWorkflowDepth ?? parentContext?.config?.limits?.max_workflow_depth ?? 3;
+        validateWorkflowDepth2(currentDepth, maxDepth, workflow.id);
+        const { config: workflowConfig, checks: checksMetadata } = projectWorkflowToGraph2(
+          workflow,
+          inputs,
+          config.checkName || workflow.id
+        );
+        const parentMemoryCfg = parentContext?.memory && parentContext.memory.getConfig && parentContext.memory.getConfig() || parentContext?.config?.memory;
+        const childJournal = new ExecutionJournal2();
+        const childMemory = MemoryStore2.createIsolated(parentMemoryCfg);
+        try {
+          await childMemory.initialize();
+        } catch {
+        }
+        const parentWorkspace = parentContext?.workspace;
+        logger.info(`[WorkflowProvider] Workspace propagation for nested workflow '${workflow.id}':`);
+        logger.info(`[WorkflowProvider]   parentContext exists: ${!!parentContext}`);
+        logger.info(`[WorkflowProvider]   parentContext.workspace exists: ${!!parentWorkspace}`);
+        if (parentWorkspace) {
+          logger.info(
+            `[WorkflowProvider]   parentWorkspace.isEnabled(): ${parentWorkspace.isEnabled?.() ?? "N/A"}`
+          );
+          const projectCount = parentWorkspace.listProjects?.()?.length ?? "N/A";
+          logger.info(`[WorkflowProvider]   parentWorkspace project count: ${projectCount}`);
+        } else {
+          logger.warn(
+            `[WorkflowProvider]   NO WORKSPACE from parent - nested checkouts won't be added to workspace!`
+          );
+        }
+        const childContext = {
+          mode: "state-machine",
+          config: workflowConfig,
+          checks: checksMetadata,
+          journal: childJournal,
+          memory: childMemory,
+          // For nested workflows we continue to execute inside the same logical
+          // working directory as the parent run. When workspace isolation is
+          // enabled on the parent engine, its WorkspaceManager is also propagated
+          // so that nested checks (AI, git-checkout, etc.) see the same isolated
+          // workspace and project symlinks instead of falling back to the Visor
+          // repository root.
+          workingDirectory: parentContext?.workingDirectory || process.cwd(),
+          originalWorkingDirectory: parentContext?.originalWorkingDirectory || parentContext?.workingDirectory || process.cwd(),
+          workspace: parentWorkspace,
+          // Always use a fresh session for nested workflows to isolate history
+          sessionId: generateHumanId(),
+          event: parentContext?.event || prInfo.eventType,
+          debug: parentContext?.debug || false,
+          maxParallelism: parentContext?.maxParallelism,
+          failFast: parentContext?.failFast,
+          // Propagate execution hooks (mocks, octokit, etc.) into the child so
+          // nested steps can be mocked/observed by the YAML test runner.
+          executionContext: parentContext?.executionContext,
+          // Ensure all workflow steps are considered requested to avoid tag/event filtering surprises
+          requestedChecks: Object.keys(checksMetadata)
+        };
+        const runner = new StateMachineRunner2(childContext);
+        const childState = runner.getState();
+        childState.flags.currentWorkflowDepth = currentDepth + 1;
+        childState.flags.maxWorkflowDepth = maxDepth;
+        childState.parentContext = parentContext;
+        childState.parentScope = parentState?.parentScope;
+        logger.info(
+          `[WorkflowProvider] Executing nested workflow '${workflow.id}' at depth ${currentDepth + 1}`
+        );
+        const result = await runner.run();
+        const bubbledEvents = childContext._bubbledEvents || [];
+        if (bubbledEvents.length > 0 && parentContext) {
+          if (parentContext.debug) {
+            logger.info(`[WorkflowProvider] Bubbling ${bubbledEvents.length} events to parent context`);
+          }
+          if (!parentContext._bubbledEvents) {
+            parentContext._bubbledEvents = [];
+          }
+          parentContext._bubbledEvents.push(...bubbledEvents);
+        }
+        const allIssues = [];
+        let totalScore = 0;
+        let scoreCount = 0;
+        for (const stepResult of Object.values(result.results)) {
+          const typedResult = stepResult;
+          if (typedResult.issues) {
+            allIssues.push(...typedResult.issues);
+          }
+          if (typedResult.score) {
+            totalScore += typedResult.score;
+            scoreCount++;
+          }
+        }
+        const outputs = await this.computeWorkflowOutputsFromState(
+          workflow,
+          inputs,
+          result.results,
+          prInfo
+        );
+        const mappedOutputs = this.mapOutputs(
+          { output: outputs },
+          config.output_mapping
+        );
+        const summary = {
+          issues: allIssues
+        };
+        summary.score = scoreCount > 0 ? Math.round(totalScore / scoreCount) : 0;
+        summary.confidence = "medium";
+        summary.output = mappedOutputs;
+        summary.content = this.formatWorkflowResultFromStateMachine(
+          workflow,
+          result,
+          mappedOutputs
+        );
+        return summary;
+      }
+      /**
+       * Compute workflow outputs from state machine execution results
+       */
+      async computeWorkflowOutputsFromState(workflow, inputs, groupedResults, prInfo) {
+        const outputs = {};
+        if (!workflow.outputs) {
+          return outputs;
+        }
+        const sandbox = createSecureSandbox();
+        const flat = {};
+        try {
+          for (const arr of Object.values(groupedResults || {})) {
+            for (const item of arr || []) {
+              if (!item) continue;
+              const name = item.checkName || item.name;
+              if (typeof name === "string" && name) {
+                flat[name] = { output: item.output, issues: item.issues };
+              }
+            }
+          }
+        } catch {
+        }
+        const outputsMap = Object.fromEntries(
+          Object.entries(flat).map(([id, result]) => [id, result.output])
+        );
+        for (const output of workflow.outputs) {
+          if (output.value_js) {
+            outputs[output.name] = compileAndRun(
+              sandbox,
+              output.value_js,
+              {
+                inputs,
+                outputs: outputsMap,
+                // Keep 'steps' as alias for backwards compatibility
+                steps: outputsMap,
+                pr: prInfo
+              },
+              { injectLog: true, logPrefix: `workflow.output.${output.name}` }
+            );
+          } else if (output.value) {
+            outputs[output.name] = await this.liquid.parseAndRender(output.value, {
+              inputs,
+              outputs: outputsMap,
+              // Keep 'steps' as alias for backwards compatibility
+              steps: outputsMap,
+              pr: prInfo
+            });
+          }
+        }
+        return outputs;
+      }
+      /**
+       * Format workflow result from state machine execution
+       */
+      formatWorkflowResultFromStateMachine(workflow, result, outputs) {
+        const lines = [];
+        lines.push(`Workflow: ${workflow.name}`);
+        if (workflow.description) {
+          lines.push(`Description: ${workflow.description}`);
+        }
+        lines.push("");
+        lines.push("Execution Summary (State Machine):");
+        lines.push(`- Total Steps: ${Object.keys(result.results || {}).length}`);
+        lines.push(`- Duration: ${result.statistics?.totalDuration || 0}ms`);
+        if (Object.keys(outputs).length > 0) {
+          lines.push("");
+          lines.push("Outputs:");
+          for (const [key, value] of Object.entries(outputs)) {
+            const formatted = typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
+            lines.push(`- ${key}: ${formatted}`);
+          }
+        }
+        return lines.join("\n");
+      }
+      formatWorkflowResult(workflow, result, outputs) {
+        const lines = [];
+        lines.push(`Workflow: ${workflow.name}`);
+        if (workflow.description) {
+          lines.push(`Description: ${workflow.description}`);
+        }
+        lines.push("");
+        lines.push("Execution Summary:");
+        lines.push(`- Status: ${result.status || "completed"}`);
+        lines.push(`- Score: ${result.score || 0}`);
+        lines.push(`- Issues Found: ${result.issues?.length || 0}`);
+        if (result.duration) {
+          lines.push(`- Duration: ${result.duration}ms`);
+        }
+        if (Object.keys(outputs).length > 0) {
+          lines.push("");
+          lines.push("Outputs:");
+          for (const [key, value] of Object.entries(outputs)) {
+            const formatted = typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
+            lines.push(`- ${key}: ${formatted}`);
+          }
+        }
+        if (result.stepSummaries && result.stepSummaries.length > 0) {
+          lines.push("");
+          lines.push("Step Results:");
+          for (const summary of result.stepSummaries) {
+            lines.push(
+              `- ${summary.stepId}: ${summary.status} (${summary.issues?.length || 0} issues)`
+            );
+          }
+        }
+        return lines.join("\n");
+      }
+      /**
+       * Load a Visor config file (with steps/checks) and wrap it as a WorkflowDefinition
+       * so it can be executed by the state machine as a nested workflow.
+       */
+      async loadWorkflowFromConfigPath(sourcePath, baseDir) {
+        const path22 = require("path");
+        const fs20 = require("fs");
+        const yaml4 = require("js-yaml");
+        const resolved = path22.isAbsolute(sourcePath) ? sourcePath : path22.resolve(baseDir, sourcePath);
+        if (!fs20.existsSync(resolved)) {
+          throw new Error(`Workflow config not found at: ${resolved}`);
+        }
+        const rawContent = fs20.readFileSync(resolved, "utf8");
+        const rawData = yaml4.load(rawContent);
+        if (rawData.imports && Array.isArray(rawData.imports)) {
+          const configDir = path22.dirname(resolved);
+          for (const source of rawData.imports) {
+            try {
+              const results = await this.registry.import(source, {
+                basePath: configDir,
+                validate: true
+              });
+              for (const result of results) {
+                if (!result.valid && result.errors) {
+                  const errors = result.errors.map((e) => `  ${e.path}: ${e.message}`).join("\n");
+                  throw new Error(`Failed to import workflow from '${source}':
+${errors}`);
+                }
+              }
+              logger.info(`Imported workflows from: ${source}`);
+            } catch (err) {
+              if (err.message?.includes("already exists")) {
+                logger.debug(`Workflow from '${source}' already imported, skipping`);
+              } else {
+                throw err;
+              }
+            }
+          }
+        }
+        const { ConfigManager: ConfigManager2 } = (init_config(), __toCommonJS(config_exports));
+        const mgr = new ConfigManager2();
+        const loaded = await mgr.loadConfig(resolved, { validate: false, mergeDefaults: false });
+        const steps = loaded.steps || loaded.checks || {};
+        if (!steps || Object.keys(steps).length === 0) {
+          throw new Error(`Config '${resolved}' does not contain any steps to execute as a workflow`);
+        }
+        const id = path22.basename(resolved).replace(/\.(ya?ml)$/i, "");
+        const name = loaded.name || `Workflow from ${path22.basename(resolved)}`;
+        const workflowDef = {
+          id,
+          name,
+          version: loaded.version || "1.0",
+          steps,
+          description: loaded.description,
+          // Inherit optional triggers if present (not required)
+          on: loaded.on,
+          // Carry over optional inputs/outputs if present so callers can consume them
+          inputs: loaded.inputs,
+          outputs: loaded.outputs
+        };
+        return workflowDef;
+      }
+    };
+  }
+});
+
+// src/providers/workflow-tool-executor.ts
+function workflowInputsToJsonSchema(inputs) {
+  if (!inputs || inputs.length === 0) {
+    return {
+      type: "object",
+      properties: {},
+      required: []
+    };
+  }
+  const properties = {};
+  const required = [];
+  for (const input of inputs) {
+    const propSchema = {};
+    if (input.schema) {
+      propSchema.type = input.schema.type || "string";
+      if (input.schema.description) propSchema.description = input.schema.description;
+      if (input.schema.enum) propSchema.enum = input.schema.enum;
+      if (input.schema.default !== void 0) propSchema.default = input.schema.default;
+      if (input.schema.minimum !== void 0) propSchema.minimum = input.schema.minimum;
+      if (input.schema.maximum !== void 0) propSchema.maximum = input.schema.maximum;
+      if (input.schema.minLength !== void 0) propSchema.minLength = input.schema.minLength;
+      if (input.schema.maxLength !== void 0) propSchema.maxLength = input.schema.maxLength;
+      if (input.schema.pattern) propSchema.pattern = input.schema.pattern;
+      if (input.schema.format) propSchema.format = input.schema.format;
+      if (input.schema.properties) propSchema.properties = input.schema.properties;
+      if (input.schema.items) propSchema.items = input.schema.items;
+      if (input.schema.additionalProperties !== void 0) {
+        propSchema.additionalProperties = input.schema.additionalProperties;
+      }
+    } else {
+      propSchema.type = "string";
+    }
+    if (!propSchema.description && input.description) {
+      propSchema.description = input.description;
+    }
+    if (propSchema.default === void 0 && input.default !== void 0) {
+      propSchema.default = input.default;
+    }
+    properties[input.name] = propSchema;
+    if (input.required !== false && input.default === void 0) {
+      required.push(input.name);
+    }
+  }
+  return {
+    type: "object",
+    properties,
+    required: required.length > 0 ? required : void 0
+  };
+}
+function createWorkflowToolDefinition(workflow, argsOverrides) {
+  const baseSchema = workflowInputsToJsonSchema(workflow.inputs);
+  let inputSchema = baseSchema;
+  if (argsOverrides && baseSchema && typeof baseSchema === "object") {
+    const baseProperties = baseSchema.properties;
+    const baseRequired = baseSchema.required;
+    const filteredProperties = baseProperties ? { ...baseProperties } : {};
+    for (const key of Object.keys(argsOverrides)) {
+      delete filteredProperties[key];
+    }
+    const filteredRequired = baseRequired ? baseRequired.filter((r) => !argsOverrides[r]) : void 0;
+    inputSchema = {
+      ...baseSchema,
+      properties: filteredProperties,
+      required: filteredRequired && filteredRequired.length > 0 ? filteredRequired : void 0
+    };
+  }
+  return {
+    name: workflow.id,
+    description: workflow.description || `Execute the ${workflow.name} workflow`,
+    inputSchema,
+    // Workflow tools don't have an exec command - they're executed specially
+    exec: "",
+    // Marker properties
+    __isWorkflowTool: true,
+    __workflowId: workflow.id,
+    __argsOverrides: argsOverrides
+  };
+}
+function isWorkflowTool(tool) {
+  return tool.__isWorkflowTool === true;
+}
+function isWorkflowToolReference(item) {
+  return typeof item === "object" && item !== null && "workflow" in item;
+}
+async function executeWorkflowAsTool(workflowId, args, context2, argsOverrides) {
+  const registry = WorkflowRegistry.getInstance();
+  const workflow = registry.get(workflowId);
+  if (!workflow) {
+    throw new Error(`Workflow '${workflowId}' not found in registry`);
+  }
+  logger.debug(`[WorkflowToolExecutor] Executing workflow '${workflowId}' as tool`);
+  const mergedArgs = {
+    ...args,
+    ...argsOverrides
+  };
+  const { WorkflowCheckProvider: WorkflowCheckProvider2 } = await Promise.resolve().then(() => (init_workflow_check_provider(), workflow_check_provider_exports));
+  const provider = new WorkflowCheckProvider2();
+  const checkConfig = {
+    type: "workflow",
+    workflow: workflowId,
+    args: mergedArgs,
+    checkName: `workflow-tool-${workflowId}`
+  };
+  const result = await provider.execute(
+    context2.prInfo,
+    checkConfig,
+    context2.outputs,
+    context2.executionContext
+  );
+  const output = result.output;
+  if (output !== void 0) {
+    return output;
+  }
+  if (result.content) {
+    return result.content;
+  }
+  return result;
+}
+function resolveWorkflowToolFromItem(item) {
+  const registry = WorkflowRegistry.getInstance();
+  if (typeof item === "string") {
+    if (registry.has(item)) {
+      const workflow = registry.get(item);
+      return createWorkflowToolDefinition(workflow);
+    }
+    return void 0;
+  }
+  if (isWorkflowToolReference(item)) {
+    const workflow = registry.get(item.workflow);
+    if (!workflow) {
+      logger.warn(`[WorkflowToolExecutor] Workflow '${item.workflow}' not found in registry`);
+      return void 0;
+    }
+    return createWorkflowToolDefinition(workflow, item.args);
+  }
+  return void 0;
+}
+var init_workflow_tool_executor = __esm({
+  "src/providers/workflow-tool-executor.ts"() {
+    "use strict";
+    init_workflow_registry();
+    init_logger();
+  }
+});
+
 // src/providers/mcp-custom-sse-server.ts
 var import_http, import_events, CustomToolsSSEServer;
 var init_mcp_custom_sse_server = __esm({
@@ -8507,6 +14112,7 @@ var init_mcp_custom_sse_server = __esm({
     init_logger();
     import_http = __toESM(require("http"));
     import_events = require("events");
+    init_workflow_tool_executor();
     CustomToolsSSEServer = class {
       server = null;
       port = 0;
@@ -8516,17 +14122,35 @@ var init_mcp_custom_sse_server = __esm({
       debug;
       eventBus;
       messageQueue = /* @__PURE__ */ new Map();
-      constructor(tools, sessionId, debug = false) {
+      tools;
+      workflowContext;
+      constructor(tools, sessionId, debug = false, workflowContext) {
         this.sessionId = sessionId;
         this.debug = debug;
         this.eventBus = new import_events.EventEmitter();
+        this.tools = tools;
+        this.workflowContext = workflowContext;
         const toolsRecord = {};
+        const workflowToolNames = [];
         for (const [name, tool] of tools.entries()) {
-          toolsRecord[name] = tool;
+          if (!isWorkflowTool(tool)) {
+            toolsRecord[name] = tool;
+          } else {
+            workflowToolNames.push(name);
+          }
+        }
+        if (workflowToolNames.length > 0 && !workflowContext) {
+          logger.warn(
+            `[CustomToolsSSEServer:${sessionId}] ${workflowToolNames.length} workflow tool(s) registered but no workflowContext provided. Tools [${workflowToolNames.join(", ")}] will fail at runtime. Pass workflowContext to enable workflow tool execution.`
+          );
         }
         this.toolExecutor = new CustomToolExecutor(toolsRecord);
         if (this.debug) {
-          logger.debug(`[CustomToolsSSEServer:${sessionId}] Initialized with ${tools.size} tools`);
+          const workflowToolCount = workflowToolNames.length;
+          const regularToolCount = tools.size - workflowToolCount;
+          logger.debug(
+            `[CustomToolsSSEServer:${sessionId}] Initialized with ${regularToolCount} regular tools and ${workflowToolCount} workflow tools`
+          );
         }
       }
       /**
@@ -8631,24 +14255,85 @@ var init_mcp_custom_sse_server = __esm({
        * Handle incoming HTTP requests
        */
       async handleRequest(req, res) {
+        const url = new URL(req.url || "/", `http://localhost:${this.port}`);
         if (req.method === "OPTIONS") {
           this.handleCORS(res);
           res.writeHead(204);
           res.end();
           return;
         }
-        if (req.method !== "POST" || req.url !== "/sse") {
-          res.writeHead(404, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Not found" }));
+        if (req.method === "GET" && url.pathname === "/sse") {
+          this.handleSSEConnection(req, res);
           return;
         }
+        if (req.method === "POST" && url.pathname === "/sse") {
+          await this.handleLegacySSEPost(req, res);
+          return;
+        }
+        if (req.method === "POST" && url.pathname === "/message") {
+          await this.handleMessage(req, res);
+          return;
+        }
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Not found" }));
+      }
+      /**
+       * Handle legacy POST /sse pattern (connection + message in one request)
+       * This maintains backward compatibility with tests
+       */
+      async handleLegacySSEPost(req, res) {
         this.handleCORS(res);
         res.writeHead(200, {
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-cache",
           Connection: "keep-alive"
         });
-        const connectionId = `conn-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const connectionId = `conn-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+        const connection = {
+          response: res,
+          id: connectionId
+        };
+        this.connections.add(connection);
+        if (this.debug) {
+          logger.debug(
+            `[CustomToolsSSEServer:${this.sessionId}] Legacy SSE POST connection: ${connectionId}`
+          );
+        }
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        req.on("end", async () => {
+          try {
+            if (body.trim()) {
+              const message = JSON.parse(body);
+              await this.handleMCPMessage(connection, message);
+            }
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : "Unknown error";
+            if (this.debug) {
+              logger.error(
+                `[CustomToolsSSEServer:${this.sessionId}] Error in legacy SSE POST: ${errorMsg}`
+              );
+            }
+            this.sendErrorResponse(connection, null, -32700, "Parse error", { error: errorMsg });
+          }
+        });
+        req.on("close", () => {
+          this.connections.delete(connection);
+        });
+      }
+      /**
+       * Handle SSE connection establishment (GET /sse)
+       */
+      handleSSEConnection(req, res) {
+        this.handleCORS(res);
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive"
+        });
+        const connectionId = `conn-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
         const connection = {
           response: res,
           id: connectionId
@@ -8657,13 +14342,39 @@ var init_mcp_custom_sse_server = __esm({
         if (this.debug) {
           logger.debug(`[CustomToolsSSEServer:${this.sessionId}] New SSE connection: ${connectionId}`);
         }
-        this.sendSSE(connection, "endpoint", `http://localhost:${this.port}/message`);
+        this.sendSSE(
+          connection,
+          "endpoint",
+          `http://localhost:${this.port}/message?sessionId=${connectionId}`
+        );
         req.on("close", () => {
           if (this.debug) {
             logger.debug(`[CustomToolsSSEServer:${this.sessionId}] Connection closed: ${connectionId}`);
           }
           this.connections.delete(connection);
         });
+      }
+      /**
+       * Handle MCP message (POST /message)
+       */
+      async handleMessage(req, res) {
+        const url = new URL(req.url || "/", `http://localhost:${this.port}`);
+        const sessionId = url.searchParams.get("sessionId");
+        let connection;
+        for (const conn of this.connections) {
+          if (conn.id === sessionId) {
+            connection = conn;
+            break;
+          }
+        }
+        if (!connection) {
+          connection = this.connections.values().next().value;
+        }
+        if (!connection) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "No active SSE connection" }));
+          return;
+        }
         let body = "";
         req.on("data", (chunk) => {
           body += chunk.toString();
@@ -8671,15 +14382,25 @@ var init_mcp_custom_sse_server = __esm({
         req.on("end", async () => {
           try {
             const message = JSON.parse(body);
+            if (this.debug) {
+              logger.debug(
+                `[CustomToolsSSEServer:${this.sessionId}] Received message: ${JSON.stringify(message)}`
+              );
+            }
             await this.handleMCPMessage(connection, message);
+            this.handleCORS(res);
+            res.writeHead(202, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ status: "accepted" }));
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : "Unknown error";
             if (this.debug) {
               logger.error(
-                `[CustomToolsSSEServer:${this.sessionId}] Error parsing request: ${errorMsg}`
+                `[CustomToolsSSEServer:${this.sessionId}] Error parsing message: ${errorMsg}`
               );
             }
             this.sendErrorResponse(connection, null, -32700, "Parse error", { error: errorMsg });
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Parse error", details: errorMsg }));
           }
         });
       }
@@ -8759,12 +14480,17 @@ var init_mcp_custom_sse_server = __esm({
        * Handle tools/list MCP request
        */
       async handleToolsList(id) {
-        const tools = this.toolExecutor.getTools();
+        const allTools = Array.from(this.tools.values());
+        if (this.debug) {
+          logger.debug(
+            `[CustomToolsSSEServer:${this.sessionId}] Listing ${allTools.length} tools: ${allTools.map((t) => t.name).join(", ")}`
+          );
+        }
         return {
           jsonrpc: "2.0",
           id,
           result: {
-            tools: tools.map((tool) => ({
+            tools: allTools.map((tool) => ({
               name: tool.name,
               description: tool.description || `Execute ${tool.name}`,
               inputSchema: tool.inputSchema || {
@@ -8786,7 +14512,29 @@ var init_mcp_custom_sse_server = __esm({
               `[CustomToolsSSEServer:${this.sessionId}] Executing tool: ${toolName} with args: ${JSON.stringify(args)}`
             );
           }
-          const result = await this.toolExecutor.execute(toolName, args);
+          let result;
+          const tool = this.tools.get(toolName);
+          if (tool && isWorkflowTool(tool)) {
+            if (!this.workflowContext) {
+              throw new Error(
+                `Workflow tool '${toolName}' requires workflow context but none was provided`
+              );
+            }
+            if (this.debug) {
+              logger.debug(
+                `[CustomToolsSSEServer:${this.sessionId}] Executing workflow tool: ${toolName}`
+              );
+            }
+            const workflowTool = tool;
+            result = await executeWorkflowAsTool(
+              workflowTool.__workflowId,
+              args,
+              this.workflowContext,
+              workflowTool.__argsOverrides
+            );
+          } else {
+            result = await this.toolExecutor.execute(toolName, args);
+          }
           const resultText = typeof result === "string" ? result : JSON.stringify(result, null, 2);
           if (this.debug) {
             logger.debug(
@@ -8859,6 +14607,7 @@ var init_ai_check_provider = __esm({
     init_state_capture();
     init_mcp_custom_sse_server();
     init_logger();
+    init_workflow_tool_executor();
     AICheckProvider = class extends CheckProvider {
       aiReviewService;
       liquidEngine;
@@ -9239,7 +14988,16 @@ var init_ai_check_provider = __esm({
           if (process.env.VISOR_DEBUG === "true") {
             const outKeys = Object.keys(templateContext.outputs || {}).join(", ");
             const histKeys = Object.keys(templateContext.outputs_history || {}).join(", ");
-            console.error(`[prompt-ctx] outputs.keys=${outKeys} hist.keys=${histKeys}`);
+            const inputsKeys = Object.keys(templateContext.inputs || {}).join(", ");
+            console.error(
+              `[prompt-ctx] outputs.keys=${outKeys} hist.keys=${histKeys} inputs.keys=${inputsKeys}`
+            );
+            const projects = templateContext.inputs?.projects;
+            if (projects) {
+              console.error(
+                `[prompt-ctx] inputs.projects has ${Array.isArray(projects) ? projects.length : "N/A"} items`
+              );
+            }
           }
         } catch {
         }
@@ -9273,6 +15031,114 @@ var init_ai_check_provider = __esm({
           } catch {
           }
           throw new Error(msg);
+        }
+      }
+      /**
+       * Render Liquid templates in schema definitions
+       * Supports dynamic enum values and other template-driven schema properties
+       */
+      async renderSchema(schema, prInfo, _eventContext, dependencyResults, outputHistory, args, workflowInputs) {
+        if (!schema) return schema;
+        let schemaStr;
+        if (typeof schema === "string") {
+          if (!schema.includes("{{") && !schema.includes("{%")) {
+            return schema;
+          }
+          schemaStr = schema;
+        } else {
+          schemaStr = JSON.stringify(schema);
+          if (!schemaStr.includes("{{") && !schemaStr.includes("{%")) {
+            return schema;
+          }
+        }
+        const outputsRaw = {};
+        if (dependencyResults) {
+          for (const [k, v] of dependencyResults.entries()) {
+            if (typeof k !== "string") continue;
+            if (k.endsWith("-raw")) {
+              const name = k.slice(0, -4);
+              const summary = v;
+              outputsRaw[name] = summary.output !== void 0 ? summary.output : summary;
+            }
+          }
+        }
+        const templateContext = {
+          pr: {
+            number: prInfo.number,
+            title: prInfo.title,
+            body: prInfo.body,
+            author: prInfo.author,
+            baseBranch: prInfo.base,
+            headBranch: prInfo.head,
+            isIncremental: prInfo.isIncremental,
+            filesChanged: prInfo.files?.map((f) => f.filename) || [],
+            totalAdditions: prInfo.files?.reduce((sum, f) => sum + f.additions, 0) || 0,
+            totalDeletions: prInfo.files?.reduce((sum, f) => sum + f.deletions, 0) || 0,
+            totalChanges: prInfo.files?.reduce((sum, f) => sum + f.changes, 0) || 0,
+            base: prInfo.base,
+            head: prInfo.head
+          },
+          files: prInfo.files || [],
+          description: prInfo.body || "",
+          outputs: dependencyResults ? Object.fromEntries(
+            Array.from(dependencyResults.entries()).map(([checkName, result]) => [
+              checkName,
+              (() => {
+                const summary = result;
+                return summary.output !== void 0 ? summary.output : summary;
+              })()
+            ])
+          ) : {},
+          outputs_history: (() => {
+            const hist = {};
+            if (outputHistory) {
+              for (const [k, v] of outputHistory.entries()) hist[k] = v;
+            }
+            return hist;
+          })(),
+          outputs_raw: outputsRaw,
+          args: args || {},
+          inputs: workflowInputs || {}
+        };
+        try {
+          if (process.env.VISOR_DEBUG === "true") {
+            logger.debug(`[schema-render] Rendering schema with Liquid templates`);
+            logger.debug(
+              `[schema-render] inputs.projects count: ${Array.isArray(templateContext.inputs?.projects) ? templateContext.inputs.projects.length : "N/A"}`
+            );
+          }
+          const renderedStr = await this.liquidEngine.parseAndRender(schemaStr, templateContext);
+          try {
+            const parsed = JSON.parse(renderedStr);
+            if (process.env.VISOR_DEBUG === "true") {
+              logger.debug(`[schema-render] Successfully rendered schema`);
+            }
+            return parsed;
+          } catch (parseError) {
+            const errorMsg = parseError instanceof Error ? parseError.message : String(parseError);
+            const preview = renderedStr.length > 2e3 ? renderedStr.substring(0, 2e3) + "...[truncated]" : renderedStr;
+            logger.error(`[schema-render] JSON_PARSE_ERROR: Failed to parse rendered schema as JSON`);
+            logger.error(`[schema-render] Parse error: ${errorMsg}`);
+            logger.error(`[schema-render] Original schema type: ${typeof schema}`);
+            logger.error(`[schema-render] Rendered output (${renderedStr.length} chars):
+${preview}`);
+            throw new Error(
+              `Schema template rendered invalid JSON: ${errorMsg}. Check Liquid template syntax. Rendered output starts with: "${renderedStr.substring(0, 100)}..."`
+            );
+          }
+        } catch (error) {
+          if (error instanceof Error && error.message.includes("Schema template rendered invalid JSON")) {
+            throw error;
+          }
+          const errorMsg = error instanceof Error ? error.message : "Unknown error";
+          logger.error(`[schema-render] LIQUID_RENDER_ERROR: Failed to render schema template`);
+          logger.error(`[schema-render] Error: ${errorMsg}`);
+          logger.error(
+            `[schema-render] Original schema: ${schemaStr.substring(0, 500)}${schemaStr.length > 500 ? "...[truncated]" : ""}`
+          );
+          throw new Error(
+            `Schema Liquid template error: ${errorMsg}. Check template syntax in schema definition.`
+          );
         }
       }
       async execute(prInfo, config, _dependencyResults, sessionInfo) {
@@ -9479,7 +15345,17 @@ var init_ai_check_provider = __esm({
             if (customTools.size > 0) {
               const sessionId = config.checkName || `ai-check-${Date.now()}`;
               const debug = aiConfig.debug || process.env.VISOR_DEBUG === "true";
-              customToolsServer = new CustomToolsSSEServer(customTools, sessionId, debug);
+              const workflowContext = {
+                prInfo,
+                outputs: _dependencyResults,
+                executionContext: sessionInfo
+              };
+              customToolsServer = new CustomToolsSSEServer(
+                customTools,
+                sessionId,
+                debug,
+                workflowContext
+              );
               const port = await customToolsServer.start();
               if (debug) {
                 logger.debug(
@@ -9560,6 +15436,15 @@ var init_ai_check_provider = __esm({
           sessionInfo?.args,
           config.workflowInputs
         );
+        const processedSchema = await this.renderSchema(
+          config.schema,
+          prInfo,
+          ctxWithStage,
+          _dependencyResults,
+          config.__outputHistory,
+          sessionInfo?.args,
+          config.workflowInputs
+        );
         const aiAny = config.ai || {};
         const persona = (aiAny?.ai_persona || config.ai_persona || "").toString().trim();
         const finalPrompt = persona ? `Persona: ${persona}
@@ -9572,7 +15457,7 @@ ${processedPrompt}` : processedPrompt;
           const finalPromptCapture = await serviceForCapture.buildCustomPrompt(
             prInfo,
             finalPrompt,
-            config.schema,
+            processedSchema,
             {
               checkName: config.checkName,
               skipPRContext: config.ai?.skip_code_context === true
@@ -9610,7 +15495,7 @@ ${processedPrompt}` : processedPrompt;
         } catch {
         }
         const service = new AIReviewService(aiConfig);
-        const schema = config.schema;
+        const schema = processedSchema;
         try {
           let result;
           const prevPromptTypeEnv = process.env.VISOR_PROMPT_TYPE;
@@ -9755,7 +15640,8 @@ ${processedPrompt}` : processedPrompt;
         }
       }
       /**
-       * Get custom tool names from check configuration
+       * Get custom tool items from check configuration
+       * Returns an array of tool items (string names or workflow references)
        */
       getCustomToolsForAI(config) {
         const aiCustomTools = config.ai_custom_tools;
@@ -9763,33 +15649,52 @@ ${processedPrompt}` : processedPrompt;
           return [];
         }
         if (Array.isArray(aiCustomTools)) {
-          return aiCustomTools.filter((name) => typeof name === "string");
+          return aiCustomTools.filter(
+            (item) => typeof item === "string" || isWorkflowToolReference(item)
+          );
         }
         if (typeof aiCustomTools === "string") {
+          return [aiCustomTools];
+        }
+        if (isWorkflowToolReference(aiCustomTools)) {
           return [aiCustomTools];
         }
         return [];
       }
       /**
-       * Load custom tools from global configuration
+       * Load custom tools from global configuration and workflow registry
+       * Supports both traditional custom tools and workflow-as-tool references
        */
-      loadCustomTools(toolNames, config) {
+      loadCustomTools(toolItems, config) {
         const tools = /* @__PURE__ */ new Map();
         const globalTools = config.__globalTools;
-        if (!globalTools) {
-          logger.warn(
-            `[AICheckProvider] ai_custom_tools specified but no global tools found in configuration`
-          );
-          return tools;
-        }
-        for (const toolName of toolNames) {
-          const tool = globalTools[toolName];
-          if (!tool) {
-            logger.warn(`[AICheckProvider] Custom tool not found: ${toolName}`);
+        for (const item of toolItems) {
+          const workflowTool = resolveWorkflowToolFromItem(item);
+          if (workflowTool) {
+            logger.debug(`[AICheckProvider] Loaded workflow '${workflowTool.name}' as custom tool`);
+            tools.set(workflowTool.name, workflowTool);
             continue;
           }
-          tool.name = tool.name || toolName;
-          tools.set(toolName, tool);
+          if (typeof item === "string") {
+            if (globalTools && globalTools[item]) {
+              const tool = globalTools[item];
+              tool.name = tool.name || item;
+              tools.set(item, tool);
+              continue;
+            }
+            logger.warn(
+              `[AICheckProvider] Custom tool '${item}' not found in global tools or workflow registry`
+            );
+          } else if (isWorkflowToolReference(item)) {
+            logger.warn(
+              `[AICheckProvider] Workflow '${item.workflow}' referenced but not found in registry`
+            );
+          }
+        }
+        if (tools.size === 0 && toolItems.length > 0 && !globalTools) {
+          logger.warn(
+            `[AICheckProvider] ai_custom_tools specified but no global tools found in configuration and no workflows matched`
+          );
         }
         return tools;
       }
@@ -10316,7 +16221,7 @@ var init_template_context = __esm({
 });
 
 // src/providers/http-client-provider.ts
-var fs8, path9, HttpClientProvider;
+var fs11, path12, HttpClientProvider;
 var init_http_client_provider = __esm({
   "src/providers/http-client-provider.ts"() {
     "use strict";
@@ -10326,8 +16231,8 @@ var init_http_client_provider = __esm({
     init_sandbox();
     init_template_context();
     init_logger();
-    fs8 = __toESM(require("fs"));
-    path9 = __toESM(require("path"));
+    fs11 = __toESM(require("fs"));
+    path12 = __toESM(require("path"));
     HttpClientProvider = class extends CheckProvider {
       liquid;
       sandbox;
@@ -10422,14 +16327,14 @@ var init_http_client_provider = __esm({
             const parentContext = context2?._parentContext;
             const workingDirectory = parentContext?.workingDirectory;
             const workspaceEnabled = parentContext?.workspace?.isEnabled?.();
-            if (workspaceEnabled && workingDirectory && !path9.isAbsolute(resolvedOutputFile)) {
-              resolvedOutputFile = path9.join(workingDirectory, resolvedOutputFile);
+            if (workspaceEnabled && workingDirectory && !path12.isAbsolute(resolvedOutputFile)) {
+              resolvedOutputFile = path12.join(workingDirectory, resolvedOutputFile);
               logger.debug(
                 `[http_client] Resolved relative output_file to workspace: ${resolvedOutputFile}`
               );
             }
-            if (skipIfExists && fs8.existsSync(resolvedOutputFile)) {
-              const stats = fs8.statSync(resolvedOutputFile);
+            if (skipIfExists && fs11.existsSync(resolvedOutputFile)) {
+              const stats = fs11.statSync(resolvedOutputFile);
               logger.verbose(`[http_client] File cached: ${resolvedOutputFile} (${stats.size} bytes)`);
               return {
                 issues: [],
@@ -10642,13 +16547,13 @@ var init_http_client_provider = __esm({
               ]
             };
           }
-          const parentDir = path9.dirname(outputFile);
-          if (parentDir && !fs8.existsSync(parentDir)) {
-            fs8.mkdirSync(parentDir, { recursive: true });
+          const parentDir = path12.dirname(outputFile);
+          if (parentDir && !fs11.existsSync(parentDir)) {
+            fs11.mkdirSync(parentDir, { recursive: true });
           }
           const arrayBuffer = await response.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
-          fs8.writeFileSync(outputFile, buffer);
+          fs11.writeFileSync(outputFile, buffer);
           const contentType = response.headers.get("content-type") || "application/octet-stream";
           logger.verbose(`[http_client] Downloaded: ${outputFile} (${buffer.length} bytes)`);
           return {
@@ -14737,7 +20642,7 @@ var init_stdin_reader = __esm({
 });
 
 // src/providers/human-input-check-provider.ts
-var fs10, path11, HumanInputCheckProvider;
+var fs13, path14, HumanInputCheckProvider;
 var init_human_input_check_provider = __esm({
   "src/providers/human-input-check-provider.ts"() {
     "use strict";
@@ -14746,8 +20651,8 @@ var init_human_input_check_provider = __esm({
     init_prompt_state();
     init_liquid_extensions();
     init_stdin_reader();
-    fs10 = __toESM(require("fs"));
-    path11 = __toESM(require("path"));
+    fs13 = __toESM(require("fs"));
+    path14 = __toESM(require("path"));
     HumanInputCheckProvider = class _HumanInputCheckProvider extends CheckProvider {
       liquid;
       /**
@@ -14921,19 +20826,19 @@ var init_human_input_check_provider = __esm({
        */
       async tryReadFile(filePath) {
         try {
-          const absolutePath = path11.isAbsolute(filePath) ? filePath : path11.resolve(process.cwd(), filePath);
-          const normalizedPath = path11.normalize(absolutePath);
+          const absolutePath = path14.isAbsolute(filePath) ? filePath : path14.resolve(process.cwd(), filePath);
+          const normalizedPath = path14.normalize(absolutePath);
           const cwd = process.cwd();
-          if (!normalizedPath.startsWith(cwd + path11.sep) && normalizedPath !== cwd) {
+          if (!normalizedPath.startsWith(cwd + path14.sep) && normalizedPath !== cwd) {
             return null;
           }
           try {
-            await fs10.promises.access(normalizedPath, fs10.constants.R_OK);
-            const stats = await fs10.promises.stat(normalizedPath);
+            await fs13.promises.access(normalizedPath, fs13.constants.R_OK);
+            const stats = await fs13.promises.stat(normalizedPath);
             if (!stats.isFile()) {
               return null;
             }
-            const content = await fs10.promises.readFile(normalizedPath, "utf-8");
+            const content = await fs13.promises.readFile(normalizedPath, "utf-8");
             return content.trim();
           } catch {
             return null;
@@ -15374,5174 +21279,6 @@ var init_script_check_provider = __esm({
   }
 });
 
-// src/workflow-registry.ts
-var workflow_registry_exports = {};
-__export(workflow_registry_exports, {
-  WorkflowRegistry: () => WorkflowRegistry
-});
-var import_fs, path12, yaml, import_ajv2, import_ajv_formats, WorkflowRegistry;
-var init_workflow_registry = __esm({
-  "src/workflow-registry.ts"() {
-    "use strict";
-    import_fs = require("fs");
-    path12 = __toESM(require("path"));
-    yaml = __toESM(require("js-yaml"));
-    init_logger();
-    init_dependency_resolver();
-    import_ajv2 = __toESM(require("ajv"));
-    import_ajv_formats = __toESM(require("ajv-formats"));
-    WorkflowRegistry = class _WorkflowRegistry {
-      static instance;
-      workflows = /* @__PURE__ */ new Map();
-      ajv;
-      constructor() {
-        this.ajv = new import_ajv2.default({ allErrors: true, strict: false });
-        (0, import_ajv_formats.default)(this.ajv);
-      }
-      /**
-       * Get the singleton instance of the workflow registry
-       */
-      static getInstance() {
-        if (!_WorkflowRegistry.instance) {
-          _WorkflowRegistry.instance = new _WorkflowRegistry();
-        }
-        return _WorkflowRegistry.instance;
-      }
-      /**
-       * Register a workflow definition
-       */
-      register(workflow, source = "inline", options) {
-        const validation = this.validateWorkflow(workflow);
-        if (!validation.valid) {
-          return validation;
-        }
-        if (this.workflows.has(workflow.id) && !options?.override) {
-          return {
-            valid: false,
-            errors: [
-              {
-                path: "id",
-                message: `Workflow with ID '${workflow.id}' already exists`,
-                value: workflow.id
-              }
-            ]
-          };
-        }
-        this.workflows.set(workflow.id, {
-          definition: workflow,
-          source,
-          registeredAt: /* @__PURE__ */ new Date(),
-          usage: {
-            count: 0
-          }
-        });
-        logger.debug(`Registered workflow '${workflow.id}' from ${source}`);
-        return { valid: true };
-      }
-      /**
-       * Get a workflow by ID
-       */
-      get(id) {
-        const entry = this.workflows.get(id);
-        if (entry) {
-          entry.usage = entry.usage || { count: 0 };
-          entry.usage.count++;
-          entry.usage.lastUsed = /* @__PURE__ */ new Date();
-        }
-        return entry?.definition;
-      }
-      /**
-       * Check if a workflow exists
-       */
-      has(id) {
-        return this.workflows.has(id);
-      }
-      /**
-       * List all registered workflows
-       */
-      list() {
-        return Array.from(this.workflows.values()).map((entry) => entry.definition);
-      }
-      /**
-       * Get workflow metadata
-       */
-      getMetadata(id) {
-        return this.workflows.get(id);
-      }
-      /**
-       * Remove a workflow from the registry
-       */
-      unregister(id) {
-        return this.workflows.delete(id);
-      }
-      /**
-       * Clear all workflows
-       */
-      clear() {
-        this.workflows.clear();
-      }
-      /**
-       * Import workflows from a file or URL
-       */
-      async import(source, options) {
-        const results = [];
-        try {
-          const content = await this.loadWorkflowContent(source, options?.basePath);
-          const data = this.parseWorkflowContent(content, source);
-          const workflows = Array.isArray(data) ? data : [data];
-          for (const workflow of workflows) {
-            if (options?.validate !== false) {
-              const validation = this.validateWorkflow(workflow);
-              if (!validation.valid) {
-                results.push(validation);
-                continue;
-              }
-              if (options?.validators) {
-                for (const validator of options.validators) {
-                  const customValidation = validator(workflow);
-                  if (!customValidation.valid) {
-                    results.push(customValidation);
-                    continue;
-                  }
-                }
-              }
-            }
-            const workflowWithoutTests = { ...workflow };
-            delete workflowWithoutTests.tests;
-            const result = this.register(workflowWithoutTests, source, { override: options?.override });
-            results.push(result);
-          }
-        } catch (error) {
-          results.push({
-            valid: false,
-            errors: [
-              {
-                path: "source",
-                message: `Failed to import workflows from '${source}': ${error instanceof Error ? error.message : String(error)}`,
-                value: source
-              }
-            ]
-          });
-        }
-        return results;
-      }
-      /**
-       * Import multiple workflow sources
-       */
-      async importMany(sources, options) {
-        const results = /* @__PURE__ */ new Map();
-        for (const source of sources) {
-          const importResults = await this.import(source, options);
-          results.set(source, importResults);
-        }
-        return results;
-      }
-      /**
-       * Validate a workflow definition
-       */
-      validateWorkflow(workflow) {
-        const errors = [];
-        const warnings = [];
-        if (!workflow.id) {
-          errors.push({ path: "id", message: "Workflow ID is required" });
-        }
-        if (!workflow.name) {
-          errors.push({ path: "name", message: "Workflow name is required" });
-        }
-        if (!workflow.steps || Object.keys(workflow.steps).length === 0) {
-          errors.push({ path: "steps", message: "Workflow must have at least one step" });
-        }
-        if (workflow.inputs) {
-          for (let i = 0; i < workflow.inputs.length; i++) {
-            const input = workflow.inputs[i];
-            if (!input.name) {
-              errors.push({ path: `inputs[${i}].name`, message: "Input parameter name is required" });
-            }
-            if (!input.schema) {
-              warnings.push({
-                path: `inputs[${i}].schema`,
-                message: "Input parameter schema is recommended"
-              });
-            }
-          }
-        }
-        if (workflow.outputs) {
-          for (let i = 0; i < workflow.outputs.length; i++) {
-            const output = workflow.outputs[i];
-            if (!output.name) {
-              errors.push({ path: `outputs[${i}].name`, message: "Output parameter name is required" });
-            }
-            if (!output.value && !output.value_js) {
-              errors.push({
-                path: `outputs[${i}]`,
-                message: "Output parameter must have either value or value_js"
-              });
-            }
-          }
-        }
-        for (const [stepId, step] of Object.entries(workflow.steps || {})) {
-          if (step.depends_on) {
-            for (const dep of step.depends_on) {
-              if (!workflow.steps[dep]) {
-                errors.push({
-                  path: `steps.${stepId}.depends_on`,
-                  message: `Step '${stepId}' depends on non-existent step '${dep}'`,
-                  value: dep
-                });
-              }
-            }
-          }
-          if (step.inputs) {
-            for (const [inputName, mapping] of Object.entries(step.inputs)) {
-              if (typeof mapping === "object" && mapping !== null && "source" in mapping) {
-                const typedMapping = mapping;
-                if (typedMapping.source === "step" && !typedMapping.stepId) {
-                  errors.push({
-                    path: `steps.${stepId}.inputs.${inputName}`,
-                    message: 'Step input mapping with source "step" must have stepId'
-                  });
-                }
-                if (typedMapping.source === "param") {
-                  const paramExists = workflow.inputs?.some((p) => p.name === typedMapping.value);
-                  if (!paramExists) {
-                    errors.push({
-                      path: `steps.${stepId}.inputs.${inputName}`,
-                      message: `Step input references non-existent parameter '${typedMapping.value}'`,
-                      value: typedMapping.value
-                    });
-                  }
-                }
-              }
-            }
-          }
-        }
-        const circularDeps = this.detectCircularDependencies(workflow);
-        if (circularDeps.length > 0) {
-          errors.push({
-            path: "steps",
-            message: `Circular dependencies detected: ${circularDeps.join(" -> ")}`
-          });
-        }
-        return {
-          valid: errors.length === 0,
-          errors: errors.length > 0 ? errors : void 0,
-          warnings: warnings.length > 0 ? warnings : void 0
-        };
-      }
-      /**
-       * Validate input values against workflow input schema
-       */
-      validateInputs(workflow, inputs) {
-        const errors = [];
-        if (!workflow.inputs) {
-          return { valid: true };
-        }
-        for (const param of workflow.inputs) {
-          if (param.required !== false && !(param.name in inputs) && param.default === void 0) {
-            errors.push({
-              path: `inputs.${param.name}`,
-              message: `Required input '${param.name}' is missing`
-            });
-          }
-        }
-        for (const param of workflow.inputs) {
-          if (param.name in inputs && param.schema) {
-            const value = inputs[param.name];
-            const valid = this.validateAgainstSchema(value, param.schema);
-            if (!valid.valid) {
-              errors.push({
-                path: `inputs.${param.name}`,
-                message: valid.error || "Invalid input value",
-                value
-              });
-            }
-          }
-        }
-        return {
-          valid: errors.length === 0,
-          errors: errors.length > 0 ? errors : void 0
-        };
-      }
-      /**
-       * Load workflow content from file or URL
-       */
-      async loadWorkflowContent(source, basePath) {
-        if (source.startsWith("http://") || source.startsWith("https://")) {
-          const response = await fetch(source);
-          if (!response.ok) {
-            throw new Error(`Failed to fetch workflow from ${source}: ${response.statusText}`);
-          }
-          return await response.text();
-        }
-        const filePath = path12.isAbsolute(source) ? source : path12.resolve(basePath || process.cwd(), source);
-        return await import_fs.promises.readFile(filePath, "utf-8");
-      }
-      /**
-       * Parse workflow content (YAML or JSON)
-       */
-      parseWorkflowContent(content, source) {
-        try {
-          return JSON.parse(content);
-        } catch {
-          try {
-            return yaml.load(content);
-          } catch (error) {
-            throw new Error(
-              `Failed to parse workflow file ${source}: ${error instanceof Error ? error.message : String(error)}`
-            );
-          }
-        }
-      }
-      /**
-       * Detect circular dependencies in workflow steps using DependencyResolver
-       */
-      detectCircularDependencies(workflow) {
-        const dependencies = {};
-        for (const [stepId, step] of Object.entries(workflow.steps || {})) {
-          const rawDeps = step.depends_on;
-          dependencies[stepId] = Array.isArray(rawDeps) ? rawDeps : rawDeps ? [rawDeps] : [];
-        }
-        try {
-          const graph = DependencyResolver.buildDependencyGraph(dependencies);
-          if (graph.hasCycles && graph.cycleNodes) {
-            return graph.cycleNodes;
-          }
-          return [];
-        } catch {
-          return [];
-        }
-      }
-      /**
-       * Validate a value against a JSON schema
-       */
-      validateAgainstSchema(value, schema) {
-        try {
-          const validate = this.ajv.compile(schema);
-          const valid = validate(value);
-          if (!valid) {
-            const errors = validate.errors?.map((e) => `${e.instancePath || "/"}: ${e.message}`).join(", ");
-            return { valid: false, error: errors };
-          }
-          return { valid: true };
-        } catch (error) {
-          return { valid: false, error: error instanceof Error ? error.message : String(error) };
-        }
-      }
-    };
-  }
-});
-
-// src/workflow-executor.ts
-var import_liquidjs2, WorkflowExecutor;
-var init_workflow_executor = __esm({
-  "src/workflow-executor.ts"() {
-    "use strict";
-    init_check_provider_registry();
-    init_dependency_resolver();
-    init_logger();
-    init_sandbox();
-    import_liquidjs2 = require("liquidjs");
-    WorkflowExecutor = class {
-      providerRegistry = null;
-      liquid;
-      constructor() {
-        this.liquid = new import_liquidjs2.Liquid();
-      }
-      /**
-       * Lazy-load the provider registry to avoid circular dependency during initialization
-       */
-      getProviderRegistry() {
-        if (!this.providerRegistry) {
-          this.providerRegistry = CheckProviderRegistry.getInstance();
-        }
-        return this.providerRegistry;
-      }
-      /**
-       * Execute a workflow
-       */
-      async execute(workflow, executionContext, runOptions) {
-        const startTime = Date.now();
-        executionContext.metadata = {
-          startTime,
-          status: "running"
-        };
-        try {
-          const executionOrder = this.resolveExecutionOrder(workflow);
-          logger.debug(`Workflow ${workflow.id} execution order: ${executionOrder.join(" -> ")}`);
-          const stepResults = /* @__PURE__ */ new Map();
-          const stepSummaries = [];
-          for (const stepId of executionOrder) {
-            const step = workflow.steps[stepId];
-            if (step.if) {
-              const shouldRun = this.evaluateCondition(step.if, {
-                inputs: executionContext.inputs,
-                outputs: Object.fromEntries(stepResults),
-                pr: runOptions.prInfo
-              });
-              if (!shouldRun) {
-                logger.info(`Skipping step '${stepId}' due to condition: ${step.if}`);
-                stepSummaries.push({
-                  stepId,
-                  status: "skipped"
-                });
-                continue;
-              }
-            }
-            const stepConfig = await this.prepareStepConfig(
-              step,
-              stepId,
-              executionContext,
-              stepResults,
-              workflow
-            );
-            try {
-              logger.info(`Executing workflow step '${stepId}'`);
-              const stepContext = {
-                ...runOptions.context,
-                workflowInputs: executionContext.inputs
-              };
-              const result = await this.executeStep(
-                stepConfig,
-                runOptions.prInfo,
-                stepResults,
-                stepContext
-              );
-              stepResults.set(stepId, result);
-              stepSummaries.push({
-                stepId,
-                status: "success",
-                issues: result.issues,
-                output: result.output
-              });
-            } catch (error) {
-              const errorMessage = error instanceof Error ? error.message : String(error);
-              logger.error(`Step '${stepId}' failed: ${errorMessage}`);
-              stepSummaries.push({
-                stepId,
-                status: "failed",
-                output: { error: errorMessage }
-              });
-              if (!runOptions.options?.continueOnError) {
-                throw new Error(`Workflow step '${stepId}' failed: ${errorMessage}`);
-              }
-            }
-          }
-          const outputs = await this.computeOutputs(
-            workflow,
-            executionContext,
-            stepResults,
-            runOptions.prInfo
-          );
-          executionContext.outputs = outputs;
-          const aggregated = this.aggregateResults(stepResults);
-          const endTime = Date.now();
-          executionContext.metadata.endTime = endTime;
-          executionContext.metadata.duration = endTime - startTime;
-          executionContext.metadata.status = "completed";
-          return {
-            success: true,
-            score: aggregated.score,
-            confidence: aggregated.confidence,
-            issues: aggregated.issues,
-            comments: aggregated.comments,
-            output: outputs,
-            status: "completed",
-            duration: endTime - startTime,
-            stepSummaries
-          };
-        } catch (error) {
-          const endTime = Date.now();
-          executionContext.metadata.endTime = endTime;
-          executionContext.metadata.duration = endTime - startTime;
-          executionContext.metadata.status = "failed";
-          executionContext.metadata.error = error instanceof Error ? error.message : String(error);
-          return {
-            success: false,
-            status: "failed",
-            duration: endTime - startTime,
-            error: error instanceof Error ? error.message : String(error)
-          };
-        }
-      }
-      /**
-       * Resolve step execution order based on dependencies
-       */
-      resolveExecutionOrder(workflow) {
-        const dependencies = {};
-        for (const [stepId, step] of Object.entries(workflow.steps)) {
-          const rawDeps = step.depends_on;
-          dependencies[stepId] = Array.isArray(rawDeps) ? rawDeps : rawDeps ? [rawDeps] : [];
-        }
-        const graph = DependencyResolver.buildDependencyGraph(dependencies);
-        if (graph.hasCycles) {
-          throw new Error(
-            `Circular dependency detected in workflow steps: ${graph.cycleNodes?.join(" -> ")}`
-          );
-        }
-        const order = [];
-        for (const group of graph.executionOrder) {
-          order.push(...group.parallel);
-        }
-        return order;
-      }
-      /**
-       * Prepare step configuration with input mappings
-       */
-      async prepareStepConfig(step, stepId, executionContext, stepResults, workflow) {
-        const config = {
-          ...step,
-          type: step.type || "ai",
-          checkName: `${executionContext.instanceId}:${stepId}`
-        };
-        if (step.inputs) {
-          for (const [inputName, mapping] of Object.entries(step.inputs)) {
-            const value = await this.resolveInputMapping(
-              mapping,
-              executionContext,
-              stepResults,
-              workflow
-            );
-            config[inputName] = value;
-          }
-        }
-        return config;
-      }
-      /**
-       * Resolve input mapping to actual value
-       */
-      async resolveInputMapping(mapping, executionContext, stepResults, _workflow) {
-        if (typeof mapping === "string") {
-          return executionContext.inputs[mapping];
-        }
-        if (typeof mapping === "object" && mapping !== null && "source" in mapping) {
-          const typedMapping = mapping;
-          switch (typedMapping.source) {
-            case "param":
-              return executionContext.inputs[String(typedMapping.value)];
-            case "step":
-              if (!typedMapping.stepId) {
-                throw new Error("Step input mapping requires stepId");
-              }
-              const stepResult = stepResults.get(typedMapping.stepId);
-              if (!stepResult) {
-                throw new Error(`Step '${typedMapping.stepId}' has not been executed yet`);
-              }
-              const output = stepResult.output;
-              if (typedMapping.outputParam && output) {
-                return output[typedMapping.outputParam];
-              }
-              return output;
-            case "constant":
-              return typedMapping.value;
-            case "expression":
-              if (!typedMapping.expression) {
-                throw new Error("Expression mapping requires expression field");
-              }
-              const sandbox = createSecureSandbox();
-              return compileAndRun(
-                sandbox,
-                typedMapping.expression,
-                {
-                  inputs: executionContext.inputs,
-                  outputs: Object.fromEntries(stepResults),
-                  steps: Object.fromEntries(
-                    Array.from(stepResults.entries()).map(([id, result]) => [
-                      id,
-                      result.output
-                    ])
-                  )
-                },
-                { injectLog: true, logPrefix: "workflow.input.expression" }
-              );
-            default:
-              throw new Error(`Unknown input mapping source: ${typedMapping.source}`);
-          }
-        }
-        if (typeof mapping === "object" && mapping !== null && "template" in mapping) {
-          const typedMapping = mapping;
-          if (typedMapping.template) {
-            return await this.liquid.parseAndRender(typedMapping.template, {
-              inputs: executionContext.inputs,
-              outputs: Object.fromEntries(stepResults)
-            });
-          }
-        }
-        return mapping;
-      }
-      /**
-       * Execute a single step
-       */
-      async executeStep(config, prInfo, dependencyResults, context2) {
-        const provider = await this.getProviderRegistry().getProvider(config.type);
-        if (!provider) {
-          throw new Error(`Provider '${config.type}' not found`);
-        }
-        return await provider.execute(prInfo, config, dependencyResults, context2);
-      }
-      /**
-       * Compute workflow outputs
-       */
-      async computeOutputs(workflow, executionContext, stepResults, prInfo) {
-        const outputs = {};
-        if (!workflow.outputs) {
-          return outputs;
-        }
-        for (const output of workflow.outputs) {
-          if (output.value_js) {
-            const sandbox = createSecureSandbox();
-            outputs[output.name] = compileAndRun(
-              sandbox,
-              output.value_js,
-              {
-                inputs: executionContext.inputs,
-                steps: Object.fromEntries(
-                  Array.from(stepResults.entries()).map(([id, result]) => [id, result.output])
-                ),
-                outputs: Object.fromEntries(stepResults),
-                pr: prInfo
-              },
-              { injectLog: true, logPrefix: `workflow.output.${output.name}` }
-            );
-          } else if (output.value) {
-            outputs[output.name] = await this.liquid.parseAndRender(output.value, {
-              inputs: executionContext.inputs,
-              steps: Object.fromEntries(
-                Array.from(stepResults.entries()).map(([id, result]) => [id, result.output])
-              ),
-              outputs: Object.fromEntries(stepResults),
-              pr: prInfo
-            });
-          }
-        }
-        return outputs;
-      }
-      /**
-       * Aggregate results from all steps
-       */
-      aggregateResults(stepResults) {
-        let totalScore = 0;
-        let scoreCount = 0;
-        const allIssues = [];
-        const allComments = [];
-        let minConfidence = "high";
-        for (const result of stepResults.values()) {
-          const extResult = result;
-          if (typeof extResult.score === "number") {
-            totalScore += extResult.score;
-            scoreCount++;
-          }
-          if (result.issues) {
-            allIssues.push(...result.issues);
-          }
-          if (extResult.comments) {
-            allComments.push(...extResult.comments);
-          }
-          if (extResult.confidence) {
-            if (extResult.confidence === "low" || extResult.confidence === "medium" && minConfidence === "high") {
-              minConfidence = extResult.confidence;
-            }
-          }
-        }
-        return {
-          score: scoreCount > 0 ? Math.round(totalScore / scoreCount) : 0,
-          confidence: minConfidence,
-          issues: allIssues,
-          comments: allComments
-        };
-      }
-      /**
-       * Evaluate a condition expression
-       */
-      evaluateCondition(condition, context2) {
-        try {
-          const sandbox = createSecureSandbox();
-          const result = compileAndRun(sandbox, condition, context2, {
-            injectLog: true,
-            logPrefix: "workflow.condition"
-          });
-          return Boolean(result);
-        } catch (error) {
-          logger.warn(`Failed to evaluate condition '${condition}': ${error}`);
-          return false;
-        }
-      }
-    };
-  }
-});
-
-// src/state-machine/workflow-projection.ts
-var workflow_projection_exports = {};
-__export(workflow_projection_exports, {
-  buildWorkflowScope: () => buildWorkflowScope,
-  extractParentScope: () => extractParentScope,
-  getWorkflowIdFromScope: () => getWorkflowIdFromScope,
-  isWorkflowStep: () => isWorkflowStep,
-  projectWorkflowToGraph: () => projectWorkflowToGraph,
-  validateWorkflowDepth: () => validateWorkflowDepth
-});
-function projectWorkflowToGraph(workflow, workflowInputs, _parentCheckId) {
-  if (!workflow.steps || Object.keys(workflow.steps).length === 0) {
-    throw new Error(`Workflow '${workflow.id}' has no steps`);
-  }
-  const checks = {};
-  const checksMetadata = {};
-  for (const [stepId, step] of Object.entries(workflow.steps)) {
-    const scopedCheckId = stepId;
-    checks[scopedCheckId] = {
-      type: step.type || "ai",
-      ...step,
-      // Store workflow inputs in the check config so they're accessible
-      workflowInputs,
-      // Mark this as a workflow step
-      _workflowStep: true,
-      _workflowId: workflow.id,
-      _stepId: stepId
-    };
-    checksMetadata[scopedCheckId] = {
-      tags: step.tags || workflow.tags || [],
-      triggers: step.on || workflow.on || [],
-      group: step.group,
-      providerType: step.type || "ai",
-      // Normalize depends_on to array (supports string | string[])
-      dependencies: (Array.isArray(step.depends_on) ? step.depends_on : step.depends_on ? [step.depends_on] : []).map((dep) => dep)
-    };
-  }
-  const config = {
-    checks,
-    version: "1.0",
-    output: {
-      pr_comment: {
-        format: "table",
-        group_by: "check",
-        collapse: false
-      }
-    }
-  };
-  if (logger.isDebugEnabled?.()) {
-    logger.debug(
-      `[WorkflowProjection] Projected workflow '${workflow.id}' with ${Object.keys(checks).length} steps`
-    );
-  }
-  return { config, checks: checksMetadata };
-}
-function validateWorkflowDepth(currentDepth, maxDepth, workflowId) {
-  if (currentDepth >= maxDepth) {
-    throw new Error(
-      `Workflow nesting depth limit exceeded (${maxDepth}) for workflow '${workflowId}'. This may indicate a circular workflow reference or excessive nesting.`
-    );
-  }
-}
-function buildWorkflowScope(parentScope, workflowCheckId, stepId, foreachIndex) {
-  const scope = parentScope ? [...parentScope] : [];
-  scope.push({
-    check: `${workflowCheckId}:${stepId}`,
-    index: foreachIndex ?? 0
-  });
-  return scope;
-}
-function extractParentScope(scopedCheckId) {
-  const lastColonIndex = scopedCheckId.lastIndexOf(":");
-  if (lastColonIndex === -1) {
-    return null;
-  }
-  return {
-    parentCheckId: scopedCheckId.substring(0, lastColonIndex),
-    stepId: scopedCheckId.substring(lastColonIndex + 1)
-  };
-}
-function isWorkflowStep(checkId) {
-  return checkId.includes(":");
-}
-function getWorkflowIdFromScope(scopedCheckId) {
-  const parts = scopedCheckId.split(":");
-  if (parts.length >= 2) {
-    return parts[0];
-  }
-  return null;
-}
-var init_workflow_projection = __esm({
-  "src/state-machine/workflow-projection.ts"() {
-    "use strict";
-    init_logger();
-  }
-});
-
-// src/utils/config-merger.ts
-var config_merger_exports = {};
-__export(config_merger_exports, {
-  ConfigMerger: () => ConfigMerger
-});
-var ConfigMerger;
-var init_config_merger = __esm({
-  "src/utils/config-merger.ts"() {
-    "use strict";
-    ConfigMerger = class {
-      /**
-       * Merge two configurations with child overriding parent
-       * @param parent - Base configuration
-       * @param child - Configuration to merge on top
-       * @returns Merged configuration
-       */
-      merge(parent, child) {
-        const result = this.deepCopy(parent);
-        if (child.version !== void 0) result.version = child.version;
-        if (child.ai_model !== void 0) result.ai_model = child.ai_model;
-        if (child.ai_provider !== void 0) result.ai_provider = child.ai_provider;
-        if (child.max_parallelism !== void 0) result.max_parallelism = child.max_parallelism;
-        if (child.fail_fast !== void 0) result.fail_fast = child.fail_fast;
-        if (child.fail_if !== void 0) result.fail_if = child.fail_if;
-        if (child.failure_conditions !== void 0)
-          result.failure_conditions = child.failure_conditions;
-        if (child.env) {
-          result.env = this.mergeObjects(parent.env || {}, child.env);
-        }
-        if (child.output) {
-          result.output = this.mergeOutputConfig(parent.output, child.output);
-        }
-        if (child.checks) {
-          result.checks = this.mergeChecks(parent.checks || {}, child.checks);
-        }
-        if (child.steps) {
-          const parentSteps = parent.steps || {};
-          const childSteps = child.steps || {};
-          result.steps = this.mergeChecks(parentSteps, childSteps);
-        }
-        if (child.tools) {
-          result.tools = this.mergeObjects(parent.tools || {}, child.tools);
-        }
-        if (child.imports) {
-          const parentImports = parent.imports || [];
-          const childImports = child.imports || [];
-          result.imports = [.../* @__PURE__ */ new Set([...parentImports, ...childImports])];
-        }
-        return result;
-      }
-      /**
-       * Deep copy an object
-       */
-      deepCopy(obj) {
-        if (obj === null || obj === void 0) {
-          return obj;
-        }
-        if (obj instanceof Date) {
-          return new Date(obj.getTime());
-        }
-        if (obj instanceof Array) {
-          const copy = [];
-          for (const item of obj) {
-            copy.push(this.deepCopy(item));
-          }
-          return copy;
-        }
-        if (obj instanceof Object) {
-          const copy = {};
-          for (const key in obj) {
-            if (Object.prototype.hasOwnProperty.call(obj, key)) {
-              copy[key] = this.deepCopy(obj[key]);
-            }
-          }
-          return copy;
-        }
-        return obj;
-      }
-      /**
-       * Merge two objects (child overrides parent)
-       */
-      mergeObjects(parent, child) {
-        const result = { ...parent };
-        for (const key in child) {
-          if (Object.prototype.hasOwnProperty.call(child, key)) {
-            const parentValue = parent[key];
-            const childValue = child[key];
-            if (childValue === null || childValue === void 0) {
-              delete result[key];
-            } else if (typeof parentValue === "object" && typeof childValue === "object" && !Array.isArray(parentValue) && !Array.isArray(childValue) && parentValue !== null && childValue !== null) {
-              result[key] = this.mergeObjects(
-                parentValue,
-                childValue
-              );
-            } else {
-              result[key] = this.deepCopy(childValue);
-            }
-          }
-        }
-        return result;
-      }
-      /**
-       * Merge output configurations
-       */
-      mergeOutputConfig(parent, child) {
-        if (!child) return parent;
-        if (!parent) return child;
-        const result = this.deepCopy(parent);
-        if (child.pr_comment) {
-          result.pr_comment = this.mergeObjects(
-            parent.pr_comment || {},
-            child.pr_comment
-          );
-        }
-        if (child.file_comment !== void 0) {
-          if (child.file_comment === null) {
-            delete result.file_comment;
-          } else {
-            result.file_comment = this.mergeObjects(
-              parent.file_comment || {},
-              child.file_comment
-            );
-          }
-        }
-        if (child.github_checks !== void 0) {
-          if (child.github_checks === null) {
-            delete result.github_checks;
-          } else {
-            result.github_checks = this.mergeObjects(
-              parent.github_checks || {},
-              child.github_checks
-            );
-          }
-        }
-        return result;
-      }
-      /**
-       * Merge check configurations with special handling
-       */
-      mergeChecks(parent, child) {
-        const result = {};
-        for (const [checkName, checkConfig] of Object.entries(parent)) {
-          result[checkName] = this.deepCopy(checkConfig);
-        }
-        for (const [checkName, childConfig] of Object.entries(child)) {
-          const parentConfig = parent[checkName];
-          if (!parentConfig) {
-            const copiedConfig = this.deepCopy(childConfig);
-            if (!copiedConfig.type) {
-              copiedConfig.type = "ai";
-            }
-            if (!copiedConfig.on) {
-              copiedConfig.on = ["manual"];
-            }
-            if (copiedConfig.appendPrompt !== void 0) {
-              if (!copiedConfig.prompt) {
-                copiedConfig.prompt = copiedConfig.appendPrompt;
-              } else {
-                copiedConfig.prompt = copiedConfig.prompt + "\n\n" + copiedConfig.appendPrompt;
-              }
-              delete copiedConfig.appendPrompt;
-            }
-            result[checkName] = copiedConfig;
-          } else {
-            result[checkName] = this.mergeCheckConfig(parentConfig, childConfig);
-          }
-        }
-        return result;
-      }
-      /**
-       * Merge individual check configurations
-       */
-      mergeCheckConfig(parent, child) {
-        const result = this.deepCopy(parent);
-        if (child.type !== void 0) result.type = child.type;
-        if (!result.type) {
-          result.type = "ai";
-        }
-        if (child.prompt !== void 0) result.prompt = child.prompt;
-        if (child.appendPrompt !== void 0) {
-          if (result.prompt) {
-            result.prompt = result.prompt + "\n\n" + child.appendPrompt;
-          } else {
-            result.prompt = child.appendPrompt;
-          }
-          delete result.appendPrompt;
-        }
-        if (child.exec !== void 0) result.exec = child.exec;
-        if (child.stdin !== void 0) result.stdin = child.stdin;
-        if (child.url !== void 0) result.url = child.url;
-        if (child.focus !== void 0) result.focus = child.focus;
-        if (child.command !== void 0) result.command = child.command;
-        if (child.ai_model !== void 0) result.ai_model = child.ai_model;
-        if (child.ai_provider !== void 0) result.ai_provider = child.ai_provider;
-        if (child.group !== void 0) result.group = child.group;
-        if (child.schema !== void 0) result.schema = child.schema;
-        if (child.if !== void 0) result.if = child.if;
-        if (child.reuse_ai_session !== void 0) result.reuse_ai_session = child.reuse_ai_session;
-        if (child.fail_if !== void 0) result.fail_if = child.fail_if;
-        if (child.failure_conditions !== void 0)
-          result.failure_conditions = child.failure_conditions;
-        if (child.on !== void 0) {
-          if (Array.isArray(child.on) && child.on.length === 0) {
-            result.on = [];
-          } else {
-            result.on = [...child.on];
-          }
-        }
-        if (!result.on) {
-          result.on = ["manual"];
-        }
-        if (child.triggers !== void 0) {
-          result.triggers = child.triggers ? [...child.triggers] : void 0;
-        }
-        if (child.depends_on !== void 0) {
-          result.depends_on = child.depends_on ? [...child.depends_on] : void 0;
-        }
-        if (child.env) {
-          result.env = this.mergeObjects(
-            parent.env || {},
-            child.env
-          );
-        }
-        if (child.ai) {
-          result.ai = this.mergeObjects(
-            parent.ai || {},
-            child.ai
-          );
-        }
-        if (child.template) {
-          result.template = this.mergeObjects(
-            parent.template || {},
-            child.template
-          );
-        }
-        return result;
-      }
-      /**
-       * Check if a check is disabled (has empty 'on' array)
-       */
-      isCheckDisabled(check) {
-        return Array.isArray(check.on) && check.on.length === 0;
-      }
-      /**
-       * Remove disabled checks from the configuration
-       */
-      removeDisabledChecks(config) {
-        if (!config.checks) return config;
-        const result = this.deepCopy(config);
-        const enabledChecks = {};
-        for (const [checkName, checkConfig] of Object.entries(result.checks)) {
-          if (!this.isCheckDisabled(checkConfig)) {
-            enabledChecks[checkName] = checkConfig;
-          } else {
-            console.log(`\u2139\uFE0F  Check '${checkName}' is disabled (empty 'on' array)`);
-          }
-        }
-        result.checks = enabledChecks;
-        return result;
-      }
-    };
-  }
-});
-
-// src/utils/config-loader.ts
-var fs12, path13, yaml2, ConfigLoader;
-var init_config_loader = __esm({
-  "src/utils/config-loader.ts"() {
-    "use strict";
-    fs12 = __toESM(require("fs"));
-    path13 = __toESM(require("path"));
-    yaml2 = __toESM(require("js-yaml"));
-    ConfigLoader = class {
-      constructor(options = {}) {
-        this.options = options;
-        this.options = {
-          allowRemote: true,
-          cacheTTL: 5 * 60 * 1e3,
-          // 5 minutes
-          timeout: 30 * 1e3,
-          // 30 seconds
-          maxDepth: 10,
-          allowedRemotePatterns: [],
-          // Empty by default for security
-          projectRoot: this.findProjectRoot(),
-          ...options
-        };
-      }
-      cache = /* @__PURE__ */ new Map();
-      loadedConfigs = /* @__PURE__ */ new Set();
-      /**
-       * Determine the source type from a string
-       */
-      getSourceType(source) {
-        if (source === "default") {
-          return "default" /* DEFAULT */;
-        }
-        if (source.startsWith("http://") || source.startsWith("https://")) {
-          return "remote" /* REMOTE */;
-        }
-        return "local" /* LOCAL */;
-      }
-      /**
-       * Fetch configuration from any source
-       */
-      async fetchConfig(source, currentDepth = 0) {
-        if (currentDepth >= (this.options.maxDepth || 10)) {
-          throw new Error(
-            `Maximum extends depth (${this.options.maxDepth}) exceeded. Check for circular dependencies.`
-          );
-        }
-        const normalizedSource = this.normalizeSource(source);
-        if (this.loadedConfigs.has(normalizedSource)) {
-          throw new Error(
-            `Circular dependency detected: ${normalizedSource} is already in the extends chain`
-          );
-        }
-        const sourceType = this.getSourceType(source);
-        try {
-          this.loadedConfigs.add(normalizedSource);
-          switch (sourceType) {
-            case "default" /* DEFAULT */:
-              return await this.fetchDefaultConfig();
-            case "remote" /* REMOTE */:
-              if (!this.options.allowRemote) {
-                throw new Error(
-                  "Remote extends are disabled. Enable with --allow-remote-extends or remove VISOR_NO_REMOTE_EXTENDS environment variable."
-                );
-              }
-              return await this.fetchRemoteConfig(source);
-            case "local" /* LOCAL */:
-              return await this.fetchLocalConfig(source);
-            default:
-              throw new Error(`Unknown configuration source: ${source}`);
-          }
-        } finally {
-          this.loadedConfigs.delete(normalizedSource);
-        }
-      }
-      /**
-       * Normalize source path/URL for comparison
-       */
-      normalizeSource(source) {
-        const sourceType = this.getSourceType(source);
-        switch (sourceType) {
-          case "default" /* DEFAULT */:
-            return "default";
-          case "remote" /* REMOTE */:
-            return source.toLowerCase();
-          case "local" /* LOCAL */:
-            const basePath = this.options.baseDir || process.cwd();
-            return path13.resolve(basePath, source);
-          default:
-            return source;
-        }
-      }
-      /**
-       * Load configuration from local file system
-       */
-      async fetchLocalConfig(filePath) {
-        const basePath = this.options.baseDir || process.cwd();
-        const resolvedPath = path13.resolve(basePath, filePath);
-        this.validateLocalPath(resolvedPath);
-        try {
-          const content = fs12.readFileSync(resolvedPath, "utf8");
-          const config = yaml2.load(content);
-          if (!config || typeof config !== "object") {
-            throw new Error(`Invalid YAML in configuration file: ${resolvedPath}`);
-          }
-          if (config.include && !config.extends) {
-            const inc = config.include;
-            config.extends = Array.isArray(inc) ? inc : [inc];
-            delete config.include;
-          }
-          const previousBaseDir = this.options.baseDir;
-          this.options.baseDir = path13.dirname(resolvedPath);
-          try {
-            if (config.extends) {
-              const processedConfig = await this.processExtends(config);
-              return processedConfig;
-            }
-            return config;
-          } finally {
-            this.options.baseDir = previousBaseDir;
-          }
-        } catch (error) {
-          if (error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
-            throw new Error(`Configuration file not found: ${resolvedPath}`);
-          }
-          if (error instanceof Error) {
-            throw new Error(`Failed to load configuration from ${resolvedPath}: ${error.message}`);
-          }
-          throw error;
-        }
-      }
-      /**
-       * Fetch configuration from remote URL
-       */
-      async fetchRemoteConfig(url) {
-        if (!url.startsWith("http://") && !url.startsWith("https://")) {
-          throw new Error(`Invalid URL: ${url}. Only HTTP and HTTPS protocols are supported.`);
-        }
-        this.validateRemoteURL(url);
-        const cacheEntry = this.cache.get(url);
-        if (cacheEntry && Date.now() - cacheEntry.timestamp < cacheEntry.ttl) {
-          const outputFormat2 = process.env.VISOR_OUTPUT_FORMAT;
-          const logFn2 = outputFormat2 === "json" || outputFormat2 === "sarif" ? console.error : console.log;
-          logFn2(`\u{1F4E6} Using cached configuration from: ${url}`);
-          return cacheEntry.config;
-        }
-        const outputFormat = process.env.VISOR_OUTPUT_FORMAT;
-        const logFn = outputFormat === "json" || outputFormat === "sarif" ? console.error : console.log;
-        logFn(`\u2B07\uFE0F  Fetching remote configuration from: ${url}`);
-        const controller = new AbortController();
-        const timeoutMs = this.options.timeout ?? 3e4;
-        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-        try {
-          const response = await fetch(url, {
-            signal: controller.signal,
-            headers: {
-              "User-Agent": "Visor/1.0"
-            }
-          });
-          if (!response.ok) {
-            throw new Error(`Failed to fetch config: ${response.status} ${response.statusText}`);
-          }
-          const content = await response.text();
-          const config = yaml2.load(content);
-          if (!config || typeof config !== "object") {
-            throw new Error(`Invalid YAML in remote configuration: ${url}`);
-          }
-          this.cache.set(url, {
-            config,
-            timestamp: Date.now(),
-            ttl: this.options.cacheTTL || 5 * 60 * 1e3
-          });
-          if (config.extends) {
-            return await this.processExtends(config);
-          }
-          return config;
-        } catch (error) {
-          if (error instanceof Error) {
-            if (error.name === "AbortError") {
-              throw new Error(`Timeout fetching configuration from ${url} (${timeoutMs}ms)`);
-            }
-            throw new Error(`Failed to fetch remote configuration from ${url}: ${error.message}`);
-          }
-          throw error;
-        } finally {
-          clearTimeout(timeoutId);
-        }
-      }
-      /**
-       * Load bundled default configuration
-       */
-      async fetchDefaultConfig() {
-        const possiblePaths = [
-          // Only support new non-dot filename
-          path13.join(__dirname, "defaults", "visor.yaml"),
-          // When running from source
-          path13.join(__dirname, "..", "..", "defaults", "visor.yaml"),
-          // Try via package root
-          this.findPackageRoot() ? path13.join(this.findPackageRoot(), "defaults", "visor.yaml") : "",
-          // GitHub Action environment variable
-          process.env.GITHUB_ACTION_PATH ? path13.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml") : "",
-          process.env.GITHUB_ACTION_PATH ? path13.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml") : ""
-        ].filter((p) => p);
-        let defaultConfigPath;
-        for (const possiblePath of possiblePaths) {
-          if (fs12.existsSync(possiblePath)) {
-            defaultConfigPath = possiblePath;
-            break;
-          }
-        }
-        if (defaultConfigPath) {
-          console.error(`\u{1F4E6} Loading bundled default configuration from ${defaultConfigPath}`);
-          const content = fs12.readFileSync(defaultConfigPath, "utf8");
-          let config = yaml2.load(content);
-          if (!config || typeof config !== "object") {
-            throw new Error("Invalid default configuration");
-          }
-          if (config.include && !config.extends) {
-            const inc = config.include;
-            config.extends = Array.isArray(inc) ? inc : [inc];
-            delete config.include;
-          }
-          config = this.normalizeStepsAndChecks(config);
-          if (config.extends) {
-            const previousBaseDir = this.options.baseDir;
-            try {
-              this.options.baseDir = path13.dirname(defaultConfigPath);
-              return await this.processExtends(config);
-            } finally {
-              this.options.baseDir = previousBaseDir;
-            }
-          }
-          return config;
-        }
-        console.warn("\u26A0\uFE0F  Bundled default configuration not found, using minimal defaults");
-        return {
-          version: "1.0",
-          checks: {},
-          output: {
-            pr_comment: {
-              format: "markdown",
-              group_by: "check",
-              collapse: true
-            }
-          }
-        };
-      }
-      /**
-       * Process extends directive in a configuration
-       */
-      async processExtends(config) {
-        if (!config.extends) {
-          return config;
-        }
-        const extends_ = Array.isArray(config.extends) ? config.extends : [config.extends];
-        const { extends: _extendsField, ...configWithoutExtends } = config;
-        const parentConfigs = [];
-        for (const source of extends_) {
-          const parentConfig = await this.fetchConfig(source, this.loadedConfigs.size);
-          parentConfigs.push(parentConfig);
-        }
-        const { ConfigMerger: ConfigMerger2 } = await Promise.resolve().then(() => (init_config_merger(), config_merger_exports));
-        const merger = new ConfigMerger2();
-        let mergedParents = {};
-        for (const parentConfig of parentConfigs) {
-          mergedParents = merger.merge(mergedParents, parentConfig);
-        }
-        return merger.merge(mergedParents, configWithoutExtends);
-      }
-      /**
-       * Find project root directory (for security validation)
-       */
-      findProjectRoot() {
-        try {
-          const { execSync } = require("child_process");
-          const gitRoot = execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim();
-          if (gitRoot) return gitRoot;
-        } catch {
-        }
-        const packageRoot = this.findPackageRoot();
-        if (packageRoot) return packageRoot;
-        return process.cwd();
-      }
-      /**
-       * Validate remote URL against allowlist
-       */
-      validateRemoteURL(url) {
-        const allowedPatterns = this.options.allowedRemotePatterns || [];
-        if (allowedPatterns.length === 0) {
-          return;
-        }
-        const isAllowed = allowedPatterns.some((pattern) => url.startsWith(pattern));
-        if (!isAllowed) {
-          throw new Error(
-            `Security error: URL ${url} is not in the allowed list. Allowed patterns: ${allowedPatterns.join(", ")}`
-          );
-        }
-      }
-      /**
-       * Validate local path against traversal attacks
-       */
-      validateLocalPath(resolvedPath) {
-        const projectRoot = this.options.projectRoot || process.cwd();
-        const normalizedPath = path13.normalize(resolvedPath);
-        const normalizedRoot = path13.normalize(projectRoot);
-        if (!normalizedPath.startsWith(normalizedRoot)) {
-          throw new Error(
-            `Security error: Path traversal detected. Cannot access files outside project root: ${projectRoot}`
-          );
-        }
-        const sensitivePatterns = [
-          "/etc/passwd",
-          "/etc/shadow",
-          "/.ssh/",
-          "/.aws/",
-          "/.env",
-          "/private/"
-        ];
-        const lowerPath = normalizedPath.toLowerCase();
-        for (const pattern of sensitivePatterns) {
-          if (lowerPath.includes(pattern)) {
-            throw new Error(`Security error: Cannot access potentially sensitive file: ${pattern}`);
-          }
-        }
-      }
-      /**
-       * Find package root directory
-       */
-      findPackageRoot() {
-        let currentDir = __dirname;
-        const root = path13.parse(currentDir).root;
-        while (currentDir !== root) {
-          const packageJsonPath = path13.join(currentDir, "package.json");
-          if (fs12.existsSync(packageJsonPath)) {
-            try {
-              const packageJson = JSON.parse(fs12.readFileSync(packageJsonPath, "utf8"));
-              if (packageJson.name === "@probelabs/visor") {
-                return currentDir;
-              }
-            } catch {
-            }
-          }
-          currentDir = path13.dirname(currentDir);
-        }
-        return null;
-      }
-      /**
-       * Clear the configuration cache
-       */
-      clearCache() {
-        this.cache.clear();
-      }
-      /**
-       * Reset the loaded configs tracking (for testing)
-       */
-      reset() {
-        this.loadedConfigs.clear();
-        this.clearCache();
-      }
-      /**
-       * Normalize 'checks' and 'steps' keys for backward compatibility
-       * Ensures both keys are present and contain the same data
-       */
-      normalizeStepsAndChecks(config) {
-        if (config.steps && config.checks) {
-          const merged = { ...config.checks, ...config.steps };
-          config.checks = merged;
-          config.steps = merged;
-        } else if (config.steps && !config.checks) {
-          config.checks = config.steps;
-        } else if (config.checks && !config.steps) {
-          config.steps = config.checks;
-        }
-        return config;
-      }
-    };
-  }
-});
-
-// src/generated/config-schema.ts
-var config_schema_exports = {};
-__export(config_schema_exports, {
-  configSchema: () => configSchema,
-  default: () => config_schema_default
-});
-var configSchema, config_schema_default;
-var init_config_schema = __esm({
-  "src/generated/config-schema.ts"() {
-    "use strict";
-    configSchema = {
-      $schema: "http://json-schema.org/draft-07/schema#",
-      $ref: "#/definitions/VisorConfigSchema",
-      definitions: {
-        VisorConfigSchema: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            hooks: {
-              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E"
-            },
-            version: {
-              type: "string",
-              description: "Configuration version"
-            },
-            extends: {
-              anyOf: [
-                {
-                  type: "string"
-                },
-                {
-                  type: "array",
-                  items: {
-                    type: "string"
-                  }
-                }
-              ],
-              description: 'Extends from other configurations - can be file path, HTTP(S) URL, or "default"'
-            },
-            include: {
-              anyOf: [
-                {
-                  type: "string"
-                },
-                {
-                  type: "array",
-                  items: {
-                    type: "string"
-                  }
-                }
-              ],
-              description: "Alias for extends - include from other configurations (backward compatibility)"
-            },
-            tools: {
-              $ref: "#/definitions/Record%3Cstring%2CCustomToolDefinition%3E",
-              description: "Custom tool definitions that can be used in MCP blocks"
-            },
-            imports: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "Import workflow definitions from external files or URLs"
-            },
-            inputs: {
-              type: "array",
-              items: {
-                $ref: "#/definitions/WorkflowInput"
-              },
-              description: "Workflow inputs (for standalone reusable workflows)"
-            },
-            outputs: {
-              type: "array",
-              items: {
-                $ref: "#/definitions/WorkflowOutput"
-              },
-              description: "Workflow outputs (for standalone reusable workflows)"
-            },
-            steps: {
-              $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E",
-              description: "Step configurations (recommended)"
-            },
-            checks: {
-              $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E",
-              description: "Check configurations (legacy, use 'steps' instead) - always populated after normalization"
-            },
-            output: {
-              $ref: "#/definitions/OutputConfig",
-              description: "Output configuration (optional - defaults provided)"
-            },
-            http_server: {
-              $ref: "#/definitions/HttpServerConfig",
-              description: "HTTP server configuration for receiving webhooks"
-            },
-            memory: {
-              $ref: "#/definitions/MemoryConfig",
-              description: "Memory storage configuration"
-            },
-            env: {
-              $ref: "#/definitions/EnvConfig",
-              description: "Global environment variables"
-            },
-            ai_model: {
-              type: "string",
-              description: "Global AI model setting"
-            },
-            ai_provider: {
-              type: "string",
-              description: "Global AI provider setting"
-            },
-            ai_mcp_servers: {
-              $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
-              description: "Global MCP servers configuration for AI checks"
-            },
-            max_parallelism: {
-              type: "number",
-              description: "Maximum number of checks to run in parallel (default: 3)"
-            },
-            fail_fast: {
-              type: "boolean",
-              description: "Stop execution when any check fails (default: false)"
-            },
-            fail_if: {
-              type: "string",
-              description: "Simple global fail condition - fails if expression evaluates to true"
-            },
-            failure_conditions: {
-              $ref: "#/definitions/FailureConditions",
-              description: "Global failure conditions - optional (deprecated, use fail_if)"
-            },
-            tag_filter: {
-              $ref: "#/definitions/TagFilter",
-              description: "Tag filter for selective check execution"
-            },
-            routing: {
-              $ref: "#/definitions/RoutingDefaults",
-              description: "Optional routing defaults for retry/goto/run policies"
-            },
-            limits: {
-              $ref: "#/definitions/LimitsConfig",
-              description: "Global execution limits"
-            },
-            frontends: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  name: {
-                    type: "string",
-                    description: "Frontend name, e.g., 'ndjson-sink', 'github'"
-                  },
-                  config: {
-                    description: "Frontend-specific configuration"
-                  }
-                },
-                required: ["name"],
-                additionalProperties: false
-              },
-              description: "Optional integrations: event-driven frontends (e.g., ndjson-sink, github)"
-            },
-            workspace: {
-              $ref: "#/definitions/WorkspaceConfig",
-              description: "Workspace isolation configuration for sandboxed execution"
-            },
-            slack: {
-              $ref: "#/definitions/SlackConfig",
-              description: "Slack configuration"
-            }
-          },
-          required: ["version"],
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        "Record<string,unknown>": {
-          type: "object",
-          additionalProperties: {}
-        },
-        "Record<string,CustomToolDefinition>": {
-          type: "object",
-          additionalProperties: {
-            $ref: "#/definitions/CustomToolDefinition"
-          }
-        },
-        CustomToolDefinition: {
-          type: "object",
-          properties: {
-            name: {
-              type: "string",
-              description: "Tool name - used to reference the tool in MCP blocks"
-            },
-            description: {
-              type: "string",
-              description: "Description of what the tool does"
-            },
-            inputSchema: {
-              type: "object",
-              properties: {
-                type: {
-                  type: "string",
-                  const: "object"
-                },
-                properties: {
-                  $ref: "#/definitions/Record%3Cstring%2Cunknown%3E"
-                },
-                required: {
-                  type: "array",
-                  items: {
-                    type: "string"
-                  }
-                },
-                additionalProperties: {
-                  type: "boolean"
-                }
-              },
-              required: ["type"],
-              additionalProperties: false,
-              description: "Input schema for the tool (JSON Schema format)",
-              patternProperties: {
-                "^x-": {}
-              }
-            },
-            exec: {
-              type: "string",
-              description: "Command to execute - supports Liquid template"
-            },
-            stdin: {
-              type: "string",
-              description: "Optional stdin input - supports Liquid template"
-            },
-            transform: {
-              type: "string",
-              description: "Transform the raw output - supports Liquid template"
-            },
-            transform_js: {
-              type: "string",
-              description: "Transform the output using JavaScript - alternative to transform"
-            },
-            cwd: {
-              type: "string",
-              description: "Working directory for command execution"
-            },
-            env: {
-              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
-              description: "Environment variables for the command"
-            },
-            timeout: {
-              type: "number",
-              description: "Timeout in milliseconds"
-            },
-            parseJson: {
-              type: "boolean",
-              description: "Whether to parse output as JSON automatically"
-            },
-            outputSchema: {
-              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
-              description: "Expected output schema for validation"
-            }
-          },
-          required: ["name", "exec"],
-          additionalProperties: false,
-          description: "Custom tool definition for use in MCP blocks",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        "Record<string,string>": {
-          type: "object",
-          additionalProperties: {
-            type: "string"
-          }
-        },
-        WorkflowInput: {
-          type: "object",
-          properties: {
-            name: {
-              type: "string",
-              description: "Input parameter name"
-            },
-            schema: {
-              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
-              description: "JSON Schema for the input"
-            },
-            required: {
-              type: "boolean",
-              description: "Whether this input is required"
-            },
-            default: {
-              description: "Default value if not provided"
-            },
-            description: {
-              type: "string",
-              description: "Human-readable description"
-            }
-          },
-          required: ["name"],
-          additionalProperties: false,
-          description: "Workflow input definition for standalone reusable workflows",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        WorkflowOutput: {
-          type: "object",
-          properties: {
-            name: {
-              type: "string",
-              description: "Output name"
-            },
-            description: {
-              type: "string",
-              description: "Human-readable description"
-            },
-            value: {
-              type: "string",
-              description: "Value using Liquid template syntax (references step outputs)"
-            },
-            value_js: {
-              type: "string",
-              description: "Value using JavaScript expression (alternative to value)"
-            }
-          },
-          required: ["name"],
-          additionalProperties: false,
-          description: "Workflow output definition for standalone reusable workflows",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        "Record<string,CheckConfig>": {
-          type: "object",
-          additionalProperties: {
-            $ref: "#/definitions/CheckConfig"
-          }
-        },
-        CheckConfig: {
-          type: "object",
-          properties: {
-            type: {
-              $ref: "#/definitions/ConfigCheckType",
-              description: "Type of check to perform (defaults to 'ai' if not specified)"
-            },
-            prompt: {
-              type: "string",
-              description: "AI prompt for the check - can be inline string or file path (auto-detected) - required for AI checks"
-            },
-            appendPrompt: {
-              type: "string",
-              description: "Additional prompt to append when extending configurations - merged with parent prompt"
-            },
-            exec: {
-              type: "string",
-              description: "Command execution with Liquid template support - required for command checks"
-            },
-            stdin: {
-              type: "string",
-              description: "Stdin input for tools with Liquid template support - optional for tool checks"
-            },
-            url: {
-              type: "string",
-              description: "HTTP URL - required for http output checks"
-            },
-            body: {
-              type: "string",
-              description: "HTTP body template (Liquid) - required for http output checks"
-            },
-            method: {
-              type: "string",
-              description: "HTTP method (defaults to POST)"
-            },
-            headers: {
-              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
-              description: "HTTP headers"
-            },
-            endpoint: {
-              type: "string",
-              description: "HTTP endpoint path - required for http_input checks"
-            },
-            transform: {
-              type: "string",
-              description: "Transform template for http_input data (Liquid) - optional"
-            },
-            transform_js: {
-              type: "string",
-              description: "Transform using JavaScript expressions (evaluated in secure sandbox) - optional"
-            },
-            content: {
-              type: "string",
-              description: "Script content to execute for script checks"
-            },
-            schedule: {
-              type: "string",
-              description: 'Cron schedule expression (e.g., "0 2 * * *") - optional for any check type'
-            },
-            focus: {
-              type: "string",
-              description: "Focus area for the check (security/performance/style/architecture/all) - optional"
-            },
-            command: {
-              type: "string",
-              description: 'Command that triggers this check (e.g., "review", "security-scan") - optional'
-            },
-            on: {
-              type: "array",
-              items: {
-                $ref: "#/definitions/EventTrigger"
-              },
-              description: "Events that trigger this check (defaults to ['manual'] if not specified)"
-            },
-            triggers: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "File patterns that trigger this check (optional)"
-            },
-            ai: {
-              $ref: "#/definitions/AIProviderConfig",
-              description: "AI provider configuration (optional)"
-            },
-            ai_model: {
-              type: "string",
-              description: "AI model to use for this check - overrides global setting"
-            },
-            ai_provider: {
-              type: "string",
-              description: "AI provider to use for this check - overrides global setting"
-            },
-            ai_persona: {
-              type: "string",
-              description: "Optional persona hint, prepended to the prompt as 'Persona: <value>'"
-            },
-            ai_prompt_type: {
-              type: "string",
-              description: "Probe promptType for this check (underscore style)"
-            },
-            ai_system_prompt: {
-              type: "string",
-              description: "System prompt for this check (underscore style)"
-            },
-            ai_custom_prompt: {
-              type: "string",
-              description: "Legacy customPrompt (underscore style) \u2014 deprecated, use ai_system_prompt"
-            },
-            ai_mcp_servers: {
-              $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
-              description: "MCP servers for this AI check - overrides global setting"
-            },
-            ai_custom_tools: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "List of custom tool names to expose to this AI check via ephemeral SSE MCP server"
-            },
-            claude_code: {
-              $ref: "#/definitions/ClaudeCodeConfig",
-              description: "Claude Code configuration (for claude-code type checks)"
-            },
-            env: {
-              $ref: "#/definitions/EnvConfig",
-              description: "Environment variables for this check"
-            },
-            timeout: {
-              type: "number",
-              description: "Timeout in milliseconds for command execution (default: 60000, i.e., 60 seconds)"
-            },
-            depends_on: {
-              anyOf: [
-                {
-                  type: "string"
-                },
-                {
-                  type: "array",
-                  items: {
-                    type: "string"
-                  }
-                }
-              ],
-              description: "Check IDs that this check depends on (optional). Accepts single string or array."
-            },
-            group: {
-              type: "string",
-              description: 'Group name for comment separation (e.g., "code-review", "pr-overview") - optional'
-            },
-            schema: {
-              anyOf: [
-                {
-                  type: "string"
-                },
-                {
-                  $ref: "#/definitions/Record%3Cstring%2Cunknown%3E"
-                }
-              ],
-              description: 'Schema type for template rendering (e.g., "code-review", "markdown") or inline JSON schema object - optional'
-            },
-            output_schema: {
-              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
-              description: "Optional JSON Schema to validate the produced output. If omitted and `schema` is an object, the engine will treat that object as the output_schema for validation purposes while still using string schemas (e.g., 'code-review') for template selection."
-            },
-            template: {
-              $ref: "#/definitions/CustomTemplateConfig",
-              description: "Custom template configuration - optional"
-            },
-            if: {
-              type: "string",
-              description: "Condition to determine if check should run - runs if expression evaluates to true"
-            },
-            reuse_ai_session: {
-              type: ["string", "boolean"],
-              description: "Check name to reuse AI session from, or true to use first dependency (only works with depends_on)"
-            },
-            session_mode: {
-              type: "string",
-              enum: ["clone", "append"],
-              description: "How to reuse AI session: 'clone' (default, copy history) or 'append' (share history)"
-            },
-            fail_if: {
-              type: "string",
-              description: "Simple fail condition - fails check if expression evaluates to true"
-            },
-            failure_conditions: {
-              $ref: "#/definitions/FailureConditions",
-              description: "Check-specific failure conditions - optional (deprecated, use fail_if)"
-            },
-            tags: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: 'Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"])'
-            },
-            criticality: {
-              type: "string",
-              enum: ["external", "internal", "policy", "info"],
-              description: "Operational criticality of this step. Drives default safety policies (contracts, retries, loop budgets) at load time. Behavior can still be overridden explicitly per step via on_*, fail_if, assume/guarantee, etc.\n\n- 'external': interacts with external systems (side effects). Highest safety.\n- 'internal': modifies CI/config/state but not prod. High safety.\n- 'policy': organizational checks (linting, style, doc). Moderate safety.\n- 'info': informational checks. Lowest safety."
-            },
-            continue_on_failure: {
-              type: "boolean",
-              description: "Allow dependents to run even if this step fails. Defaults to false (dependents are gated when this step fails). Similar to GitHub Actions' continue-on-error."
-            },
-            forEach: {
-              type: "boolean",
-              description: "Process output as array and run dependent checks for each item"
-            },
-            fanout: {
-              type: "string",
-              enum: ["map", "reduce"],
-              description: "Control scheduling behavior when this check is triggered via routing (run/goto) from a forEach scope.\n- 'map': schedule once per item (fan-out) using item scopes.\n- 'reduce': schedule a single run at the parent scope (aggregation). If unset, the current default is a single run (reduce) for backward compatibility."
-            },
-            reduce: {
-              type: "boolean",
-              description: "Alias for fanout: 'reduce'"
-            },
-            on_init: {
-              $ref: "#/definitions/OnInitConfig",
-              description: "Init routing configuration for this check (runs before execution/preprocessing)"
-            },
-            on_fail: {
-              $ref: "#/definitions/OnFailConfig",
-              description: "Failure routing configuration for this check (retry/goto/run)"
-            },
-            on_success: {
-              $ref: "#/definitions/OnSuccessConfig",
-              description: "Success routing configuration for this check (post-actions and optional goto)"
-            },
-            on_finish: {
-              $ref: "#/definitions/OnFinishConfig",
-              description: "Finish routing configuration for forEach checks (runs after ALL iterations complete)"
-            },
-            assume: {
-              anyOf: [
-                {
-                  type: "string"
-                },
-                {
-                  type: "array",
-                  items: {
-                    type: "string"
-                  }
-                }
-              ],
-              description: "Preconditions that must hold before executing the check. If any expression evaluates to false, the check is skipped (skipReason='assume')."
-            },
-            guarantee: {
-              anyOf: [
-                {
-                  type: "string"
-                },
-                {
-                  type: "array",
-                  items: {
-                    type: "string"
-                  }
-                }
-              ],
-              description: 'Postconditions that should hold after executing the check. Expressions are evaluated against the produced result/output; violations are recorded as error issues with ruleId "contract/guarantee_failed".'
-            },
-            max_runs: {
-              type: "number",
-              description: "Hard cap on how many times this check may execute within a single engine run. Overrides global limits.max_runs_per_check. Set to 0 or negative to disable for this step."
-            },
-            message: {
-              type: "string",
-              description: "Message template for log checks"
-            },
-            level: {
-              type: "string",
-              enum: ["debug", "info", "warn", "error"],
-              description: "Log level for log checks"
-            },
-            include_pr_context: {
-              type: "boolean",
-              description: "Include PR context in log output"
-            },
-            include_dependencies: {
-              type: "boolean",
-              description: "Include dependency summaries in log output"
-            },
-            include_metadata: {
-              type: "boolean",
-              description: "Include execution metadata in log output"
-            },
-            output_format: {
-              type: "string",
-              enum: ["json", "text"],
-              description: "Output parsing hint for command provider (optional) When set to 'json', command stdout is expected to be JSON. When 'text', treat as plain text. Note: command provider attempts JSON parsing heuristically; this flag mainly suppresses schema warnings and may be used by providers to alter parsing behavior in the future."
-            },
-            operation: {
-              type: "string",
-              enum: ["get", "set", "append", "increment", "delete", "clear", "list"],
-              description: "Memory operation to perform. Use `type: 'script'` for custom JavaScript."
-            },
-            key: {
-              type: "string",
-              description: "Key for memory operation"
-            },
-            value: {
-              description: "Value for set/append operations"
-            },
-            value_js: {
-              type: "string",
-              description: "JavaScript expression to compute value dynamically"
-            },
-            namespace: {
-              type: "string",
-              description: "Override namespace for this check"
-            },
-            op: {
-              type: "string",
-              description: "GitHub operation to perform (e.g., 'labels.add', 'labels.remove', 'comment.create')"
-            },
-            values: {
-              anyOf: [
-                {
-                  type: "array",
-                  items: {
-                    type: "string"
-                  }
-                },
-                {
-                  type: "string"
-                }
-              ],
-              description: "Values for GitHub operations (can be array or single value)"
-            },
-            transport: {
-              type: "string",
-              enum: ["stdio", "sse", "http"],
-              description: "Transport type for MCP: stdio (default), sse (legacy), or http (streamable HTTP)"
-            },
-            methodArgs: {
-              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
-              description: "Arguments to pass to the MCP method (supports Liquid templates)"
-            },
-            argsTransform: {
-              type: "string",
-              description: "Transform template for method arguments (Liquid)"
-            },
-            sessionId: {
-              type: "string",
-              description: "Session ID for HTTP transport (optional, server may generate one)"
-            },
-            command_args: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "Command arguments (for stdio transport in MCP checks)"
-            },
-            workingDirectory: {
-              type: "string",
-              description: "Working directory (for stdio transport in MCP checks)"
-            },
-            placeholder: {
-              type: "string",
-              description: "Placeholder text to show in input field"
-            },
-            allow_empty: {
-              type: "boolean",
-              description: "Allow empty input (default: false)"
-            },
-            multiline: {
-              type: "boolean",
-              description: "Support multiline input (default: false)"
-            },
-            default: {
-              type: "string",
-              description: "Default value if timeout occurs or empty input when allow_empty is true"
-            },
-            workflow: {
-              type: "string",
-              description: "Workflow ID or path to workflow file"
-            },
-            args: {
-              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
-              description: "Arguments/inputs for the workflow"
-            },
-            overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E",
-              description: "Override specific step configurations in the workflow"
-            },
-            output_mapping: {
-              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
-              description: "Map workflow outputs to check outputs"
-            },
-            workflow_inputs: {
-              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
-              description: "Alias for args - workflow inputs (backward compatibility)"
-            },
-            config: {
-              type: "string",
-              description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
-            },
-            workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E",
-              description: "Alias for overrides - workflow step overrides (backward compatibility)"
-            },
-            ref: {
-              type: "string",
-              description: "Git reference to checkout (branch, tag, commit SHA) - supports templates"
-            },
-            repository: {
-              type: "string",
-              description: "Repository URL or owner/repo format (defaults to current repository)"
-            },
-            token: {
-              type: "string",
-              description: "GitHub token for private repositories (defaults to GITHUB_TOKEN env)"
-            },
-            fetch_depth: {
-              type: "number",
-              description: "Number of commits to fetch (0 for full history, default: 1)"
-            },
-            fetch_tags: {
-              type: "boolean",
-              description: "Whether to fetch tags (default: false)"
-            },
-            submodules: {
-              anyOf: [
-                {
-                  type: "boolean"
-                },
-                {
-                  type: "string",
-                  const: "recursive"
-                }
-              ],
-              description: "Checkout submodules: false, true, or 'recursive'"
-            },
-            working_directory: {
-              type: "string",
-              description: "Working directory for the checkout (defaults to temp directory)"
-            },
-            use_worktree: {
-              type: "boolean",
-              description: "Use git worktree for efficient parallel checkouts (default: true)"
-            },
-            clean: {
-              type: "boolean",
-              description: "Clean the working directory before checkout (default: true)"
-            },
-            sparse_checkout: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "Sparse checkout paths - only checkout specific directories/files"
-            },
-            lfs: {
-              type: "boolean",
-              description: "Enable Git LFS (Large File Storage)"
-            },
-            clone_timeout_ms: {
-              type: "number",
-              description: "Timeout in ms for cloning the bare repository (default: 300000 = 5 min)"
-            },
-            cleanup_on_failure: {
-              type: "boolean",
-              description: "Clean up worktree on failure (default: true)"
-            },
-            persist_worktree: {
-              type: "boolean",
-              description: "Keep worktree after workflow completion (default: false)"
-            }
-          },
-          additionalProperties: false,
-          description: "Configuration for a single check",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        ConfigCheckType: {
-          type: "string",
-          enum: [
-            "ai",
-            "command",
-            "script",
-            "http",
-            "http_input",
-            "http_client",
-            "noop",
-            "log",
-            "memory",
-            "github",
-            "claude-code",
-            "mcp",
-            "human-input",
-            "workflow",
-            "git-checkout"
-          ],
-          description: "Valid check types in configuration"
-        },
-        EventTrigger: {
-          type: "string",
-          enum: [
-            "pr_opened",
-            "pr_updated",
-            "pr_closed",
-            "issue_opened",
-            "issue_comment",
-            "manual",
-            "schedule",
-            "webhook_received"
-          ],
-          description: "Valid event triggers for checks"
-        },
-        AIProviderConfig: {
-          type: "object",
-          properties: {
-            provider: {
-              type: "string",
-              enum: ["google", "anthropic", "openai", "bedrock", "mock"],
-              description: "AI provider to use"
-            },
-            model: {
-              type: "string",
-              description: "Model name to use"
-            },
-            apiKey: {
-              type: "string",
-              description: "API key (usually from environment variables)"
-            },
-            timeout: {
-              type: "number",
-              description: "Request timeout in milliseconds"
-            },
-            debug: {
-              type: "boolean",
-              description: "Enable debug mode"
-            },
-            prompt_type: {
-              type: "string",
-              description: "Probe promptType to use (e.g., engineer, code-review, architect)"
-            },
-            system_prompt: {
-              type: "string",
-              description: "System prompt (baseline preamble). Replaces legacy custom_prompt."
-            },
-            custom_prompt: {
-              type: "string",
-              description: "Probe customPrompt (baseline/system prompt) \u2014 deprecated, use system_prompt"
-            },
-            skip_code_context: {
-              type: "boolean",
-              description: "Skip adding code context (diffs, files, PR info) to the prompt"
-            },
-            skip_slack_context: {
-              type: "boolean",
-              description: "Skip adding Slack conversation context to the prompt (when running under Slack)"
-            },
-            skip_transport_context: {
-              type: "boolean",
-              description: "Skip adding transport-specific context (e.g., GitHub PR/issue XML, Slack conversation XML) to the prompt. When true, this behaves like setting both skip_code_context and skip_slack_context to true, unless those are explicitly overridden."
-            },
-            mcpServers: {
-              $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
-              description: "MCP servers configuration"
-            },
-            enableDelegate: {
-              type: "boolean",
-              description: "Enable the delegate tool for task distribution to subagents"
-            },
-            retry: {
-              $ref: "#/definitions/AIRetryConfig",
-              description: "Retry configuration for this provider"
-            },
-            fallback: {
-              $ref: "#/definitions/AIFallbackConfig",
-              description: "Fallback configuration for provider failures"
-            },
-            allowEdit: {
-              type: "boolean",
-              description: "Enable Edit and Create tools for file modification (disabled by default for security)"
-            },
-            allowedTools: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "Filter allowed tools - supports whitelist, exclusion (!prefix), or raw AI mode (empty array)"
-            },
-            disableTools: {
-              type: "boolean",
-              description: "Disable all tools for raw AI mode (alternative to allowedTools: [])"
-            },
-            allowBash: {
-              type: "boolean",
-              description: "Enable bash command execution (shorthand for bashConfig.enabled)"
-            },
-            bashConfig: {
-              $ref: "#/definitions/BashConfig",
-              description: "Advanced bash command execution configuration"
-            },
-            completion_prompt: {
-              type: "string",
-              description: "Completion prompt for post-completion validation/review (runs after attempt_completion)"
-            }
-          },
-          additionalProperties: false,
-          description: "AI provider configuration",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        "Record<string,McpServerConfig>": {
-          type: "object",
-          additionalProperties: {
-            $ref: "#/definitions/McpServerConfig"
-          }
-        },
-        McpServerConfig: {
-          type: "object",
-          properties: {
-            command: {
-              type: "string",
-              description: "Command to execute for the MCP server"
-            },
-            args: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "Arguments to pass to the command"
-            },
-            env: {
-              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
-              description: "Environment variables for the MCP server"
-            }
-          },
-          required: ["command"],
-          additionalProperties: false,
-          description: "MCP Server configuration",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        AIRetryConfig: {
-          type: "object",
-          properties: {
-            maxRetries: {
-              type: "number",
-              description: "Maximum retry attempts (0-50)"
-            },
-            initialDelay: {
-              type: "number",
-              description: "Initial delay in milliseconds (0-60000)"
-            },
-            maxDelay: {
-              type: "number",
-              description: "Maximum delay cap in milliseconds (0-300000)"
-            },
-            backoffFactor: {
-              type: "number",
-              description: "Exponential backoff multiplier (1-10)"
-            },
-            retryableErrors: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "Custom error patterns to retry on"
-            }
-          },
-          additionalProperties: false,
-          description: "Retry configuration for AI provider calls",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        AIFallbackConfig: {
-          type: "object",
-          properties: {
-            strategy: {
-              type: "string",
-              enum: ["same-model", "same-provider", "any", "custom"],
-              description: "Fallback strategy: 'same-model', 'same-provider', 'any', or 'custom'"
-            },
-            providers: {
-              type: "array",
-              items: {
-                $ref: "#/definitions/AIFallbackProviderConfig"
-              },
-              description: "Array of fallback provider configurations"
-            },
-            maxTotalAttempts: {
-              type: "number",
-              description: "Maximum total attempts across all providers"
-            },
-            auto: {
-              type: "boolean",
-              description: "Enable automatic fallback using available environment variables"
-            }
-          },
-          additionalProperties: false,
-          description: "Fallback configuration for AI providers",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        AIFallbackProviderConfig: {
-          type: "object",
-          properties: {
-            provider: {
-              type: "string",
-              enum: ["google", "anthropic", "openai", "bedrock"],
-              description: "AI provider to use"
-            },
-            model: {
-              type: "string",
-              description: "Model name to use"
-            },
-            apiKey: {
-              type: "string",
-              description: "API key for this provider"
-            },
-            maxRetries: {
-              type: "number",
-              description: "Per-provider retry override"
-            },
-            region: {
-              type: "string",
-              description: "AWS region (for Bedrock)"
-            },
-            accessKeyId: {
-              type: "string",
-              description: "AWS access key ID (for Bedrock)"
-            },
-            secretAccessKey: {
-              type: "string",
-              description: "AWS secret access key (for Bedrock)"
-            }
-          },
-          required: ["provider", "model"],
-          additionalProperties: false,
-          description: "Fallback provider configuration",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        BashConfig: {
-          type: "object",
-          properties: {
-            allow: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "Array of permitted command patterns (e.g., ['ls', 'git status'])"
-            },
-            deny: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "Array of blocked command patterns (e.g., ['rm -rf', 'sudo'])"
-            },
-            noDefaultAllow: {
-              type: "boolean",
-              description: "Disable default safe command list (use with caution)"
-            },
-            noDefaultDeny: {
-              type: "boolean",
-              description: "Disable default dangerous command blocklist (use with extreme caution)"
-            },
-            timeout: {
-              type: "number",
-              description: "Execution timeout in milliseconds"
-            },
-            workingDirectory: {
-              type: "string",
-              description: "Default working directory for command execution"
-            }
-          },
-          additionalProperties: false,
-          description: "Bash command execution configuration for ProbeAgent Note: Use 'allowBash: true' in AIProviderConfig to enable bash execution",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        ClaudeCodeConfig: {
-          type: "object",
-          properties: {
-            allowedTools: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "List of allowed tools for Claude Code to use"
-            },
-            maxTurns: {
-              type: "number",
-              description: "Maximum number of turns in conversation"
-            },
-            systemPrompt: {
-              type: "string",
-              description: "System prompt for Claude Code"
-            },
-            mcpServers: {
-              $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
-              description: "MCP servers configuration"
-            },
-            subagent: {
-              type: "string",
-              description: "Path to subagent script"
-            },
-            enableDelegate: {
-              type: "boolean",
-              description: "Enable the delegate tool for task distribution to subagents"
-            },
-            hooks: {
-              type: "object",
-              properties: {
-                onStart: {
-                  type: "string",
-                  description: "Called when check starts"
-                },
-                onEnd: {
-                  type: "string",
-                  description: "Called when check ends"
-                },
-                onError: {
-                  type: "string",
-                  description: "Called when check encounters an error"
-                }
-              },
-              additionalProperties: false,
-              description: "Event hooks for lifecycle management",
-              patternProperties: {
-                "^x-": {}
-              }
-            }
-          },
-          additionalProperties: false,
-          description: "Claude Code configuration",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        EnvConfig: {
-          type: "object",
-          additionalProperties: {
-            type: ["string", "number", "boolean"]
-          },
-          description: "Environment variable reference configuration"
-        },
-        CustomTemplateConfig: {
-          type: "object",
-          properties: {
-            file: {
-              type: "string",
-              description: "Path to custom template file (relative to config file or absolute)"
-            },
-            content: {
-              type: "string",
-              description: "Raw template content as string"
-            }
-          },
-          additionalProperties: false,
-          description: "Custom template configuration",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        FailureConditions: {
-          type: "object",
-          additionalProperties: {
-            $ref: "#/definitions/FailureCondition"
-          },
-          description: "Collection of failure conditions"
-        },
-        FailureCondition: {
-          anyOf: [
-            {
-              $ref: "#/definitions/SimpleFailureCondition"
-            },
-            {
-              $ref: "#/definitions/ComplexFailureCondition"
-            }
-          ],
-          description: "Failure condition - can be a simple expression string or complex object"
-        },
-        SimpleFailureCondition: {
-          type: "string",
-          description: "Simple failure condition - just an expression string"
-        },
-        ComplexFailureCondition: {
-          type: "object",
-          properties: {
-            condition: {
-              type: "string",
-              description: "Expression to evaluate using Function Constructor"
-            },
-            message: {
-              type: "string",
-              description: "Human-readable message when condition is met"
-            },
-            severity: {
-              $ref: "#/definitions/FailureConditionSeverity",
-              description: "Severity level of the failure"
-            },
-            halt_execution: {
-              type: "boolean",
-              description: "Whether this condition should halt execution"
-            }
-          },
-          required: ["condition"],
-          additionalProperties: false,
-          description: "Complex failure condition with additional metadata",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        FailureConditionSeverity: {
-          type: "string",
-          enum: ["error", "warning", "info"],
-          description: "Failure condition severity levels"
-        },
-        OnInitConfig: {
-          type: "object",
-          properties: {
-            run: {
-              type: "array",
-              items: {
-                $ref: "#/definitions/OnInitRunItem"
-              },
-              description: "Items to run before this check executes"
-            },
-            run_js: {
-              type: "string",
-              description: "Dynamic init items: JS expression returning OnInitRunItem[]"
-            },
-            transitions: {
-              type: "array",
-              items: {
-                $ref: "#/definitions/TransitionRule"
-              },
-              description: "Declarative transitions (optional, for advanced use cases)"
-            }
-          },
-          additionalProperties: false,
-          description: "Init routing configuration per check Runs BEFORE the check executes (preprocessing/setup)",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        OnInitRunItem: {
-          anyOf: [
-            {
-              $ref: "#/definitions/OnInitToolInvocation"
-            },
-            {
-              $ref: "#/definitions/OnInitStepInvocation"
-            },
-            {
-              $ref: "#/definitions/OnInitWorkflowInvocation"
-            },
-            {
-              type: "string"
-            }
-          ],
-          description: "Unified on_init run item - can be tool, step, workflow, or plain string"
-        },
-        OnInitToolInvocation: {
-          type: "object",
-          properties: {
-            tool: {
-              type: "string",
-              description: "Tool name (must exist in tools: section)"
-            },
-            with: {
-              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
-              description: "Arguments to pass to the tool (Liquid templates supported)"
-            },
-            as: {
-              type: "string",
-              description: "Custom output name (defaults to tool name)"
-            }
-          },
-          required: ["tool"],
-          additionalProperties: false,
-          description: "Invoke a custom tool (from tools: section)",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        OnInitStepInvocation: {
-          type: "object",
-          properties: {
-            step: {
-              type: "string",
-              description: "Step name (must exist in steps: section)"
-            },
-            with: {
-              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
-              description: "Arguments to pass to the step (Liquid templates supported)"
-            },
-            as: {
-              type: "string",
-              description: "Custom output name (defaults to step name)"
-            }
-          },
-          required: ["step"],
-          additionalProperties: false,
-          description: "Invoke a helper step (regular check)",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        OnInitWorkflowInvocation: {
-          type: "object",
-          properties: {
-            workflow: {
-              type: "string",
-              description: "Workflow ID or path"
-            },
-            with: {
-              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
-              description: "Workflow inputs (Liquid templates supported)"
-            },
-            as: {
-              type: "string",
-              description: "Custom output name (defaults to workflow name)"
-            },
-            overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E",
-              description: "Step overrides"
-            },
-            output_mapping: {
-              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
-              description: "Output mapping"
-            }
-          },
-          required: ["workflow"],
-          additionalProperties: false,
-          description: "Invoke a reusable workflow",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        "Record<string,Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182>>": {
-          type: "object",
-          additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E"
-          }
-        },
-        "Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182>": {
-          type: "object",
-          additionalProperties: false
-        },
-        TransitionRule: {
-          type: "object",
-          properties: {
-            when: {
-              type: "string",
-              description: "JavaScript expression evaluated in the same sandbox as goto_js; truthy enables the rule."
-            },
-            to: {
-              type: ["string", "null"],
-              description: "Target step ID, or null to explicitly prevent goto."
-            },
-            goto_event: {
-              $ref: "#/definitions/EventTrigger",
-              description: "Optional event override when performing goto."
-            }
-          },
-          required: ["when"],
-          additionalProperties: false,
-          description: "Declarative transition rule for on_* blocks.",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        OnFailConfig: {
-          type: "object",
-          properties: {
-            retry: {
-              $ref: "#/definitions/RetryPolicy",
-              description: "Retry policy"
-            },
-            run: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "Remediation steps to run before reattempt"
-            },
-            goto: {
-              type: "string",
-              description: "Jump back to an ancestor step (by id)"
-            },
-            goto_event: {
-              $ref: "#/definitions/EventTrigger",
-              description: "Simulate a different event when performing goto (e.g., 'pr_updated')"
-            },
-            goto_js: {
-              type: "string",
-              description: "Dynamic goto: JS expression returning step id or null"
-            },
-            run_js: {
-              type: "string",
-              description: "Dynamic remediation list: JS expression returning string[]"
-            },
-            transitions: {
-              type: "array",
-              items: {
-                $ref: "#/definitions/TransitionRule"
-              },
-              description: "Declarative transitions. Evaluated in order; first matching rule wins. If a rule's `to` is null, no goto occurs. When omitted or none match, the engine falls back to goto_js/goto for backward compatibility."
-            }
-          },
-          additionalProperties: false,
-          description: "Failure routing configuration per check",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        RetryPolicy: {
-          type: "object",
-          properties: {
-            max: {
-              type: "number",
-              description: "Maximum retry attempts (excluding the first attempt)"
-            },
-            backoff: {
-              $ref: "#/definitions/BackoffPolicy",
-              description: "Backoff policy"
-            }
-          },
-          additionalProperties: false,
-          description: "Retry policy for a step",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        BackoffPolicy: {
-          type: "object",
-          properties: {
-            mode: {
-              type: "string",
-              enum: ["fixed", "exponential"],
-              description: "Backoff mode"
-            },
-            delay_ms: {
-              type: "number",
-              description: "Initial delay in milliseconds"
-            }
-          },
-          additionalProperties: false,
-          description: "Backoff policy for retries",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        OnSuccessConfig: {
-          type: "object",
-          properties: {
-            run: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "Post-success steps to run"
-            },
-            goto: {
-              type: "string",
-              description: "Optional jump back to ancestor step (by id)"
-            },
-            goto_event: {
-              $ref: "#/definitions/EventTrigger",
-              description: "Simulate a different event when performing goto (e.g., 'pr_updated')"
-            },
-            goto_js: {
-              type: "string",
-              description: "Dynamic goto: JS expression returning step id or null"
-            },
-            run_js: {
-              type: "string",
-              description: "Dynamic post-success steps: JS expression returning string[]"
-            },
-            transitions: {
-              type: "array",
-              items: {
-                $ref: "#/definitions/TransitionRule"
-              },
-              description: "Declarative transitions (see OnFailConfig.transitions)."
-            }
-          },
-          additionalProperties: false,
-          description: "Success routing configuration per check",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        OnFinishConfig: {
-          type: "object",
-          properties: {
-            run: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "Post-finish steps to run"
-            },
-            goto: {
-              type: "string",
-              description: "Optional jump back to ancestor step (by id)"
-            },
-            goto_event: {
-              $ref: "#/definitions/EventTrigger",
-              description: "Simulate a different event when performing goto (e.g., 'pr_updated')"
-            },
-            goto_js: {
-              type: "string",
-              description: "Dynamic goto: JS expression returning step id or null"
-            },
-            run_js: {
-              type: "string",
-              description: "Dynamic post-finish steps: JS expression returning string[]"
-            },
-            transitions: {
-              type: "array",
-              items: {
-                $ref: "#/definitions/TransitionRule"
-              },
-              description: "Declarative transitions (see OnFailConfig.transitions)."
-            }
-          },
-          additionalProperties: false,
-          description: "Finish routing configuration for forEach checks Runs once after ALL iterations of forEach and ALL dependent checks complete",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        OutputConfig: {
-          type: "object",
-          properties: {
-            pr_comment: {
-              $ref: "#/definitions/PrCommentOutput",
-              description: "PR comment configuration"
-            },
-            file_comment: {
-              $ref: "#/definitions/FileCommentOutput",
-              description: "File comment configuration (optional)"
-            },
-            github_checks: {
-              $ref: "#/definitions/GitHubCheckOutput",
-              description: "GitHub check runs configuration (optional)"
-            },
-            suppressionEnabled: {
-              type: "boolean",
-              description: "Whether to enable issue suppression via visor-disable comments (default: true)"
-            }
-          },
-          required: ["pr_comment"],
-          additionalProperties: false,
-          description: "Output configuration",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        PrCommentOutput: {
-          type: "object",
-          properties: {
-            enabled: {
-              type: "boolean",
-              description: "Whether PR comments are enabled"
-            },
-            format: {
-              $ref: "#/definitions/ConfigOutputFormat",
-              description: "Format of the output"
-            },
-            group_by: {
-              $ref: "#/definitions/GroupByOption",
-              description: "How to group the results"
-            },
-            collapse: {
-              type: "boolean",
-              description: "Whether to collapse sections by default"
-            },
-            debug: {
-              $ref: "#/definitions/DebugConfig",
-              description: "Debug mode configuration (optional)"
-            }
-          },
-          required: ["format", "group_by", "collapse"],
-          additionalProperties: false,
-          description: "PR comment output configuration",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        ConfigOutputFormat: {
-          type: "string",
-          enum: ["table", "json", "markdown", "sarif"],
-          description: "Valid output formats"
-        },
-        GroupByOption: {
-          type: "string",
-          enum: ["check", "file", "severity", "group"],
-          description: "Valid grouping options"
-        },
-        DebugConfig: {
-          type: "object",
-          properties: {
-            enabled: {
-              type: "boolean",
-              description: "Enable debug mode"
-            },
-            includePrompts: {
-              type: "boolean",
-              description: "Include AI prompts in debug output"
-            },
-            includeRawResponses: {
-              type: "boolean",
-              description: "Include raw AI responses in debug output"
-            },
-            includeTiming: {
-              type: "boolean",
-              description: "Include timing information"
-            },
-            includeProviderInfo: {
-              type: "boolean",
-              description: "Include provider information"
-            }
-          },
-          required: [
-            "enabled",
-            "includePrompts",
-            "includeRawResponses",
-            "includeTiming",
-            "includeProviderInfo"
-          ],
-          additionalProperties: false,
-          description: "Debug mode configuration",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        FileCommentOutput: {
-          type: "object",
-          properties: {
-            enabled: {
-              type: "boolean",
-              description: "Whether file comments are enabled"
-            },
-            inline: {
-              type: "boolean",
-              description: "Whether to show inline comments"
-            }
-          },
-          required: ["enabled", "inline"],
-          additionalProperties: false,
-          description: "File comment output configuration",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        GitHubCheckOutput: {
-          type: "object",
-          properties: {
-            enabled: {
-              type: "boolean",
-              description: "Whether GitHub check runs are enabled"
-            },
-            per_check: {
-              type: "boolean",
-              description: "Whether to create individual check runs per configured check"
-            },
-            name_prefix: {
-              type: "string",
-              description: "Custom name prefix for check runs"
-            }
-          },
-          required: ["enabled", "per_check"],
-          additionalProperties: false,
-          description: "GitHub Check Runs output configuration",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        HttpServerConfig: {
-          type: "object",
-          properties: {
-            enabled: {
-              type: "boolean",
-              description: "Whether HTTP server is enabled"
-            },
-            port: {
-              type: "number",
-              description: "Port to listen on"
-            },
-            host: {
-              type: "string",
-              description: "Host/IP to bind to (defaults to 0.0.0.0)"
-            },
-            tls: {
-              $ref: "#/definitions/TlsConfig",
-              description: "TLS/SSL configuration for HTTPS"
-            },
-            auth: {
-              $ref: "#/definitions/HttpAuthConfig",
-              description: "Authentication configuration"
-            },
-            endpoints: {
-              type: "array",
-              items: {
-                $ref: "#/definitions/HttpEndpointConfig"
-              },
-              description: "HTTP endpoints configuration"
-            }
-          },
-          required: ["enabled", "port"],
-          additionalProperties: false,
-          description: "HTTP server configuration for receiving webhooks",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        TlsConfig: {
-          type: "object",
-          properties: {
-            enabled: {
-              type: "boolean",
-              description: "Enable TLS/HTTPS"
-            },
-            cert: {
-              type: "string",
-              description: "Path to TLS certificate file or certificate content"
-            },
-            key: {
-              type: "string",
-              description: "Path to TLS key file or key content"
-            },
-            ca: {
-              type: "string",
-              description: "Path to CA certificate file or CA content (optional)"
-            },
-            rejectUnauthorized: {
-              type: "boolean",
-              description: "Reject unauthorized connections (default: true)"
-            }
-          },
-          required: ["enabled"],
-          additionalProperties: false,
-          description: "TLS/SSL configuration for HTTPS server",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        HttpAuthConfig: {
-          type: "object",
-          properties: {
-            type: {
-              type: "string",
-              enum: ["bearer_token", "hmac", "basic", "none"],
-              description: "Authentication type"
-            },
-            secret: {
-              type: "string",
-              description: "Secret or token for authentication"
-            },
-            username: {
-              type: "string",
-              description: "Username for basic auth"
-            },
-            password: {
-              type: "string",
-              description: "Password for basic auth"
-            }
-          },
-          required: ["type"],
-          additionalProperties: false,
-          description: "HTTP server authentication configuration",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        HttpEndpointConfig: {
-          type: "object",
-          properties: {
-            path: {
-              type: "string",
-              description: "Path for the webhook endpoint"
-            },
-            transform: {
-              type: "string",
-              description: "Optional transform template (Liquid) for the received data"
-            },
-            name: {
-              type: "string",
-              description: "Optional name/ID for this endpoint"
-            }
-          },
-          required: ["path"],
-          additionalProperties: false,
-          description: "HTTP server endpoint configuration",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        MemoryConfig: {
-          type: "object",
-          properties: {
-            storage: {
-              type: "string",
-              enum: ["memory", "file"],
-              description: 'Storage mode: "memory" (in-memory, default) or "file" (persistent)'
-            },
-            format: {
-              type: "string",
-              enum: ["json", "csv"],
-              description: "Storage format (only for file storage, default: json)"
-            },
-            file: {
-              type: "string",
-              description: "File path (required if storage: file)"
-            },
-            namespace: {
-              type: "string",
-              description: 'Default namespace (default: "default")'
-            },
-            auto_load: {
-              type: "boolean",
-              description: "Auto-load on startup (default: true if storage: file)"
-            },
-            auto_save: {
-              type: "boolean",
-              description: "Auto-save after operations (default: true if storage: file)"
-            }
-          },
-          additionalProperties: false,
-          description: "Memory storage configuration",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        TagFilter: {
-          type: "object",
-          properties: {
-            include: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "Tags that checks must have to be included (ANY match)"
-            },
-            exclude: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "Tags that will exclude checks if present (ANY match)"
-            }
-          },
-          additionalProperties: false,
-          description: "Tag filter configuration for selective check execution",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        RoutingDefaults: {
-          type: "object",
-          properties: {
-            max_loops: {
-              type: "number",
-              description: "Per-scope cap on routing transitions (success + failure)"
-            },
-            defaults: {
-              type: "object",
-              properties: {
-                on_fail: {
-                  $ref: "#/definitions/OnFailConfig"
-                }
-              },
-              additionalProperties: false,
-              description: "Default policies applied to checks (step-level overrides take precedence)",
-              patternProperties: {
-                "^x-": {}
-              }
-            }
-          },
-          additionalProperties: false,
-          description: "Global routing defaults",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        LimitsConfig: {
-          type: "object",
-          properties: {
-            max_runs_per_check: {
-              type: "number",
-              description: "Maximum number of executions per check within a single engine run. Applies to each distinct scope independently for forEach item executions. Set to 0 or negative to disable. Default: 50."
-            },
-            max_workflow_depth: {
-              type: "number",
-              description: "Maximum nesting depth for workflows executed by the state machine engine. Nested workflows are invoked by the workflow provider; this limit prevents accidental infinite recursion. Default: 3."
-            }
-          },
-          additionalProperties: false,
-          description: "Global engine limits",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        WorkspaceConfig: {
-          type: "object",
-          properties: {
-            enabled: {
-              type: "boolean",
-              description: "Enable workspace isolation (default: true when config present)"
-            },
-            base_path: {
-              type: "string",
-              description: "Base path for workspaces (default: /tmp/visor-workspaces)"
-            },
-            name: {
-              type: "string",
-              description: "Workspace directory name (defaults to session id)"
-            },
-            main_project_name: {
-              type: "string",
-              description: "Main project folder name inside the workspace (defaults to original directory name)"
-            },
-            cleanup_on_exit: {
-              type: "boolean",
-              description: "Clean up workspace on exit (default: true)"
-            },
-            include_main_project: {
-              type: "boolean",
-              description: "Include main project worktree in AI allowed folders (default: false)"
-            }
-          },
-          additionalProperties: false,
-          description: "Workspace isolation configuration",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        SlackConfig: {
-          type: "object",
-          properties: {
-            version: {
-              type: "string",
-              description: "Slack API version"
-            },
-            mentions: {
-              type: "string",
-              description: "Mention handling: 'all', 'direct', etc."
-            },
-            threads: {
-              type: "string",
-              description: "Thread handling: 'required', 'optional', etc."
-            },
-            show_raw_output: {
-              type: "boolean",
-              description: "Show raw output in Slack responses"
-            },
-            telemetry: {
-              $ref: "#/definitions/SlackTelemetryConfig",
-              description: "Append telemetry identifiers to Slack replies."
-            }
-          },
-          additionalProperties: false,
-          description: "Slack configuration",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        SlackTelemetryConfig: {
-          type: "object",
-          properties: {
-            enabled: {
-              type: "boolean",
-              description: "Enable telemetry ID suffix in Slack messages"
-            }
-          },
-          additionalProperties: false,
-          patternProperties: {
-            "^x-": {}
-          }
-        }
-      }
-    };
-    config_schema_default = configSchema;
-  }
-});
-
-// src/config.ts
-var config_exports = {};
-__export(config_exports, {
-  ConfigManager: () => ConfigManager,
-  VALID_EVENT_TRIGGERS: () => VALID_EVENT_TRIGGERS
-});
-var yaml3, fs13, path14, import_simple_git, import_ajv3, import_ajv_formats2, VALID_EVENT_TRIGGERS, ConfigManager, __ajvValidate, __ajvErrors;
-var init_config = __esm({
-  "src/config.ts"() {
-    "use strict";
-    yaml3 = __toESM(require("js-yaml"));
-    fs13 = __toESM(require("fs"));
-    path14 = __toESM(require("path"));
-    init_logger();
-    import_simple_git = __toESM(require("simple-git"));
-    init_config_loader();
-    init_config_merger();
-    import_ajv3 = __toESM(require("ajv"));
-    import_ajv_formats2 = __toESM(require("ajv-formats"));
-    init_sandbox();
-    VALID_EVENT_TRIGGERS = [
-      "pr_opened",
-      "pr_updated",
-      "pr_closed",
-      "issue_opened",
-      "issue_comment",
-      "manual",
-      "schedule",
-      "webhook_received"
-    ];
-    ConfigManager = class {
-      validCheckTypes = [
-        "ai",
-        "claude-code",
-        "mcp",
-        "command",
-        "script",
-        "http",
-        "http_input",
-        "http_client",
-        "memory",
-        "noop",
-        "log",
-        "github",
-        "human-input",
-        "workflow",
-        "git-checkout"
-      ];
-      validEventTriggers = [...VALID_EVENT_TRIGGERS];
-      validOutputFormats = ["table", "json", "markdown", "sarif"];
-      validGroupByOptions = ["check", "file", "severity", "group"];
-      /**
-       * Load configuration from a file
-       */
-      async loadConfig(configPath, options = {}) {
-        const { validate = true, mergeDefaults = true, allowedRemotePatterns } = options;
-        const resolvedPath = path14.isAbsolute(configPath) ? configPath : path14.resolve(process.cwd(), configPath);
-        try {
-          let configContent;
-          try {
-            configContent = fs13.readFileSync(resolvedPath, "utf8");
-          } catch (readErr) {
-            if (readErr && (readErr.code === "ENOENT" || readErr.code === "ENOTDIR")) {
-              throw new Error(`Configuration file not found: ${resolvedPath}`);
-            }
-            throw new Error(
-              `Failed to read configuration file ${resolvedPath}: ${readErr?.message || String(readErr)}`
-            );
-          }
-          let parsedConfig;
-          try {
-            parsedConfig = yaml3.load(configContent);
-          } catch (yamlError) {
-            const errorMessage = yamlError instanceof Error ? yamlError.message : String(yamlError);
-            throw new Error(`Invalid YAML syntax in ${resolvedPath}: ${errorMessage}`);
-          }
-          if (!parsedConfig || typeof parsedConfig !== "object") {
-            throw new Error("Configuration file must contain a valid YAML object");
-          }
-          const extendsValue = parsedConfig.extends || parsedConfig.include;
-          if (extendsValue) {
-            const loaderOptions = {
-              baseDir: path14.dirname(resolvedPath),
-              allowRemote: this.isRemoteExtendsAllowed(),
-              maxDepth: 10,
-              allowedRemotePatterns
-            };
-            const loader = new ConfigLoader(loaderOptions);
-            const merger = new ConfigMerger();
-            const extends_ = Array.isArray(extendsValue) ? extendsValue : [extendsValue];
-            const { extends: _, include: __, ...configWithoutExtends } = parsedConfig;
-            let mergedConfig = {};
-            for (const source of extends_) {
-              console.log(`\u{1F4E6} Extending from: ${source}`);
-              const parentConfig = await loader.fetchConfig(source);
-              mergedConfig = merger.merge(mergedConfig, parentConfig);
-            }
-            parsedConfig = merger.merge(mergedConfig, configWithoutExtends);
-            parsedConfig = merger.removeDisabledChecks(parsedConfig);
-          }
-          if (parsedConfig.id && typeof parsedConfig.id === "string") {
-            parsedConfig = await this.convertWorkflowToConfig(parsedConfig, path14.dirname(resolvedPath));
-          }
-          parsedConfig = this.normalizeStepsAndChecks(parsedConfig, !!extendsValue);
-          await this.loadWorkflows(parsedConfig, path14.dirname(resolvedPath));
-          if (validate) {
-            this.validateConfig(parsedConfig);
-          }
-          let finalConfig = parsedConfig;
-          if (mergeDefaults) {
-            finalConfig = this.mergeWithDefaults(parsedConfig);
-          }
-          return finalConfig;
-        } catch (error) {
-          if (error instanceof Error) {
-            if (error.message.includes("not found") || error.message.includes("Invalid YAML") || error.message.includes("extends") || error.message.includes("EACCES") || error.message.includes("EISDIR")) {
-              throw error;
-            }
-            if (error.message.includes("ENOENT")) {
-              throw new Error(`Configuration file not found: ${resolvedPath}`);
-            }
-            if (error.message.includes("EPERM")) {
-              throw new Error(`Permission denied reading configuration file: ${resolvedPath}`);
-            }
-            throw new Error(`Failed to read configuration file ${resolvedPath}: ${error.message}`);
-          }
-          throw error;
-        }
-      }
-      /**
-       * Load configuration from an in-memory object (used by the test runner to
-       * handle co-located config + tests without writing temp files).
-       */
-      async loadConfigFromObject(obj, options = {}) {
-        const { validate = true, mergeDefaults = true, allowedRemotePatterns, baseDir } = options;
-        try {
-          let parsedConfig = JSON.parse(JSON.stringify(obj || {}));
-          if (!parsedConfig || typeof parsedConfig !== "object") {
-            throw new Error("Configuration must be a YAML/JSON object");
-          }
-          const extendsValue = parsedConfig.extends || parsedConfig.include;
-          if (extendsValue) {
-            const loaderOptions = {
-              baseDir: baseDir || process.cwd(),
-              allowRemote: this.isRemoteExtendsAllowed(),
-              maxDepth: 10,
-              allowedRemotePatterns
-            };
-            const loader = new ConfigLoader(loaderOptions);
-            const extends_ = Array.isArray(extendsValue) ? extendsValue : [extendsValue];
-            const { extends: _, include: __, ...configWithoutExtends } = parsedConfig;
-            let mergedConfig = {};
-            for (const source of extends_) {
-              console.log(`\u{1F4E6} Extending from: ${source}`);
-              const parentConfig = await loader.fetchConfig(String(source));
-              mergedConfig = new ConfigMerger().merge(mergedConfig, parentConfig);
-            }
-            parsedConfig = new ConfigMerger().merge(mergedConfig, configWithoutExtends);
-            parsedConfig = new ConfigMerger().removeDisabledChecks(parsedConfig);
-          }
-          if (parsedConfig.id && typeof parsedConfig.id === "string") {
-            parsedConfig = await this.convertWorkflowToConfig(parsedConfig, baseDir || process.cwd());
-          }
-          parsedConfig = this.normalizeStepsAndChecks(parsedConfig, !!extendsValue);
-          await this.loadWorkflows(parsedConfig, baseDir || process.cwd());
-          if (validate) this.validateConfig(parsedConfig);
-          let finalConfig = parsedConfig;
-          if (mergeDefaults) finalConfig = this.mergeWithDefaults(parsedConfig);
-          return finalConfig;
-        } catch (error) {
-          if (error instanceof Error) throw new Error(`Failed to load configuration: ${error.message}`);
-          throw error;
-        }
-      }
-      /**
-       * Find and load configuration from default locations
-       */
-      async findAndLoadConfig(options = {}) {
-        const gitRoot = await this.findGitRepositoryRoot();
-        const searchDirs = [gitRoot, process.cwd()].filter(Boolean);
-        for (const baseDir of searchDirs) {
-          const candidates = ["visor.yaml", "visor.yml", ".visor.yaml", ".visor.yml"].map(
-            (p) => path14.join(baseDir, p)
-          );
-          for (const p of candidates) {
-            try {
-              const st = fs13.statSync(p);
-              if (!st.isFile()) continue;
-              const isLegacy = path14.basename(p).startsWith(".");
-              if (isLegacy) {
-                if (process.env.VISOR_STRICT_CONFIG_NAME === "true") {
-                  const rel = path14.relative(baseDir, p);
-                  throw new Error(
-                    `Legacy config detected: ${rel}. Please rename to visor.yaml (or visor.yml).`
-                  );
-                }
-                return this.loadConfig(p, options);
-              }
-              return this.loadConfig(p, options);
-            } catch (e) {
-              if (e && e.code === "ENOENT") continue;
-              if (e) throw e;
-            }
-          }
-        }
-        const bundledConfig = this.loadBundledDefaultConfig();
-        if (bundledConfig) {
-          return bundledConfig;
-        }
-        return this.getDefaultConfig();
-      }
-      /**
-       * Find the git repository root directory
-       */
-      async findGitRepositoryRoot() {
-        try {
-          const git = (0, import_simple_git.default)();
-          const isRepo = await git.checkIsRepo();
-          if (!isRepo) {
-            return null;
-          }
-          const rootDir = await git.revparse(["--show-toplevel"]);
-          return rootDir.trim();
-        } catch {
-          return null;
-        }
-      }
-      /**
-       * Get default configuration
-       */
-      async getDefaultConfig() {
-        return {
-          version: "1.0",
-          steps: {},
-          checks: {},
-          // Keep for backward compatibility
-          max_parallelism: 3,
-          output: {
-            pr_comment: {
-              format: "markdown",
-              group_by: "check",
-              collapse: true
-            }
-          }
-        };
-      }
-      /**
-       * Load bundled default configuration from the package
-       */
-      loadBundledDefaultConfig() {
-        try {
-          const possiblePaths = [];
-          if (typeof __dirname !== "undefined") {
-            possiblePaths.push(
-              path14.join(__dirname, "defaults", "visor.yaml"),
-              path14.join(__dirname, "..", "defaults", "visor.yaml")
-            );
-          }
-          const pkgRoot = this.findPackageRoot();
-          if (pkgRoot) {
-            possiblePaths.push(path14.join(pkgRoot, "defaults", "visor.yaml"));
-          }
-          if (process.env.GITHUB_ACTION_PATH) {
-            possiblePaths.push(
-              path14.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml"),
-              path14.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml")
-            );
-          }
-          let bundledConfigPath;
-          for (const possiblePath of possiblePaths) {
-            if (fs13.existsSync(possiblePath)) {
-              bundledConfigPath = possiblePath;
-              break;
-            }
-          }
-          if (bundledConfigPath) {
-            console.error(`\u{1F4E6} Loading bundled default configuration from ${bundledConfigPath}`);
-            const readAndParse = (p) => {
-              const raw = fs13.readFileSync(p, "utf8");
-              const obj = yaml3.load(raw);
-              if (!obj || typeof obj !== "object") return {};
-              if (obj.include && !obj.extends) {
-                const inc = obj.include;
-                obj.extends = Array.isArray(inc) ? inc : [inc];
-                delete obj.include;
-              }
-              return obj;
-            };
-            const baseDir = path14.dirname(bundledConfigPath);
-            const merger = new (init_config_merger(), __toCommonJS(config_merger_exports)).ConfigMerger();
-            const loadWithExtendsSync = (p) => {
-              const current = readAndParse(p);
-              const extVal = current.extends || current.include;
-              if (current.extends !== void 0) delete current.extends;
-              if (current.include !== void 0) delete current.include;
-              if (!extVal) return current;
-              const list = Array.isArray(extVal) ? extVal : [extVal];
-              let acc = {};
-              for (const src of list) {
-                const rel = typeof src === "string" ? src : String(src);
-                const abs = path14.isAbsolute(rel) ? rel : path14.resolve(baseDir, rel);
-                const parentCfg = loadWithExtendsSync(abs);
-                acc = merger.merge(acc, parentCfg);
-              }
-              return merger.merge(acc, current);
-            };
-            let parsedConfig = loadWithExtendsSync(bundledConfigPath);
-            parsedConfig = this.normalizeStepsAndChecks(parsedConfig);
-            this.validateConfig(parsedConfig);
-            return this.mergeWithDefaults(parsedConfig);
-          }
-        } catch (error) {
-          console.warn(
-            "Failed to load bundled default config:",
-            error instanceof Error ? error.message : String(error)
-          );
-        }
-        return null;
-      }
-      /**
-       * Find the root directory of the Visor package
-       */
-      findPackageRoot() {
-        let currentDir = __dirname;
-        while (currentDir !== path14.dirname(currentDir)) {
-          const packageJsonPath = path14.join(currentDir, "package.json");
-          if (fs13.existsSync(packageJsonPath)) {
-            try {
-              const packageJson = JSON.parse(fs13.readFileSync(packageJsonPath, "utf8"));
-              if (packageJson.name === "@probelabs/visor") {
-                return currentDir;
-              }
-            } catch {
-            }
-          }
-          currentDir = path14.dirname(currentDir);
-        }
-        return null;
-      }
-      /**
-       * Convert a workflow definition file to a visor config
-       * When a workflow YAML is run standalone, register the workflow and use its tests as checks
-       */
-      async convertWorkflowToConfig(workflowData, _basePath) {
-        const { WorkflowRegistry: WorkflowRegistry2 } = await Promise.resolve().then(() => (init_workflow_registry(), workflow_registry_exports));
-        const registry = WorkflowRegistry2.getInstance();
-        const workflowId = workflowData.id;
-        logger.info(`Detected standalone workflow file: ${workflowId}`);
-        const tests = workflowData.tests || {};
-        const workflowDefinition = { ...workflowData };
-        delete workflowDefinition.tests;
-        const result = registry.register(workflowDefinition, "standalone", { override: true });
-        if (!result.valid && result.errors) {
-          const errors = result.errors.map((e) => `  ${e.path}: ${e.message}`).join("\n");
-          throw new Error(`Failed to register workflow '${workflowId}':
-${errors}`);
-        }
-        logger.info(`Registered workflow '${workflowId}' for standalone execution`);
-        const workflowSteps = workflowData.steps || {};
-        const visorConfig = {
-          version: "1.0",
-          steps: workflowSteps,
-          checks: workflowSteps,
-          tests
-          // Preserve test harness config (may be empty if stripped by test runner)
-        };
-        if (workflowData.outputs) {
-          visorConfig.outputs = workflowData.outputs;
-        }
-        if (workflowData.inputs) {
-          visorConfig.inputs = workflowData.inputs;
-        }
-        logger.debug(
-          `Standalone workflow config has ${Object.keys(workflowSteps).length} workflow steps as checks`
-        );
-        logger.debug(`Workflow step names: ${Object.keys(workflowSteps).join(", ")}`);
-        logger.debug(`Config keys after conversion: ${Object.keys(visorConfig).join(", ")}`);
-        return visorConfig;
-      }
-      /**
-       * Load and register workflows from configuration
-       */
-      async loadWorkflows(config, basePath) {
-        if (!config.imports || config.imports.length === 0) {
-          return;
-        }
-        const { WorkflowRegistry: WorkflowRegistry2 } = await Promise.resolve().then(() => (init_workflow_registry(), workflow_registry_exports));
-        const registry = WorkflowRegistry2.getInstance();
-        for (const source of config.imports) {
-          const results = await registry.import(source, { basePath, validate: true });
-          for (const result of results) {
-            if (!result.valid && result.errors) {
-              const errors = result.errors.map((e) => `  ${e.path}: ${e.message}`).join("\n");
-              throw new Error(`Failed to import workflow from '${source}':
-${errors}`);
-            }
-          }
-          logger.info(`Imported workflows from: ${source}`);
-        }
-      }
-      /**
-       * Normalize 'checks' and 'steps' keys for backward compatibility
-       * Ensures both keys are present and contain the same data
-       */
-      normalizeStepsAndChecks(config, preferChecks = false) {
-        if (config.steps && config.checks) {
-          if (preferChecks) {
-            const merged = { ...config.steps, ...config.checks };
-            config.steps = merged;
-            config.checks = merged;
-          } else {
-            config.checks = config.steps;
-            config.steps = config.steps;
-          }
-        } else if (config.steps && !config.checks) {
-          config.checks = config.steps;
-        } else if (config.checks && !config.steps) {
-          config.steps = config.checks;
-        }
-        return config;
-      }
-      /**
-       * Merge configuration with CLI options
-       */
-      mergeWithCliOptions(config, cliOptions) {
-        const mergedConfig = { ...config };
-        if (cliOptions.maxParallelism !== void 0) {
-          mergedConfig.max_parallelism = cliOptions.maxParallelism;
-        }
-        if (cliOptions.failFast !== void 0) {
-          mergedConfig.fail_fast = cliOptions.failFast;
-        }
-        return {
-          config: mergedConfig,
-          cliChecks: cliOptions.checks || [],
-          cliOutput: cliOptions.output || "table"
-        };
-      }
-      /**
-       * Load configuration with environment variable overrides
-       */
-      async loadConfigWithEnvOverrides() {
-        const environmentOverrides = {};
-        if (process.env.VISOR_CONFIG_PATH) {
-          environmentOverrides.configPath = process.env.VISOR_CONFIG_PATH;
-        }
-        if (process.env.VISOR_OUTPUT_FORMAT) {
-          environmentOverrides.outputFormat = process.env.VISOR_OUTPUT_FORMAT;
-        }
-        let config;
-        if (environmentOverrides.configPath) {
-          try {
-            config = await this.loadConfig(environmentOverrides.configPath);
-          } catch {
-            config = await this.findAndLoadConfig();
-          }
-        } else {
-          config = await this.findAndLoadConfig();
-        }
-        return { config, environmentOverrides };
-      }
-      /**
-       * Validate configuration against schema
-       * @param config The config to validate
-       * @param strict If true, treat warnings as errors (default: false)
-       */
-      validateConfig(config, strict = false) {
-        const errors = [];
-        const warnings = [];
-        this.validateWithAjvSchema(config, errors, warnings);
-        if (!config.version) {
-          errors.push({
-            field: "version",
-            message: "Missing required field: version"
-          });
-        }
-        if (!config.checks && !config.steps) {
-          errors.push({
-            field: "checks/steps",
-            message: 'Missing required field: either "checks" or "steps" must be defined. "steps" is recommended for new configurations.'
-          });
-        }
-        const checksToValidate = config.checks || config.steps;
-        if (checksToValidate) {
-          for (const [checkName, checkConfig] of Object.entries(checksToValidate)) {
-            if (!checkConfig.type) {
-              checkConfig.type = "ai";
-            }
-            this.validateCheckConfig(checkName, checkConfig, errors, config, warnings);
-            if (checkConfig.ai_mcp_servers) {
-              this.validateMcpServersObject(
-                checkConfig.ai_mcp_servers,
-                `checks.${checkName}.ai_mcp_servers`,
-                errors,
-                warnings
-              );
-            }
-            if (checkConfig.ai?.mcpServers) {
-              this.validateMcpServersObject(
-                checkConfig.ai.mcpServers,
-                `checks.${checkName}.ai.mcpServers`,
-                errors,
-                warnings
-              );
-            }
-            if (checkConfig.ai_mcp_servers && checkConfig.ai?.mcpServers) {
-              const lower = Object.keys(checkConfig.ai_mcp_servers);
-              const higher = Object.keys(checkConfig.ai.mcpServers);
-              const overridden = lower.filter((k) => higher.includes(k));
-              warnings.push({
-                field: `checks.${checkName}.ai.mcpServers`,
-                message: overridden.length > 0 ? `Both ai_mcp_servers and ai.mcpServers are set; ai.mcpServers overrides these servers: ${overridden.join(
-                  ", "
-                )}` : "Both ai_mcp_servers and ai.mcpServers are set; ai.mcpServers takes precedence for this check."
-              });
-            }
-            try {
-              const anyCheck = checkConfig;
-              const aiObj = anyCheck.ai || void 0;
-              const hasBareMcpAtCheck = Object.prototype.hasOwnProperty.call(anyCheck, "mcpServers");
-              const hasAiMcp = aiObj && Object.prototype.hasOwnProperty.call(aiObj, "mcpServers");
-              const hasClaudeCodeMcp = anyCheck.claude_code && typeof anyCheck.claude_code === "object" && Object.prototype.hasOwnProperty.call(
-                anyCheck.claude_code,
-                "mcpServers"
-              );
-              if (checkConfig.type === "ai") {
-                if (hasBareMcpAtCheck) {
-                  warnings.push({
-                    field: `checks.${checkName}.mcpServers`,
-                    message: "'mcpServers' at the check root is ignored for type 'ai'. Use 'ai.mcpServers' or 'ai_mcp_servers' instead.",
-                    value: anyCheck.mcpServers
-                  });
-                }
-                if (hasClaudeCodeMcp) {
-                  warnings.push({
-                    field: `checks.${checkName}.claude_code.mcpServers`,
-                    message: "'claude_code.mcpServers' is ignored for type 'ai'. Use 'ai.mcpServers' or 'ai_mcp_servers' instead."
-                  });
-                }
-              }
-              if (checkConfig.type === "claude-code") {
-                if (hasAiMcp || checkConfig.ai_mcp_servers) {
-                  warnings.push({
-                    field: hasAiMcp ? `checks.${checkName}.ai.mcpServers` : `checks.${checkName}.ai_mcp_servers`,
-                    message: "For type 'claude-code', MCP must be configured under 'claude_code.mcpServers'. 'ai.mcpServers' and 'ai_mcp_servers' are ignored for this check."
-                  });
-                }
-              }
-            } catch {
-            }
-          }
-        }
-        if (config.ai_mcp_servers) {
-          this.validateMcpServersObject(config.ai_mcp_servers, "ai_mcp_servers", errors, warnings);
-        }
-        if (config.output) {
-          this.validateOutputConfig(config.output, errors);
-        }
-        if (config.http_server) {
-          this.validateHttpServerConfig(
-            config.http_server,
-            errors
-          );
-        }
-        if (config.max_parallelism !== void 0) {
-          if (typeof config.max_parallelism !== "number" || config.max_parallelism < 1 || !Number.isInteger(config.max_parallelism)) {
-            errors.push({
-              field: "max_parallelism",
-              message: "max_parallelism must be a positive integer (minimum 1)",
-              value: config.max_parallelism
-            });
-          }
-        }
-        if (config.tag_filter) {
-          this.validateTagFilter(config.tag_filter, errors);
-        }
-        if (strict && warnings.length > 0) {
-          errors.push(...warnings);
-        }
-        if (errors.length > 0) {
-          throw new Error(errors[0].message);
-        }
-        if (!strict && warnings.length > 0) {
-          for (const w of warnings) {
-            logger.warn(`\u26A0\uFE0F  Config warning [${w.field}]: ${w.message}`);
-          }
-        }
-      }
-      /**
-       * Validate individual check configuration
-       */
-      validateCheckConfig(checkName, checkConfig, errors, config, _warnings) {
-        if (!checkConfig.type) {
-          checkConfig.type = "ai";
-        }
-        if (checkConfig.type === "logger") {
-          checkConfig.type = "log";
-        }
-        if (!this.validCheckTypes.includes(checkConfig.type)) {
-          errors.push({
-            field: `checks.${checkName}.type`,
-            message: `Invalid check type "${checkConfig.type}". Must be: ${this.validCheckTypes.join(", ")}`,
-            value: checkConfig.type
-          });
-        }
-        if (checkConfig.type === "ai" && !checkConfig.prompt) {
-          errors.push({
-            field: `checks.${checkName}.prompt`,
-            message: `Invalid check configuration for "${checkName}": missing prompt (required for AI checks)`
-          });
-        }
-        try {
-          const externalTypes = /* @__PURE__ */ new Set(["github", "http", "http_client", "http_input", "workflow"]);
-          if (externalTypes.has(checkConfig.type) && !checkConfig.criticality) {
-            errors.push({
-              field: `checks.${checkName}.criticality`,
-              message: `Missing required criticality for step "${checkName}" (type: ${checkConfig.type}). Set criticality: 'external' or 'internal' to enable safe defaults for side-effecting steps.`
-            });
-          }
-        } catch {
-        }
-        try {
-          const crit = checkConfig.criticality || "policy";
-          const isCritical = crit === "external" || crit === "internal";
-          if (isCritical) {
-            const hasAssume = typeof checkConfig.assume === "string" || Array.isArray(checkConfig.assume) && checkConfig.assume.length > 0;
-            const hasIf = typeof checkConfig.if === "string" && checkConfig.if.trim().length > 0;
-            if (!hasAssume && !hasIf) {
-              errors.push({
-                field: `checks.${checkName}.assume`,
-                message: `Critical step "${checkName}" (criticality: ${crit}) requires a precondition: set 'assume:' (preferred) or 'if:' to guard execution.`
-              });
-            }
-            const outputProviders = /* @__PURE__ */ new Set([
-              "ai",
-              "script",
-              "command",
-              "http",
-              "http_client",
-              "http_input"
-            ]);
-            if (outputProviders.has(checkConfig.type)) {
-              const hasSchema = typeof checkConfig.schema !== "undefined";
-              const hasGuarantee = typeof checkConfig.guarantee === "string" && checkConfig.guarantee.trim().length > 0;
-              if (!hasSchema && !hasGuarantee) {
-                errors.push({
-                  field: `checks.${checkName}.schema/guarantee`,
-                  message: `Critical step "${checkName}" (type: ${checkConfig.type}) requires an output contract: provide 'schema:' (renderer name or JSON Schema) or 'guarantee:' expression.`
-                });
-              }
-            }
-          }
-        } catch {
-        }
-        if (checkConfig.type === "command" && !checkConfig.exec) {
-          errors.push({
-            field: `checks.${checkName}.exec`,
-            message: `Invalid check configuration for "${checkName}": missing exec field (required for command checks)`
-          });
-        }
-        if (checkConfig.type === "http") {
-          if (!checkConfig.url) {
-            errors.push({
-              field: `checks.${checkName}.url`,
-              message: `Invalid check configuration for "${checkName}": missing url field (required for http checks)`
-            });
-          }
-          if (!checkConfig.body) {
-            errors.push({
-              field: `checks.${checkName}.body`,
-              message: `Invalid check configuration for "${checkName}": missing body field (required for http checks)`
-            });
-          }
-        }
-        if (checkConfig.type === "http_input" && !checkConfig.endpoint) {
-          errors.push({
-            field: `checks.${checkName}.endpoint`,
-            message: `Invalid check configuration for "${checkName}": missing endpoint field (required for http_input checks)`
-          });
-        }
-        try {
-          const hasObjSchema = checkConfig?.schema && typeof checkConfig.schema === "object";
-          const hasOutputSchema = checkConfig?.output_schema && typeof checkConfig.output_schema === "object";
-          if (hasObjSchema && hasOutputSchema) {
-            (_warnings || errors).push({
-              field: `checks.${checkName}.schema`,
-              message: `Both 'schema' (object) and 'output_schema' are set; 'schema' will be used for validation. 'output_schema' is deprecated.`
-            });
-          }
-        } catch {
-        }
-        if (checkConfig.type === "http_client" && !checkConfig.url) {
-          errors.push({
-            field: `checks.${checkName}.url`,
-            message: `Invalid check configuration for "${checkName}": missing url field (required for http_client checks)`
-          });
-        }
-        if (checkConfig.schedule) {
-          const cronParts = checkConfig.schedule.split(" ");
-          if (cronParts.length < 5 || cronParts.length > 6) {
-            errors.push({
-              field: `checks.${checkName}.schedule`,
-              message: `Invalid cron expression for "${checkName}": ${checkConfig.schedule}`,
-              value: checkConfig.schedule
-            });
-          }
-        }
-        if (checkConfig.on) {
-          if (!Array.isArray(checkConfig.on)) {
-            errors.push({
-              field: `checks.${checkName}.on`,
-              message: `Invalid check configuration for "${checkName}": 'on' field must be an array`
-            });
-          } else {
-            for (const event of checkConfig.on) {
-              if (!this.validEventTriggers.includes(event)) {
-                errors.push({
-                  field: `checks.${checkName}.on`,
-                  message: `Invalid event "${event}". Must be one of: ${this.validEventTriggers.join(", ")}`,
-                  value: event
-                });
-              }
-            }
-          }
-        }
-        if (checkConfig.reuse_ai_session !== void 0) {
-          const reuseValue = checkConfig.reuse_ai_session;
-          const isString = typeof reuseValue === "string";
-          const isBoolean = typeof reuseValue === "boolean";
-          const isSelf = reuseValue === "self";
-          if (!isString && !isBoolean) {
-            errors.push({
-              field: `checks.${checkName}.reuse_ai_session`,
-              message: `Invalid reuse_ai_session value for "${checkName}": must be string (check name) or boolean`,
-              value: reuseValue
-            });
-          } else if (isString && !isSelf) {
-            const targetCheckName = reuseValue;
-            if (!config?.checks || !config.checks[targetCheckName]) {
-              errors.push({
-                field: `checks.${checkName}.reuse_ai_session`,
-                message: `Check "${checkName}" references non-existent check "${targetCheckName}" for session reuse`,
-                value: reuseValue
-              });
-            }
-          } else if (reuseValue === true) {
-            if (!checkConfig.depends_on || !Array.isArray(checkConfig.depends_on) || checkConfig.depends_on.length === 0) {
-              errors.push({
-                field: `checks.${checkName}.reuse_ai_session`,
-                message: `Check "${checkName}" has reuse_ai_session=true but missing or empty depends_on. Session reuse requires dependency on another check.`,
-                value: reuseValue
-              });
-            }
-          }
-        }
-        if (checkConfig.session_mode !== void 0) {
-          if (checkConfig.session_mode !== "clone" && checkConfig.session_mode !== "append") {
-            errors.push({
-              field: `checks.${checkName}.session_mode`,
-              message: `Invalid session_mode value for "${checkName}": must be 'clone' or 'append'`,
-              value: checkConfig.session_mode
-            });
-          }
-          if (!checkConfig.reuse_ai_session) {
-            errors.push({
-              field: `checks.${checkName}.session_mode`,
-              message: `Check "${checkName}" has session_mode but no reuse_ai_session. session_mode requires reuse_ai_session to be set.`,
-              value: checkConfig.session_mode
-            });
-          }
-        }
-        if (checkConfig.tags !== void 0) {
-          if (!Array.isArray(checkConfig.tags)) {
-            errors.push({
-              field: `checks.${checkName}.tags`,
-              message: `Invalid tags value for "${checkName}": must be an array of strings`,
-              value: checkConfig.tags
-            });
-          } else {
-            const validTagPattern = /^[a-zA-Z0-9][a-zA-Z0-9-_]*$/;
-            checkConfig.tags.forEach((tag, index) => {
-              if (typeof tag !== "string") {
-                errors.push({
-                  field: `checks.${checkName}.tags[${index}]`,
-                  message: `Invalid tag at index ${index} for "${checkName}": must be a string`,
-                  value: tag
-                });
-              } else if (!validTagPattern.test(tag)) {
-                errors.push({
-                  field: `checks.${checkName}.tags[${index}]`,
-                  message: `Invalid tag "${tag}" for "${checkName}": tags must be alphanumeric with hyphens or underscores (start with alphanumeric)`,
-                  value: tag
-                });
-              }
-            });
-          }
-        }
-        if (checkConfig.on_finish !== void 0) {
-          if (!checkConfig.forEach) {
-            errors.push({
-              field: `checks.${checkName}.on_finish`,
-              message: `Check "${checkName}" has on_finish but forEach is not true. on_finish is only valid on forEach checks.`,
-              value: checkConfig.on_finish
-            });
-          }
-        }
-        try {
-          const transformJs = checkConfig.transform_js;
-          if (typeof transformJs === "string" && transformJs.trim().length > 0) {
-            const result = validateJsSyntax(transformJs);
-            if (!result.valid) {
-              errors.push({
-                field: `checks.${checkName}.transform_js`,
-                message: `JavaScript syntax error in "${checkName}" transform_js: ${result.error}`,
-                value: transformJs.slice(0, 100) + (transformJs.length > 100 ? "..." : "")
-              });
-            }
-          }
-          if (checkConfig.type === "script") {
-            const content = checkConfig.content;
-            if (typeof content === "string" && content.trim().length > 0) {
-              const result = validateJsSyntax(content);
-              if (!result.valid) {
-                errors.push({
-                  field: `checks.${checkName}.content`,
-                  message: `JavaScript syntax error in "${checkName}" script: ${result.error}`,
-                  value: content.slice(0, 100) + (content.length > 100 ? "..." : "")
-                });
-              }
-            }
-          }
-        } catch {
-        }
-      }
-      /**
-       * Validate MCP servers object shape and values (basic shape only)
-       */
-      validateMcpServersObject(mcpServers, fieldPrefix, errors, _warnings) {
-        if (typeof mcpServers !== "object" || mcpServers === null) {
-          errors.push({
-            field: fieldPrefix,
-            message: `${fieldPrefix} must be an object mapping server names to { command, args?, env? }`,
-            value: mcpServers
-          });
-          return;
-        }
-        for (const [serverName, cfg] of Object.entries(mcpServers)) {
-          const pathStr = `${fieldPrefix}.${serverName}`;
-          if (!cfg || typeof cfg !== "object") {
-            errors.push({ field: pathStr, message: `${pathStr} must be an object`, value: cfg });
-            continue;
-          }
-          const { command, args, env } = cfg;
-          if (typeof command !== "string" || command.trim() === "") {
-            errors.push({
-              field: `${pathStr}.command`,
-              message: `${pathStr}.command must be a non-empty string`,
-              value: command
-            });
-          }
-          if (args !== void 0 && !Array.isArray(args)) {
-            errors.push({
-              field: `${pathStr}.args`,
-              message: `${pathStr}.args must be an array of strings`,
-              value: args
-            });
-          }
-          if (env !== void 0) {
-            if (typeof env !== "object" || env === null) {
-              errors.push({
-                field: `${pathStr}.env`,
-                message: `${pathStr}.env must be an object of string values`,
-                value: env
-              });
-            } else {
-              for (const [k, v] of Object.entries(env)) {
-                if (typeof v !== "string") {
-                  errors.push({
-                    field: `${pathStr}.env.${k}`,
-                    message: `${pathStr}.env.${k} must be a string`,
-                    value: v
-                  });
-                }
-              }
-            }
-          }
-        }
-      }
-      /**
-       * Validate configuration using generated JSON Schema via Ajv, if available.
-       * Adds to errors/warnings but does not throw directly.
-       */
-      validateWithAjvSchema(config, errors, warnings) {
-        try {
-          if (!__ajvValidate) {
-            try {
-              const jsonPath = path14.resolve(__dirname, "generated", "config-schema.json");
-              const jsonSchema = require(jsonPath);
-              if (jsonSchema) {
-                const ajv = new import_ajv3.default({ allErrors: true, allowUnionTypes: true, strict: false });
-                (0, import_ajv_formats2.default)(ajv);
-                const validate = ajv.compile(jsonSchema);
-                __ajvValidate = (data) => validate(data);
-                __ajvErrors = () => validate.errors;
-              }
-            } catch {
-            }
-            if (!__ajvValidate) {
-              try {
-                const mod = (init_config_schema(), __toCommonJS(config_schema_exports));
-                const schema = mod?.configSchema || mod?.default || mod;
-                if (schema) {
-                  const ajv = new import_ajv3.default({ allErrors: true, allowUnionTypes: true, strict: false });
-                  (0, import_ajv_formats2.default)(ajv);
-                  const validate = ajv.compile(schema);
-                  __ajvValidate = (data) => validate(data);
-                  __ajvErrors = () => validate.errors;
-                } else {
-                  return;
-                }
-              } catch {
-                return;
-              }
-            }
-          }
-          const ok = __ajvValidate(config);
-          const errs = __ajvErrors ? __ajvErrors() : null;
-          if (!ok && Array.isArray(errs)) {
-            for (const e of errs) {
-              const pathStr = e.instancePath ? e.instancePath.replace(/^\//, "").replace(/\//g, ".") : "";
-              const msg = e.message || "Invalid configuration";
-              if (e.keyword === "additionalProperties") {
-                const addl = e.params && e.params.additionalProperty || "unknown";
-                const fullField = pathStr ? `${pathStr}.${addl}` : addl;
-                const topLevel = !pathStr;
-                if (topLevel && (addl === "tests" || addl === "slack")) {
-                  continue;
-                }
-                warnings.push({
-                  field: fullField || "config",
-                  message: topLevel ? `Unknown top-level key '${addl}' will be ignored.` : `Unknown key '${addl}' will be ignored`
-                });
-              } else {
-                logger.debug(`Ajv note [${pathStr || "config"}]: ${msg}`);
-              }
-            }
-          }
-        } catch (err) {
-          logger.debug(`Ajv validation skipped: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-      // Unknown-key warnings are fully handled by Ajv using the generated schema
-      // Unknown-key hints are produced by Ajv (additionalProperties=false)
-      /**
-       * Validate tag filter configuration
-       */
-      validateTagFilter(tagFilter, errors) {
-        const validTagPattern = /^[a-zA-Z0-9][a-zA-Z0-9-_]*$/;
-        if (tagFilter.include !== void 0) {
-          if (!Array.isArray(tagFilter.include)) {
-            errors.push({
-              field: "tag_filter.include",
-              message: "tag_filter.include must be an array of strings",
-              value: tagFilter.include
-            });
-          } else {
-            tagFilter.include.forEach((tag, index) => {
-              if (typeof tag !== "string") {
-                errors.push({
-                  field: `tag_filter.include[${index}]`,
-                  message: `Invalid tag at index ${index}: must be a string`,
-                  value: tag
-                });
-              } else if (!validTagPattern.test(tag)) {
-                errors.push({
-                  field: `tag_filter.include[${index}]`,
-                  message: `Invalid tag "${tag}": tags must be alphanumeric with hyphens or underscores`,
-                  value: tag
-                });
-              }
-            });
-          }
-        }
-        if (tagFilter.exclude !== void 0) {
-          if (!Array.isArray(tagFilter.exclude)) {
-            errors.push({
-              field: "tag_filter.exclude",
-              message: "tag_filter.exclude must be an array of strings",
-              value: tagFilter.exclude
-            });
-          } else {
-            tagFilter.exclude.forEach((tag, index) => {
-              if (typeof tag !== "string") {
-                errors.push({
-                  field: `tag_filter.exclude[${index}]`,
-                  message: `Invalid tag at index ${index}: must be a string`,
-                  value: tag
-                });
-              } else if (!validTagPattern.test(tag)) {
-                errors.push({
-                  field: `tag_filter.exclude[${index}]`,
-                  message: `Invalid tag "${tag}": tags must be alphanumeric with hyphens or underscores`,
-                  value: tag
-                });
-              }
-            });
-          }
-        }
-      }
-      /**
-       * Validate HTTP server configuration
-       */
-      validateHttpServerConfig(httpServerConfig, errors) {
-        if (typeof httpServerConfig.enabled !== "boolean") {
-          errors.push({
-            field: "http_server.enabled",
-            message: "http_server.enabled must be a boolean",
-            value: httpServerConfig.enabled
-          });
-        }
-        if (httpServerConfig.enabled === true) {
-          if (typeof httpServerConfig.port !== "number" || httpServerConfig.port < 1 || httpServerConfig.port > 65535) {
-            errors.push({
-              field: "http_server.port",
-              message: "http_server.port must be a number between 1 and 65535",
-              value: httpServerConfig.port
-            });
-          }
-          if (httpServerConfig.auth) {
-            const auth = httpServerConfig.auth;
-            const validAuthTypes = ["bearer_token", "hmac", "basic", "none"];
-            if (!auth.type || !validAuthTypes.includes(auth.type)) {
-              errors.push({
-                field: "http_server.auth.type",
-                message: `Invalid auth type. Must be one of: ${validAuthTypes.join(", ")}`,
-                value: auth.type
-              });
-            }
-          }
-          if (httpServerConfig.tls && typeof httpServerConfig.tls === "object") {
-            const tls = httpServerConfig.tls;
-            if (tls.enabled === true) {
-              if (!tls.cert) {
-                errors.push({
-                  field: "http_server.tls.cert",
-                  message: "TLS certificate is required when TLS is enabled"
-                });
-              }
-              if (!tls.key) {
-                errors.push({
-                  field: "http_server.tls.key",
-                  message: "TLS key is required when TLS is enabled"
-                });
-              }
-            }
-          }
-          if (httpServerConfig.endpoints && Array.isArray(httpServerConfig.endpoints)) {
-            for (let i = 0; i < httpServerConfig.endpoints.length; i++) {
-              const endpoint = httpServerConfig.endpoints[i];
-              if (!endpoint.path || typeof endpoint.path !== "string") {
-                errors.push({
-                  field: `http_server.endpoints[${i}].path`,
-                  message: "Endpoint path must be a string",
-                  value: endpoint.path
-                });
-              }
-            }
-          }
-        }
-      }
-      /**
-       * Validate output configuration
-       */
-      validateOutputConfig(outputConfig, errors) {
-        if (outputConfig.pr_comment) {
-          const prComment = outputConfig.pr_comment;
-          if (typeof prComment.format === "string" && !this.validOutputFormats.includes(prComment.format)) {
-            errors.push({
-              field: "output.pr_comment.format",
-              message: `Invalid output format "${prComment.format}". Must be one of: ${this.validOutputFormats.join(", ")}`,
-              value: prComment.format
-            });
-          }
-          if (typeof prComment.group_by === "string" && !this.validGroupByOptions.includes(prComment.group_by)) {
-            errors.push({
-              field: "output.pr_comment.group_by",
-              message: `Invalid group_by option "${prComment.group_by}". Must be one of: ${this.validGroupByOptions.join(", ")}`,
-              value: prComment.group_by
-            });
-          }
-        }
-      }
-      /**
-       * Check if remote extends are allowed
-       */
-      isRemoteExtendsAllowed() {
-        if (process.env.VISOR_NO_REMOTE_EXTENDS === "true" || process.env.VISOR_NO_REMOTE_EXTENDS === "1") {
-          return false;
-        }
-        return true;
-      }
-      /**
-       * Merge configuration with default values
-       */
-      mergeWithDefaults(config) {
-        const defaultConfig = {
-          version: "1.0",
-          checks: {},
-          max_parallelism: 3,
-          output: {
-            pr_comment: {
-              format: "markdown",
-              group_by: "check",
-              collapse: true
-            }
-          }
-        };
-        const merged = { ...defaultConfig, ...config };
-        if (merged.output) {
-          merged.output.pr_comment = {
-            ...defaultConfig.output.pr_comment,
-            ...merged.output.pr_comment
-          };
-        } else {
-          merged.output = defaultConfig.output;
-        }
-        return merged;
-      }
-    };
-    __ajvValidate = null;
-    __ajvErrors = null;
-  }
-});
-
-// src/providers/workflow-check-provider.ts
-var import_liquidjs3, WorkflowCheckProvider;
-var init_workflow_check_provider = __esm({
-  "src/providers/workflow-check-provider.ts"() {
-    "use strict";
-    init_check_provider_interface();
-    init_workflow_registry();
-    init_workflow_executor();
-    init_logger();
-    init_sandbox();
-    import_liquidjs3 = require("liquidjs");
-    WorkflowCheckProvider = class extends CheckProvider {
-      registry;
-      executor;
-      liquid;
-      constructor() {
-        super();
-        this.registry = WorkflowRegistry.getInstance();
-        this.executor = new WorkflowExecutor();
-        this.liquid = new import_liquidjs3.Liquid();
-      }
-      getName() {
-        return "workflow";
-      }
-      getDescription() {
-        return "Executes reusable workflow definitions as checks";
-      }
-      async validateConfig(config) {
-        const cfg = config;
-        if (!cfg.workflow && !cfg.config) {
-          logger.error('Workflow provider requires either "workflow" (id) or "config" (path)');
-          return false;
-        }
-        if (cfg.workflow) {
-          if (!this.registry.has(cfg.workflow)) {
-            logger.error(`Workflow '${cfg.workflow}' not found in registry`);
-            return false;
-          }
-        }
-        return true;
-      }
-      async execute(prInfo, config, dependencyResults, context2) {
-        const cfg = config;
-        const isConfigPathMode = !!cfg.config && !cfg.workflow;
-        const stepName = config.checkName || cfg.workflow || cfg.config || "workflow";
-        let workflow;
-        let workflowId = cfg.workflow;
-        if (isConfigPathMode) {
-          const parentCwd = context2?._parentContext?.originalWorkingDirectory || context2?._parentContext?.workingDirectory || context2?.originalWorkingDirectory || context2?.workingDirectory || process.cwd();
-          workflow = await this.loadWorkflowFromConfigPath(String(cfg.config), parentCwd);
-          workflowId = workflow.id;
-          logger.info(`Executing workflow from config '${cfg.config}' as '${workflowId}'`);
-        } else {
-          workflowId = String(cfg.workflow);
-          workflow = this.registry.get(workflowId);
-          if (!workflow) {
-            throw new Error(`Workflow '${workflowId}' not found in registry`);
-          }
-          logger.info(`Executing workflow '${workflowId}'`);
-        }
-        const inputs = await this.prepareInputs(workflow, config, prInfo, dependencyResults);
-        try {
-          const inputsCapture = Object.entries(inputs).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join("\n\n");
-          context2?.hooks?.onPromptCaptured?.({
-            step: String(stepName),
-            provider: "workflow",
-            prompt: inputsCapture
-          });
-        } catch {
-        }
-        const validation = this.registry.validateInputs(workflow, inputs);
-        if (!validation.valid) {
-          const errors = validation.errors?.map((e) => `${e.path}: ${e.message}`).join(", ");
-          throw new Error(`Invalid workflow inputs: ${errors}`);
-        }
-        try {
-          const mock = context2?.hooks?.mockForStep?.(String(stepName));
-          if (mock !== void 0) {
-            const ms = mock;
-            const issuesArr = Array.isArray(ms?.issues) ? ms.issues : [];
-            const out = ms && typeof ms === "object" && "output" in ms ? ms.output : ms;
-            const summary2 = {
-              issues: issuesArr,
-              output: out,
-              ...typeof ms?.content === "string" ? { content: String(ms.content) } : {}
-            };
-            return summary2;
-          }
-        } catch {
-        }
-        const modifiedWorkflow = this.applyOverrides(workflow, config);
-        const engineMode = context2?._engineMode;
-        if (engineMode === "state-machine") {
-          logger.info(`[WorkflowProvider] Delegating workflow '${workflowId}' to state machine engine`);
-          return await this.executeViaStateMachine(
-            modifiedWorkflow,
-            inputs,
-            config,
-            prInfo,
-            dependencyResults,
-            context2
-          );
-        }
-        const executionContext = {
-          instanceId: `${workflowId}-${Date.now()}`,
-          parentCheckId: config.checkName,
-          inputs,
-          stepResults: /* @__PURE__ */ new Map()
-        };
-        const result = await this.executor.execute(modifiedWorkflow, executionContext, {
-          prInfo,
-          dependencyResults,
-          context: context2
-        });
-        const outputs = this.mapOutputs(result, config.output_mapping);
-        const summary = {
-          issues: result.issues || []
-        };
-        summary.score = result.score || 0;
-        summary.confidence = result.confidence || "medium";
-        summary.comments = result.comments || [];
-        summary.output = outputs;
-        summary.content = this.formatWorkflowResult(workflow, result, outputs);
-        return summary;
-      }
-      getSupportedConfigKeys() {
-        return [
-          "workflow",
-          "config",
-          "args",
-          "overrides",
-          "output_mapping",
-          "timeout",
-          "env",
-          "checkName"
-        ];
-      }
-      async isAvailable() {
-        return true;
-      }
-      getRequirements() {
-        return [];
-      }
-      /**
-       * Prepare inputs for workflow execution
-       */
-      async prepareInputs(workflow, config, prInfo, dependencyResults) {
-        const inputs = {};
-        if (workflow.inputs) {
-          for (const param of workflow.inputs) {
-            if (param.default !== void 0) {
-              inputs[param.name] = param.default;
-            }
-          }
-        }
-        const eventContext = config.eventContext || {};
-        logger.debug(`[WorkflowProvider] prepareInputs for ${workflow.id}`);
-        logger.debug(
-          `[WorkflowProvider] eventContext keys: ${Object.keys(eventContext).join(", ") || "none"}`
-        );
-        logger.debug(
-          `[WorkflowProvider] eventContext.slack: ${eventContext.slack ? "present" : "absent"}`
-        );
-        logger.debug(
-          `[WorkflowProvider] eventContext.conversation: ${eventContext.conversation ? "present" : "absent"}`
-        );
-        const slack = (() => {
-          try {
-            const anyCtx = eventContext;
-            const slackCtx = anyCtx?.slack;
-            if (slackCtx && typeof slackCtx === "object") return slackCtx;
-          } catch {
-          }
-          return void 0;
-        })();
-        const conversation = (() => {
-          try {
-            const anyCtx = eventContext;
-            if (anyCtx?.slack?.conversation) return anyCtx.slack.conversation;
-            if (anyCtx?.github?.conversation) return anyCtx.github.conversation;
-            if (anyCtx?.conversation) return anyCtx.conversation;
-          } catch {
-          }
-          return void 0;
-        })();
-        logger.debug(`[WorkflowProvider] slack extracted: ${slack ? "present" : "absent"}`);
-        logger.debug(
-          `[WorkflowProvider] conversation extracted: ${conversation ? "present" : "absent"}`
-        );
-        if (conversation) {
-          logger.debug(
-            `[WorkflowProvider] conversation.messages count: ${Array.isArray(conversation.messages) ? conversation.messages.length : 0}`
-          );
-        }
-        const outputHistory = config.__outputHistory;
-        const outputs_history = {};
-        if (outputHistory) {
-          for (const [k, v] of outputHistory.entries()) {
-            outputs_history[k] = v;
-          }
-        }
-        const outputsMap = {};
-        logger.debug(
-          `[WorkflowProvider] dependencyResults: ${dependencyResults ? dependencyResults.size : "undefined"} entries`
-        );
-        if (dependencyResults) {
-          for (const [key, result] of dependencyResults.entries()) {
-            const extracted = result.output ?? result;
-            outputsMap[key] = extracted;
-            const extractedKeys = extracted && typeof extracted === "object" ? Object.keys(extracted).join(", ") : "not-object";
-            logger.debug(`[WorkflowProvider] outputs['${key}']: keys=[${extractedKeys}]`);
-          }
-        }
-        const templateContext = {
-          pr: prInfo,
-          outputs: outputsMap,
-          env: process.env,
-          slack,
-          conversation,
-          outputs_history
-        };
-        const userInputs = config.args || config.workflow_inputs;
-        if (userInputs) {
-          for (const [key, value] of Object.entries(userInputs)) {
-            if (typeof value === "string") {
-              if (value.includes("{{") || value.includes("{%")) {
-                inputs[key] = await this.liquid.parseAndRender(value, templateContext);
-                if (key === "text" || key === "question" || key === "context") {
-                  const rendered = String(inputs[key]);
-                  logger.info(
-                    `[WorkflowProvider] Rendered '${key}' input (${rendered.length} chars): ${rendered.substring(0, 500)}${rendered.length > 500 ? "..." : ""}`
-                  );
-                }
-              } else {
-                inputs[key] = value;
-              }
-            } else if (typeof value === "object" && value !== null && "expression" in value) {
-              const exprValue = value;
-              const sandbox = createSecureSandbox();
-              inputs[key] = compileAndRun(sandbox, exprValue.expression, templateContext, {
-                injectLog: true,
-                logPrefix: `workflow.input.${key}`
-              });
-            } else {
-              inputs[key] = value;
-            }
-          }
-        }
-        return inputs;
-      }
-      /**
-       * Apply overrides to workflow steps
-       */
-      applyOverrides(workflow, config) {
-        const overrideConfig = config.overrides || config.workflow_overrides;
-        if (!overrideConfig) {
-          return workflow;
-        }
-        const modified = JSON.parse(JSON.stringify(workflow));
-        for (const [stepId, overrides] of Object.entries(overrideConfig)) {
-          if (modified.steps[stepId]) {
-            modified.steps[stepId] = {
-              ...modified.steps[stepId],
-              ...overrides
-            };
-          } else {
-            logger.warn(`Cannot override non-existent step '${stepId}' in workflow '${workflow.id}'`);
-          }
-        }
-        return modified;
-      }
-      /**
-       * Map workflow outputs to check outputs
-       */
-      mapOutputs(result, outputMapping) {
-        if (!outputMapping) {
-          return result.output || {};
-        }
-        const mapped = {};
-        const workflowOutputs = result.output || {};
-        for (const [checkOutput, workflowOutput] of Object.entries(outputMapping)) {
-          if (workflowOutput in workflowOutputs) {
-            mapped[checkOutput] = workflowOutputs[workflowOutput];
-          } else if (workflowOutput.includes(".")) {
-            const parts = workflowOutput.split(".");
-            let value = workflowOutputs;
-            for (const part of parts) {
-              value = value?.[part];
-              if (value === void 0) break;
-            }
-            mapped[checkOutput] = value;
-          }
-        }
-        return mapped;
-      }
-      /**
-       * Format workflow execution result for display
-       */
-      /**
-       * Execute workflow via state machine engine (M3: nested workflows)
-       */
-      async executeViaStateMachine(workflow, inputs, config, prInfo, dependencyResults, context2) {
-        const {
-          projectWorkflowToGraph: projectWorkflowToGraph2,
-          validateWorkflowDepth: validateWorkflowDepth2
-        } = (init_workflow_projection(), __toCommonJS(workflow_projection_exports));
-        const { StateMachineRunner: StateMachineRunner2 } = (init_runner(), __toCommonJS(runner_exports));
-        const { ExecutionJournal: ExecutionJournal2 } = (init_snapshot_store(), __toCommonJS(snapshot_store_exports));
-        const { MemoryStore: MemoryStore2 } = (init_memory_store(), __toCommonJS(memory_store_exports));
-        const { v4: uuidv44 } = require("uuid");
-        const parentContext = context2?._parentContext;
-        const parentState = context2?._parentState;
-        const currentDepth = parentState?.flags?.currentWorkflowDepth || 0;
-        const maxDepth = parentState?.flags?.maxWorkflowDepth ?? parentContext?.config?.limits?.max_workflow_depth ?? 3;
-        validateWorkflowDepth2(currentDepth, maxDepth, workflow.id);
-        const { config: workflowConfig, checks: checksMetadata } = projectWorkflowToGraph2(
-          workflow,
-          inputs,
-          config.checkName || workflow.id
-        );
-        const parentMemoryCfg = parentContext?.memory && parentContext.memory.getConfig && parentContext.memory.getConfig() || parentContext?.config?.memory;
-        const childJournal = new ExecutionJournal2();
-        const childMemory = MemoryStore2.createIsolated(parentMemoryCfg);
-        try {
-          await childMemory.initialize();
-        } catch {
-        }
-        const parentWorkspace = parentContext?.workspace;
-        logger.info(`[WorkflowProvider] Workspace propagation for nested workflow '${workflow.id}':`);
-        logger.info(`[WorkflowProvider]   parentContext exists: ${!!parentContext}`);
-        logger.info(`[WorkflowProvider]   parentContext.workspace exists: ${!!parentWorkspace}`);
-        if (parentWorkspace) {
-          logger.info(
-            `[WorkflowProvider]   parentWorkspace.isEnabled(): ${parentWorkspace.isEnabled?.() ?? "N/A"}`
-          );
-          const projectCount = parentWorkspace.listProjects?.()?.length ?? "N/A";
-          logger.info(`[WorkflowProvider]   parentWorkspace project count: ${projectCount}`);
-        } else {
-          logger.warn(
-            `[WorkflowProvider]   NO WORKSPACE from parent - nested checkouts won't be added to workspace!`
-          );
-        }
-        const childContext = {
-          mode: "state-machine",
-          config: workflowConfig,
-          checks: checksMetadata,
-          journal: childJournal,
-          memory: childMemory,
-          // For nested workflows we continue to execute inside the same logical
-          // working directory as the parent run. When workspace isolation is
-          // enabled on the parent engine, its WorkspaceManager is also propagated
-          // so that nested checks (AI, git-checkout, etc.) see the same isolated
-          // workspace and project symlinks instead of falling back to the Visor
-          // repository root.
-          workingDirectory: parentContext?.workingDirectory || process.cwd(),
-          originalWorkingDirectory: parentContext?.originalWorkingDirectory || parentContext?.workingDirectory || process.cwd(),
-          workspace: parentWorkspace,
-          // Always use a fresh session for nested workflows to isolate history
-          sessionId: uuidv44(),
-          event: parentContext?.event || prInfo.eventType,
-          debug: parentContext?.debug || false,
-          maxParallelism: parentContext?.maxParallelism,
-          failFast: parentContext?.failFast,
-          // Propagate execution hooks (mocks, octokit, etc.) into the child so
-          // nested steps can be mocked/observed by the YAML test runner.
-          executionContext: parentContext?.executionContext,
-          // Ensure all workflow steps are considered requested to avoid tag/event filtering surprises
-          requestedChecks: Object.keys(checksMetadata)
-        };
-        const runner = new StateMachineRunner2(childContext);
-        const childState = runner.getState();
-        childState.flags.currentWorkflowDepth = currentDepth + 1;
-        childState.flags.maxWorkflowDepth = maxDepth;
-        childState.parentContext = parentContext;
-        childState.parentScope = parentState?.parentScope;
-        logger.info(
-          `[WorkflowProvider] Executing nested workflow '${workflow.id}' at depth ${currentDepth + 1}`
-        );
-        const result = await runner.run();
-        const bubbledEvents = childContext._bubbledEvents || [];
-        if (bubbledEvents.length > 0 && parentContext) {
-          if (parentContext.debug) {
-            logger.info(`[WorkflowProvider] Bubbling ${bubbledEvents.length} events to parent context`);
-          }
-          if (!parentContext._bubbledEvents) {
-            parentContext._bubbledEvents = [];
-          }
-          parentContext._bubbledEvents.push(...bubbledEvents);
-        }
-        const allIssues = [];
-        let totalScore = 0;
-        let scoreCount = 0;
-        for (const stepResult of Object.values(result.results)) {
-          const typedResult = stepResult;
-          if (typedResult.issues) {
-            allIssues.push(...typedResult.issues);
-          }
-          if (typedResult.score) {
-            totalScore += typedResult.score;
-            scoreCount++;
-          }
-        }
-        const outputs = await this.computeWorkflowOutputsFromState(
-          workflow,
-          inputs,
-          result.results,
-          prInfo
-        );
-        const mappedOutputs = this.mapOutputs(
-          { output: outputs },
-          config.output_mapping
-        );
-        const summary = {
-          issues: allIssues
-        };
-        summary.score = scoreCount > 0 ? Math.round(totalScore / scoreCount) : 0;
-        summary.confidence = "medium";
-        summary.output = mappedOutputs;
-        summary.content = this.formatWorkflowResultFromStateMachine(
-          workflow,
-          result,
-          mappedOutputs
-        );
-        return summary;
-      }
-      /**
-       * Compute workflow outputs from state machine execution results
-       */
-      async computeWorkflowOutputsFromState(workflow, inputs, groupedResults, prInfo) {
-        const outputs = {};
-        if (!workflow.outputs) {
-          return outputs;
-        }
-        const sandbox = createSecureSandbox();
-        const flat = {};
-        try {
-          for (const arr of Object.values(groupedResults || {})) {
-            for (const item of arr || []) {
-              if (!item) continue;
-              const name = item.checkName || item.name;
-              if (typeof name === "string" && name) {
-                flat[name] = { output: item.output, issues: item.issues };
-              }
-            }
-          }
-        } catch {
-        }
-        const outputsMap = Object.fromEntries(
-          Object.entries(flat).map(([id, result]) => [id, result.output])
-        );
-        for (const output of workflow.outputs) {
-          if (output.value_js) {
-            outputs[output.name] = compileAndRun(
-              sandbox,
-              output.value_js,
-              {
-                inputs,
-                outputs: outputsMap,
-                // Keep 'steps' as alias for backwards compatibility
-                steps: outputsMap,
-                pr: prInfo
-              },
-              { injectLog: true, logPrefix: `workflow.output.${output.name}` }
-            );
-          } else if (output.value) {
-            outputs[output.name] = await this.liquid.parseAndRender(output.value, {
-              inputs,
-              outputs: outputsMap,
-              // Keep 'steps' as alias for backwards compatibility
-              steps: outputsMap,
-              pr: prInfo
-            });
-          }
-        }
-        return outputs;
-      }
-      /**
-       * Format workflow result from state machine execution
-       */
-      formatWorkflowResultFromStateMachine(workflow, result, outputs) {
-        const lines = [];
-        lines.push(`Workflow: ${workflow.name}`);
-        if (workflow.description) {
-          lines.push(`Description: ${workflow.description}`);
-        }
-        lines.push("");
-        lines.push("Execution Summary (State Machine):");
-        lines.push(`- Total Steps: ${Object.keys(result.results || {}).length}`);
-        lines.push(`- Duration: ${result.statistics?.totalDuration || 0}ms`);
-        if (Object.keys(outputs).length > 0) {
-          lines.push("");
-          lines.push("Outputs:");
-          for (const [key, value] of Object.entries(outputs)) {
-            const formatted = typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
-            lines.push(`- ${key}: ${formatted}`);
-          }
-        }
-        return lines.join("\n");
-      }
-      formatWorkflowResult(workflow, result, outputs) {
-        const lines = [];
-        lines.push(`Workflow: ${workflow.name}`);
-        if (workflow.description) {
-          lines.push(`Description: ${workflow.description}`);
-        }
-        lines.push("");
-        lines.push("Execution Summary:");
-        lines.push(`- Status: ${result.status || "completed"}`);
-        lines.push(`- Score: ${result.score || 0}`);
-        lines.push(`- Issues Found: ${result.issues?.length || 0}`);
-        if (result.duration) {
-          lines.push(`- Duration: ${result.duration}ms`);
-        }
-        if (Object.keys(outputs).length > 0) {
-          lines.push("");
-          lines.push("Outputs:");
-          for (const [key, value] of Object.entries(outputs)) {
-            const formatted = typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
-            lines.push(`- ${key}: ${formatted}`);
-          }
-        }
-        if (result.stepSummaries && result.stepSummaries.length > 0) {
-          lines.push("");
-          lines.push("Step Results:");
-          for (const summary of result.stepSummaries) {
-            lines.push(
-              `- ${summary.stepId}: ${summary.status} (${summary.issues?.length || 0} issues)`
-            );
-          }
-        }
-        return lines.join("\n");
-      }
-      /**
-       * Load a Visor config file (with steps/checks) and wrap it as a WorkflowDefinition
-       * so it can be executed by the state machine as a nested workflow.
-       */
-      async loadWorkflowFromConfigPath(sourcePath, baseDir) {
-        const path22 = require("path");
-        const fs20 = require("fs");
-        const resolved = path22.isAbsolute(sourcePath) ? sourcePath : path22.resolve(baseDir, sourcePath);
-        if (!fs20.existsSync(resolved)) {
-          throw new Error(`Workflow config not found at: ${resolved}`);
-        }
-        const { ConfigManager: ConfigManager2 } = (init_config(), __toCommonJS(config_exports));
-        const mgr = new ConfigManager2();
-        const loaded = await mgr.loadConfig(resolved, { validate: false, mergeDefaults: false });
-        const steps = loaded.steps || loaded.checks || {};
-        if (!steps || Object.keys(steps).length === 0) {
-          throw new Error(`Config '${resolved}' does not contain any steps to execute as a workflow`);
-        }
-        const id = path22.basename(resolved).replace(/\.(ya?ml)$/i, "");
-        const name = loaded.name || `Workflow from ${path22.basename(resolved)}`;
-        const workflowDef = {
-          id,
-          name,
-          version: loaded.version || "1.0",
-          steps,
-          description: loaded.description,
-          // Inherit optional triggers if present (not required)
-          on: loaded.on,
-          // Carry over optional inputs/outputs if present so callers can consume them
-          inputs: loaded.inputs,
-          outputs: loaded.outputs
-        };
-        return workflowDef;
-      }
-    };
-  }
-});
-
 // src/utils/worktree-manager.ts
 var fs14, fsp, path15, crypto, WorktreeManager, worktreeManager;
 var init_worktree_manager = __esm({
@@ -20897,11 +21634,29 @@ var init_worktree_manager = __esm({
        *
        * This runs after fetchRef so that <ref> should resolve to either a
        * local branch, tag, or remote-tracking ref.
+       *
+       * If the ref is "main" or "master" and doesn't exist, automatically
+       * falls back to the other common default branch name.
        */
       async getCommitShaForRef(bareRepoPath, ref) {
         const cmd = `git -C ${this.escapeShellArg(bareRepoPath)} rev-parse ${this.escapeShellArg(ref)}`;
         const result = await this.executeGitCommand(cmd);
         if (result.exitCode !== 0) {
+          const fallbackRefs = {
+            main: "master",
+            master: "main"
+          };
+          const fallbackRef = fallbackRefs[ref];
+          if (fallbackRef) {
+            logger.debug(`Ref '${ref}' not found, trying fallback '${fallbackRef}'`);
+            await this.fetchRef(bareRepoPath, fallbackRef);
+            const fallbackCmd = `git -C ${this.escapeShellArg(bareRepoPath)} rev-parse ${this.escapeShellArg(fallbackRef)}`;
+            const fallbackResult = await this.executeGitCommand(fallbackCmd);
+            if (fallbackResult.exitCode === 0) {
+              logger.info(`Using fallback branch '${fallbackRef}' instead of '${ref}'`);
+              return fallbackResult.stdout.trim();
+            }
+          }
           throw new Error(`Failed to get commit SHA for ref ${ref}: ${result.stderr}`);
         }
         return result.stdout.trim();
@@ -21758,6 +22513,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
       const providerRegistry = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports)).CheckProviderRegistry.getInstance();
       const provider = providerRegistry.getProviderOrThrow(providerType);
       const outputHistory = buildOutputHistoryFromJournal(context2);
+      const workflowInputs = resolveWorkflowInputs(checkConfig, context2);
       const providerConfig = {
         type: providerType,
         checkName: checkId,
@@ -21781,6 +22537,8 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
         ...checkConfig,
         eventContext: context2.prInfo?.eventContext || {},
         __outputHistory: outputHistory,
+        // Propagate workflow inputs for template access via {{ inputs.* }}
+        workflowInputs,
         ai: {
           ...checkConfig.ai || {},
           timeout: checkConfig.ai?.timeout || 12e5,
@@ -21991,11 +22749,12 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
     logger.info(`[LevelDispatch] Calling handleRouting for ${checkId}`);
   } catch {
   }
+  let wasHalted = false;
   try {
     state.completedChecks.add(checkId);
     const currentWaveCompletions = state.currentWaveCompletions;
     if (currentWaveCompletions) currentWaveCompletions.add(checkId);
-    await handleRouting(context2, state, transition, emitEvent, {
+    wasHalted = await handleRouting(context2, state, transition, emitEvent, {
       checkId,
       scope: [],
       result: aggregatedResult,
@@ -22004,6 +22763,10 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
     });
   } catch (error) {
     logger.warn(`[LevelDispatch] Routing error for aggregated forEach ${checkId}: ${error}`);
+  }
+  if (wasHalted) {
+    logger.info(`[LevelDispatch] Execution halted after routing for aggregated forEach ${checkId}`);
+    return aggregatedResult;
   }
   try {
     context2.journal.commitEntry({
@@ -22172,6 +22935,7 @@ var init_foreach_processor = __esm({
     init_dependency_gating();
     init_stats_manager();
     init_routing();
+    init_workflow_inputs();
   }
 });
 
@@ -22722,6 +23486,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
     const providerRegistry = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports)).CheckProviderRegistry.getInstance();
     const provider = providerRegistry.getProviderOrThrow(providerType);
     const outputHistory = buildOutputHistoryFromJournal(context2);
+    const workflowInputs = resolveWorkflowInputs(checkConfig, context2);
     const providerConfig = {
       type: providerType,
       checkName: checkId,
@@ -22737,6 +23502,8 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       ...checkConfig,
       eventContext: context2.prInfo?.eventContext || {},
       __outputHistory: outputHistory,
+      // Propagate workflow inputs for template access via {{ inputs.* }}
+      workflowInputs,
       ai: {
         ...checkConfig.ai || {},
         timeout: checkConfig.ai?.timeout || 12e5,
@@ -22894,13 +23661,17 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       logger.info(`[LevelDispatch] Calling handleRouting for ${checkId}`);
     } catch {
     }
-    await handleRouting(context2, state, transition, emitEvent, {
+    const wasHalted = await handleRouting(context2, state, transition, emitEvent, {
       checkId,
       scope,
       result: enrichedResult,
       checkConfig,
       success: !hasFatalIssues(enrichedResult)
     });
+    if (wasHalted) {
+      logger.info(`[LevelDispatch] Execution halted after routing for ${checkId}`);
+      return enrichedResult;
+    }
     try {
       const commitResult = {
         ...enrichedResult,
@@ -23018,6 +23789,7 @@ var init_execution_invoker = __esm({
     init_stats_manager();
     init_on_init_handlers();
     init_sandbox();
+    init_workflow_inputs();
     MAX_ON_INIT_ITEMS = 50;
   }
 });
@@ -23267,7 +24039,11 @@ async function handleLevelDispatch(context2, state, transition, emitEvent) {
     }
   }
   state.currentLevelChecks.clear();
-  transition("WavePlanning");
+  if (state.currentState !== "Error") {
+    transition("WavePlanning");
+  } else {
+    logger.info("[LevelDispatch] Skipping transition to WavePlanning - already in Error state");
+  }
 }
 function groupBySession(checks, context2) {
   const sessionProviderMap = /* @__PURE__ */ new Map();
@@ -23512,6 +24288,7 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
       const providerRegistry = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports)).CheckProviderRegistry.getInstance();
       const provider = providerRegistry.getProviderOrThrow(providerType);
       const outputHistory = buildOutputHistoryFromJournal2(context2);
+      const workflowInputs = resolveWorkflowInputs(checkConfig, context2);
       const providerConfig = {
         type: providerType,
         checkName: checkId,
@@ -23527,6 +24304,8 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
         ...checkConfig,
         eventContext: context2.prInfo?.eventContext || {},
         __outputHistory: outputHistory,
+        // Propagate workflow inputs for template access via {{ inputs.* }}
+        workflowInputs,
         ai: {
           ...checkConfig.ai || {},
           timeout: checkConfig.ai?.timeout || 12e5,
@@ -23967,11 +24746,12 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
     logger.info(`[LevelDispatch] Calling handleRouting for ${checkId}`);
   } catch {
   }
+  let wasHalted = false;
   try {
     state.completedChecks.add(checkId);
     const currentWaveCompletions = state.currentWaveCompletions;
     if (currentWaveCompletions) currentWaveCompletions.add(checkId);
-    await handleRouting(context2, state, transition, emitEvent, {
+    wasHalted = await handleRouting(context2, state, transition, emitEvent, {
       checkId,
       scope: [],
       result: aggregatedResult,
@@ -23980,6 +24760,10 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
     });
   } catch (error) {
     logger.warn(`[LevelDispatch] Routing error for aggregated forEach ${checkId}: ${error}`);
+  }
+  if (wasHalted) {
+    logger.info(`[LevelDispatch] Execution halted after routing for aggregated ${checkId}`);
+    return aggregatedResult;
   }
   try {
     context2.journal.commitEntry({
@@ -24538,6 +25322,7 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
     const providerRegistry = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports)).CheckProviderRegistry.getInstance();
     const provider = providerRegistry.getProviderOrThrow(providerType);
     const outputHistory = buildOutputHistoryFromJournal2(context2);
+    const workflowInputs = resolveWorkflowInputs(checkConfig2, context2);
     const providerConfig = {
       type: providerType,
       checkName: checkId,
@@ -24555,6 +25340,8 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
       // Expose history and checks metadata for template helpers
       __outputHistory: outputHistory,
       checksMeta,
+      // Propagate workflow inputs for template access via {{ inputs.* }}
+      workflowInputs,
       ai: {
         ...checkConfig2.ai || {},
         timeout: checkConfig2.ai?.timeout || 12e5,
@@ -24937,13 +25724,35 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
       logger.info(`[LevelDispatch] Calling handleRouting for ${checkId}`);
     } catch {
     }
-    await handleRouting(context2, state, transition, emitEvent, {
+    const wasHalted = await handleRouting(context2, state, transition, emitEvent, {
       checkId,
       scope,
       result: enrichedResult,
       checkConfig: checkConfig2,
       success: !hasFatalIssues2(enrichedResult)
     });
+    if (wasHalted) {
+      logger.info(
+        `[LevelDispatch] Execution halted after routing for ${checkId}, stopping level dispatch`
+      );
+      try {
+        const commitResult = {
+          ...enrichedResult,
+          ...renderedContent ? { content: renderedContent } : {},
+          ...result.output !== void 0 ? outputWithTimestamp !== void 0 ? { output: outputWithTimestamp } : { output: result.output } : {}
+        };
+        context2.journal.commitEntry({
+          sessionId: context2.sessionId,
+          checkId,
+          result: commitResult,
+          event: context2.event || "manual",
+          scope
+        });
+      } catch (error) {
+        logger.warn(`[LevelDispatch] Failed to commit halt result to journal: ${error}`);
+      }
+      return enrichedResult;
+    }
     try {
       const commitResult = {
         ...enrichedResult,
@@ -25367,6 +26176,7 @@ var init_level_dispatch = __esm({
     init_mermaid_telemetry();
     init_fallback_ndjson();
     init_failure_condition_evaluator();
+    init_workflow_inputs();
   }
 });
 
@@ -25428,11 +26238,11 @@ var runner_exports = {};
 __export(runner_exports, {
   StateMachineRunner: () => StateMachineRunner
 });
-var import_uuid, StateMachineRunner;
+var StateMachineRunner;
 var init_runner = __esm({
   "src/state-machine/runner.ts"() {
     "use strict";
-    import_uuid = require("uuid");
+    init_human_id();
     init_logger();
     init_trace_helpers();
     init_init();
@@ -25619,7 +26429,7 @@ var init_runner = __esm({
           const bus = this.context.eventBus;
           if (bus && typeof bus.emit === "function") {
             const envelope = {
-              id: (0, import_uuid.v4)(),
+              id: generateHumanId(),
               version: 1,
               timestamp: (/* @__PURE__ */ new Date()).toISOString(),
               runId: this.context.sessionId,
@@ -26724,7 +27534,7 @@ function buildEngineContextForRun(workingDirectory, config, prInfo, debug, maxPa
     memory,
     workingDirectory,
     originalWorkingDirectory: workingDirectory,
-    sessionId: (0, import_uuid2.v4)(),
+    sessionId: generateHumanId(),
     event: prInfo.eventType,
     debug,
     maxParallelism,
@@ -26774,13 +27584,12 @@ async function initializeWorkspace(context2) {
     return context2;
   }
 }
-var import_uuid2;
 var init_build_engine_context = __esm({
   "src/state-machine/context/build-engine-context.ts"() {
     "use strict";
     init_snapshot_store();
     init_memory_store();
-    import_uuid2 = require("uuid");
+    init_human_id();
     init_logger();
     init_workspace_manager();
   }
@@ -27433,11 +28242,11 @@ var github_comments_exports = {};
 __export(github_comments_exports, {
   CommentManager: () => CommentManager
 });
-var import_uuid3, CommentManager;
+var CommentManager;
 var init_github_comments = __esm({
   "src/github-comments.ts"() {
     "use strict";
-    import_uuid3 = require("uuid");
+    init_human_id();
     init_logger();
     init_footer();
     CommentManager = class {
@@ -27605,7 +28414,7 @@ ${content}
        * Generate unique comment ID
        */
       generateCommentId() {
-        return (0, import_uuid3.v4)().substring(0, 8);
+        return generateShortHumanId();
       }
       /**
        * Check if comment is a Visor comment

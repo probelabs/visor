@@ -3,23 +3,27 @@ import {
   check_provider_registry_exports,
   init_check_provider_registry,
   init_runner
-} from "./chunk-EU3Y4VKT.mjs";
+} from "./chunk-A4PGHURG.mjs";
+import {
+  generateHumanId,
+  init_human_id
+} from "./chunk-EXFGO4FX.mjs";
 import "./chunk-NAW3DB3I.mjs";
 import {
   commandExecutor,
   init_command_executor
 } from "./chunk-J2QWVDXK.mjs";
-import "./chunk-HQL734ZI.mjs";
 import "./chunk-J6EVEXC2.mjs";
 import {
   ConfigManager,
   init_config
-} from "./chunk-LTYGUFQW.mjs";
+} from "./chunk-RTKJXNZS.mjs";
 import "./chunk-O5EZDNYL.mjs";
+import "./chunk-HQL734ZI.mjs";
 import {
   ExecutionJournal,
   init_snapshot_store
-} from "./chunk-BHZ4CKUS.mjs";
+} from "./chunk-PXFIALUH.mjs";
 import "./chunk-SWEEZ5D5.mjs";
 import "./chunk-BOVFH3LI.mjs";
 import "./chunk-ZYAUYXSW.mjs";
@@ -341,7 +345,6 @@ __export(build_engine_context_exports, {
   buildEngineContextForRun: () => buildEngineContextForRun,
   initializeWorkspace: () => initializeWorkspace
 });
-import { v4 as uuidv4 } from "uuid";
 function applyCriticalityDefaults(cfg) {
   const checks = cfg.checks || {};
   for (const id of Object.keys(checks)) {
@@ -398,7 +401,7 @@ function buildEngineContextForRun(workingDirectory, config, prInfo, debug, maxPa
     memory,
     workingDirectory,
     originalWorkingDirectory: workingDirectory,
-    sessionId: uuidv4(),
+    sessionId: generateHumanId(),
     event: prInfo.eventType,
     debug,
     maxParallelism,
@@ -453,6 +456,7 @@ var init_build_engine_context = __esm({
     "use strict";
     init_snapshot_store();
     init_memory_store();
+    init_human_id();
     init_logger();
     init_workspace_manager();
   }
@@ -566,7 +570,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       try {
         const map = options?.webhookContext?.webhookData;
         if (map) {
-          const { CheckProviderRegistry } = await import("./check-provider-registry-AXINCDZY.mjs");
+          const { CheckProviderRegistry } = await import("./check-provider-registry-3KI5RKXT.mjs");
           const reg = CheckProviderRegistry.getInstance();
           const p = reg.getProvider("http_input");
           if (p && typeof p.setWebhookContext === "function") p.setWebhookContext(map);
@@ -679,7 +683,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       logger.info("[StateMachine] Using state machine engine");
     }
     if (!config) {
-      const { ConfigManager: ConfigManager2 } = await import("./config-OIMHOYBO.mjs");
+      const { ConfigManager: ConfigManager2 } = await import("./config-6CUVEH7H.mjs");
       const configManager = new ConfigManager2();
       config = await configManager.getDefaultConfig();
       logger.debug("[StateMachine] Using default configuration (no config provided)");
@@ -705,7 +709,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
     if (Array.isArray(configWithTagFilter.frontends) && configWithTagFilter.frontends.length > 0) {
       try {
         const { EventBus } = await import("./event-bus-5BEVPQ6T.mjs");
-        const { FrontendsHost } = await import("./host-P5NQICP7.mjs");
+        const { FrontendsHost } = await import("./host-NYWXLIFC.mjs");
         const bus = new EventBus();
         context.eventBus = bus;
         frontendsHost = new FrontendsHost(bus, logger);
