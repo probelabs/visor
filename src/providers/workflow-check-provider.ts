@@ -801,7 +801,9 @@ export class WorkflowCheckProvider extends CheckProvider {
           if (!result.valid && result.errors) {
             // Check if error is just "already exists" - skip silently
             // This allows multiple workflows to import the same dependency
-            const isAlreadyExists = result.errors.every((e: any) => e.message.includes('already exists'));
+            const isAlreadyExists = result.errors.every((e: any) =>
+              e.message.includes('already exists')
+            );
             if (isAlreadyExists) {
               logger.debug(`Workflow from '${source}' already imported, skipping`);
               continue;

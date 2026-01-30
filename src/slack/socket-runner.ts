@@ -177,9 +177,7 @@ export class SlackSocketRunner {
     if (env.envelope_id) this.send({ envelope_id: env.envelope_id }); // ack ASAP
     if (env.type !== 'events_api' || !env.payload) {
       if (process.env.VISOR_DEBUG === 'true') {
-        logger.debug(
-          `[SlackSocket] Dropping non-events payload: type=${String(env.type || '-')}`
-        );
+        logger.debug(`[SlackSocket] Dropping non-events payload: type=${String(env.type || '-')}`);
       }
       return;
     }
@@ -225,8 +223,7 @@ export class SlackSocketRunner {
     const channelId = String(ev.channel || '');
     const isDmLike = channelId.startsWith('D') || channelId.startsWith('G');
     const text = String(ev.text || '');
-    const hasBotMention =
-      !!this.botUserId && text.includes(`<@${String(this.botUserId)}>`);
+    const hasBotMention = !!this.botUserId && text.includes(`<@${String(this.botUserId)}>`);
 
     // In public channels (C*), only react to app_mention events so we don't
     // trigger on every message in a thread. In DMs/MPIMs we allow plain

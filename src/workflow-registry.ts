@@ -217,7 +217,9 @@ export class WorkflowRegistry {
         delete (workflowWithoutExtras as any).imports;
 
         // Register the workflow (without tests/imports)
-        const result = this.register(workflowWithoutExtras, source, { override: options?.override });
+        const result = this.register(workflowWithoutExtras, source, {
+          override: options?.override,
+        });
         results.push(result);
       }
     } catch (error) {
