@@ -315,12 +315,19 @@ export class SlackFrontend implements Frontend {
       const cfg: any = ctx.config || {};
       const checkCfg: any = cfg.checks?.[checkId];
       if (!checkCfg) return;
+      if (checkCfg.type === 'human-input') return;
       if (checkCfg.criticality === 'internal') return;
       const issues = (result as any)?.issues;
       if (!Array.isArray(issues) || issues.length === 0) return;
 
       const failureIssue = issues.find(issue => this.isExecutionFailureIssue(issue));
       if (!failureIssue) return;
+      if (
+        typeof failureIssue.message === 'string' &&
+        failureIssue.message.toLowerCase().includes('awaiting human input')
+      ) {
+        return;
+      }
 
       const msg =
         typeof failureIssue.message === 'string' && failureIssue.message.trim().length > 0

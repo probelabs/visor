@@ -15,6 +15,7 @@ type SlackSocketConfig = {
   mentions?: 'direct' | 'all';
   threads?: 'required' | 'any';
   channel_allowlist?: string[]; // simple wildcard prefix match, e.g., CENG*
+  allowBotMessages?: boolean; // allow bot_message events (default: false)
 };
 
 export class SlackSocketRunner {
@@ -29,6 +30,7 @@ export class SlackSocketRunner {
   private client?: SlackClient;
   private limiter?: RateLimiter;
   private botUserId?: string;
+  private allowBotMessages: boolean = false;
   private processedKeys: Map<string, number> = new Map();
   private adapter?: SlackAdapter;
   private retryCount = 0;
@@ -41,6 +43,11 @@ export class SlackSocketRunner {
     this.mentions = opts.mentions || 'direct';
     this.threads = opts.threads || 'any';
     this.allow = Array.isArray(opts.channel_allowlist) ? opts.channel_allowlist : [];
+    const slackAny: any = (cfg as any).slack || {};
+    this.allowBotMessages =
+      opts.allowBotMessages === true ||
+      slackAny.allow_bot_messages === true ||
+      process.env.VISOR_SLACK_ALLOW_BOT_MESSAGES === 'true';
     this.engine = engine;
     this.cfg = cfg;
   }
@@ -198,6 +205,13 @@ export class SlackSocketRunner {
       }
       return;
     }
+    // Ignore bot messages unless explicitly allowed
+    if (subtype === 'bot_message' && !this.allowBotMessages) {
+      if (process.env.VISOR_DEBUG === 'true') {
+        logger.debug('[SlackSocket] Dropping bot_message (disabled)');
+      }
+      return;
+    }
     // Only skip our own bot messages, allow other bots to trigger Visor
     if (this.botUserId && ev.user && String(ev.user) === String(this.botUserId)) {
       if (process.env.VISOR_DEBUG === 'true') {
@@ -225,12 +239,13 @@ export class SlackSocketRunner {
     const isDmLike = channelId.startsWith('D');
     const text = String(ev.text || '');
     const hasBotMention = !!this.botUserId && text.includes(`<@${String(this.botUserId)}>`);
+    const isMentionEvent = type === 'app_mention' || hasBotMention;
 
     // In public (C*) and private (G*) channels, require an explicit bot mention
     // so we don't trigger on every message in a thread.
     // In 1:1 DMs we allow plain message events when mentions=all.
     if (!isDmLike) {
-      if (!hasBotMention) {
+      if (!isMentionEvent) {
         if (process.env.VISOR_DEBUG === 'true') {
           logger.debug(
             `[SlackSocket] Dropping channel message: type=${type} hasBotMention=${hasBotMention}`
@@ -239,7 +254,7 @@ export class SlackSocketRunner {
         return;
       }
     } else {
-      if (this.mentions === 'direct' && type !== 'app_mention' && !hasBotMention) {
+      if (this.mentions === 'direct' && !isMentionEvent) {
         if (process.env.VISOR_DEBUG === 'true') {
           logger.debug(
             `[SlackSocket] Dropping DM message: type=${type} hasBotMention=${hasBotMention}`
