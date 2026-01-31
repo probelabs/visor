@@ -116,7 +116,7 @@ describe('Slack socket gating (mentions / channel types)', () => {
     );
     expect(spy).not.toHaveBeenCalled();
 
-    // Bot message with explicit mention should be accepted
+    // Bot message with explicit mention should be ignored by default
     (runner as any).botUserId = 'UFAKEBOT';
     await (runner as any).handleMessage(
       JSON.stringify(
@@ -129,7 +129,7 @@ describe('Slack socket gating (mentions / channel types)', () => {
         })
       )
     );
-    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).not.toHaveBeenCalled();
 
     // app_mention in same channel should be accepted
     await (runner as any).handleMessage(
@@ -137,7 +137,7 @@ describe('Slack socket gating (mentions / channel types)', () => {
         mkEnv({ type: 'app_mention', channel: 'C1', ts: '1800.2', text: '<@UFAKEBOT> hi' })
       )
     );
-    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
   });
 
