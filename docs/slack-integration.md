@@ -117,6 +117,11 @@ slack:
     ack: eyes             # Acknowledgement reaction
     done: thumbsup        # Completion reaction
 
+  # Optional: allow bot_message events (default: false)
+  # When true, messages posted by other bots can trigger runs (still subject
+  # to mention/threads/channel allowlist gating).
+  allow_bot_messages: false
+
   # Optional: rate limiting
   rate_limiting:
     enabled: true
@@ -157,6 +162,7 @@ checks:
 | `mentions` | string | `"direct"` | `"direct"` for @mentions only, `"all"` for DMs too |
 | `threads` | string | `"any"` | `"required"` to only respond in threads |
 | `channel_allowlist` | string[] | `[]` | Limit to specific channels (supports `*` wildcard) |
+| `allow_bot_messages` | boolean | `false` | Allow `bot_message` events to trigger runs |
 | `show_raw_output` | boolean | `false` | Post raw JSON output (for debugging) |
 | `reactions.enabled` | boolean | `true` | Enable reaction management |
 | `reactions.ack` | string | `"eyes"` | Reaction name for acknowledgement |

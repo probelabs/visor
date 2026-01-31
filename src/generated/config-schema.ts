@@ -2034,6 +2034,10 @@ export const configSchema = {
           type: 'string',
           description: "Thread handling: 'required', 'optional', etc.",
         },
+        allow_bot_messages: {
+          type: 'boolean',
+          description: 'Allow bot_message events to trigger runs (default: false)',
+        },
         show_raw_output: {
           type: 'boolean',
           description: 'Show raw output in Slack responses',
