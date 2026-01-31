@@ -10,14 +10,20 @@ describe('Slack socket gating (mentions / channel types)', () => {
     checks: { ask: { type: 'human-input' as any, on: ['manual'] } },
   } as any;
 
-  function mkEnv(opts: { type: string; channel: string; ts?: string; text?: string }) {
-    const { type, channel } = opts;
+  function mkEnv(opts: {
+    type: string;
+    channel: string;
+    ts?: string;
+    text?: string;
+    subtype?: string;
+  }) {
+    const { type, channel, subtype } = opts;
     const ts = opts.ts || '1700.123';
     const text = opts.text || 'Hello bot!';
     return {
       type: 'events_api',
       envelope_id: `env-${channel}-${type}-${ts}`,
-      payload: { event: { type, channel, ts, text } },
+      payload: { event: { type, channel, ts, text, subtype } },
     };
   }
 
@@ -47,6 +53,43 @@ describe('Slack socket gating (mentions / channel types)', () => {
     spy.mockRestore();
   });
 
+  test('private channel (G*) requires explicit mention', async () => {
+    const cfg = baseCfg;
+    const engine = new StateMachineExecutionEngine();
+    const runner = new SlackSocketRunner(engine, cfg, {
+      appToken: 'xapp-test',
+      endpoint: '/bots/slack/support',
+      mentions: 'all',
+      threads: 'required',
+    });
+    const spy = jest
+      .spyOn((StateMachineExecutionEngine as any).prototype, 'executeChecks')
+      .mockResolvedValue({
+        results: { default: [] },
+        statistics: {
+          totalChecks: 1,
+          checksByGroup: {},
+          issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
+        },
+      });
+
+    // Plain message in G* channel should be ignored (no mention)
+    await (runner as any).handleMessage(
+      JSON.stringify(mkEnv({ type: 'message', channel: 'G1', ts: '1750.1', text: 'Hello bot!' }))
+    );
+    expect(spy).not.toHaveBeenCalled();
+
+    // Explicit mention in same channel should be accepted
+    (runner as any).botUserId = 'UFAKEBOT';
+    await (runner as any).handleMessage(
+      JSON.stringify(
+        mkEnv({ type: 'message', channel: 'G1', ts: '1750.2', text: '<@UFAKEBOT> hi' })
+      )
+    );
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
   test('public channel only reacts to app_mention, not plain message', async () => {
     const cfg = baseCfg;
     const engine = new StateMachineExecutionEngine();
@@ -70,6 +113,21 @@ describe('Slack socket gating (mentions / channel types)', () => {
     // Plain message in C* channel should be ignored
     await (runner as any).handleMessage(
       JSON.stringify(mkEnv({ type: 'message', channel: 'C1', ts: '1800.1', text: 'Hello bot!' }))
+    );
+    expect(spy).not.toHaveBeenCalled();
+
+    // Bot message with explicit mention should be ignored by default
+    (runner as any).botUserId = 'UFAKEBOT';
+    await (runner as any).handleMessage(
+      JSON.stringify(
+        mkEnv({
+          type: 'message',
+          subtype: 'bot_message',
+          channel: 'C1',
+          ts: '1800.15',
+          text: '<@UFAKEBOT> hi from bot',
+        })
+      )
     );
     expect(spy).not.toHaveBeenCalled();
 

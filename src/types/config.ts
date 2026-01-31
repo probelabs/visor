@@ -1205,6 +1205,8 @@ export interface SlackConfig {
   mentions?: string;
   /** Thread handling: 'required', 'optional', etc. */
   threads?: string;
+  /** Allow bot_message events to trigger runs (default: false) */
+  allow_bot_messages?: boolean;
   /** Show raw output in Slack responses */
   show_raw_output?: boolean;
   /**

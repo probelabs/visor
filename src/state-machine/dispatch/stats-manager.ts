@@ -9,6 +9,7 @@ export function hasFatalIssues(result: ReviewSummary): boolean {
     return (
       ruleId.endsWith('/error') ||
       ruleId.includes('/execution_error') ||
+      ruleId.includes('timeout') ||
       ruleId.endsWith('_fail_if')
     );
   });

@@ -15,6 +15,7 @@ type SlackSocketConfig = {
   mentions?: 'direct' | 'all';
   threads?: 'required' | 'any';
   channel_allowlist?: string[]; // simple wildcard prefix match, e.g., CENG*
+  allowBotMessages?: boolean; // allow bot_message events (default: false)
 };
 
 export class SlackSocketRunner {
@@ -29,6 +30,7 @@ export class SlackSocketRunner {
   private client?: SlackClient;
   private limiter?: RateLimiter;
   private botUserId?: string;
+  private allowBotMessages: boolean = false;
   private processedKeys: Map<string, number> = new Map();
   private adapter?: SlackAdapter;
   private retryCount = 0;
@@ -41,6 +43,11 @@ export class SlackSocketRunner {
     this.mentions = opts.mentions || 'direct';
     this.threads = opts.threads || 'any';
     this.allow = Array.isArray(opts.channel_allowlist) ? opts.channel_allowlist : [];
+    const slackAny: any = (cfg as any).slack || {};
+    this.allowBotMessages =
+      opts.allowBotMessages === true ||
+      slackAny.allow_bot_messages === true ||
+      process.env.VISOR_SLACK_ALLOW_BOT_MESSAGES === 'true';
     this.engine = engine;
     this.cfg = cfg;
   }
@@ -168,19 +175,50 @@ export class SlackSocketRunner {
     try {
       env = JSON.parse(raw);
     } catch {
+      if (process.env.VISOR_DEBUG === 'true') {
+        logger.debug('[SlackSocket] Dropping non-JSON payload');
+      }
       return;
     }
     if (env.type === 'hello') return;
     if (env.envelope_id) this.send({ envelope_id: env.envelope_id }); // ack ASAP
-    if (env.type !== 'events_api' || !env.payload) return;
+    if (env.type !== 'events_api' || !env.payload) {
+      if (process.env.VISOR_DEBUG === 'true') {
+        logger.debug(`[SlackSocket] Dropping non-events payload: type=${String(env.type || '-')}`);
+      }
+      return;
+    }
     const p = env.payload;
     const ev = p.event || {};
     const type = ev.type as string;
+    const subtype = ev.subtype as string | undefined;
 
-    // Ignore bot messages and edited/changed events to prevent loops
-    if (ev.subtype && ev.subtype !== 'thread_broadcast') return;
-    if (ev.bot_id) return;
-    if (this.botUserId && ev.user && String(ev.user) === String(this.botUserId)) return;
+    // Ensure botUserId is available for mention detection when possible
+    try {
+      await this.ensureClient();
+    } catch {}
+
+    // Ignore edited/changed events to prevent loops
+    if (subtype && subtype !== 'thread_broadcast' && subtype !== 'bot_message') {
+      if (process.env.VISOR_DEBUG === 'true') {
+        logger.debug(`[SlackSocket] Dropping subtype=${subtype}`);
+      }
+      return;
+    }
+    // Ignore bot messages unless explicitly allowed
+    if (subtype === 'bot_message' && !this.allowBotMessages) {
+      if (process.env.VISOR_DEBUG === 'true') {
+        logger.debug('[SlackSocket] Dropping bot_message (disabled)');
+      }
+      return;
+    }
+    // Only skip our own bot messages, allow other bots to trigger Visor
+    if (this.botUserId && ev.user && String(ev.user) === String(this.botUserId)) {
+      if (process.env.VISOR_DEBUG === 'true') {
+        logger.debug('[SlackSocket] Dropping self-bot message');
+      }
+      return;
+    }
 
     // Info-level receipt log for observability
     try {
@@ -197,21 +235,49 @@ export class SlackSocketRunner {
 
     // Gating: mentions / DM vs channel
     const channelId = String(ev.channel || '');
-    const isDmLike = channelId.startsWith('D') || channelId.startsWith('G');
+    // Only treat 1:1 DMs (D*) as DM-like; private channels/MPIMs (G*) require mentions.
+    const isDmLike = channelId.startsWith('D');
+    const text = String(ev.text || '');
+    const hasBotMention = !!this.botUserId && text.includes(`<@${String(this.botUserId)}>`);
+    const isMentionEvent = type === 'app_mention' || hasBotMention;
 
-    // In public channels (C*), only react to app_mention events so we don't
-    // trigger on every message in a thread. In DMs/MPIMs we allow plain
-    // message events when mentions=all.
+    // In public (C*) and private (G*) channels, require an explicit bot mention
+    // so we don't trigger on every message in a thread.
+    // In 1:1 DMs we allow plain message events when mentions=all.
     if (!isDmLike) {
-      if (type !== 'app_mention') return;
+      if (!isMentionEvent) {
+        if (process.env.VISOR_DEBUG === 'true') {
+          logger.debug(
+            `[SlackSocket] Dropping channel message: type=${type} hasBotMention=${hasBotMention}`
+          );
+        }
+        return;
+      }
     } else {
-      if (this.mentions === 'direct' && type !== 'app_mention') return;
+      if (this.mentions === 'direct' && !isMentionEvent) {
+        if (process.env.VISOR_DEBUG === 'true') {
+          logger.debug(
+            `[SlackSocket] Dropping DM message: type=${type} hasBotMention=${hasBotMention}`
+          );
+        }
+        return;
+      }
     }
     // Gating: threads (accept root messages by treating ts as thread root)
     const rootOrThread = ev.thread_ts || ev.ts || ev.event_ts;
-    if (this.threads === 'required' && !rootOrThread) return;
+    if (this.threads === 'required' && !rootOrThread) {
+      if (process.env.VISOR_DEBUG === 'true') {
+        logger.debug('[SlackSocket] Dropping message: threads required but no thread_ts');
+      }
+      return;
+    }
     // channel allowlist
-    if (!this.matchesAllowlist(ev.channel)) return;
+    if (!this.matchesAllowlist(ev.channel)) {
+      if (process.env.VISOR_DEBUG === 'true') {
+        logger.debug(`[SlackSocket] Dropping message: channel not in allowlist`);
+      }
+      return;
+    }
 
     // Deduplicate duplicate events (e.g., message + app_mention with same ts)
     try {
@@ -219,7 +285,12 @@ export class SlackSocketRunner {
       const now = Date.now();
       for (const [k, t] of this.processedKeys.entries())
         if (now - t > 10000) this.processedKeys.delete(k);
-      if (this.processedKeys.has(key)) return;
+      if (this.processedKeys.has(key)) {
+        if (process.env.VISOR_DEBUG === 'true') {
+          logger.debug(`[SlackSocket] Dropping duplicate event key=${key}`);
+        }
+        return;
+      }
       this.processedKeys.set(key, now);
     } catch {}
 

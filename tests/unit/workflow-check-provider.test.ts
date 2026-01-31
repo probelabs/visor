@@ -244,6 +244,52 @@ describe('WorkflowCheckProvider', () => {
       expect(executorCall[1].inputs.language).toBe('typescript'); // test.ts contains .ts
     });
 
+    it('should support readfile tag in Liquid templates', async () => {
+      // Create a temporary test file
+      const fs = require('fs');
+      const path = require('path');
+      const testFilePath = path.join(process.cwd(), 'test-architecture.md');
+      const testContent = '# Architecture\n\nThis is the architecture doc.';
+      fs.writeFileSync(testFilePath, testContent);
+
+      try {
+        const config: CheckProviderConfig = {
+          type: 'workflow',
+          workflow: 'test-workflow',
+          workflow_inputs: {
+            language: 'typescript',
+            threshold: 85,
+            architecture: '{% readfile "test-architecture.md" %}',
+          },
+        };
+
+        // Update the workflow definition to accept architecture input
+        const workflowWithArchitecture: WorkflowDefinition = {
+          ...sampleWorkflow,
+          inputs: [
+            ...sampleWorkflow.inputs!,
+            { name: 'architecture', schema: { type: 'string' as const }, required: false },
+          ],
+        };
+
+        mockRegistry.get.mockReturnValue(workflowWithArchitecture);
+        mockRegistry.validateInputs.mockReturnValue({ valid: true });
+        mockExecutor.execute.mockResolvedValue({
+          success: true,
+          output: {},
+          status: 'completed',
+        });
+
+        await provider.execute(samplePRInfo, config);
+
+        const executorCall = mockExecutor.execute.mock.calls[0];
+        expect(executorCall[1].inputs.architecture).toBe(testContent);
+      } finally {
+        // Clean up the test file
+        fs.unlinkSync(testFilePath);
+      }
+    });
+
     it('should handle workflow overrides', async () => {
       const config: CheckProviderConfig = {
         type: 'workflow',

@@ -18,6 +18,7 @@ import { logger } from './logger';
 import { createSecureSandbox, compileAndRun } from './utils/sandbox';
 // eslint-disable-next-line no-restricted-imports -- needed for Liquid type
 import { Liquid } from 'liquidjs';
+import { createExtendedLiquid } from './liquid-extensions';
 
 /**
  * Workflow execution result
@@ -60,7 +61,7 @@ export class WorkflowExecutor {
   constructor() {
     // Don't call CheckProviderRegistry.getInstance() here to avoid circular dependency
     // during registry initialization (since WorkflowCheckProvider is registered in the registry)
-    this.liquid = new Liquid();
+    this.liquid = createExtendedLiquid();
   }
 
   /**

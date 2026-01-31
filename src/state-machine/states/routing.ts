@@ -81,19 +81,26 @@ function classifyFailure(result: ReviewSummary): 'none' | 'logical' | 'execution
   if (!issues || issues.length === 0) return 'none';
   // Heuristics:
   // - logical: fail_if, contract/guarantee_failed, explicit ruleIds ending with _fail_if
-  // - execution: provider/command errors, forEach/execution_error, sandbox_runner_error
+  // - execution: provider/command errors, timeouts, forEach/execution_error, sandbox_runner_error
   let hasLogical = false;
   let hasExecution = false;
   for (const iss of issues) {
     const id = String((iss as any).ruleId || '');
     const msg = String((iss as any).message || '');
+    const msgLower = msg.toLowerCase();
     if (
       id.endsWith('_fail_if') ||
       id.includes('contract/guarantee_failed') ||
       id.includes('contract/schema_validation_failed')
     )
       hasLogical = true;
-    if (id.includes('/execution_error') || msg.includes('Command execution failed'))
+    if (
+      id.endsWith('/error') ||
+      id.includes('/execution_error') ||
+      id.includes('timeout') ||
+      msgLower.includes('timed out') ||
+      msg.includes('Command execution failed')
+    )
       hasExecution = true;
     if (id.includes('forEach/execution_error') || msg.includes('sandbox_runner_error'))
       hasExecution = true;

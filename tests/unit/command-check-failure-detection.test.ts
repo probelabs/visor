@@ -46,6 +46,42 @@ describe('Command Check Failure Detection', () => {
       expect(stats?.skipReason).toBe('dependency_failed');
     });
 
+    it('should treat command timeouts as execution failures and skip dependents', async () => {
+      const config: Partial<VisorConfig> = {
+        version: '1.0',
+        checks: {
+          'timeout-command': {
+            type: 'command',
+            exec: 'node -e "setTimeout(()=>{}, 10000)"',
+            timeout: 50,
+          },
+          'dependent-check': {
+            type: 'command',
+            exec: 'echo "should be skipped"',
+            depends_on: ['timeout-command'],
+          },
+        },
+      };
+
+      const result = await engine.executeChecks({
+        checks: ['timeout-command', 'dependent-check'],
+        config: config as VisorConfig,
+        workingDirectory: process.cwd(),
+      });
+
+      const allIssues = result.reviewSummary.issues || [];
+      const hasTimeoutError = allIssues.some((issue: any) =>
+        issue.ruleId?.endsWith('/command/timeout')
+      );
+      expect(hasTimeoutError).toBe(true);
+
+      const stats = result.executionStatistics?.checks!.find(
+        c => c.checkName === 'dependent-check'
+      );
+      expect(stats?.skipped).toBe(true);
+      expect(stats?.skipReason).toBe('dependency_failed');
+    });
+
     it('should not skip dependent checks when command succeeds', async () => {
       const config: Partial<VisorConfig> = {
         version: '1.0',

@@ -13,6 +13,7 @@ import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import { generateHumanId } from '../utils/human-id';
 // eslint-disable-next-line no-restricted-imports -- needed for Liquid type
 import { Liquid } from 'liquidjs';
+import { createExtendedLiquid } from '../liquid-extensions';
 
 /**
  * Provider that executes workflows as checks
@@ -26,7 +27,7 @@ export class WorkflowCheckProvider extends CheckProvider {
     super();
     this.registry = WorkflowRegistry.getInstance();
     this.executor = new WorkflowExecutor();
-    this.liquid = new Liquid();
+    this.liquid = createExtendedLiquid();
   }
 
   getName(): string {
@@ -792,26 +793,26 @@ export class WorkflowCheckProvider extends CheckProvider {
     if (rawData.imports && Array.isArray(rawData.imports)) {
       const configDir = path.dirname(resolved);
       for (const source of rawData.imports) {
-        try {
-          const results = await this.registry.import(source, {
-            basePath: configDir,
-            validate: true,
-          });
-          for (const result of results) {
-            if (!result.valid && result.errors) {
-              const errors = result.errors.map((e: any) => `  ${e.path}: ${e.message}`).join('\n');
-              throw new Error(`Failed to import workflow from '${source}':\n${errors}`);
+        const results = await this.registry.import(source, {
+          basePath: configDir,
+          validate: true,
+        });
+        for (const result of results) {
+          if (!result.valid && result.errors) {
+            // Check if error is just "already exists" - skip silently
+            // This allows multiple workflows to import the same dependency
+            const isAlreadyExists = result.errors.every((e: any) =>
+              e.message.includes('already exists')
+            );
+            if (isAlreadyExists) {
+              logger.debug(`Workflow from '${source}' already imported, skipping`);
+              continue;
             }
-          }
-          logger.info(`Imported workflows from: ${source}`);
-        } catch (err: any) {
-          // If the workflow already exists, log a warning but don't fail
-          if (err.message?.includes('already exists')) {
-            logger.debug(`Workflow from '${source}' already imported, skipping`);
-          } else {
-            throw err;
+            const errors = result.errors.map((e: any) => `  ${e.path}: ${e.message}`).join('\n');
+            throw new Error(`Failed to import workflow from '${source}':\n${errors}`);
           }
         }
+        logger.info(`Imported workflows from: ${source}`);
       }
     }
 

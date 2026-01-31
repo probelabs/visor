@@ -325,7 +325,59 @@ export class WorktreeManager {
       if (metadata) {
         // Check if the requested ref matches the existing ref
         if (metadata.ref === ref) {
-          // Same ref - reuse existing worktree
+          // Same ref - refresh commit in case the branch moved
+          try {
+            const bareRepoPath =
+              metadata.bare_repo_path ||
+              (await this.getOrCreateBareRepo(
+                repository,
+                repoUrl,
+                options.token,
+                options.fetchDepth,
+                options.cloneTimeoutMs
+              ));
+            const fetched = await this.fetchRef(bareRepoPath, ref);
+            if (fetched) {
+              const latestCommit = await this.getCommitShaForRef(bareRepoPath, ref);
+              if (latestCommit && latestCommit !== metadata.commit) {
+                logger.info(
+                  `Worktree ref ${ref} advanced (${metadata.commit} -> ${latestCommit}), updating...`
+                );
+                const checkoutCmd = `git -C ${this.escapeShellArg(worktreePath)} checkout --detach ${this.escapeShellArg(latestCommit)}`;
+                const checkoutResult = await this.executeGitCommand(checkoutCmd, {
+                  timeout: 60000,
+                });
+                if (checkoutResult.exitCode !== 0) {
+                  throw new Error(`Failed to checkout updated ref: ${checkoutResult.stderr}`);
+                }
+
+                const updatedMetadata: WorktreeMetadata = {
+                  ...metadata,
+                  commit: latestCommit,
+                  created_at: new Date().toISOString(),
+                };
+                await this.saveMetadata(worktreePath, updatedMetadata);
+                if (options.clean) {
+                  logger.debug(`Cleaning updated worktree`);
+                  await this.cleanWorktree(worktreePath);
+                }
+                this.activeWorktrees.set(worktreeId, updatedMetadata);
+                return {
+                  id: worktreeId,
+                  path: worktreePath,
+                  ref: updatedMetadata.ref,
+                  commit: updatedMetadata.commit,
+                  metadata: updatedMetadata,
+                  locked: false,
+                };
+              }
+            }
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            logger.warn(`Failed to refresh worktree, will reuse existing: ${errorMessage}`);
+          }
+
+          // Same ref - reuse existing worktree (already up to date or refresh failed)
           if (options.clean) {
             logger.debug(`Cleaning existing worktree`);
             await this.cleanWorktree(worktreePath);
@@ -358,8 +410,11 @@ export class WorktreeManager {
               ));
 
             // Fetch the new ref and get its commit SHA
-            await this.fetchRef(bareRepoPath, ref);
+            const fetched = await this.fetchRef(bareRepoPath, ref);
             const newCommit = await this.getCommitShaForRef(bareRepoPath, ref);
+            if (!fetched) {
+              logger.warn(`Using cached ref ${ref} for update; fetch failed`);
+            }
 
             // Checkout the new commit in the worktree (detached HEAD)
             const checkoutCmd = `git -C ${this.escapeShellArg(worktreePath)} checkout --detach ${this.escapeShellArg(newCommit)}`;
@@ -415,8 +470,11 @@ export class WorktreeManager {
     // We use the commit (detached HEAD) instead of the branch name so we
     // can have multiple worktrees for the same branch without git refusing
     // with "branch X is already checked out".
-    await this.fetchRef(bareRepoPath, ref);
+    const fetched = await this.fetchRef(bareRepoPath, ref);
     const commit = await this.getCommitShaForRef(bareRepoPath, ref);
+    if (!fetched) {
+      logger.warn(`Using cached ref ${ref}; fetch failed`);
+    }
 
     // Prune stale worktree entries before creating a new one.
     // This handles the case where a worktree directory was manually deleted
@@ -486,15 +544,20 @@ export class WorktreeManager {
   /**
    * Fetch a specific ref in bare repository
    */
-  private async fetchRef(bareRepoPath: string, ref: string): Promise<void> {
+  private async fetchRef(bareRepoPath: string, ref: string): Promise<boolean> {
     // Validate ref (already validated in createWorktree, but double-check for safety)
     this.validateRef(ref);
 
     logger.debug(`Fetching ref: ${ref}`);
 
     // Try to fetch the ref (might be a PR ref or branch)
-    const fetchCmd = `git -C ${this.escapeShellArg(bareRepoPath)} fetch origin ${this.escapeShellArg(ref + ':' + ref)} 2>&1 || true`;
-    await this.executeGitCommand(fetchCmd, { timeout: 60000 });
+    const fetchCmd = `git -C ${this.escapeShellArg(bareRepoPath)} fetch origin ${this.escapeShellArg(ref + ':' + ref)} 2>&1`;
+    const result = await this.executeGitCommand(fetchCmd, { timeout: 60000 });
+    if (result.exitCode !== 0) {
+      logger.warn(`Failed to fetch ref ${ref}: ${result.stderr}`);
+      return false;
+    }
+    return true;
   }
 
   /**

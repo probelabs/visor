@@ -1145,6 +1145,12 @@ ${bodyWithReturn}
           isTimeout = true;
         }
       }
+      // Fallback: detect timeout based on error message text
+      if (!isTimeout && error instanceof Error) {
+        if (/timed out/i.test(error.message)) {
+          isTimeout = true;
+        }
+      }
 
       // Extract stderr from the error if available (child_process errors include stdout/stderr)
       let stderrOutput = '';
