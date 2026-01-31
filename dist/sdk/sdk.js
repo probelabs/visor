@@ -3447,9 +3447,10 @@ function classifyFailure(result) {
   for (const iss of issues) {
     const id = String(iss.ruleId || "");
     const msg = String(iss.message || "");
+    const msgLower = msg.toLowerCase();
     if (id.endsWith("_fail_if") || id.includes("contract/guarantee_failed") || id.includes("contract/schema_validation_failed"))
       hasLogical = true;
-    if (id.includes("/execution_error") || msg.includes("Command execution failed"))
+    if (id.endsWith("/error") || id.includes("/execution_error") || id.includes("timeout") || msgLower.includes("timed out") || msg.includes("Command execution failed"))
       hasExecution = true;
     if (id.includes("forEach/execution_error") || msg.includes("sandbox_runner_error"))
       hasExecution = true;
@@ -5462,7 +5463,7 @@ function hasFatalIssues(result) {
   if (!result.issues) return false;
   return result.issues.some((issue) => {
     const ruleId = issue.ruleId || "";
-    return ruleId.endsWith("/error") || ruleId.includes("/execution_error") || ruleId.endsWith("_fail_if");
+    return ruleId.endsWith("/error") || ruleId.includes("/execution_error") || ruleId.includes("timeout") || ruleId.endsWith("_fail_if");
   });
 }
 function updateStats(results, state, isForEachIteration = false) {
@@ -8833,12 +8834,45 @@ var init_workflow_registry = __esm({
        * Import workflows from a file or URL
        */
       async import(source, options) {
+        return this.importInternal(source, options, /* @__PURE__ */ new Set());
+      }
+      async importInternal(source, options, visited) {
         const results = [];
         try {
-          const content = await this.loadWorkflowContent(source, options?.basePath);
-          const data = this.parseWorkflowContent(content, source);
+          const { content, resolvedSource, importBasePath } = await this.loadWorkflowContent(
+            source,
+            options?.basePath
+          );
+          const visitKey = resolvedSource || source;
+          if (visited.has(visitKey)) {
+            return results;
+          }
+          visited.add(visitKey);
+          const data = this.parseWorkflowContent(content, resolvedSource || source);
+          const topImports = !Array.isArray(data) ? data?.imports : void 0;
+          if (Array.isArray(topImports)) {
+            for (const childSource of topImports) {
+              const childResults = await this.importInternal(
+                childSource,
+                { ...options, basePath: importBasePath },
+                visited
+              );
+              results.push(...childResults);
+            }
+          }
           const workflows = Array.isArray(data) ? data : [data];
           for (const workflow of workflows) {
+            const workflowImports = workflow?.imports;
+            if (Array.isArray(workflowImports)) {
+              for (const childSource of workflowImports) {
+                const childResults = await this.importInternal(
+                  childSource,
+                  { ...options, basePath: importBasePath },
+                  visited
+                );
+                results.push(...childResults);
+              }
+            }
             if (options?.validate !== false) {
               const validation = this.validateWorkflow(workflow);
               if (!validation.valid) {
@@ -8855,9 +8889,12 @@ var init_workflow_registry = __esm({
                 }
               }
             }
-            const workflowWithoutTests = { ...workflow };
-            delete workflowWithoutTests.tests;
-            const result = this.register(workflowWithoutTests, source, { override: options?.override });
+            const workflowWithoutExtras = { ...workflow };
+            delete workflowWithoutExtras.tests;
+            delete workflowWithoutExtras.imports;
+            const result = this.register(workflowWithoutExtras, source, {
+              override: options?.override
+            });
             results.push(result);
           }
         } catch (error) {
@@ -9015,15 +9052,27 @@ var init_workflow_registry = __esm({
        * Load workflow content from file or URL
        */
       async loadWorkflowContent(source, basePath) {
+        const baseIsUrl = basePath?.startsWith("http://") || basePath?.startsWith("https://");
         if (source.startsWith("http://") || source.startsWith("https://")) {
           const response = await fetch(source);
           if (!response.ok) {
             throw new Error(`Failed to fetch workflow from ${source}: ${response.statusText}`);
           }
-          return await response.text();
+          const importBasePath = new URL(".", source).toString();
+          return { content: await response.text(), resolvedSource: source, importBasePath };
+        }
+        if (baseIsUrl) {
+          const resolvedUrl = new URL(source, basePath).toString();
+          const response = await fetch(resolvedUrl);
+          if (!response.ok) {
+            throw new Error(`Failed to fetch workflow from ${resolvedUrl}: ${response.statusText}`);
+          }
+          const importBasePath = new URL(".", resolvedUrl).toString();
+          return { content: await response.text(), resolvedSource: resolvedUrl, importBasePath };
         }
         const filePath = path8.isAbsolute(source) ? source : path8.resolve(basePath || process.cwd(), source);
-        return await import_fs.promises.readFile(filePath, "utf-8");
+        const content = await import_fs.promises.readFile(filePath, "utf-8");
+        return { content, resolvedSource: filePath, importBasePath: path8.dirname(filePath) };
       }
       /**
        * Parse workflow content (YAML or JSON)
@@ -9081,7 +9130,7 @@ var init_workflow_registry = __esm({
 });
 
 // src/workflow-executor.ts
-var import_liquidjs2, WorkflowExecutor;
+var WorkflowExecutor;
 var init_workflow_executor = __esm({
   "src/workflow-executor.ts"() {
     "use strict";
@@ -9089,12 +9138,12 @@ var init_workflow_executor = __esm({
     init_dependency_resolver();
     init_logger();
     init_sandbox();
-    import_liquidjs2 = require("liquidjs");
+    init_liquid_extensions();
     WorkflowExecutor = class {
       providerRegistry = null;
       liquid;
       constructor() {
-        this.liquid = new import_liquidjs2.Liquid();
+        this.liquid = createExtendedLiquid();
       }
       /**
        * Lazy-load the provider registry to avoid circular dependency during initialization
@@ -10877,7 +10926,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -10893,7 +10942,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -11523,7 +11572,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -11538,13 +11587,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182>>": {
+        "Record<string,Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182>": {
+        "Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281>": {
           type: "object",
           additionalProperties: false
         },
@@ -12153,6 +12202,10 @@ var init_config_schema = __esm({
               type: "string",
               description: "Thread handling: 'required', 'optional', etc."
             },
+            allow_bot_messages: {
+              type: "boolean",
+              description: "Allow bot_message events to trigger runs (default: false)"
+            },
             show_raw_output: {
               type: "boolean",
               description: "Show raw output in Slack responses"
@@ -12602,6 +12655,11 @@ ${errors}`);
           const results = await registry.import(source, { basePath, validate: true });
           for (const result of results) {
             if (!result.valid && result.errors) {
+              const isAlreadyExists = result.errors.every((e) => e.message.includes("already exists"));
+              if (isAlreadyExists) {
+                logger.debug(`Workflow from '${source}' already imported, skipping`);
+                continue;
+              }
               const errors = result.errors.map((e) => `  ${e.path}: ${e.message}`).join("\n");
               throw new Error(`Failed to import workflow from '${source}':
 ${errors}`);
@@ -13349,7 +13407,7 @@ var workflow_check_provider_exports = {};
 __export(workflow_check_provider_exports, {
   WorkflowCheckProvider: () => WorkflowCheckProvider
 });
-var import_liquidjs3, WorkflowCheckProvider;
+var WorkflowCheckProvider;
 var init_workflow_check_provider = __esm({
   "src/providers/workflow-check-provider.ts"() {
     "use strict";
@@ -13359,7 +13417,7 @@ var init_workflow_check_provider = __esm({
     init_logger();
     init_sandbox();
     init_human_id();
-    import_liquidjs3 = require("liquidjs");
+    init_liquid_extensions();
     WorkflowCheckProvider = class extends CheckProvider {
       registry;
       executor;
@@ -13368,7 +13426,7 @@ var init_workflow_check_provider = __esm({
         super();
         this.registry = WorkflowRegistry.getInstance();
         this.executor = new WorkflowExecutor();
-        this.liquid = new import_liquidjs3.Liquid();
+        this.liquid = createExtendedLiquid();
       }
       getName() {
         return "workflow";
@@ -13909,26 +13967,25 @@ var init_workflow_check_provider = __esm({
         if (rawData.imports && Array.isArray(rawData.imports)) {
           const configDir = path22.dirname(resolved);
           for (const source of rawData.imports) {
-            try {
-              const results = await this.registry.import(source, {
-                basePath: configDir,
-                validate: true
-              });
-              for (const result of results) {
-                if (!result.valid && result.errors) {
-                  const errors = result.errors.map((e) => `  ${e.path}: ${e.message}`).join("\n");
-                  throw new Error(`Failed to import workflow from '${source}':
-${errors}`);
+            const results = await this.registry.import(source, {
+              basePath: configDir,
+              validate: true
+            });
+            for (const result of results) {
+              if (!result.valid && result.errors) {
+                const isAlreadyExists = result.errors.every(
+                  (e) => e.message.includes("already exists")
+                );
+                if (isAlreadyExists) {
+                  logger.debug(`Workflow from '${source}' already imported, skipping`);
+                  continue;
                 }
-              }
-              logger.info(`Imported workflows from: ${source}`);
-            } catch (err) {
-              if (err.message?.includes("already exists")) {
-                logger.debug(`Workflow from '${source}' already imported, skipping`);
-              } else {
-                throw err;
+                const errors = result.errors.map((e) => `  ${e.path}: ${e.message}`).join("\n");
+                throw new Error(`Failed to import workflow from '${source}':
+${errors}`);
               }
             }
+            logger.info(`Imported workflows from: ${source}`);
           }
         }
         const { ConfigManager: ConfigManager2 } = (init_config(), __toCommonJS(config_exports));
@@ -18758,6 +18815,11 @@ ${bodyWithReturn}
               isTimeout = true;
             }
           }
+          if (!isTimeout && error instanceof Error) {
+            if (/timed out/i.test(error.message)) {
+              isTimeout = true;
+            }
+          }
           let stderrOutput = "";
           if (error && typeof error === "object") {
             const execError = error;
@@ -21498,6 +21560,53 @@ var init_worktree_manager = __esm({
           const metadata2 = await this.loadMetadata(worktreePath);
           if (metadata2) {
             if (metadata2.ref === ref) {
+              try {
+                const bareRepoPath2 = metadata2.bare_repo_path || await this.getOrCreateBareRepo(
+                  repository,
+                  repoUrl,
+                  options.token,
+                  options.fetchDepth,
+                  options.cloneTimeoutMs
+                );
+                const fetched2 = await this.fetchRef(bareRepoPath2, ref);
+                if (fetched2) {
+                  const latestCommit = await this.getCommitShaForRef(bareRepoPath2, ref);
+                  if (latestCommit && latestCommit !== metadata2.commit) {
+                    logger.info(
+                      `Worktree ref ${ref} advanced (${metadata2.commit} -> ${latestCommit}), updating...`
+                    );
+                    const checkoutCmd = `git -C ${this.escapeShellArg(worktreePath)} checkout --detach ${this.escapeShellArg(latestCommit)}`;
+                    const checkoutResult = await this.executeGitCommand(checkoutCmd, {
+                      timeout: 6e4
+                    });
+                    if (checkoutResult.exitCode !== 0) {
+                      throw new Error(`Failed to checkout updated ref: ${checkoutResult.stderr}`);
+                    }
+                    const updatedMetadata = {
+                      ...metadata2,
+                      commit: latestCommit,
+                      created_at: (/* @__PURE__ */ new Date()).toISOString()
+                    };
+                    await this.saveMetadata(worktreePath, updatedMetadata);
+                    if (options.clean) {
+                      logger.debug(`Cleaning updated worktree`);
+                      await this.cleanWorktree(worktreePath);
+                    }
+                    this.activeWorktrees.set(worktreeId, updatedMetadata);
+                    return {
+                      id: worktreeId,
+                      path: worktreePath,
+                      ref: updatedMetadata.ref,
+                      commit: updatedMetadata.commit,
+                      metadata: updatedMetadata,
+                      locked: false
+                    };
+                  }
+                }
+              } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                logger.warn(`Failed to refresh worktree, will reuse existing: ${errorMessage}`);
+              }
               if (options.clean) {
                 logger.debug(`Cleaning existing worktree`);
                 await this.cleanWorktree(worktreePath);
@@ -21523,8 +21632,11 @@ var init_worktree_manager = __esm({
                   options.fetchDepth,
                   options.cloneTimeoutMs
                 );
-                await this.fetchRef(bareRepoPath2, ref);
+                const fetched2 = await this.fetchRef(bareRepoPath2, ref);
                 const newCommit = await this.getCommitShaForRef(bareRepoPath2, ref);
+                if (!fetched2) {
+                  logger.warn(`Using cached ref ${ref} for update; fetch failed`);
+                }
                 const checkoutCmd = `git -C ${this.escapeShellArg(worktreePath)} checkout --detach ${this.escapeShellArg(newCommit)}`;
                 const checkoutResult = await this.executeGitCommand(checkoutCmd, { timeout: 6e4 });
                 if (checkoutResult.exitCode !== 0) {
@@ -21562,8 +21674,11 @@ var init_worktree_manager = __esm({
             await fsp.rm(worktreePath, { recursive: true, force: true });
           }
         }
-        await this.fetchRef(bareRepoPath, ref);
+        const fetched = await this.fetchRef(bareRepoPath, ref);
         const commit = await this.getCommitShaForRef(bareRepoPath, ref);
+        if (!fetched) {
+          logger.warn(`Using cached ref ${ref}; fetch failed`);
+        }
         await this.pruneWorktrees(bareRepoPath);
         logger.info(`Creating worktree for ${repository}@${ref} (${commit})`);
         const createCmd = `git -C ${this.escapeShellArg(
@@ -21617,8 +21732,13 @@ var init_worktree_manager = __esm({
       async fetchRef(bareRepoPath, ref) {
         this.validateRef(ref);
         logger.debug(`Fetching ref: ${ref}`);
-        const fetchCmd = `git -C ${this.escapeShellArg(bareRepoPath)} fetch origin ${this.escapeShellArg(ref + ":" + ref)} 2>&1 || true`;
-        await this.executeGitCommand(fetchCmd, { timeout: 6e4 });
+        const fetchCmd = `git -C ${this.escapeShellArg(bareRepoPath)} fetch origin ${this.escapeShellArg(ref + ":" + ref)} 2>&1`;
+        const result = await this.executeGitCommand(fetchCmd, { timeout: 6e4 });
+        if (result.exitCode !== 0) {
+          logger.warn(`Failed to fetch ref ${ref}: ${result.stderr}`);
+          return false;
+        }
+        return true;
       }
       /**
        * Clean worktree (reset and remove untracked files)
@@ -24502,6 +24622,7 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
         const ruleId = issue.ruleId || "";
         return ruleId.endsWith("/error") || // System errors
         ruleId.includes("/execution_error") || // Command failures
+        ruleId.includes("timeout") || // Timeouts
         ruleId.endsWith("_fail_if");
       });
       if (iterationHasFatalIssues && output !== void 0 && output !== null && typeof output === "object") {
@@ -24617,7 +24738,7 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
             allIssues.push(failIssue);
             const nowHasFatalIssues = enrichedResult.issues.some((issue) => {
               const ruleId = issue.ruleId || "";
-              return ruleId.endsWith("/error") || ruleId.includes("/execution_error") || ruleId.endsWith("_fail_if");
+              return ruleId.endsWith("/error") || ruleId.includes("/execution_error") || ruleId.includes("timeout") || ruleId.endsWith("_fail_if");
             });
             if (nowHasFatalIssues && output !== void 0 && output !== null && typeof output === "object" && !output.__failed) {
               output = { ...output, __failed: true };
@@ -25994,6 +26115,7 @@ function hasFatalIssues2(result) {
     const ruleId = issue.ruleId || "";
     return ruleId.endsWith("/error") || // System errors
     ruleId.includes("/execution_error") || // Command failures
+    ruleId.includes("timeout") || // Timeouts
     ruleId.endsWith("_fail_if") && ruleId !== "global_fail_if";
   });
 }
@@ -26037,6 +26159,7 @@ function updateStats2(results, state, isForEachIteration = false) {
       const ruleId = issue.ruleId || "";
       return ruleId.endsWith("/error") || // System errors, exceptions
       ruleId.includes("/execution_error") || // Command failures
+      ruleId.includes("timeout") || // Timeouts
       ruleId.endsWith("_fail_if") && ruleId !== "global_fail_if";
     });
     if (error) {
@@ -29515,6 +29638,8 @@ var init_slack_frontend = __esm({
             const ev = env && env.payload || env;
             await this.maybePostDirectReply(ctx, ev.checkId, ev.result).catch(() => {
             });
+            await this.maybePostExecutionFailure(ctx, ev.checkId, ev.result).catch(() => {
+            });
           })
         );
         this.subs.push(
@@ -29664,7 +29789,6 @@ var init_slack_frontend = __esm({
       }
       async maybePostError(ctx, title, message, checkId) {
         if (this.errorNotified) return;
-        if (!this.isTelemetryEnabled(ctx)) return;
         const slack = this.getSlack(ctx);
         if (!slack) return;
         const payload = this.getInboundSlackPayload(ctx);
@@ -29677,11 +29801,13 @@ var init_slack_frontend = __esm({
 Check: ${checkId}`;
         if (message) text += `
 ${message}`;
-        const traceInfo = this.getTraceInfo();
-        if (traceInfo?.traceId) {
-          text += `
+        if (this.isTelemetryEnabled(ctx)) {
+          const traceInfo = this.getTraceInfo();
+          if (traceInfo?.traceId) {
+            text += `
 
 \`trace_id: ${traceInfo.traceId}\``;
+          }
         }
         const formattedText = formatSlackText(text);
         await slack.chat.postMessage({ channel, text: formattedText, thread_ts: threadTs });
@@ -29693,6 +29819,32 @@ ${message}`;
         }
         this.errorNotified = true;
       }
+      isExecutionFailureIssue(issue) {
+        const ruleId = String(issue?.ruleId || "");
+        const msg = String(issue?.message || "");
+        const msgLower = msg.toLowerCase();
+        return ruleId.endsWith("/error") || ruleId.includes("/execution_error") || ruleId.includes("timeout") || ruleId.includes("sandbox_runner_error") || msgLower.includes("timed out") || msg.includes("Command execution failed");
+      }
+      async maybePostExecutionFailure(ctx, checkId, result) {
+        try {
+          if (this.errorNotified) return;
+          const cfg = ctx.config || {};
+          const checkCfg = cfg.checks?.[checkId];
+          if (!checkCfg) return;
+          if (checkCfg.type === "human-input") return;
+          if (checkCfg.criticality === "internal") return;
+          const issues = result?.issues;
+          if (!Array.isArray(issues) || issues.length === 0) return;
+          const failureIssue = issues.find((issue) => this.isExecutionFailureIssue(issue));
+          if (!failureIssue) return;
+          if (typeof failureIssue.message === "string" && failureIssue.message.toLowerCase().includes("awaiting human input")) {
+            return;
+          }
+          const msg = typeof failureIssue.message === "string" && failureIssue.message.trim().length > 0 ? failureIssue.message.trim() : `Execution failed (${String(failureIssue.ruleId || "unknown")})`;
+          await this.maybePostError(ctx, "Check failed", msg, checkId);
+        } catch {
+        }
+      }
       async ensureAcknowledgement(ctx) {
         if (this.acked) return;
         const ref = this.getInboundSlackEvent(ctx);
@@ -29702,7 +29854,6 @@ ${message}`;
         try {
           const payload = this.getInboundSlackPayload(ctx);
           const ev = payload?.event;
-          if (ev?.subtype === "bot_message") return;
           try {
             const botId = await slack.getBotUserId?.();
             if (botId && ev?.user && String(ev.user) === String(botId)) return;

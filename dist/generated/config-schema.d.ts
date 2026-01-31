@@ -686,7 +686,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -702,7 +702,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -1296,7 +1296,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1311,13 +1311,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41182>': {
+        readonly 'Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };
@@ -1919,6 +1919,10 @@ export declare const configSchema: {
                 readonly threads: {
                     readonly type: "string";
                     readonly description: "Thread handling: 'required', 'optional', etc.";
+                };
+                readonly allow_bot_messages: {
+                    readonly type: "boolean";
+                    readonly description: "Allow bot_message events to trigger runs (default: false)";
                 };
                 readonly show_raw_output: {
                     readonly type: "boolean";
