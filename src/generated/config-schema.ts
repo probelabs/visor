@@ -436,6 +436,10 @@ export const configSchema = {
           type: 'string',
           description: 'Probe promptType for this check (underscore style)',
         },
+        ai_max_iterations: {
+          type: 'number',
+          description: 'Maximum tool iterations for ProbeAgent (underscore style)',
+        },
         ai_system_prompt: {
           type: 'string',
           description: 'System prompt for this check (underscore style)',
@@ -741,7 +745,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -758,7 +762,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -889,6 +893,10 @@ export const configSchema = {
         timeout: {
           type: 'number',
           description: 'Request timeout in milliseconds',
+        },
+        max_iterations: {
+          type: 'number',
+          description: 'Maximum tool iterations for ProbeAgent',
         },
         debug: {
           type: 'boolean',
@@ -1396,7 +1404,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1411,14 +1419,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281>>':
+    'Record<string,Partial<interface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281>': {
+    'Partial<interface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453>': {
       type: 'object',
       additionalProperties: false,
     },

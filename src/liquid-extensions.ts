@@ -13,6 +13,7 @@ import {
   detectLocalMode,
 } from './utils/author-permissions';
 import { MemoryStore } from './memory-store';
+import { createSecureSandbox, compileAndRun } from './utils/sandbox';
 
 /**
  * Sanitize label strings to only allow [A-Za-z0-9:/\- ] characters (including spaces and hyphens)
@@ -313,24 +314,22 @@ export function configureLiquidWithExtensions(liquid: Liquid): void {
     const name = typeof varName === 'string' && varName.trim() ? varName.trim() : 'i';
     const body = String(expr || '');
     try {
-      // Build a tiny predicate; expose only item, idx, arr
-
-      const fn = new Function(
-        name,
-        'idx',
-        'arr',
-        `try { return (${body}); } catch { return false; }`
-      );
+      // Use sandbox for secure evaluation
+      const sandbox = createSecureSandbox();
       const out: any[] = [];
       for (let idx = 0; idx < arr.length; idx++) {
-        const i = arr[idx];
+        const item = arr[idx];
         let ok = false;
         try {
-          ok = !!(fn as any)(i, idx, arr);
+          const scope: Record<string, unknown> = { [name]: item, idx, arr };
+          ok = !!compileAndRun<boolean>(sandbox, body, scope, {
+            injectLog: false,
+            wrapFunction: true,
+          });
         } catch {
           ok = false;
         }
-        if (ok) out.push(i);
+        if (ok) out.push(item);
       }
       return out;
     } catch {

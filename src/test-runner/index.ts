@@ -17,6 +17,7 @@ import { EnvironmentManager } from './core/environment';
 import { MockManager } from './core/mocks';
 import { buildPrInfoFromFixture } from './core/fixture';
 import { validateTestsDoc } from './validator';
+import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 export type TestCase = {
   name: string;
   description?: string;
@@ -525,20 +526,13 @@ export class VisorTestRunner {
       if (!outputDef.name) continue;
       try {
         if (outputDef.value_js) {
-          // Evaluate JavaScript expression
-          const fn = new Function(
-            'steps',
-            'outputs',
-            'results',
-            `
-            try {
-              ${outputDef.value_js}
-            } catch (e) {
-              return undefined;
-            }
-          `
-          );
-          computed[outputDef.name] = fn(steps, outputs, results);
+          // Evaluate JavaScript expression using sandbox
+          const sandbox = createSecureSandbox();
+          const scope = { steps, outputs, results };
+          computed[outputDef.name] = compileAndRun(sandbox, outputDef.value_js, scope, {
+            injectLog: false,
+            wrapFunction: true,
+          });
         } else if (outputDef.value) {
           // Evaluate Liquid template with extended filters and tags
           const { createExtendedLiquid } = require('../liquid-extensions');

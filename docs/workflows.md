@@ -229,6 +229,35 @@ steps:
     on: [pr_opened, pr_updated]
 ```
 
+### Passing Inputs to Nested Workflows
+
+When a step runs another workflow, you can pass inputs with `workflow_inputs`.
+String values are rendered as Liquid templates. For non-string values, use a
+JavaScript `expression` so the nested workflow receives the correct types.
+
+```yaml
+steps:
+  context_collect:
+    type: workflow
+    config: workflows/context-collect.yaml
+    workflow_inputs:
+      # String inputs can use Liquid templates
+      text: "{{ outputs['ask'].text }}"
+
+      # Non-string inputs should use expressions
+      enabled:
+        expression: "inputs.tags?.includes('jira') ?? false"
+      max_issues:
+        expression: "inputs.max_issues ?? 3"
+      ticket_prefixes:
+        expression: "inputs.ticket_prefixes ?? ['TT', 'DX']"
+```
+
+Notes:
+- Liquid templates are only rendered for **string** values.
+- Avoid bare `key: {{ ... }}` for non-strings; YAML parses it as an object and
+  it will not be rendered. Use `expression` instead.
+
 ### Using Config Path
 
 Alternatively, reference a config file directly instead of a pre-registered workflow:

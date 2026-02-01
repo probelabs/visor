@@ -33,7 +33,7 @@ describe('E2E: forEach branch-first deep DAG', () => {
           type: 'command',
           exec: 'bash -lc "true"',
           transform_js:
-            '(() => { const ITEM = outputs["A"].item; const error = ITEM === "ISSUE-2"; const issues = [{ message: `B:${ITEM}`, severity: "info", category: "logic", ruleId: "b" }]; if (error) issues.push({ message: "fail_if", severity: "error", category: "logic", ruleId: "B_fail_if" }); return { issues, error, item: ITEM }; })()',
+            '(() => { const ITEM = outputs["A"].item; const err = ITEM === "ISSUE-2"; const issuesList = [{ message: `B:${ITEM}`, severity: "info", category: "logic", ruleId: "b" }]; if (err) issuesList.push({ message: "fail_if", severity: "error", category: "logic", ruleId: "B_fail_if" }); return { issues: issuesList, error: err, item: ITEM }; })()',
           depends_on: ['A'],
           fail_if: 'output.error',
         },

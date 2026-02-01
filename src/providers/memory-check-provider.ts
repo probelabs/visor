@@ -294,9 +294,7 @@ export class MemoryCheckProvider extends CheckProvider {
    * Evaluate JavaScript expression in context using SandboxJS for secure execution
    */
   private evaluateJavaScript(expression: string, context: Record<string, unknown>): unknown {
-    if (!this.sandbox) {
-      this.sandbox = this.createSecureSandbox();
-    }
+    this.sandbox = this.createSecureSandbox();
 
     try {
       const scope: Record<string, unknown> = { ...context };

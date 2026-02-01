@@ -240,9 +240,7 @@ export class HttpClientProvider extends CheckProvider {
       // Apply JavaScript transformation if specified
       if (transformJs) {
         try {
-          if (!this.sandbox) {
-            this.sandbox = this.createSecureSandbox();
-          }
+          this.sandbox = this.createSecureSandbox();
 
           // Create scope for JavaScript transform (scope, not context)
           const jsScope: Record<string, unknown> = {
