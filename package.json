@@ -47,7 +47,7 @@
     "prebuild": "npm run clean && node scripts/generate-config-schema.js",
     "pretest": "node scripts/generate-config-schema.js && npm run build:cli",
     "test:with-build": "npm run build:cli && jest",
-    "test:yaml": "node dist/index.js test --progress compact",
+    "test:yaml": "node dist/index.js test --progress compact defaults/ && node dist/index.js test --progress compact tests/ && node dist/index.js test --progress compact examples/",
     "test:yaml:parallel": "node dist/index.js test --progress compact --max-parallel 4",
     "prepare": "husky",
     "pre-commit": "lint-staged",
