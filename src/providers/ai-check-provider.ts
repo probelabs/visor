@@ -827,6 +827,9 @@ export class AICheckProvider extends CheckProvider {
       if (aiAny.enableDelegate !== undefined) {
         aiConfig.enableDelegate = aiAny.enableDelegate as boolean;
       }
+      if (aiAny.enableTasks !== undefined) {
+        aiConfig.enableTasks = aiAny.enableTasks as boolean;
+      }
       if (aiAny.allowEdit !== undefined) {
         aiConfig.allowEdit = aiAny.allowEdit as boolean;
       }
@@ -1126,6 +1129,47 @@ export class AICheckProvider extends CheckProvider {
         customToolsServerName = serverName;
         break; // Only support one custom tools server per check
       }
+    }
+
+    // Option 4: Extract workflow entries directly from ai_mcp_servers/ai_mcp_servers_js
+    // Entries with 'workflow' property are workflow tool references that need SSE server
+    const workflowEntriesFromMcp: WorkflowToolReference[] = [];
+    const mcpEntriesToRemove: string[] = [];
+    for (const [serverName, serverConfig] of Object.entries(mcpServers)) {
+      // Cast to any to check for workflow property (extends McpServerConfig)
+      const cfg = serverConfig as unknown as Record<string, unknown>;
+      if (cfg.workflow && typeof cfg.workflow === 'string') {
+        // This is a workflow tool entry - extract it
+        workflowEntriesFromMcp.push({
+          workflow: cfg.workflow as string,
+          args: cfg.inputs as Record<string, unknown> | undefined,
+        });
+        mcpEntriesToRemove.push(serverName);
+        logger.debug(
+          `[AICheckProvider] Extracted workflow tool '${serverName}' from ai_mcp_servers`
+        );
+      }
+    }
+    // Remove workflow entries from mcpServers (they'll be exposed via SSE server)
+    for (const name of mcpEntriesToRemove) {
+      delete mcpServers[name];
+    }
+    // Merge workflow entries with other custom tools
+    if (workflowEntriesFromMcp.length > 0) {
+      if (customToolsToLoad.length > 0) {
+        // Avoid duplicates
+        const existingNames = new Set(
+          customToolsToLoad.map(item => (typeof item === 'string' ? item : item.workflow))
+        );
+        for (const wf of workflowEntriesFromMcp) {
+          if (!existingNames.has(wf.workflow)) {
+            customToolsToLoad.push(wf);
+          }
+        }
+      } else {
+        customToolsToLoad = workflowEntriesFromMcp;
+      }
+      customToolsServerName = '__tools__';
     }
 
     if (customToolsToLoad.length > 0 && customToolsServerName && !config.ai?.disableTools) {
@@ -1691,7 +1735,11 @@ export class AICheckProvider extends CheckProvider {
         return {};
       }
 
-      // Validate each server config has at least command or url
+      // Validate each server config - accepts multiple entry types:
+      // 1. External stdio MCP server: has 'command'
+      // 2. External SSE/HTTP MCP server: has 'url'
+      // 3. Workflow tool reference: has 'workflow'
+      // 4. Auto-detect from tools: section: empty object {}
       const validServers: Record<string, import('../types/config').McpServerConfig> = {};
       for (const [serverName, serverConfig] of Object.entries(result as Record<string, unknown>)) {
         if (typeof serverConfig !== 'object' || serverConfig === null) {
@@ -1701,9 +1749,11 @@ export class AICheckProvider extends CheckProvider {
           continue;
         }
         const cfg = serverConfig as Record<string, unknown>;
-        if (!cfg.command && !cfg.url) {
+        // Accept: command (stdio), url (sse/http), workflow (workflow tool), or empty {} (auto-detect)
+        const isValid = cfg.command || cfg.url || cfg.workflow || Object.keys(cfg).length === 0;
+        if (!isValid) {
           logger.warn(
-            `[AICheckProvider] ai_mcp_servers_js: server "${serverName}" must have command or url`
+            `[AICheckProvider] ai_mcp_servers_js: server "${serverName}" must have command, url, or workflow`
           );
           continue;
         }
@@ -1819,6 +1869,7 @@ export class AICheckProvider extends CheckProvider {
       'ai.max_iterations',
       'ai.mcpServers',
       'ai.enableDelegate',
+      'ai.enableTasks',
       // legacy persona/prompt keys supported in config
       'ai_persona',
       'ai_prompt_type',

@@ -347,6 +347,8 @@ export interface AIProviderConfig {
   mcpServers?: Record<string, McpServerConfig>;
   /** Enable the delegate tool for task distribution to subagents */
   enableDelegate?: boolean;
+  /** Enable task management for tracking multi-goal requests */
+  enableTasks?: boolean;
   /** Retry configuration for this provider */
   retry?: AIRetryConfig;
   /** Fallback configuration for provider failures */
@@ -366,15 +368,42 @@ export interface AIProviderConfig {
 }
 
 /**
- * MCP Server configuration
+ * Unified MCP server/tool entry - type detected by which properties are present
+ *
+ * Detection logic (priority order):
+ * 1. Has `command` → stdio MCP server (external process)
+ * 2. Has `url` → SSE/HTTP MCP server (external endpoint)
+ * 3. Has `workflow` → workflow tool reference
+ * 4. Empty `{}` or just key → auto-detect from `tools:` section
  */
 export interface McpServerConfig {
-  /** Command to execute for the MCP server */
-  command: string;
+  // === External stdio MCP server ===
+  /** Command to execute (presence indicates stdio server) */
+  command?: string;
   /** Arguments to pass to the command */
   args?: string[];
   /** Environment variables for the MCP server */
   env?: Record<string, string>;
+
+  // === External SSE/HTTP MCP server ===
+  /** URL endpoint (presence indicates external server) */
+  url?: string;
+  /** Transport type */
+  transport?: 'stdio' | 'sse' | 'http';
+
+  // === Workflow tool reference ===
+  /** Workflow ID or path (presence indicates workflow tool) */
+  workflow?: string;
+  /** Inputs to pass to workflow */
+  inputs?: Record<string, unknown>;
+  /** Tool description for AI */
+  description?: string;
+
+  // === Access control ===
+  /** Whitelist specific methods from this MCP server (supports wildcards like "search_*") */
+  allowedMethods?: string[];
+  /** Block specific methods from this MCP server (supports wildcards like "*_delete") */
+  blockedMethods?: string[];
 }
 
 /**
