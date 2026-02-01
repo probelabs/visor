@@ -322,6 +322,8 @@ export interface AIProviderConfig {
   apiKey?: string;
   /** Request timeout in milliseconds */
   timeout?: number;
+  /** Maximum tool iterations for ProbeAgent */
+  max_iterations?: number;
   /** Enable debug mode */
   debug?: boolean;
   /** Probe promptType to use (e.g., engineer, code-review, architect) */
@@ -452,6 +454,8 @@ export interface CheckConfig {
   ai_persona?: string;
   /** Probe promptType for this check (underscore style) */
   ai_prompt_type?: string;
+  /** Maximum tool iterations for ProbeAgent (underscore style) */
+  ai_max_iterations?: number;
   /** System prompt for this check (underscore style) */
   ai_system_prompt?: string;
   /** Legacy customPrompt (underscore style) — deprecated, use ai_system_prompt */

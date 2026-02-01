@@ -158,6 +158,29 @@ Notes
 - If `prompt_type` is omitted and a `schema` is provided, Visor defaults to `code-review`.
 - `ai_persona` is a lightweight hint added as a first line; prefer `prompt_type` when integrating with Probe personas.
 
+#### Tool Iteration Limits (ProbeAgent max_iterations)
+
+Use `max_iterations` to control how many tool loops ProbeAgent can execute before it stops.
+
+Accepted keys
+- Under `ai:`
+  - `max_iterations`: number — Maximum tool iterations for ProbeAgent.
+- At the check level (alias)
+  - `ai_max_iterations`: number
+
+Example
+
+```yaml
+steps:
+  explore-code:
+    type: ai
+    ai:
+      provider: google
+      model: gemini-2.5-pro
+      max_iterations: 40
+    prompt: "Investigate the issue and gather evidence from code."
+```
+
 #### AWS Bedrock Specific Configuration
 
 Complete example for Bedrock with all options:

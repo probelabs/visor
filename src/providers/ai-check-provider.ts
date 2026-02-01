@@ -806,6 +806,10 @@ export class AICheckProvider extends CheckProvider {
       if (aiAny.timeout !== undefined) {
         aiConfig.timeout = aiAny.timeout as number;
       }
+      if (aiAny.max_iterations !== undefined || aiAny.maxIterations !== undefined) {
+        const raw = aiAny.max_iterations ?? aiAny.maxIterations;
+        aiConfig.maxIterations = Number(raw);
+      }
       if (aiAny.provider !== undefined) {
         aiConfig.provider = aiAny.provider as
           | 'google'
@@ -987,6 +991,9 @@ export class AICheckProvider extends CheckProvider {
         | 'openai'
         | 'bedrock'
         | 'mock';
+    }
+    if (config.ai_max_iterations !== undefined && aiConfig.maxIterations === undefined) {
+      aiConfig.maxIterations = config.ai_max_iterations as number;
     }
 
     // Get custom prompt from config - REQUIRED, no fallbacks
@@ -1534,6 +1541,7 @@ export class AICheckProvider extends CheckProvider {
       'ai.model',
       'ai.apiKey',
       'ai.timeout',
+      'ai.max_iterations',
       'ai.mcpServers',
       'ai.enableDelegate',
       // legacy persona/prompt keys supported in config
@@ -1541,6 +1549,7 @@ export class AICheckProvider extends CheckProvider {
       'ai_prompt_type',
       'ai_custom_prompt',
       'ai_system_prompt',
+      'ai_max_iterations',
       // new provider resilience and tools toggles
       'ai.retry',
       'ai.fallback',

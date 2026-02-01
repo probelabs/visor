@@ -166,12 +166,14 @@ interface TracedProbeAgentOptions extends ProbeAgentOptions {
   _telemetryConfig?: unknown; // SimpleTelemetry config
   _traceFilePath?: string;
   customPrompt?: string;
+  maxIterations?: number;
 }
 
 export interface AIReviewConfig {
   apiKey?: string; // From env: GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, CLAUDE_CODE_API_KEY, or AWS credentials
   model?: string; // From env: MODEL_NAME (e.g., gemini-2.5-pro-preview-06-05)
   timeout?: number; // Default: 1200000ms (20 minutes)
+  maxIterations?: number; // Maximum tool iterations for ProbeAgent
   provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock' | 'claude-code';
   debug?: boolean; // Enable debug mode
   tools?: Array<{ name: string; [key: string]: unknown }>; // (unused) Legacy tool listing
@@ -1784,6 +1786,9 @@ ${'='.repeat(60)}
         // Use systemPrompt (native in rc168+) with fallback to customPrompt for backward compat
         systemPrompt: systemPrompt || this.config.systemPrompt || this.config.customPrompt,
       };
+      if (this.config.maxIterations !== undefined) {
+        options.maxIterations = this.config.maxIterations;
+      }
 
       // Enable tracing in debug mode for better diagnostics
       // This uses SimpleTelemetry for lightweight tracing
