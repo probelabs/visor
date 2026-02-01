@@ -418,6 +418,10 @@ export declare const configSchema: {
                     readonly type: "string";
                     readonly description: "Probe promptType for this check (underscore style)";
                 };
+                readonly ai_max_iterations: {
+                    readonly type: "number";
+                    readonly description: "Maximum tool iterations for ProbeAgent (underscore style)";
+                };
                 readonly ai_system_prompt: {
                     readonly type: "string";
                     readonly description: "System prompt for this check (underscore style)";
@@ -686,7 +690,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -702,7 +706,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -805,6 +809,10 @@ export declare const configSchema: {
                 readonly timeout: {
                     readonly type: "number";
                     readonly description: "Request timeout in milliseconds";
+                };
+                readonly max_iterations: {
+                    readonly type: "number";
+                    readonly description: "Maximum tool iterations for ProbeAgent";
                 };
                 readonly debug: {
                     readonly type: "boolean";
@@ -1296,7 +1304,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1311,13 +1319,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281>': {
+        readonly 'Partial<interface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };

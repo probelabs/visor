@@ -2986,79 +2986,14 @@ var init_failure_condition_evaluator = __esm({
           if (!this.sandbox) {
             this.sandbox = this.createSecureSandbox();
           }
-          let result;
+          let exec2;
           try {
-            let exec2;
-            try {
-              exec2 = this.sandbox.compile(`return (${raw});`);
-            } catch {
-              const normalizedExpr = normalize3(condition);
-              exec2 = this.sandbox.compile(`return (${normalizedExpr});`);
-            }
-            result = exec2(scope).run();
-          } catch (_primaryErr) {
-            try {
-              const vm = require("vm");
-              const ctx = {
-                // Scope vars
-                output,
-                outputs,
-                debug: debugData,
-                memory: memoryAccessor,
-                issues,
-                metadata,
-                criticalIssues,
-                errorIssues,
-                totalIssues,
-                warningIssues,
-                infoIssues,
-                checkName,
-                schema,
-                group,
-                branch,
-                baseBranch,
-                filesChanged,
-                filesCount,
-                event,
-                env,
-                inputs,
-                // Helpers
-                contains,
-                startsWith,
-                endsWith,
-                length,
-                always,
-                success,
-                failure,
-                log: log2,
-                hasIssue,
-                countIssues,
-                hasFileMatching,
-                hasIssueWith,
-                hasFileWith,
-                hasMinPermission: hasMinPermission2,
-                isOwner: isOwner2,
-                isMember: isMember2,
-                isCollaborator: isCollaborator2,
-                isContributor: isContributor2,
-                isFirstTimer: isFirstTimer2,
-                Math,
-                JSON
-              };
-              const context3 = vm.createContext(ctx);
-              let code = `(${raw})`;
-              try {
-                result = new vm.Script(code).runInContext(context3, { timeout: 50 });
-              } catch {
-                const normalizedExpr = normalize3(condition);
-                code = `(${normalizedExpr})`;
-                result = new vm.Script(code).runInContext(context3, { timeout: 50 });
-              }
-            } catch (vmErr) {
-              console.error("\u274C Failed to evaluate expression:", condition, vmErr);
-              throw vmErr;
-            }
+            exec2 = this.sandbox.compile(`return (${raw});`);
+          } catch {
+            const normalizedExpr = normalize3(condition);
+            exec2 = this.sandbox.compile(`return (${normalizedExpr});`);
           }
+          const result = exec2(scope).run();
           try {
             (init_logger(), __toCommonJS(logger_exports)).logger.debug(`  fail_if: result=${Boolean(result)}`);
           } catch {
@@ -4466,18 +4401,10 @@ async function evaluateRunJs(runJs, checkId, checkConfig, result, context2, _sta
         { injectLog: false, wrapFunction: false }
       );
       return Array.isArray(evalResult) ? evalResult.filter(Boolean) : [];
-    } catch (_e) {
-      try {
-        const vm = require("vm");
-        const context3 = vm.createContext({ scope: scopeObj, console: { log: () => {
-        } } });
-        const src = `(() => { ${runJs}
- })()`;
-        const val = new vm.Script(src).runInContext(context3, { timeout: 100 });
-        return Array.isArray(val) ? val.filter((x) => typeof x === "string" && x) : [];
-      } catch (_vmErr) {
-        return [];
-      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.error(`[Routing] Error in run_js sandbox evaluation: ${msg}`);
+      return [];
     }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -4583,25 +4510,9 @@ async function evaluateGoto(gotoJs, gotoStatic, checkId, checkConfig, result, co
         if (typeof evalResult === "string" && evalResult) {
           return evalResult;
         }
-      } catch (_e) {
-        try {
-          const vm = require("vm");
-          const contextObj = {
-            step: scopeObj.step,
-            outputs: scopeObj.outputs,
-            outputs_history: scopeObj.outputs_history,
-            output: scopeObj.output,
-            memory: scopeObj.memory,
-            event: scopeObj.event,
-            forEach: scopeObj.forEach
-          };
-          const vmctx = vm.createContext(contextObj);
-          const src = `(() => { ${gotoJs}
- })()`;
-          const res = new vm.Script(src).runInContext(vmctx, { timeout: 100 });
-          if (typeof res === "string" && res) return res;
-        } catch (_vmErr) {
-        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        logger.error(`[Routing] Error in goto_js sandbox evaluation: ${msg}`);
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -4676,29 +4587,10 @@ async function evaluateTransitions(transitions, checkId, checkConfig, result, co
           { scope: scopeObj },
           { injectLog: false, wrapFunction: false }
         );
-      } catch (_e) {
-        try {
-          const vm = require("vm");
-          const helpersFns = {
-            any: (arr, pred) => Array.isArray(arr) && arr.some(pred),
-            all: (arr, pred) => Array.isArray(arr) && arr.every(pred),
-            none: (arr, pred) => Array.isArray(arr) && !arr.some(pred),
-            count: (arr, pred) => Array.isArray(arr) ? arr.filter(pred).length : 0
-          };
-          const context3 = vm.createContext({
-            step: scopeObj.step,
-            outputs: scopeObj.outputs,
-            outputs_history: scopeObj.outputs_history,
-            output: scopeObj.output,
-            memory: scopeObj.memory,
-            event: scopeObj.event,
-            ...helpersFns
-          });
-          const res = new vm.Script(`(${rule.when})`).runInContext(context3, { timeout: 50 });
-          matched = !!res;
-        } catch (_vmErr) {
-          matched = false;
-        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        logger.warn(`[Routing] Error evaluating transition 'when' clause: ${msg}`);
+        matched = false;
       }
       if (matched) {
         if (rule.to === null) return null;
@@ -5142,22 +5034,21 @@ function configureLiquidWithExtensions(liquid) {
     const name = typeof varName === "string" && varName.trim() ? varName.trim() : "i";
     const body = String(expr || "");
     try {
-      const fn = new Function(
-        name,
-        "idx",
-        "arr",
-        `try { return (${body}); } catch { return false; }`
-      );
+      const sandbox = createSecureSandbox();
       const out = [];
       for (let idx = 0; idx < arr.length; idx++) {
-        const i = arr[idx];
+        const item = arr[idx];
         let ok = false;
         try {
-          ok = !!fn(i, idx, arr);
+          const scope = { [name]: item, idx, arr };
+          ok = !!compileAndRun(sandbox, body, scope, {
+            injectLog: false,
+            wrapFunction: true
+          });
         } catch {
           ok = false;
         }
-        if (ok) out.push(i);
+        if (ok) out.push(item);
       }
       return out;
     } catch {
@@ -5352,6 +5243,7 @@ var init_liquid_extensions = __esm({
     import_path2 = __toESM(require("path"));
     init_author_permissions();
     init_memory_store();
+    init_sandbox();
     ReadFileTag = class extends import_liquidjs.Tag {
       filepath;
       constructor(token, remainTokens, liquid) {
@@ -7245,6 +7137,9 @@ ${"=".repeat(60)}
             // Use systemPrompt (native in rc168+) with fallback to customPrompt for backward compat
             systemPrompt: systemPrompt || this.config.systemPrompt || this.config.customPrompt
           };
+          if (this.config.maxIterations !== void 0) {
+            options.maxIterations = this.config.maxIterations;
+          }
           let traceFilePath = "";
           let telemetryConfig = null;
           let probeFileTracer = null;
@@ -7734,9 +7629,12 @@ ${"=".repeat(60)}
               const errMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
               log(`\u{1F50D} Direct JSON parsing failed: ${errMsg}`);
               if (response.toLowerCase().includes("i cannot") || response.toLowerCase().includes("unable to")) {
-                console.error("\u{1F6AB} AI refused to analyze - returning empty result");
+                console.error("\u{1F6AB} AI refused to analyze - returning refusal as output");
+                const trimmed2 = response.trim();
                 return {
-                  issues: []
+                  issues: [],
+                  output: trimmed2 ? { text: trimmed2 } : {},
+                  debug: debugInfo
                 };
               }
               log("\u{1F527} Treating response as plain text (no JSON extraction)");
@@ -8686,9 +8584,7 @@ var init_custom_tool_executor = __esm({
        * Apply JavaScript transform to output
        */
       async applyJavaScriptTransform(transformJs, output, context2) {
-        if (!this.sandbox) {
-          this.sandbox = createSecureSandbox();
-        }
+        this.sandbox = createSecureSandbox();
         const code = `
       const output = ${JSON.stringify(output)};
       const context = ${JSON.stringify(context2)};
@@ -10643,6 +10539,10 @@ var init_config_schema = __esm({
               type: "string",
               description: "Probe promptType for this check (underscore style)"
             },
+            ai_max_iterations: {
+              type: "number",
+              description: "Maximum tool iterations for ProbeAgent (underscore style)"
+            },
             ai_system_prompt: {
               type: "string",
               description: "System prompt for this check (underscore style)"
@@ -10926,7 +10826,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -10942,7 +10842,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -11073,6 +10973,10 @@ var init_config_schema = __esm({
             timeout: {
               type: "number",
               description: "Request timeout in milliseconds"
+            },
+            max_iterations: {
+              type: "number",
+              description: "Maximum tool iterations for ProbeAgent"
             },
             debug: {
               type: "boolean",
@@ -11572,7 +11476,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -11587,13 +11491,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281>>": {
+        "Record<string,Partial<interface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-11359-23582-src_types_config.ts-0-41281>": {
+        "Partial<interface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453>": {
           type: "object",
           additionalProperties: false
         },
@@ -13851,7 +13755,6 @@ var init_workflow_check_provider = __esm({
         if (!workflow.outputs) {
           return outputs;
         }
-        const sandbox = createSecureSandbox();
         const flat = {};
         try {
           for (const arr of Object.values(groupedResults || {})) {
@@ -13870,6 +13773,7 @@ var init_workflow_check_provider = __esm({
         );
         for (const output of workflow.outputs) {
           if (output.value_js) {
+            const sandbox = createSecureSandbox();
             outputs[output.name] = compileAndRun(
               sandbox,
               output.value_js,
@@ -15230,6 +15134,10 @@ ${preview}`);
           if (aiAny2.timeout !== void 0) {
             aiConfig.timeout = aiAny2.timeout;
           }
+          if (aiAny2.max_iterations !== void 0 || aiAny2.maxIterations !== void 0) {
+            const raw = aiAny2.max_iterations ?? aiAny2.maxIterations;
+            aiConfig.maxIterations = Number(raw);
+          }
           if (aiAny2.provider !== void 0) {
             aiConfig.provider = aiAny2.provider;
           }
@@ -15363,6 +15271,9 @@ ${preview}`);
         }
         if (config.ai_provider !== void 0) {
           aiConfig.provider = config.ai_provider;
+        }
+        if (config.ai_max_iterations !== void 0 && aiConfig.maxIterations === void 0) {
+          aiConfig.maxIterations = config.ai_max_iterations;
         }
         const customPrompt = config.prompt;
         if (!customPrompt) {
@@ -15766,6 +15677,7 @@ ${processedPrompt}` : processedPrompt;
           "ai.model",
           "ai.apiKey",
           "ai.timeout",
+          "ai.max_iterations",
           "ai.mcpServers",
           "ai.enableDelegate",
           // legacy persona/prompt keys supported in config
@@ -15773,6 +15685,7 @@ ${processedPrompt}` : processedPrompt;
           "ai_prompt_type",
           "ai_custom_prompt",
           "ai_system_prompt",
+          "ai_max_iterations",
           // new provider resilience and tools toggles
           "ai.retry",
           "ai.fallback",
@@ -16459,9 +16372,7 @@ var init_http_client_provider = __esm({
           }
           if (transformJs) {
             try {
-              if (!this.sandbox) {
-                this.sandbox = this.createSecureSandbox();
-              }
+              this.sandbox = this.createSecureSandbox();
               const jsScope = {
                 output: data,
                 pr: templateContext.pr,
@@ -18312,23 +18223,6 @@ ${bodyWithReturn}
                   { injectLog: false, wrapFunction: false }
                 );
               }
-              try {
-                if (finalOutput && typeof finalOutput === "object" && !Array.isArray(finalOutput) && (finalOutput.error === void 0 || finalOutput.issues === void 0)) {
-                  const vm = await import("vm");
-                  const vmContext = vm.createContext({ scope: jsContext });
-                  const vmCode = `
-                (function(){
-                  const output = scope.output; const pr = scope.pr; const files = scope.files; const outputs = scope.outputs; const env = scope.env; const log = ()=>{};
-${bodyWithReturn}
-                })()
-              `;
-                  const vmResult = vm.runInContext(vmCode, vmContext, { timeout: 1e3 });
-                  if (vmResult && typeof vmResult === "object") {
-                    finalOutput = vmResult;
-                  }
-                }
-              } catch {
-              }
               let finalSnapshot = null;
               try {
                 if (finalOutput && typeof finalOutput === "object" && !Array.isArray(finalOutput)) {
@@ -19581,9 +19475,7 @@ var init_memory_check_provider = __esm({
        * Evaluate JavaScript expression in context using SandboxJS for secure execution
        */
       evaluateJavaScript(expression, context2) {
-        if (!this.sandbox) {
-          this.sandbox = this.createSecureSandbox();
-        }
+        this.sandbox = this.createSecureSandbox();
         try {
           const scope = { ...context2 };
           return compileAndRun(this.sandbox, `return (${expression});`, scope, {
@@ -19816,9 +19708,7 @@ var init_mcp_check_provider = __esm({
           }
           if (cfg.transform_js) {
             try {
-              if (!this.sandbox) {
-                this.sandbox = this.createSecureSandbox();
-              }
+              this.sandbox = this.createSecureSandbox();
               const scope = {
                 output: finalOutput,
                 pr: templateContext.pr,
