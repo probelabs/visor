@@ -637,8 +637,6 @@ export class WorkflowCheckProvider extends CheckProvider {
       return outputs;
     }
 
-    const sandbox = createSecureSandbox();
-
     // Flatten GroupedCheckResults (group -> CheckResult[]) to a simple map
     // of checkName -> { output, issues } so workflow-level value_js can
     // reference outputs["security"].issues, etc.
@@ -664,6 +662,7 @@ export class WorkflowCheckProvider extends CheckProvider {
     for (const output of workflow.outputs) {
       if (output.value_js) {
         // JavaScript expression
+        const sandbox = createSecureSandbox();
         outputs[output.name] = compileAndRun(
           sandbox,
           output.value_js,

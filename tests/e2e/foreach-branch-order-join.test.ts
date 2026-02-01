@@ -36,7 +36,7 @@ describe('E2E: forEach branch-first with join', () => {
           type: 'command',
           exec: 'bash -lc "true"',
           transform_js:
-            '(() => { const ITEM = outputs["root"]; const error = ITEM === "ISSUE-2"; const issues = [{ message: `B:${ITEM}`, severity: "info", category: "logic", ruleId: "b" }]; if (error) issues.push({ message: "fail_if", severity: "error", category: "logic", ruleId: "B_fail_if" }); return { issues, error, item: ITEM }; })()',
+            '(() => { const ITEM = outputs["root"]; const err = ITEM === "ISSUE-2"; const issuesList = [{ message: `B:${ITEM}`, severity: "info", category: "logic", ruleId: "b" }]; if (err) issuesList.push({ message: "fail_if", severity: "error", category: "logic", ruleId: "B_fail_if" }); return { issues: issuesList, error: err, item: ITEM }; })()',
           depends_on: ['root'],
           fail_if: 'output.error',
         },

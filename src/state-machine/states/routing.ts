@@ -1480,17 +1480,10 @@ async function evaluateRunJs(
         { injectLog: false, wrapFunction: false }
       );
       return Array.isArray(evalResult) ? evalResult.filter(Boolean) : [];
-    } catch (_e) {
-      // Fallback to VM for modern syntax used inside run_js
-      try {
-        const vm = require('node:vm');
-        const context = vm.createContext({ scope: scopeObj, console: { log: () => {} } });
-        const src = `(() => { ${runJs}\n })()`;
-        const val = new vm.Script(src).runInContext(context, { timeout: 100 });
-        return Array.isArray(val) ? val.filter((x: any) => typeof x === 'string' && x) : [];
-      } catch (_vmErr) {
-        return [];
-      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.error(`[Routing] Error in run_js sandbox evaluation: ${msg}`);
+      return [];
     }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -1642,26 +1635,10 @@ export async function evaluateGoto(
         if (typeof evalResult === 'string' && evalResult) {
           return evalResult;
         }
-      } catch (_e) {
-        // Fallback to VM for modern syntax in goto_js
-        try {
-          const vm = require('node:vm');
-          const contextObj = {
-            step: scopeObj.step,
-            outputs: scopeObj.outputs,
-            outputs_history: scopeObj.outputs_history,
-            output: scopeObj.output,
-            memory: scopeObj.memory,
-            event: scopeObj.event,
-            forEach: (scopeObj as any).forEach,
-          };
-          const vmctx = vm.createContext(contextObj);
-          const src = `(() => { ${gotoJs}\n })()`;
-          const res = new vm.Script(src).runInContext(vmctx, { timeout: 100 });
-          if (typeof res === 'string' && res) return res;
-        } catch (_vmErr) {
-          // ignore; fall through to static goto
-        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        logger.error(`[Routing] Error in goto_js sandbox evaluation: ${msg}`);
+        // Fall through to static goto
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -1766,31 +1743,10 @@ export async function evaluateTransitions(
           { scope: scopeObj },
           { injectLog: false, wrapFunction: false }
         );
-      } catch (_e) {
-        // Fallback: Node VM for modern syntax like optional chaining and ??
-        try {
-          const vm = require('node:vm');
-          const helpersFns = {
-            any: (arr: any[], pred: (x: any) => boolean) => Array.isArray(arr) && arr.some(pred),
-            all: (arr: any[], pred: (x: any) => boolean) => Array.isArray(arr) && arr.every(pred),
-            none: (arr: any[], pred: (x: any) => boolean) => Array.isArray(arr) && !arr.some(pred),
-            count: (arr: any[], pred: (x: any) => boolean) =>
-              Array.isArray(arr) ? arr.filter(pred).length : 0,
-          };
-          const context = vm.createContext({
-            step: scopeObj.step,
-            outputs: scopeObj.outputs,
-            outputs_history: scopeObj.outputs_history,
-            output: scopeObj.output,
-            memory: scopeObj.memory,
-            event: scopeObj.event,
-            ...helpersFns,
-          });
-          const res = new vm.Script(`(${rule.when})`).runInContext(context, { timeout: 50 });
-          matched = !!res;
-        } catch (_vmErr) {
-          matched = false;
-        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        logger.warn(`[Routing] Error evaluating transition 'when' clause: ${msg}`);
+        matched = false;
       }
       if (matched) {
         if (rule.to === null) return null;
