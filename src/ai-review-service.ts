@@ -2421,14 +2421,17 @@ ${'='.repeat(60)}
           const errMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
           log(`🔍 Direct JSON parsing failed: ${errMsg}`);
 
-          // If the response starts with "I cannot" or similar, it's likely a refusal
+          // If the response indicates refusal, return it as plain text output
           if (
             response.toLowerCase().includes('i cannot') ||
             response.toLowerCase().includes('unable to')
           ) {
-            console.error('🚫 AI refused to analyze - returning empty result');
+            console.error('🚫 AI refused to analyze - returning refusal as output');
+            const trimmed = response.trim();
             return {
               issues: [],
+              output: trimmed ? { text: trimmed } : {},
+              debug: debugInfo,
             };
           }
 
