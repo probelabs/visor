@@ -23,6 +23,8 @@ import {
   WorkflowToolReference,
   WorkflowToolContext,
 } from './workflow-tool-executor';
+import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
+import type Sandbox from '@nyariv/sandboxjs';
 
 /**
  * AI-powered check provider using probe agent
@@ -30,6 +32,7 @@ import {
 export class AICheckProvider extends CheckProvider {
   private aiReviewService: AIReviewService;
   private liquidEngine: ReturnType<typeof createExtendedLiquid>;
+  private sandbox: Sandbox | null = null;
 
   constructor() {
     super();
@@ -1026,20 +1029,96 @@ export class AICheckProvider extends CheckProvider {
       Object.assign(mcpServers, config.ai.mcpServers);
     }
 
-    // 4. Setup custom tools SSE server if MCP servers reference custom tools
-    // Check for both ai_custom_tools (new format) and tools: in MCP servers (reuse existing)
+    // 4. Evaluate ai_mcp_servers_js for dynamic MCP server selection (overrides all static configs)
+    const mcpServersJsExpr = (config as any).ai_mcp_servers_js as string | undefined;
+    if (mcpServersJsExpr && _dependencyResults) {
+      try {
+        const dynamicServers = this.evaluateMcpServersJs(
+          mcpServersJsExpr,
+          prInfo,
+          _dependencyResults,
+          config
+        );
+        if (Object.keys(dynamicServers).length > 0) {
+          Object.assign(mcpServers, dynamicServers);
+        }
+      } catch (error) {
+        logger.error(
+          `[AICheckProvider] Failed to evaluate ai_mcp_servers_js: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+        // Continue without dynamic servers
+      }
+    }
+
+    // 5. Resolve environment variable placeholders in MCP server env configs
+    // Supports ${VAR} and ${{ env.VAR }} syntax
+    for (const serverConfig of Object.values(mcpServers)) {
+      if (serverConfig.env) {
+        const resolvedEnv: Record<string, string> = {};
+        for (const [key, value] of Object.entries(serverConfig.env)) {
+          if (typeof value === 'string') {
+            resolvedEnv[key] = String(EnvironmentResolver.resolveValue(value));
+          } else {
+            resolvedEnv[key] = String(value);
+          }
+        }
+        serverConfig.env = resolvedEnv;
+      }
+    }
+
+    // 6. Setup custom tools SSE server if MCP servers reference custom tools
+    // Check for ai_custom_tools_js (dynamic), ai_custom_tools (static), and tools: in MCP servers
     let customToolsServer: CustomToolsSSEServer | null = null;
     let customToolsToLoad: Array<string | WorkflowToolReference> = [];
     let customToolsServerName: string | null = null;
 
-    // Option 1: Check for ai_custom_tools (backward compatible)
-    const legacyCustomTools = this.getCustomToolsForAI(config);
-    if (legacyCustomTools.length > 0) {
-      customToolsToLoad = legacyCustomTools;
-      customToolsServerName = '__custom_tools__';
+    // Option 1: Check for ai_custom_tools_js (dynamic JavaScript expression)
+    const customToolsJsExpr = (config as any).ai_custom_tools_js as string | undefined;
+    if (customToolsJsExpr && _dependencyResults) {
+      try {
+        const dynamicTools = this.evaluateCustomToolsJs(
+          customToolsJsExpr,
+          prInfo,
+          _dependencyResults,
+          config
+        );
+        if (dynamicTools.length > 0) {
+          customToolsToLoad = dynamicTools;
+          customToolsServerName = '__custom_tools__';
+          logger.debug(
+            `[AICheckProvider] ai_custom_tools_js evaluated to ${dynamicTools.length} tools`
+          );
+        }
+      } catch (error) {
+        logger.error(
+          `[AICheckProvider] Failed to evaluate ai_custom_tools_js: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+        // Continue without dynamic tools, fallback to static
+      }
     }
 
-    // Option 2: Check if any MCP server uses "tools:" format (preferred - reuses ai_mcp_servers)
+    // Option 2: Check for ai_custom_tools (static - backward compatible)
+    // Merge with dynamic tools if both are specified
+    const staticCustomTools = this.getCustomToolsForAI(config);
+    if (staticCustomTools.length > 0) {
+      if (customToolsToLoad.length > 0) {
+        // Merge dynamic and static tools (avoid duplicates by name)
+        const existingNames = new Set(
+          customToolsToLoad.map(item => (typeof item === 'string' ? item : item.workflow))
+        );
+        for (const tool of staticCustomTools) {
+          const name = typeof tool === 'string' ? tool : tool.workflow;
+          if (!existingNames.has(name)) {
+            customToolsToLoad.push(tool);
+          }
+        }
+      } else {
+        customToolsToLoad = staticCustomTools;
+        customToolsServerName = '__custom_tools__';
+      }
+    }
+
+    // Option 3: Check if any MCP server uses "tools:" format (preferred - reuses ai_mcp_servers)
     // Note: This format only supports string tool names, not workflow references
     for (const [serverName, serverConfig] of Object.entries(mcpServers)) {
       if ((serverConfig as any).tools && Array.isArray((serverConfig as any).tools)) {
@@ -1478,6 +1557,199 @@ export class AICheckProvider extends CheckProvider {
   }
 
   /**
+   * Evaluate ai_custom_tools_js expression to dynamically compute custom tools.
+   * Returns an array of tool names or workflow references.
+   */
+  private evaluateCustomToolsJs(
+    expression: string,
+    prInfo: PRInfo,
+    dependencyResults: Map<string, ReviewSummary>,
+    config: CheckProviderConfig
+  ): Array<string | WorkflowToolReference> {
+    if (!this.sandbox) {
+      this.sandbox = createSecureSandbox();
+    }
+
+    // Build outputs object from dependency results (same pattern as template rendering)
+    const outputs: Record<string, unknown> = {};
+    for (const [checkId, result] of dependencyResults.entries()) {
+      // Extract structured output if available, otherwise use result as-is
+      const summary = result as ReviewSummary & { output?: unknown };
+      outputs[checkId] = summary.output !== undefined ? summary.output : summary;
+    }
+
+    // Build context for the expression
+    const jsContext: Record<string, unknown> = {
+      outputs,
+      inputs: (config as any).inputs || {},
+      pr: {
+        number: prInfo.number,
+        title: prInfo.title,
+        description: prInfo.body,
+        author: prInfo.author,
+        branch: prInfo.head,
+        base: prInfo.base,
+        authorAssociation: prInfo.authorAssociation,
+      },
+      files:
+        prInfo.files?.map(f => ({
+          filename: f.filename,
+          status: f.status,
+          additions: f.additions,
+          deletions: f.deletions,
+          changes: f.changes,
+        })) || [],
+      env: this.buildSafeEnv(),
+      memory: (config as any).__memoryAccessor || {},
+    };
+
+    try {
+      const result = compileAndRun<unknown>(this.sandbox, expression, jsContext, {
+        injectLog: true,
+        wrapFunction: true,
+        logPrefix: '[ai_custom_tools_js]',
+      });
+
+      // Validate result is an array
+      if (!Array.isArray(result)) {
+        logger.warn(
+          `[AICheckProvider] ai_custom_tools_js must return an array, got ${typeof result}`
+        );
+        return [];
+      }
+
+      // Filter to valid items (strings or workflow references)
+      return result.filter(
+        (item: unknown) => typeof item === 'string' || isWorkflowToolReference(item as any)
+      ) as Array<string | WorkflowToolReference>;
+    } catch (error) {
+      logger.error(
+        `[AICheckProvider] Failed to evaluate ai_custom_tools_js: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Evaluate ai_mcp_servers_js expression to dynamically compute MCP servers.
+   * Returns a record mapping server names to McpServerConfig objects.
+   */
+  private evaluateMcpServersJs(
+    expression: string,
+    prInfo: PRInfo,
+    dependencyResults: Map<string, ReviewSummary>,
+    config: CheckProviderConfig
+  ): Record<string, import('../types/config').McpServerConfig> {
+    if (!this.sandbox) {
+      this.sandbox = createSecureSandbox();
+    }
+
+    // Build outputs object from dependency results (same pattern as template rendering)
+    const outputs: Record<string, unknown> = {};
+    for (const [checkId, result] of dependencyResults.entries()) {
+      const summary = result as ReviewSummary & { output?: unknown };
+      outputs[checkId] = summary.output !== undefined ? summary.output : summary;
+    }
+
+    // Build context for the expression
+    const jsContext: Record<string, unknown> = {
+      outputs,
+      inputs: (config as any).inputs || {},
+      pr: {
+        number: prInfo.number,
+        title: prInfo.title,
+        description: prInfo.body,
+        author: prInfo.author,
+        branch: prInfo.head,
+        base: prInfo.base,
+        authorAssociation: prInfo.authorAssociation,
+      },
+      files:
+        prInfo.files?.map(f => ({
+          filename: f.filename,
+          status: f.status,
+          additions: f.additions,
+          deletions: f.deletions,
+          changes: f.changes,
+        })) || [],
+      env: this.buildSafeEnv(),
+      memory: (config as any).__memoryAccessor || {},
+    };
+
+    try {
+      const result = compileAndRun<unknown>(this.sandbox, expression, jsContext, {
+        injectLog: true,
+        wrapFunction: true,
+        logPrefix: '[ai_mcp_servers_js]',
+      });
+
+      // Validate result is an object (not array, not null)
+      if (typeof result !== 'object' || result === null || Array.isArray(result)) {
+        logger.warn(
+          `[AICheckProvider] ai_mcp_servers_js must return an object, got ${Array.isArray(result) ? 'array' : typeof result}`
+        );
+        return {};
+      }
+
+      // Validate each server config has at least command or url
+      const validServers: Record<string, import('../types/config').McpServerConfig> = {};
+      for (const [serverName, serverConfig] of Object.entries(result as Record<string, unknown>)) {
+        if (typeof serverConfig !== 'object' || serverConfig === null) {
+          logger.warn(
+            `[AICheckProvider] ai_mcp_servers_js: server "${serverName}" config must be an object`
+          );
+          continue;
+        }
+        const cfg = serverConfig as Record<string, unknown>;
+        if (!cfg.command && !cfg.url) {
+          logger.warn(
+            `[AICheckProvider] ai_mcp_servers_js: server "${serverName}" must have command or url`
+          );
+          continue;
+        }
+        validServers[serverName] = cfg as unknown as import('../types/config').McpServerConfig;
+      }
+
+      logger.debug(
+        `[AICheckProvider] ai_mcp_servers_js evaluated to ${Object.keys(validServers).length} servers: ${Object.keys(validServers).join(', ')}`
+      );
+      return validServers;
+    } catch (error) {
+      logger.error(
+        `[AICheckProvider] Failed to evaluate ai_mcp_servers_js: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+      return {};
+    }
+  }
+
+  /**
+   * Build a safe subset of environment variables for sandbox access.
+   * Excludes sensitive keys like API keys, secrets, tokens.
+   */
+  private buildSafeEnv(): Record<string, string> {
+    const sensitivePatterns = [
+      /api.?key/i,
+      /secret/i,
+      /token/i,
+      /password/i,
+      /credential/i,
+      /auth/i,
+      /private/i,
+    ];
+    const safeEnv: Record<string, string> = {};
+
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value === undefined) continue;
+      const isSensitive = sensitivePatterns.some(pattern => pattern.test(key));
+      if (!isSensitive) {
+        safeEnv[key] = value;
+      }
+    }
+
+    return safeEnv;
+  }
+
+  /**
    * Load custom tools from global configuration and workflow registry
    * Supports both traditional custom tools and workflow-as-tool references
    */
@@ -1564,6 +1836,9 @@ export class AICheckProvider extends CheckProvider {
       'ai_model',
       'ai_provider',
       'ai_mcp_servers',
+      'ai_mcp_servers_js',
+      'ai_custom_tools',
+      'ai_custom_tools_js',
       'env',
     ];
   }

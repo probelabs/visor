@@ -623,4 +623,167 @@ describe('AICheckProvider', () => {
       expect(requirements).toEqual(expect.arrayContaining([expect.stringContaining('API_KEY')]));
     });
   });
+
+  describe('getSupportedConfigKeys for ai_custom_tools_js', () => {
+    it('should include ai_custom_tools and ai_custom_tools_js in supported keys', () => {
+      const keys = provider.getSupportedConfigKeys();
+      expect(keys).toContain('ai_custom_tools');
+      expect(keys).toContain('ai_custom_tools_js');
+    });
+  });
+
+  describe('evaluateCustomToolsJs', () => {
+    // Access the private method for testing via type assertion
+    const getEvaluator = (p: AICheckProvider) => (p as any).evaluateCustomToolsJs.bind(p);
+
+    it('should return empty array when expression returns non-array', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator('"not an array"', mockPRInfo, new Map(), {
+        type: 'ai',
+        prompt: 'test',
+      });
+      expect(result).toEqual([]);
+    });
+
+    it('should return tool names from simple expression', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator('["tool1", "tool2"]', mockPRInfo, new Map(), {
+        type: 'ai',
+        prompt: 'test',
+      });
+      expect(result).toEqual(['tool1', 'tool2']);
+    });
+
+    it('should filter out invalid items from result array', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator(
+        '["valid-tool", 123, null, { workflow: "my-workflow" }, { invalid: true }]',
+        mockPRInfo,
+        new Map(),
+        { type: 'ai', prompt: 'test' }
+      );
+      // Should only include string and valid workflow reference
+      expect(result).toEqual(['valid-tool', { workflow: 'my-workflow' }]);
+    });
+
+    it('should access outputs from dependency results', () => {
+      const evaluator = getEvaluator(provider);
+      const depResults = new Map<string, any>([
+        ['route-intent', { output: { intent: 'engineer', tags: ['jira'] } }],
+      ]);
+
+      const result = evaluator(
+        `
+        const tools = [];
+        if (outputs['route-intent']?.intent === 'engineer') {
+          tools.push('engineer-tool');
+        }
+        if (outputs['route-intent']?.tags?.includes('jira')) {
+          tools.push('jira-tool');
+        }
+        return tools;
+        `,
+        mockPRInfo,
+        depResults,
+        { type: 'ai', prompt: 'test' }
+      );
+      expect(result).toEqual(['engineer-tool', 'jira-tool']);
+    });
+
+    it('should access pr context in expression', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator(
+        `
+        const tools = [];
+        if (pr.author === 'testuser') {
+          tools.push('user-specific-tool');
+        }
+        if (pr.branch === 'feature') {
+          tools.push('feature-tool');
+        }
+        return tools;
+        `,
+        mockPRInfo,
+        new Map(),
+        { type: 'ai', prompt: 'test' }
+      );
+      expect(result).toEqual(['user-specific-tool', 'feature-tool']);
+    });
+
+    it('should access inputs from config', () => {
+      const evaluator = getEvaluator(provider);
+      const config = {
+        type: 'ai',
+        prompt: 'test',
+        inputs: { feature_flag: true, project: 'tyk' },
+      };
+
+      const result = evaluator(
+        `
+        const tools = [];
+        if (inputs.feature_flag) {
+          tools.push({ workflow: 'feature-workflow', args: { project: inputs.project } });
+        }
+        return tools;
+        `,
+        mockPRInfo,
+        new Map(),
+        config
+      );
+      expect(result).toEqual([{ workflow: 'feature-workflow', args: { project: 'tyk' } }]);
+    });
+
+    it('should handle files context', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator(
+        `
+        const tools = [];
+        if (files.some(f => f.filename.endsWith('.ts'))) {
+          tools.push('typescript-tool');
+        }
+        return tools;
+        `,
+        mockPRInfo,
+        new Map(),
+        { type: 'ai', prompt: 'test' }
+      );
+      expect(result).toEqual(['typescript-tool']);
+    });
+
+    it('should return empty array on syntax error', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator('this is not valid javascript {{}}', mockPRInfo, new Map(), {
+        type: 'ai',
+        prompt: 'test',
+      });
+      expect(result).toEqual([]);
+    });
+
+    it('should return empty array on runtime error', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator('throw new Error("runtime error")', mockPRInfo, new Map(), {
+        type: 'ai',
+        prompt: 'test',
+      });
+      expect(result).toEqual([]);
+    });
+
+    it('should support log() helper for debugging', () => {
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+      const evaluator = getEvaluator(provider);
+
+      evaluator(
+        `
+        log("Debug: checking outputs");
+        return ["debug-tool"];
+        `,
+        mockPRInfo,
+        new Map(),
+        { type: 'ai', prompt: 'test' }
+      );
+
+      expect(consoleSpy).toHaveBeenCalledWith('[ai_custom_tools_js]', 'Debug: checking outputs');
+      consoleSpy.mockRestore();
+    });
+  });
 });

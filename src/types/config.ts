@@ -462,8 +462,44 @@ export interface CheckConfig {
   ai_custom_prompt?: string;
   /** MCP servers for this AI check - overrides global setting */
   ai_mcp_servers?: Record<string, McpServerConfig>;
+  /**
+   * JavaScript expression to dynamically compute MCP servers for this AI check.
+   * Expression has access to: outputs, inputs, pr, files, env, memory
+   * Must return an object mapping server names to McpServerConfig objects.
+   *
+   * Example:
+   * ```
+   * const servers = {};
+   * const tags = outputs['route-intent']?.tags || [];
+   * if (tags.includes('jira')) {
+   *   servers.jira = {
+   *     command: "npx",
+   *     args: ["-y", "@aashari/mcp-server-atlassian-jira"],
+   *     env: { ATLASSIAN_SITE_NAME: "mysite" }
+   *   };
+   * }
+   * return servers;
+   * ```
+   */
+  ai_mcp_servers_js?: string;
   /** List of custom tool names to expose to this AI check via ephemeral SSE MCP server */
   ai_custom_tools?: string[];
+  /**
+   * JavaScript expression to dynamically compute custom tools for this AI check.
+   * Expression has access to: outputs, inputs, pr, files, env, memory
+   * Must return an array of tool names (strings) or WorkflowToolReference objects
+   * ({ workflow: string, args?: Record<string, unknown> })
+   *
+   * Example:
+   * ```
+   * const tools = [];
+   * if (outputs['route-intent'].intent === 'engineer') {
+   *   tools.push({ workflow: 'engineer', args: { projects: ['tyk'] } });
+   * }
+   * return tools;
+   * ```
+   */
+  ai_custom_tools_js?: string;
   /** Claude Code configuration (for claude-code type checks) */
   claude_code?: ClaudeCodeConfig;
   /** Environment variables for this check */

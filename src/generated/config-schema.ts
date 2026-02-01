@@ -452,6 +452,11 @@ export const configSchema = {
           $ref: '#/definitions/Record%3Cstring%2CMcpServerConfig%3E',
           description: 'MCP servers for this AI check - overrides global setting',
         },
+        ai_mcp_servers_js: {
+          type: 'string',
+          description:
+            'JavaScript expression to dynamically compute MCP servers for this AI check. Expression has access to: outputs, inputs, pr, files, env, memory Must return an object mapping server names to McpServerConfig objects.\n\nExample: ``` const servers = {}; const tags = outputs[\'route-intent\']?.tags || []; if (tags.includes(\'jira\')) {   servers.jira = {     command: "npx",     args: ["-y", "@aashari/mcp-server-atlassian-jira"],     env: { ATLASSIAN_SITE_NAME: "mysite" }   }; } return servers; ```',
+        },
         ai_custom_tools: {
           type: 'array',
           items: {
@@ -459,6 +464,11 @@ export const configSchema = {
           },
           description:
             'List of custom tool names to expose to this AI check via ephemeral SSE MCP server',
+        },
+        ai_custom_tools_js: {
+          type: 'string',
+          description:
+            "JavaScript expression to dynamically compute custom tools for this AI check. Expression has access to: outputs, inputs, pr, files, env, memory Must return an array of tool names (strings) or WorkflowToolReference objects ({ workflow: string, args?: Record<string, unknown> })\n\nExample: ``` const tools = []; if (outputs['route-intent'].intent === 'engineer') {   tools.push({ workflow: 'engineer', args: { projects: ['tyk'] } }); } return tools; ```",
         },
         claude_code: {
           $ref: '#/definitions/ClaudeCodeConfig',
@@ -745,7 +755,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11434-24928-src_types_config.ts-0-42627%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -762,7 +772,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11434-24928-src_types_config.ts-0-42627%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1404,7 +1414,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-11434-24928-src_types_config.ts-0-42627%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1419,14 +1429,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453>>':
+    'Record<string,Partial<interface-src_types_config.ts-11434-24928-src_types_config.ts-0-42627>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-11434-24928-src_types_config.ts-0-42627%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-11434-23754-src_types_config.ts-0-41453>': {
+    'Partial<interface-src_types_config.ts-11434-24928-src_types_config.ts-0-42627>': {
       type: 'object',
       additionalProperties: false,
     },
