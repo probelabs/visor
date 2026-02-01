@@ -38,7 +38,7 @@ describe('E2E: forEach branch-first execution order', () => {
           // Deterministic JSON via transform_js; ISSUE-2 triggers error=true
           exec: 'bash -lc "true"',
           transform_js:
-            '(() => { const ITEM = outputs["list-issues"]; const error = ITEM === "ISSUE-2"; return { issues: [{ message: `categorize:${ITEM}`, severity: "info", category: "logic", ruleId: "cat" }], item: ITEM, category: "bug", error }; })()',
+            '(() => { const ITEM = outputs["list-issues"]; const err = ITEM === "ISSUE-2"; return { issues: [{ message: `categorize:${ITEM}`, severity: "info", category: "logic", ruleId: "cat" }], item: ITEM, category: "bug", error: err }; })()',
           depends_on: ['list-issues'],
           fail_if: 'output.error',
         },

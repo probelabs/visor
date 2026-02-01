@@ -544,30 +544,6 @@ ${bodyWithReturn}
             );
           }
 
-          // Fallback: if sandbox could not preserve primitives (e.g., booleans lost),
-          // attempt to re-evaluate the transform in a locked Node VM context to get plain JS values.
-          try {
-            if (
-              finalOutput &&
-              typeof finalOutput === 'object' &&
-              !Array.isArray(finalOutput) &&
-              ((finalOutput as any).error === undefined ||
-                (finalOutput as any).issues === undefined)
-            ) {
-              const vm = await import('node:vm');
-              const vmContext = vm.createContext({ scope: jsContext });
-              const vmCode = `
-                (function(){
-                  const output = scope.output; const pr = scope.pr; const files = scope.files; const outputs = scope.outputs; const env = scope.env; const log = ()=>{};
-${bodyWithReturn}
-                })()
-              `;
-              const vmResult = vm.runInContext(vmCode, vmContext, { timeout: 1000 });
-              if (vmResult && typeof vmResult === 'object') {
-                finalOutput = vmResult;
-              }
-            }
-          } catch {}
           // Create a plain JSON snapshot of the transform result to avoid proxy/getter surprises
           // Prefer JSON stringify inside the sandbox realm (so it knows how to serialize its own objects),
           // then fall back to host-side JSON clone and finally to a shallow copy of own enumerable properties.
