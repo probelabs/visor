@@ -209,9 +209,7 @@ export class CustomToolExecutor {
     output: unknown,
     context: Record<string, unknown>
   ): Promise<unknown> {
-    if (!this.sandbox) {
-      this.sandbox = createSecureSandbox();
-    }
+    this.sandbox = createSecureSandbox();
 
     const code = `
       const output = ${JSON.stringify(output)};

@@ -245,9 +245,7 @@ export class McpCheckProvider extends CheckProvider {
       // Apply JavaScript transform using secure sandbox
       if (cfg.transform_js) {
         try {
-          if (!this.sandbox) {
-            this.sandbox = this.createSecureSandbox();
-          }
+          this.sandbox = this.createSecureSandbox();
 
           // Build scope with all context variables
           const scope = {
