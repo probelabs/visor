@@ -1203,11 +1203,13 @@ export class AICheckProvider extends CheckProvider {
           }
 
           // Update the server config to use the ephemeral SSE endpoint
+          // Use 10-minute timeout for workflow tools since they can run complex operations
           mcpServers[customToolsServerName] = {
             command: '',
             args: [],
             url: `http://localhost:${port}/sse`,
             transport: 'sse',
+            timeout: 600000, // 10 minutes for workflow tools
           } as any;
         }
       } catch (error) {
