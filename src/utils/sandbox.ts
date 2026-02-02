@@ -46,8 +46,9 @@ export function validateJsSyntax(code: string): JsSyntaxValidationResult {
       : `return (() => {\n${trimmed}\n})();\n`
     : `return (\n${trimmed}\n);\n`;
 
-  // Add log injection header (same as compileAndRun)
-  const header = `const __lp = "[syntax-check]"; const log = (...a) => { try { console.log(__lp, ...a); } catch {} };\n`;
+  // For syntax validation, we just need to ensure 'log' is defined so code using it parses correctly
+  // No need for unique IDs since validation creates a fresh sandbox and only compiles (no execution)
+  const header = `var log = function() {};\n`;
   const fullCode = `${header}${body}`;
 
   try {
@@ -238,10 +239,21 @@ export function compileAndRun<T = unknown>(
     .replace(/[`$\\]/g, '') // strip backticks, dollar (template) and backslashes
     .replace(/\$\{/g, '') // remove template openings if present
     .slice(0, 64);
-  // Build a safe header without string concatenation inside user code
-  const header = inject
-    ? `const __lp = ${JSON.stringify(safePrefix)}; const log = (...a) => { try { console.log(__lp, ...a); } catch {} };\n`
-    : '';
+  // Inject log function through scope to avoid "already declared" errors
+  // when multiple sandbox executions run in parallel with shared global state.
+  // Only add log when injectLog is true - when false, user code may declare its own log.
+  const scopeWithLog = inject
+    ? {
+        ...scope,
+        log: (...args: unknown[]) => {
+          try {
+            console.log(safePrefix, ...args);
+          } catch {}
+        },
+      }
+    : scope;
+  // No header needed - log is passed through scope
+  const header = '';
   // When wrapping, execute user code inside an IIFE and return its value.
   // This reliably captures the value of the last expression or any explicit
   // return statements inside the script, without requiring the caller to
@@ -256,7 +268,9 @@ export function compileAndRun<T = unknown>(
   // (e.g., `(() => { ... })()` or `(function(){ ... })()`), return its value
   // directly to avoid swallowing the result by nesting it inside another block.
   const looksLikeIife = /\)\s*\(\s*\)\s*;?$/.test(src.trim());
-  const body = opts.wrapFunction
+  // Default wrapFunction to true if not explicitly set to false
+  const shouldWrap = opts.wrapFunction !== false;
+  const body = shouldWrap
     ? looksLikeBlock
       ? looksLikeIife
         ? `return (\n${src}\n);\n`
@@ -274,7 +288,7 @@ export function compileAndRun<T = unknown>(
 
   let out: any;
   try {
-    out = exec(scope);
+    out = exec(scopeWithLog);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new Error(`sandbox_execution_error: ${msg}`);
