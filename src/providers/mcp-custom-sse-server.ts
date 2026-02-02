@@ -489,12 +489,24 @@ export class CustomToolsSSEServer implements CustomMCPServer {
   private sendSSE(connection: SSEConnection, event: string, data: unknown): void {
     try {
       const dataStr = typeof data === 'string' ? data : JSON.stringify(data);
+
+      // Log SSE message being sent (important for debugging MCP communication)
+      const preview =
+        dataStr.length > 300
+          ? `${dataStr.substring(0, 150)}...${dataStr.substring(dataStr.length - 150)}`
+          : dataStr;
+      logger.debug(
+        `[CustomToolsSSEServer:${this.sessionId}] Sending SSE event='${event}' size=${dataStr.length} preview=${preview}`
+      );
+
       connection.response.write(`event: ${event}\n`);
       connection.response.write(`data: ${dataStr}\n\n`);
+
+      logger.debug(
+        `[CustomToolsSSEServer:${this.sessionId}] SSE message sent successfully, event='${event}'`
+      );
     } catch (error) {
-      if (this.debug) {
-        logger.error(`[CustomToolsSSEServer:${this.sessionId}] Error sending SSE: ${error}`);
-      }
+      logger.error(`[CustomToolsSSEServer:${this.sessionId}] Error sending SSE: ${error}`);
     }
   }
 
@@ -518,10 +530,19 @@ export class CustomToolsSSEServer implements CustomMCPServer {
     // Handle tools/call request
     if (message.method === 'tools/call') {
       const request = message as MCPToolCallRequest;
+      const argsPreview = JSON.stringify(request.params.arguments).substring(0, 200);
+      logger.info(
+        `[CustomToolsSSEServer:${this.sessionId}] Received tools/call for '${request.params.name}' id=${request.id} args=${argsPreview}`
+      );
+
       const response = await this.handleToolCall(
         request.id,
         request.params.name,
         request.params.arguments
+      );
+
+      logger.info(
+        `[CustomToolsSSEServer:${this.sessionId}] Sending response for '${request.params.name}' id=${request.id} hasError=${!!response.error}`
       );
       this.sendSSE(connection, 'message', response);
       return;
@@ -635,13 +656,19 @@ export class CustomToolsSSEServer implements CustomMCPServer {
       // Format result as MCP response
       const resultText = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
 
-      if (this.debug) {
-        logger.debug(
-          `[CustomToolsSSEServer:${this.sessionId}] Tool execution completed: ${toolName}`
-        );
-      }
+      // Always log tool completion with result details (important for debugging MCP issues)
+      const resultPreview =
+        resultText.length > 500
+          ? `${resultText.substring(0, 250)}...TRUNCATED(${resultText.length} chars)...${resultText.substring(resultText.length - 250)}`
+          : resultText;
+      logger.info(
+        `[CustomToolsSSEServer:${this.sessionId}] Tool ${toolName} completed. Result size: ${resultText.length} chars`
+      );
+      logger.debug(
+        `[CustomToolsSSEServer:${this.sessionId}] Tool ${toolName} result preview: ${resultPreview}`
+      );
 
-      return {
+      const response: MCPToolCallResponse = {
         jsonrpc: '2.0',
         id,
         result: {
@@ -653,6 +680,12 @@ export class CustomToolsSSEServer implements CustomMCPServer {
           ],
         },
       };
+
+      logger.debug(
+        `[CustomToolsSSEServer:${this.sessionId}] Returning MCP response for ${toolName}, id=${id}, content_length=${resultText.length}`
+      );
+
+      return response;
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
       logger.error(

@@ -213,6 +213,7 @@ export class WorkspaceManager {
 
   /**
    * Add a project to the workspace (creates symlink to worktree)
+   * If the same repository + worktreePath combination already exists, returns the existing path.
    */
   async addProject(
     repository: string,
@@ -223,10 +224,22 @@ export class WorkspaceManager {
       throw new Error('Workspace not initialized. Call initialize() first.');
     }
 
+    // Check if this exact project (same repo + worktree path) is already added
+    // This prevents duplicate checkouts when tyk-code-talk is called multiple times
+    for (const [existingName, existingProject] of this.projects.entries()) {
+      if (
+        existingProject.repository === repository &&
+        existingProject.worktreePath === worktreePath
+      ) {
+        logger.debug(`Reusing existing project: ${existingName} (${repository})`);
+        return existingProject.path;
+      }
+    }
+
     // Extract project name and sanitize to prevent path traversal
     let projectName = sanitizePathComponent(description || this.extractRepoName(repository));
 
-    // Handle duplicate names
+    // Handle duplicate names (only if not reusing existing)
     projectName = this.getUniqueName(projectName);
     this.usedNames.add(projectName);
 

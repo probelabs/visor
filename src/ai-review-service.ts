@@ -181,6 +181,8 @@ export interface AIReviewConfig {
   mcpServers?: Record<string, import('./types/config').McpServerConfig>;
   // Enable delegate tool for task distribution to subagents
   enableDelegate?: boolean;
+  // Enable task management for tracking multi-goal requests
+  enableTasks?: boolean;
   // ProbeAgent persona/prompt family (e.g., 'engineer', 'code-review', 'architect')
   promptType?: string;
   // System prompt to prepend (baseline/preamble). Replaces legacy customPrompt
@@ -1814,6 +1816,11 @@ ${'='.repeat(60)}
       // Enable delegate tool if configured
       if (this.config.enableDelegate !== undefined) {
         (options as any).enableDelegate = this.config.enableDelegate;
+      }
+
+      // Enable task management if configured
+      if (this.config.enableTasks !== undefined) {
+        (options as any).enableTasks = this.config.enableTasks;
       }
 
       // Pass retry configuration to ProbeAgent
