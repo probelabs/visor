@@ -13,6 +13,23 @@ import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import { EnvironmentResolver } from '../utils/env-resolver';
 import { CustomToolExecutor } from './custom-tool-executor';
 import { CustomToolDefinition } from '../types/config';
+import { Agent } from 'undici';
+
+// Create a custom fetch with longer timeouts for SSE connections
+// Default undici headers timeout is 30s which is too short for long-running MCP tools
+const sseAgent = new Agent({
+  headersTimeout: 300000, // 5 minutes for headers
+  bodyTimeout: 600000, // 10 minutes for body
+  keepAliveTimeout: 600000, // 10 minutes keep-alive
+});
+
+const sseFetch: typeof fetch = (input, init) => {
+  return fetch(input, {
+    ...init,
+    // @ts-expect-error - dispatcher is a Node.js specific option
+    dispatcher: sseAgent,
+  });
+};
 
 /**
  * MCP Check Provider Configuration
@@ -491,6 +508,7 @@ export class McpCheckProvider extends CheckProvider {
 
     const transport = new SSEClientTransport(new URL(config.url!), {
       requestInit,
+      fetch: sseFetch, // Use custom fetch with longer timeouts
     });
 
     return this.executeWithTransport(transport, config, methodArgs, timeout, `SSE: ${config.url}`);
@@ -512,6 +530,7 @@ export class McpCheckProvider extends CheckProvider {
     const transport = new StreamableHTTPClientTransport(new URL(config.url!), {
       requestInit,
       sessionId: config.sessionId,
+      fetch: sseFetch, // Use custom fetch with longer timeouts
     });
 
     return this.executeWithTransport(

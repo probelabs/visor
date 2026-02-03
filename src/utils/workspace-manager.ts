@@ -75,6 +75,11 @@ export class WorkspaceManager {
   private cleanupHandlersRegistered: boolean = false;
   private usedNames: Set<string> = new Set();
 
+  // Reference counting to prevent premature cleanup
+  private activeOperations: number = 0;
+  private cleanupRequested: boolean = false;
+  private cleanupResolvers: Array<() => void> = [];
+
   private constructor(sessionId: string, originalPath: string, config?: Partial<WorkspaceConfig>) {
     this.sessionId = sessionId;
     this.originalPath = originalPath;
@@ -127,6 +132,45 @@ export class WorkspaceManager {
    */
   isEnabled(): boolean {
     return this.config.enabled;
+  }
+
+  /**
+   * Acquire a reference to the workspace (prevents cleanup while held)
+   * Call release() when done with the operation.
+   */
+  acquire(): void {
+    this.activeOperations++;
+    logger.debug(
+      `[Workspace] Acquired reference (active: ${this.activeOperations}) for ${this.workspacePath}`
+    );
+  }
+
+  /**
+   * Release a reference to the workspace.
+   * If cleanup was requested and this was the last reference, cleanup will proceed.
+   */
+  release(): void {
+    this.activeOperations = Math.max(0, this.activeOperations - 1);
+    logger.debug(
+      `[Workspace] Released reference (active: ${this.activeOperations}) for ${this.workspacePath}`
+    );
+
+    // If cleanup was requested and no more active operations, proceed with cleanup
+    if (this.cleanupRequested && this.activeOperations === 0) {
+      logger.debug(`[Workspace] All references released, proceeding with deferred cleanup`);
+      // Resolve all waiting cleanup promises
+      for (const resolve of this.cleanupResolvers) {
+        resolve();
+      }
+      this.cleanupResolvers = [];
+    }
+  }
+
+  /**
+   * Get the number of active operations
+   */
+  getActiveOperations(): number {
+    return this.activeOperations;
   }
 
   /**
@@ -263,10 +307,41 @@ export class WorkspaceManager {
   }
 
   /**
-   * Cleanup the workspace
+   * Cleanup the workspace.
+   * If there are active operations, waits for them to complete before cleaning up.
+   * @param timeout Maximum time to wait for active operations (default: 60s)
    */
-  async cleanup(): Promise<void> {
-    logger.info(`Cleaning up workspace: ${this.workspacePath}`);
+  async cleanup(timeout: number = 60000): Promise<void> {
+    logger.info(
+      `Cleaning up workspace: ${this.workspacePath} (active operations: ${this.activeOperations})`
+    );
+
+    // If there are active operations, wait for them to complete
+    if (this.activeOperations > 0) {
+      logger.info(
+        `[Workspace] Waiting for ${this.activeOperations} active operations to complete before cleanup`
+      );
+      this.cleanupRequested = true;
+
+      // Wait for all operations to complete (with timeout)
+      await Promise.race([
+        new Promise<void>(resolve => {
+          if (this.activeOperations === 0) {
+            resolve();
+          } else {
+            this.cleanupResolvers.push(resolve);
+          }
+        }),
+        new Promise<void>(resolve => {
+          setTimeout(() => {
+            logger.warn(
+              `[Workspace] Cleanup timeout after ${timeout}ms, proceeding anyway (${this.activeOperations} operations still active)`
+            );
+            resolve();
+          }, timeout);
+        }),
+      ]);
+    }
 
     try {
       // Remove main project worktree if it exists
@@ -295,6 +370,8 @@ export class WorkspaceManager {
       this.mainProjectInfo = null;
       this.projects.clear();
       this.usedNames.clear();
+      this.cleanupRequested = false;
+      this.cleanupResolvers = [];
 
       logger.info(`Workspace cleanup completed: ${this.sessionId}`);
     } catch (error) {

@@ -110,6 +110,8 @@ export class CustomToolsSSEServer implements CustomMCPServer {
   private messageQueue: Map<string, MCPMessage[]> = new Map();
   private tools: Map<string, CustomToolDefinition>;
   private workflowContext?: WorkflowToolContext;
+  private keepaliveInterval: NodeJS.Timeout | null = null;
+  private static readonly KEEPALIVE_INTERVAL_MS = 30000; // 30 seconds
 
   constructor(
     tools: Map<string, CustomToolDefinition>,
@@ -201,6 +203,9 @@ export class CustomToolsSSEServer implements CustomMCPServer {
             );
           }
 
+          // Start keepalive to prevent connection timeouts during long AI thinking periods
+          this.startKeepalive();
+
           resolve(this.port);
         });
       } catch (error) {
@@ -210,12 +215,61 @@ export class CustomToolsSSEServer implements CustomMCPServer {
   }
 
   /**
+   * Start sending periodic keepalive pings to all connections
+   * This prevents the SSE connection from being closed during long idle periods
+   */
+  private startKeepalive(): void {
+    if (this.keepaliveInterval) {
+      return; // Already running
+    }
+
+    this.keepaliveInterval = setInterval(() => {
+      if (this.connections.size === 0) {
+        return;
+      }
+
+      for (const connection of this.connections) {
+        try {
+          // Send SSE comment as keepalive (: prefixed lines are comments in SSE)
+          connection.response.write(`: keepalive ${Date.now()}\n\n`);
+        } catch (error) {
+          // Connection might be closed, will be cleaned up on next request
+          if (this.debug) {
+            logger.debug(
+              `[CustomToolsSSEServer:${this.sessionId}] Keepalive failed for ${connection.id}: ${error}`
+            );
+          }
+        }
+      }
+
+      if (this.debug) {
+        logger.debug(
+          `[CustomToolsSSEServer:${this.sessionId}] Sent keepalive to ${this.connections.size} connection(s)`
+        );
+      }
+    }, CustomToolsSSEServer.KEEPALIVE_INTERVAL_MS);
+  }
+
+  /**
+   * Stop the keepalive interval
+   */
+  private stopKeepalive(): void {
+    if (this.keepaliveInterval) {
+      clearInterval(this.keepaliveInterval);
+      this.keepaliveInterval = null;
+    }
+  }
+
+  /**
    * Stop the server and cleanup resources
    */
   async stop(): Promise<void> {
     if (this.debug) {
       logger.debug(`[CustomToolsSSEServer:${this.sessionId}] Stopping server...`);
     }
+
+    // Stop keepalive first
+    this.stopKeepalive();
 
     // Close all SSE connections
     for (const connection of this.connections) {
@@ -595,6 +649,12 @@ export class CustomToolsSSEServer implements CustomMCPServer {
     toolName: string,
     args: Record<string, unknown>
   ): Promise<MCPToolCallResponse> {
+    // Acquire workspace reference to prevent premature cleanup during tool execution
+    const workspace = this.workflowContext?.workspace;
+    if (workspace) {
+      workspace.acquire();
+    }
+
     try {
       if (this.debug) {
         logger.debug(
@@ -671,6 +731,11 @@ export class CustomToolsSSEServer implements CustomMCPServer {
           },
         },
       };
+    } finally {
+      // Release workspace reference after tool execution completes
+      if (workspace) {
+        workspace.release();
+      }
     }
   }
 

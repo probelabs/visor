@@ -35,6 +35,8 @@ export interface WorkflowToolContext {
   prInfo: PRInfo;
   outputs?: Map<string, ReviewSummary>;
   executionContext?: ExecutionContext;
+  /** Workspace manager for reference counting during async operations */
+  workspace?: import('../utils/workspace-manager').WorkspaceManager;
 }
 
 /**

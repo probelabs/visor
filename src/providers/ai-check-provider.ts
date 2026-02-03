@@ -1059,10 +1059,13 @@ export class AICheckProvider extends CheckProvider {
           const debug = aiConfig.debug || process.env.VISOR_DEBUG === 'true';
 
           // Build workflow context for workflow tools
+          // Include workspace for reference counting during async MCP tool calls
+          const parentCtxForTools = (sessionInfo as any)?._parentContext;
           const workflowContext: WorkflowToolContext = {
             prInfo,
             outputs: _dependencyResults,
             executionContext: sessionInfo as import('./check-provider.interface').ExecutionContext,
+            workspace: parentCtxForTools?.workspace,
           };
 
           customToolsServer = new CustomToolsSSEServer(

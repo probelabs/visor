@@ -554,6 +554,45 @@ export class VisorTestRunner {
     }
     return computed;
   }
+
+  /**
+   * Auto-propagate step outputs as workflow outputs when no explicit outputs defined.
+   * Mirrors the logic in workflow-check-provider.ts for consistency.
+   */
+  private autoPropagateeWorkflowOutputs(
+    outputHistory: Record<string, unknown[]>
+  ): Record<string, unknown> | undefined {
+    // Build outputs map from history (last output for each step)
+    const outputsMap: Record<string, unknown> = {};
+    for (const [stepId, hist] of Object.entries(outputHistory)) {
+      if (Array.isArray(hist) && hist.length > 0) {
+        outputsMap[stepId] = hist[hist.length - 1];
+      }
+    }
+
+    const stepNames = Object.keys(outputsMap);
+    if (stepNames.length === 0) {
+      return undefined;
+    }
+
+    // For single-step workflows, unwrap the step output to top level
+    if (stepNames.length === 1) {
+      const singleStepOutput = outputsMap[stepNames[0]];
+      // Return the step's output directly if it's an object, otherwise wrap it
+      if (
+        singleStepOutput &&
+        typeof singleStepOutput === 'object' &&
+        !Array.isArray(singleStepOutput)
+      ) {
+        return singleStepOutput as Record<string, unknown>;
+      }
+      return { result: singleStepOutput };
+    }
+
+    // For multi-step workflows, keep outputs nested by step name
+    return outputsMap;
+  }
+
   /**
    * Locate a tests file: explicit path > ./.visor.tests.yaml > defaults/visor.tests.yaml
    */
@@ -957,7 +996,7 @@ export class VisorTestRunner {
         // (fallback for on_finish static targets handled inside executeTestCase)
         // Workflow testing: compute workflow outputs if workflow has outputs defined
         let workflowOutputs: Record<string, unknown> | undefined;
-        if (Array.isArray((cfgLocal as any).outputs)) {
+        if (Array.isArray((cfgLocal as any).outputs) && (cfgLocal as any).outputs.length > 0) {
           try {
             workflowOutputs = this.computeWorkflowOutputs(
               (cfgLocal as any).outputs,
@@ -967,6 +1006,16 @@ export class VisorTestRunner {
           } catch (e) {
             if (process.env.VISOR_DEBUG === 'true') {
               console.log(`  ⚠️ Error computing workflow outputs: ${e}`);
+            }
+          }
+        } else {
+          // Auto-propagate step outputs when no explicit outputs defined
+          // This mirrors the workflow-check-provider auto-propagation logic
+          try {
+            workflowOutputs = this.autoPropagateeWorkflowOutputs(exec.outHistory);
+          } catch (e) {
+            if (process.env.VISOR_DEBUG === 'true') {
+              console.log(`  ⚠️ Error auto-propagating workflow outputs: ${e}`);
             }
           }
         }
