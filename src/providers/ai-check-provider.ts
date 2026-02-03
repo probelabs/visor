@@ -1559,7 +1559,15 @@ export class AICheckProvider extends CheckProvider {
       // Cleanup custom tools server
       if (customToolsServer) {
         try {
-          await customToolsServer.stop();
+          const graceMsRaw = process.env.VISOR_CUSTOM_TOOLS_GRACE_MS;
+          const drainTimeoutRaw = process.env.VISOR_CUSTOM_TOOLS_DRAIN_TIMEOUT_MS;
+          const graceMs = graceMsRaw ? parseInt(graceMsRaw, 10) : undefined;
+          const drainTimeoutMs = drainTimeoutRaw ? parseInt(drainTimeoutRaw, 10) : undefined;
+
+          await customToolsServer.stop({
+            graceMs: Number.isFinite(graceMs as number) ? graceMs : undefined,
+            drainTimeoutMs: Number.isFinite(drainTimeoutMs as number) ? drainTimeoutMs : undefined,
+          });
           if (aiConfig.debug || process.env.VISOR_DEBUG === 'true') {
             logger.debug('[AICheckProvider] Custom tools SSE server stopped');
           }

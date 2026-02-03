@@ -91,7 +91,7 @@ interface SSEConnection {
  */
 export interface CustomMCPServer {
   start(): Promise<number>;
-  stop(): Promise<void>;
+  stop(options?: { graceMs?: number; drainTimeoutMs?: number }): Promise<void>;
   getUrl(): string;
 }
 
@@ -111,6 +111,8 @@ export class CustomToolsSSEServer implements CustomMCPServer {
   private tools: Map<string, CustomToolDefinition>;
   private workflowContext?: WorkflowToolContext;
   private keepaliveInterval: NodeJS.Timeout | null = null;
+  private activeToolCalls: number = 0;
+  private lastActivityAt: number = Date.now();
   private static readonly KEEPALIVE_INTERVAL_MS = 30000; // 30 seconds
 
   constructor(
@@ -263,7 +265,38 @@ export class CustomToolsSSEServer implements CustomMCPServer {
   /**
    * Stop the server and cleanup resources
    */
-  async stop(): Promise<void> {
+  async stop(options?: { graceMs?: number; drainTimeoutMs?: number }): Promise<void> {
+    const graceMs = this.getEnvNumber('VISOR_CUSTOM_TOOLS_GRACE_MS', 0);
+    const drainTimeoutMs = this.getEnvNumber('VISOR_CUSTOM_TOOLS_DRAIN_TIMEOUT_MS', 60000);
+    const effectiveGraceMs = options?.graceMs ?? graceMs;
+    const effectiveDrainTimeoutMs = options?.drainTimeoutMs ?? drainTimeoutMs;
+
+    if (effectiveGraceMs > 0) {
+      const sinceLastActivity = Date.now() - this.lastActivityAt;
+      const waitMs = Math.max(0, effectiveGraceMs - sinceLastActivity);
+      if (waitMs > 0) {
+        logger.debug(
+          `[CustomToolsSSEServer:${this.sessionId}] Grace period before stop: ${waitMs}ms (activeToolCalls=${this.activeToolCalls})`
+        );
+        await new Promise(resolve => setTimeout(resolve, waitMs));
+      }
+    }
+
+    if (this.activeToolCalls > 0) {
+      const startedAt = Date.now();
+      logger.debug(
+        `[CustomToolsSSEServer:${this.sessionId}] Waiting for ${this.activeToolCalls} active tool call(s) before stop`
+      );
+      while (this.activeToolCalls > 0 && Date.now() - startedAt < effectiveDrainTimeoutMs) {
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+      if (this.activeToolCalls > 0) {
+        logger.warn(
+          `[CustomToolsSSEServer:${this.sessionId}] Drain timeout reached; stopping with ${this.activeToolCalls} active tool call(s)`
+        );
+      }
+    }
+
     if (this.debug) {
       logger.debug(`[CustomToolsSSEServer:${this.sessionId}] Stopping server...`);
     }
@@ -331,6 +364,11 @@ export class CustomToolsSSEServer implements CustomMCPServer {
    */
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const url = new URL(req.url || '/', `http://localhost:${this.port}`);
+    if (this.debug) {
+      logger.debug(
+        `[CustomToolsSSEServer:${this.sessionId}] HTTP ${req.method} ${url.pathname} (connections=${this.connections.size})`
+      );
+    }
 
     // Handle CORS preflight
     if (req.method === 'OPTIONS') {
@@ -389,7 +427,7 @@ export class CustomToolsSSEServer implements CustomMCPServer {
 
     if (this.debug) {
       logger.debug(
-        `[CustomToolsSSEServer:${this.sessionId}] Legacy SSE POST connection: ${connectionId}`
+        `[CustomToolsSSEServer:${this.sessionId}] Legacy SSE POST connection: ${connectionId} (connections=${this.connections.size})`
       );
     }
 
@@ -419,6 +457,11 @@ export class CustomToolsSSEServer implements CustomMCPServer {
     // Handle disconnect
     req.on('close', () => {
       this.connections.delete(connection);
+      if (this.debug) {
+        logger.debug(
+          `[CustomToolsSSEServer:${this.sessionId}] Legacy SSE POST connection closed: ${connectionId} (connections=${this.connections.size})`
+        );
+      }
     });
   }
 
@@ -445,7 +488,9 @@ export class CustomToolsSSEServer implements CustomMCPServer {
     this.connections.add(connection);
 
     if (this.debug) {
-      logger.debug(`[CustomToolsSSEServer:${this.sessionId}] New SSE connection: ${connectionId}`);
+      logger.debug(
+        `[CustomToolsSSEServer:${this.sessionId}] New SSE connection: ${connectionId} (connections=${this.connections.size})`
+      );
     }
 
     // Send initial endpoint message with session ID for message routing
@@ -458,7 +503,9 @@ export class CustomToolsSSEServer implements CustomMCPServer {
     // Handle client disconnect
     req.on('close', () => {
       if (this.debug) {
-        logger.debug(`[CustomToolsSSEServer:${this.sessionId}] Connection closed: ${connectionId}`);
+        logger.debug(
+          `[CustomToolsSSEServer:${this.sessionId}] Connection closed: ${connectionId} (connections=${this.connections.size})`
+        );
       }
       this.connections.delete(connection);
     });
@@ -488,6 +535,11 @@ export class CustomToolsSSEServer implements CustomMCPServer {
     if (!connection) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'No active SSE connection' }));
+      if (this.debug) {
+        logger.debug(
+          `[CustomToolsSSEServer:${this.sessionId}] No active SSE connection for sessionId=${sessionId}`
+        );
+      }
       return;
     }
 
@@ -573,6 +625,7 @@ export class CustomToolsSSEServer implements CustomMCPServer {
         `[CustomToolsSSEServer:${this.sessionId}] Received MCP message: ${JSON.stringify(message)}`
       );
     }
+    this.lastActivityAt = Date.now();
 
     // Handle tools/list request
     if (message.method === 'tools/list') {
@@ -676,6 +729,9 @@ export class CustomToolsSSEServer implements CustomMCPServer {
       workspace.acquire();
     }
 
+    this.activeToolCalls++;
+    this.lastActivityAt = Date.now();
+
     try {
       if (this.debug) {
         logger.debug(
@@ -683,34 +739,53 @@ export class CustomToolsSSEServer implements CustomMCPServer {
         );
       }
 
+      const retryCount = this.getEnvNumber('VISOR_CUSTOM_TOOLS_RETRY_COUNT', 0);
+      const retryDelayMs = this.getEnvNumber('VISOR_CUSTOM_TOOLS_RETRY_DELAY_MS', 1000);
+      let attempt = 0;
       let result: unknown;
 
-      // Check if this is a workflow tool
-      const tool = this.tools.get(toolName);
-      if (tool && isWorkflowTool(tool)) {
-        // Execute workflow tool
-        if (!this.workflowContext) {
-          throw new Error(
-            `Workflow tool '${toolName}' requires workflow context but none was provided`
-          );
-        }
+      while (true) {
+        try {
+          // Check if this is a workflow tool
+          const tool = this.tools.get(toolName);
+          if (tool && isWorkflowTool(tool)) {
+            // Execute workflow tool
+            if (!this.workflowContext) {
+              throw new Error(
+                `Workflow tool '${toolName}' requires workflow context but none was provided`
+              );
+            }
 
-        if (this.debug) {
-          logger.debug(
-            `[CustomToolsSSEServer:${this.sessionId}] Executing workflow tool: ${toolName}`
-          );
-        }
+            if (this.debug) {
+              logger.debug(
+                `[CustomToolsSSEServer:${this.sessionId}] Executing workflow tool: ${toolName}`
+              );
+            }
 
-        const workflowTool = tool as WorkflowToolDefinition;
-        result = await executeWorkflowAsTool(
-          workflowTool.__workflowId,
-          args,
-          this.workflowContext,
-          workflowTool.__argsOverrides
-        );
-      } else {
-        // Execute regular custom tool
-        result = await this.toolExecutor.execute(toolName, args);
+            const workflowTool = tool as WorkflowToolDefinition;
+            result = await executeWorkflowAsTool(
+              workflowTool.__workflowId,
+              args,
+              this.workflowContext,
+              workflowTool.__argsOverrides
+            );
+          } else {
+            // Execute regular custom tool
+            result = await this.toolExecutor.execute(toolName, args);
+          }
+          break;
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+          if (attempt >= retryCount) {
+            throw error;
+          }
+          const delay = Math.min(retryDelayMs * Math.pow(2, attempt), 30000);
+          logger.warn(
+            `[CustomToolsSSEServer:${this.sessionId}] Tool ${toolName} failed (attempt ${attempt + 1}/${retryCount + 1}): ${errorMsg}. Retrying in ${delay}ms`
+          );
+          await new Promise(resolve => setTimeout(resolve, delay));
+          attempt++;
+        }
       }
 
       // Format result as MCP response
@@ -765,11 +840,20 @@ export class CustomToolsSSEServer implements CustomMCPServer {
         },
       };
     } finally {
+      this.activeToolCalls = Math.max(0, this.activeToolCalls - 1);
+      this.lastActivityAt = Date.now();
       // Release workspace reference after tool execution completes
       if (workspace) {
         workspace.release();
       }
     }
+  }
+
+  private getEnvNumber(name: string, fallback: number): number {
+    const raw = process.env[name];
+    if (!raw) return fallback;
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : fallback;
   }
 
   /**
