@@ -15,12 +15,34 @@ import { CustomToolExecutor } from './custom-tool-executor';
 import { CustomToolDefinition } from '../types/config';
 import { Agent } from 'undici';
 
+const parseTimeoutMs = (value: string | undefined, fallback: number): number => {
+  if (value === undefined || value === '') {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (Number.isNaN(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return parsed;
+};
+
+const parseRetryValue = (value: string | undefined, fallback: number): number => {
+  if (value === undefined || value === '') {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (Number.isNaN(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return Math.floor(parsed);
+};
+
 // Create a custom fetch with longer timeouts for SSE connections
 // Default undici headers timeout is 30s which is too short for long-running MCP tools
 const sseAgent = new Agent({
-  headersTimeout: 300000, // 5 minutes for headers
-  bodyTimeout: 600000, // 10 minutes for body
-  keepAliveTimeout: 600000, // 10 minutes keep-alive
+  headersTimeout: parseTimeoutMs(process.env.VISOR_MCP_SSE_HEADERS_TIMEOUT_MS, 300000), // 5 minutes
+  bodyTimeout: parseTimeoutMs(process.env.VISOR_MCP_SSE_BODY_TIMEOUT_MS, 600000), // 10 minutes
+  keepAliveTimeout: parseTimeoutMs(process.env.VISOR_MCP_SSE_KEEP_ALIVE_TIMEOUT_MS, 600000), // 10 minutes
 });
 
 const sseFetch: typeof fetch = (input, init) => {
@@ -73,6 +95,59 @@ export class McpCheckProvider extends CheckProvider {
   private liquid: Liquid;
   private sandbox?: Sandbox;
   private customToolExecutor?: CustomToolExecutor;
+
+  private isRetryableError(error: unknown): boolean {
+    const err = error as { message?: unknown; code?: unknown; cause?: unknown };
+    const message = typeof err?.message === 'string' ? err.message.toLowerCase() : '';
+    const code = typeof err?.code === 'string' ? err.code.toLowerCase() : '';
+    const cause = err?.cause as { message?: unknown; code?: unknown } | undefined;
+    const causeMessage = typeof cause?.message === 'string' ? cause.message.toLowerCase() : '';
+    const causeCode = typeof cause?.code === 'string' ? cause.code.toLowerCase() : '';
+
+    if (this.isTimeoutError(error)) {
+      return true;
+    }
+
+    const tokens = [
+      'fetch failed',
+      'econnreset',
+      'econnrefused',
+      'ehostunreach',
+      'enotfound',
+      'socket hang up',
+      'connection closed',
+      'connection terminated',
+    ];
+    return (
+      tokens.some(t => message.includes(t)) ||
+      tokens.some(t => causeMessage.includes(t)) ||
+      tokens.some(t => code.includes(t)) ||
+      tokens.some(t => causeCode.includes(t))
+    );
+  }
+
+  private isTimeoutError(error: unknown): boolean {
+    const err = error as { message?: unknown; code?: unknown; cause?: unknown };
+    const message = typeof err?.message === 'string' ? err.message.toLowerCase() : '';
+    const code = typeof err?.code === 'string' ? err.code.toLowerCase() : '';
+    const cause = err?.cause as { message?: unknown; code?: unknown } | undefined;
+    const causeMessage = typeof cause?.message === 'string' ? cause.message.toLowerCase() : '';
+    const causeCode = typeof cause?.code === 'string' ? cause.code.toLowerCase() : '';
+    return (
+      message.includes('timeout') ||
+      code.includes('timeout') ||
+      causeMessage.includes('timeout') ||
+      causeCode.includes('timeout')
+    );
+  }
+
+  private getTimeoutSeverity(): ReviewIssue['severity'] {
+    const raw = (process.env.VISOR_MCP_TIMEOUT_SEVERITY || '').trim().toLowerCase();
+    if (raw === 'info' || raw === 'warning' || raw === 'error' || raw === 'critical') {
+      return raw;
+    }
+    return 'error';
+  }
 
   constructor() {
     super();
@@ -313,16 +388,27 @@ export class McpCheckProvider extends CheckProvider {
       } as ReviewSummary;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      logger.error(`MCP check failed: ${errorMessage}`);
+      const isTimeout = this.isTimeoutError(error);
+      const timeoutSeverity = this.getTimeoutSeverity();
+      const severity: ReviewIssue['severity'] = isTimeout ? timeoutSeverity : 'error';
+      const ruleId = isTimeout ? 'mcp/timeout' : 'mcp/execution_error';
+
+      if (isTimeout && severity !== 'error' && severity !== 'critical') {
+        logger.warn(`MCP check timed out (non-fatal): ${errorMessage}`);
+      } else {
+        logger.error(`MCP check failed: ${errorMessage}`);
+      }
 
       return {
         issues: [
           {
             file: 'mcp',
             line: 0,
-            ruleId: 'mcp/execution_error',
-            message: `MCP check failed: ${errorMessage}`,
-            severity: 'error',
+            ruleId,
+            message: isTimeout
+              ? `MCP check timed out: ${errorMessage}`
+              : `MCP check failed: ${errorMessage}`,
+            severity,
             category: 'logic',
           },
         ],
@@ -392,79 +478,103 @@ export class McpCheckProvider extends CheckProvider {
    * Generic method to execute MCP method with any transport
    */
   private async executeWithTransport(
-    transport: StdioClientTransport | SSEClientTransport | StreamableHTTPClientTransport,
+    createTransport: () =>
+      | StdioClientTransport
+      | SSEClientTransport
+      | StreamableHTTPClientTransport,
     config: McpCheckConfig,
     methodArgs: Record<string, unknown>,
     timeout: number,
     transportName: string
   ): Promise<unknown> {
-    // Create client
-    const client = new Client(
-      {
-        name: 'visor-mcp-client',
-        version: '1.0.0',
-      },
-      {
-        capabilities: {},
-      }
-    );
+    const maxRetries = parseRetryValue(process.env.VISOR_MCP_RETRY_COUNT, 0);
+    const baseDelayMs = parseRetryValue(process.env.VISOR_MCP_RETRY_DELAY_MS, 1000);
+    const backoffMs = parseRetryValue(process.env.VISOR_MCP_RETRY_BACKOFF_MS, 0);
 
-    try {
-      // Connect with timeout
-      let timeoutId: NodeJS.Timeout | undefined;
-      try {
-        await Promise.race([
-          client.connect(transport),
-          new Promise((_, reject) => {
-            timeoutId = setTimeout(() => reject(new Error('Connection timeout')), timeout);
-          }),
-        ]);
-      } finally {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
+    let attempt = 0;
+    while (true) {
+      const client = new Client(
+        {
+          name: 'visor-mcp-client',
+          version: '1.0.0',
+        },
+        {
+          capabilities: {},
         }
-      }
+      );
 
-      logger.debug(`Connected to MCP server via ${transportName}`);
+      const transport = createTransport();
 
-      // Log session ID for HTTP transport
-      if (transport instanceof StreamableHTTPClientTransport && transport.sessionId) {
-        logger.debug(`MCP Session ID: ${transport.sessionId}`);
-      }
-
-      // List available tools (for debugging)
       try {
-        const toolsResult = await client.listTools();
-        logger.debug(`Available MCP tools: ${JSON.stringify(toolsResult?.tools || [])}`);
-      } catch (error) {
-        logger.debug(`Could not list MCP tools: ${error}`);
-      }
-
-      // Call the tool with timeout
-      let callTimeoutId: NodeJS.Timeout | undefined;
-      try {
-        const result = await Promise.race([
-          client.callTool({
-            name: config.method,
-            arguments: methodArgs,
-          }),
-          new Promise((_, reject) => {
-            callTimeoutId = setTimeout(() => reject(new Error('Request timeout')), timeout);
-          }),
-        ]);
-
-        logger.debug(`MCP method result: ${JSON.stringify(result)}`);
-        return result;
-      } finally {
-        if (callTimeoutId) {
-          clearTimeout(callTimeoutId);
+        // Connect with timeout
+        let timeoutId: NodeJS.Timeout | undefined;
+        try {
+          await Promise.race([
+            client.connect(transport),
+            new Promise((_, reject) => {
+              timeoutId = setTimeout(() => reject(new Error('Connection timeout')), timeout);
+            }),
+          ]);
+        } finally {
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+          }
         }
-      }
-    } finally {
-      try {
-        await client.close();
+
+        logger.debug(`Connected to MCP server via ${transportName}`);
+
+        // Log session ID for HTTP transport
+        if (transport instanceof StreamableHTTPClientTransport && transport.sessionId) {
+          logger.debug(`MCP Session ID: ${transport.sessionId}`);
+        }
+
+        // List available tools (for debugging)
+        try {
+          const toolsResult = await client.listTools();
+          logger.debug(`Available MCP tools: ${JSON.stringify(toolsResult?.tools || [])}`);
+        } catch (error) {
+          logger.debug(`Could not list MCP tools: ${error}`);
+        }
+
+        // Call the tool with timeout
+        let callTimeoutId: NodeJS.Timeout | undefined;
+        try {
+          const result = await Promise.race([
+            client.callTool({
+              name: config.method,
+              arguments: methodArgs,
+            }),
+            new Promise((_, reject) => {
+              callTimeoutId = setTimeout(() => reject(new Error('Request timeout')), timeout);
+            }),
+          ]);
+
+          logger.debug(`MCP method result: ${JSON.stringify(result)}`);
+          return result;
+        } finally {
+          if (callTimeoutId) {
+            clearTimeout(callTimeoutId);
+          }
+        }
       } catch (error) {
-        logger.debug(`Error closing MCP client: ${error}`);
+        const retryable = this.isRetryableError(error);
+        if (!retryable || attempt >= maxRetries) {
+          throw error;
+        }
+        const delay = baseDelayMs + backoffMs * attempt;
+        logger.warn(
+          `MCP ${transportName} failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        await new Promise(resolve => setTimeout(resolve, delay));
+        attempt += 1;
+      } finally {
+        try {
+          await client.close();
+        } catch (error) {
+          logger.debug(`Error closing MCP client: ${error}`);
+        }
       }
     }
   }
@@ -477,15 +587,14 @@ export class McpCheckProvider extends CheckProvider {
     methodArgs: Record<string, unknown>,
     timeout: number
   ): Promise<unknown> {
-    const transport = new StdioClientTransport({
-      command: config.command!,
-      args: config.command_args as string[] | undefined,
-      env: config.env,
-      cwd: config.workingDirectory,
-    });
-
     return this.executeWithTransport(
-      transport,
+      () =>
+        new StdioClientTransport({
+          command: config.command!,
+          args: config.command_args as string[] | undefined,
+          env: config.env,
+          cwd: config.workingDirectory,
+        }),
       config,
       methodArgs,
       timeout,
@@ -506,12 +615,17 @@ export class McpCheckProvider extends CheckProvider {
       requestInit.headers = EnvironmentResolver.resolveHeaders(config.headers);
     }
 
-    const transport = new SSEClientTransport(new URL(config.url!), {
-      requestInit,
-      fetch: sseFetch, // Use custom fetch with longer timeouts
-    });
-
-    return this.executeWithTransport(transport, config, methodArgs, timeout, `SSE: ${config.url}`);
+    return this.executeWithTransport(
+      () =>
+        new SSEClientTransport(new URL(config.url!), {
+          requestInit,
+          fetch: sseFetch, // Use custom fetch with longer timeouts
+        }),
+      config,
+      methodArgs,
+      timeout,
+      `SSE: ${config.url}`
+    );
   }
 
   /**
@@ -527,14 +641,13 @@ export class McpCheckProvider extends CheckProvider {
       requestInit.headers = EnvironmentResolver.resolveHeaders(config.headers);
     }
 
-    const transport = new StreamableHTTPClientTransport(new URL(config.url!), {
-      requestInit,
-      sessionId: config.sessionId,
-      fetch: sseFetch, // Use custom fetch with longer timeouts
-    });
-
     return this.executeWithTransport(
-      transport,
+      () =>
+        new StreamableHTTPClientTransport(new URL(config.url!), {
+          requestInit,
+          sessionId: config.sessionId,
+          fetch: sseFetch, // Use custom fetch with longer timeouts
+        }),
       config,
       methodArgs,
       timeout,

@@ -172,7 +172,7 @@ interface TracedProbeAgentOptions extends ProbeAgentOptions {
 export interface AIReviewConfig {
   apiKey?: string; // From env: GOOGLE_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, CLAUDE_CODE_API_KEY, or AWS credentials
   model?: string; // From env: MODEL_NAME (e.g., gemini-2.5-pro-preview-06-05)
-  timeout?: number; // Default: 1200000ms (20 minutes)
+  timeout?: number; // Default: 1800000ms (30 minutes)
   maxIterations?: number; // Maximum tool iterations for ProbeAgent
   provider?: 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock' | 'claude-code';
   debug?: boolean; // Enable debug mode
@@ -278,7 +278,7 @@ export class AIReviewService {
 
   constructor(config: AIReviewConfig = {}) {
     this.config = {
-      timeout: 1200000, // Increased timeout to 20 minutes for AI responses
+      timeout: 1800000, // Increased timeout to 30 minutes for AI responses
       ...config,
     };
 

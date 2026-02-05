@@ -1557,15 +1557,15 @@ export class AICheckProvider extends CheckProvider {
       throw new Error(`AI analysis failed: ${errorMessage}`);
     } finally {
       // Cleanup custom tools server
+      // When AI check is complete (success or error), stop immediately without grace period.
+      // Grace period is only useful during active tool iteration, not at check completion.
       if (customToolsServer) {
         try {
-          const graceMsRaw = process.env.VISOR_CUSTOM_TOOLS_GRACE_MS;
           const drainTimeoutRaw = process.env.VISOR_CUSTOM_TOOLS_DRAIN_TIMEOUT_MS;
-          const graceMs = graceMsRaw ? parseInt(graceMsRaw, 10) : undefined;
           const drainTimeoutMs = drainTimeoutRaw ? parseInt(drainTimeoutRaw, 10) : undefined;
 
           await customToolsServer.stop({
-            graceMs: Number.isFinite(graceMs as number) ? graceMs : undefined,
+            graceMs: 0, // No grace period at check completion - we're done
             drainTimeoutMs: Number.isFinite(drainTimeoutMs as number) ? drainTimeoutMs : undefined,
           });
           if (aiConfig.debug || process.env.VISOR_DEBUG === 'true') {

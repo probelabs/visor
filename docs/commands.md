@@ -104,7 +104,7 @@ visor mcp-server [options]
 - `--config <path>` - Path to configuration file
 
 #### Execution Control
-- `--timeout <ms>` - Timeout for operations (default: 1200000ms / 20 minutes)
+- `--timeout <ms>` - Timeout for operations (default: 1200000ms / 30 minutes)
 - `--max-parallelism <count>` - Maximum parallel checks (default: 3)
 - `--fail-fast` - Stop execution on first failure
 

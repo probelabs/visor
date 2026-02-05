@@ -332,6 +332,28 @@ export class CommandCheckProvider extends CheckProvider {
       if (exitCode !== 0) {
         const errorMessage = stderr || `Command exited with code ${exitCode}`;
         logger.error(`Command failed with exit code ${exitCode}: ${errorMessage}`);
+
+        // Build error output so workflow tools can propagate errors to AI
+        const errorOutput = {
+          error: true,
+          exit_code: exitCode,
+          message: errorMessage,
+          // Include stdout if present - may contain partial results or error details
+          ...(stdout.trim() ? { stdout: stdout.trim() } : {}),
+          // Include a text field for AI tool compatibility
+          text: `Command failed with exit code ${exitCode}: ${errorMessage}`,
+        };
+
+        // Capture error output in telemetry so traces show what happened
+        try {
+          const span = trace.getSpan(otContext.active());
+          if (span) {
+            captureCheckOutput(span, errorOutput);
+          }
+        } catch {
+          // Ignore telemetry errors
+        }
+
         return {
           issues: [
             {
@@ -343,7 +365,8 @@ export class CommandCheckProvider extends CheckProvider {
               category: 'logic',
             },
           ],
-        };
+          output: errorOutput,
+        } as ReviewSummary & { output: unknown };
       }
 
       // Keep raw output for transforms
@@ -1157,6 +1180,24 @@ ${bodyWithReturn}
 
       logger.error(`✗ ${detailedMessage}`);
 
+      // Build error output so workflow tools can propagate errors to AI
+      const errorOutput = {
+        error: true,
+        timeout: isTimeout,
+        message: detailedMessage,
+        text: detailedMessage,
+      };
+
+      // Capture error output in telemetry
+      try {
+        const span = trace.getSpan(otContext.active());
+        if (span) {
+          captureCheckOutput(span, errorOutput);
+        }
+      } catch {
+        // Ignore telemetry errors
+      }
+
       return {
         issues: [
           {
@@ -1168,7 +1209,8 @@ ${bodyWithReturn}
             category: 'logic',
           },
         ],
-      };
+        output: errorOutput,
+      } as ReviewSummary & { output: unknown };
     }
   }
 
