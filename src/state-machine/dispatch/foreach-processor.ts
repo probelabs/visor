@@ -189,7 +189,7 @@ export async function executeCheckWithForEachItems(
         workflowInputs,
         ai: {
           ...(checkConfig.ai || {}),
-          timeout: checkConfig.ai?.timeout || 1200000,
+          timeout: checkConfig.ai?.timeout || 1800000,
           debug: !!context.debug,
         },
       };

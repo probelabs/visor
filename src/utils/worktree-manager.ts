@@ -100,14 +100,17 @@ export class WorktreeManager {
   }
 
   /**
-   * Generate a unique worktree ID
+   * Generate a deterministic worktree ID based on repository and ref.
+   * This allows worktrees to be reused when the same repo+ref is requested again.
    */
   private generateWorktreeId(repository: string, ref: string): string {
     const sanitizedRepo = repository.replace(/[^a-zA-Z0-9-]/g, '-');
     const sanitizedRef = ref.replace(/[^a-zA-Z0-9-]/g, '-');
+    // Use deterministic hash (no Date.now()) so same repo+ref produces same ID
+    // This enables worktree reuse across multiple calls
     const hash = crypto
       .createHash('md5')
-      .update(`${repository}:${ref}:${Date.now()}`)
+      .update(`${repository}:${ref}`)
       .digest('hex')
       .substring(0, 8);
     return `${sanitizedRepo}-${sanitizedRef}-${hash}`;

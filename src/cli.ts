@@ -45,7 +45,7 @@ export class CLI {
       .option('--config <path>', 'Path to configuration file')
       .option(
         '--timeout <ms>',
-        'Timeout for check operations in milliseconds (default: 1200000ms / 20 minutes)',
+        'Timeout for check operations in milliseconds (default: 1800000ms / 30 minutes)',
         value => parseInt(value, 10)
       )
       .option(
@@ -132,7 +132,7 @@ export class CLI {
         .option('--config <path>', 'Path to configuration file')
         .option(
           '--timeout <ms>',
-          'Timeout for check operations in milliseconds (default: 1200000ms / 20 minutes)',
+          'Timeout for check operations in milliseconds (default: 1800000ms / 30 minutes)',
           value => parseInt(value, 10)
         )
         .option(
@@ -349,7 +349,7 @@ export class CLI {
       .option('--config <path>', 'Path to configuration file')
       .option(
         '--timeout <ms>',
-        'Timeout for check operations in milliseconds (default: 1200000ms / 20 minutes)',
+        'Timeout for check operations in milliseconds (default: 1800000ms / 30 minutes)',
         value => parseInt(value, 10)
       )
       .option(

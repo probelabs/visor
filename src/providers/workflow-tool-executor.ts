@@ -35,6 +35,8 @@ export interface WorkflowToolContext {
   prInfo: PRInfo;
   outputs?: Map<string, ReviewSummary>;
   executionContext?: ExecutionContext;
+  /** Workspace manager for reference counting during async operations */
+  workspace?: import('../utils/workspace-manager').WorkspaceManager;
 }
 
 /**
@@ -226,16 +228,27 @@ export async function executeWorkflowAsTool(
   // Return the output from the workflow execution
   // The workflow output is the most useful part for AI tools
   const output = (result as any).output;
+
+  // Log what we're returning (important for debugging MCP tool results)
+  const outputKeys = output ? Object.keys(output) : [];
+  const outputPreview = output ? JSON.stringify(output).substring(0, 500) : 'undefined';
+  logger.info(
+    `[WorkflowToolExecutor] Workflow '${workflowId}' completed. Output keys: [${outputKeys.join(', ')}]`
+  );
+  logger.debug(`[WorkflowToolExecutor] Workflow '${workflowId}' output preview: ${outputPreview}`);
+
   if (output !== undefined) {
     return output;
   }
 
   // Fall back to content if no structured output
   if ((result as any).content) {
+    logger.debug(`[WorkflowToolExecutor] Using content fallback for '${workflowId}'`);
     return (result as any).content;
   }
 
   // Fall back to the full result
+  logger.debug(`[WorkflowToolExecutor] Using full result fallback for '${workflowId}'`);
   return result;
 }
 

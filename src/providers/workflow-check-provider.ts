@@ -633,10 +633,6 @@ export class WorkflowCheckProvider extends CheckProvider {
   ): Promise<Record<string, unknown>> {
     const outputs: Record<string, unknown> = {};
 
-    if (!workflow.outputs) {
-      return outputs;
-    }
-
     // Flatten GroupedCheckResults (group -> CheckResult[]) to a simple map
     // of checkName -> { output, issues } so workflow-level value_js can
     // reference outputs["security"].issues, etc.
@@ -659,11 +655,52 @@ export class WorkflowCheckProvider extends CheckProvider {
       Object.entries(flat).map(([id, result]) => [id, (result as any).output])
     );
 
+    // If no explicit outputs defined, propagate step outputs automatically
+    // This provides a simpler default - no value_js needed for simple passthrough
+    if (!workflow.outputs || workflow.outputs.length === 0) {
+      const stepNames = Object.keys(outputsMap);
+
+      // For single-step workflows, unwrap the step output to top level
+      // This makes { 'step-name': { answer: {...} } } become { answer: {...} }
+      if (stepNames.length === 1) {
+        const singleStepOutput = outputsMap[stepNames[0]];
+        logger.debug(
+          `[WorkflowProvider] No outputs defined for workflow '${workflow.id}', unwrapping single step '${stepNames[0]}' output to top level`
+        );
+        // Return the step's output directly if it's an object, otherwise wrap it
+        if (
+          singleStepOutput &&
+          typeof singleStepOutput === 'object' &&
+          !Array.isArray(singleStepOutput)
+        ) {
+          return singleStepOutput as Record<string, unknown>;
+        }
+        return { result: singleStepOutput };
+      }
+
+      // For multi-step workflows, keep outputs nested by step name
+      logger.debug(
+        `[WorkflowProvider] No outputs defined for workflow '${workflow.id}', propagating all step outputs: [${stepNames.join(', ')}]`
+      );
+      return outputsMap;
+    }
+
+    // Log available step outputs for debugging
+    const stepOutputKeys = Object.keys(outputsMap);
+    const stepOutputSummary = stepOutputKeys.map(k => {
+      const v = outputsMap[k];
+      const keys = v && typeof v === 'object' ? Object.keys(v) : [];
+      return `${k}:[${keys.join(',')}]`;
+    });
+    logger.debug(
+      `[WorkflowProvider] Computing outputs for '${workflow.id}'. Available steps: ${stepOutputSummary.join(', ') || '(none)'}`
+    );
+
     for (const output of workflow.outputs) {
       if (output.value_js) {
         // JavaScript expression
         const sandbox = createSecureSandbox();
-        outputs[output.name] = compileAndRun(
+        const result = compileAndRun(
           sandbox,
           output.value_js,
           {
@@ -675,6 +712,18 @@ export class WorkflowCheckProvider extends CheckProvider {
           },
           { injectLog: true, logPrefix: `workflow.output.${output.name}` }
         );
+        outputs[output.name] = result;
+
+        // Log result for debugging
+        const resultType =
+          result === null ? 'null' : result === undefined ? 'undefined' : typeof result;
+        const resultPreview =
+          result && typeof result === 'object'
+            ? `{${Object.keys(result).join(',')}}`
+            : String(result).substring(0, 100);
+        logger.debug(
+          `[WorkflowProvider] Output '${output.name}' value_js result: type=${resultType}, preview=${resultPreview}`
+        );
       } else if (output.value) {
         // Liquid template
         outputs[output.name] = await this.liquid.parseAndRender(output.value, {
@@ -685,6 +734,16 @@ export class WorkflowCheckProvider extends CheckProvider {
           pr: prInfo,
         });
       }
+    }
+
+    // Log final outputs
+    const outputKeys = Object.keys(outputs);
+    const nullOutputs = outputKeys.filter(k => outputs[k] === null || outputs[k] === undefined);
+    if (nullOutputs.length > 0) {
+      logger.warn(
+        `[WorkflowProvider] Workflow '${workflow.id}' has null/undefined outputs: [${nullOutputs.join(', ')}]. ` +
+          `This may indicate value_js expressions are not finding expected data.`
+      );
     }
 
     return outputs;

@@ -140,7 +140,7 @@ The CLI supports a global timeout via the `--timeout` flag:
 visor --check all --timeout 300000  # 5 minute global timeout (milliseconds)
 ```
 
-This timeout applies to AI operations. The default is 1200000ms (20 minutes).
+This timeout applies to AI operations. The default is 1200000ms (30 minutes).
 
 ## Examples
 
