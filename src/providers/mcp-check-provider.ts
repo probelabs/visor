@@ -487,7 +487,7 @@ export class McpCheckProvider extends CheckProvider {
     timeout: number,
     transportName: string
   ): Promise<unknown> {
-    const maxRetries = parseRetryValue(process.env.VISOR_MCP_RETRY_COUNT, 0);
+    const maxRetries = parseRetryValue(process.env.VISOR_MCP_RETRY_COUNT, 2);
     const baseDelayMs = parseRetryValue(process.env.VISOR_MCP_RETRY_DELAY_MS, 1000);
     const backoffMs = parseRetryValue(process.env.VISOR_MCP_RETRY_BACKOFF_MS, 0);
 
