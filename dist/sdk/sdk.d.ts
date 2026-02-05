@@ -250,6 +250,8 @@ interface AIProviderConfig {
     mcpServers?: Record<string, McpServerConfig>;
     /** Enable the delegate tool for task distribution to subagents */
     enableDelegate?: boolean;
+    /** Enable task management for tracking multi-goal requests */
+    enableTasks?: boolean;
     /** Retry configuration for this provider */
     retry?: AIRetryConfig;
     /** Fallback configuration for provider failures */
@@ -268,15 +270,35 @@ interface AIProviderConfig {
     completion_prompt?: string;
 }
 /**
- * MCP Server configuration
+ * Unified MCP server/tool entry - type detected by which properties are present
+ *
+ * Detection logic (priority order):
+ * 1. Has `command` → stdio MCP server (external process)
+ * 2. Has `url` → SSE/HTTP MCP server (external endpoint)
+ * 3. Has `workflow` → workflow tool reference
+ * 4. Empty `{}` or just key → auto-detect from `tools:` section
  */
 interface McpServerConfig {
-    /** Command to execute for the MCP server */
-    command: string;
+    /** Command to execute (presence indicates stdio server) */
+    command?: string;
     /** Arguments to pass to the command */
     args?: string[];
     /** Environment variables for the MCP server */
     env?: Record<string, string>;
+    /** URL endpoint (presence indicates external server) */
+    url?: string;
+    /** Transport type */
+    transport?: 'stdio' | 'sse' | 'http';
+    /** Workflow ID or path (presence indicates workflow tool) */
+    workflow?: string;
+    /** Inputs to pass to workflow */
+    inputs?: Record<string, unknown>;
+    /** Tool description for AI */
+    description?: string;
+    /** Whitelist specific methods from this MCP server (supports wildcards like "search_*") */
+    allowedMethods?: string[];
+    /** Block specific methods from this MCP server (supports wildcards like "*_delete") */
+    blockedMethods?: string[];
 }
 /**
  * Claude Code configuration
@@ -362,8 +384,44 @@ interface CheckConfig {
     ai_custom_prompt?: string;
     /** MCP servers for this AI check - overrides global setting */
     ai_mcp_servers?: Record<string, McpServerConfig>;
+    /**
+     * JavaScript expression to dynamically compute MCP servers for this AI check.
+     * Expression has access to: outputs, inputs, pr, files, env, memory
+     * Must return an object mapping server names to McpServerConfig objects.
+     *
+     * Example:
+     * ```
+     * const servers = {};
+     * const tags = outputs['route-intent']?.tags || [];
+     * if (tags.includes('jira')) {
+     *   servers.jira = {
+     *     command: "npx",
+     *     args: ["-y", "@aashari/mcp-server-atlassian-jira"],
+     *     env: { ATLASSIAN_SITE_NAME: "mysite" }
+     *   };
+     * }
+     * return servers;
+     * ```
+     */
+    ai_mcp_servers_js?: string;
     /** List of custom tool names to expose to this AI check via ephemeral SSE MCP server */
     ai_custom_tools?: string[];
+    /**
+     * JavaScript expression to dynamically compute custom tools for this AI check.
+     * Expression has access to: outputs, inputs, pr, files, env, memory
+     * Must return an array of tool names (strings) or WorkflowToolReference objects
+     * ({ workflow: string, args?: Record<string, unknown> })
+     *
+     * Example:
+     * ```
+     * const tools = [];
+     * if (outputs['route-intent'].intent === 'engineer') {
+     *   tools.push({ workflow: 'engineer', args: { projects: ['tyk'] } });
+     * }
+     * return tools;
+     * ```
+     */
+    ai_custom_tools_js?: string;
     /** Claude Code configuration (for claude-code type checks) */
     claude_code?: ClaudeCodeConfig;
     /** Environment variables for this check */

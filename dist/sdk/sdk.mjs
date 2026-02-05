@@ -3,48 +3,48 @@ import {
   check_provider_registry_exports,
   init_check_provider_registry,
   init_runner
-} from "./chunk-TS6BUNAI.mjs";
+} from "./chunk-UPKHRMUA.mjs";
 import {
   generateHumanId,
   init_human_id
-} from "./chunk-EXFGO4FX.mjs";
-import "./chunk-NAW3DB3I.mjs";
+} from "./chunk-KFKHU6CM.mjs";
+import "./chunk-XXAEN5KU.mjs";
 import {
   commandExecutor,
   init_command_executor
-} from "./chunk-J2QWVDXK.mjs";
-import "./chunk-VW2GBXQT.mjs";
+} from "./chunk-SIMCSNXO.mjs";
+import "./chunk-N7IVCCGH.mjs";
 import {
   ConfigManager,
   init_config
-} from "./chunk-XWJPT5KQ.mjs";
-import "./chunk-O5EZDNYL.mjs";
-import "./chunk-HQL734ZI.mjs";
+} from "./chunk-D55IQCUP.mjs";
+import "./chunk-NCWIZVOT.mjs";
+import "./chunk-QRXSDDYN.mjs";
 import {
   ExecutionJournal,
   init_snapshot_store
-} from "./chunk-EORMDOZU.mjs";
-import "./chunk-MPS4HVQI.mjs";
-import "./chunk-ZYAUYXSW.mjs";
-import "./chunk-S2RUE2RG.mjs";
-import "./chunk-BHOKBQPB.mjs";
-import "./chunk-CNX7V5JK.mjs";
-import "./chunk-BOVFH3LI.mjs";
+} from "./chunk-VEROLBCD.mjs";
+import "./chunk-UKG5UP5U.mjs";
+import "./chunk-WVNQ56DO.mjs";
+import "./chunk-YCUWMIV5.mjs";
+import "./chunk-LMJSJQPP.mjs";
+import "./chunk-25IC7KXZ.mjs";
+import "./chunk-EJN6Q4D3.mjs";
 import {
   MemoryStore,
   init_memory_store
-} from "./chunk-IHZOSIF4.mjs";
+} from "./chunk-UEWXVJ6C.mjs";
 import {
   init_logger,
   logger
-} from "./chunk-3NMLT3YS.mjs";
-import "./chunk-YSN4G6CI.mjs";
-import "./chunk-3OMWVM6J.mjs";
+} from "./chunk-P6YFV6N2.mjs";
+import "./chunk-4HVFUUNB.mjs";
+import "./chunk-B7BVQM5K.mjs";
 import {
   __esm,
   __export,
   __toCommonJS
-} from "./chunk-WMJKH4XE.mjs";
+} from "./chunk-J7LXIPZS.mjs";
 
 // src/utils/workspace-manager.ts
 import * as fsp from "fs/promises";
@@ -73,6 +73,10 @@ var init_workspace_manager = __esm({
       projects = /* @__PURE__ */ new Map();
       cleanupHandlersRegistered = false;
       usedNames = /* @__PURE__ */ new Set();
+      // Reference counting to prevent premature cleanup
+      activeOperations = 0;
+      cleanupRequested = false;
+      cleanupResolvers = [];
       constructor(sessionId, originalPath, config) {
         this.sessionId = sessionId;
         this.originalPath = originalPath;
@@ -113,6 +117,39 @@ var init_workspace_manager = __esm({
        */
       isEnabled() {
         return this.config.enabled;
+      }
+      /**
+       * Acquire a reference to the workspace (prevents cleanup while held)
+       * Call release() when done with the operation.
+       */
+      acquire() {
+        this.activeOperations++;
+        logger.debug(
+          `[Workspace] Acquired reference (active: ${this.activeOperations}) for ${this.workspacePath}`
+        );
+      }
+      /**
+       * Release a reference to the workspace.
+       * If cleanup was requested and this was the last reference, cleanup will proceed.
+       */
+      release() {
+        this.activeOperations = Math.max(0, this.activeOperations - 1);
+        logger.debug(
+          `[Workspace] Released reference (active: ${this.activeOperations}) for ${this.workspacePath}`
+        );
+        if (this.cleanupRequested && this.activeOperations === 0) {
+          logger.debug(`[Workspace] All references released, proceeding with deferred cleanup`);
+          for (const resolve2 of this.cleanupResolvers) {
+            resolve2();
+          }
+          this.cleanupResolvers = [];
+        }
+      }
+      /**
+       * Get the number of active operations
+       */
+      getActiveOperations() {
+        return this.activeOperations;
       }
       /**
        * Get the workspace path
@@ -176,10 +213,17 @@ var init_workspace_manager = __esm({
       }
       /**
        * Add a project to the workspace (creates symlink to worktree)
+       * If the same repository + worktreePath combination already exists, returns the existing path.
        */
       async addProject(repository, worktreePath, description) {
         if (!this.initialized) {
           throw new Error("Workspace not initialized. Call initialize() first.");
+        }
+        for (const [existingName, existingProject] of this.projects.entries()) {
+          if (existingProject.repository === repository && existingProject.worktreePath === worktreePath) {
+            logger.debug(`Reusing existing project: ${existingName} (${repository})`);
+            return existingProject.path;
+          }
         }
         let projectName = sanitizePathComponent(description || this.extractRepoName(repository));
         projectName = this.getUniqueName(projectName);
@@ -207,10 +251,37 @@ var init_workspace_manager = __esm({
         return Array.from(this.projects.values());
       }
       /**
-       * Cleanup the workspace
+       * Cleanup the workspace.
+       * If there are active operations, waits for them to complete before cleaning up.
+       * @param timeout Maximum time to wait for active operations (default: 60s)
        */
-      async cleanup() {
-        logger.info(`Cleaning up workspace: ${this.workspacePath}`);
+      async cleanup(timeout = 6e4) {
+        logger.info(
+          `Cleaning up workspace: ${this.workspacePath} (active operations: ${this.activeOperations})`
+        );
+        if (this.activeOperations > 0) {
+          logger.info(
+            `[Workspace] Waiting for ${this.activeOperations} active operations to complete before cleanup`
+          );
+          this.cleanupRequested = true;
+          await Promise.race([
+            new Promise((resolve2) => {
+              if (this.activeOperations === 0) {
+                resolve2();
+              } else {
+                this.cleanupResolvers.push(resolve2);
+              }
+            }),
+            new Promise((resolve2) => {
+              setTimeout(() => {
+                logger.warn(
+                  `[Workspace] Cleanup timeout after ${timeout}ms, proceeding anyway (${this.activeOperations} operations still active)`
+                );
+                resolve2();
+              }, timeout);
+            })
+          ]);
+        }
         try {
           if (this.mainProjectInfo) {
             const mainProjectPath = this.mainProjectInfo.mainProjectPath;
@@ -229,6 +300,8 @@ var init_workspace_manager = __esm({
           this.mainProjectInfo = null;
           this.projects.clear();
           this.usedNames.clear();
+          this.cleanupRequested = false;
+          this.cleanupResolvers = [];
           logger.info(`Workspace cleanup completed: ${this.sessionId}`);
         } catch (error) {
           logger.warn(`Failed to cleanup workspace: ${error}`);
@@ -528,12 +601,12 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
     const timestamp = (/* @__PURE__ */ new Date()).toISOString();
     try {
       if (options.config?.memory) {
-        const { MemoryStore: MemoryStore2 } = await import("./memory-store-RW5N2NGJ.mjs");
+        const { MemoryStore: MemoryStore2 } = await import("./memory-store-LPOZWQ5E.mjs");
         const memoryStore = MemoryStore2.getInstance(options.config.memory);
         await memoryStore.initialize();
         logger.debug("Memory store initialized");
       }
-      const { GitRepositoryAnalyzer } = await import("./git-repository-analyzer-HJC4MYW4.mjs");
+      const { GitRepositoryAnalyzer } = await import("./git-repository-analyzer-VO7OZMTM.mjs");
       const gitAnalyzer = new GitRepositoryAnalyzer(options.workingDirectory);
       logger.info("Analyzing local git repository...");
       const repositoryInfo = await gitAnalyzer.analyzeRepository();
@@ -570,7 +643,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       try {
         const map = options?.webhookContext?.webhookData;
         if (map) {
-          const { CheckProviderRegistry } = await import("./check-provider-registry-CVUONJ5A.mjs");
+          const { CheckProviderRegistry } = await import("./check-provider-registry-OB5FEBJU.mjs");
           const reg = CheckProviderRegistry.getInstance();
           const p = reg.getProvider("http_input");
           if (p && typeof p.setWebhookContext === "function") p.setWebhookContext(map);
@@ -683,7 +756,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       logger.info("[StateMachine] Using state machine engine");
     }
     if (!config) {
-      const { ConfigManager: ConfigManager2 } = await import("./config-DXX64GD3.mjs");
+      const { ConfigManager: ConfigManager2 } = await import("./config-GYTBTHRZ.mjs");
       const configManager = new ConfigManager2();
       config = await configManager.getDefaultConfig();
       logger.debug("[StateMachine] Using default configuration (no config provided)");
@@ -708,8 +781,8 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
     let frontendsHost;
     if (Array.isArray(configWithTagFilter.frontends) && configWithTagFilter.frontends.length > 0) {
       try {
-        const { EventBus } = await import("./event-bus-5BEVPQ6T.mjs");
-        const { FrontendsHost } = await import("./host-H3AWNZ2F.mjs");
+        const { EventBus } = await import("./event-bus-XV2TOQFU.mjs");
+        const { FrontendsHost } = await import("./host-H7MKML2H.mjs");
         const bus = new EventBus();
         context.eventBus = bus;
         frontendsHost = new FrontendsHost(bus, logger);
@@ -845,7 +918,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       logger.info("[StateMachine] Execution complete");
     }
     try {
-      const { SessionRegistry } = await import("./session-registry-4E6YRQ77.mjs");
+      const { SessionRegistry } = await import("./session-registry-6PV6SGEJ.mjs");
       const sessionRegistry = SessionRegistry.getInstance();
       sessionRegistry.clearAllSessions();
     } catch (error) {
@@ -1035,10 +1108,10 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
    * @returns Array of failure condition evaluation results
    */
   async evaluateFailureConditions(checkName, reviewSummary, config, previousOutputs, authorAssociation) {
-    const { FailureConditionEvaluator } = await import("./failure-condition-evaluator-G4HMJPXF.mjs");
+    const { FailureConditionEvaluator } = await import("./failure-condition-evaluator-KRFY4OLQ.mjs");
     const evaluator = new FailureConditionEvaluator();
-    const { addEvent } = await import("./trace-helpers-VP6QYVBX.mjs");
-    const { addFailIfTriggered } = await import("./metrics-7PP3EJUH.mjs");
+    const { addEvent } = await import("./trace-helpers-LUCR52GY.mjs");
+    const { addFailIfTriggered } = await import("./metrics-CSBGJEWW.mjs");
     const checkConfig = config.checks?.[checkName];
     if (!checkConfig) {
       return [];
@@ -1140,7 +1213,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
    */
   async getRepositoryStatus() {
     try {
-      const { GitRepositoryAnalyzer } = await import("./git-repository-analyzer-HJC4MYW4.mjs");
+      const { GitRepositoryAnalyzer } = await import("./git-repository-analyzer-VO7OZMTM.mjs");
       const analyzer = new GitRepositoryAnalyzer(this.workingDirectory);
       const info = await analyzer.analyzeRepository();
       return {
