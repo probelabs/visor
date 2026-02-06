@@ -473,6 +473,7 @@ export class SlackSocketRunner {
         });
       } catch {}
       // Fetch user info for tracing (may already be cached from guest check)
+      // Note: We intentionally exclude PII (email, real_name) from traces for privacy compliance
       const userInfo = await this.fetchUserInfo(userId);
       try {
         await withActiveSpan(
@@ -483,9 +484,8 @@ export class SlackSocketRunner {
             'slack.channel_id': channelId,
             'slack.thread_ts': threadTs,
             'slack.user_id': userId,
-            ...(userInfo?.email && { 'slack.user_email': userInfo.email }),
+            // Only include non-PII user info in traces (username is not PII, but email/real_name are)
             ...(userInfo?.name && { 'slack.user_name': userInfo.name }),
-            ...(userInfo?.realName && { 'slack.user_real_name': userInfo.realName }),
             ...(userInfo?.isGuest !== undefined && { 'slack.user_is_guest': userInfo.isGuest }),
           },
           async () => {
