@@ -19,6 +19,8 @@ import { IssueFilter } from './issue-filter';
 import { logger } from './logger';
 import Sandbox from '@nyariv/sandboxjs';
 import { VisorConfig, OnFailConfig, OnSuccessConfig } from './types/config';
+import { SandboxManager } from './sandbox/sandbox-manager';
+import { CheckRunner } from './sandbox/check-runner';
 
 type ExtendedReviewSummary = ReviewSummary & {
   output?: unknown;
@@ -125,6 +127,7 @@ export class CheckExecutionEngine {
   private config?: import('./types/config').VisorConfig;
   private webhookContext?: { webhookData: Map<string, unknown> };
   private routingSandbox?: Sandbox;
+  private sandboxManager?: SandboxManager;
 
   constructor(workingDirectory?: string) {
     this.workingDirectory = workingDirectory || process.cwd();
@@ -1113,9 +1116,73 @@ export class CheckExecutionEngine {
       throw new Error('Config with check definitions required for grouped execution');
     }
 
+    // Create SandboxManager if sandboxes are configured
+    if (config.sandboxes && Object.keys(config.sandboxes).length > 0) {
+      try {
+        const { execSync } = require('child_process');
+        const gitBranch = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8' }).trim();
+        this.sandboxManager = new SandboxManager(
+          config.sandboxes,
+          this.workingDirectory,
+          gitBranch
+        );
+      } catch {
+        // If git branch detection fails, use 'unknown'
+        this.sandboxManager = new SandboxManager(
+          config.sandboxes,
+          this.workingDirectory,
+          'unknown'
+        );
+      }
+    }
+
+    try {
+      return await this._executeGroupedChecksInner(
+        prInfo,
+        checks,
+        timeout,
+        config,
+        outputFormat,
+        debug,
+        maxParallelism,
+        failFast,
+        tagFilter
+      );
+    } finally {
+      // Cleanup sandbox containers
+      if (this.sandboxManager) {
+        await this.sandboxManager.stopAll().catch(err => {
+          logger.warn(`Failed to stop sandboxes: ${err}`);
+        });
+        this.sandboxManager = undefined;
+      }
+    }
+  }
+
+  /**
+   * Inner implementation of executeGroupedChecks (separated for sandbox lifecycle management)
+   */
+  private async _executeGroupedChecksInner(
+    prInfo: PRInfo,
+    checks: string[],
+    timeout?: number,
+    config?: import('./types/config').VisorConfig,
+    outputFormat?: string,
+    debug?: boolean,
+    maxParallelism?: number,
+    failFast?: boolean,
+    _tagFilter?: import('./types/config').TagFilter
+  ): Promise<GroupedCheckResults> {
+    const logFn =
+      outputFormat === 'json' || outputFormat === 'sarif'
+        ? debug
+          ? console.error
+          : () => {}
+        : console.log;
+
     // If we have a config with individual check definitions, use dependency-aware execution
     const hasDependencies = checks.some(checkName => {
-      const checkConfig = config.checks[checkName];
+      const checkConfig = config?.checks?.[checkName];
       return checkConfig?.depends_on && checkConfig.depends_on.length > 0;
     });
 
@@ -1176,32 +1243,55 @@ export class CheckExecutionEngine {
     }
 
     const checkConfig = config.checks[checkName];
-    const providerType = checkConfig.type || 'ai';
-    const provider = this.providerRegistry.getProviderOrThrow(providerType);
-    this.setProviderWebhookContext(provider);
 
-    const providerConfig: CheckProviderConfig = {
-      type: providerType,
-      prompt: checkConfig.prompt,
-      focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
-      schema: checkConfig.schema,
-      group: checkConfig.group,
-      eventContext: prInfo.eventContext, // Pass event context for templates
-      ai: {
-        timeout: timeout || 600000,
-        debug: debug,
-        ...(checkConfig.ai || {}),
-      },
-      ai_provider: checkConfig.ai_provider || config.ai_provider,
-      ai_model: checkConfig.ai_model || config.ai_model,
-      // Pass claude_code config if present
-      claude_code: checkConfig.claude_code,
-      // Pass any provider-specific config
-      ...checkConfig,
-    };
-    providerConfig.forEach = checkConfig.forEach;
+    // Check if this check should run in a sandbox
+    const sandboxName =
+      this.sandboxManager?.resolveSandbox(checkConfig.sandbox, config.sandbox) ?? null;
 
-    const result = await provider.execute(prInfo, providerConfig);
+    let result: ReviewSummary;
+
+    if (sandboxName && this.sandboxManager) {
+      // Execute in sandbox via CheckRunner
+      const sandboxConfig = config.sandboxes?.[sandboxName];
+      if (!sandboxConfig) {
+        throw new Error(`Sandbox '${sandboxName}' not found in sandboxes configuration`);
+      }
+      result = await CheckRunner.runCheck(
+        this.sandboxManager,
+        sandboxName,
+        sandboxConfig,
+        checkConfig,
+        prInfo,
+        undefined,
+        timeout
+      );
+    } else {
+      // Execute on host (original code path)
+      const providerType = checkConfig.type || 'ai';
+      const provider = this.providerRegistry.getProviderOrThrow(providerType);
+      this.setProviderWebhookContext(provider);
+
+      const providerConfig: CheckProviderConfig = {
+        type: providerType,
+        prompt: checkConfig.prompt,
+        focus: checkConfig.focus || this.mapCheckNameToFocus(checkName),
+        schema: checkConfig.schema,
+        group: checkConfig.group,
+        eventContext: prInfo.eventContext,
+        ai: {
+          timeout: timeout || 600000,
+          debug: debug,
+          ...(checkConfig.ai || {}),
+        },
+        ai_provider: checkConfig.ai_provider || config.ai_provider,
+        ai_model: checkConfig.ai_model || config.ai_model,
+        claude_code: checkConfig.claude_code,
+        ...checkConfig,
+      };
+      providerConfig.forEach = checkConfig.forEach;
+
+      result = await provider.execute(prInfo, providerConfig);
+    }
 
     // Render the check content using the appropriate template
     const content = await this.renderCheckContent(checkName, result, checkConfig, prInfo);
@@ -1690,13 +1780,23 @@ export class CheckExecutionEngine {
             log(`🔧 Debug: Starting check: ${checkName} at level ${executionGroup.level}`);
           }
 
+          // Check if this check should run in a sandbox
+          const sandboxName =
+            this.sandboxManager?.resolveSandbox(checkConfig.sandbox, config.sandbox) ?? null;
+
           // Get the appropriate provider for this check type
           const providerType = checkConfig.type || 'ai';
-          const provider = this.providerRegistry.getProviderOrThrow(providerType);
-          if (debug) {
-            log(`🔧 Debug: Provider for '${checkName}' is '${providerType}'`);
+          const provider = sandboxName
+            ? null
+            : this.providerRegistry.getProviderOrThrow(providerType);
+          if (provider) {
+            if (debug) {
+              log(`🔧 Debug: Provider for '${checkName}' is '${providerType}'`);
+            }
+            this.setProviderWebhookContext(provider);
+          } else if (debug) {
+            log(`🔧 Debug: Check '${checkName}' will execute in sandbox '${sandboxName}'`);
           }
-          this.setProviderWebhookContext(provider);
 
           // Create provider config for this specific check
           const extendedCheckConfig = checkConfig as CheckConfig & {
@@ -1904,25 +2004,42 @@ export class CheckExecutionEngine {
                 );
               }
 
-              // Execute with retry/routing semantics per item
-              const itemResult = await this.executeWithRouting(
-                checkName,
-                checkConfig,
-                provider,
-                providerConfig,
-                prInfo,
-                forEachDependencyResults,
-                sessionInfo,
-                config,
-                dependencyGraph,
-                debug,
-                results,
-                /*foreachContext*/ {
-                  index: itemIndex,
-                  total: forEachItems.length,
-                  parent: forEachParentName,
+              // Execute check - either in sandbox or on host
+              let itemResult: ReviewSummary;
+              if (sandboxName && this.sandboxManager) {
+                const sandboxConfig = config.sandboxes?.[sandboxName];
+                if (!sandboxConfig) {
+                  throw new Error(`Sandbox '${sandboxName}' not found`);
                 }
-              );
+                itemResult = await CheckRunner.runCheck(
+                  this.sandboxManager,
+                  sandboxName,
+                  sandboxConfig,
+                  checkConfig,
+                  prInfo,
+                  forEachDependencyResults,
+                  timeout
+                );
+              } else {
+                itemResult = await this.executeWithRouting(
+                  checkName,
+                  checkConfig,
+                  provider!,
+                  providerConfig,
+                  prInfo,
+                  forEachDependencyResults,
+                  sessionInfo,
+                  config,
+                  dependencyGraph,
+                  debug,
+                  results,
+                  /*foreachContext*/ {
+                    index: itemIndex,
+                    total: forEachItems.length,
+                    parent: forEachParentName,
+                  }
+                );
+              }
 
               return { index: itemIndex, itemResult };
             });
@@ -2023,20 +2140,37 @@ export class CheckExecutionEngine {
               }
             }
 
-            // Execute with retry/routing semantics
-            finalResult = await this.executeWithRouting(
-              checkName,
-              checkConfig,
-              provider,
-              providerConfig,
-              prInfo,
-              dependencyResults,
-              sessionInfo,
-              config,
-              dependencyGraph,
-              debug,
-              results
-            );
+            // Execute check - either in sandbox or on host
+            if (sandboxName && this.sandboxManager) {
+              const sandboxConfig = config.sandboxes?.[sandboxName];
+              if (!sandboxConfig) {
+                throw new Error(`Sandbox '${sandboxName}' not found`);
+              }
+              finalResult = await CheckRunner.runCheck(
+                this.sandboxManager,
+                sandboxName,
+                sandboxConfig,
+                checkConfig,
+                prInfo,
+                dependencyResults,
+                timeout
+              );
+            } else {
+              // Execute with retry/routing semantics on host
+              finalResult = await this.executeWithRouting(
+                checkName,
+                checkConfig,
+                provider!,
+                providerConfig,
+                prInfo,
+                dependencyResults,
+                sessionInfo,
+                config,
+                dependencyGraph,
+                debug,
+                results
+              );
+            }
 
             if (checkConfig.forEach) {
               try {

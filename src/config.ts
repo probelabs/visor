@@ -410,8 +410,118 @@ export class ConfigManager {
       this.validateTagFilter(config.tag_filter as unknown as Record<string, unknown>, errors);
     }
 
+    // Validate sandbox configuration
+    if (config.sandboxes) {
+      const sandboxNames = Object.keys(config.sandboxes);
+      for (const [sandboxName, sandboxConfig] of Object.entries(config.sandboxes)) {
+        this.validateSandboxConfig(sandboxName, sandboxConfig, errors);
+      }
+
+      // Validate top-level sandbox reference
+      if (config.sandbox && !sandboxNames.includes(config.sandbox)) {
+        errors.push({
+          field: 'sandbox',
+          message: `Top-level sandbox '${config.sandbox}' not found in sandboxes definitions. Available: ${sandboxNames.join(', ')}`,
+          value: config.sandbox,
+        });
+      }
+
+      // Validate check-level sandbox references
+      if (config.checks) {
+        for (const [checkName, checkConfig] of Object.entries(config.checks)) {
+          if (checkConfig.sandbox && !sandboxNames.includes(checkConfig.sandbox)) {
+            errors.push({
+              field: `checks.${checkName}.sandbox`,
+              message: `Check '${checkName}' references sandbox '${checkConfig.sandbox}' which is not defined. Available: ${sandboxNames.join(', ')}`,
+              value: checkConfig.sandbox,
+            });
+          }
+        }
+      }
+    } else {
+      // If no sandboxes defined, check that nothing references them
+      if (config.sandbox) {
+        errors.push({
+          field: 'sandbox',
+          message: `Top-level sandbox '${config.sandbox}' is set but no sandboxes are defined`,
+          value: config.sandbox,
+        });
+      }
+      if (config.checks) {
+        for (const [checkName, checkConfig] of Object.entries(config.checks)) {
+          if (checkConfig.sandbox) {
+            errors.push({
+              field: `checks.${checkName}.sandbox`,
+              message: `Check '${checkName}' references sandbox '${checkConfig.sandbox}' but no sandboxes are defined`,
+              value: checkConfig.sandbox,
+            });
+          }
+        }
+      }
+    }
+
     if (errors.length > 0) {
       throw new Error(errors[0].message);
+    }
+  }
+
+  /**
+   * Validate sandbox configuration
+   */
+  private validateSandboxConfig(
+    name: string,
+    config: import('./sandbox/types').SandboxConfig,
+    errors: ConfigValidationError[]
+  ): void {
+    // Must have exactly one mode
+    const modes = [
+      config.image ? 'image' : null,
+      config.dockerfile || config.dockerfile_inline ? 'dockerfile' : null,
+      config.compose ? 'compose' : null,
+    ].filter(Boolean);
+
+    if (modes.length === 0) {
+      errors.push({
+        field: `sandboxes.${name}`,
+        message: `Sandbox '${name}' must specify one of: image, dockerfile, dockerfile_inline, or compose`,
+      });
+    } else if (modes.length > 1) {
+      errors.push({
+        field: `sandboxes.${name}`,
+        message: `Sandbox '${name}' has multiple modes (${modes.join(', ')}). Specify exactly one.`,
+      });
+    }
+
+    // Compose mode requires service
+    if (config.compose && !config.service) {
+      errors.push({
+        field: `sandboxes.${name}.service`,
+        message: `Sandbox '${name}' uses compose mode but is missing required 'service' field`,
+      });
+    }
+
+    // Validate cache paths are absolute
+    if (config.cache?.paths) {
+      for (const p of config.cache.paths) {
+        if (!p.startsWith('/')) {
+          errors.push({
+            field: `sandboxes.${name}.cache.paths`,
+            message: `Cache path '${p}' in sandbox '${name}' must be absolute (start with /)`,
+            value: p,
+          });
+        }
+      }
+    }
+
+    // Validate resource limits
+    if (config.resources?.cpu !== undefined) {
+      if (typeof config.resources.cpu !== 'number' || config.resources.cpu <= 0) {
+        errors.push({
+          field: `sandboxes.${name}.resources.cpu`,
+          message: `CPU limit in sandbox '${name}' must be a positive number`,
+          value: config.resources.cpu,
+        });
+      }
     }
   }
 

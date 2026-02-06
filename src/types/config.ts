@@ -352,6 +352,8 @@ export interface CheckConfig {
   on_fail?: OnFailConfig;
   /** Success routing configuration for this check (post-actions and optional goto) */
   on_success?: OnSuccessConfig;
+  /** Sandbox name to use for this check (overrides workspace-level default) */
+  sandbox?: string;
 }
 
 /**
@@ -596,6 +598,10 @@ export interface VisorConfig {
   tag_filter?: TagFilter;
   /** Optional routing defaults for retry/goto/run policies */
   routing?: RoutingDefaults;
+  /** Workspace-level default sandbox name (all checks use this unless overridden) */
+  sandbox?: string;
+  /** Named sandbox environment definitions */
+  sandboxes?: Record<string, import('../sandbox/types').SandboxConfig>;
 }
 
 /**

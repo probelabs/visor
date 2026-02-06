@@ -11,9 +11,142 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 /**
+ * Execute a single check in sandbox mode (--run-check).
+ * Reads CheckRunPayload from argument or stdin, executes one check,
+ * writes CheckRunResult JSON to stdout. All logging goes to stderr.
+ */
+async function runCheckMode(payloadArg?: string): Promise<void> {
+  // Force all logging to stderr so stdout is reserved for JSON result
+  configureLoggerFromCli({ output: 'json', debug: false, verbose: false, quiet: true });
+
+  let payloadJson: string;
+  if (payloadArg && payloadArg !== '-') {
+    payloadJson = payloadArg;
+  } else {
+    // Read from stdin
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) {
+      chunks.push(chunk as Buffer);
+    }
+    payloadJson = Buffer.concat(chunks).toString('utf8');
+  }
+
+  let payload: import('./sandbox/types').CheckRunPayload;
+  try {
+    payload = JSON.parse(payloadJson);
+  } catch {
+    const errorResult = { issues: [], output: null, error: 'Invalid JSON payload' };
+    process.stdout.write(JSON.stringify(errorResult) + '\n');
+    return process.exit(1);
+  }
+
+  if (!payload.check || !payload.prInfo) {
+    const errorResult = { issues: [], output: null, error: 'Missing check or prInfo in payload' };
+    process.stdout.write(JSON.stringify(errorResult) + '\n');
+    return process.exit(1);
+  }
+
+  try {
+    const { CheckProviderRegistry } = await import('./providers/check-provider-registry');
+    const registry = CheckProviderRegistry.getInstance();
+
+    const checkConfig = payload.check;
+    const providerType = checkConfig.type || 'ai';
+    const provider = registry.getProviderOrThrow(providerType);
+
+    // Reconstruct PRInfo from serialized form
+    const prInfo: PRInfo = {
+      number: payload.prInfo.number,
+      title: payload.prInfo.title,
+      body: payload.prInfo.body,
+      author: payload.prInfo.author,
+      base: payload.prInfo.base,
+      head: payload.prInfo.head,
+      files: payload.prInfo.files.map(f => ({
+        filename: f.filename,
+        status: f.status as 'added' | 'removed' | 'modified' | 'renamed',
+        additions: f.additions,
+        deletions: f.deletions,
+        changes: f.changes,
+        patch: f.patch,
+      })),
+      totalAdditions: payload.prInfo.totalAdditions,
+      totalDeletions: payload.prInfo.totalDeletions,
+      eventType: payload.prInfo.eventType as import('./types/config').EventTrigger | undefined,
+      fullDiff: payload.prInfo.fullDiff,
+      commitDiff: payload.prInfo.commitDiff,
+      isIncremental: payload.prInfo.isIncremental,
+      isIssue: payload.prInfo.isIssue,
+      eventContext: payload.prInfo.eventContext,
+    };
+
+    // Build provider config
+    const providerConfig: import('./providers/check-provider.interface').CheckProviderConfig = {
+      type: providerType,
+      prompt: checkConfig.prompt,
+      exec: checkConfig.exec,
+      focus: checkConfig.focus,
+      schema: checkConfig.schema,
+      group: checkConfig.group,
+      eventContext: prInfo.eventContext,
+      env: checkConfig.env,
+      ai: checkConfig.ai || {},
+      ai_provider: checkConfig.ai_provider,
+      ai_model: checkConfig.ai_model,
+      claude_code: checkConfig.claude_code,
+      transform: checkConfig.transform,
+      transform_js: checkConfig.transform_js,
+      forEach: checkConfig.forEach,
+      ...checkConfig,
+    };
+
+    // Build dependency results map if provided
+    let dependencyResults: Map<string, import('./reviewer').ReviewSummary> | undefined;
+    if (payload.dependencyOutputs) {
+      dependencyResults = new Map();
+      for (const [key, value] of Object.entries(payload.dependencyOutputs)) {
+        dependencyResults.set(key, value as import('./reviewer').ReviewSummary);
+      }
+    }
+
+    const result = await provider.execute(prInfo, providerConfig, dependencyResults);
+
+    // Build CheckRunResult
+    const extResult = result as import('./reviewer').ReviewSummary & {
+      output?: unknown;
+      content?: string;
+    };
+    const checkRunResult: import('./sandbox/types').CheckRunResult = {
+      issues: result.issues || [],
+      output: extResult.output,
+      content: extResult.content,
+      debug: result.debug,
+    };
+
+    process.stdout.write(JSON.stringify(checkRunResult) + '\n');
+  } catch (err) {
+    const errorResult = {
+      issues: [],
+      output: null,
+      error: err instanceof Error ? err.message : String(err),
+    };
+    process.stdout.write(JSON.stringify(errorResult) + '\n');
+    process.exit(1);
+  }
+}
+
+/**
  * Main CLI entry point for Visor
  */
 export async function main(): Promise<void> {
+  // Check for --run-check mode before standard CLI parsing
+  const runCheckIndex = process.argv.indexOf('--run-check');
+  if (runCheckIndex !== -1) {
+    const payloadArg = process.argv[runCheckIndex + 1];
+    await runCheckMode(payloadArg);
+    return;
+  }
+
   try {
     const cli = new CLI();
     const configManager = new ConfigManager();
