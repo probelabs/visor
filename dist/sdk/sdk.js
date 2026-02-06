@@ -1980,26 +1980,28 @@ ${src}
 );
 ` : `${src}`;
   const code = `${header}${body}`;
+  const codePreview = src.replace(/\s+/g, " ").trim().slice(0, 100);
+  const contextInfo = safePrefix !== "[sandbox]" ? ` [${safePrefix}]` : "";
   let exec2;
   try {
     exec2 = sandbox.compile(code);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    throw new Error(`sandbox_compile_error: ${msg}`);
+    throw new Error(`sandbox_compile_error${contextInfo}: ${msg} | code: ${codePreview}`);
   }
   let out;
   try {
     out = exec2(scopeWithLog);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    throw new Error(`sandbox_execution_error: ${msg}`);
+    throw new Error(`sandbox_execution_error${contextInfo}: ${msg} | code: ${codePreview}`);
   }
   if (out && typeof out.run === "function") {
     try {
       return out.run();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      throw new Error(`sandbox_runner_error: ${msg}`);
+      throw new Error(`sandbox_runner_error${contextInfo}: ${msg} | code: ${codePreview}`);
     }
   }
   return out;
@@ -13857,25 +13859,33 @@ var init_workflow_check_provider = __esm({
         );
         for (const output of workflow.outputs) {
           if (output.value_js) {
-            const sandbox = createSecureSandbox();
-            const result = compileAndRun(
-              sandbox,
-              output.value_js,
-              {
-                inputs,
-                outputs: outputsMap,
-                // Keep 'steps' as alias for backwards compatibility
-                steps: outputsMap,
-                pr: prInfo
-              },
-              { injectLog: true, logPrefix: `workflow.output.${output.name}` }
-            );
-            outputs[output.name] = result;
-            const resultType = result === null ? "null" : result === void 0 ? "undefined" : typeof result;
-            const resultPreview = result && typeof result === "object" ? `{${Object.keys(result).join(",")}}` : String(result).substring(0, 100);
-            logger.debug(
-              `[WorkflowProvider] Output '${output.name}' value_js result: type=${resultType}, preview=${resultPreview}`
-            );
+            try {
+              const sandbox = createSecureSandbox();
+              const result = compileAndRun(
+                sandbox,
+                output.value_js,
+                {
+                  inputs,
+                  outputs: outputsMap,
+                  // Keep 'steps' as alias for backwards compatibility
+                  steps: outputsMap,
+                  pr: prInfo
+                },
+                { injectLog: true, logPrefix: `workflow.output.${output.name}` }
+              );
+              outputs[output.name] = result;
+              const resultType = result === null ? "null" : result === void 0 ? "undefined" : typeof result;
+              const resultPreview = result && typeof result === "object" ? `{${Object.keys(result).join(",")}}` : String(result).substring(0, 100);
+              logger.debug(
+                `[WorkflowProvider] Output '${output.name}' value_js result: type=${resultType}, preview=${resultPreview}`
+              );
+            } catch (valueJsError) {
+              const errorMsg = valueJsError instanceof Error ? valueJsError.message : String(valueJsError);
+              logger.error(
+                `[WorkflowProvider] Output '${output.name}' value_js failed: ${errorMsg}. Setting to null. Available step outputs: [${Object.keys(outputsMap).join(", ")}]`
+              );
+              outputs[output.name] = null;
+            }
           } else if (output.value) {
             outputs[output.name] = await this.liquid.parseAndRender(output.value, {
               inputs,
