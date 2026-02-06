@@ -2,6 +2,7 @@ import { Octokit } from '@octokit/rest';
 import { PRInfo } from './pr-analyzer';
 import { CommentManager } from './github-comments';
 import { AIReviewService, AIDebugInfo } from './ai-review-service';
+import { extractTextFromJson } from './utils/json-text-extractor';
 
 export interface ReviewIssue {
   // Location
@@ -42,6 +43,8 @@ export interface CheckResult {
   checkName: string;
   content: string; // Rendered output for this specific check
   group: string; // Which group this check belongs to
+  // Optional structured output for custom schemas (e.g., overview, issue-assistant)
+  output?: unknown;
   debug?: AIDebugInfo;
   issues?: ReviewIssue[]; // Structured issues alongside rendered content
 }
@@ -55,6 +58,8 @@ export interface GroupedCheckResults {
 export interface ReviewSummary {
   issues?: ReviewIssue[];
   debug?: AIDebugInfo;
+  /** Session ID created for this check (for cleanup tracking) */
+  sessionId?: string;
 }
 
 // Test utility function - Convert old ReviewSummary to new GroupedCheckResults format
@@ -118,12 +123,14 @@ export function convertIssuesToComments(issues: ReviewIssue[]): ReviewComment[] 
 }
 
 export interface ReviewOptions {
-  focus?: 'security' | 'performance' | 'style' | 'all';
+  focus?: string;
   format?: 'table' | 'json' | 'markdown' | 'sarif';
   debug?: boolean;
   config?: import('./types/config').VisorConfig;
   checks?: string[];
   parallelExecution?: boolean;
+  // Optional tag filter to include/exclude checks by tags when running via GitHub Action path
+  tagFilter?: import('./types/config').TagFilter;
 }
 
 export class PRReviewer {
@@ -145,17 +152,20 @@ export class PRReviewer {
     const { debug = false, config, checks } = options;
 
     if (config && checks && checks.length > 0) {
-      const { CheckExecutionEngine } = await import('./check-execution-engine');
-      const engine = new CheckExecutionEngine();
-      const groupedResults = await engine.executeGroupedChecks(
+      const { StateMachineExecutionEngine } = await import('./state-machine-execution-engine');
+      const engine = new StateMachineExecutionEngine();
+      const { results } = await engine.executeGroupedChecks(
         prInfo,
         checks,
         undefined,
         config,
         undefined,
-        debug
+        debug,
+        undefined,
+        undefined,
+        options.tagFilter
       );
-      return groupedResults;
+      return results;
     }
 
     throw new Error(
@@ -164,16 +174,146 @@ export class PRReviewer {
     );
   }
 
+  /**
+   * Helper to check if a schema is comment-generating
+   * Comment-generating schemas include:
+   * - Built-in schemas: code-review, overview, plain, text
+   * - Custom schemas with a "text" field in properties
+   */
+  private async isCommentGeneratingSchema(
+    schema: string | Record<string, unknown>
+  ): Promise<boolean> {
+    try {
+      // Check for built-in comment-generating schemas
+      if (typeof schema === 'string') {
+        // Well-known comment-generating schemas
+        if (['code-review', 'overview', 'plain', 'text'].includes(schema)) {
+          return true;
+        }
+
+        // Try to load and check custom string schema
+        const fs = require('fs').promises;
+        const path = require('path');
+
+        // Sanitize schema name
+        const sanitizedSchemaName = schema.replace(/[^a-zA-Z0-9-]/g, '');
+        if (!sanitizedSchemaName || sanitizedSchemaName !== schema) {
+          return false;
+        }
+
+        // Locate built-in schema JSON. In Actions, schemas live under dist/output (relative to __dirname).
+        // In local dev/tests, schemas live under project/output (relative to CWD).
+        const candidatePaths = [
+          path.join(__dirname, 'output', sanitizedSchemaName, 'schema.json'),
+          path.join(process.cwd(), 'output', sanitizedSchemaName, 'schema.json'),
+        ];
+
+        for (const schemaPath of candidatePaths) {
+          try {
+            const schemaContent = await fs.readFile(schemaPath, 'utf-8');
+            const schemaObj = JSON.parse(schemaContent);
+
+            // Check if schema has a "text" field in properties
+            const properties = schemaObj.properties as Record<string, unknown> | undefined;
+            return !!(properties && 'text' in properties);
+          } catch {
+            // try next location
+          }
+        }
+        // Schema file not found in any known location, not comment-generating
+        return false;
+      } else {
+        // Inline schema object - check if it has a "text" field in properties
+        const properties = schema.properties as Record<string, unknown> | undefined;
+        return !!(properties && 'text' in properties);
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Filter check results to only include those that should post GitHub comments
+   */
+  private async filterCommentGeneratingChecks(
+    checkResults: CheckResult[],
+    config: import('./types/config').VisorConfig
+  ): Promise<CheckResult[]> {
+    const filtered: CheckResult[] = [];
+
+    for (const r of checkResults) {
+      const cfg = config.checks?.[r.checkName];
+      const type = cfg?.type || 'ai'; // Default to 'ai' if not specified
+      const schema = cfg?.schema;
+
+      // Determine if this check should generate a comment
+      // Include checks with:
+      // 1. type: 'ai' or 'claude-code' with no schema or comment-generating schemas
+      // 2. Other types ONLY if they have explicit comment-generating schemas
+      let shouldPostComment = false;
+
+      // AI-powered checks generate comments by default
+      const isAICheck = type === 'ai' || type === 'claude-code';
+
+      if (!schema || schema === '') {
+        // No schema specified - only AI checks generate comments by default
+        // Other types (github, command, http, etc.) without schema are for orchestration
+        shouldPostComment = isAICheck;
+      } else {
+        // Check if the schema is comment-generating (built-in or custom with text field)
+        shouldPostComment = await this.isCommentGeneratingSchema(schema);
+      }
+
+      if (shouldPostComment) {
+        filtered.push(r);
+      }
+    }
+
+    return filtered;
+  }
+
   async postReviewComment(
     owner: string,
     repo: string,
     prNumber: number,
     groupedResults: GroupedCheckResults,
-    options: ReviewOptions & { commentId?: string; triggeredBy?: string; commitSha?: string } = {}
+    options: ReviewOptions & {
+      commentId?: string;
+      triggeredBy?: string;
+      commitSha?: string;
+      octokitOverride?: Octokit;
+    } = {}
   ): Promise<void> {
     // Post separate comments for each group
     for (const [groupName, checkResults] of Object.entries(groupedResults)) {
-      const comment = await this.formatGroupComment(checkResults, options, {
+      // Only checks with comment-generating schemas should post PR comments
+      // AI checks (ai, claude-code) generate comments by default
+      // Other types need explicit comment-generating schemas
+      let filteredResults = options.config
+        ? await this.filterCommentGeneratingChecks(checkResults, options.config)
+        : checkResults;
+
+      // Collapse results to avoid concatenating mutually-exclusive or duplicate posts.
+      // For fact-validation flow, both 'post-verified-response' and 'post-unverified-warning'
+      // can appear across waves. Prefer the final intended output and drop earlier entries.
+      if (groupName === 'github-output' && filteredResults && filteredResults.length > 1) {
+        // Keep only the last occurrence per checkName.
+        const byName = new Map<string, any>();
+        for (const cr of filteredResults) byName.set(cr.checkName, cr);
+        let collapsed = Array.from(byName.values());
+        const hasVerified = collapsed.some((r: any) => r.checkName === 'post-verified-response');
+        if (hasVerified) {
+          collapsed = collapsed.filter((r: any) => r.checkName !== 'post-unverified-warning');
+        }
+        filteredResults = collapsed as any;
+      }
+
+      // If nothing to report after filtering, skip this group
+      if (!filteredResults || filteredResults.length === 0) {
+        continue;
+      }
+
+      const comment = await this.formatGroupComment(filteredResults, options, {
         owner,
         repo,
         prNumber,
@@ -193,7 +333,13 @@ export class PRReviewer {
           : `visor-review-${groupName}`;
       }
 
-      await this.commentManager.updateOrCreateComment(owner, repo, prNumber, comment, {
+      // Do not post empty comments (possible if content is blank after fallbacks)
+      if (!comment || !comment.trim()) continue;
+
+      const manager = options.octokitOverride
+        ? new CommentManager(options.octokitOverride)
+        : this.commentManager;
+      await manager.updateOrCreateComment(owner, repo, prNumber, comment, {
         commentId,
         triggeredBy: options.triggeredBy || 'unknown',
         allowConcurrentUpdates: false,
@@ -207,23 +353,46 @@ export class PRReviewer {
     _options: ReviewOptions,
     _githubContext?: { owner: string; repo: string; prNumber: number; commitSha?: string }
   ): Promise<string> {
-    let comment = '';
-    comment += `## 🔍 Code Analysis Results\n\n`;
+    // Concatenate all check outputs in this group; fall back to structured output fields
+    const normalize = (s: string) => s.replace(/\\n/g, '\n');
 
-    // Simple concatenation of all check outputs in this group
     const checkContents = checkResults
-      .map(result => result.content)
-      .filter(content => content.trim());
-    comment += checkContents.join('\n\n');
+      .map(result => {
+        // Try content first
+        const trimmed = result.content?.trim();
+        if (trimmed) {
+          const extractedText = extractTextFromJson(trimmed);
+          if (extractedText) return normalize(extractedText);
+        }
+        // Fallback: try structured output field
+        const out = (result as unknown as { debug?: unknown; issues?: unknown; output?: any })
+          .output;
+        if (out) {
+          const extractedText = extractTextFromJson(out);
+          if (extractedText) return normalize(extractedText);
+        }
+        return '';
+      })
+      .filter(content => content && content.trim());
 
     // Add debug info if any check has it
     const debugInfo = checkResults.find(result => result.debug)?.debug;
+
+    // Only generate comment if there's actual content or debug info
+    if (checkContents.length === 0 && !debugInfo) {
+      return '';
+    }
+
+    let comment = '';
+    comment += `## 🔍 Code Analysis Results\n\n`;
+    comment += checkContents.join('\n\n');
+
     if (debugInfo) {
       comment += '\n\n' + this.formatDebugSection(debugInfo);
       comment += '\n\n';
     }
 
-    comment += `\n\n---\n\n*Powered by [Visor](https://probelabs.com/visor) from [Probelabs](https://probelabs.com)*`;
+    // Footer will be added by formatCommentWithMetadata in github-comments.ts
     return comment;
   }
 

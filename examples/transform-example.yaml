@@ -2,7 +2,7 @@ version: "1.0"
 # Example demonstrating the transform feature in Visor checks
 # Transform allows you to reshape command output using Liquid templates
 
-checks:
+steps:
   # Example 1: Extract specific key from JSON output
   get-package-version:
     type: command
@@ -87,6 +87,9 @@ checks:
   # Example 7: Extract nested array from API response
   fetch-pr-comments:
     type: http_client
+    criticality: external
+    assume: "pr.repo && pr.number"
+    schema: plain
     url: "https://api.github.com/repos/{{ pr.repo }}/pulls/{{ pr.number }}/comments"
     transform: |
       [

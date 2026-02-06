@@ -1,15 +1,24 @@
 import { Command } from 'commander';
 import { CliOptions, CheckType, OutputFormat } from './types/cli';
+import { EventTrigger } from './types/config';
+import { VALID_EVENT_TRIGGERS } from './config';
 import * as fs from 'fs';
 import * as path from 'path';
+// Import version from package.json to avoid hardcoding
+const packageJson = require('../package.json');
 
 /**
  * CLI argument parser and command handler
  */
 export class CLI {
   private program: Command;
-  private validChecks: CheckType[] = ['performance', 'architecture', 'security', 'style', 'all'];
   private validOutputs: OutputFormat[] = ['table', 'json', 'markdown', 'sarif'];
+  // Valid events: all core EventTrigger types plus 'all' for CLI-only usage
+  // Reuses VALID_EVENT_TRIGGERS from config.ts as the single source of truth
+  private validEvents: ReadonlyArray<EventTrigger | 'all'> = [
+    ...VALID_EVENT_TRIGGERS,
+    'all', // CLI-specific: run checks regardless of event triggers
+  ] as const;
 
   constructor() {
     this.program = new Command();
@@ -24,6 +33,7 @@ export class CLI {
       .name('visor')
       .description('Visor - AI-powered code review tool')
       .version(this.getVersion())
+      .option('--slack', 'Enable Slack Socket Mode runner (uses SLACK_APP_TOKEN)')
       .option(
         '-c, --check <type>',
         'Specify check type (can be used multiple times)',
@@ -35,7 +45,7 @@ export class CLI {
       .option('--config <path>', 'Path to configuration file')
       .option(
         '--timeout <ms>',
-        'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
+        'Timeout for check operations in milliseconds (default: 1800000ms / 30 minutes)',
         value => parseInt(value, 10)
       )
       .option(
@@ -52,6 +62,32 @@ export class CLI {
       .option('--no-remote-extends', 'Disable loading configurations from remote URLs')
       .option('--enable-code-context', 'Force include code diffs in analysis (CLI mode)')
       .option('--disable-code-context', 'Force exclude code diffs from analysis (CLI mode)')
+      .option(
+        '--analyze-branch-diff',
+        'Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas)'
+      )
+      .option(
+        '--event <type>',
+        'Simulate GitHub event (pr_opened, pr_updated, issue_opened, issue_comment, manual, all). Default: auto-detect from schema or "all"'
+      )
+      .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
+      .option('--debug-server', 'Start debug visualizer server for live execution visualization')
+      .option('--debug-port <port>', 'Port for debug server (default: 3456)', value =>
+        parseInt(value, 10)
+      )
+      .option('--message <text>', 'Message for human-input checks (inline text or file path)')
+      .option('--tui', 'Enable interactive TUI (chat + logs tabs)')
+      .option('--keep-workspace', 'Keep workspace folders after execution (for debugging)')
+      .option('--workspace-path <path>', 'Workspace base path (overrides VISOR_WORKSPACE_PATH)')
+      .option('--workspace-here', 'Place workspace under current directory')
+      .option(
+        '--workspace-name <name>',
+        'Workspace directory name (overrides VISOR_WORKSPACE_NAME)'
+      )
+      .option(
+        '--workspace-project-name <name>',
+        'Main project folder name inside workspace (overrides VISOR_WORKSPACE_PROJECT)'
+      )
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
 
@@ -84,6 +120,7 @@ export class CLI {
         .name('visor')
         .description('Visor - AI-powered code review tool')
         .version(this.getVersion())
+        .option('--slack', 'Enable Slack Socket Mode runner (uses SLACK_APP_TOKEN)')
         .option(
           '-c, --check <type>',
           'Specify check type (can be used multiple times)',
@@ -95,7 +132,7 @@ export class CLI {
         .option('--config <path>', 'Path to configuration file')
         .option(
           '--timeout <ms>',
-          'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
+          'Timeout for check operations in milliseconds (default: 1800000ms / 30 minutes)',
           value => parseInt(value, 10)
         )
         .option(
@@ -115,6 +152,32 @@ export class CLI {
         )
         .option('--enable-code-context', 'Force include code diffs in analysis (CLI mode)')
         .option('--disable-code-context', 'Force exclude code diffs from analysis (CLI mode)')
+        .option(
+          '--analyze-branch-diff',
+          'Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas)'
+        )
+        .option(
+          '--event <type>',
+          'Simulate GitHub event (pr_opened, pr_updated, issue_opened, issue_comment, manual, all). Default: auto-detect from schema or "all"'
+        )
+        .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
+        .option('--debug-server', 'Start debug visualizer server for live execution visualization')
+        .option('--debug-port <port>', 'Port for debug server (default: 3456)', value =>
+          parseInt(value, 10)
+        )
+        .option('--message <text>', 'Message for human-input checks (inline text or file path)')
+        .option('--tui', 'Enable interactive TUI (chat + logs tabs)')
+        .option('--keep-workspace', 'Keep workspace folders after execution (for debugging)')
+        .option('--workspace-path <path>', 'Workspace base path (overrides VISOR_WORKSPACE_PATH)')
+        .option('--workspace-here', 'Place workspace under current directory')
+        .option(
+          '--workspace-name <name>',
+          'Workspace directory name (overrides VISOR_WORKSPACE_NAME)'
+        )
+        .option(
+          '--workspace-project-name <name>',
+          'Main project folder name inside workspace (overrides VISOR_WORKSPACE_PROJECT)'
+        )
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
         .addHelpText('after', this.getExamplesText())
@@ -178,6 +241,19 @@ export class CLI {
         help: options.help,
         version: options.version,
         codeContext,
+        debugServer: options.debugServer || false,
+        debugPort: options.debugPort,
+        analyzeBranchDiff: options.analyzeBranchDiff,
+        event: options.event,
+        message: options.message,
+        githubV2: false,
+        slack: Boolean(options.slack),
+        tui: Boolean(options.tui),
+        keepWorkspace: Boolean(options.keepWorkspace),
+        workspacePath: options.workspacePath,
+        workspaceHere: Boolean(options.workspaceHere),
+        workspaceName: options.workspaceName,
+        workspaceProjectName: options.workspaceProjectName,
       };
     } catch (error: unknown) {
       // Handle commander.js exit overrides for help/version ONLY
@@ -243,6 +319,13 @@ export class CLI {
         );
       }
     }
+
+    // Validate event type
+    if (options.event && !this.validEvents.includes(options.event as EventTrigger | 'all')) {
+      throw new Error(
+        `Invalid event type: ${options.event}. Available options: ${this.validEvents.join(', ')}`
+      );
+    }
   }
 
   /**
@@ -266,7 +349,7 @@ export class CLI {
       .option('--config <path>', 'Path to configuration file')
       .option(
         '--timeout <ms>',
-        'Timeout for check operations in milliseconds (default: 600000ms / 10 minutes)',
+        'Timeout for check operations in milliseconds (default: 1800000ms / 30 minutes)',
         value => parseInt(value, 10)
       )
       .option(
@@ -282,6 +365,31 @@ export class CLI {
       .option('--exclude-tags <tags>', 'Exclude checks with these tags (comma-separated)')
       .option('--enable-code-context', 'Force include code diffs in analysis (CLI mode)')
       .option('--disable-code-context', 'Force exclude code diffs from analysis (CLI mode)')
+      .option(
+        '--analyze-branch-diff',
+        'Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas)'
+      )
+      .option(
+        '--event <type>',
+        'Simulate GitHub event (pr_opened, pr_updated, issue_opened, issue_comment, manual, all). Default: auto-detect from schema or "all"'
+      )
+      .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
+      .option('--debug-server', 'Start debug visualizer server for live execution visualization')
+      .option('--debug-port <port>', 'Port for debug server (default: 3456)', value =>
+        parseInt(value, 10)
+      )
+      .option('--tui', 'Enable interactive TUI (chat + logs tabs)')
+      .option('--keep-workspace', 'Keep workspace folders after execution (for debugging)')
+      .option('--workspace-path <path>', 'Workspace base path (overrides VISOR_WORKSPACE_PATH)')
+      .option('--workspace-here', 'Place workspace under current directory')
+      .option(
+        '--workspace-name <name>',
+        'Workspace directory name (overrides VISOR_WORKSPACE_NAME)'
+      )
+      .option(
+        '--workspace-project-name <name>',
+        'Main project folder name inside workspace (overrides VISOR_WORKSPACE_PROJECT)'
+      )
       .addHelpText('after', this.getExamplesText());
 
     // Get the basic help and append examples manually if addHelpText doesn't work
@@ -324,8 +432,8 @@ export class CLI {
       // Continue to fallback
     }
 
-    // Fallback to the actual current version in package.json
-    return '0.1.42';
+    // Fallback to the version from package.json (set during release via git tag)
+    return packageJson.version || 'unknown';
   }
 
   /**

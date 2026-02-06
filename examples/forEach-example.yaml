@@ -2,7 +2,7 @@ version: "1.0"
 # Example demonstrating the forEach flag in Visor checks
 # forEach allows a check to output an array, and dependent checks will run once for each item
 
-checks:
+steps:
   # Step 1: Get a list of JSON files (outputs an array)
   list-json-files:
     type: command
@@ -85,6 +85,9 @@ checks:
   # Complex example: Process webhook data
   get-jira-tickets:
     type: http_client
+    criticality: external
+    assume: "pr.number"
+    schema: plain
     url: "https://api.example.com/jira/tickets?pr={{ pr.number }}"
     transform: |
       {{ data.issues | json }}
@@ -93,6 +96,9 @@ checks:
 
   update-each-ticket:
     type: http
+    criticality: external
+    assume: "outputs['get-jira-tickets']"
+    schema: plain
     url: "https://api.example.com/jira/ticket/{{ outputs.get-jira-tickets.id }}"
     body: |
       {

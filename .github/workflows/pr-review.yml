@@ -1,13 +1,14 @@
 name: PR Review Bot
 
 on:
+  # For fork PRs: Use pull_request_target instead (see docs/GITHUB_CHECKS.md for details)
   pull_request:
-    types: [opened, synchronize, edited]  # Include edited for complete PR lifecycle
+    types: [opened, synchronize, edited]
   issue_comment:
     types: [created]
   issues:
     types: [opened]
-    
+
 
 permissions:
   contents: read
@@ -18,10 +19,24 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
-    
+    env:
+      VISOR_DEBUG: 'true'
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Checkout PR branch (for issue_comment events)
+        if: github.event_name == 'issue_comment' && github.event.issue.pull_request
+        run: gh pr checkout ${{ github.event.issue.number }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout PR branch (for issue_comment events)
+        if: github.event_name == 'issue_comment' && github.event.issue.pull_request
+        run: gh pr checkout ${{ github.event.issue.number }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -39,30 +54,53 @@ jobs:
         id: visor_review
         uses: ./
         with:
+          mode: github-actions
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           installation-id: ${{ secrets.APP_INSTALLATION_ID }}
-          auto-review: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
+          auto-review: ${{ (github.event_name == 'pull_request_target' || github.event_name == 'pull_request') && 'true' || 'false' }}
           debug: 'true'
           fail-fast: 'true'
         env:
           GITHUB_CONTEXT: ${{ toJson(github) }}
+          VISOR_TELEMETRY_ENABLED: 'true'
+          VISOR_TELEMETRY_SINK: 'file'
+          VISOR_TRACE_REPORT: 'true'
+          VISOR_DEBUG_AI_SESSIONS: 'true'
+          VISOR_GITHUB_V2: 'true'
           # AI Provider API Keys (configure one of these in your repository secrets)
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          # Optional: Specify the AI model to use (use Google model with Google API key)
-          MODEL_NAME: ${{ secrets.AI_MODEL_NAME || 'gemini-2.0-flash-exp' }}
+          # GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ANTHROPIC_API_URL: 'https://api.z.ai/api/anthropic/v1'
+          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Optional: Specify the AI model to use
+          MODEL_NAME: 'glm-4.6'
 
-      - name: Upload Debug Artifacts
+      - name: List Debug Artifacts
+        if: always()
+        run: |
+          echo "📁 Debug Artifacts:"
+          if [ -d "debug-artifacts" ]; then
+            ls -lh debug-artifacts/ || echo "No debug artifacts found"
+          else
+            echo "debug-artifacts directory not found"
+          fi
+
+      - name: Upload Trace Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: visor-debug-${{ github.run_number }}
-          path: debug-artifacts/
-          retention-days: 30
+          name: visor-trace-${{ github.run_number }}
+          path: |
+            output/traces/*.ndjson
+            output/traces/*.report.html
+            output/traces/*.otlp.json
+            debug-artifacts/*.json
+            debug-artifacts/*.txt
+            debug-artifacts/*.jsonl
+          retention-days: 14
           if-no-files-found: ignore
-          
+
       - name: Validate Review Results
         if: steps.visor_review.outputs.review-score
         run: |

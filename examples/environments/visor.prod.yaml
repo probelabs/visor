@@ -28,7 +28,7 @@ fail_fast: true     # Stop on critical issues
 fail_if: "output.issues.some(i => i.severity === 'critical')"
 
 # Add production-specific validations
-checks:
+steps:
   prod-security-audit:
     type: ai
     group: production

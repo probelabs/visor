@@ -1,0 +1,34 @@
+Visor 0.1.42 • Probe 0.6.0-rc125 • Node v24.7.0
+▶ Loading configuration
+📝 Code context: DISABLED (no code-review schema found in local mode)
+▶ Analyzing repository
+🔍 Visor - AI-powered code review tool
+Configuration version: 1.0
+📂 Repository: main branch
+📁 Files changed: 2
+▶ Executing 2 check(s)
+▶ Running check: fetch-tickets [1/2]
+  command provider: executing check=fetch-tickets hasTransformJs=true
+✔ Check complete: fetch-tickets (0.0s) - 1 items
+  Found 2 items for forEach iteration
+▶ Running check: analyze-ticket [2/2]
+  forEach: processing 2 items from "fetch-tickets"...
+  command provider: executing check=analyze-ticket hasTransformJs=false
+  command provider: executing check=analyze-ticket hasTransformJs=false
+provdbg analyze-ticket renderedCommand= echo '{"issues":[{"file":"TT-101.js","line":1,"severity":"error","message":"Issue in TT-101","ruleId":"ticket-check"}]}'
+
+provdbg analyze-ticket renderedCommand= echo '{"issues":[{"file":"TT-102.js","line":1,"severity":"warning","message":"Issue in TT-102","ruleId":"ticket-check"}]}'
+
+provdbg analyze-ticket rawOutput= {"issues":[{"file":"TT-101.js","line":1,"severity":"error","message":"Issue in TT-101","ruleId":"ticket-check"}]}
+  provider: fast-path issues=1 remaining keys=undefined
+  extractIssuesFromOutput: typeof=object
+  extractIssuesFromOutput: keys=issues issuesIsArray=true
+  ✔ 1/2 (0.0s)
+provdbg analyze-ticket rawOutput= {"issues":[{"file":"TT-102.js","line":1,"severity":"warning","message":"Issue in TT-102","ruleId":"ticket-check"}]}
+  provider: fast-path issues=1 remaining keys=undefined
+  extractIssuesFromOutput: typeof=object
+  extractIssuesFromOutput: keys=issues issuesIsArray=true
+  ✔ 2/2 (0.0s)
+✔ Check complete: analyze-ticket (0.0s) - 2 runs, 2 issues
+▶ Formatting results as json
+✔ Completed 1 check(s): 2 issues (0 critical, 1 error, 1 warning)

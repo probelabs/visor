@@ -5,7 +5,7 @@ import * as crypto from 'crypto';
 import { HttpServerConfig, VisorConfig } from './types/config';
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from './liquid-extensions';
-import { CheckExecutionEngine } from './check-execution-engine';
+import { StateMachineExecutionEngine } from './state-machine-execution-engine';
 
 export interface WebhookPayload {
   endpoint: string;
@@ -26,7 +26,7 @@ export class WebhookServer {
   private config: HttpServerConfig;
   private liquid: Liquid;
   private webhookData: Map<string, unknown> = new Map();
-  private executionEngine?: CheckExecutionEngine;
+  private executionEngine?: StateMachineExecutionEngine;
   private visorConfig?: VisorConfig;
   private isGitHubActions: boolean;
 
@@ -42,7 +42,7 @@ export class WebhookServer {
   /**
    * Set the execution engine for triggering checks on webhook receipt
    */
-  public setExecutionEngine(engine: CheckExecutionEngine): void {
+  public setExecutionEngine(engine: StateMachineExecutionEngine): void {
     this.executionEngine = engine;
   }
 
@@ -222,6 +222,17 @@ export class WebhookServer {
         return;
       }
 
+      // Slack URL verification challenge (if Slack headers present)
+      try {
+        const isSlack = !!(req.headers['x-slack-signature'] || req.headers['X-Slack-Signature']);
+        const b: any = body;
+        if (isSlack && b && typeof b === 'object' && b.type === 'url_verification' && b.challenge) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ challenge: String(b.challenge) }));
+          return;
+        }
+      } catch {}
+
       // Process the webhook
       const payload: WebhookPayload = {
         endpoint: endpoint.path,
@@ -295,19 +306,24 @@ export class WebhookServer {
    */
   private verifyHmacSignature(req: http.IncomingMessage, rawBody: string, secret: string): boolean {
     try {
-      // Get signature from header
+      // Slack signature path (preferred when headers present)
+      const slackSig = req.headers['x-slack-signature'] as string | undefined;
+      const slackTs = req.headers['x-slack-request-timestamp'] as string | undefined;
+      if (slackSig && slackTs) {
+        try {
+          const { verifySlackSignature } = require('./slack/signature');
+          return verifySlackSignature(req.headers as any, rawBody, secret);
+        } catch {}
+      }
+      // Generic HMAC with x-webhook-signature: sha256=<hex(hmac(body))>
       const receivedSignature = req.headers['x-webhook-signature'] as string;
       if (!receivedSignature) {
         console.warn('Missing x-webhook-signature header for HMAC authentication');
         return false;
       }
-
-      // Calculate expected signature
       const hmac = crypto.createHmac('sha256', secret);
       hmac.update(rawBody, 'utf8');
       const calculatedSignature = `sha256=${hmac.digest('hex')}`;
-
-      // Use timing-safe comparison to prevent timing attacks
       return this.timingSafeEqual(receivedSignature, calculatedSignature);
     } catch (error) {
       console.error('Error verifying HMAC signature:', error);
@@ -508,7 +524,7 @@ export class WebhookServer {
 export function createWebhookServer(
   config: HttpServerConfig,
   visorConfig?: VisorConfig,
-  executionEngine?: CheckExecutionEngine
+  executionEngine?: StateMachineExecutionEngine
 ): WebhookServer {
   const server = new WebhookServer(config, visorConfig);
 

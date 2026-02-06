@@ -1,6 +1,7 @@
 import * as yaml from 'js-yaml';
 import * as fs from 'fs';
 import * as path from 'path';
+import { logger } from './logger';
 import simpleGit from 'simple-git';
 import {
   VisorConfig,
@@ -17,6 +18,24 @@ import {
 import { CliOptions } from './types/cli';
 import { ConfigLoader, ConfigLoaderOptions } from './utils/config-loader';
 import { ConfigMerger } from './utils/config-merger';
+import Ajv from 'ajv';
+import addFormats from 'ajv-formats';
+import { validateJsSyntax } from './utils/sandbox';
+
+/**
+ * Valid event triggers for checks
+ * Exported as a constant to serve as the single source of truth for event validation
+ */
+export const VALID_EVENT_TRIGGERS: readonly EventTrigger[] = [
+  'pr_opened',
+  'pr_updated',
+  'pr_closed',
+  'issue_opened',
+  'issue_comment',
+  'manual',
+  'schedule',
+  'webhook_received',
+] as const;
 
 /**
  * Configuration manager for Visor
@@ -25,25 +44,23 @@ export class ConfigManager {
   private validCheckTypes: ConfigCheckType[] = [
     'ai',
     'claude-code',
+    'mcp',
     'command',
+    'script',
     'http',
     'http_input',
     'http_client',
+    'memory',
     'noop',
     'log',
+    'github',
+    'human-input',
+    'workflow',
+    'git-checkout',
   ];
-  private validEventTriggers: EventTrigger[] = [
-    'pr_opened',
-    'pr_updated',
-    'pr_closed',
-    'issue_opened',
-    'issue_comment',
-    'manual',
-    'schedule',
-    'webhook_received',
-  ];
+  private validEventTriggers: EventTrigger[] = [...VALID_EVENT_TRIGGERS];
   private validOutputFormats: ConfigOutputFormat[] = ['table', 'json', 'markdown', 'sarif'];
-  private validGroupByOptions: GroupByOption[] = ['check', 'file', 'severity'];
+  private validGroupByOptions: GroupByOption[] = ['check', 'file', 'severity', 'group'];
 
   /**
    * Load configuration from a file
@@ -54,29 +71,42 @@ export class ConfigManager {
   ): Promise<VisorConfig> {
     const { validate = true, mergeDefaults = true, allowedRemotePatterns } = options;
 
-    try {
-      if (!fs.existsSync(configPath)) {
-        throw new Error(`Configuration file not found: ${configPath}`);
-      }
+    // Resolve relative paths to absolute paths based on current working directory
+    const resolvedPath = path.isAbsolute(configPath)
+      ? configPath
+      : path.resolve(process.cwd(), configPath);
 
-      const configContent = fs.readFileSync(configPath, 'utf8');
+    try {
+      let configContent: string;
+      try {
+        // Attempt to read directly; if not found or not accessible, an error will be thrown
+        configContent = fs.readFileSync(resolvedPath, 'utf8');
+      } catch (readErr: any) {
+        if (readErr && (readErr.code === 'ENOENT' || readErr.code === 'ENOTDIR')) {
+          throw new Error(`Configuration file not found: ${resolvedPath}`);
+        }
+        throw new Error(
+          `Failed to read configuration file ${resolvedPath}: ${readErr?.message || String(readErr)}`
+        );
+      }
       let parsedConfig: Partial<VisorConfig>;
 
       try {
         parsedConfig = yaml.load(configContent) as Partial<VisorConfig>;
       } catch (yamlError) {
         const errorMessage = yamlError instanceof Error ? yamlError.message : String(yamlError);
-        throw new Error(`Invalid YAML syntax in ${configPath}: ${errorMessage}`);
+        throw new Error(`Invalid YAML syntax in ${resolvedPath}: ${errorMessage}`);
       }
 
       if (!parsedConfig || typeof parsedConfig !== 'object') {
         throw new Error('Configuration file must contain a valid YAML object');
       }
 
-      // Handle extends directive if present
-      if (parsedConfig.extends) {
+      // Handle extends/include directive (include is an alias for extends)
+      const extendsValue = parsedConfig.extends || (parsedConfig as any).include;
+      if (extendsValue) {
         const loaderOptions: ConfigLoaderOptions = {
-          baseDir: path.dirname(configPath),
+          baseDir: path.dirname(resolvedPath),
           allowRemote: this.isRemoteExtendsAllowed(),
           maxDepth: 10,
           allowedRemotePatterns,
@@ -85,12 +115,12 @@ export class ConfigManager {
         const loader = new ConfigLoader(loaderOptions);
         const merger = new ConfigMerger();
 
-        // Process extends
-        const extends_ = Array.isArray(parsedConfig.extends)
-          ? parsedConfig.extends
-          : [parsedConfig.extends];
+        // Process extends/include
+        const extends_ = Array.isArray(extendsValue) ? extendsValue : [extendsValue];
+
+        // Remove extends and include fields from config
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { extends: _extendsField, ...configWithoutExtends } = parsedConfig;
+        const { extends: _, include: __, ...configWithoutExtends } = parsedConfig as any;
 
         // Load and merge all parent configurations
         let mergedConfig: Partial<VisorConfig> = {};
@@ -106,6 +136,19 @@ export class ConfigManager {
         // Remove disabled checks (those with empty 'on' array)
         parsedConfig = merger.removeDisabledChecks(parsedConfig);
       }
+
+      // Check if this is a workflow definition file (has 'id' field indicating it's a workflow)
+      // Do this BEFORE normalizing to avoid copying workflow steps to checks
+      if ((parsedConfig as any).id && typeof (parsedConfig as any).id === 'string') {
+        parsedConfig = await this.convertWorkflowToConfig(parsedConfig, path.dirname(resolvedPath));
+      }
+
+      // Normalize 'checks' and 'steps'. Prefer checks when this config used extends/include
+      // so child overrides win over bundled defaults that may live under steps.
+      parsedConfig = this.normalizeStepsAndChecks(parsedConfig, !!extendsValue);
+
+      // Load workflows if defined
+      await this.loadWorkflows(parsedConfig, path.dirname(resolvedPath));
 
       if (validate) {
         this.validateConfig(parsedConfig);
@@ -131,13 +174,70 @@ export class ConfigManager {
         }
         // Add more context for generic errors
         if (error.message.includes('ENOENT')) {
-          throw new Error(`Configuration file not found: ${configPath}`);
+          throw new Error(`Configuration file not found: ${resolvedPath}`);
         }
         if (error.message.includes('EPERM')) {
-          throw new Error(`Permission denied reading configuration file: ${configPath}`);
+          throw new Error(`Permission denied reading configuration file: ${resolvedPath}`);
         }
-        throw new Error(`Failed to read configuration file ${configPath}: ${error.message}`);
+        throw new Error(`Failed to read configuration file ${resolvedPath}: ${error.message}`);
       }
+      throw error;
+    }
+  }
+
+  /**
+   * Load configuration from an in-memory object (used by the test runner to
+   * handle co-located config + tests without writing temp files).
+   */
+  public async loadConfigFromObject(
+    obj: Partial<VisorConfig>,
+    options: ConfigLoadOptions & { baseDir?: string } = {}
+  ): Promise<VisorConfig> {
+    const { validate = true, mergeDefaults = true, allowedRemotePatterns, baseDir } = options;
+    try {
+      let parsedConfig: Partial<VisorConfig> = JSON.parse(JSON.stringify(obj || {}));
+      if (!parsedConfig || typeof parsedConfig !== 'object') {
+        throw new Error('Configuration must be a YAML/JSON object');
+      }
+
+      const extendsValue = (parsedConfig as any).extends || (parsedConfig as any).include;
+      if (extendsValue) {
+        const loaderOptions: ConfigLoaderOptions = {
+          baseDir: baseDir || process.cwd(),
+          allowRemote: this.isRemoteExtendsAllowed(),
+          maxDepth: 10,
+          allowedRemotePatterns,
+        };
+        const loader = new ConfigLoader(loaderOptions);
+        const extends_ = Array.isArray(extendsValue) ? extendsValue : [extendsValue];
+        // Remove extends/include
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { extends: _, include: __, ...configWithoutExtends } = parsedConfig as any;
+        let mergedConfig: Partial<VisorConfig> = {};
+        for (const source of extends_) {
+          console.log(`📦 Extending from: ${source}`);
+          const parentConfig = await loader.fetchConfig(String(source));
+          mergedConfig = new ConfigMerger().merge(mergedConfig, parentConfig);
+        }
+        parsedConfig = new ConfigMerger().merge(mergedConfig, configWithoutExtends);
+        parsedConfig = new ConfigMerger().removeDisabledChecks(parsedConfig);
+      }
+
+      // Convert workflow definition to runnable config if needed
+      if ((parsedConfig as any).id && typeof (parsedConfig as any).id === 'string') {
+        parsedConfig = await this.convertWorkflowToConfig(parsedConfig, baseDir || process.cwd());
+      }
+
+      parsedConfig = this.normalizeStepsAndChecks(parsedConfig, !!extendsValue);
+      await this.loadWorkflows(parsedConfig, baseDir || process.cwd());
+
+      if (validate) this.validateConfig(parsedConfig);
+
+      let finalConfig = parsedConfig as VisorConfig;
+      if (mergeDefaults) finalConfig = this.mergeWithDefaults(parsedConfig) as VisorConfig;
+      return finalConfig;
+    } catch (error) {
+      if (error instanceof Error) throw new Error(`Failed to load configuration: ${error.message}`);
       throw error;
     }
   }
@@ -151,11 +251,30 @@ export class ConfigManager {
     const searchDirs = [gitRoot, process.cwd()].filter(Boolean) as string[];
 
     for (const baseDir of searchDirs) {
-      const possiblePaths = [path.join(baseDir, '.visor.yaml'), path.join(baseDir, '.visor.yml')];
+      const candidates = ['visor.yaml', 'visor.yml', '.visor.yaml', '.visor.yml'].map(p =>
+        path.join(baseDir, p)
+      );
 
-      for (const configPath of possiblePaths) {
-        if (fs.existsSync(configPath)) {
-          return this.loadConfig(configPath, options);
+      for (const p of candidates) {
+        try {
+          const st = fs.statSync(p);
+          if (!st.isFile()) continue;
+          const isLegacy = path.basename(p).startsWith('.');
+          if (isLegacy) {
+            // Allow legacy dotfile unless strict mode enabled
+            if (process.env.VISOR_STRICT_CONFIG_NAME === 'true') {
+              const rel = path.relative(baseDir, p);
+              throw new Error(
+                `Legacy config detected: ${rel}. Please rename to visor.yaml (or visor.yml).`
+              );
+            }
+            return this.loadConfig(p, options);
+          }
+          return this.loadConfig(p, options);
+        } catch (e: any) {
+          if (e && e.code === 'ENOENT') continue; // try next
+          // Surface unexpected errors
+          if (e) throw e;
         }
       }
     }
@@ -196,7 +315,8 @@ export class ConfigManager {
   public async getDefaultConfig(): Promise<VisorConfig> {
     return {
       version: '1.0',
-      checks: {},
+      steps: {},
+      checks: {}, // Keep for backward compatibility
       max_parallelism: 3,
       output: {
         pr_comment: {
@@ -213,22 +333,31 @@ export class ConfigManager {
    */
   public loadBundledDefaultConfig(): VisorConfig | null {
     try {
-      // Try different paths to find the bundled default config
-      const possiblePaths = [
-        // When running as GitHub Action (bundled in dist/)
-        path.join(__dirname, 'defaults', '.visor.yaml'),
-        // When running from source
-        path.join(__dirname, '..', 'defaults', '.visor.yaml'),
-        // Try via package root
-        this.findPackageRoot() ? path.join(this.findPackageRoot()!, 'defaults', '.visor.yaml') : '',
-        // GitHub Action environment variable
-        process.env.GITHUB_ACTION_PATH
-          ? path.join(process.env.GITHUB_ACTION_PATH, 'defaults', '.visor.yaml')
-          : '',
-        process.env.GITHUB_ACTION_PATH
-          ? path.join(process.env.GITHUB_ACTION_PATH, 'dist', 'defaults', '.visor.yaml')
-          : '',
-      ].filter(p => p); // Remove empty paths
+      // Try different paths to find the bundled default config (support CJS and ESM)
+      const possiblePaths: string[] = [];
+
+      // __dirname is available in CJS; guard for ESM builds
+      if (typeof __dirname !== 'undefined') {
+        // Only support new non-dot filename
+        possiblePaths.push(
+          path.join(__dirname, 'defaults', 'visor.yaml'),
+          path.join(__dirname, '..', 'defaults', 'visor.yaml')
+        );
+      }
+
+      // Try via package root
+      const pkgRoot = this.findPackageRoot();
+      if (pkgRoot) {
+        possiblePaths.push(path.join(pkgRoot, 'defaults', 'visor.yaml'));
+      }
+
+      // GitHub Action environment variable
+      if (process.env.GITHUB_ACTION_PATH) {
+        possiblePaths.push(
+          path.join(process.env.GITHUB_ACTION_PATH, 'defaults', 'visor.yaml'),
+          path.join(process.env.GITHUB_ACTION_PATH, 'dist', 'defaults', 'visor.yaml')
+        );
+      }
 
       let bundledConfigPath: string | undefined;
       for (const possiblePath of possiblePaths) {
@@ -238,17 +367,46 @@ export class ConfigManager {
         }
       }
 
-      if (bundledConfigPath && fs.existsSync(bundledConfigPath)) {
+      if (bundledConfigPath) {
         // Always log to stderr to avoid contaminating formatted output
         console.error(`📦 Loading bundled default configuration from ${bundledConfigPath}`);
-        const configContent = fs.readFileSync(bundledConfigPath, 'utf8');
-        const parsedConfig = yaml.load(configContent) as Partial<VisorConfig>;
+        // Synchronous loader for bundled defaults with shallow extends support
+        const readAndParse = (p: string): Partial<VisorConfig> => {
+          const raw = fs.readFileSync(p, 'utf8');
+          const obj = yaml.load(raw) as Partial<VisorConfig>;
+          if (!obj || typeof obj !== 'object') return {};
+          // Alias: support 'include' as 'extends' in packaged defaults
+          if ((obj as any).include && !(obj as any).extends) {
+            const inc = (obj as any).include;
+            (obj as any).extends = Array.isArray(inc) ? inc : [inc];
+            delete (obj as any).include;
+          }
+          return obj;
+        };
+        const baseDir = path.dirname(bundledConfigPath);
+        const merger = new (require('./utils/config-merger').ConfigMerger)();
 
-        if (!parsedConfig || typeof parsedConfig !== 'object') {
-          return null;
-        }
+        const loadWithExtendsSync = (p: string): Partial<VisorConfig> => {
+          const current = readAndParse(p);
+          const extVal: any = (current as any).extends || (current as any).include;
+          // Strip extends/include to prevent re-processing
+          if ((current as any).extends !== undefined) delete (current as any).extends;
+          if ((current as any).include !== undefined) delete (current as any).include;
+          if (!extVal) return current;
+          const list = Array.isArray(extVal) ? extVal : [extVal];
+          let acc: Partial<VisorConfig> = {};
+          for (const src of list) {
+            const rel = typeof src === 'string' ? src : String(src);
+            const abs = path.isAbsolute(rel) ? rel : path.resolve(baseDir, rel);
+            const parentCfg = loadWithExtendsSync(abs);
+            acc = merger.merge(acc, parentCfg);
+          }
+          return merger.merge(acc, current);
+        };
 
-        // Validate and merge with defaults
+        let parsedConfig = loadWithExtendsSync(bundledConfigPath);
+        // Normalize and validate as usual
+        parsedConfig = this.normalizeStepsAndChecks(parsedConfig);
         this.validateConfig(parsedConfig);
         return this.mergeWithDefaults(parsedConfig) as VisorConfig;
       }
@@ -287,6 +445,160 @@ export class ConfigManager {
     }
 
     return null;
+  }
+
+  /**
+   * Convert a workflow definition file to a visor config
+   * When a workflow YAML is run standalone, register the workflow and use its tests as checks
+   */
+  private async convertWorkflowToConfig(
+    workflowData: any,
+    basePath: string
+  ): Promise<Partial<VisorConfig>> {
+    const { WorkflowRegistry } = await import('./workflow-registry');
+    const registry = WorkflowRegistry.getInstance();
+
+    // Register the workflow
+    const workflowId = workflowData.id;
+    logger.info(`Detected standalone workflow file: ${workflowId}`);
+
+    // Process imports first so dependencies are available
+    if (workflowData.imports && Array.isArray(workflowData.imports)) {
+      for (const source of workflowData.imports) {
+        try {
+          const results = await registry.import(source, { basePath, validate: true });
+          for (const result of results) {
+            if (!result.valid && result.errors) {
+              const errors = result.errors.map(e => `  ${e.path}: ${e.message}`).join('\n');
+              throw new Error(`Failed to import workflow from '${source}':\n${errors}`);
+            }
+          }
+          logger.info(`Imported workflows from: ${source}`);
+        } catch (err: unknown) {
+          // If the workflow already exists, log a warning but don't fail
+          const errMsg = err instanceof Error ? err.message : String(err);
+          if (errMsg.includes('already exists')) {
+            logger.debug(`Workflow from '${source}' already imported, skipping`);
+          } else {
+            throw err;
+          }
+        }
+      }
+    }
+
+    // Extract tests before modifying workflowData
+    const tests = workflowData.tests || {};
+
+    // Create a clean workflow definition (without tests and imports)
+    const workflowDefinition = { ...workflowData };
+    delete workflowDefinition.tests;
+    delete workflowDefinition.imports;
+
+    // Register the workflow itself
+    const result = registry.register(workflowDefinition, 'standalone', { override: true });
+    if (!result.valid && result.errors) {
+      const errors = result.errors.map(e => `  ${e.path}: ${e.message}`).join('\n');
+      throw new Error(`Failed to register workflow '${workflowId}':\n${errors}`);
+    }
+
+    logger.info(`Registered workflow '${workflowId}' for standalone execution`);
+
+    // For standalone workflow testing, use the workflow's steps as checks
+    // This allows the test runner to execute the workflow steps directly
+    const workflowSteps = workflowData.steps || {};
+
+    // Create a config that includes the workflow steps as checks,
+    // plus the tests section and workflow metadata for output computation
+    const visorConfig: Partial<VisorConfig> & { tests?: any; outputs?: any; inputs?: any } = {
+      version: '1.0',
+      steps: workflowSteps,
+      checks: workflowSteps,
+      tests: tests, // Preserve test harness config (may be empty if stripped by test runner)
+    };
+
+    // Preserve workflow metadata for output computation during tests
+    if (workflowData.outputs) {
+      visorConfig.outputs = workflowData.outputs;
+    }
+    if (workflowData.inputs) {
+      visorConfig.inputs = workflowData.inputs;
+    }
+
+    logger.debug(
+      `Standalone workflow config has ${Object.keys(workflowSteps).length} workflow steps as checks`
+    );
+    logger.debug(`Workflow step names: ${Object.keys(workflowSteps).join(', ')}`);
+    logger.debug(`Config keys after conversion: ${Object.keys(visorConfig).join(', ')}`);
+
+    return visorConfig;
+  }
+
+  /**
+   * Load and register workflows from configuration
+   */
+  private async loadWorkflows(config: Partial<VisorConfig>, basePath: string): Promise<void> {
+    // Only import workflows from external files
+    if (!config.imports || config.imports.length === 0) {
+      return;
+    }
+
+    const { WorkflowRegistry } = await import('./workflow-registry');
+    const registry = WorkflowRegistry.getInstance();
+
+    // Import workflow files
+    for (const source of config.imports) {
+      const results = await registry.import(source, { basePath, validate: true });
+      for (const result of results) {
+        if (!result.valid && result.errors) {
+          // Check if error is just "already exists" - skip silently
+          // This allows multiple workflows to import the same dependency
+          const isAlreadyExists = result.errors.every(e => e.message.includes('already exists'));
+          if (isAlreadyExists) {
+            logger.debug(`Workflow from '${source}' already imported, skipping`);
+            continue;
+          }
+          const errors = result.errors.map(e => `  ${e.path}: ${e.message}`).join('\n');
+          throw new Error(`Failed to import workflow from '${source}':\n${errors}`);
+        }
+      }
+      logger.info(`Imported workflows from: ${source}`);
+    }
+  }
+
+  /**
+   * Normalize 'checks' and 'steps' keys for backward compatibility
+   * Ensures both keys are present and contain the same data
+   */
+  private normalizeStepsAndChecks(
+    config: Partial<VisorConfig>,
+    preferChecks: boolean = false
+  ): Partial<VisorConfig> {
+    // If both are present, merge with CHECKS taking precedence on key conflicts.
+    // Rationale: user overrides typically land in 'checks' while bundled defaults
+    // may come in via 'steps' (e.g., included workflows). We want user overrides
+    // (e.g., appendPrompt) to win over defaults.
+    if (config.steps && config.checks) {
+      if (preferChecks) {
+        // Union with checks winning over steps (child overrides)
+        const merged = { ...(config.steps as any), ...(config.checks as Record<string, any>) };
+        config.steps = merged as any;
+        config.checks = merged as any;
+      } else {
+        // Back-compat: when both present in a single file, honor steps exclusively
+        // (ignore extra keys under checks)
+        config.checks = config.steps;
+        // Ensure steps remains authoritative
+        config.steps = config.steps;
+      }
+    } else if (config.steps && !config.checks) {
+      // Copy steps to checks for internal compatibility
+      config.checks = config.steps;
+    } else if (config.checks && !config.steps) {
+      // Copy checks to steps for forward compatibility
+      config.steps = config.checks;
+    }
+
+    return config;
   }
 
   /**
@@ -348,9 +660,16 @@ export class ConfigManager {
 
   /**
    * Validate configuration against schema
+   * @param config The config to validate
+   * @param strict If true, treat warnings as errors (default: false)
    */
-  private validateConfig(config: Partial<VisorConfig>): void {
+  public validateConfig(config: Partial<VisorConfig>, strict = false): void {
     const errors: ConfigValidationError[] = [];
+    const warnings: ConfigValidationError[] = [];
+
+    // First, run schema-based validation (runtime-generated).
+    // Unknown keys become schema errors (we convert additionalProperties to warnings by default).
+    this.validateWithAjvSchema(config, errors, warnings);
 
     // Validate required fields
     if (!config.version) {
@@ -360,21 +679,166 @@ export class ConfigManager {
       });
     }
 
-    if (!config.checks) {
+    // Unknown key warnings are produced by Ajv using the pre-generated schema.
+
+    // Validate that either 'checks' or 'steps' is present
+    if (!config.checks && !config.steps) {
       errors.push({
-        field: 'checks',
-        message: 'Missing required field: checks',
+        field: 'checks/steps',
+        message:
+          'Missing required field: either "checks" or "steps" must be defined. "steps" is recommended for new configurations.',
       });
-    } else {
+    }
+
+    // Use normalized checks for validation (both should be present after normalization)
+    const checksToValidate = config.checks || config.steps;
+    if (checksToValidate) {
       // Validate each check configuration
-      for (const [checkName, checkConfig] of Object.entries(config.checks)) {
+      for (const [checkName, checkConfig] of Object.entries(checksToValidate)) {
         // Default type to 'ai' if not specified
         if (!checkConfig.type) {
           checkConfig.type = 'ai';
         }
         // 'on' field is optional - if not specified, check can run on any event
-        this.validateCheckConfig(checkName, checkConfig, errors);
+        this.validateCheckConfig(checkName, checkConfig, errors, config, warnings);
+
+        // Unknown/typo keys at the check level are produced by Ajv.
+
+        // Validate MCP servers at check-level (basic shape only)
+        if (checkConfig.ai_mcp_servers) {
+          this.validateMcpServersObject(
+            checkConfig.ai_mcp_servers,
+            `checks.${checkName}.ai_mcp_servers`,
+            errors,
+            warnings
+          );
+        }
+        if ((checkConfig as CheckConfig).ai?.mcpServers) {
+          this.validateMcpServersObject(
+            (checkConfig as CheckConfig).ai!.mcpServers as Record<string, unknown>,
+            `checks.${checkName}.ai.mcpServers`,
+            errors,
+            warnings
+          );
+        }
+        // 3) Precedence warning if both are provided
+        if (checkConfig.ai_mcp_servers && (checkConfig as CheckConfig).ai?.mcpServers) {
+          const lower = Object.keys(checkConfig.ai_mcp_servers);
+          const higher = Object.keys((checkConfig as CheckConfig).ai!.mcpServers!);
+          const overridden = lower.filter(k => higher.includes(k));
+          warnings.push({
+            field: `checks.${checkName}.ai.mcpServers`,
+            message:
+              overridden.length > 0
+                ? `Both ai_mcp_servers and ai.mcpServers are set; ai.mcpServers overrides these servers: ${overridden.join(
+                    ', '
+                  )}`
+                : 'Both ai_mcp_servers and ai.mcpServers are set; ai.mcpServers takes precedence for this check.',
+          });
+        }
+
+        // Type-specific guidance for MCP placement to avoid silent ignores
+        try {
+          const anyCheck = checkConfig as unknown as Record<string, unknown>;
+          const aiObj = (anyCheck.ai as Record<string, unknown>) || undefined;
+          const hasBareMcpAtCheck = Object.prototype.hasOwnProperty.call(anyCheck, 'mcpServers');
+          const hasAiMcp = aiObj && Object.prototype.hasOwnProperty.call(aiObj, 'mcpServers');
+          const hasClaudeCodeMcp =
+            anyCheck.claude_code &&
+            typeof anyCheck.claude_code === 'object' &&
+            Object.prototype.hasOwnProperty.call(
+              anyCheck.claude_code as Record<string, unknown>,
+              'mcpServers'
+            );
+
+          if (checkConfig.type === 'ai') {
+            if (hasBareMcpAtCheck) {
+              warnings.push({
+                field: `checks.${checkName}.mcpServers`,
+                message:
+                  "'mcpServers' at the check root is ignored for type 'ai'. Use 'ai.mcpServers' or 'ai_mcp_servers' instead.",
+                value: (anyCheck as any).mcpServers,
+              });
+            }
+            if (hasClaudeCodeMcp) {
+              warnings.push({
+                field: `checks.${checkName}.claude_code.mcpServers`,
+                message:
+                  "'claude_code.mcpServers' is ignored for type 'ai'. Use 'ai.mcpServers' or 'ai_mcp_servers' instead.",
+              });
+            }
+          }
+
+          if (checkConfig.type === 'claude-code') {
+            if (hasAiMcp || checkConfig.ai_mcp_servers) {
+              warnings.push({
+                field: hasAiMcp
+                  ? `checks.${checkName}.ai.mcpServers`
+                  : `checks.${checkName}.ai_mcp_servers`,
+                message:
+                  "For type 'claude-code', MCP must be configured under 'claude_code.mcpServers'. 'ai.mcpServers' and 'ai_mcp_servers' are ignored for this check.",
+              });
+            }
+          }
+        } catch {
+          // best-effort hints; never fail validation here
+        }
       }
+    }
+
+    // Validate sandbox configuration
+    if (config.sandboxes) {
+      const sandboxNames = Object.keys(config.sandboxes);
+      for (const [sandboxName, sandboxConfig] of Object.entries(config.sandboxes)) {
+        this.validateSandboxConfig(sandboxName, sandboxConfig, errors);
+      }
+
+      // Validate top-level sandbox reference
+      if (config.sandbox && !sandboxNames.includes(config.sandbox)) {
+        errors.push({
+          field: 'sandbox',
+          message: `Top-level sandbox '${config.sandbox}' not found in sandboxes definitions. Available: ${sandboxNames.join(', ')}`,
+          value: config.sandbox,
+        });
+      }
+
+      // Validate check-level sandbox references
+      if (checksToValidate) {
+        for (const [checkName, checkConfig] of Object.entries(checksToValidate)) {
+          if (checkConfig.sandbox && !sandboxNames.includes(checkConfig.sandbox)) {
+            errors.push({
+              field: `checks.${checkName}.sandbox`,
+              message: `Check '${checkName}' references sandbox '${checkConfig.sandbox}' which is not defined. Available: ${sandboxNames.join(', ')}`,
+              value: checkConfig.sandbox,
+            });
+          }
+        }
+      }
+    } else {
+      // If no sandboxes defined, check that nothing references them
+      if (config.sandbox) {
+        errors.push({
+          field: 'sandbox',
+          message: `Top-level sandbox '${config.sandbox}' is set but no sandboxes are defined`,
+          value: config.sandbox,
+        });
+      }
+      if (checksToValidate) {
+        for (const [checkName, checkConfig] of Object.entries(checksToValidate)) {
+          if (checkConfig.sandbox) {
+            errors.push({
+              field: `checks.${checkName}.sandbox`,
+              message: `Check '${checkName}' references sandbox '${checkConfig.sandbox}' but no sandboxes are defined`,
+              value: checkConfig.sandbox,
+            });
+          }
+        }
+      }
+    }
+
+    // Validate global MCP servers if present
+    if (config.ai_mcp_servers) {
+      this.validateMcpServersObject(config.ai_mcp_servers, 'ai_mcp_servers', errors, warnings);
     }
 
     // Validate output configuration if present
@@ -410,58 +874,20 @@ export class ConfigManager {
       this.validateTagFilter(config.tag_filter as unknown as Record<string, unknown>, errors);
     }
 
-    // Validate sandbox configuration
-    if (config.sandboxes) {
-      const sandboxNames = Object.keys(config.sandboxes);
-      for (const [sandboxName, sandboxConfig] of Object.entries(config.sandboxes)) {
-        this.validateSandboxConfig(sandboxName, sandboxConfig, errors);
-      }
-
-      // Validate top-level sandbox reference
-      if (config.sandbox && !sandboxNames.includes(config.sandbox)) {
-        errors.push({
-          field: 'sandbox',
-          message: `Top-level sandbox '${config.sandbox}' not found in sandboxes definitions. Available: ${sandboxNames.join(', ')}`,
-          value: config.sandbox,
-        });
-      }
-
-      // Validate check-level sandbox references
-      if (config.checks) {
-        for (const [checkName, checkConfig] of Object.entries(config.checks)) {
-          if (checkConfig.sandbox && !sandboxNames.includes(checkConfig.sandbox)) {
-            errors.push({
-              field: `checks.${checkName}.sandbox`,
-              message: `Check '${checkName}' references sandbox '${checkConfig.sandbox}' which is not defined. Available: ${sandboxNames.join(', ')}`,
-              value: checkConfig.sandbox,
-            });
-          }
-        }
-      }
-    } else {
-      // If no sandboxes defined, check that nothing references them
-      if (config.sandbox) {
-        errors.push({
-          field: 'sandbox',
-          message: `Top-level sandbox '${config.sandbox}' is set but no sandboxes are defined`,
-          value: config.sandbox,
-        });
-      }
-      if (config.checks) {
-        for (const [checkName, checkConfig] of Object.entries(config.checks)) {
-          if (checkConfig.sandbox) {
-            errors.push({
-              field: `checks.${checkName}.sandbox`,
-              message: `Check '${checkName}' references sandbox '${checkConfig.sandbox}' but no sandboxes are defined`,
-              value: checkConfig.sandbox,
-            });
-          }
-        }
-      }
+    // In strict mode, treat warnings as errors
+    if (strict && warnings.length > 0) {
+      errors.push(...warnings);
     }
 
     if (errors.length > 0) {
       throw new Error(errors[0].message);
+    }
+
+    // Emit warnings (do not block execution) - only in non-strict mode
+    if (!strict && warnings.length > 0) {
+      for (const w of warnings) {
+        logger.warn(`⚠️  Config warning [${w.field}]: ${w.message}`);
+      }
     }
   }
 
@@ -531,11 +957,17 @@ export class ConfigManager {
   private validateCheckConfig(
     checkName: string,
     checkConfig: CheckConfig,
-    errors: ConfigValidationError[]
+    errors: ConfigValidationError[],
+    config?: Partial<VisorConfig>,
+    _warnings?: ConfigValidationError[]
   ): void {
     // Default to 'ai' if no type specified
     if (!checkConfig.type) {
       checkConfig.type = 'ai';
+    }
+    // Backward-compat alias: accept 'logger' as 'log'
+    if ((checkConfig as any).type === 'logger') {
+      (checkConfig as any).type = 'log';
     }
 
     if (!this.validCheckTypes.includes(checkConfig.type)) {
@@ -552,6 +984,66 @@ export class ConfigManager {
         field: `checks.${checkName}.prompt`,
         message: `Invalid check configuration for "${checkName}": missing prompt (required for AI checks)`,
       });
+    }
+
+    // Require specifying criticality for external-effect providers
+    try {
+      const externalTypes = new Set(['github', 'http', 'http_client', 'http_input', 'workflow']);
+      if (externalTypes.has(checkConfig.type as string) && !checkConfig.criticality) {
+        errors.push({
+          field: `checks.${checkName}.criticality`,
+          message: `Missing required criticality for step "${checkName}" (type: ${checkConfig.type}). Set criticality: 'external' or 'internal' to enable safe defaults for side-effecting steps.`,
+        });
+      }
+    } catch {
+      // best-effort hint only
+    }
+
+    // Criticality-driven contract requirements (lint-time)
+    // For higher-safety modes, require a pre-run guard (assume or if) and,
+    // for output-producing providers, a post-run contract (schema or guarantee).
+    try {
+      const crit = (checkConfig.criticality || 'policy') as string;
+      const isCritical = crit === 'external' || crit === 'internal';
+
+      if (isCritical) {
+        // 1) Pre-run guard: either assume (string or non-empty array) or if
+        const hasAssume =
+          typeof (checkConfig as any).assume === 'string' ||
+          (Array.isArray((checkConfig as any).assume) && (checkConfig as any).assume.length > 0);
+        const hasIf =
+          typeof (checkConfig as any).if === 'string' && (checkConfig as any).if.trim().length > 0;
+        if (!hasAssume && !hasIf) {
+          errors.push({
+            field: `checks.${checkName}.assume`,
+            message: `Critical step "${checkName}" (criticality: ${crit}) requires a precondition: set 'assume:' (preferred) or 'if:' to guard execution.`,
+          });
+        }
+
+        // 2) Post-run contract for output-producing providers
+        const outputProviders = new Set([
+          'ai',
+          'script',
+          'command',
+          'http',
+          'http_client',
+          'http_input',
+        ]);
+        if (outputProviders.has(checkConfig.type as string)) {
+          const hasSchema = typeof (checkConfig as any).schema !== 'undefined';
+          const hasGuarantee =
+            typeof (checkConfig as any).guarantee === 'string' &&
+            (checkConfig as any).guarantee.trim().length > 0;
+          if (!hasSchema && !hasGuarantee) {
+            errors.push({
+              field: `checks.${checkName}.schema/guarantee`,
+              message: `Critical step "${checkName}" (type: ${checkConfig.type}) requires an output contract: provide 'schema:' (renderer name or JSON Schema) or 'guarantee:' expression.`,
+            });
+          }
+        }
+      }
+    } catch {
+      // lint-only; never throw from here
     }
 
     // Command checks require exec field
@@ -578,6 +1070,9 @@ export class ConfigManager {
       }
     }
 
+    // Note: Do not add special-case validation for log 'message' here.
+    // Schema (Ajv) permits 'message' and related keys; provider enforces at execution time.
+
     // HTTP input checks require endpoint field
     if (checkConfig.type === 'http_input' && !checkConfig.endpoint) {
       errors.push({
@@ -585,6 +1080,21 @@ export class ConfigManager {
         message: `Invalid check configuration for "${checkName}": missing endpoint field (required for http_input checks)`,
       });
     }
+
+    // Prefer single-field schema: if both schema (object) and output_schema are present, warn
+    try {
+      const hasObjSchema =
+        (checkConfig as any)?.schema && typeof (checkConfig as any).schema === 'object';
+      const hasOutputSchema =
+        (checkConfig as any)?.output_schema &&
+        typeof (checkConfig as any).output_schema === 'object';
+      if (hasObjSchema && hasOutputSchema) {
+        (_warnings || errors).push({
+          field: `checks.${checkName}.schema`,
+          message: `Both 'schema' (object) and 'output_schema' are set; 'schema' will be used for validation. 'output_schema' is deprecated.`,
+        });
+      }
+    } catch {}
 
     // HTTP client checks require url field
     if (checkConfig.type === 'http_client' && !checkConfig.url) {
@@ -630,13 +1140,29 @@ export class ConfigManager {
 
     // Validate reuse_ai_session configuration
     if (checkConfig.reuse_ai_session !== undefined) {
-      if (typeof checkConfig.reuse_ai_session !== 'boolean') {
+      const reuseValue = checkConfig.reuse_ai_session as unknown;
+      const isString = typeof reuseValue === 'string';
+      const isBoolean = typeof reuseValue === 'boolean';
+      const isSelf = reuseValue === 'self';
+
+      if (!isString && !isBoolean) {
         errors.push({
           field: `checks.${checkName}.reuse_ai_session`,
-          message: `Invalid reuse_ai_session value for "${checkName}": must be boolean`,
-          value: checkConfig.reuse_ai_session,
+          message: `Invalid reuse_ai_session value for "${checkName}": must be string (check name) or boolean`,
+          value: reuseValue,
         });
-      } else if (checkConfig.reuse_ai_session === true) {
+      } else if (isString && !isSelf) {
+        // When reuse_ai_session is a string (other than the special 'self' value),
+        // it must refer to a valid check name
+        const targetCheckName = reuseValue as string;
+        if (!config?.checks || !config.checks[targetCheckName]) {
+          errors.push({
+            field: `checks.${checkName}.reuse_ai_session`,
+            message: `Check "${checkName}" references non-existent check "${targetCheckName}" for session reuse`,
+            value: reuseValue,
+          });
+        }
+      } else if (reuseValue === true) {
         // When reuse_ai_session is true, depends_on must be specified and non-empty
         if (
           !checkConfig.depends_on ||
@@ -646,9 +1172,29 @@ export class ConfigManager {
           errors.push({
             field: `checks.${checkName}.reuse_ai_session`,
             message: `Check "${checkName}" has reuse_ai_session=true but missing or empty depends_on. Session reuse requires dependency on another check.`,
-            value: checkConfig.reuse_ai_session,
+            value: reuseValue,
           });
         }
+      }
+    }
+
+    // Validate session_mode configuration
+    if (checkConfig.session_mode !== undefined) {
+      if (checkConfig.session_mode !== 'clone' && checkConfig.session_mode !== 'append') {
+        errors.push({
+          field: `checks.${checkName}.session_mode`,
+          message: `Invalid session_mode value for "${checkName}": must be 'clone' or 'append'`,
+          value: checkConfig.session_mode,
+        });
+      }
+
+      // session_mode only makes sense with reuse_ai_session
+      if (!checkConfig.reuse_ai_session) {
+        errors.push({
+          field: `checks.${checkName}.session_mode`,
+          message: `Check "${checkName}" has session_mode but no reuse_ai_session. session_mode requires reuse_ai_session to be set.`,
+          value: checkConfig.session_mode,
+        });
       }
     }
 
@@ -680,7 +1226,212 @@ export class ConfigManager {
         });
       }
     }
+
+    // Validate on_finish configuration
+    if (checkConfig.on_finish !== undefined) {
+      if (!checkConfig.forEach) {
+        errors.push({
+          field: `checks.${checkName}.on_finish`,
+          message: `Check "${checkName}" has on_finish but forEach is not true. on_finish is only valid on forEach checks.`,
+          value: checkConfig.on_finish,
+        });
+      }
+    }
+
+    // Validate JavaScript syntax in transform_js and script content
+    try {
+      // Validate transform_js if present
+      const transformJs = (checkConfig as any).transform_js;
+      if (typeof transformJs === 'string' && transformJs.trim().length > 0) {
+        const result = validateJsSyntax(transformJs);
+        if (!result.valid) {
+          errors.push({
+            field: `checks.${checkName}.transform_js`,
+            message: `JavaScript syntax error in "${checkName}" transform_js: ${result.error}`,
+            value: transformJs.slice(0, 100) + (transformJs.length > 100 ? '...' : ''),
+          });
+        }
+      }
+
+      // Validate script content if type is 'script'
+      if (checkConfig.type === 'script') {
+        const content = (checkConfig as any).content;
+        if (typeof content === 'string' && content.trim().length > 0) {
+          const result = validateJsSyntax(content);
+          if (!result.valid) {
+            errors.push({
+              field: `checks.${checkName}.content`,
+              message: `JavaScript syntax error in "${checkName}" script: ${result.error}`,
+              value: content.slice(0, 100) + (content.length > 100 ? '...' : ''),
+            });
+          }
+        }
+      }
+    } catch {
+      // Syntax validation is best-effort; don't fail the whole config on validation errors
+    }
   }
+
+  /**
+   * Validate MCP servers object shape and values (basic shape only)
+   */
+  private validateMcpServersObject(
+    mcpServers: unknown,
+    fieldPrefix: string,
+    errors: ConfigValidationError[],
+    _warnings: ConfigValidationError[]
+  ): void {
+    if (typeof mcpServers !== 'object' || mcpServers === null) {
+      errors.push({
+        field: fieldPrefix,
+        message: `${fieldPrefix} must be an object mapping server names to { command, args?, env? }`,
+        value: mcpServers,
+      });
+      return;
+    }
+
+    for (const [serverName, cfg] of Object.entries(mcpServers as Record<string, unknown>)) {
+      const pathStr = `${fieldPrefix}.${serverName}`;
+      if (!cfg || typeof cfg !== 'object') {
+        errors.push({ field: pathStr, message: `${pathStr} must be an object`, value: cfg });
+        continue;
+      }
+      const { command, args, env } = cfg as { command?: unknown; args?: unknown; env?: unknown };
+      if (typeof command !== 'string' || command.trim() === '') {
+        errors.push({
+          field: `${pathStr}.command`,
+          message: `${pathStr}.command must be a non-empty string`,
+          value: command,
+        });
+      }
+      if (args !== undefined && !Array.isArray(args)) {
+        errors.push({
+          field: `${pathStr}.args`,
+          message: `${pathStr}.args must be an array of strings`,
+          value: args,
+        });
+      }
+      if (env !== undefined) {
+        if (typeof env !== 'object' || env === null) {
+          errors.push({
+            field: `${pathStr}.env`,
+            message: `${pathStr}.env must be an object of string values`,
+            value: env,
+          });
+        } else {
+          for (const [k, v] of Object.entries(env as Record<string, unknown>)) {
+            if (typeof v !== 'string') {
+              errors.push({
+                field: `${pathStr}.env.${k}`,
+                message: `${pathStr}.env.${k} must be a string`,
+                value: v,
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Validate configuration using generated JSON Schema via Ajv, if available.
+   * Adds to errors/warnings but does not throw directly.
+   */
+  private validateWithAjvSchema(
+    config: Partial<VisorConfig>,
+    errors: ConfigValidationError[],
+    warnings: ConfigValidationError[]
+  ): void {
+    try {
+      if (!__ajvValidate) {
+        // Preferred fast path: try plain JSON in dist/generated first
+        try {
+          const jsonPath = path.resolve(__dirname, 'generated', 'config-schema.json');
+
+          const jsonSchema = require(jsonPath);
+          if (jsonSchema) {
+            const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
+            addFormats(ajv);
+            const validate = ajv.compile(jsonSchema);
+            __ajvValidate = (data: unknown) => validate(data);
+            __ajvErrors = () => validate.errors;
+          }
+        } catch {}
+        // Fallback: use embedded TS module (bundled by ncc)
+        if (!__ajvValidate) {
+          try {
+            const mod = require('./generated/config-schema');
+            const schema = mod?.configSchema || mod?.default || mod;
+            if (schema) {
+              const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
+              addFormats(ajv);
+              const validate = ajv.compile(schema);
+              __ajvValidate = (data: unknown) => validate(data);
+              __ajvErrors = () => validate.errors;
+            } else {
+              return;
+            }
+          } catch {
+            return;
+          }
+        }
+      }
+
+      const ok = __ajvValidate(config);
+      const errs = __ajvErrors ? __ajvErrors() : null;
+      if (!ok && Array.isArray(errs)) {
+        for (const e of errs) {
+          const pathStr = e.instancePath
+            ? e.instancePath.replace(/^\//, '').replace(/\//g, '.')
+            : '';
+          const msg = e.message || 'Invalid configuration';
+          if (e.keyword === 'additionalProperties') {
+            const addl = (e.params && (e.params as any).additionalProperty) || 'unknown';
+            const fullField = pathStr ? `${pathStr}.${addl}` : addl;
+            const topLevel = !pathStr;
+            // Gracefully allow certain known top-level keys that may appear in
+            // specific execution contexts but are not part of the core schema.
+            // - 'tests' is used by the YAML test runner and can legitimately
+            //   be present when loading a suite file.
+            // - 'slack' holds inbound Slack settings (socket/webhook); older
+            //   schema snapshots may not include it yet.
+            // - 'sandboxes', 'sandbox', 'sandbox_defaults' are sandbox
+            //   execution keys that may not yet be in the generated schema.
+            const allowedTopLevelKeys = new Set([
+              'tests',
+              'slack',
+              'sandboxes',
+              'sandbox',
+              'sandbox_defaults',
+            ]);
+            if (topLevel && allowedTopLevelKeys.has(addl)) {
+              // Do not warn for these keys.
+              continue;
+            }
+            // At check level, allow 'sandbox' without warning
+            if (!topLevel && addl === 'sandbox' && pathStr.match(/^(checks|steps)\.[^.]+$/)) {
+              continue;
+            }
+            warnings.push({
+              field: fullField || 'config',
+              message: topLevel
+                ? `Unknown top-level key '${addl}' will be ignored.`
+                : `Unknown key '${addl}' will be ignored`,
+            });
+          } else {
+            // Defer to our existing programmatic validators for required/type errors
+            // to preserve friendly, stable error messages and avoid duplication.
+            logger.debug(`Ajv note [${pathStr || 'config'}]: ${msg}`);
+          }
+        }
+      }
+    } catch (err) {
+      logger.debug(`Ajv validation skipped: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Unknown-key warnings are fully handled by Ajv using the generated schema
+  // Unknown-key hints are produced by Ajv (additionalProperties=false)
 
   /**
    * Validate tag filter configuration
@@ -908,3 +1659,7 @@ export class ConfigManager {
     return merged;
   }
 }
+
+// Cache Ajv validator across loads to avoid repeated heavy generation
+let __ajvValidate: ((data: unknown) => boolean) | null = null;
+let __ajvErrors: (() => import('ajv').ErrorObject[] | null | undefined) | null = null;

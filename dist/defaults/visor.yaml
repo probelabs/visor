@@ -1,0 +1,483 @@
+version: "1.0"
+include: "./code-review.yaml"
+
+# Default Visor configuration - provides comprehensive code analysis out-of-the-box
+# Uses mock provider for CI compatibility when no AI API keys are configured
+# Users can override this by creating their own .visor.yaml in their project root
+
+# Global AI provider settings - users should configure their preferred provider
+# For CI testing, use --provider mock CLI flag instead
+
+# Run up to 4 steps in parallel for faster execution
+max_parallelism: 4
+
+# Global fail condition - fail if critical or error severity issues are found
+fail_if: "output.issues && output.issues.some(i => i.severity === 'critical' || i.severity === 'error')"
+
+# Workflow steps (formerly 'checks' - both keys are supported for backward compatibility)
+steps:
+  # AI-powered release notes generation - manual execution only for release workflows
+  release-notes:
+    type: ai
+    group: release
+    on: [manual]
+    prompt: |
+      Generate professional release notes for version {{ env.TAG_NAME }} of this project.
+
+      Analyze the git commits since the last release:
+      ```
+      {{ env.GIT_LOG }}
+      ```
+
+      And the file changes summary:
+      ```
+      {{ env.GIT_DIFF_STAT }}
+      ```
+
+      Create release notes with these sections:
+
+      ## 🚀 What's New in {{ env.TAG_NAME }}
+
+      ### ✨ New Features
+      List any new features added (look for feat: commits)
+
+      ### 🐛 Bug Fixes
+      List any bugs fixed (look for fix: commits)
+
+      ### 📈 Improvements
+      List any improvements or refactoring (look for refactor:, perf:, chore:, build: commits)
+
+      ### 🔥 Breaking Changes
+      List any breaking changes if present (look for BREAKING CHANGE or ! in commits)
+
+      ### 📊 Statistics
+      - Number of commits since last release
+      - Number of contributors involved
+      - Number of files changed
+
+      Keep descriptions concise and user-friendly. Focus on what changed from a user perspective, not implementation details.
+      Use present tense and action-oriented language. Group similar changes together.
+    schema: plain
+
+  # (overview, security, architecture, performance, quality) were extracted to defaults/code-review.yaml
+
+  # Apply labels based on overview tags — runs only on PR open (GitHub environments only)
+  apply-overview-labels:
+    type: github
+    criticality: external
+    tags: [github]
+    on: [pr_opened]
+    depends_on: [overview]
+    assume:
+      - "outputs['overview']?.tags?.label"
+      - "outputs['overview']?.tags?.['review-effort'] != null"
+    op: labels.add
+    values:
+      - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
+      - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
+
+  # Issue Assistant (issues only) — triage-quality prompt from main branch, structured output
+  issue-assistant:
+    type: ai
+    group: dynamic  # New issue triage posts a standalone comment
+    on: [issue_opened]
+    schema: issue-assistant
+    prompt: |
+        You are an intelligent GitHub issue assistant for the {{ event.repository.fullName }} repository. Your role is to provide professional, knowledgeable assistance when a NEW issue is opened.
+
+        {%- liquid
+          # Correction context from the last validation wave (filtered)
+          # Keep only invalid or non-high confidence items using where_exp
+          assign issues = outputs_history["validate-fact"].last | where_exp: 'i', 'i && (i.is_valid != true || i.confidence != "high")'
+          assign has_problems = issues | not_empty
+        -%}
+        {% if has_problems %}
+        ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
+
+        <previous_response>
+        {% assign prev_comment = outputs_history["comment-assistant"].last %}
+        {{ prev_comment.text }}
+        </previous_response>
+
+        **Validation Errors Found:**
+        {% for issue in issues %}
+        {% if issue.is_valid == nil or issue.is_valid != true or issue.confidence != 'high' %}
+        - **{{ issue.claim }}**: {{ issue.evidence | default: "" }}
+          {% if issue.correction %}
+          Correction: {{ issue.correction }}
+          {% endif %}
+        Claim: {{ issue.claim }}
+        {% if issue.correction %}Correction: {{ issue.correction }}{% endif %}
+        {% endif %}
+        {% endfor %}
+
+        Please provide a corrected response that addresses these factual errors.
+        {% endif %}
+
+        Return ONE JSON object (no prose outside JSON) that validates the `issue-assistant` schema with:
+        - `text`: write a clear, well-structured markdown reply that welcomes the reporter, shows understanding, and provides next steps. Use sections and bullets where helpful.
+        - `intent`: must be "issue_triage" for this flow.
+        - `labels` (optional): array of labels that would help organization for this new issue.
+
+        Add a short “References” section at the end of the markdown `text` as a simple, clickable markdown list (no fenced code blocks). Keep it minimal. If you didn’t consult code, write `References: none`.
+
+        Example:
+        References:
+        - [path/to/file.ext:START-END](https://github.com/{{ event.repository.fullName }}/blob/{{ event.pull_request.head.sha | default: 'HEAD' }}/path/to/file.ext#LSTART-LEND) – very short note
+
+        Use this triage rubric (adopted from our main prompt):
+        1) Categorize the issue - choose from: bug, chore, documentation, enhancement, feature, question, wontfix, invalid, duplicate
+        2) Assess priority (low/medium/high/urgent)
+        3) Estimate complexity (trivial/simple/moderate/complex)
+        4) Recommend labels from the categories above
+        5) Identify potential areas affected or relevant documentation
+        6) Provide an initial response with clarifying questions if needed
+
+        Response style:
+        - Professional and welcoming
+        - Start by acknowledging what you understand from the issue report
+        - Clearly state what you're confident about based on the information provided
+        - Identify what is unclear or missing, and explicitly ask follow-up questions to help with debugging
+        - When information is incomplete, ask specific questions that would help diagnose the issue
+        - Provide actionable guidance and clear next steps
+        - Use natural markdown formatting; include code snippets where useful
+        - Be honest about what you know and what you don't know
+        - NEVER make promises about timelines, release dates, or team commitments
+        - NEVER say things like "we'll pick this up", "will be included in upcoming release", or "we will post updates"
+        - Focus on technical analysis and helpful information rather than commitments
+
+  # Comment Assistant (comments only) — intent detection and reply
+  comment-assistant:
+    type: ai
+    group: dynamic
+    on: [issue_comment]
+    command: "visor"
+    prompt: |
+        You are the GitHub comment assistant for {{ event.repository.fullName }}. Respond to user comments on issues or PR discussion threads.
+
+        Latest comment (verbatim):
+        {{ event.comment.body | default: "" }}
+
+        {%- liquid
+          # Correction context from the last validation wave (filtered)
+          assign issues = outputs_history["validate-fact"].last | where_exp: 'i', 'i && (i.is_valid != true || i.confidence != "high")'
+          assign has_problems = issues | not_empty
+          assign prev_comment = outputs_history["comment-assistant"].last
+        -%}
+        {% if has_problems %}
+        ⚠️  **IMPORTANT: Your previous response contained factual errors. Please correct them:**
+
+        <previous_response>
+        {{ prev_comment.text | default: "" }}
+        </previous_response>
+
+        **Validation Errors Found:**
+        {%- for issue in issues -%}
+        {%- if issue.is_valid == nil or issue.is_valid != true or issue.confidence != 'high' -%}
+        - **{{ issue.claim }}**: {{ issue.evidence | default: "" }}
+          {%- if issue.correction %}
+          Correction: {{ issue.correction }}
+          {%- endif %}
+        Claim: {{ issue.claim }}
+        {%- if issue.correction %}Correction: {{ issue.correction }}{% endif -%}
+        {%- endif -%}
+        {%- endfor -%}
+
+        Please provide a corrected response that addresses these factual errors.
+        {% endif %}
+
+        Return ONE JSON object (no prose outside JSON) that validates the `issue-assistant` schema with:
+        - `text`: a concise, helpful markdown reply to the latest comment.
+        - `intent`: choose one: "comment_reply" (normal reply) or "comment_retrigger" (pick this ONLY when the user explicitly asks to re-run checks OR explicitly asks to disable some checks).
+        - `labels`: omit for comments (do not include).
+
+        Add a short “References” section at the end of the markdown `text` as a clickable markdown list (no fenced blocks). If none used, write `References: none`.
+
+        Example:
+        References:
+        - [path/to/file.ext:START-END](https://github.com/{{ event.repository.fullName }}/blob/{{ event.pull_request.head.sha | default: 'HEAD' }}/path/to/file.ext#LSTART-LEND) – very short note
+
+        Rules:
+        - Never suggest rerun/disable unless asked explicitly.
+        - If asked to disable any check(s), set `intent` = "comment_retrigger" and in `text` acknowledge the request and say the checks will be re-run; DO NOT propose slash/directive comments.
+        - Stay technical, direct, and specific; add code snippets or links when helpful.
+        - When answering questions, acknowledge what you can answer confidently based on the context provided
+        - If you need more information to provide a complete answer, ask specific follow-up questions
+        - Be honest when you don't know something or can't find the answer in the available context
+        - If the question requires information not available in the PR/issue context, clearly state what's missing
+        - Provide partial answers when possible, and indicate what additional information would help give a complete response
+    schema: issue-assistant
+    on_success:
+      transitions:
+        - when: "event.name === 'issue_comment' && output?.intent === 'comment_retrigger'"
+          to: overview
+          goto_event: pr_updated
+
+  # Apply labels to new issues based on assistant output (GitHub-only)
+  apply-issue-labels:
+    type: github
+    criticality: external
+    tags: [github]
+    on: [issue_opened]
+    depends_on: [issue-assistant]
+    assume:
+      - "(outputs['issue-assistant']?.labels?.length ?? 0) > 0"
+    op: labels.add
+    # Explicitly derive labels from issue-assistant output with guardrails
+    # - Use Liquid to serialize labels array to JSON; provider will expand
+    # - Assumptions ensure the dependency exists and produced at least one label
+    values:
+      - "{{ outputs['issue-assistant'].labels | default: [] | json }}"
+
+  # External origin labelling for PRs and Issues
+  external-label:
+    type: github
+    criticality: external
+    tags: [github]
+    on: [pr_opened, issue_opened]
+    if: "!isMember() && !isContributor()"
+    op: labels.add
+    values:
+      - "external"
+
+  # ============================================================================
+  # Fact Validation System (enabled with ENABLE_FACT_VALIDATION env var)
+  # ============================================================================
+  # This system validates factual claims made by AI assistants before posting
+  # responses to GitHub issues and comments. It uses forEach with on_finish hooks
+  # to validate all facts, aggregate results, and retry with correction context
+  # if needed.
+  #
+  # To enable: Set ENABLE_FACT_VALIDATION=true environment variable
+  # ============================================================================
+
+  # Extract verifiable facts from assistant responses
+  # This is a forEach check that triggers validation for each fact
+  extract-facts:
+    type: ai
+    group: fact-validation
+    on: [issue_opened, issue_comment]
+    depends_on: ["issue-assistant|comment-assistant"]
+    # Only when validation is enabled (assistants schedule validate-fact; engine runs this dependency inline)
+    if: "env.ENABLE_FACT_VALIDATION === 'true'"
+    # Ensure we have an assistant output to analyze for this event type
+    assume:
+      - "outputs['issue-assistant'] || outputs['comment-assistant']"
+    ai:
+      skip_code_context: true
+      disableTools: true
+    prompt: |
+      Your task is to EXTRACT factual claims from the assistant's response below.
+
+      IMPORTANT: Do NOT investigate, verify, or validate any facts. Simply identify and list them.
+      Do NOT use any tools or search the codebase. Just read the response and extract claims.
+
+      Assistant's response to analyze:
+      ```
+      {% if outputs['issue-assistant'] %}{{ outputs['issue-assistant'].text }}{% else %}{{ outputs['comment-assistant'].text }}{% endif %}
+      ```
+
+      If the response ends with a “References” section in a fenced block labeled `refs`, parse it. Each line will be in the form:
+      path/to/file.ext[:start[-end]|#SymbolName] - note
+      Capture it as an array of objects `{ path, lines?, symbol? }` where `lines` is the numeric line or range if present, or `symbol` is the string after `#`.
+      When assigning references to facts:
+      - If a reference clearly maps to a specific fact, include only those refs for that fact.
+      - If mapping is ambiguous, include the entire refs list for that fact (better recall than omission).
+
+      Extract verifiable factual claims about:
+      - Configuration variables and their values (e.g., "max_parallelism defaults to 4")
+      - Feature capabilities (what is/isn't supported, how features work)
+      - File paths and locations mentioned (e.g., "config is in src/config.ts")
+      - Function/class names and their behavior
+      - Command syntax and available options
+      - API endpoints and their methods
+      - Environment variables and usage
+      - Default values and constants
+      - Line numbers or code locations mentioned
+      - Data structures and schemas
+      - Dependencies and version requirements
+
+      Guidelines:
+      - Extract claims AS STATED in the response (don't verify or investigate)
+      - Focus on specific, testable assertions
+      - Each claim MUST be self-contained with ALL necessary context
+      - Include file paths, line numbers, values in the claim itself
+      - AVOID duplicates - if same fact appears multiple times, extract it once
+      - Group related info when it's the SAME fact (e.g., "value is 3 at lines 100 and 200")
+      - Each fact should be atomic and independently verifiable
+
+      Example of GOOD claims:
+        - "max_parallelism defaults to 3 in src/check-execution-engine.ts at lines 2795 and 4712"
+        - "Configuration file defaults/visor.yaml sets max_parallelism to 4 at line 11"
+
+      Example of BAD claims (missing context):
+      - "Default is 3" (missing: default of what? where?)
+      - "Code has hardcoded value" (missing: what value? where? which file?)
+
+      Do NOT extract:
+      - Recommendations (e.g., "you should change X to Y")
+      - Opinions or preferences (e.g., "this is better than")
+      - General explanations without specific claims
+      - Your own knowledge - only extract what's IN the response
+      - Duplicate facts (same claim stated multiple ways)
+
+      Return ONLY the JSON array of fact objects. Do not investigate or verify anything.
+      Each item must be: { id, category, claim, verifiable, refs? } where refs items may contain `lines` or `symbol`.
+
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id:
+            type: string
+            description: Unique identifier for the fact (e.g., fact-1, fact-2)
+          category:
+            type: string
+            description: Type of claim (Configuration, Feature, Documentation, API, etc.)
+          claim:
+            type: string
+            description: The exact factual statement being made
+          verifiable:
+            type: boolean
+            description: Whether this claim can be verified against the codebase
+          refs:
+            type: array
+            description: Optional list of code references (parsed from assistant References block)
+            items:
+              type: object
+              properties:
+                path:
+                  type: string
+                lines:
+                  type: string
+                  description: Line or range, e.g., "120-145" or "88"
+              required: [path]
+        required: [id, category, claim, verifiable]
+
+    forEach: true
+
+    # After one validation wave completes, route back to the appropriate assistant
+    # using declarative transitions so the engine forward-runs dependents
+    # (assistant → extract-facts → validate-fact).
+    on_finish:
+      transitions:
+        - when: "any(outputs_history['validate-fact'], v => v && (v.is_valid === false || v.valid === false)) && event.name === 'issue_opened'"
+          to: issue-assistant
+        - when: "any(outputs_history['validate-fact'], v => v && (v.is_valid === false || v.valid === false)) && event.name === 'issue_comment'"
+          to: comment-assistant
+
+  # Validate each extracted fact
+  validate-fact:
+    type: ai
+    group: fact-validation
+    on: [issue_opened, issue_comment]
+    depends_on: [extract-facts]
+    if: "env.ENABLE_FACT_VALIDATION === 'true'"
+    ai:
+      timeout: 180000 # 3 minutes hard cap per validation
+    # always validate each fact
+    prompt: |
+      Validate this factual claim against the codebase:
+
+      **Claim:** {{ outputs['extract-facts'].claim }}
+      **Category:** {{ outputs['extract-facts'].category }}
+      **Fact ID:** {{ outputs['extract-facts'].id }}
+
+      Use code search and file reading tools to verify if this claim is accurate.
+
+      If references were provided for this fact (parsed earlier), use them FIRST and prefer them strongly:
+      {% assign refs = outputs['extract-facts'].refs %}
+      {% assign __refs_len = refs | size %}
+      {% if refs and __refs_len > 0 %}
+      Provided References:
+      {% for r in refs %}- {{ r.path }}{% if r.lines %}:{{ r.lines }}{% endif %}{% if r.symbol %}#{{ r.symbol }}{% endif %}
+      {% endfor %}
+      Strategy:
+      - If a reference has `lines`, open those line ranges first and try to validate from there.
+      - If a reference has `symbol`, locate the symbol definition in the referenced file (e.g., function/class/const). Search for common patterns like:
+        - `function SYMBOL(`, `const SYMBOL`, `let SYMBOL`, `class SYMBOL`, `export .* SYMBOL`, `SYMBOL:\s*` (TypeScript), etc.
+        Then analyze ~100 lines around the definition (±50 lines) before expanding.
+      - Expand search to nearby lines in the same files if needed (±50 lines).
+      - Only if still inconclusive, perform a broader search.
+      {% else %}
+      No provided references. Perform a targeted search (prefer exact identifiers from the claim) before broader queries.
+      {% endif %}
+
+      Provide:
+      - Evidence of what you found in the codebase
+      - Confidence level (high/medium/low) in your validation
+      - If the claim is incorrect, provide the accurate information as a correction
+
+    schema:
+      type: object
+      properties:
+        fact_id:
+          type: string
+          description: ID of the fact being validated
+        claim:
+          type: string
+          description: The original claim being validated
+        is_valid:
+          type: boolean
+          description: Whether the claim is accurate
+        confidence:
+          type: string
+          enum: [high, medium, low]
+          description: Confidence level in the validation
+        evidence:
+          type: string
+          description: Evidence found in the codebase supporting the validation
+        correction:
+          type: string
+          description: If invalid, the correct information (optional)
+      required: [fact_id, claim, is_valid, confidence, evidence]
+
+  # Aggregate validation results and expose boolean all_valid
+  aggregate:
+    type: script
+    group: fact-validation
+    on: [issue_opened, issue_comment]
+    depends_on: [validate-fact]
+    if: "env.ENABLE_FACT_VALIDATION === 'true'"
+    assume:
+      # Run only when we have per-item validations and it's the first attempt
+      - "(outputs['validate-fact']?.forEachItems?.length ?? 0) > 0"
+      - "(memory.get('attempt', 'fact-validation') ?? 0) === 0"
+    content: |
+      const vf = (outputs.history['validate-fact']||[]).filter(v => v && typeof v === 'object');
+      const ex = (outputs.history['extract-facts']||[]);
+      let lastSize = 0; for (let i = ex.length - 1; i >= 0 && lastSize === 0; i--) { if (Array.isArray(ex[i])) { lastSize = ex[i].length; } }
+      const recent = lastSize > 0 ? vf.slice(-lastSize) : vf;
+      const allValid = recent.length > 0 && recent.every(i => i && (i.is_valid === true || i.valid === true));
+      memory.set('all_valid', allValid, 'fact-validation');
+      return { all_valid: allValid };
+    schema:
+      type: object
+      properties:
+        all_valid:
+          type: boolean
+      required:
+        - all_valid
+      additionalProperties: false
+    guarantee: "output && typeof output.all_valid === 'boolean'"
+    namespace: fact-validation
+
+  # Post only when all facts are valid
+  post-verified:
+    type: log
+    group: fact-validation
+    on: [issue_opened, issue_comment]
+    depends_on: [extract-facts]
+    if: "env.ENABLE_FACT_VALIDATION === 'true' && memory.get('all_valid', 'fact-validation') === true"
+    message: "✅ Posted verified response"
+    level: info
+
+  # Retrigger noop removed — comment-assistant schedules overview directly
+
+output:
+  pr_comment:
+    format: markdown
+    # Grouping is determined solely by each check's `group` field.
+    # The renderer ignores any global group_by; keep comments compact.
+    collapse: true

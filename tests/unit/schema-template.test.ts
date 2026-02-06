@@ -316,8 +316,8 @@ describe('Schema-Template System', () => {
       });
 
       // Test specific check configurations
-      expect(mockConfig.checks.security.group).toBe('code-review');
-      expect(mockConfig.checks.security.schema).toBe('code-review');
+      expect(mockConfig.checks!.security.group).toBe('code-review');
+      expect(mockConfig.checks!.security.schema).toBe('code-review');
       expect(mockConfig.checks['full-review'].group).toBe('pr-overview');
       expect(mockConfig.checks['full-review'].schema).toBe('text');
     });
@@ -350,8 +350,8 @@ describe('Schema-Template System', () => {
       };
 
       // Test dependency relationships
-      expect(mockConfigWithDeps.checks.architecture.depends_on).toEqual(['security']);
-      expect(mockConfigWithDeps.checks.overview.depends_on).toEqual(['security', 'architecture']);
+      expect(mockConfigWithDeps.checks!.architecture.depends_on).toEqual(['security']);
+      expect(mockConfigWithDeps.checks!.overview.depends_on).toEqual(['security', 'architecture']);
     });
 
     test('should support custom schema references', () => {

@@ -48,11 +48,15 @@ output:
       expect(config.version).toBe('1.0');
       expect(config.checks).toHaveProperty('performance');
       expect(config.checks).toHaveProperty('security');
-      expect(config.output.pr_comment.format).toBe('table');
+      expect(config.output!.pr_comment.format).toBe('table');
     });
 
     it('should handle missing config file gracefully', async () => {
-      mockFs.existsSync.mockReturnValue(false);
+      (mockFs.readFileSync as any).mockImplementation(() => {
+        const err: any = new Error('ENOENT');
+        err.code = 'ENOENT';
+        throw err;
+      });
 
       await expect(configManager.loadConfig('/nonexistent/config.yaml')).rejects.toThrow(
         'Configuration file not found: /nonexistent/config.yaml'
@@ -91,6 +95,32 @@ output:
         'Failed to read configuration file'
       );
     });
+
+    it('should resolve relative paths to absolute paths', async () => {
+      const validConfig = `
+version: "1.0"
+checks:
+  test:
+    type: ai
+    prompt: "Test"
+`;
+
+      // Mock readFileSync to succeed when absolute path is used
+      (mockFs.readFileSync as any).mockImplementation((p: any) => {
+        if (!path.isAbsolute(p as string)) {
+          throw new Error('Expected absolute path');
+        }
+        return validConfig;
+      });
+
+      // Pass a relative path
+      await configManager.loadConfig('./test-config/.visor.yaml');
+
+      // Verify that readFileSync was called with an absolute path
+      expect(mockFs.readFileSync).toHaveBeenCalled();
+      const readCallArg = (mockFs.readFileSync as any).mock.calls[0][0] as string;
+      expect(path.isAbsolute(readCallArg)).toBe(true);
+    });
   });
 
   describe('Schema Validation', () => {
@@ -122,7 +152,7 @@ output:
       mockFs.readFileSync.mockReturnValue(configWithoutChecks);
 
       await expect(configManager.loadConfig('/path/to/config.yaml')).rejects.toThrow(
-        'Missing required field: checks'
+        'either "checks" or "steps" must be defined. "steps" is recommended for new configurations.'
       );
     });
 
@@ -141,8 +171,8 @@ checks:
       const config = await configManager.loadConfig('/path/to/config.yaml');
 
       // Should not throw - type defaults to 'ai'
-      expect(config.checks.performance.type).toBe('ai');
-      expect(config.checks.performance.prompt).toBe('Type defaults to ai');
+      expect(config.checks!.performance.type).toBe('ai');
+      expect(config.checks!.performance.prompt).toBe('Type defaults to ai');
     });
 
     it('should validate check type values', async () => {
@@ -159,7 +189,7 @@ checks:
       mockFs.readFileSync.mockReturnValue(configWithInvalidType);
 
       await expect(configManager.loadConfig('/path/to/config.yaml')).rejects.toThrow(
-        'Invalid check type "invalid_type". Must be: ai'
+        'Invalid check type "invalid_type"'
       );
     });
 
@@ -234,14 +264,14 @@ checks:
       const config = await configManager.loadConfig('/path/to/minimal.yaml');
 
       // Should have default output configuration
-      expect(config.output.pr_comment.format).toBe('markdown');
-      expect(config.output.pr_comment.group_by).toBe('check');
-      expect(config.output.pr_comment.collapse).toBe(true);
+      expect(config.output!.pr_comment.format).toBe('markdown');
+      expect(config.output!.pr_comment.group_by).toBe('check');
+      expect(config.output!.pr_comment.collapse).toBe(true);
     });
   });
 
   describe('Configuration File Discovery', () => {
-    it('should find .visor.yaml in current directory', async () => {
+    it('should find visor.yaml in current directory', async () => {
       const validConfig = `
 version: "1.0"
 checks:
@@ -254,18 +284,22 @@ checks:
       // Mock process.cwd() to return our test directory
       jest.spyOn(process, 'cwd').mockReturnValue(testConfigDir);
 
-      mockFs.existsSync.mockImplementation((filePath: any) => {
-        return filePath === path.join(testConfigDir, '.visor.yaml');
+      // Simulate presence of visor.yaml via statSync
+      const visorPath = path.join(testConfigDir, 'visor.yaml');
+      (mockFs.statSync as any).mockImplementation((p: any) => {
+        if (p === visorPath) {
+          return { isFile: () => true } as fs.Stats;
+        }
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       });
       mockFs.readFileSync.mockReturnValue(validConfig);
 
       const config = await configManager.findAndLoadConfig();
 
-      expect(mockFs.existsSync).toHaveBeenCalledWith(path.join(testConfigDir, '.visor.yaml'));
       expect(config.version).toBe('1.0');
     });
 
-    it('should find .visor.yml in current directory', async () => {
+    it('should find visor.yml in current directory', async () => {
       const validConfig = `
 version: "1.0"
 checks:
@@ -277,9 +311,14 @@ checks:
 
       jest.spyOn(process, 'cwd').mockReturnValue(testConfigDir);
 
-      mockFs.existsSync.mockImplementation((filePath: any) => {
-        // First check for .yaml fails, second check for .yml succeeds
-        return filePath === path.join(testConfigDir, '.visor.yml');
+      (mockFs.statSync as any).mockImplementation((p: any) => {
+        if (p === path.join(testConfigDir, 'visor.yaml')) {
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        }
+        if (p === path.join(testConfigDir, 'visor.yml')) {
+          return { isFile: () => true } as fs.Stats;
+        }
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       });
       mockFs.readFileSync.mockReturnValue(validConfig);
 
@@ -290,7 +329,14 @@ checks:
 
     it('should return default config when no file found', async () => {
       jest.spyOn(process, 'cwd').mockReturnValue(testConfigDir);
-      mockFs.existsSync.mockReturnValue(false);
+      // No user configs present
+      (mockFs.statSync as any).mockImplementation(() => {
+        const err: any = new Error('ENOENT');
+        err.code = 'ENOENT';
+        throw err;
+      });
+      // No bundled defaults present
+      (mockFs.existsSync as any).mockReturnValue(false);
 
       const config = await configManager.findAndLoadConfig();
 
@@ -434,11 +480,11 @@ output:
 
       const config = await configManager.loadConfig('/path/to/complex.yaml');
 
-      expect(config.checks.performance.prompt).toContain('N+1 database queries');
-      expect(config.checks.security.prompt).toContain('SQL injection');
-      expect(config.checks.architecture.prompt).toContain('SOLID principles');
-      expect(config.output.pr_comment.format).toBe('markdown');
-      expect(config.output.pr_comment.collapse).toBe(false);
+      expect(config.checks!.performance.prompt).toContain('N+1 database queries');
+      expect(config.checks!.security.prompt).toContain('SQL injection');
+      expect(config.checks!.architecture.prompt).toContain('SOLID principles');
+      expect(config.output!.pr_comment.format).toBe('markdown');
+      expect(config.output!.pr_comment.collapse).toBe(false);
     });
   });
 });

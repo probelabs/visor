@@ -10,11 +10,17 @@ describe('forEach raw array access E2E Tests', () => {
 
   // Helper function to execute CLI with clean environment
   const execCLI = (args: string[], options: any = {}): string => {
-    // Clear Jest environment variables so the CLI runs properly
-    const cleanEnv = { ...process.env };
+    // Clear Jest and Git environment variables so the CLI runs properly and
+    // cannot be affected by the parent repository's hook environment
+    const cleanEnv = { ...process.env } as NodeJS.ProcessEnv;
     delete cleanEnv.JEST_WORKER_ID;
     delete cleanEnv.NODE_ENV;
     delete cleanEnv.GITHUB_ACTIONS;
+    delete cleanEnv.GIT_DIR;
+    delete cleanEnv.GIT_WORK_TREE;
+    delete cleanEnv.GIT_INDEX_FILE;
+    delete cleanEnv.GIT_PREFIX;
+    delete cleanEnv.GIT_COMMON_DIR;
 
     // Merge options with clean environment
     const finalOptions = {
@@ -62,7 +68,7 @@ describe('forEach raw array access E2E Tests', () => {
     execSync('git config user.name "Test User"', { cwd: tempDir });
     fs.writeFileSync(path.join(tempDir, 'test.txt'), 'test');
     execSync('git add .', { cwd: tempDir });
-    execSync('git commit -q -m "initial"', { cwd: tempDir });
+    execSync('git -c core.hooksPath=/dev/null commit -q -m "initial"', { cwd: tempDir });
   });
 
   afterEach(() => {
@@ -118,7 +124,7 @@ output:
     });
 
     const output = JSON.parse(result || '{}');
-    const checkResult = output.default?.[0];
+    const checkResult = output['analyze-item']?.[0];
     const issues = checkResult?.issues || [];
 
     if (issues.length !== 3) {
@@ -197,7 +203,7 @@ output:
     });
 
     const output = JSON.parse(result || '{}');
-    const issues = output.default?.[0]?.issues || [];
+    const issues = output['compare-item']?.[0]?.issues || [];
 
     // Should have 3 issues
     if (issues.length !== 3) {
@@ -263,7 +269,7 @@ output:
     });
 
     const output = JSON.parse(result || '{}');
-    const checkResult = output.default?.[0] || {};
+    const checkResult = output['compare-item']?.[0] || {};
     const content = checkResult.content || '';
     expect(typeof content).toBe('string');
     expect(content).toContain('DIFF:base');
@@ -308,7 +314,7 @@ output:
     });
 
     const output = JSON.parse(result || '{}');
-    const issues = output.default?.[0]?.issues || [];
+    const issues = output['process-category']?.[0]?.issues || [];
 
     // Should have 2 issues
     if (issues.length !== 2) {

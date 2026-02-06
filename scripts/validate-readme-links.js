@@ -21,6 +21,8 @@ function read(file) {
 function makeSlugger() {
   const seen = new Map();
   return function slugify(raw) {
+    const original = String(raw);
+    const startsWithNonAlnum = /^[^a-zA-Z0-9]/.test(original.trimStart());
     // Normalize, strip markdown/HTML, remove emoji and diacritics, kebab-case
     let text = String(raw)
       .normalize('NFKD')
@@ -33,11 +35,11 @@ function makeSlugger() {
       .toLowerCase();
     // Allow word chars, spaces, and hyphens; drop the rest
     text = text
-      .replace(/[^a-z0-9_\s-]/g, '')
-      .replace(/[\s_]+/g, '-')
-      .replace(/-+/g, '-');
-    text = text.replace(/^-+/, '').replace(/-+$/, '');
-    let slug = text;
+      .replace(/[^a-z0-9_\s-]/g, '') // keep letters, numbers, spaces, underscores, hyphens
+      .replace(/_/g, '-') // underscores to hyphens (one-to-one)
+      .replace(/\s/g, '-'); // spaces to hyphens (one-to-one, preserves doubles)
+    // Do NOT collapse or trim hyphens: GitHub preserves leading and double hyphens
+    let slug = startsWithNonAlnum && !text.startsWith('-') ? `-${text}` : text;
     if (seen.has(slug)) {
       const n = seen.get(slug) + 1;
       seen.set(slug, n);
@@ -98,7 +100,9 @@ function main() {
   // Validate docs links
   const docLinks = links.filter(l => l.href.startsWith('docs/'));
   for (const l of docLinks) {
-    const file = path.join(ROOT, l.href);
+    // Strip anchor links (e.g., docs/file.md#section -> docs/file.md)
+    const filePathWithoutAnchor = l.href.split('#')[0];
+    const file = path.join(ROOT, filePathWithoutAnchor);
     if (!fs.existsSync(file)) {
       errors.push(`Missing doc file referenced from README: ${l.href}`);
     }
@@ -107,7 +111,8 @@ function main() {
   // Warn about docs that are not referenced
   if (fs.existsSync(DOCS_DIR)) {
     const allDocs = fs.readdirSync(DOCS_DIR).filter(f => f.endsWith('.md'));
-    const referenced = new Set(docLinks.map(l => path.basename(l.href)));
+    // Strip anchors from hrefs when checking references
+    const referenced = new Set(docLinks.map(l => path.basename(l.href.split('#')[0])));
     for (const f of allDocs) {
       if (!referenced.has(f)) {
         warnings.push(`Doc not referenced from README: docs/${f}`);

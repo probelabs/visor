@@ -6,6 +6,10 @@ branding:
   color: 'blue'
 
 inputs:
+  mode:
+    description: 'Run mode: github-actions or cli. Default: github-actions'
+    required: false
+    default: 'github-actions'
   github-token:
     description: 'GitHub token for API access (use this OR app-id/private-key)'
     required: false
@@ -29,7 +33,7 @@ inputs:
     default: 'true'
   
   checks:
-    description: 'Comma-separated list of checks to run (security,performance,style,architecture,all)'
+    description: 'Comma-separated list of checks to run (security,performance,architecture,quality,all)'
     required: false
     default: 'all'
   
@@ -47,14 +51,19 @@ inputs:
     description: 'Post review results as PR comment'
     required: false
     default: 'true'
-  
+
   create-check:
     description: 'Create GitHub check run with results'
     required: false
     default: 'true'
-  
+
   add-labels:
     description: 'Add quality labels to PR'
+    required: false
+    default: 'true'
+
+  add-reactions:
+    description: 'Add emoji reactions to PR/issues (eyes on start, thumbs up on completion)'
     required: false
     default: 'true'
 
@@ -96,7 +105,7 @@ inputs:
   tags:
     description: 'Include checks with these tags (comma-separated)'
     required: false
-    default: ''
+    default: 'github'
 
   exclude-tags:
     description: 'Exclude checks with these tags (comma-separated)'

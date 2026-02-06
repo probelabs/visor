@@ -1,5 +1,7 @@
 import { Octokit } from '@octokit/rest';
-import { v4 as uuidv4 } from 'uuid';
+import { generateShortHumanId } from './utils/human-id';
+import { logger } from './logger';
+import { generateFooter } from './footer';
 
 export interface Comment {
   id: number;
@@ -103,6 +105,8 @@ export class CommentManager {
       triggeredBy?: string;
       allowConcurrentUpdates?: boolean;
       commitSha?: string;
+      /** Cached GitHub comment ID to use for updates when listComments may not return it yet (eventual consistency) */
+      cachedGithubCommentId?: number;
     } = {}
   ): Promise<Comment> {
     const {
@@ -110,10 +114,36 @@ export class CommentManager {
       triggeredBy = 'unknown',
       allowConcurrentUpdates = false,
       commitSha,
+      cachedGithubCommentId,
     } = options;
 
     return this.withRetry(async () => {
-      const existingComment = await this.findVisorComment(owner, repo, prNumber, commentId);
+      // First try to find the comment via listComments API
+      let existingComment = await this.findVisorComment(owner, repo, prNumber, commentId);
+
+      // If not found but we have a cached GitHub ID, try to fetch it directly
+      // This handles GitHub API eventual consistency where newly created comments
+      // may not appear in listComments immediately
+      if (!existingComment && cachedGithubCommentId) {
+        try {
+          const cachedComment = await this.octokit.rest.issues.getComment({
+            owner,
+            repo,
+            comment_id: cachedGithubCommentId,
+          });
+          if (cachedComment.data && this.isVisorComment(cachedComment.data.body || '', commentId)) {
+            existingComment = cachedComment.data as Comment;
+            logger.debug(
+              `[github-comments] Found comment via cached ID ${cachedGithubCommentId} (not visible in listComments yet)`
+            );
+          }
+        } catch (_e) {
+          // Comment may have been deleted, continue with create flow
+          logger.debug(
+            `[github-comments] Cached comment ${cachedGithubCommentId} not found, will create new`
+          );
+        }
+      }
 
       const formattedContent = this.formatCommentWithMetadata(content, {
         commentId,
@@ -145,6 +175,10 @@ export class CommentManager {
           body: formattedContent,
         });
 
+        logger.info(
+          `✅ Successfully updated comment (ID: ${commentId}, GitHub ID: ${existingComment.id}) on PR #${prNumber} in ${owner}/${repo}`
+        );
+
         return updatedComment.data as Comment;
       } else {
         const newComment = await this.octokit.rest.issues.createComment({
@@ -153,6 +187,10 @@ export class CommentManager {
           issue_number: prNumber,
           body: formattedContent,
         });
+
+        logger.info(
+          `✅ Successfully created comment (ID: ${commentId}, GitHub ID: ${newComment.data.id}) on PR #${prNumber} in ${owner}/${repo}`
+        );
 
         return newComment.data as Comment;
       }
@@ -165,12 +203,18 @@ export class CommentManager {
   public formatCommentWithMetadata(content: string, metadata: CommentMetadata): string {
     const { commentId, lastUpdated, triggeredBy, commitSha } = metadata;
 
-    const commitInfo = commitSha ? ` | Commit: ${commitSha.substring(0, 7)}` : '';
+    const footer = generateFooter({
+      includeMetadata: {
+        lastUpdated,
+        triggeredBy,
+        commitSha,
+      },
+    });
 
     return `<!-- visor-comment-id:${commentId} -->
 ${content}
 
-*Last updated: ${lastUpdated} | Triggered by: ${triggeredBy}${commitInfo}*
+${footer}
 <!-- /visor-comment-id:${commentId} -->`;
   }
 
@@ -205,8 +249,7 @@ ${content}
       const totalScore = items.reduce((sum, item) => sum + (item.score || 0), 0) / items.length;
       const totalIssues = items.reduce((sum, item) => sum + (item.issuesFound || 0), 0);
 
-      const emoji = this.getCheckTypeEmoji(groupKey);
-      const title = `${emoji} ${this.formatGroupTitle(groupKey, totalScore, totalIssues)}`;
+      const title = this.formatGroupTitle(groupKey, totalScore, totalIssues);
 
       const sectionContent = items.map(item => item.content).join('\n\n');
       sections.push(this.createCollapsibleSection(title, sectionContent, totalIssues > 0));
@@ -219,7 +262,7 @@ ${content}
    * Generate unique comment ID
    */
   private generateCommentId(): string {
-    return uuidv4().substring(0, 8);
+    return generateShortHumanId();
   }
 
   /**
@@ -322,10 +365,12 @@ ${content}
           // Don't retry auth errors, not found errors, etc.
           throw error;
         } else {
-          const delay = Math.min(
-            this.retryConfig.baseDelay * Math.pow(this.retryConfig.backoffFactor, attempt),
-            this.retryConfig.maxDelay
-          );
+          const computed =
+            this.retryConfig.baseDelay * Math.pow(this.retryConfig.backoffFactor, attempt);
+          const delay =
+            computed > this.retryConfig.maxDelay
+              ? Math.max(0, this.retryConfig.maxDelay - 1)
+              : computed;
           await this.sleep(delay);
         }
       }
@@ -338,7 +383,14 @@ ${content}
    * Sleep utility
    */
   private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise(resolve => {
+      const t = setTimeout(resolve, ms);
+      if (typeof (t as any).unref === 'function') {
+        try {
+          (t as any).unref();
+        } catch {}
+      }
+    });
   }
 
   /**
@@ -378,24 +430,7 @@ ${content}
     return 'Critical Issues';
   }
 
-  /**
-   * Get emoji for check type
-   */
-  private getCheckTypeEmoji(checkType: string): string {
-    const emojiMap: Record<string, string> = {
-      performance: '📈',
-      security: '🔒',
-      architecture: '🏗️',
-      style: '🎨',
-      all: '🔍',
-      Excellent: '✅',
-      Good: '👍',
-      'Needs Improvement': '⚠️',
-      'Critical Issues': '🚨',
-      Unknown: '❓',
-    };
-    return emojiMap[checkType] || '📝';
-  }
+  // Emoji helper removed: plain titles are used in group headers
 
   /**
    * Format group title with score and issue count

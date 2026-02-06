@@ -10,10 +10,16 @@ describe('forEach with transform_js E2E Tests', () => {
 
   // Helper function to execute CLI with clean environment
   const execCLI = (args: string[], options: any = {}): string => {
-    const cleanEnv = { ...process.env };
+    const cleanEnv = { ...process.env } as NodeJS.ProcessEnv;
     delete cleanEnv.JEST_WORKER_ID;
     delete cleanEnv.NODE_ENV;
     delete cleanEnv.GITHUB_ACTIONS;
+    // Ensure git-related env from hooks cannot leak into the CLI process
+    delete cleanEnv.GIT_DIR;
+    delete cleanEnv.GIT_WORK_TREE;
+    delete cleanEnv.GIT_INDEX_FILE;
+    delete cleanEnv.GIT_PREFIX;
+    delete cleanEnv.GIT_COMMON_DIR;
 
     const finalOptions = {
       ...options,
@@ -64,7 +70,7 @@ describe('forEach with transform_js E2E Tests', () => {
     execSync('git config user.name "Test User"', { cwd: tempDir });
     fs.writeFileSync(path.join(tempDir, 'test.txt'), 'test');
     execSync('git add .', { cwd: tempDir });
-    execSync('git commit -q -m "initial"', { cwd: tempDir });
+    execSync('git -c core.hooksPath=/dev/null commit -q -m "initial"', { cwd: tempDir });
   });
 
   afterEach(() => {
@@ -133,11 +139,12 @@ output:
     }
 
     // Verify the check ran successfully
-    expect(output.default).toBeDefined();
-    expect(Array.isArray(output.default)).toBe(true);
-    expect(output.default.length).toBe(1); // Should be aggregated into one result
+    // With group_by: check, the check is grouped by its name
+    expect(output['analyze-ticket']).toBeDefined();
+    expect(Array.isArray(output['analyze-ticket'])).toBe(true);
+    expect(output['analyze-ticket'].length).toBe(1); // Should be aggregated into one result
 
-    const checkResult = output.default[0];
+    const checkResult = output['analyze-ticket'][0];
     expect(checkResult.checkName).toBe('analyze-ticket');
 
     // Check that no errors were reported
@@ -178,7 +185,7 @@ output:
     const result = execCLI(['--check', 'analyze-ticket', '--output', 'json'], { cwd: tempDir });
 
     const output = JSON.parse(result || '{}');
-    const checkResult = output.default[0];
+    const checkResult = output['analyze-ticket'][0];
     const content = checkResult.content || '';
 
     expect(content).toContain('TICKET:TT-101:high');
@@ -215,7 +222,7 @@ output:
     const result = execCLI(['--check', 'process-item', '--output', 'json'], { cwd: tempDir });
 
     const output = JSON.parse(result || '{}');
-    const checkResult = output.default[0];
+    const checkResult = output['process-item'][0];
     const content = checkResult.content || '';
 
     // Verify nested objects are properly accessed
@@ -253,7 +260,7 @@ output:
     const result = execCLI(['--check', 'process-single', '--output', 'json'], { cwd: tempDir });
 
     const output = JSON.parse(result);
-    const checkResult = output.default[0];
+    const checkResult = output['process-single'][0];
     const content = checkResult.content || '';
 
     // Should process the single item
@@ -296,9 +303,9 @@ output:
     const result = execCLI(['--check', 'summarize', '--output', 'json'], { cwd: tempDir });
 
     const output = JSON.parse(result);
-    expect(output.default).toBeDefined();
+    expect(output['summarize']).toBeDefined();
 
-    const checkResult = output.default[0];
+    const checkResult = output['summarize'][0];
     const content = checkResult.content || '';
 
     // Should contain summary with enriched data
@@ -337,8 +344,57 @@ output:
     const output = JSON.parse(result);
 
     // Should handle empty array without errors
-    expect(output.default).toBeDefined();
-    expect(Array.isArray(output.default)).toBe(true);
+    expect(output['process-empty']).toBeDefined();
+    expect(Array.isArray(output['process-empty'])).toBe(true);
+  });
+
+  it('should raise error on undefined forEach output and skip dependents', () => {
+    const configContent = `
+version: "1.0"
+checks:
+  fetch-undefined:
+    type: command
+    exec: |
+      echo '{"tickets":[{"key":"A-1"}]}'
+    transform_js: |
+      // Simulate a bug where transform returns nothing
+      const data = JSON.parse(output);
+      // forgot to return data.tickets;
+      // explicitly return undefined
+      return undefined;
+    forEach: true
+
+  analyze-bug:
+    type: command
+    depends_on: [fetch-undefined]
+    exec: |
+      echo "BUG: {{ outputs['fetch-undefined'].key }}"
+
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: false
+`;
+
+    fs.writeFileSync(path.join(tempDir, '.visor.yaml'), configContent);
+
+    const result = execCLI(['--check', 'analyze-bug', '--output', 'json', '--debug'], {
+      cwd: tempDir,
+    });
+
+    // JSON should still be well-formed
+    const jsonMatch = result.match(/\{[\s\S]*\}$/);
+    const jsonString = jsonMatch ? jsonMatch[0] : result;
+    const output = JSON.parse(jsonString);
+
+    // Only the requested check appears; it should not contain content from execution
+    const allChecks = Object.values(output).flat() as any[];
+    const check = allChecks.find((r: any) => r.checkName === 'analyze-bug');
+    expect(check).toBeDefined();
+    // Skipped dependent should not have produced command output
+    expect(check.content || '').toBe('');
+    expect(Array.isArray(check.issues)).toBe(true);
   });
 
   it('should properly aggregate issues from forEach dependent checks', () => {
@@ -375,7 +431,7 @@ output:
     const result = execCLI(['--check', 'check-file', '--output', 'json'], { cwd: tempDir });
 
     const output = JSON.parse(result);
-    const checkResult = output.default[0];
+    const checkResult = output['check-file'][0];
 
     // Should aggregate issues from all forEach iterations
     expect(checkResult.issues).toBeDefined();
@@ -423,7 +479,7 @@ output:
     const result = execCLI(['--check', 'analyze-post', '--output', 'json'], { cwd: tempDir });
 
     const output = JSON.parse(result);
-    const checkResult = output.default[0];
+    const checkResult = output['analyze-post'][0];
     const content = checkResult.content || '';
 
     // Should process all flattened posts
@@ -465,8 +521,9 @@ output:
       const output = JSON.parse(result);
 
       // Should handle the error and report it
-      expect(output.default).toBeDefined();
-      const checkResult = output.default.find(
+      // With group_by: check, each check is in its own group
+      const allChecks = Object.values(output).flat();
+      const checkResult = allChecks.find(
         (r: any) => r.checkName === 'fetch-invalid' || r.checkName === 'process-invalid'
       );
       expect(checkResult).toBeDefined();
@@ -506,9 +563,11 @@ output:
       const output = JSON.parse(result);
 
       // Should report the parse error
-      const fetchResult = output.default.find((r: any) => r.checkName === 'fetch-malformed');
+      // With group_by: check, each check is in its own group
+      const allChecks = Object.values(output).flat() as any[];
+      const fetchResult = allChecks.find((r: any) => r.checkName === 'fetch-malformed');
       expect(fetchResult).toBeDefined();
-      const issues = fetchResult?.issues || [];
+      const issues = (fetchResult as any)?.issues || [];
       expect(issues.length).toBeGreaterThan(0);
       expect(
         issues.some((i: any) => {

@@ -40,8 +40,29 @@ export class ConfigMerger {
       result.checks = this.mergeChecks(parent.checks || {}, child.checks);
     }
 
-    // Note: extends should not be in the final merged config
-    // It's only used during the loading process
+    // Merge steps as well (some configs provide only 'steps' and rely on normalization later)
+    // This preserves step definitions across extends chains before normalization.
+    if ((child as any).steps) {
+      const parentSteps = ((parent as any).steps || {}) as Record<string, CheckConfig>;
+      const childSteps = ((child as any).steps || {}) as Record<string, CheckConfig>;
+      (result as any).steps = this.mergeChecks(parentSteps, childSteps);
+    }
+
+    // Merge custom tools
+    if (child.tools) {
+      result.tools = this.mergeObjects(parent.tools || {}, child.tools);
+    }
+
+    // Merge workflow imports (concatenate arrays)
+    if (child.imports) {
+      const parentImports = parent.imports || [];
+      const childImports = child.imports || [];
+      // Combine and deduplicate
+      result.imports = [...new Set([...parentImports, ...childImports])];
+    }
+
+    // Note: extends/include should not be in the final merged config
+    // They are only used during the loading process
 
     return result;
   }

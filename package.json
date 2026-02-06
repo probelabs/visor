@@ -5,6 +5,20 @@
   "bin": {
     "visor": "./dist/index.js"
   },
+  "exports": {
+    ".": {
+      "require": "./dist/index.js",
+      "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/sdk.d.ts",
+      "import": "./dist/sdk/sdk.mjs",
+      "require": "./dist/sdk/sdk.js"
+    },
+    "./cli": {
+      "require": "./dist/index.js"
+    }
+  },
   "files": [
     "dist/",
     "defaults/",
@@ -17,17 +31,24 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build": "ncc build src/index.ts -o dist && cp -r defaults dist/ && node scripts/inject-version.js && echo '#!/usr/bin/env node' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js",
-    "test": "jest",
+    "build:cli": "ncc build src/index.ts -o dist && cp -r defaults dist/ && cp -r output dist/ && cp -r docs dist/ && cp -r examples dist/ && cp -r src/debug-visualizer/ui dist/debug-visualizer/ && node scripts/inject-version.js && echo '#!/usr/bin/env node' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js",
+    "build:sdk": "tsup src/sdk.ts --dts --sourcemap --format esm,cjs --out-dir dist/sdk",
+    "build": "npm run build:cli && npm run build:sdk",
+    "test": "jest && npm run test:yaml",
     "prepublishOnly": "npm run build",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
+    "test:manual:bash": "RUN_MANUAL_TESTS=true jest tests/manual/bash-config-manual.test.ts",
     "lint": "eslint src tests --ext .ts",
     "lint:fix": "eslint src tests --ext .ts --fix",
     "format": "prettier --write src tests",
     "format:check": "prettier --check src tests",
     "clean": "",
-    "prebuild": "npm run clean",
+    "prebuild": "npm run clean && node scripts/generate-config-schema.js",
+    "pretest": "node scripts/generate-config-schema.js && npm run build:cli",
+    "test:with-build": "npm run build:cli && jest",
+    "test:yaml": "node dist/index.js test --progress compact",
+    "test:yaml:parallel": "node dist/index.js test --progress compact --max-parallel 4",
     "prepare": "husky",
     "pre-commit": "lint-staged",
     "deploy:site": "cd site && npx wrangler pages deploy . --project-name=visor-site --commit-dirty=true",
@@ -45,7 +66,9 @@
     "workshop:pdf": "reveal-md workshop/slides.md --print workshop/Visor-Workshop.pdf --print-size letter",
     "workshop:pdf:ci": "reveal-md workshop/slides.md --print workshop/Visor-Workshop.pdf --print-size letter --puppeteer-launch-args=\"--no-sandbox --disable-dev-shm-usage\"",
     "workshop:pdf:a4": "reveal-md workshop/slides.md --print workshop/Visor-Workshop-A4.pdf --print-size A4",
-    "workshop:build": "npm run workshop:export && npm run workshop:pdf"
+    "workshop:build": "npm run workshop:export && npm run workshop:pdf",
+    "simulate:issue": "TS_NODE_TRANSPILE_ONLY=1 ts-node scripts/simulate-gh-run.ts --event issues --action opened --debug",
+    "simulate:comment": "TS_NODE_TRANSPILE_ONLY=1 ts-node scripts/simulate-gh-run.ts --event issue_comment --action created --debug"
   },
   "keywords": [
     "code-review",
@@ -68,30 +91,55 @@
   "homepage": "https://github.com/probelabs/visor#readme",
   "dependencies": {
     "@actions/core": "^1.11.1",
-    "@nyariv/sandboxjs": "^0.8.25",
+    "@modelcontextprotocol/sdk": "^1.25.3",
+    "@nyariv/sandboxjs": "github:probelabs/SandboxJS#f1c13b8eee98734a8ea024061eada4aa9a9ff2e9",
     "@octokit/action": "^8.0.2",
     "@octokit/auth-app": "^8.1.0",
     "@octokit/core": "^7.0.3",
     "@octokit/rest": "^22.0.0",
-    "@probelabs/probe": "^0.6.0-rc115",
+    "@probelabs/probe": "^0.6.0-rc226",
     "@types/commander": "^2.12.0",
     "@types/uuid": "^10.0.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "blessed": "^0.1.81",
     "cli-table3": "^0.6.5",
     "commander": "^14.0.0",
+    "dotenv": "^17.2.3",
+    "ignore": "^7.0.5",
     "js-yaml": "^4.1.0",
     "liquidjs": "^10.21.1",
     "node-cron": "^3.0.3",
+    "open": "^9.1.0",
     "simple-git": "^3.28.0",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "ws": "^8.18.3"
+  },
+  "optionalDependencies": {
+    "@anthropic/claude-code-sdk": "npm:null@*",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^1.30.1",
+    "@opentelemetry/exporter-trace-otlp-grpc": "^0.203.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.203.0",
+    "@opentelemetry/instrumentation": "^0.203.0",
+    "@opentelemetry/resources": "^1.30.1",
+    "@opentelemetry/sdk-metrics": "^1.30.1",
+    "@opentelemetry/sdk-node": "^0.203.0",
+    "@opentelemetry/sdk-trace-base": "^1.30.1",
+    "@opentelemetry/semantic-conventions": "^1.30.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",
     "@kie/act-js": "^2.6.2",
     "@kie/mock-github": "^2.0.1",
+    "@swc/core": "^1.13.2",
+    "@swc/jest": "^0.2.37",
+    "@types/blessed": "^0.1.27",
     "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.3.0",
     "@types/node-cron": "^3.0.11",
+    "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.42.0",
     "@typescript-eslint/parser": "^8.42.0",
     "@vercel/ncc": "^0.38.4",
@@ -103,20 +151,14 @@
     "lint-staged": "^16.1.6",
     "prettier": "^3.6.2",
     "reveal-md": "^6.1.2",
-    "ts-jest": "^29.4.1",
+    "ts-json-schema-generator": "^1.5.1",
     "ts-node": "^10.9.2",
+    "tsup": "^8.5.0",
     "typescript": "^5.9.2",
     "wrangler": "^3.0.0"
   },
-  "peerDependencies": {
-    "@anthropic/claude-code-sdk": "^1.0.0",
-    "@modelcontextprotocol/sdk": "^1.0.0"
-  },
   "peerDependenciesMeta": {
     "@anthropic/claude-code-sdk": {
-      "optional": true
-    },
-    "@modelcontextprotocol/sdk": {
       "optional": true
     }
   },

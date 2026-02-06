@@ -8,13 +8,17 @@ Visor supports tagging checks to create flexible execution profiles. This lets y
 2. Filter execution using `--tags` and `--exclude-tags`
 3. Dependencies adapt intelligently based on what’s included
 
+Note on defaults
+- If you do NOT provide any tag filter (no `--tags`/`--exclude-tags` and no `tag_filter` in config), Visor only runs untagged checks. Any check that has `tags: [...]` is skipped by default. This keeps day‑to‑day runs lightweight and makes tagged groups opt‑in.
+- To run tagged checks, explicitly include their tags (for example, `--tags github,security`).
+
 ### Basic Configuration
 
 ```yaml
 # .visor.yaml
 version: "1.0"
 
-checks:
+steps:
   # Fast, local security check
   security-quick:
     type: ai
@@ -125,28 +129,67 @@ jobs:
 
 ### Advanced Examples
 
-#### Environment-Specific Execution
+#### Default behavior vs. explicit tags
+
+By default (no tag filter provided), only untagged checks execute. To include tagged checks, specify them explicitly:
+
+```bash
+# Default (no flags): only untagged checks
+visor
+
+# Include github-tagged checks (e.g., GitHub operations)
+visor --tags github
+
+# Include multiple tag groups
+visor --tags github,security
+```
+
+In the test runner, you can mirror this behavior with the tests DSL (see [Testing DSL Reference](./testing/dsl-reference.md)):
 
 ```yaml
-# Development environment - fast feedback
-development:
-  extends: .visor.yaml
-  tag_filter:
-    include: ["local", "fast"]
-    exclude: ["experimental"]
+# defaults/.visor.tests.yaml
+tests:
+  defaults:
+    # Run GitHub-tagged checks during tests
+    tags: "github"
+```
 
-# Staging environment - balanced
-staging:
-  extends: .visor.yaml
-  tag_filter:
-    include: ["remote", "security", "performance"]
-    exclude: ["experimental"]
+#### Environment-Specific Execution
 
-# Production environment - comprehensive
-production:
-  extends: .visor.yaml
-  tag_filter:
-    include: ["remote", "comprehensive", "critical"]
+Create separate config files for each environment:
+
+```yaml
+# .visor.dev.yaml - Development environment (fast feedback)
+version: "1.0"
+extends: .visor.yaml
+tag_filter:
+  include: ["local", "fast"]
+  exclude: ["experimental"]
+```
+
+```yaml
+# .visor.staging.yaml - Staging environment (balanced)
+version: "1.0"
+extends: .visor.yaml
+tag_filter:
+  include: ["remote", "security", "performance"]
+  exclude: ["experimental"]
+```
+
+```yaml
+# .visor.prod.yaml - Production environment (comprehensive)
+version: "1.0"
+extends: .visor.yaml
+tag_filter:
+  include: ["remote", "comprehensive", "critical"]
+```
+
+Then use the appropriate config file:
+
+```bash
+visor --config .visor.dev.yaml      # Development
+visor --config .visor.staging.yaml  # Staging
+visor --config .visor.prod.yaml     # Production
 ```
 
 #### Multi-Stage Pipeline
@@ -192,7 +235,7 @@ jobs:
 When using tags with dependencies, Visor intelligently handles missing dependencies:
 
 ```yaml
-checks:
+steps:
   data-validation:
     type: ai
     prompt: "Validate data structures"
@@ -219,6 +262,24 @@ checks:
 - Examples: `local`, `test-env`, `feature_flag`, `v2`
 - Invalid: `-invalid`, `@special`, `tag with spaces`
 
+### SDK Usage
+
+Tag filtering is also available when using Visor programmatically via the SDK:
+
+```typescript
+import { run } from '@probelabs/visor';
+
+const result = await run({
+  config: './visor.yaml',
+  tagFilter: {
+    include: ['local', 'fast'],
+    exclude: ['experimental']
+  }
+});
+```
+
+See [SDK Documentation](./sdk.md) for complete API reference.
+
 ### Best Practices
 
 1. Use consistent naming conventions across your organization
@@ -228,3 +289,10 @@ checks:
 5. Use tag combinations for fine-grained control
 6. Test tag filters before deploying broadly
 
+### Related Documentation
+
+- [Configuration](./configuration.md) - Full configuration reference
+- [CLI Commands](./commands.md) - CLI flag reference including `--tags` and `--exclude-tags`
+- [GitHub Action Reference](./action-reference.md) - GitHub Action inputs for tag filtering
+- [Testing DSL Reference](./testing/dsl-reference.md) - Tag filtering in test suites
+- [SDK Documentation](./sdk.md) - Programmatic tag filtering

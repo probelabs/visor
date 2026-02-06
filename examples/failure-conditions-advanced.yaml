@@ -27,7 +27,7 @@ failure_conditions:
     severity: error
     halt_execution: true
 
-checks:
+steps:
   # Security check with complex conditions
   security-comprehensive:
     type: ai
@@ -110,12 +110,6 @@ checks:
     on: [pr_opened, pr_updated]
 
     failure_conditions:
-      # Suggestion-based conditions
-      missing_docs:
-        condition: 'hasSuggestion(output.suggestions, "documentation")'
-        message: "Documentation improvements suggested"
-        severity: warning
-
       # Complex style rules
       style_quality:
         condition: |

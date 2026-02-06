@@ -12,7 +12,7 @@ describe('Schema-Template Integration Tests', () => {
   let ajv: Ajv;
 
   beforeAll(() => {
-    // Register a mock provider once for all tests
+    // Register a mock provider once for all tests (new-style provider with execute)
     const mockAIProvider = {
       async executeCheck(checkId: string, _prInfo: unknown, _config: unknown) {
         if (checkId === 'security') {
@@ -79,10 +79,23 @@ graph TD
 
     const registry = CheckProviderRegistry.getInstance();
     try {
+      // Minimal adapter to the current CheckProvider interface
       registry.register({
         getName: () => 'mock-ai',
-        executeCheck: mockAIProvider.executeCheck,
-      } as never);
+        getDescription: () => 'Mock AI provider for integration tests',
+        async validateConfig() {
+          return true;
+        },
+        async execute(prInfo: any, config: any) {
+          // In dependency-aware mode, check id comes from the configured step id
+          const stepId = typeof config?.checkName === 'string' ? config.checkName : config?.type;
+          return mockAIProvider.executeCheck(stepId || 'full-review', prInfo, config);
+        },
+        getSupportedConfigKeys: () => [],
+        async isAvailable() {
+          return true;
+        },
+      } as any);
     } catch {
       // Provider already registered, ignore
     }

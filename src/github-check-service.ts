@@ -5,6 +5,7 @@
 import { Octokit } from '@octokit/rest';
 import { FailureConditionResult } from './types/config';
 import { ReviewIssue } from './reviewer';
+import { generateFooter } from './footer';
 
 export interface CheckRunOptions {
   owner: string;
@@ -13,6 +14,7 @@ export interface CheckRunOptions {
   name: string;
   details_url?: string;
   external_id?: string;
+  engine_mode?: 'legacy' | 'state-machine'; // M4: Track which engine mode was used
 }
 
 export interface CheckRunAnnotation {
@@ -53,12 +55,22 @@ export class GitHubCheckService {
 
   /**
    * Create a new check run in queued status
+   * M4: Includes engine_mode metadata in summary
    */
   async createCheckRun(
     options: CheckRunOptions,
     summary?: CheckRunSummary
   ): Promise<{ id: number; url: string }> {
     try {
+      // M4: Add engine mode metadata to summary if provided
+      const enhancedSummary =
+        summary && options.engine_mode
+          ? {
+              ...summary,
+              summary: `${summary.summary}\n\n_Engine: ${options.engine_mode}_`,
+            }
+          : summary;
+
       const response = await this.octokit.rest.checks.create({
         owner: options.owner,
         repo: options.repo,
@@ -67,11 +79,11 @@ export class GitHubCheckService {
         status: 'queued',
         details_url: options.details_url,
         external_id: options.external_id,
-        output: summary
+        output: enhancedSummary
           ? {
-              title: summary.title,
-              summary: summary.summary,
-              text: summary.text,
+              title: enhancedSummary.title,
+              summary: enhancedSummary.summary,
+              text: enhancedSummary.text,
             }
           : undefined,
       });
@@ -153,11 +165,16 @@ export class GitHubCheckService {
         executionError
       );
 
+      // Filter out system-level issues (fail_if conditions, internal errors)
+      // These should not appear as annotations but affect the check conclusion
+      let filteredIssues = reviewIssues.filter(
+        issue => !(issue.file === 'system' && issue.line === 0)
+      );
+
       // Filter annotations to only include files changed in this commit
       // This prevents old annotations from previous commits showing up in the Files tab
-      let filteredIssues = reviewIssues;
       if (filesChangedInCommit && filesChangedInCommit.length > 0) {
-        filteredIssues = reviewIssues.filter(issue =>
+        filteredIssues = filteredIssues.filter(issue =>
           filesChangedInCommit.some(changedFile => issue.file === changedFile)
         );
       }
@@ -312,20 +329,21 @@ export class GitHubCheckService {
       const passedConditions = failureResults.filter(result => !result.failed);
 
       if (failedConditions.length > 0) {
-        sections.push('### ❌ Failed Conditions');
+        sections.push('### Failed Conditions');
         failedConditions.forEach(condition => {
           sections.push(
             `- **${condition.conditionName}**: ${condition.message || condition.expression}`
           );
-          if (condition.severity === 'error') {
-            sections.push(`  - ⚠️ **Severity:** Error`);
+          if (condition.severity) {
+            const icon = this.getSeverityEmoji(condition.severity);
+            sections.push(`  - Severity: ${icon} ${condition.severity}`);
           }
         });
         sections.push('');
       }
 
       if (passedConditions.length > 0) {
-        sections.push('### ✅ Passed Conditions');
+        sections.push('### Passed Conditions');
         passedConditions.forEach(condition => {
           sections.push(
             `- **${condition.conditionName}**: ${condition.message || 'Condition passed'}`
@@ -338,18 +356,18 @@ export class GitHubCheckService {
     // Issues by category section
     if (reviewIssues.length > 0) {
       const issuesByCategory = this.groupIssuesByCategory(reviewIssues);
-      sections.push('## 🐛 Issues by Category');
+      sections.push('## Issues by Category');
 
       Object.entries(issuesByCategory).forEach(([category, issues]) => {
         if (issues.length > 0) {
           sections.push(
-            `### ${this.getCategoryEmoji(category)} ${category.charAt(0).toUpperCase() + category.slice(1)} (${issues.length})`
+            `### ${category.charAt(0).toUpperCase() + category.slice(1)} (${issues.length})`
           );
 
           // Show only first 5 issues per category to keep the summary concise
           const displayIssues = issues.slice(0, 5);
           displayIssues.forEach(issue => {
-            const severityIcon = this.getSeverityIcon(issue.severity);
+            const severityIcon = this.getSeverityEmoji(issue.severity);
             sections.push(`- ${severityIcon} **${issue.file}:${issue.line}** - ${issue.message}`);
           });
 
@@ -363,11 +381,7 @@ export class GitHubCheckService {
 
     // Footer
     sections.push('');
-    sections.push('---');
-    sections.push('');
-    sections.push(
-      '*Generated by [Visor](https://github.com/probelabs/visor) - AI-powered code review*'
-    );
+    sections.push(generateFooter());
 
     return sections.join('\n');
   }
@@ -423,32 +437,16 @@ export class GitHubCheckService {
   }
 
   /**
-   * Get emoji for issue category
+   * Get emoji for issue severity (allowed; step/category emojis are removed)
    */
-  private getCategoryEmoji(category: string): string {
-    const emojiMap: Record<string, string> = {
-      security: '🔐',
-      performance: '⚡',
-      style: '🎨',
-      logic: '🧠',
-      architecture: '🏗️',
-      documentation: '📚',
-      general: '📝',
-    };
-    return emojiMap[category.toLowerCase()] || '📝';
-  }
-
-  /**
-   * Get icon for issue severity
-   */
-  private getSeverityIcon(severity: string): string {
+  private getSeverityEmoji(severity: string): string {
     const iconMap: Record<string, string> = {
       critical: '🚨',
       error: '❌',
       warning: '⚠️',
       info: 'ℹ️',
     };
-    return iconMap[severity.toLowerCase()] || 'ℹ️';
+    return iconMap[String(severity || '').toLowerCase()] || '';
   }
 
   /**

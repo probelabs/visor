@@ -1,34 +1,50 @@
-## 🤖 Claude Code Provider
+## Claude Code Provider
 
-Visor includes advanced integration with Claude Code SDK, providing powerful AI-driven code analysis with MCP (Model Context Protocol) tools and subagent support.
+Visor includes advanced integration with the Claude Code SDK, providing powerful AI-driven code analysis with MCP (Model Context Protocol) tools and subagent support.
 
 ### Features
 
-- Advanced AI Analysis: Leverages Claude Code's sophisticated understanding
-- MCP Tools: Built-in and custom tools for specialized analysis
-- Subagents: Delegate specific tasks to specialized agents
-- Streaming Responses: Real-time feedback during analysis
-- Flexible Permissions: Granular control over tool usage
+- **Advanced AI Analysis**: Leverages Claude Code's sophisticated understanding
+- **MCP Tools**: Custom tools for specialized analysis via MCP servers
+- **Subagents**: Delegate specific tasks to specialized agents
+- **Session Reuse**: Continue conversations across dependent checks
+- **Flexible Permissions**: Granular control over tool usage
 
-### Configuration
+### Configuration Options
+
+The `claude_code` configuration block supports the following options:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `allowedTools` | `string[]` | List of tool names Claude can use (e.g., `['Grep', 'Read', 'WebSearch']`) |
+| `maxTurns` | `number` | Maximum conversation turns (default: 5) |
+| `systemPrompt` | `string` | Custom system prompt for the analysis |
+| `mcpServers` | `object` | MCP server configurations (see below) |
+| `subagent` | `string` | Path to a subagent definition file |
+| `hooks` | `object` | Lifecycle hooks (`onStart`, `onEnd`, `onError`) |
+
+### Basic Example
 
 ```yaml
-checks:
-  claude_comprehensive:
+steps:
+  claude_security_review:
     type: claude-code
-    prompt: "Perform a comprehensive security and performance review"
-    tags: ["comprehensive", "security", "performance", "slow", "remote"]
+    prompt: "Perform a comprehensive security review"
     claude_code:
       allowedTools: ['Grep', 'Read', 'WebSearch']
       maxTurns: 5
       systemPrompt: "You are an expert security auditor"
+```
 
+### Example with MCP Servers
+
+```yaml
+steps:
   claude_with_mcp:
     type: claude-code
     prompt: "Analyze code complexity and architecture"
-    tags: ["architecture", "complexity", "comprehensive", "remote"]
     claude_code:
-      allowedTools: ['analyze_file_structure', 'calculate_complexity']
+      allowedTools: ['Read', 'Grep', 'custom_tool']
       mcpServers:
         custom_analyzer:
           command: "node"
@@ -37,38 +53,92 @@ checks:
             ANALYSIS_MODE: "deep"
 ```
 
-### Built-in MCP Tools
+### MCP Server Configuration
 
-- analyze_file_structure: Analyzes project organization
-- detect_patterns: Identifies code patterns and anti-patterns
-- calculate_complexity: Computes complexity metrics
-- suggest_improvements: Provides improvement recommendations
+Each MCP server entry supports:
 
-### Custom MCP Servers
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| `command` | `string` | Yes | The command to spawn the MCP server |
+| `args` | `string[]` | No | Command line arguments |
+| `env` | `object` | No | Environment variables for the server process |
 
-Create `.mcp.json` in your project root:
+### Subagents
 
-```json
-{
-  "mcpServers": {
-    "security_scanner": {
-      "command": "python",
-      "args": ["./tools/security_scanner.py"],
-      "env": {
-        "SCAN_DEPTH": "full"
-      }
-    }
-  }
-}
+Use the `subagent` option to delegate tasks to specialized agents:
+
+```yaml
+steps:
+  claude_comprehensive:
+    type: claude-code
+    prompt: "Perform a comprehensive code review"
+    claude_code:
+      subagent: "./.claude/agents/code-reviewer.md"
+      maxTurns: 10
 ```
 
-### Environment Setup
+### Hooks
+
+Lifecycle hooks allow custom processing at different stages:
+
+```yaml
+steps:
+  claude_with_hooks:
+    type: claude-code
+    prompt: "Review the code"
+    claude_code:
+      hooks:
+        onStart: "echo 'Starting review'"
+        onEnd: "echo 'Review complete'"
+        onError: "./scripts/handle-error.sh"
+```
+
+### Session Reuse
+
+Reuse Claude Code sessions across dependent checks for context continuity:
+
+```yaml
+steps:
+  initial_analysis:
+    type: claude-code
+    prompt: "Analyze the code structure"
+    claude_code:
+      maxTurns: 3
+
+  follow_up:
+    type: claude-code
+    prompt: "Based on the previous analysis, suggest improvements"
+    depends_on: [initial_analysis]
+    reuse_ai_session: true
+```
+
+### Environment Variables
+
+The provider requires an API key via one of these environment variables:
 
 ```bash
-# Install Claude Code CLI (required)
-npm install -g @anthropic-ai/claude-code
-
-# Set API key (optional - uses local Claude Code if available)
+# Option 1: Claude Code specific key
 export CLAUDE_CODE_API_KEY=your-api-key
+
+# Option 2: General Anthropic API key
+export ANTHROPIC_API_KEY=your-api-key
 ```
+
+### Required Dependencies
+
+Install the Claude Code SDK:
+
+```bash
+npm install @anthropic/claude-code-sdk @modelcontextprotocol/sdk
+```
+
+### Complete Example
+
+See [examples/claude-code-config.yaml](../examples/claude-code-config.yaml) for a comprehensive configuration example.
+
+### Related Documentation
+
+- [MCP Support for AI Providers](./mcp.md) - General MCP configuration
+- [AI Configuration](./ai-configuration.md) - Standard AI provider configuration
+- [Configuration](./configuration.md) - General configuration reference
 

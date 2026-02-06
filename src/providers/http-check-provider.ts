@@ -4,6 +4,13 @@ import { ReviewSummary, ReviewIssue } from '../reviewer';
 import { IssueFilter } from '../issue-filter';
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
+import { trace, context as otContext } from '../telemetry/lazy-otel';
+import {
+  captureCheckInputContext,
+  captureCheckOutput,
+  captureProviderCall,
+} from '../telemetry/state-capture';
+import { EnvironmentResolver } from '../utils/env-resolver';
 
 /**
  * Check provider that sends data to an HTTP endpoint, typically used as an output/notification provider
@@ -90,6 +97,16 @@ export class HttpCheckProvider extends CheckProvider {
       metadata: config.metadata || {},
     };
 
+    // Capture input context in active OTEL span
+    try {
+      const span = trace.getSpan(otContext.active());
+      if (span) {
+        captureCheckInputContext(span, templateContext);
+      }
+    } catch {
+      // Ignore telemetry errors
+    }
+
     // Render the body template
     let payload: Record<string, unknown>;
     try {
@@ -110,8 +127,17 @@ export class HttpCheckProvider extends CheckProvider {
     }
 
     try {
+      // Resolve environment variables in headers
+      const resolvedHeaders = EnvironmentResolver.resolveHeaders(headers);
+
       // Send webhook request
-      const response = await this.sendWebhookRequest(url, method, headers, payload, timeout);
+      const response = await this.sendWebhookRequest(
+        url,
+        method,
+        resolvedHeaders,
+        payload,
+        timeout
+      );
 
       // Parse webhook response
       const result = this.parseWebhookResponse(response, url);
@@ -121,10 +147,38 @@ export class HttpCheckProvider extends CheckProvider {
       const issueFilter = new IssueFilter(suppressionEnabled);
       const filteredIssues = issueFilter.filterIssues(result.issues || [], process.cwd());
 
-      return {
+      const finalResult = {
         ...result,
         issues: filteredIssues,
       };
+
+      // Capture HTTP provider call and output in active OTEL span
+      try {
+        const span = trace.getSpan(otContext.active());
+        if (span) {
+          // Sanitize headers for telemetry to avoid exposing sensitive data
+          const sanitizedHeaders = EnvironmentResolver.sanitizeHeaders(resolvedHeaders);
+          captureProviderCall(
+            span,
+            'http',
+            {
+              url,
+              method,
+              headers: sanitizedHeaders,
+              body: JSON.stringify(payload).substring(0, 500),
+            },
+            {
+              content: JSON.stringify(response).substring(0, 500),
+            }
+          );
+          const outputForSpan = (finalResult as { output?: unknown }).output ?? finalResult;
+          captureCheckOutput(span, outputForSpan);
+        }
+      } catch {
+        // Ignore telemetry errors
+      }
+
+      return finalResult;
     } catch (error) {
       return this.createErrorResult(url, error);
     }

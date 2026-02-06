@@ -8,7 +8,7 @@ ai_provider: google
 ai_model: gemini-1.5-flash
 
 # All available checks with comprehensive tagging
-checks:
+steps:
   # ====================
   # Security Checks
   # ====================

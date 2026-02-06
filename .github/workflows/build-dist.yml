@@ -12,52 +12,79 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: build-dist-main
+      cancel-in-progress: true
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
         with:
           node-version: '20'
-          cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          rm -rf node_modules package-lock.json
+          npm install
+          # Explicitly install rollup platform-specific binary
+          npm install --no-save @rollup/rollup-linux-x64-gnu
+
+      - name: Remove dist before build (ensure clean bundle)
+        run: rm -rf dist
 
       - name: Build project
         run: npm run build
 
-      - name: Bundle action
+      - name: Clean transient artifacts from dist (avoid committing runtime noise)
         run: |
-          # Install ncc to bundle the action
-          npm install -g @vercel/ncc
+          # Remove debug and trace artifacts that can be produced by local/test runs
+          rm -rf dist/debug-artifacts || true
+          rm -rf dist/traces || true
+          # Remove any nested traces directories (e.g., dist/output/traces)
+          find dist -type d -name traces -prune -exec rm -rf {} + || true
+          # Remove sanitized temp configs and debug trace files if present
+          find dist -type f -name '.visor-config-sanitized-*.yaml' -delete || true
+          find dist -type f -name 'trace-*.jsonl' -delete || true
 
-          # Bundle the main action file with all dependencies
-          ncc build dist/index.js -o bundled --license licenses.txt
+      - name: Prepare bundled directory
+        run: |
+          # Note: dist/index.js is already bundled by ncc during build:cli
+          # We just need to organize files for GitHub Actions deployment
+          mkdir -p bundled
 
-          # Copy the tiktoken WASM file to the bundled directory
-          # This is needed because ncc doesn't automatically include WASM files
-          if [ -f node_modules/tiktoken/tiktoken_bg.wasm ]; then
-            cp node_modules/tiktoken/tiktoken_bg.wasm bundled/tiktoken_bg.wasm
-            echo "✅ Copied tiktoken_bg.wasm to bundle"
-          else
-            echo "⚠️  Warning: tiktoken_bg.wasm not found - token counting may fail"
+          # Copy the main bundled file
+          cp dist/index.js bundled/index.js
+
+          # Copy additional required files
+          if [ -d dist/defaults ]; then
+            cp -r dist/defaults bundled/
+            echo "✅ Copied defaults to bundle"
           fi
 
-          # Copy schema files to the bundled directory
-          # ncc doesn't automatically include JSON schema files
-          if [ -d output ]; then
-            cp -r output bundled/
-            echo "✅ Copied output schemas to bundle"
-          else
-            echo "⚠️  Warning: output schemas not found - validation may fail"
+          # Copy schema files if they exist
+          if [ -d dist/generated ]; then
+            cp -r dist/generated bundled/
+            echo "✅ Copied generated schemas to bundle"
           fi
 
-      - name: Update dist files
+          if [ -d dist/output ]; then
+            # Copy output folder but ensure no transient traces are present
+            rsync -a --delete --exclude 'traces/**' dist/output/ bundled/output/
+            echo "✅ Copied output schemas to bundle (traces excluded)"
+          fi
+
+          # Copy SDK build artifacts
+          if [ -d dist/sdk ]; then
+            cp -r dist/sdk bundled/
+            echo "✅ Copied SDK build artifacts to bundle"
+          fi
+
+      - name: Update dist files and commit to main
         run: |
           # Configure git
           git config --local user.email "action@github.com"
@@ -74,35 +101,47 @@ jobs:
 
           # Copy bundled files to dist/ directory
           cp bundled/index.js dist/
-          cp bundled/licenses.txt dist/ 2>/dev/null || true
 
-          # Copy tiktoken WASM file if it exists
-          if [ -f bundled/tiktoken_bg.wasm ]; then
-            cp bundled/tiktoken_bg.wasm dist/tiktoken_bg.wasm
-            echo "✅ Copied tiktoken_bg.wasm to dist/"
+          # Copy additional files if they exist
+          if [ -d bundled/defaults ]; then
+            cp -r bundled/defaults dist/
+            echo "✅ Copied defaults to dist/"
+          fi
+
+          if [ -d bundled/generated ]; then
+            cp -r bundled/generated dist/
+            echo "✅ Copied generated schemas to dist/"
           fi
 
           # Copy schema files if they exist
           if [ -d bundled/output ]; then
-            cp -r bundled/output dist/
+            rsync -a --delete bundled/output/ dist/output/
             echo "✅ Copied output schemas to dist/"
+          fi
+
+          # Copy SDK build artifacts if they exist
+          if [ -d bundled/sdk ]; then
+            cp -r bundled/sdk dist/
+            echo "✅ Copied SDK build artifacts to dist/"
           fi
 
           # Add bundled files to git (force add since dist/ is in .gitignore)
           git add -f dist/
 
-          # Check if there are changes to commit
+          # Commit and push only if there are changes
           if ! git diff --cached --quiet; then
-            git commit --no-verify -m "$(cat <<'EOF'
-          build: update bundled dist files
-
-          🤖 Generated with [Claude Code](https://claude.ai/code)
-
-          Co-Authored-By: Claude <noreply@anthropic.com>
-          EOF
-          )"
+            git commit --no-verify -m "build: update bundled dist files"
             git push origin main
-            echo "✅ Bundled files updated"
+            echo "✅ Bundled files updated on main"
           else
             echo "ℹ️ No changes to dist files"
           fi
+
+      - name: Mirror current commit to nightly
+        run: |
+          # Push the same commit to nightly so it always mirrors main (with dist)
+          CURRENT_SHA=$(git rev-parse HEAD)
+          echo "Mirroring commit $CURRENT_SHA to nightly"
+          # Create/force-update nightly to the current HEAD
+          git push --force-with-lease origin HEAD:refs/heads/nightly
+          echo "✅ Nightly updated"

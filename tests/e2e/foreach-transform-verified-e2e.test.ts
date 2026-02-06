@@ -10,11 +10,17 @@ describe('forEach with transform_js E2E Verification Tests', () => {
 
   // Helper function to execute CLI with clean environment
   const execCLI = (args: string[], options: any = {}): string => {
-    // Clear Jest environment variables so the CLI runs properly
-    const cleanEnv = { ...process.env };
+    // Clear Jest and Git environment variables so the CLI runs properly and
+    // cannot be affected by the parent repository's hook environment
+    const cleanEnv = { ...process.env } as NodeJS.ProcessEnv;
     delete cleanEnv.JEST_WORKER_ID;
     delete cleanEnv.NODE_ENV;
     delete cleanEnv.GITHUB_ACTIONS;
+    delete cleanEnv.GIT_DIR;
+    delete cleanEnv.GIT_WORK_TREE;
+    delete cleanEnv.GIT_INDEX_FILE;
+    delete cleanEnv.GIT_PREFIX;
+    delete cleanEnv.GIT_COMMON_DIR;
 
     // Merge options with clean environment
     const finalOptions = {
@@ -59,7 +65,7 @@ describe('forEach with transform_js E2E Verification Tests', () => {
     execSync('git config user.name "Test User"', { cwd: tempDir });
     fs.writeFileSync(path.join(tempDir, 'test.txt'), 'test');
     execSync('git add .', { cwd: tempDir });
-    execSync('git commit -q -m "initial"', { cwd: tempDir });
+    execSync('git -c core.hooksPath=/dev/null commit -q -m "initial"', { cwd: tempDir });
   });
 
   afterEach(() => {
@@ -105,11 +111,11 @@ output:
     const output = JSON.parse(result || '{}');
 
     // Verify the check ran successfully
-    expect(output.default).toBeDefined();
-    expect(Array.isArray(output.default)).toBe(true);
-    expect(output.default.length).toBeGreaterThan(0);
+    expect(output['analyze-ticket']).toBeDefined();
+    expect(Array.isArray(output['analyze-ticket'])).toBe(true);
+    expect(output['analyze-ticket'].length).toBeGreaterThan(0);
 
-    const checkResult = output.default[0];
+    const checkResult = output['analyze-ticket'][0];
     expect(checkResult.checkName).toBe('analyze-ticket');
 
     // Verify we got issues from both forEach iterations
@@ -166,7 +172,7 @@ output:
     });
 
     const output = JSON.parse(result || '{}');
-    const checkResult = output.default?.[0];
+    const checkResult = output['validate-data']?.[0];
     const issues = checkResult?.issues || [];
 
     // Should have 2 issues
@@ -227,7 +233,7 @@ output:
     });
 
     const output = JSON.parse(result || '{}');
-    const issues = output.default?.[0]?.issues || [];
+    const issues = output['process-item']?.[0]?.issues || [];
 
     // Should have 3 issues (a1, a2, b1)
     expect(issues.length).toBe(3);
@@ -271,7 +277,7 @@ output:
     });
 
     const output = JSON.parse(result || '{}');
-    const checkResult = output.default?.[0];
+    const checkResult = output['process-empty']?.[0];
 
     // Should have no issues since forEach had empty array
     expect(checkResult?.issues || []).toEqual([]);
@@ -312,7 +318,8 @@ output:
     const output = JSON.parse(result || '{}');
 
     // Should report the transform_js error
-    const fetchResult = output.default?.find((r: any) => r.checkName === 'fetch-invalid');
+    const allChecks = Object.values(output).flat() as any[];
+    const fetchResult = allChecks.find((r: any) => r.checkName === 'fetch-invalid');
     expect(fetchResult).toBeDefined();
     expect(fetchResult.issues).toBeDefined();
     expect(fetchResult.issues.length).toBeGreaterThan(0);
@@ -361,7 +368,7 @@ output:
     });
 
     const output = JSON.parse(result || '{}');
-    const issues = output.default?.[0]?.issues || [];
+    const issues = output['scan-file']?.[0]?.issues || [];
 
     // Should have 3 total issues (2 from file1.js, 1 from file2.js, 0 from file3.js)
     expect(issues.length).toBe(3);

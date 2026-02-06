@@ -5,8 +5,16 @@ import { HttpInputProvider } from './http-input-provider';
 import { HttpClientProvider } from './http-client-provider';
 import { NoopCheckProvider } from './noop-check-provider';
 import { LogCheckProvider } from './log-check-provider';
+import { GitHubOpsProvider } from './github-ops-provider';
 import { ClaudeCodeCheckProvider } from './claude-code-check-provider';
 import { CommandCheckProvider } from './command-check-provider';
+import { MemoryCheckProvider } from './memory-check-provider';
+import { McpCheckProvider } from './mcp-check-provider';
+import { HumanInputCheckProvider } from './human-input-check-provider';
+import { ScriptCheckProvider } from './script-check-provider';
+import { WorkflowCheckProvider } from './workflow-check-provider';
+import { GitCheckoutProvider } from './git-checkout-provider';
+import { CustomToolDefinition } from '../types/config';
 
 /**
  * Registry for managing check providers
@@ -14,6 +22,7 @@ import { CommandCheckProvider } from './command-check-provider';
 export class CheckProviderRegistry {
   private providers: Map<string, CheckProvider> = new Map();
   private static instance: CheckProviderRegistry;
+  private customTools?: Record<string, CustomToolDefinition>;
 
   private constructor() {
     // Register default providers
@@ -37,11 +46,17 @@ export class CheckProviderRegistry {
     // Register all built-in providers
     this.register(new AICheckProvider());
     this.register(new CommandCheckProvider());
+    this.register(new ScriptCheckProvider());
     this.register(new HttpCheckProvider());
     this.register(new HttpInputProvider());
     this.register(new HttpClientProvider());
     this.register(new NoopCheckProvider());
     this.register(new LogCheckProvider());
+    this.register(new MemoryCheckProvider());
+    this.register(new GitHubOpsProvider());
+    this.register(new HumanInputCheckProvider());
+    this.register(new WorkflowCheckProvider());
+    this.register(new GitCheckoutProvider());
 
     // Try to register ClaudeCodeCheckProvider - it may fail if dependencies are missing
     try {
@@ -49,6 +64,22 @@ export class CheckProviderRegistry {
     } catch (error) {
       console.error(
         `Warning: Failed to register ClaudeCodeCheckProvider: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+    }
+
+    // Try to register McpCheckProvider - it may fail if dependencies are missing
+    try {
+      const mcpProvider = new McpCheckProvider();
+      // Set custom tools if available
+      if (this.customTools) {
+        mcpProvider.setCustomTools(this.customTools);
+      }
+      this.register(mcpProvider);
+    } catch (error) {
+      console.error(
+        `Warning: Failed to register McpCheckProvider: ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
       );
@@ -121,6 +152,19 @@ export class CheckProviderRegistry {
    */
   getAllProviders(): CheckProvider[] {
     return Array.from(this.providers.values());
+  }
+
+  /**
+   * Set custom tools that can be used by the MCP provider
+   */
+  setCustomTools(tools: Record<string, CustomToolDefinition>): void {
+    this.customTools = tools;
+
+    // Update MCP provider if already registered
+    const mcpProvider = this.providers.get('mcp') as McpCheckProvider | undefined;
+    if (mcpProvider) {
+      mcpProvider.setCustomTools(tools);
+    }
   }
 
   /**

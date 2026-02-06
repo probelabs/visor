@@ -3,18 +3,36 @@ import { CommandCheckProvider } from '../../src/providers/command-check-provider
 import { CheckProviderConfig } from '../../src/providers/check-provider.interface';
 import { PRInfo } from '../../src/pr-analyzer';
 import { ReviewSummary } from '../../src/reviewer';
+import { CommandExecutionResult, CommandExecutionOptions } from '../../src/utils/command-executor';
 
-// Mock child_process
-const mockExec = jest.fn() as jest.MockedFunction<any>;
-const mockPromisify = jest.fn().mockReturnValue(mockExec);
+// First, create the mock functions with the factory pattern
+jest.mock('../../src/utils/command-executor', () => {
+  const mockExecute =
+    jest.fn<
+      (command: string, options?: CommandExecutionOptions) => Promise<CommandExecutionResult>
+    >();
+  const mockBuildEnvironment = jest.fn().mockReturnValue({});
 
-jest.mock('child_process', () => ({
-  exec: jest.fn(),
-}));
+  return {
+    commandExecutor: {
+      execute: mockExecute,
+      buildEnvironment: mockBuildEnvironment,
+    },
+    // Export mocks for test access
+    __mockExecute: mockExecute,
+    __mockBuildEnvironment: mockBuildEnvironment,
+  };
+});
 
-jest.mock('util', () => ({
-  promisify: mockPromisify,
-}));
+// Import the mocked module to get the mock functions
+const mockModule = jest.requireMock('../../src/utils/command-executor') as {
+  __mockExecute: jest.MockedFunction<
+    (command: string, options?: CommandExecutionOptions) => Promise<CommandExecutionResult>
+  >;
+  __mockBuildEnvironment: jest.MockedFunction<() => Record<string, string>>;
+};
+const mockExecute = mockModule.__mockExecute;
+// mockBuildEnvironment is defined but not used in tests
 
 /**
  * Test: forEach with Custom Schema Integration
@@ -69,9 +87,10 @@ describe('forEach with Custom Schema Integration', () => {
       ],
     } as ReviewSummary & { output: unknown });
 
-    mockExec.mockResolvedValue({
+    mockExecute.mockResolvedValue({
       stdout: 'test\n',
       stderr: '',
+      exitCode: 0,
     });
 
     const result = await provider.execute(mockPRInfo, config, dependencyResults);

@@ -4,6 +4,12 @@ on:
   pull_request:
     branches: [main, master]
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  checks: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -19,13 +25,18 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: 'npm'
+          # cache: 'npm' # Disabled due to rollup optional dependency bug
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          # Use npm ci for reproducible builds from package-lock.json
+          rm -rf node_modules
+          npm ci
+          # Explicitly install rollup platform-specific binary for Linux
+          npm install --no-save @rollup/rollup-linux-x64-gnu
 
-      - name: Build package (skip pre/post scripts)
-        run: npm run build --ignore-scripts
+      - name: Build package
+        run: npm run build
 
       - name: Lint code
         run: npm run lint
@@ -40,6 +51,7 @@ jobs:
         run: npm test
         env:
           CI: true
+          NODE_OPTIONS: --max-old-space-size=6144
 
       - name: Test CLI
         run: |
@@ -51,3 +63,31 @@ jobs:
           npm pack
           ls -la *.tgz
           echo "✅ Package can be created successfully"
+
+      # Visor YAML tests run as part of `npm test` via test:yaml.
+      # Artifacts are still uploaded below from ./output.
+
+      - name: Upload integration test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visor-test-results
+          path: |
+            output/visor-tests.json
+            output/visor-tests.xml
+            output/visor-tests.md
+
+      - name: Test basic action functionality
+        uses: ./
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          owner: 'octocat'
+          repo: 'Hello-World'
+          ai-model: 'mock'
+          ai-provider: 'mock'
+          config-path: '.visor.test.yaml'
+          comment-on-pr: 'false'
+          add-reactions: 'false'
+
+  # Consolidated scenario tests into the main 'test' job to avoid duplication.
+  # If you need to split later, prefer a matrix or a reusable workflow.

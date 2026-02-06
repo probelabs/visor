@@ -1,0 +1,20 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 999,
+    "title": "Test issue",
+    "body": "Issue body",
+    "user": {
+      "login": "tester"
+    },
+    "labels": [],
+    "assignees": [],
+    "state": "open"
+  },
+  "repository": {
+    "owner": {
+      "login": "local"
+    },
+    "name": "visor"
+  }
+}

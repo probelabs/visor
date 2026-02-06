@@ -1,0 +1,14 @@
+version: '1.0'
+steps:
+  step-one:
+    type: ai
+    prompt: Step prompt
+checks:
+  check-one:
+    type: command
+    exec: echo test
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true

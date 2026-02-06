@@ -1,0 +1,126 @@
+# Example Visor configuration demonstrating bash command execution in AI checks
+version: "1.0"
+
+# Global AI provider configuration
+ai_provider: anthropic
+ai_model: claude-3-sonnet
+
+steps:
+  # Example 1: Simple - Enable bash with default safe commands
+  git-status-analysis:
+    type: ai
+    prompt: |
+      Analyze the current git repository status:
+      - Check for uncommitted changes
+      - Review the current branch
+      - List recent commits
+      - Identify any potential issues
+    ai:
+      provider: anthropic
+      model: claude-3-opus
+      allowBash: true  # Simple one-line enable
+    on: ["pr_opened", "pr_updated"]
+    tags: ["git", "analysis"]
+
+  # Example 2: Advanced - Custom allow/deny lists for npm commands
+  npm-audit-check:
+    type: ai
+    prompt: |
+      Run npm audit and analyze the security vulnerabilities:
+      - Check for high/critical vulnerabilities
+      - Review outdated dependencies
+      - Suggest remediation steps
+    ai:
+      provider: google
+      model: gemini-2.0-flash-exp
+      allowBash: true
+      bashConfig:
+        allow:
+          - 'npm audit --json'
+          - 'npm outdated --json'
+          - 'npm list --depth=0'
+        timeout: 60000  # 60 second timeout
+    on: ["pr_opened"]
+    tags: ["security", "npm"]
+
+  # Example 3: Advanced - Test execution with custom config
+  test-runner-analysis:
+    type: ai
+    prompt: |
+      Run the test suite and analyze the results:
+      - Execute all tests
+      - Identify failing tests
+      - Review code coverage
+      - Suggest improvements
+    ai:
+      provider: anthropic
+      allowBash: true
+      bashConfig:
+        allow:
+          - 'npm test'
+          - 'npm run test:coverage'
+        deny:
+          - 'npm install'  # Explicitly block installation
+        timeout: 300000  # 5 minute timeout for tests
+        workingDirectory: '.'
+    on: ["pr_opened", "pr_updated"]
+    tags: ["tests", "coverage"]
+
+  # Example 4: Advanced - Build and lint with timeouts
+  build-lint-check:
+    type: ai
+    prompt: |
+      Run build and lint checks:
+      - Execute the build process
+      - Run ESLint
+      - Check TypeScript compilation
+      - Review any errors or warnings
+    ai:
+      provider: openai
+      model: gpt-4
+      allowBash: true
+      bashConfig:
+        allow:
+          - 'npm run build'
+          - 'npm run lint'
+          - 'tsc --noEmit'
+        timeout: 180000  # 3 minute timeout
+    on: ["pr_opened"]
+    tags: ["build", "lint"]
+
+  # Example 5: Expert - Custom commands only (no defaults)
+  custom-commands-only:
+    type: ai
+    prompt: "Run custom analysis commands with strict control"
+    ai:
+      provider: anthropic
+      allowBash: true
+      bashConfig:
+        noDefaultAllow: true  # Disable default safe commands
+        noDefaultDeny: false  # Keep dangerous command blocklist
+        allow:
+          - 'custom-tool analyze'
+          - 'custom-tool report'
+        timeout: 30000
+    on: ["manual"]
+    tags: ["custom", "advanced"]
+
+  # Example 6: Simple - File system analysis with defaults
+  filesystem-analysis:
+    type: ai
+    prompt: |
+      Analyze the project file structure:
+      - List all source files
+      - Check file sizes
+      - Review directory structure
+      - Identify any organizational issues
+    ai:
+      provider: anthropic
+      allowBash: true  # Uses default safe commands (ls, find, etc.)
+    on: ["pr_opened"]
+    tags: ["filesystem", "structure"]
+
+output:
+  pr_comment:
+    enabled: true
+    group_by: check

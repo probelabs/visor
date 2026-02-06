@@ -11,6 +11,7 @@ Visor uses [LiquidJS](https://liquidjs.com/) for templating in prompts, commands
   - `pr.title` - PR title
   - `pr.body` - PR description
   - `pr.author` - PR author username
+  - `pr.authorAssociation` - Author's association (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, etc.)
   - `pr.baseBranch` - Target branch
   - `pr.headBranch` - Source branch
   - `pr.totalAdditions` - Lines added
@@ -26,7 +27,9 @@ Visor uses [LiquidJS](https://liquidjs.com/) for templating in prompts, commands
 - `event` - GitHub event context (varies by trigger)
 
 - `outputs` - Results from dependency checks (Map)
-  - Access with: `outputs.checkName`
+  - Access current value: `outputs.checkName`
+  - Access history: `outputs.history.checkName` - Array of all previous outputs from this check
+  - See [Output History](./output-history.md) for detailed usage in loops, retries, and forEach
 
 - `env` - Safe environment variables
 
@@ -100,18 +103,6 @@ The `json` filter serializes objects to JSON strings, useful for debugging or pa
 # Debug output object
 {{ outputs | json }}
 
-### Auto‑JSON Access
-
-When a dependency’s output is a JSON string, Visor exposes it as an object automatically in templates:
-
-```liquid
-# If `fetch-tickets` printed '{"tickets":[{"key":"TT-101"}]}'
-Ticket key: {{ outputs['fetch-tickets'].tickets[0].key }}  
-# No JSON.parse required
-```
-
-If the underlying value is plain text, it behaves as a normal string.
-
 # Debug specific check output
 {{ outputs.security | json }}
 
@@ -125,6 +116,68 @@ echo '{{ pr | json }}' | jq .
   "outputs": {{ outputs | json }}
 }
 ```
+
+### Author Permission Filters
+
+> **📖 For complete documentation, see [Author Permissions Guide](./author-permissions.md)**
+
+Check the PR author's permission level in Liquid templates using filters:
+
+```liquid
+# Check if author has at least MEMBER permission
+{% if pr.authorAssociation | has_min_permission: "MEMBER" %}
+  Running quick scan for trusted member...
+{% else %}
+  Running full security scan for external contributor...
+{% endif %}
+
+# Check specific permission levels
+{% if pr.authorAssociation | is_owner %}
+  🎖️ Repository owner
+{% elsif pr.authorAssociation | is_member %}
+  👥 Organization member
+{% elsif pr.authorAssociation | is_collaborator %}
+  🤝 Collaborator
+{% elsif pr.authorAssociation | is_first_timer %}
+  🎉 First-time contributor - Welcome!
+{% endif %}
+
+# Use in prompts
+{% if pr.authorAssociation | is_member %}
+  Review this PR from team member {{ pr.author }}.
+  Focus on logic and design patterns.
+{% else %}
+  Review this PR from external contributor {{ pr.author }}.
+  Pay extra attention to security and best practices.
+{% endif %}
+
+# Conditional commands
+{% if pr.authorAssociation | has_min_permission: "COLLABORATOR" %}
+gh pr review --approve
+{% else %}
+gh pr review --comment --body "Thanks! A maintainer will review soon."
+{% endif %}
+```
+
+**Available filters:**
+- `has_min_permission: "LEVEL"` - Check if >= permission level
+- `is_owner` - Repository owner
+- `is_member` - Organization member or owner
+- `is_collaborator` - Collaborator or higher
+- `is_contributor` - Has contributed before
+- `is_first_timer` - First-time contributor
+
+### Auto‑JSON Access
+
+When a dependency's output is a JSON string, Visor exposes it as an object automatically in templates:
+
+```liquid
+# If `fetch-tickets` printed '{"tickets":[{"key":"TT-101"}]}'
+Ticket key: {{ outputs['fetch-tickets'].tickets[0].key }}
+# No JSON.parse required
+```
+
+If the underlying value is plain text, it behaves as a normal string.
 
 ### String Filters
 
@@ -145,6 +198,223 @@ echo '{{ pr | json }}' | jq .
 {{ files | map: "filename" }}   # Array of filenames
 ```
 
+### Encoding Filters
+
+```liquid
+# Base64 encoding/decoding
+{{ "user:password" | base64 }}           # Encode to base64
+{{ encoded_value | base64_decode }}       # Decode from base64
+
+# JSON escaping (for use inside JSON string values)
+"jql": "{{ myValue | json_escape }}"
+```
+
+### Shell Escaping Filters
+
+For safely passing values to shell commands:
+
+```liquid
+# Single-quote escaping (recommended, POSIX-compliant)
+{{ value | shell_escape }}         # "hello'world" becomes "'hello'\''world'"
+{{ value | escape_shell }}         # Alias for shell_escape
+
+# Double-quote escaping (less safe, use when needed)
+{{ value | shell_escape_double }}  # Escapes $, `, \, ", and !
+```
+
+### Utility Filters
+
+```liquid
+# Safe nested access using dot-path
+{{ obj | get: 'a.b.c' }}           # Access nested property safely
+
+# Check if value is non-empty
+{% if items | not_empty %}         # True for non-empty arrays/strings/objects
+  Has items
+{% endif %}
+
+# Pick first non-empty value
+{{ a | coalesce: b, c }}           # Returns first non-empty value
+
+# Expression-based array filtering (Shopify-style)
+{{ items | where_exp: 'i', 'i.is_valid == true' }}
+
+# String manipulation
+{{ value | unescape_newlines }}    # Convert "\n" to actual newlines
+```
+
+### Label Sanitization Filters
+
+For safely formatting labels (only allows `[A-Za-z0-9:/\- ]`):
+
+```liquid
+{{ label | safe_label }}           # Sanitize a single label
+{{ labels | safe_label_list }}     # Sanitize an array of labels
+```
+
+### Memory Store Filters
+
+Access the persistent memory store from templates:
+
+```liquid
+# Get a value from memory
+{{ "my-key" | memory_get }}
+{{ "my-key" | memory_get: "namespace" }}
+
+# Check if a key exists
+{% if "my-key" | memory_has %}
+  Key exists in memory
+{% endif %}
+
+# List all keys in a namespace
+{{ "namespace" | memory_list }}
+```
+
+### Chat History Helper
+
+The `chat_history` filter turns one or more check histories into a linear, timestamp‑sorted chat transcript. This is especially useful for human‑input + AI chat flows (Slack, CLI, etc.).
+
+Basic usage:
+
+```liquid
+{% assign history = '' | chat_history: 'ask', 'reply' %}
+{% for m in history %}
+  {{ m.role | capitalize }}: {{ m.text }}
+{% endfor %}
+```
+
+Each `history` item has:
+
+- `m.step`  – originating check name (e.g. `"ask"`, `"reply"`)
+- `m.role`  – logical role (`"user"` or `"assistant"` by default)
+- `m.text`  – normalized text (from `.text` / `.content` / fallback field)
+- `m.ts`    – timestamp used for ordering
+- `m.raw`   – original `outputs_history[step][i]` object
+
+By default:
+
+- Human input checks (`type: human-input`) map to `role: "user"`.
+- AI checks (`type: ai`) map to `role: "assistant"`.
+- Messages are sorted by `ts` ascending across all steps.
+
+Advanced options (all optional, passed as keyword arguments):
+
+```liquid
+{% assign history = '' | chat_history:
+  'ask',
+  'reply',
+  direction: 'asc',          # or 'desc' (default: 'asc')
+  limit: 50,                 # keep at most N messages (after sorting)
+  text: {
+    default_field: 'text',   # which field to prefer when .text/.content missing
+    by_step: {
+      'summary': 'summary.text'  # use nested path for specific steps
+    }
+  },
+  roles: {
+    by_type: {
+      'human-input': 'user',
+      'ai': 'assistant'
+    },
+    by_step: {
+      'system-note': 'system'
+    },
+    default: 'assistant'
+  },
+  role_map: 'ask=user,reply=assistant'  # compact per-step override
+%}
+```
+
+Precedence for `role` resolution:
+
+1. `role_map` / `roles.by_step[step]` (explicit step override)
+2. `roles.by_type[checkType]` (e.g. `'human-input'`, `'ai'`)
+3. Built‑in defaults: `human-input → user`, `ai → assistant`
+4. `roles.default` if provided
+5. Fallback: `"assistant"`
+
+Examples:
+
+```liquid
+{%- assign history = '' | chat_history: 'ask', 'reply' -%}
+{%- for m in history -%}
+  {{ m.role }}: {{ m.text }}
+{%- endfor -%}
+```
+
+```liquid
+{%- assign history = '' | chat_history: 'ask', 'clarify', 'reply', direction: 'desc', limit: 5 -%}
+{%- for m in history -%}
+  [{{ m.step }}][{{ m.role }}] {{ m.text }}
+{%- endfor -%}
+```
+
+<!-- Removed merge_sort_by example: filter no longer provided -->
+
+### Conversation Context (Slack, GitHub, etc.)
+
+For transport‑aware prompts, Visor exposes a normalized `conversation` object in Liquid
+for AI checks:
+
+```liquid
+{% if conversation %}
+  Transport: {{ conversation.transport }}   {# 'slack', 'github', ... #}
+  Thread: {{ conversation.thread.id }}
+  {% if conversation.thread.url %}
+    Link: {{ conversation.thread.url }}
+  {% endif %}
+
+  {% for m in conversation.messages %}
+    {{ m.user }} ({{ m.role }} at {{ m.timestamp }}): {{ m.text }}
+  {% endfor %}
+
+  Latest:
+  {{ conversation.current.user }} ({{ conversation.current.role }}): {{ conversation.current.text }}
+{% endif %}
+```
+
+Contract:
+
+- `conversation.transport` – transport identifier (`'slack'`, `'github'`, etc.)
+- `conversation.thread.id` – stable thread key:
+  - Slack: `"channel:thread_ts"`
+  - GitHub: `"owner/repo#number"`
+- `conversation.thread.url` – optional deep link (Slack thread or GitHub PR/issue URL)
+- `conversation.messages[]` – full history as normalized messages:
+  - `role`: `'user' | 'bot'`
+  - `user`: Slack user id or GitHub login
+  - `text`: message body
+  - `timestamp`: message timestamp
+  - `origin`: e.g. `'visor'` for bot messages, `'github'` for GitHub messages
+- `conversation.current` – message that triggered the current run (same shape as above)
+- `conversation.attributes` – extra metadata (e.g. `channel`, `thread_ts`, `owner`, `repo`, `number`, `event_name`, `action`)
+
+Transport‑specific helpers:
+
+- Slack:
+  - `slack.event` – raw Slack event payload (channel, ts, text, etc.)
+  - `slack.conversation` – same structure as `conversation` for Slack runs
+- GitHub:
+  - `event` – GitHub event metadata and payload (unchanged)
+  - A normalized GitHub conversation is also attached so `conversation.transport == 'github'`
+    reflects the PR/issue body and comment history.
+
+You can combine `conversation` with `chat_history`:
+
+```liquid
+{% assign history = '' | chat_history: 'ask', 'reply' %}
+{% if conversation and conversation.transport == 'slack' %}
+  # Slack thread:
+  {% for m in conversation.messages %}
+    {{ m.user }}: {{ m.text }}
+  {% endfor %}
+{% endif %}
+
+{% for m in history %}
+  [{{ m.step }}][{{ m.role }}] {{ m.text }}
+{% endfor %}
+```
+
 ## Examples
 
 ### Debugging Outputs
@@ -152,7 +422,7 @@ echo '{{ pr | json }}' | jq .
 When you see `[Object]` in your templates, use the `json` filter:
 
 ```yaml
-checks:
+steps:
   debug-outputs:
     type: log
     message: |
@@ -180,7 +450,7 @@ checks:
 ### Safe Command Execution
 
 ```yaml
-checks:
+steps:
   analyze-with-tool:
     type: command
     exec: |
@@ -195,7 +465,7 @@ checks:
 ### Transform Responses
 
 ```yaml
-checks:
+steps:
   http-webhook:
     type: http_input
     transform: |
@@ -238,7 +508,7 @@ Environment: {{ env | json }}
 When using `transform_js` or conditions (`if`, `fail_if`), use the `log()` function:
 
 ```yaml
-checks:
+steps:
   my-check:
     type: command
     exec: curl -s https://api.example.com/data

@@ -1,6 +1,7 @@
-import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
+import { CheckProvider, CheckProviderConfig, ExecutionContext } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
+// eslint-disable-next-line no-restricted-imports -- needed for Liquid type
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { logger } from '../logger';
@@ -62,7 +63,7 @@ export class LogCheckProvider extends CheckProvider {
     prInfo: PRInfo,
     config: CheckProviderConfig,
     dependencyResults?: Map<string, ReviewSummary>,
-    _sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
+    context?: ExecutionContext
   ): Promise<ReviewSummary> {
     const message = config.message as string;
     const level = (config.level as LogLevel) || 'info';
@@ -76,7 +77,10 @@ export class LogCheckProvider extends CheckProvider {
       dependencyResults,
       includePrContext,
       includeDependencies,
-      includeMetadata
+      includeMetadata,
+      config.__outputHistory as Map<string, unknown[]> | undefined,
+      context,
+      config
     );
 
     // Render the log message template
@@ -98,12 +102,20 @@ export class LogCheckProvider extends CheckProvider {
     else if (level === 'debug') logger.debug(logOutput);
     else logger.info(logOutput);
 
-    // Return with the log content as custom data for dependent checks
-    return {
+    // Return with the log content as custom data for dependent checks.
+    // For chat-style logs (group: chat), also expose a structured
+    // `output.text` field so frontends like Slack can post a clean
+    // human-facing message without the level prefix.
+    const summary: ReviewSummary & { logOutput: string; output?: unknown } = {
       issues: [],
-      // Add log output as custom field
       logOutput,
-    } as ReviewSummary & { logOutput: string };
+    };
+
+    if ((config as any).group === 'chat') {
+      (summary as any).output = { text: renderedMessage };
+    }
+
+    return summary;
   }
 
   private buildTemplateContext(
@@ -111,7 +123,10 @@ export class LogCheckProvider extends CheckProvider {
     dependencyResults?: Map<string, ReviewSummary>,
     _includePrContext: boolean = true,
     _includeDependencies: boolean = true,
-    includeMetadata: boolean = true
+    includeMetadata: boolean = true,
+    outputHistory?: Map<string, unknown[]>,
+    executionContext?: ExecutionContext,
+    config?: CheckProviderConfig
   ): Record<string, unknown> {
     const context: Record<string, unknown> = {};
 
@@ -142,9 +157,12 @@ export class LogCheckProvider extends CheckProvider {
     if (dependencyResults) {
       const dependencies: Record<string, unknown> = {};
       const outputs: Record<string, unknown> = {};
+      const outputsRaw: Record<string, unknown> = {};
+      const history: Record<string, unknown[]> = {};
       context.dependencyCount = dependencyResults.size;
 
       for (const [checkName, result] of dependencyResults.entries()) {
+        if (typeof checkName !== 'string') continue;
         dependencies[checkName] = {
           issueCount: result.issues?.length || 0,
           suggestionCount: 0,
@@ -153,11 +171,30 @@ export class LogCheckProvider extends CheckProvider {
 
         // Add outputs namespace for accessing dependency results directly
         const summary = result as import('../reviewer').ReviewSummary & { output?: unknown };
-        outputs[checkName] = summary.output !== undefined ? summary.output : summary;
+        if (typeof checkName === 'string' && checkName.endsWith('-raw')) {
+          const name = checkName.slice(0, -4);
+          outputsRaw[name] = summary.output !== undefined ? summary.output : summary;
+        } else {
+          outputs[checkName] = summary.output !== undefined ? summary.output : summary;
+        }
       }
+
+      // Add history for each check if available
+      if (outputHistory) {
+        for (const [checkName, historyArray] of outputHistory) {
+          history[checkName] = historyArray;
+        }
+      }
+
+      // Attach history to the outputs object
+      (outputs as any).history = history;
 
       context.dependencies = dependencies;
       context.outputs = outputs;
+      // Alias: outputs_history mirrors outputs.history for consistency
+      (context as any).outputs_history = history;
+      // New: outputs_raw exposes aggregate values (e.g., arrays) for forEach parents
+      (context as any).outputs_raw = outputsRaw;
     }
 
     if (includeMetadata) {
@@ -169,6 +206,15 @@ export class LogCheckProvider extends CheckProvider {
         workingDirectory: process.cwd(),
       };
     }
+
+    // Add workflow inputs if available
+    // Check config first (set by projectWorkflowToGraph), then fall back to executionContext
+    const workflowInputs =
+      (config as any)?.workflowInputs || executionContext?.workflowInputs || {};
+    logger.debug(
+      `[LogProvider] Adding ${Object.keys(workflowInputs).length} workflow inputs to context`
+    );
+    context.inputs = workflowInputs;
 
     return context;
   }

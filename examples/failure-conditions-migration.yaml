@@ -24,7 +24,7 @@ failure_conditions:
     severity: error
     halt_execution: true
 
-checks:
+steps:
   # Migrated security check with failure conditions
   security:
     type: ai

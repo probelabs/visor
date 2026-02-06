@@ -1,0 +1,6 @@
+version: '1.0'
+output:
+  pr_comment:
+    format: markdown
+    group_by: check
+    collapse: true

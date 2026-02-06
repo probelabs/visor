@@ -1,10 +1,16 @@
 # Failure Routing (Retry/Goto/Remediate) — RFC
 
-Status: Draft
+Status: **Implemented** (fully landed in engine, Phase 5 fanout/reduce included)
 
-Last updated: 2025-10-03
+Last updated: 2026-01-28
 
 Owner: Visor team
+
+> **Note**: This RFC has been fully implemented. For user documentation, see
+> [failure-routing.md](./failure-routing.md). The implementation includes all
+> core features: `on_fail`, `on_success`, `on_finish`, retry with backoff,
+> `goto`/`goto_js`, `run`/`run_js`, `goto_event`, fanout/reduce semantics, loop
+> budgets, and forEach scope isolation.
 
 ## Objectives
 
@@ -20,7 +26,9 @@ Owner: Visor team
 
 ## Config Sketch (MVP)
 
-Proposed additions use Visor’s existing 2.0 style (type/exec/depends_on). New keys are `on_fail`, `on_success`, and optional top‑level `routing` for defaults.
+Proposed additions use Visor's existing 2.0 style (type/exec/depends_on). New keys are `on_fail`, `on_success`, `on_finish`, and optional top‑level `routing` for defaults.
+
+> **Implementation note**: The implementation also added `transitions` (declarative rule-based routing) and `goto_event` (event override for goto targets). See [failure-routing.md](./failure-routing.md) for full documentation.
 
 ```yaml
 version: "2.0"
@@ -36,7 +44,7 @@ routing:
           mode: fixed        # fixed|exponential
           delay_ms: 2000     # initial delay in milliseconds
 
-checks:
+steps:
   setup-env:
     type: command
     exec: "npm ci"
@@ -157,9 +165,10 @@ checks:
 
 ## CLI and UX
 
-- Flags: `--on-fail-max-loops`, `--retry-max`, `--no-failure-routing` (to disable feature globally).
+- **Future Flags** (not yet implemented): `--on-fail-max-loops`, `--retry-max`, `--no-failure-routing` (to disable feature globally).
 - Run summary shows failure routes taken with timestamps and attempt counts.
 - Debug: when `--debug` is set, include evaluated `*_js` results (with sensitive data redacted), sandbox timing, retry/backoff decisions, goto/run transitions, and per-scope loop counters.
+- Telemetry: routing decisions are traced via OTel events (`visor.routing`) with attributes like `trigger`, `action`, `target`, `source`, `scope`, and `goto_event`.
 
 ## Tests and Demo
 
@@ -168,14 +177,24 @@ checks:
 
 ## Acceptance Criteria
 
-- Goto: Given a failing step with `goto: setup-env`, engine jumps to `setup-env`, proceeds, and re-runs the failed step.
-- Remediation: Given `run: [lint-fix]`, if remediation succeeds, the failed step re-runs once; if remediation fails, the run stops with a clear message.
-- Retry: Per-step retries respect backoff and caps; global `max_loops` prevents infinite ping-pong.
-- Compatibility: Configs without `on_fail` behave exactly as today.
-- Observability: Logs show ordered trace of retries and jumps; exit codes reflect final outcome.
-- Dynamic routing: `goto_js` and `run_js` work with pure, time-limited evaluation; precedence and merging behave as specified.
-- forEach: Each item runs with isolated counters; `*_js` receives `foreach` context and cannot jump across scopes.
-- on_success goto: After a step succeeds, `goto` (ancestor-only) can jump back to a prior step; with `max_loops` enforcement the run either converges or fails with a clear trace.
+All original acceptance criteria have been met:
+
+- [x] **Goto**: Given a failing step with `goto: setup-env`, engine jumps to `setup-env`, proceeds, and re-runs the failed step.
+- [x] **Remediation**: Given `run: [lint-fix]`, if remediation succeeds, the failed step re-runs once; if remediation fails, the run stops with a clear message.
+- [x] **Retry**: Per-step retries respect backoff and caps; global `max_loops` prevents infinite ping-pong.
+- [x] **Compatibility**: Configs without `on_fail` behave exactly as today.
+- [x] **Observability**: Logs show ordered trace of retries and jumps; exit codes reflect final outcome.
+- [x] **Dynamic routing**: `goto_js` and `run_js` work with pure, time-limited evaluation; precedence and merging behave as specified.
+- [x] **forEach**: Each item runs with isolated counters; `*_js` receives `foreach` context and cannot jump across scopes.
+- [x] **on_success goto**: After a step succeeds, `goto` (ancestor-only) can jump back to a prior step; with `max_loops` enforcement the run either converges or fails with a clear trace.
+
+Additional features implemented beyond the original RFC:
+
+- [x] **on_finish hook**: Runs after all forEach iterations and dependent checks complete — ideal for aggregation.
+- [x] **goto_event**: Override the event trigger when performing a goto (e.g., simulate `pr_updated`).
+- [x] **Declarative transitions**: Rule-based routing via `transitions: [{ when, to, goto_event }]` in on_fail/on_success/on_finish.
+- [x] **Fanout/reduce**: Control whether routing targets run per-item (`fanout: map`) or as a single aggregation (`fanout: reduce`).
+- [x] **Criticality-aware retry suppression**: High-criticality steps skip retries for logical failures (fail_if/guarantee).
 
 ## Open Questions
 
@@ -184,10 +203,16 @@ checks:
 - Any preferred global default (e.g., retry once everywhere with linear 2s backoff)?
 - Should we allow opt-in cross-scope targets via explicit qualifiers (e.g., `parent:setup-env`), guarded by additional loop caps?
 
-## Next Steps
+## Next Steps (Completed)
 
-1. Audit current workflow engine & failure handling.
-2. Finalize config keys and schema validation messages.
-3. Implement engine changes with loop safeguards.
-4. Add tests and the `lab-05-retry.yaml` demo.
-5. Extend docs and workshop slides.
+All primary implementation work is done:
+
+1. ~~Audit current workflow engine & failure handling.~~ Done.
+2. ~~Finalize config keys and schema validation messages.~~ Done — see `src/types/config.ts`.
+3. ~~Implement engine changes with loop safeguards.~~ Done — see `src/state-machine/states/routing.ts`.
+4. ~~Add tests and demos.~~ Done — see `tests/integration/routing-*.test.ts` and `examples/routing-*.yaml`.
+5. ~~Extend docs and workshop slides.~~ Done — see [failure-routing.md](./failure-routing.md).
+
+Remaining follow-ups:
+- CLI flags (`--on-fail-max-loops`, `--retry-max`, `--no-failure-routing`) are planned but not yet implemented.
+- Consider adding labeled checkpoints and opt-in cross-scope targets (see Open Questions).

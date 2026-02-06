@@ -112,8 +112,8 @@ describe('Jira MCP Configuration', () => {
         const config = await configManager.loadConfig(examplePath);
         expect(config).toBeDefined();
         expect(config.checks).toBeDefined();
-        expect(config.checks.jira_analyze_and_label).toBeDefined();
-        expect(config.checks.jira_analyze_and_label.type).toBe('ai');
+        expect(config.checks!.jira_analyze_and_label).toBeDefined();
+        expect(config.checks!.jira_analyze_and_label.type).toBe('ai');
         expect(config.ai_mcp_servers).toBeDefined();
         if (config.ai_mcp_servers) {
           expect(config.ai_mcp_servers.jira).toBeDefined();

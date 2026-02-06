@@ -1,7 +1,10 @@
+import { EventTrigger } from './config';
+
 /**
  * Valid check types that can be performed by Visor
+ * Now config-driven - any check name from config is valid
  */
-export type CheckType = 'performance' | 'architecture' | 'security' | 'style' | 'all';
+export type CheckType = string;
 
 /**
  * Valid output formats for CLI results
@@ -44,6 +47,32 @@ export interface CliOptions {
   codeContext?: 'auto' | 'enabled' | 'disabled';
   /** When set, write formatted output to this file instead of stdout */
   outputFile?: string;
+  /** Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas) */
+  analyzeBranchDiff?: boolean;
+  /** Simulate GitHub event type for event-based filtering ('all' runs checks regardless of event triggers) */
+  event?: EventTrigger | 'all';
+  /** Enable debug visualizer server for live debugging */
+  debugServer?: boolean;
+  /** Port for debug visualizer server (default: 3456) */
+  debugPort?: number;
+  /** Message for human-input checks (inline string or file path) */
+  message?: string;
+  /** Deprecated: GitHub integration v2 is always enabled in GitHub contexts */
+  githubV2?: boolean;
+  /** Enable Slack Socket Mode runner */
+  slack?: boolean;
+  /** Enable interactive TUI (chat + logs tabs) */
+  tui?: boolean;
+  /** Keep workspace folders after execution (for debugging) */
+  keepWorkspace?: boolean;
+  /** Set workspace base path (overrides VISOR_WORKSPACE_PATH) */
+  workspacePath?: string;
+  /** Use current working directory as workspace base path */
+  workspaceHere?: boolean;
+  /** Set workspace directory name (overrides VISOR_WORKSPACE_NAME) */
+  workspaceName?: string;
+  /** Set main project folder name inside workspace (overrides VISOR_WORKSPACE_PROJECT) */
+  workspaceProjectName?: string;
 }
 
 /**

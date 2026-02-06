@@ -6,7 +6,7 @@ version: "1.0"
 # Global fail condition - applies to all checks
 fail_if: "output.issues.some(i => i.severity === 'critical')"
 
-checks:
+steps:
   # Security check - zero tolerance
   security-check:
     type: ai

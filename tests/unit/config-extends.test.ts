@@ -79,8 +79,11 @@ describe('Config Extends Functionality', () => {
         checks: {
           remote: {
             type: 'http',
+            criticality: 'external',
             url: 'https://example.com/webhook',
             body: '{"test": "data"}',
+            assume: 'true',
+            guarantee: 'true',
             on: ['pr_opened'],
           },
         },
@@ -483,10 +486,10 @@ describe('Config Extends Functionality', () => {
 
       const config = await configManager.loadConfig(path.join(testConfigDir, 'child.yaml'));
 
-      expect(config.checks.base).toBeDefined();
-      expect(config.checks.child).toBeDefined();
-      expect(config.checks.base.prompt).toBe('Base check');
-      expect(config.checks.child.exec).toBe('npm test');
+      expect(config.checks!.base).toBeDefined();
+      expect(config.checks!.child).toBeDefined();
+      expect(config.checks!.base.prompt).toBe('Base check');
+      expect(config.checks!.child.exec).toBe('npm test');
     });
 
     it('should load configuration with multiple extends', async () => {
@@ -533,8 +536,11 @@ describe('Config Extends Functionality', () => {
         checks: {
           custom: {
             type: 'http',
+            criticality: 'external',
             url: 'https://example.com',
             body: '{"test": "data"}',
+            assume: 'true',
+            guarantee: 'true',
             on: ['pr_opened'],
           },
         },
@@ -555,10 +561,10 @@ describe('Config Extends Functionality', () => {
 
       expect(config.ai_model).toBe('gpt-3.5');
       expect(config.ai_provider).toBe('openai');
-      expect(config.checks.security).toBeDefined();
-      expect(config.checks.performance).toBeDefined();
-      expect(config.checks.custom).toBeDefined();
-      expect(config.output.pr_comment.format).toBe('json');
+      expect(config.checks!.security).toBeDefined();
+      expect(config.checks!.performance).toBeDefined();
+      expect(config.checks!.custom).toBeDefined();
+      expect(config.output!.pr_comment.format).toBe('json');
     });
 
     it('should extend from default configuration', async () => {
@@ -586,9 +592,9 @@ describe('Config Extends Functionality', () => {
         path.join(testConfigDir, 'extends-default.yaml')
       );
 
-      expect(loaded.checks.custom).toBeDefined();
+      expect(loaded.checks!.custom).toBeDefined();
       // Should have some default checks if default config exists
-      expect(Object.keys(loaded.checks).length).toBeGreaterThan(1);
+      expect(Object.keys(loaded.checks!).length).toBeGreaterThan(1);
     });
 
     it('should respect VISOR_NO_REMOTE_EXTENDS environment variable', async () => {
@@ -660,10 +666,10 @@ describe('Config Extends Functionality', () => {
 
       const config = await configManager.loadConfig(path.join(testConfigDir, 'override.yaml'));
 
-      expect(config.checks.security.prompt).toBe('Advanced security check');
-      expect(config.checks.security.ai_model).toBe('gpt-4');
-      expect(config.checks.security.on).toEqual(['pr_opened', 'pr_updated']);
-      expect(config.checks.security.group).toBe('advanced');
+      expect(config.checks!.security.prompt).toBe('Advanced security check');
+      expect(config.checks!.security.ai_model).toBe('gpt-4');
+      expect(config.checks!.security.on).toEqual(['pr_opened', 'pr_updated']);
+      expect(config.checks!.security.group).toBe('advanced');
     });
 
     it('should handle CLI --no-remote-extends flag through environment variable', async () => {
@@ -873,7 +879,7 @@ describe('Config Extends Functionality', () => {
       fs.writeFileSync(path.join(testConfigDir, 'empty-extends.yaml'), yaml.dump(config));
 
       const loaded = await configManager.loadConfig(path.join(testConfigDir, 'empty-extends.yaml'));
-      expect(loaded.checks.test).toBeDefined();
+      expect(loaded.checks!.test).toBeDefined();
       expect(loaded.version).toBe('1.0');
     });
 
@@ -968,8 +974,11 @@ describe('Config Extends Functionality', () => {
         checks: {
           top: {
             type: 'http',
+            criticality: 'external',
             url: 'https://example.com',
             body: '{"test": "data"}',
+            assume: 'true',
+            guarantee: 'true',
             on: ['pr_opened'],
           },
         },
@@ -990,10 +999,10 @@ describe('Config Extends Functionality', () => {
 
       expect(loaded.version).toBe('1.0'); // From base
       expect(loaded.ai_model).toBe('gpt-4'); // From middle
-      expect(loaded.checks.base).toBeDefined(); // From base
-      expect(loaded.checks.middle).toBeDefined(); // From middle
-      expect(loaded.checks.top).toBeDefined(); // From top
-      expect(loaded.output.pr_comment.format).toBe('json'); // From top
+      expect(loaded.checks!.base).toBeDefined(); // From base
+      expect(loaded.checks!.middle).toBeDefined(); // From middle
+      expect(loaded.checks!.top).toBeDefined(); // From top
+      expect(loaded.output!.pr_comment.format).toBe('json'); // From top
     });
 
     it('should handle mixed local and remote extends', async () => {
@@ -1020,8 +1029,11 @@ describe('Config Extends Functionality', () => {
         checks: {
           remote: {
             type: 'http',
+            criticality: 'external',
             url: 'https://example.com',
             body: '{"test": "data"}',
+            assume: 'true',
+            guarantee: 'true',
             on: ['pr_opened'],
           },
         },
@@ -1064,10 +1076,10 @@ describe('Config Extends Functionality', () => {
 
       const loaded = await configManager.loadConfig(path.join(testConfigDir, 'mixed.yaml'));
 
-      expect(loaded.checks.local).toBeDefined();
-      expect(loaded.checks.remote).toBeDefined();
-      expect(loaded.checks.child).toBeDefined();
-      expect(loaded.output.pr_comment.format).toBe('json');
+      expect(loaded.checks!.local).toBeDefined();
+      expect(loaded.checks!.remote).toBeDefined();
+      expect(loaded.checks!.child).toBeDefined();
+      expect(loaded.output!.pr_comment.format).toBe('json');
     });
 
     it('should handle extends with relative path resolution', async () => {
@@ -1118,8 +1130,8 @@ describe('Config Extends Functionality', () => {
 
       const loaded = await configManager.loadConfig(path.join(subDir, 'child.yaml'));
 
-      expect(loaded.checks.parent).toBeDefined();
-      expect(loaded.checks.child).toBeDefined();
+      expect(loaded.checks!.parent).toBeDefined();
+      expect(loaded.checks!.child).toBeDefined();
     });
 
     it('should handle deeply nested object merging', () => {
@@ -1543,8 +1555,11 @@ describe('Config Extends Functionality', () => {
           },
           performance: {
             type: 'http',
+            criticality: 'external',
             url: 'https://perf.example.com/analyze',
             body: '{"test": "data"}',
+            assume: 'true',
+            guarantee: 'true',
             on: ['pr_opened'],
             group: 'performance',
           },
@@ -1572,15 +1587,15 @@ describe('Config Extends Functionality', () => {
       expect(config.max_parallelism).toBe(2); // From base
 
       // Verify checks
-      expect(config.checks.security.prompt).toBe('Enhanced security check with AI'); // Overridden
-      expect(config.checks.security.on).toEqual(['pr_opened', 'pr_updated']); // Overridden
-      expect(config.checks.style).toBeDefined(); // From base
-      expect(config.checks.performance).toBeDefined(); // Added in child
+      expect(config.checks!.security.prompt).toBe('Enhanced security check with AI'); // Overridden
+      expect(config.checks!.security.on).toEqual(['pr_opened', 'pr_updated']); // Overridden
+      expect(config.checks!.style).toBeDefined(); // From base
+      expect(config.checks!.performance).toBeDefined(); // Added in child
 
       // Verify output
-      expect(config.output.pr_comment.format).toBe('json'); // Overridden
-      expect(config.output.pr_comment.group_by).toBe('file'); // Overridden
-      expect(config.output.pr_comment.collapse).toBe(false); // Overridden
+      expect(config.output!.pr_comment.format).toBe('json'); // Overridden
+      expect(config.output!.pr_comment.group_by).toBe('file'); // Overridden
+      expect(config.output!.pr_comment.collapse).toBe(false); // Overridden
     });
 
     it('should handle configuration with disabled checks removal', async () => {
@@ -1632,8 +1647,8 @@ describe('Config Extends Functionality', () => {
         path.join(testConfigDir, 'child-disabled.yaml')
       );
 
-      expect(config.checks.enabled).toBeDefined();
-      expect(config.checks.disabled).toBeUndefined(); // Should be removed
+      expect(config.checks!.enabled).toBeDefined();
+      expect(config.checks!.disabled).toBeUndefined(); // Should be removed
     });
 
     it('should handle extends from default with custom overrides', async () => {
@@ -1663,9 +1678,9 @@ describe('Config Extends Functionality', () => {
       );
 
       expect(loaded.ai_model).toBe('custom-model');
-      expect(loaded.checks.custom).toBeDefined();
+      expect(loaded.checks!.custom).toBeDefined();
       // Should have some checks from default config
-      expect(Object.keys(loaded.checks).length).toBeGreaterThan(1);
+      expect(Object.keys(loaded.checks!).length).toBeGreaterThan(1);
     });
   });
 
@@ -1720,8 +1735,8 @@ describe('Config Extends Functionality', () => {
         path.join(testConfigDir, 'absolute-child.yaml')
       );
 
-      expect(loaded.checks.absolute).toBeDefined();
-      expect(loaded.checks.child).toBeDefined();
+      expect(loaded.checks!.absolute).toBeDefined();
+      expect(loaded.checks!.child).toBeDefined();
     });
 
     it('should handle complex relative path scenarios', async () => {
@@ -1773,8 +1788,11 @@ describe('Config Extends Functionality', () => {
         checks: {
           level2: {
             type: 'http',
+            criticality: 'external',
             url: 'https://example.com',
             body: '{"test": "data"}',
+            assume: 'true',
+            guarantee: 'true',
             on: ['pr_opened'],
           },
         },
@@ -1793,10 +1811,10 @@ describe('Config Extends Functionality', () => {
 
       const loaded = await configManager.loadConfig(path.join(level2Dir, 'level2-config.yaml'));
 
-      expect(loaded.checks.root).toBeDefined(); // From root
-      expect(loaded.checks.level1).toBeDefined(); // From level1
-      expect(loaded.checks.level2).toBeDefined(); // From level2
-      expect(loaded.output.pr_comment.format).toBe('json'); // From level2
+      expect(loaded.checks!.root).toBeDefined(); // From root
+      expect(loaded.checks!.level1).toBeDefined(); // From level1
+      expect(loaded.checks!.level2).toBeDefined(); // From level2
+      expect(loaded.output!.pr_comment.format).toBe('json'); // From level2
     });
 
     it('should handle mixed absolute and relative paths in extends array', async () => {
@@ -1841,8 +1859,11 @@ describe('Config Extends Functionality', () => {
         checks: {
           child: {
             type: 'http',
+            criticality: 'external',
             url: 'https://example.com',
             body: '{"test": "data"}',
+            assume: 'true',
+            guarantee: 'true',
             on: ['pr_opened'],
           },
         },
@@ -1861,9 +1882,9 @@ describe('Config Extends Functionality', () => {
 
       const loaded = await configManager.loadConfig(path.join(testConfigDir, 'mixed-paths.yaml'));
 
-      expect(loaded.checks.config1).toBeDefined();
-      expect(loaded.checks.config2).toBeDefined();
-      expect(loaded.checks.child).toBeDefined();
+      expect(loaded.checks!.config1).toBeDefined();
+      expect(loaded.checks!.config2).toBeDefined();
+      expect(loaded.checks!.child).toBeDefined();
     });
   });
 });

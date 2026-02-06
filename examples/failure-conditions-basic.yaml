@@ -17,7 +17,7 @@ failure_conditions:
     message: "Too many issues found - consider refactoring"
     severity: warning
 
-checks:
+steps:
   # Basic security check with simple failure condition
   security-check:
     type: ai

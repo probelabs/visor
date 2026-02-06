@@ -283,7 +283,7 @@ export class EventMapper {
     const { event_name, action } = eventContext;
 
     if (eventContext.comment?.user?.login) {
-      return `comment_by_${eventContext.comment.user.login}`;
+      return `comment by @${eventContext.comment.user.login}`;
     }
 
     return action ? `${event_name}_${action}` : event_name;

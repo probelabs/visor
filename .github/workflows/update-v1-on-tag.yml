@@ -1,0 +1,67 @@
+name: Update v1 from nightly on v1.*.* tags
+
+on:
+  push:
+    tags:
+      - 'v1.*.*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Optional tag name to update to nightly tip'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  point-v1-to-nightly:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare git
+        run: |
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch origin +refs/heads/nightly:refs/remotes/origin/nightly +refs/tags/*:refs/tags/*
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Determine tag and nightly SHA
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.ref }}" ]; then
+            TAG_NAME="${{ github.event.inputs.ref }}"
+          else
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+          fi
+          NIGHTLY_SHA=$(git rev-parse refs/remotes/origin/nightly)
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "nightly_sha=$NIGHTLY_SHA" >> $GITHUB_OUTPUT
+          echo "Using nightly @$NIGHTLY_SHA for $TAG_NAME"
+
+      - name: Update v1 branch to nightly
+        run: |
+          NIGHTLY_SHA="${{ steps.vars.outputs.nightly_sha }}"
+          # Create local v1 at nightly and push
+          git update-ref refs/heads/v1 "$NIGHTLY_SHA"
+          git push --force-with-lease origin refs/heads/v1
+
+      - name: Move tag to nightly (ensures the tag contains dist)
+        run: |
+          TAG_NAME="${{ steps.vars.outputs.tag }}"
+          NIGHTLY_SHA="${{ steps.vars.outputs.nightly_sha }}"
+          git tag -f "$TAG_NAME" "$NIGHTLY_SHA"
+          git push -f origin "refs/tags/$TAG_NAME"
+
+      - name: Update moving major tag v1
+        run: |
+          TAG_NAME="${{ steps.vars.outputs.tag }}"
+          if echo "$TAG_NAME" | grep -qE '^v1\.'; then
+            # Point lightweight tag 'v1' to the same commit
+            NIGHTLY_SHA="${{ steps.vars.outputs.nightly_sha }}"
+            git tag -f v1 "$NIGHTLY_SHA"
+            git push -f origin refs/tags/v1
+            echo "✅ Updated floating tag v1"
+          else
+            echo "Skipping major tag update for non-v1 tag: $TAG_NAME"
+          fi

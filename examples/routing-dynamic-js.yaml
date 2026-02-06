@@ -4,7 +4,7 @@ version: "2.0"
 routing:
   max_loops: 6
 
-checks:
+steps:
   setup:
     type: command
     exec: "echo '[setup] install deps'"

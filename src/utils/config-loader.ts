@@ -149,16 +149,19 @@ export class ConfigLoader {
     // Validate against path traversal attacks
     this.validateLocalPath(resolvedPath);
 
-    if (!fs.existsSync(resolvedPath)) {
-      throw new Error(`Configuration file not found: ${resolvedPath}`);
-    }
-
     try {
       const content = fs.readFileSync(resolvedPath, 'utf8');
       const config = yaml.load(content) as Partial<VisorConfig>;
 
       if (!config || typeof config !== 'object') {
         throw new Error(`Invalid YAML in configuration file: ${resolvedPath}`);
+      }
+
+      // Normalize 'include' (alias) to 'extends' for nested chains
+      if ((config as any).include && !(config as any).extends) {
+        const inc = (config as any).include;
+        (config as any).extends = Array.isArray(inc) ? inc : [inc];
+        delete (config as any).include;
       }
 
       // Update base directory for nested extends
@@ -177,7 +180,10 @@ export class ConfigLoader {
         // Restore previous base directory
         this.options.baseDir = previousBaseDir;
       }
-    } catch (error) {
+    } catch (error: any) {
+      if (error && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) {
+        throw new Error(`Configuration file not found: ${resolvedPath}`);
+      }
       if (error instanceof Error) {
         throw new Error(`Failed to load configuration from ${resolvedPath}: ${error.message}`);
       }
@@ -268,18 +274,18 @@ export class ConfigLoader {
   private async fetchDefaultConfig(): Promise<Partial<VisorConfig>> {
     // Try different paths to find the bundled default config
     const possiblePaths = [
-      // When running as GitHub Action (bundled in dist/)
-      path.join(__dirname, 'defaults', '.visor.yaml'),
+      // Only support new non-dot filename
+      path.join(__dirname, 'defaults', 'visor.yaml'),
       // When running from source
-      path.join(__dirname, '..', '..', 'defaults', '.visor.yaml'),
+      path.join(__dirname, '..', '..', 'defaults', 'visor.yaml'),
       // Try via package root
-      this.findPackageRoot() ? path.join(this.findPackageRoot()!, 'defaults', '.visor.yaml') : '',
+      this.findPackageRoot() ? path.join(this.findPackageRoot()!, 'defaults', 'visor.yaml') : '',
       // GitHub Action environment variable
       process.env.GITHUB_ACTION_PATH
-        ? path.join(process.env.GITHUB_ACTION_PATH, 'defaults', '.visor.yaml')
+        ? path.join(process.env.GITHUB_ACTION_PATH, 'defaults', 'visor.yaml')
         : '',
       process.env.GITHUB_ACTION_PATH
-        ? path.join(process.env.GITHUB_ACTION_PATH, 'dist', 'defaults', '.visor.yaml')
+        ? path.join(process.env.GITHUB_ACTION_PATH, 'dist', 'defaults', 'visor.yaml')
         : '',
     ].filter(p => p); // Remove empty paths
 
@@ -291,19 +297,36 @@ export class ConfigLoader {
       }
     }
 
-    if (defaultConfigPath && fs.existsSync(defaultConfigPath)) {
+    if (defaultConfigPath) {
       // Always log to stderr to avoid contaminating formatted output
       console.error(`📦 Loading bundled default configuration from ${defaultConfigPath}`);
       const content = fs.readFileSync(defaultConfigPath, 'utf8');
-      const config = yaml.load(content) as Partial<VisorConfig>;
+      let config = yaml.load(content) as Partial<VisorConfig>;
 
       if (!config || typeof config !== 'object') {
         throw new Error('Invalid default configuration');
       }
 
+      // Alias: support 'include' as 'extends' in packaged defaults
+      if ((config as any).include && !(config as any).extends) {
+        const inc = (config as any).include;
+        (config as any).extends = Array.isArray(inc) ? inc : [inc];
+        delete (config as any).include;
+      }
+
+      // Normalize 'checks' and 'steps' for backward compatibility
+      config = this.normalizeStepsAndChecks(config);
+
       // Default configs shouldn't have extends, but handle it just in case
       if (config.extends) {
-        return await this.processExtends(config);
+        // Ensure relative paths (e.g., ./code-review.yaml) resolve from the defaults directory
+        const previousBaseDir = this.options.baseDir;
+        try {
+          this.options.baseDir = path.dirname(defaultConfigPath);
+          return await this.processExtends(config);
+        } finally {
+          this.options.baseDir = previousBaseDir;
+        }
       }
 
       return config;
@@ -472,5 +495,26 @@ export class ConfigLoader {
   public reset(): void {
     this.loadedConfigs.clear();
     this.clearCache();
+  }
+
+  /**
+   * Normalize 'checks' and 'steps' keys for backward compatibility
+   * Ensures both keys are present and contain the same data
+   */
+  private normalizeStepsAndChecks(config: Partial<VisorConfig>): Partial<VisorConfig> {
+    // If both are present, merge with 'steps' taking precedence on key conflicts
+    if (config.steps && config.checks) {
+      const merged = { ...(config.checks as Record<string, unknown>), ...(config.steps as any) };
+      config.checks = merged as any;
+      config.steps = merged as any;
+    } else if (config.steps && !config.checks) {
+      // Copy steps to checks for internal compatibility
+      config.checks = config.steps;
+    } else if (config.checks && !config.steps) {
+      // Copy checks to steps for forward compatibility
+      config.steps = config.checks;
+    }
+
+    return config;
   }
 }

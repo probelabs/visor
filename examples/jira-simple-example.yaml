@@ -16,7 +16,7 @@ ai_mcp_servers:
       JIRA_EMAIL: "${JIRA_EMAIL}"            # user@company.com
       JIRA_API_TOKEN: "${JIRA_API_TOKEN}"    # your_api_token
 
-checks:
+steps:
   jira_analyze_and_label:
     type: ai
     prompt: |

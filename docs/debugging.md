@@ -8,7 +8,10 @@ This guide provides comprehensive debugging techniques and tools to help trouble
 - [Debugging Liquid Templates](#debugging-liquid-templates)
 - [Using the Logger Check](#using-the-logger-check)
 - [Common Debugging Patterns](#common-debugging-patterns)
+- [Author Permission Functions](#author-permission-functions)
 - [Troubleshooting Tips](#troubleshooting-tips)
+- [Tracing with OpenTelemetry](#tracing-with-opentelemetry)
+- [Debug Visualizer](#debug-visualizer)
 
 ## Debug Mode
 
@@ -40,7 +43,7 @@ The `log()` function is available in JavaScript expressions for debugging:
 #### In `if` Conditions
 
 ```yaml
-checks:
+steps:
   analyze-bugs:
     type: ai
     depends_on: [fetch-tickets]
@@ -55,7 +58,7 @@ checks:
 #### In `fail_if` Conditions
 
 ```yaml
-checks:
+steps:
   security-check:
     type: ai
     prompt: "Check for security issues"
@@ -68,7 +71,7 @@ checks:
 #### In `transform_js`
 
 ```yaml
-checks:
+steps:
   process-data:
     type: command
     exec: curl -s https://api.example.com/data
@@ -111,7 +114,7 @@ The `log()` function prefixes output with 🔍 for easy identification:
 The `json` filter is invaluable for inspecting data structures:
 
 ```yaml
-checks:
+steps:
   debug-template:
     type: log
     message: |
@@ -154,7 +157,7 @@ Nested value: {{ outputs["complex-check"]["data"]["nested"]["value"] | default: 
 The `logger` check type is designed for debugging workflows:
 
 ```yaml
-checks:
+steps:
   debug-dependencies:
     type: logger
     depends_on: [fetch-data, process-data]
@@ -190,7 +193,7 @@ checks:
 ### 1. Debugging forEach Iterations
 
 ```yaml
-checks:
+steps:
   fetch-items:
     type: command
     exec: echo '[{"id":1,"name":"A"},{"id":2,"name":"B"}]'
@@ -208,12 +211,15 @@ checks:
     depends_on: [fetch-items]
     message: |
       Processing item: {{ outputs["fetch-items"] | json }}
+      All processed so far: {{ outputs.history["fetch-items"] | json }}
 ```
+
+**Note:** Use `outputs.history['check-name']` to access all previous iteration outputs. See [Output History](./output-history.md) for tracking outputs across loop iterations and forEach processing.
 
 **Note on forEach outputs**: When a check uses `forEach`, its output is automatically unwrapped in both templates and JavaScript contexts, giving you direct access to the array. This makes it easier to work with the data:
 
 ```yaml
-checks:
+steps:
   analyze-tickets:
     type: command
     depends_on: [fetch-tickets]
@@ -227,7 +233,7 @@ checks:
 ### 2. Debugging Conditional Execution
 
 ```yaml
-checks:
+steps:
   conditional-check:
     type: command
     exec: echo "test"
@@ -247,7 +253,7 @@ checks:
 ### 3. Debugging Transform Chains
 
 ```yaml
-checks:
+steps:
   fetch-raw:
     type: command
     exec: curl -s https://api.example.com/data
@@ -275,7 +281,7 @@ checks:
 ### 4. Debugging AI Prompts
 
 ```yaml
-checks:
+steps:
   debug-ai-context:
     type: logger
     depends_on: [fetch-context]
@@ -303,7 +309,7 @@ checks:
 When `outputs` access fails, debug the structure:
 
 ```yaml
-checks:
+steps:
   debug-outputs:
     type: command
     depends_on: [previous-check]
@@ -313,8 +319,16 @@ checks:
       log("Output keys:", Object.keys(outputs));
       log("Previous check type:", typeof outputs["previous-check"]);
       log("Is array?", Array.isArray(outputs["previous-check"]));
+
+      // Debug output history
+      log("History available:", !!outputs.history);
+      log("History keys:", Object.keys(outputs.history || {}));
+      log("Previous check history length:", outputs.history["previous-check"]?.length);
+
       return "debug complete";
 ```
+
+**Tip:** Use `outputs` for current values and `outputs.history` to see all previous values from loop iterations or retries. See [Output History](./output-history.md) for more details.
 
 ### 2. Validate JSON Before Parsing
 
@@ -338,7 +352,7 @@ transform_js: |
 ### 3. Debug Environment Variables
 
 ```yaml
-checks:
+steps:
   debug-env:
     type: logger
     message: |
@@ -356,7 +370,7 @@ checks:
 ### 4. Debug File Patterns
 
 ```yaml
-checks:
+steps:
   debug-files:
     type: command
     exec: echo "checking files"
@@ -374,7 +388,7 @@ checks:
 ### 5. Debug Schema Validation
 
 ```yaml
-checks:
+steps:
   validate-output:
     type: command
     exec: echo '{"items":[1,2,3]}'
@@ -411,18 +425,23 @@ checks:
 Set these environment variables for additional debug output:
 
 ```bash
-# Show all debug output
+# Enable verbose debug output (used in diff processing and other internals)
 export DEBUG=1
+# or
+export VERBOSE=1
 
-# Show Liquid template rendering
-export DEBUG_TEMPLATES=1
+# Enable telemetry and tracing
+export VISOR_TELEMETRY_ENABLED=true
+export VISOR_TELEMETRY_SINK=file  # or otlp, console
 
-# Show command execution details
-export DEBUG_COMMANDS=1
+# Set trace output directory
+export VISOR_TRACE_DIR=output/traces
 
-# Show dependency resolution
-export DEBUG_DEPS=1
+# For headless/CI environments (skip auto-opening browser)
+export VISOR_NOBROWSER=true
 ```
+
+See [Telemetry Setup](./telemetry-setup.md) for detailed configuration of tracing and metrics.
 
 ## Common Issues and Solutions
 
@@ -430,13 +449,13 @@ export DEBUG_DEPS=1
 
 ```yaml
 # Wrong - check has no dependencies
-checks:
+steps:
   my-check:
     type: command
     exec: echo "{{ outputs.other }}"  # Error: outputs is undefined
 
 # Correct - add depends_on
-checks:
+steps:
   my-check:
     type: command
     depends_on: [other]
@@ -475,9 +494,208 @@ if: |
   return isValid;
 ```
 
+## Author Permission Functions
+
+> **📖 For complete documentation, examples, and best practices, see [Author Permissions Guide](./author-permissions.md)**
+
+Visor provides helper functions to check the PR author's permission level in JavaScript expressions (`if`, `fail_if`, `transform_js`). These functions use GitHub's `author_association` field.
+
+### Permission Hierarchy
+
+From highest to lowest privilege:
+- **OWNER** - Repository owner
+- **MEMBER** - Organization member
+- **COLLABORATOR** - Invited collaborator
+- **CONTRIBUTOR** - Has contributed before
+- **FIRST_TIME_CONTRIBUTOR** - First PR to this repo
+- **FIRST_TIMER** - First GitHub contribution ever
+- **NONE** - No association
+
+### Available Functions
+
+#### `hasMinPermission(level)`
+
+Check if author has **at least** the specified permission level (>= logic):
+
+```yaml
+steps:
+  # Run security scan for external contributors only
+  security-scan:
+    type: command
+    exec: npm run security-scan
+    if: "!hasMinPermission('MEMBER')"  # Not owner or member
+
+  # Auto-approve for trusted contributors
+  auto-approve:
+    type: command
+    exec: gh pr review --approve
+    if: "hasMinPermission('COLLABORATOR')"  # Collaborators and above
+```
+
+#### `isOwner()`, `isMember()`, `isCollaborator()`, `isContributor()`
+
+Boolean checks for specific or hierarchical permission levels:
+
+```yaml
+steps:
+  # Different workflows based on permission
+  code-review:
+    type: ai
+    prompt: "Review code"
+    if: |
+      log("Author is owner:", isOwner());
+      log("Author is member:", isMember());
+      log("Author is collaborator:", isCollaborator());
+
+      // Members can skip review
+      !isMember()
+
+  # Block sensitive file changes from non-members
+  sensitive-files-check:
+    type: command
+    exec: echo "Checking sensitive files..."
+    fail_if: |
+      !isMember() && files.some(f =>
+        f.filename.startsWith('secrets/') ||
+        f.filename === '.env' ||
+        f.filename.endsWith('.key')
+      )
+```
+
+#### `isFirstTimer()`
+
+Check if author is a first-time contributor:
+
+```yaml
+steps:
+  welcome-message:
+    type: command
+    exec: gh pr comment --body "Welcome to the project!"
+    if: "isFirstTimer()"
+
+  require-review:
+    type: command
+    exec: gh pr review --request-changes
+    fail_if: "isFirstTimer() && outputs.issues?.length > 5"
+```
+
+### Local Mode Behavior
+
+When running locally (not in GitHub Actions):
+- All permission checks return `true` (treated as owner)
+- `isFirstTimer()` returns `false`
+- This prevents blocking local development/testing
+
+### Examples
+
+#### Conditional Security Scanning
+
+```yaml
+steps:
+  # Run expensive security scan only for external contributors
+  deep-security-scan:
+    type: command
+    exec: npm run security-scan:deep
+    if: "!hasMinPermission('MEMBER')"
+
+  # Quick scan for trusted members
+  quick-security-scan:
+    type: command
+    exec: npm run security-scan:quick
+    if: "hasMinPermission('MEMBER')"
+```
+
+#### Require Reviews Based on Permission
+
+```yaml
+steps:
+  require-approval:
+    type: command
+    exec: gh pr review --request-changes
+    fail_if: |
+      // First-timers need clean PRs
+      (isFirstTimer() && totalIssues > 0) ||
+      // Non-collaborators need approval for large changes
+      (!hasMinPermission('COLLABORATOR') && pr.totalAdditions > 500)
+```
+
+#### Auto-merge for Trusted Contributors
+
+```yaml
+steps:
+  auto-merge:
+    type: command
+    depends_on: [tests, lint, security-scan]
+    exec: gh pr merge --auto --squash
+    if: |
+      // Only auto-merge for collaborators with passing checks
+      hasMinPermission('COLLABORATOR') &&
+      outputs.tests.error === false &&
+      outputs.lint.error === false &&
+      outputs["security-scan"].criticalIssues === 0
+```
+
+## Tracing with OpenTelemetry
+
+Visor supports OpenTelemetry tracing for deep execution visibility. Enable tracing to see:
+
+- **Root span**: `visor.run` - one per CLI/Slack execution
+- **State spans**: `engine.state.*` with `wave`, `wave_kind`, `session_id` attributes
+- **Check spans**: `visor.check.<checkId>` with `visor.check.id`, `visor.check.type`, `visor.foreach.index` (for map fanout)
+- **Routing decisions**: `visor.routing` events with `trigger`, `action`, `source`, `target`, `scope`, `goto_event`
+- **Wave visibility**: `engine.state.level_dispatch` includes `level_size` and `level_checks_preview`
+
+### Quick Start with Jaeger
+
+```bash
+# Start Jaeger locally
+docker run -d --name jaeger \
+  -p 16686:16686 \
+  -p 4318:4318 \
+  jaegertracing/all-in-one:latest
+
+# Run Visor with tracing enabled
+VISOR_TELEMETRY_ENABLED=true \
+VISOR_TELEMETRY_SINK=otlp \
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces \
+visor --config .visor.yaml
+
+# View traces at http://localhost:16686
+```
+
+For complete tracing setup and configuration, see [Telemetry Setup](./telemetry-setup.md).
+
+## Debug Visualizer
+
+Visor includes a built-in debug visualizer - a lightweight HTTP server that streams OpenTelemetry spans during execution and provides control endpoints for pause/resume/stop.
+
+### Starting the Debug Visualizer
+
+```bash
+# Start with debug server
+visor --config .visor.yaml --debug-server --debug-port 3456
+
+# For CI/headless environments
+VISOR_NOBROWSER=true visor --config .visor.yaml --debug-server --debug-port 3456
+```
+
+### Control Endpoints
+
+- `GET /api/status` - Execution state and readiness
+- `GET /api/spans` - Current in-memory spans (live view)
+- `POST /api/start` - Begin execution
+- `POST /api/pause` - Pause scheduling (in-flight work continues)
+- `POST /api/resume` - Resume scheduling
+- `POST /api/stop` - Stop scheduling new work
+- `POST /api/reset` - Clear spans and return to idle
+
+For complete debug visualizer documentation, see [Debug Visualizer](./debug-visualizer.md).
+
 ## Further Reading
 
 - [Liquid Templates Guide](./liquid-templates.md) - Template syntax and variables
 - [Command Provider Documentation](./command-provider.md) - Command execution and transforms
 - [Configuration Reference](./configuration.md) - Full configuration options
-- [GitHub Actions Integration](./github-actions.md) - CI/CD debugging
+- [Telemetry Setup](./telemetry-setup.md) - OpenTelemetry tracing and metrics
+- [Debug Visualizer](./debug-visualizer.md) - Live execution visualization
+- [Output History](./output-history.md) - Tracking outputs across loop iterations

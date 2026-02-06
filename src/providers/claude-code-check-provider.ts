@@ -167,78 +167,6 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
   }
 
   /**
-   * Setup MCP tools based on configuration
-   */
-  private async setupMcpTools(
-    config: ClaudeCodeConfig
-  ): Promise<Array<{ name: string; [key: string]: unknown }>> {
-    const tools: Array<{ name: string; [key: string]: unknown }> = [];
-
-    // Add allowed tools
-    if (config.allowedTools) {
-      for (const toolName of config.allowedTools) {
-        tools.push({ name: toolName });
-      }
-    }
-
-    // Setup custom MCP servers if configured
-    if (config.mcpServers) {
-      try {
-        // Import MCP SDK for custom server creation using safe import
-        const mcpModule = await safeImport<{
-          createSdkMcpServer?: unknown;
-          default?: { createSdkMcpServer?: unknown };
-        }>('@modelcontextprotocol/sdk');
-
-        if (!mcpModule) {
-          console.warn('@modelcontextprotocol/sdk package not found. MCP servers disabled.');
-          return tools;
-        }
-
-        const createSdkMcpServer =
-          mcpModule.createSdkMcpServer || mcpModule.default?.createSdkMcpServer;
-
-        if (typeof createSdkMcpServer === 'function') {
-          for (const [serverName, serverConfig] of Object.entries(config.mcpServers)) {
-            try {
-              // Create MCP server instance
-              const server = await createSdkMcpServer({
-                name: serverName,
-                command: serverConfig.command,
-                args: serverConfig.args || [],
-                env: { ...process.env, ...serverConfig.env },
-              });
-
-              // Add server tools to available tools
-              const serverTools = (await server.listTools()) as Array<{ name: string }>;
-              tools.push(
-                ...serverTools.map(tool => ({
-                  name: tool.name,
-                  server: serverName,
-                }))
-              );
-            } catch (serverError) {
-              console.warn(
-                `Failed to setup MCP server ${serverName}: ${serverError instanceof Error ? serverError.message : 'Unknown error'}`
-              );
-            }
-          }
-        } else {
-          console.warn(
-            'createSdkMcpServer function not found in @modelcontextprotocol/sdk. MCP servers disabled.'
-          );
-        }
-      } catch (error) {
-        console.warn(
-          `Failed to import MCP SDK: ${error instanceof Error ? error.message : 'Unknown error'}. MCP servers disabled.`
-        );
-      }
-    }
-
-    return tools;
-  }
-
-  /**
    * Group files by their file extension for template context
    */
   private groupFilesByExtension(
@@ -552,6 +480,17 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
     dependencyResults?: Map<string, ReviewSummary>,
     sessionInfo?: { parentSessionId?: string; reuseSession?: boolean }
   ): Promise<ReviewSummary> {
+    // Test hook: allow short-circuiting provider with mock output (YAML tests)
+    try {
+      const stepName = (config as any).checkName || 'claude-code';
+      const mock = (sessionInfo as any)?.hooks?.mockForStep?.(String(stepName));
+      if (mock !== undefined) {
+        if (mock && typeof mock === 'object' && 'issues' in (mock as any)) {
+          return mock as unknown as ReviewSummary;
+        }
+        return { issues: [], output: mock as unknown } as ReviewSummary & { output: unknown };
+      }
+    } catch {}
     // Extract Claude Code configuration
     const claudeCodeConfig = (config.claude_code as ClaudeCodeConfig) || {};
 
@@ -577,17 +516,24 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
       // Initialize Claude Code client
       const client = await this.initializeClaudeCodeClient();
 
-      // Setup MCP tools
-      const tools = await this.setupMcpTools(claudeCodeConfig);
-
-      // Prepare query object
+      // Prepare query object with MCP servers passed directly to SDK
       const query: ClaudeCodeQuery = {
         query: processedPrompt,
-        tools: tools.length > 0 ? tools : undefined,
         maxTurns: claudeCodeConfig.maxTurns || 5,
         systemPrompt: claudeCodeConfig.systemPrompt,
         subagent: claudeCodeConfig.subagent,
       };
+
+      // Add allowed tools if specified
+      if (claudeCodeConfig.allowedTools && claudeCodeConfig.allowedTools.length > 0) {
+        query.tools = claudeCodeConfig.allowedTools.map(name => ({ name }));
+      }
+
+      // Pass MCP servers directly to the SDK - let it handle spawning and tool discovery
+      if (claudeCodeConfig.mcpServers && Object.keys(claudeCodeConfig.mcpServers).length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (query as any).mcpServers = claudeCodeConfig.mcpServers;
+      }
 
       // Execute query with Claude Code
       let response: ClaudeCodeResponse;
@@ -631,7 +577,6 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
         sessionId: response.session_id,
         turnCount: response.turn_count,
         usage: response.usage,
-        toolsUsed: tools.map(t => t.name),
       };
 
       // Apply issue suppression filtering

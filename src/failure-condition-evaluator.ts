@@ -3,6 +3,8 @@
  */
 
 import { ReviewSummary } from './reviewer';
+import { addEvent } from './telemetry/trace-helpers';
+import { addFailIfTriggered } from './telemetry/metrics';
 import {
   FailureConditions,
   FailureCondition,
@@ -11,79 +13,23 @@ import {
   FailureConditionSeverity,
 } from './types/config';
 import Sandbox from '@nyariv/sandboxjs';
+import { createSecureSandbox } from './utils/sandbox';
+import { createPermissionHelpers, detectLocalMode } from './utils/author-permissions';
+import { MemoryStore } from './memory-store';
 
 /**
  * Evaluates failure conditions using SandboxJS for secure evaluation
  */
 export class FailureConditionEvaluator {
-  private sandbox: Sandbox;
+  private sandbox?: Sandbox;
 
-  constructor() {
-    this.sandbox = this.createSecureSandbox();
-  }
+  constructor() {}
 
   /**
    * Create a secure sandbox with whitelisted functions and globals
    */
   private createSecureSandbox(): Sandbox {
-    // Start with safe globals and prototypes
-    const globals = {
-      ...Sandbox.SAFE_GLOBALS,
-      // Allow Math for calculations
-      Math,
-      // Allow console for debugging (in controlled environment)
-      console: {
-        log: console.log,
-        warn: console.warn,
-        error: console.error,
-      },
-    };
-
-    // Create prototype whitelist - use safe defaults
-    const prototypeWhitelist = new Map(Sandbox.SAFE_PROTOTYPES);
-
-    // Explicitly allow array methods that we need
-    const arrayMethods = new Set([
-      'some',
-      'every',
-      'filter',
-      'map',
-      'reduce',
-      'find',
-      'includes',
-      'indexOf',
-      'length',
-      'slice',
-      'concat',
-      'join',
-    ]);
-    prototypeWhitelist.set(Array.prototype, arrayMethods);
-
-    // Allow string methods
-    const stringMethods = new Set([
-      'toLowerCase',
-      'toUpperCase',
-      'includes',
-      'indexOf',
-      'startsWith',
-      'endsWith',
-      'slice',
-      'substring',
-      'length',
-      'trim',
-      'split',
-      'replace',
-    ]);
-    prototypeWhitelist.set(String.prototype, stringMethods);
-
-    // Allow basic object methods
-    const objectMethods = new Set(['hasOwnProperty', 'toString', 'valueOf']);
-    prototypeWhitelist.set(Object.prototype, objectMethods);
-
-    return new Sandbox({
-      globals,
-      prototypeWhitelist,
-    });
+    return createSecureSandbox();
   }
 
   /**
@@ -95,18 +41,61 @@ export class FailureConditionEvaluator {
     checkGroup: string,
     reviewSummary: ReviewSummary,
     expression: string,
-    previousOutputs?: Record<string, ReviewSummary>
+    previousOutputs?: Record<string, ReviewSummary>,
+    authorAssociation?: string
   ): Promise<boolean> {
     const context = this.buildEvaluationContext(
       checkName,
       checkSchema,
       checkGroup,
       reviewSummary,
-      previousOutputs
+      previousOutputs,
+      authorAssociation
     );
 
     try {
-      return this.evaluateExpression(expression, context);
+      try {
+        const isObj = context.output && typeof context.output === 'object';
+        const keys = isObj ? Object.keys(context.output as any).join(',') : typeof context.output;
+        let errorVal: unknown = undefined;
+        if (isObj && (context.output as any).error !== undefined)
+          errorVal = (context.output as any).error;
+        require('./logger').logger.debug(
+          `  fail_if: evaluating '${expression}' with output keys=${keys} error=${String(errorVal)}`
+        );
+      } catch {}
+      const res = this.evaluateExpression(expression, context);
+      if (res === true) {
+        try {
+          addEvent('fail_if.triggered', {
+            check: checkName,
+            scope: 'check',
+            name: `${checkName}_fail_if`,
+            expression,
+            severity: 'error',
+          });
+        } catch {}
+        try {
+          const { emitNdjsonSpanWithEvents } = require('./telemetry/fallback-ndjson');
+          emitNdjsonSpanWithEvents(
+            'visor.fail_if',
+            { check: checkName, scope: 'check', name: `${checkName}_fail_if` },
+            [
+              {
+                name: 'fail_if.triggered',
+                attrs: {
+                  check: checkName,
+                  scope: 'check',
+                  name: `${checkName}_fail_if`,
+                  expression,
+                  severity: 'error',
+                },
+              },
+            ]
+          );
+        } catch {}
+      }
+      return res;
     } catch (error) {
       console.warn(`Failed to evaluate fail_if expression: ${error}`);
       return false; // Don't fail on evaluation errors
@@ -146,6 +135,10 @@ export class FailureConditionEvaluator {
       event?: string;
       environment?: Record<string, string>;
       previousResults?: Map<string, ReviewSummary>;
+      authorAssociation?: string;
+      workflowInputs?: Record<string, unknown>;
+      /** Current step's output for guarantee evaluation */
+      output?: unknown;
     }
   ): Promise<boolean> {
     // Build context for if evaluation
@@ -183,10 +176,18 @@ export class FailureConditionEvaluator {
           })()
         : {},
 
-      // Required output property (empty for if conditions)
-      output: {
-        issues: [],
-      },
+      // Workflow inputs (for workflows)
+      inputs: contextData?.workflowInputs || {},
+
+      // Output property: use provided output for guarantee evaluation, or empty for if conditions
+      output:
+        contextData?.output !== undefined &&
+        contextData.output !== null &&
+        typeof contextData.output === 'object'
+          ? (contextData.output as Record<string, unknown>)
+          : { issues: [] },
+      // Author association (used by permission helpers)
+      authorAssociation: contextData?.authorAssociation,
 
       // Utility metadata
       metadata: {
@@ -205,11 +206,21 @@ export class FailureConditionEvaluator {
     };
 
     try {
-      return this.evaluateExpression(expression, context);
+      const res = this.evaluateExpression(expression, context);
+      try {
+        if (process.env.VISOR_DEBUG === 'true') {
+          // Debug if-eval output (only when VISOR_DEBUG enabled)
+          const outputKeys = Object.keys(context.outputs || {});
+          console.error(
+            `[if-eval] check=${checkName} expr="${expression}" result=${String(res)} outputKeys=[${outputKeys.join(',')}]`
+          );
+        }
+      } catch {}
+      return res;
     } catch (error) {
       console.warn(`Failed to evaluate if expression for check '${checkName}': ${error}`);
-      // Default to running the check if evaluation fails
-      return true;
+      // Fail-secure: do not run the check on evaluation errors
+      return false;
     }
   }
 
@@ -223,14 +234,16 @@ export class FailureConditionEvaluator {
     reviewSummary: ReviewSummary,
     globalConditions?: FailureConditions,
     checkConditions?: FailureConditions,
-    previousOutputs?: Record<string, ReviewSummary>
+    previousOutputs?: Record<string, ReviewSummary>,
+    authorAssociation?: string
   ): Promise<FailureConditionResult[]> {
     const context = this.buildEvaluationContext(
       checkName,
       checkSchema,
       checkGroup,
       reviewSummary,
-      previousOutputs
+      previousOutputs,
+      authorAssociation
     );
 
     const results: FailureConditionResult[] = [];
@@ -270,8 +283,53 @@ export class FailureConditionEvaluator {
 
     for (const [conditionName, condition] of Object.entries(conditions)) {
       try {
+        addEvent('fail_if.evaluated', {
+          check: context.checkName,
+          scope: source,
+          name: conditionName,
+          expression: this.extractExpression(condition),
+        });
+      } catch {}
+
+      // File fallback: append an NDJSON span with the evaluation event
+      try {
+        const { emitNdjsonSpanWithEvents } = require('./telemetry/fallback-ndjson');
+        emitNdjsonSpanWithEvents(
+          'visor.fail_if',
+          { check: context.checkName || 'unknown', scope: source, name: conditionName },
+          [
+            {
+              name: 'fail_if.evaluated',
+              attrs: {
+                check: context.checkName,
+                scope: source,
+                name: conditionName,
+                expression: this.extractExpression(condition),
+              },
+            },
+          ]
+        );
+      } catch {}
+
+      try {
         const result = await this.evaluateSingleCondition(conditionName, condition, context);
         results.push(result);
+
+        if (result.failed) {
+          try {
+            addEvent('fail_if.triggered', {
+              check: context.checkName,
+              scope: source,
+              name: conditionName,
+              expression: result.expression,
+              severity: result.severity,
+              halt_execution: result.haltExecution,
+            });
+          } catch {}
+          try {
+            addFailIfTriggered(context.checkName || 'unknown', source);
+          } catch {}
+        }
       } catch (error) {
         // If evaluation fails, create an error result
         results.push({
@@ -400,19 +458,36 @@ export class FailureConditionEvaluator {
         return issues.some(issue => (issue as { file?: string }).file?.includes(pattern));
       };
 
-      const hasSuggestion = (suggestions: string[], text: string): boolean => {
-        if (!Array.isArray(suggestions)) return false;
-        return suggestions.some(s => s.toLowerCase().includes(text.toLowerCase()));
-      };
-
       // Backward compatibility aliases
       const hasIssueWith = hasIssue;
       const hasFileWith = hasFileMatching;
 
+      // Permission helper functions
+      const permissionHelpers = createPermissionHelpers(
+        context.authorAssociation,
+        detectLocalMode()
+      );
+      const hasMinPermission = permissionHelpers.hasMinPermission;
+      const isOwner = permissionHelpers.isOwner;
+      const isMember = permissionHelpers.isMember;
+      const isCollaborator = permissionHelpers.isCollaborator;
+      const isContributor = permissionHelpers.isContributor;
+      const isFirstTimer = permissionHelpers.isFirstTimer;
+
       // Extract context variables
       const output = context.output || {};
-      const issues = output.issues || [];
-      const suggestions: string[] = [];
+      // Ensure issues is an array - it might be a JSON string from workflow outputs
+      let issues = output.issues || [];
+      if (typeof issues === 'string') {
+        try {
+          issues = JSON.parse(issues);
+        } catch {
+          issues = [];
+        }
+      }
+      if (!Array.isArray(issues)) {
+        issues = [];
+      }
 
       // Backward compatibility: provide metadata for transition period
       // TODO: Remove after all configurations are updated
@@ -428,6 +503,9 @@ export class FailureConditionEvaluator {
         totalIssues: issues.length,
         hasChanges: context.hasChanges || false,
       };
+
+      // Do not mutate output shape here. Output contracts are defined by providers and
+      // workflow outputs. Tests and expressions should rely on those schemas directly.
 
       // Legacy variables for backward compatibility
       const criticalIssues = metadata.criticalIssues;
@@ -447,7 +525,17 @@ export class FailureConditionEvaluator {
       const event = context.event || 'manual';
       const env = context.env || {};
       const outputs = context.outputs || {};
+      const inputs = context.inputs || {};
       const debugData = context.debug || null;
+
+      // Get memory store and create accessor for fail_if expressions
+      const memoryStore = MemoryStore.getInstance();
+      const memoryAccessor = {
+        get: (key: string, ns?: string) => memoryStore.get(key, ns),
+        has: (key: string, ns?: string) => memoryStore.has(key, ns),
+        list: (ns?: string) => memoryStore.list(ns),
+        getAll: (ns?: string) => memoryStore.getAll(ns),
+      };
 
       // Create scope with all context variables and helper functions
       const scope = {
@@ -455,9 +543,10 @@ export class FailureConditionEvaluator {
         output,
         outputs,
         debug: debugData,
+        // Memory accessor for fail_if expressions
+        memory: memoryAccessor,
         // Legacy compatibility variables
         issues,
-        suggestions,
         metadata,
         criticalIssues,
         errorIssues,
@@ -474,6 +563,7 @@ export class FailureConditionEvaluator {
         filesCount,
         event,
         env,
+        inputs,
         // Helper functions
         contains,
         startsWith,
@@ -486,29 +576,39 @@ export class FailureConditionEvaluator {
         hasIssue,
         countIssues,
         hasFileMatching,
-        hasSuggestion,
         hasIssueWith,
         hasFileWith,
+        // Permission helpers
+        hasMinPermission,
+        isOwner,
+        isMember,
+        isCollaborator,
+        isContributor,
+        isFirstTimer,
       };
 
       // Compile and execute the expression in the sandbox
       const raw = condition.trim();
+      if (!this.sandbox) {
+        this.sandbox = this.createSecureSandbox();
+      }
       let exec: ReturnType<typeof this.sandbox.compile>;
       try {
-        // Try compiling the raw expression as-is first (supports multi-line logical expressions)
         exec = this.sandbox.compile(`return (${raw});`);
       } catch {
-        // Fallback: normalize multi-line statements into a comma-chain expression
         const normalizedExpr = normalize(condition);
         exec = this.sandbox.compile(`return (${normalizedExpr});`);
       }
       const result = exec(scope).run();
-
+      try {
+        require('./logger').logger.debug(`  fail_if: result=${Boolean(result)}`);
+      } catch {}
       // Ensure we return a boolean
       return Boolean(result);
     } catch (error) {
       console.error('❌ Failed to evaluate expression:', condition, error);
-      // Re-throw the error so it can be caught at a higher level for error reporting
+      // Re-throw the error so it can be caught by evaluateSingleCondition
+      // and properly populate the error field in the result
       throw error;
     }
   }
@@ -549,29 +649,124 @@ export class FailureConditionEvaluator {
     checkSchema: string,
     checkGroup: string,
     reviewSummary: ReviewSummary,
-    previousOutputs?: Record<string, ReviewSummary>
+    previousOutputs?: Record<string, ReviewSummary>,
+    authorAssociation?: string
   ): FailureConditionContext {
     const { issues, debug } = reviewSummary;
+    const reviewSummaryWithOutput = reviewSummary as ReviewSummary & { output?: unknown };
+
+    // Extract output field to avoid nesting (output.output)
+    const {
+      output: extractedOutput,
+      // Exclude issues from otherFields since we handle it separately
+      issues: _issues, // eslint-disable-line @typescript-eslint/no-unused-vars
+      ...otherFields
+    } = reviewSummaryWithOutput as any;
+
+    // Build output object with safety for array-based outputs (forEach aggregation)
+    const aggregatedOutput: Record<string, unknown> = {
+      issues: (issues || []).map(issue => ({
+        file: issue.file,
+        line: issue.line,
+        endLine: issue.endLine,
+        ruleId: issue.ruleId,
+        message: issue.message,
+        severity: issue.severity,
+        category: issue.category,
+        group: issue.group,
+        schema: issue.schema,
+        suggestion: issue.suggestion,
+        replacement: issue.replacement,
+      })),
+      // Include additional schema-specific data from reviewSummary
+      ...otherFields,
+    };
+
+    if (Array.isArray(extractedOutput)) {
+      // Preserve items array and lift common flags for convenience (e.g., output.error)
+      aggregatedOutput.items = extractedOutput;
+      const anyError = extractedOutput.find(
+        it => it && typeof it === 'object' && (it as Record<string, unknown>).error
+      ) as Record<string, unknown> | undefined;
+      if (anyError && anyError.error !== undefined) {
+        aggregatedOutput.error = anyError.error;
+      }
+    } else if (extractedOutput && typeof extractedOutput === 'object') {
+      Object.assign(aggregatedOutput, extractedOutput as Record<string, unknown>);
+    }
+
+    // If provider attached a raw transform snapshot, merge its fields generically.
+    try {
+      const raw = (reviewSummaryWithOutput as any).__raw;
+      if (raw && typeof raw === 'object') {
+        Object.assign(aggregatedOutput, raw as Record<string, unknown>);
+      }
+    } catch {}
+
+    // If output is a string, try to parse JSON (full or from end) to enrich context,
+    // and also derive common boolean flags generically (e.g., key:true/false) for fail_if usage.
+    try {
+      if (typeof extractedOutput === 'string') {
+        const parsed =
+          this.tryExtractJsonFromEnd(extractedOutput) ??
+          (() => {
+            try {
+              return JSON.parse(extractedOutput);
+            } catch {
+              return null;
+            }
+          })();
+        if (parsed !== null) {
+          if (Array.isArray(parsed)) {
+            (aggregatedOutput as any).items = parsed;
+          } else if (typeof parsed === 'object') {
+            Object.assign(aggregatedOutput, parsed as Record<string, unknown>);
+          }
+        }
+        // Generic boolean key extraction for simple text outputs (no special provider cases)
+        const lower = extractedOutput.toLowerCase();
+        const boolFrom = (key: string): boolean | null => {
+          const reTrue = new RegExp(
+            `(?:^|[^a-z0-9_])${key}[^a-z0-9_]*[:=][^a-z0-9_]*true(?:[^a-z0-9_]|$)`
+          );
+          const reFalse = new RegExp(
+            `(?:^|[^a-z0-9_])${key}[^a-z0-9_]*[:=][^a-z0-9_]*false(?:[^a-z0-9_]|$)`
+          );
+          if (reTrue.test(lower)) return true;
+          if (reFalse.test(lower)) return false;
+          return null;
+        };
+        const keys = ['error'];
+        for (const k of keys) {
+          const v = boolFrom(k);
+          if (v !== null && (aggregatedOutput as any)[k] === undefined) {
+            (aggregatedOutput as any)[k] = v;
+          }
+        }
+      }
+    } catch {}
+
+    // Try to parse JSON from content as a last resort when no structured output is present
+    try {
+      const rsAny = reviewSummaryWithOutput as any;
+      const hasStructuredOutput = extractedOutput !== undefined && extractedOutput !== null;
+      if (!hasStructuredOutput && typeof rsAny?.content === 'string') {
+        const parsedFromContent = this.tryExtractJsonFromEnd(rsAny.content);
+        if (parsedFromContent !== null && parsedFromContent !== undefined) {
+          if (Array.isArray(parsedFromContent)) {
+            (aggregatedOutput as any).items = parsedFromContent;
+          } else if (typeof parsedFromContent === 'object') {
+            Object.assign(aggregatedOutput, parsedFromContent as Record<string, unknown>);
+          }
+        }
+      }
+    } catch {}
+
+    // Get memory store instance
+    const memoryStore = MemoryStore.getInstance();
 
     const context: FailureConditionContext = {
-      output: {
-        issues: (issues || []).map(issue => ({
-          file: issue.file,
-          line: issue.line,
-          endLine: issue.endLine,
-          ruleId: issue.ruleId,
-          message: issue.message,
-          severity: issue.severity,
-          category: issue.category,
-          group: issue.group,
-          schema: issue.schema,
-          suggestion: issue.suggestion,
-          replacement: issue.replacement,
-        })),
-        // Include additional schema-specific data from reviewSummary
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ...(reviewSummary as any), // Pass through any additional fields
-      },
+      output: aggregatedOutput,
       outputs: (() => {
         if (!previousOutputs) return {};
         const outputs: Record<string, unknown> = {};
@@ -583,10 +778,18 @@ export class FailureConditionEvaluator {
         }
         return outputs;
       })(),
+      // Add memory accessor for fail_if expressions
+      memory: {
+        get: (key: string, ns?: string) => memoryStore.get(key, ns),
+        has: (key: string, ns?: string) => memoryStore.has(key, ns),
+        list: (ns?: string) => memoryStore.list(ns),
+        getAll: (ns?: string) => memoryStore.getAll(ns),
+      } as any,
       // Add basic context info for failure conditions
       checkName: checkName,
       schema: checkSchema,
       group: checkGroup,
+      authorAssociation: authorAssociation,
     };
 
     // Add debug information if available
@@ -600,6 +803,26 @@ export class FailureConditionEvaluator {
     }
 
     return context;
+  }
+
+  // Minimal JSON-from-end extractor for fail_if context fallback
+  private tryExtractJsonFromEnd(text: string): unknown | null {
+    try {
+      const lines = text.split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const t = lines[i].trim();
+        if (t.startsWith('{') || t.startsWith('[')) {
+          const candidate = lines.slice(i).join('\n').trim();
+          if (
+            (candidate.startsWith('{') && candidate.endsWith('}')) ||
+            (candidate.startsWith('[') && candidate.endsWith(']'))
+          ) {
+            return JSON.parse(candidate);
+          }
+        }
+      }
+    } catch {}
+    return null;
   }
 
   /**

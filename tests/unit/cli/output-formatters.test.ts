@@ -86,8 +86,8 @@ describe('OutputFormatters', () => {
       expect(result).toContain('Analysis Summary');
       expect(result).toContain('Total Issues');
       expect(result).toContain('3');
-      expect(result).toContain('Critical Issues');
-      expect(result).toContain('0'); // No critical issues in our test data
+      // Note: "Critical Issues" row only shown when criticalIssues > 0
+      expect(result).not.toContain('Critical Issues'); // No critical issues in our test data
       expect(result).toContain('Execution Time');
       expect(result).toContain('1500ms');
       expect(result).toContain('security, performance, style');
@@ -547,6 +547,61 @@ describe('OutputFormatters', () => {
 
       // Table should truncate long messages - just check it doesn't crash
       expect(tableResult).toBeDefined();
+    });
+
+    // Note: heavy truncation paths are exercised indirectly in other tests. Keep this suite fast.
+
+    it('should break single long words to prevent wrap-ansi slow path', () => {
+      const longWord = 'A'.repeat(200);
+      const res = {
+        ...mockAnalysisResult,
+        reviewSummary: {
+          issues: [
+            {
+              file: 'src/file.ts',
+              line: 1,
+              endLine: undefined,
+              ruleId: 'style/longword',
+              message: longWord,
+              severity: 'warning' as const,
+              category: 'style' as const,
+            },
+          ],
+        },
+      };
+      const out = OutputFormatters.formatAsTable(res, { groupByCategory: true });
+      expect(out).toBeTruthy();
+      // It shouldn't include the entire 2000-char sequence in one line
+      expect(out.includes(longWord)).toBe(false);
+    });
+
+    it('should format sizable code replacements without hanging', () => {
+      const longLine = 'const a = 1; //' + 'x'.repeat(60);
+      const code = Array.from({ length: 20 }, () => longLine).join('\n');
+      const res = {
+        ...mockAnalysisResult,
+        reviewSummary: {
+          issues: [
+            {
+              file: 'src/file.ts',
+              line: 2,
+              endLine: undefined,
+              ruleId: 'style/huge-replacement',
+              message: 'Refactor needed',
+              severity: 'info' as const,
+              category: 'style' as const,
+              replacement: code,
+            },
+          ],
+        },
+      };
+      const out = OutputFormatters.formatAsTable(res, {
+        groupByCategory: true,
+        showDetails: true,
+      });
+      expect(out).toContain('Code fix:');
+      // Ensure we don't dump an enormous block
+      expect(out.length).toBeLessThan(9000);
     });
   });
 });
