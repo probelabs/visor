@@ -121,9 +121,14 @@ export class CheckRunner {
         const visorPath = sandboxConfig.visor_path || '/opt/visor';
         const payloadJson = JSON.stringify(payload);
 
-        // Use stdin to pass payload to avoid shell argument length limits
-        // The visor binary is bundled as index.js (ncc output)
-        const command = `echo '${payloadJson.replace(/'/g, "'\\''")}' | node ${visorPath}/index.js --run-check -`;
+        // Allow child visor to resolve externalized npm packages (e.g. @opentelemetry/*)
+        // from the workspace's node_modules (ncc doesn't bundle dynamic requires)
+        env['NODE_PATH'] = `${workdir}/node_modules`;
+
+        // Base64-encode payload to avoid shell quoting issues (the command goes
+        // through two layers of sh -c quoting: check-runner → docker exec)
+        const b64Payload = Buffer.from(payloadJson).toString('base64');
+        const command = `echo ${b64Payload} | base64 -d | node ${visorPath}/index.js --run-check -`;
 
         logger.info(`Executing check in sandbox '${sandboxName}'`);
 

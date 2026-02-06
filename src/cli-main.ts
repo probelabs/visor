@@ -30,6 +30,18 @@ async function runCheckMode(payloadArg?: string): Promise<void> {
   // Force all logging to stderr so stdout is reserved for JSON result
   configureLoggerFromCli({ output: 'json', debug: false, verbose: false, quiet: true });
 
+  // Initialize telemetry when enabled (sandbox child trace relay)
+  let telemetryEnabled = false;
+  if (process.env.VISOR_TELEMETRY_ENABLED === 'true') {
+    try {
+      const { initTelemetry } = await import('./telemetry/opentelemetry');
+      await initTelemetry({ enabled: true });
+      telemetryEnabled = true;
+    } catch {
+      // Telemetry not available — continue without it
+    }
+  }
+
   let payloadJson: string;
   if (payloadArg && payloadArg !== '-') {
     payloadJson = payloadArg;
@@ -120,7 +132,35 @@ async function runCheckMode(payloadArg?: string): Promise<void> {
       }
     }
 
-    const result = await provider.execute(prInfo, providerConfig, dependencyResults);
+    // Wrap execution in OTel span when telemetry is enabled
+    let result: import('./reviewer').ReviewSummary;
+    if (telemetryEnabled) {
+      try {
+        const { withActiveSpan, setSpanAttributes } = await import('./telemetry/trace-helpers');
+        result = await withActiveSpan(
+          `visor.sandbox.child.${checkConfig.type || 'check'}`,
+          {
+            'visor.check.type': providerType,
+            'visor.check.exec': checkConfig.exec || '',
+          },
+          async () => {
+            const r = await provider.execute(prInfo, providerConfig, dependencyResults);
+            try {
+              setSpanAttributes({
+                'visor.check.output.type': typeof (r as any).output,
+                'visor.check.issues_count': (r.issues || []).length,
+              });
+            } catch {}
+            return r;
+          }
+        );
+      } catch {
+        // Fallback if span fails
+        result = await provider.execute(prInfo, providerConfig, dependencyResults);
+      }
+    } else {
+      result = await provider.execute(prInfo, providerConfig, dependencyResults);
+    }
 
     // Build CheckRunResult
     const extResult = result as import('./reviewer').ReviewSummary & {
@@ -134,8 +174,23 @@ async function runCheckMode(payloadArg?: string): Promise<void> {
       debug: result.debug,
     };
 
+    // Flush telemetry before writing result (ensures NDJSON is written)
+    if (telemetryEnabled) {
+      try {
+        const { shutdownTelemetry } = await import('./telemetry/opentelemetry');
+        await shutdownTelemetry();
+      } catch {}
+    }
+
     process.stdout.write(JSON.stringify(checkRunResult) + '\n');
   } catch (err) {
+    // Flush telemetry even on error
+    if (telemetryEnabled) {
+      try {
+        const { shutdownTelemetry } = await import('./telemetry/opentelemetry');
+        await shutdownTelemetry();
+      } catch {}
+    }
     const errorResult = {
       issues: [],
       output: null,

@@ -169,10 +169,14 @@ describe('CheckRunner', () => {
       depResults
     );
 
-    // Verify the payload includes dependency outputs
+    // Verify the payload includes dependency outputs (base64-encoded)
     const execCall = mockManager.exec.mock.calls[0];
     const command = execCall[1].command as string;
-    expect(command).toContain('dependencyOutputs');
+    // Extract the base64 payload from: echo <b64> | base64 -d | node ...
+    const b64Match = command.match(/^echo (\S+) \| base64/);
+    expect(b64Match).toBeTruthy();
+    const decoded = Buffer.from(b64Match![1], 'base64').toString('utf8');
+    expect(decoded).toContain('dependencyOutputs');
   });
 
   it('should forward env from sandbox config passthrough', async () => {

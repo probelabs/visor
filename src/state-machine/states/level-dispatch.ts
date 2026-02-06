@@ -933,15 +933,16 @@ async function executeCheckWithForEachItems(
           session_id: context.sessionId,
           wave: state.wave,
         },
-        async () => executeWithSandboxRouting(
-          checkId,
-          checkConfig,
-          context,
-          prInfo,
-          dependencyResults,
-          checkConfig.ai?.timeout || 1800000,
-          () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-        )
+        async () =>
+          executeWithSandboxRouting(
+            checkId,
+            checkConfig,
+            context,
+            prInfo,
+            dependencyResults,
+            checkConfig.ai?.timeout || 1800000,
+            () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+          )
       );
 
       // Enrich issues
@@ -2239,15 +2240,16 @@ async function executeSingleCheck(
         session_id: context.sessionId,
         wave: state.wave,
       },
-      async () => executeWithSandboxRouting(
-        checkId,
-        checkConfig,
-        context,
-        prInfo,
-        dependencyResults,
-        checkConfig.ai?.timeout || 1800000,
-        () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-      )
+      async () =>
+        executeWithSandboxRouting(
+          checkId,
+          checkConfig,
+          context,
+          prInfo,
+          dependencyResults,
+          checkConfig.ai?.timeout || 1800000,
+          () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+        )
     );
 
     // Special case: human-input style checks that intentionally pause the run

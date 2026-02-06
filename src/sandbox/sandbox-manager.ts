@@ -3,7 +3,8 @@
  * Handles lazy container startup, reuse, exec routing, and cleanup.
  */
 
-import { resolve, dirname } from 'path';
+import { resolve, dirname, join } from 'path';
+import { existsSync } from 'fs';
 import { SandboxConfig, SandboxInstance, SandboxExecOptions, SandboxExecResult } from './types';
 import { DockerImageSandbox } from './docker-image-sandbox';
 import { DockerComposeSandbox } from './docker-compose-sandbox';
@@ -30,10 +31,12 @@ export class SandboxManager {
     this.gitBranch = gitBranch;
     this.cacheManager = new CacheVolumeManager();
 
-    // Visor dist path: the directory containing this compiled JS file's parent
-    // In development: <project>/dist/sandbox/sandbox-manager.js → <project>/dist
-    // We mount the parent of 'dist' along with node_modules
-    this.visorDistPath = resolve(dirname(__dirname));
+    // Visor dist path: the directory containing index.js (the ncc bundle)
+    // ncc bundle: __dirname = <project>/dist (index.js is here)
+    // unbundled:  __dirname = <project>/dist/sandbox → parent has index.js
+    this.visorDistPath = existsSync(join(__dirname, 'index.js'))
+      ? __dirname
+      : resolve(dirname(__dirname));
   }
 
   /**

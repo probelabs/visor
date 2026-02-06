@@ -1,58 +1,150 @@
 /**
  * Read child visor NDJSON trace file and re-emit spans
- * into the parent's telemetry context as events.
+ * into the parent's telemetry context as proper child spans.
+ *
+ * NDJSON format from FileSpanExporter:
+ *   { traceId, spanId, parentSpanId?, name, startTime: [s,ns], endTime: [s,ns],
+ *     status: { code, message? }, attributes, events?, kind }
  */
 
 import { readFileSync } from 'fs';
-import { addEvent } from './sandbox-telemetry';
+import { logger } from '../logger';
+
+interface ChildSpanRecord {
+  traceId?: string;
+  spanId?: string;
+  parentSpanId?: string;
+  name: string;
+  startTime?: [number, number];
+  endTime?: [number, number];
+  status?: { code?: number; message?: string };
+  attributes?: Record<string, unknown>;
+  events?: Array<{
+    name: string;
+    time?: [number, number];
+    attributes?: Record<string, unknown>;
+    attrs?: Record<string, unknown>; // fallback-ndjson uses 'attrs'
+  }>;
+  kind?: number;
+}
 
 /**
- * Ingest child trace NDJSON file and re-emit each span
- * as an event on the current parent span.
+ * Try to obtain the OTel tracer. Returns null if OTel is not available.
+ */
+function getTracer(): any {
+  try {
+    const helpers = require('../telemetry/trace-helpers');
+    return helpers.getTracer();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Try to get the OTel context module for active span context.
+ */
+function getOtelContext(): any {
+  try {
+    return require('../telemetry/lazy-otel');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ingest child trace NDJSON file and re-emit each span as a proper
+ * child span under the current active parent span.
  *
- * Each line in the file is a JSON object with at minimum:
- *   { name: string, attributes?: Record<string, unknown>, events?: [...] }
+ * Spans are created with their original startTime/endTime so they
+ * appear with correct timing in the trace viewer.
  *
- * Gracefully ignores parse errors (child may have crashed mid-write).
+ * Gracefully degrades to no-op if OTel is not available.
  */
 export function ingestChildTrace(filePath: string): void {
   let content: string;
   try {
     content = readFileSync(filePath, 'utf8');
   } catch {
-    // File may not exist or be unreadable — nothing to ingest
     return;
   }
 
   const lines = content.split('\n');
+  const spans: ChildSpanRecord[] = [];
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
+    try {
+      spans.push(JSON.parse(trimmed));
+    } catch {
+      // Ignore malformed lines
+    }
+  }
+
+  if (spans.length === 0) return;
+
+  const tracer = getTracer();
+  if (!tracer) {
+    // No OTel — fall back to logging
+    logger.info(`[trace-ingester] ${spans.length} child spans (OTel unavailable)`);
+    return;
+  }
+
+  const otel = getOtelContext();
+
+  // Re-emit each child span as a proper child span of the current parent
+  for (const child of spans) {
+    if (!child.name) continue;
+
+    // Skip fallback markers and fallback-ndjson duplicates (no traceId = fallback emitter)
+    if (child.name === 'visor.run' || child.name === 'visor.event') continue;
+    if (!child.traceId && !child.startTime) continue; // fallback-ndjson record, skip
 
     try {
-      const span = JSON.parse(trimmed);
-      const attrs: Record<string, unknown> = {
-        'visor.sandbox.child_span': true,
-        ...(span.attributes || {}),
+      const spanOptions: Record<string, any> = {
+        attributes: {
+          'visor.sandbox.child_span': true,
+          ...(child.attributes || {}),
+        },
       };
 
-      if (span.name) {
-        attrs['child_span_name'] = span.name;
+      // Preserve original timing if available
+      if (child.startTime) {
+        spanOptions.startTime = child.startTime;
       }
 
-      // Re-emit child span events as sub-events
-      if (Array.isArray(span.events)) {
-        for (const evt of span.events) {
-          addEvent(`visor.sandbox.child: ${evt.name || span.name}`, {
-            ...attrs,
-            ...(evt.attrs || {}),
-          });
+      const span = tracer.startSpan(`child: ${child.name}`, spanOptions);
+
+      // Re-emit child events
+      if (Array.isArray(child.events)) {
+        for (const evt of child.events) {
+          const evtAttrs = evt.attributes || evt.attrs || {};
+          if (evt.time) {
+            span.addEvent(evt.name, evtAttrs, evt.time);
+          } else {
+            span.addEvent(evt.name, evtAttrs);
+          }
         }
+      }
+
+      // Set status if error
+      if (child.status && child.status.code === 2) {
+        try {
+          const { SpanStatusCode } = otel || {};
+          span.setStatus({
+            code: SpanStatusCode?.ERROR || 2,
+            message: child.status.message,
+          });
+        } catch {}
+      }
+
+      // End with original endTime if available
+      if (child.endTime) {
+        span.end(child.endTime);
       } else {
-        addEvent(`visor.sandbox.child: ${span.name || 'unknown'}`, attrs);
+        span.end();
       }
     } catch {
-      // Gracefully ignore malformed lines (child may have crashed mid-write)
+      // Non-fatal: skip individual span re-emission errors
     }
   }
 }
