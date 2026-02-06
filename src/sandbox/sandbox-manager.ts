@@ -9,6 +9,7 @@ import { DockerImageSandbox } from './docker-image-sandbox';
 import { DockerComposeSandbox } from './docker-compose-sandbox';
 import { CacheVolumeManager } from './cache-volume-manager';
 import { logger } from '../logger';
+import { withActiveSpan, addEvent } from './sandbox-telemetry';
 
 export class SandboxManager {
   private sandboxDefs: Record<string, SandboxConfig>;
@@ -17,6 +18,11 @@ export class SandboxManager {
   private instances: Map<string, SandboxInstance> = new Map();
   private cacheManager: CacheVolumeManager;
   private visorDistPath: string;
+
+  /** Get the resolved repository path (used by trace file relay) */
+  getRepoPath(): string {
+    return this.repoPath;
+  }
 
   constructor(sandboxDefs: Record<string, SandboxConfig>, repoPath: string, gitBranch: string) {
     this.sandboxDefs = sandboxDefs;
@@ -65,35 +71,50 @@ export class SandboxManager {
       throw new Error(`Sandbox '${name}' is not defined`);
     }
 
-    let instance: SandboxInstance;
+    const mode = config.compose ? 'compose' : 'image';
 
-    if (config.compose) {
-      // Compose mode
-      const composeSandbox = new DockerComposeSandbox(name, config);
-      await composeSandbox.start();
-      instance = composeSandbox;
-    } else {
-      // Image / Dockerfile mode
-      // Resolve cache volumes
-      let cacheVolumeMounts: string[] = [];
-      if (config.cache) {
-        const volumes = await this.cacheManager.resolveVolumes(name, config.cache, this.gitBranch);
-        cacheVolumeMounts = volumes.map(v => v.mountSpec);
+    return withActiveSpan(
+      'visor.sandbox.start',
+      {
+        'visor.sandbox.name': name,
+        'visor.sandbox.mode': mode,
+      },
+      async () => {
+        let instance: SandboxInstance;
+
+        if (config.compose) {
+          // Compose mode
+          const composeSandbox = new DockerComposeSandbox(name, config);
+          await composeSandbox.start();
+          instance = composeSandbox;
+        } else {
+          // Image / Dockerfile mode
+          // Resolve cache volumes
+          let cacheVolumeMounts: string[] = [];
+          if (config.cache) {
+            const volumes = await this.cacheManager.resolveVolumes(
+              name,
+              config.cache,
+              this.gitBranch
+            );
+            cacheVolumeMounts = volumes.map(v => v.mountSpec);
+          }
+
+          const imageSandbox = new DockerImageSandbox(
+            name,
+            config,
+            this.repoPath,
+            this.visorDistPath,
+            cacheVolumeMounts
+          );
+          await imageSandbox.start();
+          instance = imageSandbox;
+        }
+
+        this.instances.set(name, instance);
+        return instance;
       }
-
-      const imageSandbox = new DockerImageSandbox(
-        name,
-        config,
-        this.repoPath,
-        this.visorDistPath,
-        cacheVolumeMounts
-      );
-      await imageSandbox.start();
-      instance = imageSandbox;
-    }
-
-    this.instances.set(name, instance);
-    return instance;
+    );
   }
 
   /**
@@ -101,33 +122,48 @@ export class SandboxManager {
    */
   async exec(name: string, options: SandboxExecOptions): Promise<SandboxExecResult> {
     const instance = await this.getOrStart(name);
-    return instance.exec(options);
+    return withActiveSpan(
+      'visor.sandbox.exec',
+      {
+        'visor.sandbox.name': name,
+      },
+      async (span: any) => {
+        const result = await instance.exec(options);
+        try {
+          span.setAttribute('visor.sandbox.exit_code', result.exitCode);
+        } catch {}
+        return result;
+      }
+    );
   }
 
   /**
    * Stop all running sandbox instances and run cache eviction
    */
   async stopAll(): Promise<void> {
-    const stopPromises = Array.from(this.instances.entries()).map(async ([name, instance]) => {
-      try {
-        await instance.stop();
-        logger.info(`Stopped sandbox '${name}'`);
-      } catch (err) {
-        logger.warn(`Failed to stop sandbox '${name}': ${err}`);
-      }
-
-      // Run cache eviction
-      const config = this.sandboxDefs[name];
-      if (config?.cache) {
+    return withActiveSpan('visor.sandbox.stopAll', undefined, async () => {
+      const stopPromises = Array.from(this.instances.entries()).map(async ([name, instance]) => {
         try {
-          await this.cacheManager.evictExpired(name, config.cache.ttl, config.cache.max_scopes);
-        } catch {
-          // Non-fatal
+          await instance.stop();
+          addEvent('visor.sandbox.stopped', { 'visor.sandbox.name': name });
+          logger.info(`Stopped sandbox '${name}'`);
+        } catch (err) {
+          logger.warn(`Failed to stop sandbox '${name}': ${err}`);
         }
-      }
-    });
 
-    await Promise.allSettled(stopPromises);
-    this.instances.clear();
+        // Run cache eviction
+        const config = this.sandboxDefs[name];
+        if (config?.cache) {
+          try {
+            await this.cacheManager.evictExpired(name, config.cache.ttl, config.cache.max_scopes);
+          } catch {
+            // Non-fatal
+          }
+        }
+      });
+
+      await Promise.allSettled(stopPromises);
+      this.instances.clear();
+    });
   }
 }

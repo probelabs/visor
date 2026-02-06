@@ -1,4 +1,4 @@
-import { filterEnvForSandbox } from '../../src/sandbox/env-filter';
+import { filterEnvForSandbox, BUILTIN_PASSTHROUGH } from '../../src/sandbox/env-filter';
 
 describe('EnvFilter', () => {
   describe('filterEnvForSandbox', () => {
@@ -96,6 +96,99 @@ describe('EnvFilter', () => {
       // CI_BUILD_ID should NOT match pattern 'CI' (no wildcard)
       // But CI is a default, so CI_BUILD_ID should not be included
       expect(result.CI_BUILD_ID).toBeUndefined();
+    });
+  });
+
+  describe('custom defaultPatterns (workspace-level sandbox_defaults)', () => {
+    it('should replace builtins when defaultPatterns is provided', () => {
+      const hostEnv = {
+        PATH: '/usr/bin',
+        HOME: '/home/user',
+        USER: 'testuser',
+        CI: 'true',
+        NODE_ENV: 'test',
+        LANG: 'en_US.UTF-8',
+      };
+
+      // Only PATH allowed as default — HOME, USER, CI etc. should be blocked
+      const result = filterEnvForSandbox(undefined, hostEnv, undefined, ['PATH']);
+
+      expect(result.PATH).toBe('/usr/bin');
+      expect(result.HOME).toBeUndefined();
+      expect(result.USER).toBeUndefined();
+      expect(result.CI).toBeUndefined();
+      expect(result.NODE_ENV).toBeUndefined();
+      expect(result.LANG).toBeUndefined();
+    });
+
+    it('should block all host env when defaultPatterns is empty array', () => {
+      const hostEnv = {
+        PATH: '/usr/bin',
+        HOME: '/home/user',
+        CI: 'true',
+      };
+
+      // Empty defaults + no passthrough = nothing from host
+      const result = filterEnvForSandbox(undefined, hostEnv, undefined, []);
+
+      expect(Object.keys(result)).toHaveLength(0);
+    });
+
+    it('should still allow check-level env when defaultPatterns is empty', () => {
+      const hostEnv = { PATH: '/usr/bin', SECRET: 'x' };
+      const checkEnv = { MY_VAR: 'val' };
+
+      const result = filterEnvForSandbox(checkEnv, hostEnv, undefined, []);
+
+      expect(result.MY_VAR).toBe('val');
+      expect(result.PATH).toBeUndefined();
+      expect(result.SECRET).toBeUndefined();
+    });
+
+    it('should merge per-sandbox passthrough with custom defaults', () => {
+      const hostEnv = {
+        PATH: '/usr/bin',
+        CI: 'true',
+        GITHUB_TOKEN: 'ghp_xxx',
+        HOME: '/home/user',
+      };
+
+      // workspace defaults: PATH, CI only
+      // per-sandbox passthrough adds GITHUB_*
+      const result = filterEnvForSandbox(undefined, hostEnv, ['GITHUB_*'], ['PATH', 'CI']);
+
+      expect(result.PATH).toBe('/usr/bin');
+      expect(result.CI).toBe('true');
+      expect(result.GITHUB_TOKEN).toBe('ghp_xxx');
+      expect(result.HOME).toBeUndefined();
+    });
+
+    it('should forward OTel env vars when included in patterns', () => {
+      const hostEnv = {
+        PATH: '/usr/bin',
+        VISOR_TELEMETRY_ENABLED: 'true',
+        VISOR_TELEMETRY_SINK: 'file',
+        VISOR_FALLBACK_TRACE_FILE: '/tmp/trace.ndjson',
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'http://collector:4318',
+        OTEL_SERVICE_NAME: 'visor',
+      };
+
+      const result = filterEnvForSandbox(undefined, hostEnv, undefined, [
+        'PATH',
+        'VISOR_TELEMETRY_*',
+        'VISOR_FALLBACK_TRACE_FILE',
+        'OTEL_*',
+      ]);
+
+      expect(result.VISOR_TELEMETRY_ENABLED).toBe('true');
+      expect(result.VISOR_TELEMETRY_SINK).toBe('file');
+      expect(result.VISOR_FALLBACK_TRACE_FILE).toBe('/tmp/trace.ndjson');
+      expect(result.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('http://collector:4318');
+      expect(result.OTEL_SERVICE_NAME).toBe('visor');
+    });
+
+    it('should export BUILTIN_PASSTHROUGH for reference', () => {
+      expect(BUILTIN_PASSTHROUGH).toEqual(['PATH', 'HOME', 'USER', 'CI', 'NODE_ENV', 'LANG']);
     });
   });
 });

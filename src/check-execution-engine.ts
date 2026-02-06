@@ -1263,7 +1263,8 @@ export class CheckExecutionEngine {
         checkConfig,
         prInfo,
         undefined,
-        timeout
+        timeout,
+        config.sandbox_defaults
       );
     } else {
       // Execute on host (original code path)
@@ -2018,7 +2019,8 @@ export class CheckExecutionEngine {
                   checkConfig,
                   prInfo,
                   forEachDependencyResults,
-                  timeout
+                  timeout,
+                  config.sandbox_defaults
                 );
               } else {
                 itemResult = await this.executeWithRouting(
@@ -2153,7 +2155,8 @@ export class CheckExecutionEngine {
                 checkConfig,
                 prInfo,
                 dependencyResults,
-                timeout
+                timeout,
+                config.sandbox_defaults
               );
             } else {
               // Execute with retry/routing semantics on host

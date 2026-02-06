@@ -4,6 +4,9 @@
  * and parses the JSON result from stdout.
  */
 
+import { writeFileSync, existsSync, unlinkSync } from 'fs';
+import { join } from 'path';
+import { randomUUID } from 'crypto';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { CheckConfig } from '../types/config';
@@ -12,6 +15,8 @@ import { SandboxManager } from './sandbox-manager';
 import { filterEnvForSandbox } from './env-filter';
 import { SandboxConfig } from './types';
 import { logger } from '../logger';
+import { withActiveSpan, setSpanError } from './sandbox-telemetry';
+import { ingestChildTrace } from './trace-ingester';
 
 /**
  * Serialize PRInfo to a plain JSON-safe object
@@ -60,122 +65,171 @@ export class CheckRunner {
     checkConfig: CheckConfig,
     prInfo: PRInfo,
     dependencyResults?: Map<string, ReviewSummary>,
-    timeoutMs?: number
+    timeoutMs?: number,
+    workspaceDefaults?: { env_passthrough?: string[] }
   ): Promise<ReviewSummary> {
-    // Build the payload
-    const dependencyOutputs: Record<string, unknown> = {};
-    if (dependencyResults) {
-      for (const [key, value] of dependencyResults) {
-        dependencyOutputs[key] = value;
+    return withActiveSpan(
+      'visor.sandbox.runCheck',
+      {
+        'visor.sandbox.name': sandboxName,
+        'visor.check.name': (checkConfig as any).name || 'unknown',
+      },
+      async () => {
+        // Build the payload
+        const dependencyOutputs: Record<string, unknown> = {};
+        if (dependencyResults) {
+          for (const [key, value] of dependencyResults) {
+            dependencyOutputs[key] = value;
+          }
+        }
+
+        const payload: CheckRunPayload = {
+          check: checkConfig,
+          prInfo: serializePRInfo(prInfo),
+          dependencyOutputs:
+            Object.keys(dependencyOutputs).length > 0 ? dependencyOutputs : undefined,
+        };
+
+        // Filter environment variables
+        const env = filterEnvForSandbox(
+          checkConfig.env as Record<string, string | number | boolean> | undefined,
+          process.env,
+          sandboxConfig.env_passthrough,
+          workspaceDefaults?.env_passthrough
+        );
+
+        // Set up child trace file relay (skip for read-only sandboxes)
+        const workdir = sandboxConfig.workdir || '/workspace';
+        let hostTracePath: string | undefined;
+        if (!sandboxConfig.read_only) {
+          const traceFileName = `.visor-trace-${randomUUID().slice(0, 8)}.ndjson`;
+          hostTracePath = join(sandboxManager.getRepoPath(), traceFileName);
+          const containerTracePath = `${workdir}/${traceFileName}`;
+          try {
+            writeFileSync(hostTracePath, '', 'utf8'); // Create empty file (inside mounted workspace)
+          } catch {
+            hostTracePath = undefined; // Can't write — skip trace relay
+          }
+          if (hostTracePath) {
+            env['VISOR_FALLBACK_TRACE_FILE'] = containerTracePath;
+            env['VISOR_TELEMETRY_ENABLED'] = 'true';
+            env['VISOR_TELEMETRY_SINK'] = 'file';
+          }
+        }
+
+        // Build the command
+        const visorPath = sandboxConfig.visor_path || '/opt/visor';
+        const payloadJson = JSON.stringify(payload);
+
+        // Use stdin to pass payload to avoid shell argument length limits
+        // The visor binary is bundled as index.js (ncc output)
+        const command = `echo '${payloadJson.replace(/'/g, "'\\''")}' | node ${visorPath}/index.js --run-check -`;
+
+        logger.info(`Executing check in sandbox '${sandboxName}'`);
+
+        const result = await sandboxManager.exec(sandboxName, {
+          command,
+          env,
+          timeoutMs: timeoutMs || 600000,
+          maxBuffer: 50 * 1024 * 1024,
+        });
+
+        // Ingest child trace file if it exists
+        if (hostTracePath) {
+          try {
+            if (existsSync(hostTracePath)) {
+              ingestChildTrace(hostTracePath);
+              unlinkSync(hostTracePath);
+            }
+          } catch {
+            // Non-fatal: child trace ingestion failure shouldn't affect check result
+            try {
+              if (existsSync(hostTracePath)) unlinkSync(hostTracePath);
+            } catch {}
+          }
+        }
+
+        // Parse the result from stdout
+        const stdout = result.stdout.trim();
+
+        if (result.exitCode !== 0 && !stdout) {
+          // Complete failure - no JSON output
+          setSpanError(new Error(`Sandbox execution failed (exit ${result.exitCode})`));
+          return {
+            issues: [
+              {
+                severity: 'error',
+                message: `Sandbox execution failed (exit ${result.exitCode}): ${result.stderr.slice(0, 500)}`,
+                file: '',
+                line: 0,
+                ruleId: 'sandbox-execution-error',
+                category: 'logic',
+              },
+            ],
+          };
+        }
+
+        // Find the last line that looks like JSON (the result)
+        const lines = stdout.split('\n');
+        let jsonLine: string | undefined;
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const line = lines[i].trim();
+          if (line.startsWith('{')) {
+            jsonLine = line;
+            break;
+          }
+        }
+
+        if (!jsonLine) {
+          setSpanError(new Error('No JSON output from sandboxed check'));
+          return {
+            issues: [
+              {
+                severity: 'error',
+                message: `No JSON output from sandboxed check. Stdout: ${stdout.slice(0, 500)}`,
+                file: '',
+                line: 0,
+                ruleId: 'sandbox-parse-error',
+                category: 'logic',
+              },
+            ],
+          };
+        }
+
+        let checkRunResult: CheckRunResult;
+        try {
+          checkRunResult = JSON.parse(jsonLine);
+        } catch (parseErr) {
+          setSpanError(parseErr);
+          return {
+            issues: [
+              {
+                severity: 'error',
+                message: `Invalid JSON from sandboxed check: ${jsonLine.slice(0, 200)}`,
+                file: '',
+                line: 0,
+                ruleId: 'sandbox-parse-error',
+                category: 'logic',
+              },
+            ],
+          };
+        }
+
+        // Convert CheckRunResult back to ReviewSummary
+        const summary: ReviewSummary & { output?: unknown; content?: string } = {
+          issues: checkRunResult.issues || [],
+          debug: checkRunResult.debug as ReviewSummary['debug'],
+        };
+
+        if (checkRunResult.output !== undefined) {
+          summary.output = checkRunResult.output;
+        }
+        if (checkRunResult.content !== undefined) {
+          summary.content = checkRunResult.content;
+        }
+
+        return summary;
       }
-    }
-
-    const payload: CheckRunPayload = {
-      check: checkConfig,
-      prInfo: serializePRInfo(prInfo),
-      dependencyOutputs: Object.keys(dependencyOutputs).length > 0 ? dependencyOutputs : undefined,
-    };
-
-    // Filter environment variables
-    const env = filterEnvForSandbox(
-      checkConfig.env as Record<string, string | number | boolean> | undefined,
-      process.env,
-      sandboxConfig.env_passthrough
     );
-
-    // Build the command
-    const visorPath = sandboxConfig.visor_path || '/opt/visor';
-    const payloadJson = JSON.stringify(payload);
-
-    // Use stdin to pass payload to avoid shell argument length limits
-    // The visor binary is bundled as index.js (ncc output)
-    const command = `echo '${payloadJson.replace(/'/g, "'\\''")}' | node ${visorPath}/index.js --run-check -`;
-
-    logger.info(`Executing check in sandbox '${sandboxName}'`);
-
-    const result = await sandboxManager.exec(sandboxName, {
-      command,
-      env,
-      timeoutMs: timeoutMs || 600000,
-      maxBuffer: 50 * 1024 * 1024,
-    });
-
-    // Parse the result from stdout
-    const stdout = result.stdout.trim();
-
-    if (result.exitCode !== 0 && !stdout) {
-      // Complete failure - no JSON output
-      return {
-        issues: [
-          {
-            severity: 'error',
-            message: `Sandbox execution failed (exit ${result.exitCode}): ${result.stderr.slice(0, 500)}`,
-            file: '',
-            line: 0,
-            ruleId: 'sandbox-execution-error',
-            category: 'logic',
-          },
-        ],
-      };
-    }
-
-    // Find the last line that looks like JSON (the result)
-    const lines = stdout.split('\n');
-    let jsonLine: string | undefined;
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i].trim();
-      if (line.startsWith('{')) {
-        jsonLine = line;
-        break;
-      }
-    }
-
-    if (!jsonLine) {
-      return {
-        issues: [
-          {
-            severity: 'error',
-            message: `No JSON output from sandboxed check. Stdout: ${stdout.slice(0, 500)}`,
-            file: '',
-            line: 0,
-            ruleId: 'sandbox-parse-error',
-            category: 'logic',
-          },
-        ],
-      };
-    }
-
-    let checkRunResult: CheckRunResult;
-    try {
-      checkRunResult = JSON.parse(jsonLine);
-    } catch {
-      return {
-        issues: [
-          {
-            severity: 'error',
-            message: `Invalid JSON from sandboxed check: ${jsonLine.slice(0, 200)}`,
-            file: '',
-            line: 0,
-            ruleId: 'sandbox-parse-error',
-            category: 'logic',
-          },
-        ],
-      };
-    }
-
-    // Convert CheckRunResult back to ReviewSummary
-    const summary: ReviewSummary & { output?: unknown; content?: string } = {
-      issues: checkRunResult.issues || [],
-      debug: checkRunResult.debug as ReviewSummary['debug'],
-    };
-
-    if (checkRunResult.output !== undefined) {
-      summary.output = checkRunResult.output;
-    }
-    if (checkRunResult.content !== undefined) {
-      summary.content = checkRunResult.content;
-    }
-
-    return summary;
   }
 }

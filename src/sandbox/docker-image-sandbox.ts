@@ -11,6 +11,7 @@ import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { SandboxConfig, SandboxExecOptions, SandboxExecResult, SandboxInstance } from './types';
 import { logger } from '../logger';
+import { withActiveSpan, addEvent } from './sandbox-telemetry';
 
 const execAsync = promisify(execCb);
 
@@ -49,40 +50,50 @@ export class DockerImageSandbox implements SandboxInstance {
     }
 
     const imageName = `visor-sandbox-${this.name}`;
+    const buildMode = this.config.dockerfile_inline ? 'inline' : 'dockerfile';
 
-    if (this.config.dockerfile_inline) {
-      // Write inline Dockerfile to temp file
-      const tmpDir = mkdtempSync(join(tmpdir(), 'visor-build-'));
-      const dockerfilePath = join(tmpDir, 'Dockerfile');
-      writeFileSync(dockerfilePath, this.config.dockerfile_inline, 'utf8');
+    return withActiveSpan(
+      'visor.sandbox.build',
+      {
+        'visor.sandbox.name': this.name,
+        'visor.sandbox.build.mode': buildMode,
+      },
+      async () => {
+        if (this.config.dockerfile_inline) {
+          // Write inline Dockerfile to temp file
+          const tmpDir = mkdtempSync(join(tmpdir(), 'visor-build-'));
+          const dockerfilePath = join(tmpDir, 'Dockerfile');
+          writeFileSync(dockerfilePath, this.config.dockerfile_inline, 'utf8');
 
-      try {
-        logger.info(`Building sandbox image '${imageName}' from inline Dockerfile`);
-        await execAsync(`docker build -t ${imageName} -f ${dockerfilePath} ${this.repoPath}`, {
-          maxBuffer: EXEC_MAX_BUFFER,
-          timeout: 300000,
-        });
-      } finally {
-        try {
-          unlinkSync(dockerfilePath);
-        } catch {
-          /* ignore */
+          try {
+            logger.info(`Building sandbox image '${imageName}' from inline Dockerfile`);
+            await execAsync(`docker build -t ${imageName} -f ${dockerfilePath} ${this.repoPath}`, {
+              maxBuffer: EXEC_MAX_BUFFER,
+              timeout: 300000,
+            });
+          } finally {
+            try {
+              unlinkSync(dockerfilePath);
+            } catch {
+              /* ignore */
+            }
+          }
+
+          return imageName;
         }
+
+        if (this.config.dockerfile) {
+          logger.info(`Building sandbox image '${imageName}' from ${this.config.dockerfile}`);
+          await execAsync(
+            `docker build -t ${imageName} -f ${this.config.dockerfile} ${this.repoPath}`,
+            { maxBuffer: EXEC_MAX_BUFFER, timeout: 300000 }
+          );
+          return imageName;
+        }
+
+        throw new Error(`Sandbox '${this.name}' has no image, dockerfile, or dockerfile_inline`);
       }
-
-      return imageName;
-    }
-
-    if (this.config.dockerfile) {
-      logger.info(`Building sandbox image '${imageName}' from ${this.config.dockerfile}`);
-      await execAsync(
-        `docker build -t ${imageName} -f ${this.config.dockerfile} ${this.repoPath}`,
-        { maxBuffer: EXEC_MAX_BUFFER, timeout: 300000 }
-      );
-      return imageName;
-    }
-
-    throw new Error(`Sandbox '${this.name}' has no image, dockerfile, or dockerfile_inline`);
+    );
   }
 
   /**
@@ -134,6 +145,10 @@ export class DockerImageSandbox implements SandboxInstance {
 
     const { stdout } = await execAsync(cmd, { maxBuffer: EXEC_MAX_BUFFER, timeout: 60000 });
     this.containerId = stdout.trim();
+    addEvent('visor.sandbox.container.started', {
+      container_name: this.containerName,
+      image,
+    });
   }
 
   /**
@@ -192,6 +207,9 @@ export class DockerImageSandbox implements SandboxInstance {
       } catch {
         // Container may already be stopped
       }
+      addEvent('visor.sandbox.container.stopped', {
+        container_name: this.containerName,
+      });
       this.containerId = null;
     }
   }

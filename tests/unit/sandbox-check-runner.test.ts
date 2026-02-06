@@ -33,6 +33,7 @@ describe('CheckRunner', () => {
       resolveSandbox: jest.fn(),
       getOrStart: jest.fn(),
       stopAll: jest.fn(),
+      getRepoPath: jest.fn().mockReturnValue('/tmp/visor-test-repo'),
     } as unknown as jest.Mocked<SandboxManager>;
   });
 

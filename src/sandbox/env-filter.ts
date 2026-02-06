@@ -4,8 +4,8 @@
  * before forwarding them into sandbox containers.
  */
 
-/** Default env vars always forwarded into sandboxes */
-const DEFAULT_PASSTHROUGH = ['PATH', 'HOME', 'USER', 'CI', 'NODE_ENV', 'LANG'];
+/** Built-in env vars forwarded into sandboxes (used when no workspace defaults are set) */
+export const BUILTIN_PASSTHROUGH = ['PATH', 'HOME', 'USER', 'CI', 'NODE_ENV', 'LANG'];
 
 /**
  * Test if a string matches a glob-like pattern with * wildcards.
@@ -26,17 +26,21 @@ function matchesPattern(name: string, pattern: string): boolean {
  * @param checkEnv - Check-level env overrides (always included)
  * @param hostEnv - Host process.env to filter
  * @param passthroughPatterns - Glob patterns from sandbox config env_passthrough
+ * @param defaultPatterns - Workspace-level defaults from sandbox_defaults.env_passthrough
+ *                          (replaces BUILTIN_PASSTHROUGH when provided)
  * @returns Merged environment variables safe for the sandbox
  */
 export function filterEnvForSandbox(
   checkEnv: Record<string, string | number | boolean> | undefined,
   hostEnv: Record<string, string | undefined>,
-  passthroughPatterns?: string[]
+  passthroughPatterns?: string[],
+  defaultPatterns?: string[]
 ): Record<string, string> {
   const result: Record<string, string> = {};
 
-  // Combine default patterns with user-specified patterns
-  const patterns = [...DEFAULT_PASSTHROUGH, ...(passthroughPatterns || [])];
+  // If workspace-level defaults provided, use those instead of builtins
+  const defaults = defaultPatterns !== undefined ? defaultPatterns : BUILTIN_PASSTHROUGH;
+  const patterns = [...defaults, ...(passthroughPatterns || [])];
 
   // Filter host env vars by patterns
   for (const [key, value] of Object.entries(hostEnv)) {

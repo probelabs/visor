@@ -565,6 +565,14 @@ export interface HttpServerConfig {
 }
 
 /**
+ * Workspace-level sandbox defaults
+ */
+export interface SandboxDefaults {
+  /** Base env var patterns for all sandboxes (replaces hardcoded defaults when set) */
+  env_passthrough?: string[];
+}
+
+/**
  * Main Visor configuration
  */
 export interface VisorConfig {
@@ -602,6 +610,8 @@ export interface VisorConfig {
   sandbox?: string;
   /** Named sandbox environment definitions */
   sandboxes?: Record<string, import('../sandbox/types').SandboxConfig>;
+  /** Workspace-level sandbox defaults (env allowlist, etc.) */
+  sandbox_defaults?: SandboxDefaults;
 }
 
 /**
