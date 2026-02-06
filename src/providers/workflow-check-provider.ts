@@ -698,32 +698,42 @@ export class WorkflowCheckProvider extends CheckProvider {
 
     for (const output of workflow.outputs) {
       if (output.value_js) {
-        // JavaScript expression
-        const sandbox = createSecureSandbox();
-        const result = compileAndRun(
-          sandbox,
-          output.value_js,
-          {
-            inputs,
-            outputs: outputsMap,
-            // Keep 'steps' as alias for backwards compatibility
-            steps: outputsMap,
-            pr: prInfo,
-          },
-          { injectLog: true, logPrefix: `workflow.output.${output.name}` }
-        );
-        outputs[output.name] = result;
-
-        // Log result for debugging
-        const resultType =
-          result === null ? 'null' : result === undefined ? 'undefined' : typeof result;
-        const resultPreview =
-          result && typeof result === 'object'
-            ? `{${Object.keys(result).join(',')}}`
-            : String(result).substring(0, 100);
-        logger.debug(
-          `[WorkflowProvider] Output '${output.name}' value_js result: type=${resultType}, preview=${resultPreview}`
-        );
+        // JavaScript expression - wrap in try-catch for graceful degradation
+        try {
+          const sandbox = createSecureSandbox();
+          const result = compileAndRun(
+            sandbox,
+            output.value_js,
+            {
+              inputs,
+              outputs: outputsMap,
+              // Keep 'steps' as alias for backwards compatibility
+              steps: outputsMap,
+              pr: prInfo,
+            },
+            { injectLog: true, logPrefix: `workflow.output.${output.name}` }
+          );
+          outputs[output.name] = result;
+          // Log result for debugging
+          const resultType =
+            result === null ? 'null' : result === undefined ? 'undefined' : typeof result;
+          const resultPreview =
+            result && typeof result === 'object'
+              ? `{${Object.keys(result).join(',')}}`
+              : String(result).substring(0, 100);
+          logger.debug(
+            `[WorkflowProvider] Output '${output.name}' value_js result: type=${resultType}, preview=${resultPreview}`
+          );
+        } catch (valueJsError) {
+          // Log the error but don't crash - set output to null
+          const errorMsg =
+            valueJsError instanceof Error ? valueJsError.message : String(valueJsError);
+          logger.error(
+            `[WorkflowProvider] Output '${output.name}' value_js failed: ${errorMsg}. ` +
+              `Setting to null. Available step outputs: [${Object.keys(outputsMap).join(', ')}]`
+          );
+          outputs[output.name] = null;
+        }
       } else if (output.value) {
         // Liquid template
         outputs[output.name] = await this.liquid.parseAndRender(output.value, {
