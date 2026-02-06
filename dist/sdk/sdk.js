@@ -46706,6 +46706,35 @@ var init_client = __esm({
         }
         return String(resp.user_id);
       }
+      /**
+       * Fetch user info from Slack API.
+       * Returns user profile including guest status flags, email, and display name.
+       */
+      async getUserInfo(userId) {
+        try {
+          const resp = await this.api("users.info", { user: userId });
+          if (!resp || resp.ok !== true || !resp.user) {
+            return { ok: false };
+          }
+          return {
+            ok: true,
+            user: {
+              id: resp.user.id,
+              name: resp.user.name,
+              real_name: resp.user.real_name || resp.user.profile?.real_name,
+              email: resp.user.profile?.email,
+              is_restricted: resp.user.is_restricted,
+              is_ultra_restricted: resp.user.is_ultra_restricted,
+              is_bot: resp.user.is_bot,
+              is_app_user: resp.user.is_app_user,
+              deleted: resp.user.deleted
+            }
+          };
+        } catch (e) {
+          console.warn(`Slack users.info failed: ${e instanceof Error ? e.message : String(e)}`);
+          return { ok: false };
+        }
+      }
       async fetchThreadReplies(channel, thread_ts, limit = 40) {
         try {
           const params = new URLSearchParams({
