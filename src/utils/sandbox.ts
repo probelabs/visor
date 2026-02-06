@@ -278,12 +278,17 @@ export function compileAndRun<T = unknown>(
       : `return (\n${src}\n);\n`
     : `${src}`;
   const code = `${header}${body}`;
+
+  // Create code preview for error messages (first 100 chars, single line)
+  const codePreview = src.replace(/\s+/g, ' ').trim().slice(0, 100);
+  const contextInfo = safePrefix !== '[sandbox]' ? ` [${safePrefix}]` : '';
+
   let exec: ReturnType<typeof sandbox.compile>;
   try {
     exec = sandbox.compile(code);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    throw new Error(`sandbox_compile_error: ${msg}`);
+    throw new Error(`sandbox_compile_error${contextInfo}: ${msg} | code: ${codePreview}`);
   }
 
   let out: any;
@@ -291,7 +296,7 @@ export function compileAndRun<T = unknown>(
     out = exec(scopeWithLog);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    throw new Error(`sandbox_execution_error: ${msg}`);
+    throw new Error(`sandbox_execution_error${contextInfo}: ${msg} | code: ${codePreview}`);
   }
 
   if (out && typeof out.run === 'function') {
@@ -299,7 +304,7 @@ export function compileAndRun<T = unknown>(
       return out.run();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      throw new Error(`sandbox_runner_error: ${msg}`);
+      throw new Error(`sandbox_runner_error${contextInfo}: ${msg} | code: ${codePreview}`);
     }
   }
   return out as T;

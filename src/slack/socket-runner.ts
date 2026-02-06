@@ -398,8 +398,9 @@ export class SlackSocketRunner {
           {
             'visor.run.source': 'slack',
             'slack.event.type': String(type || ''),
-            'slack.channel': channelId,
+            'slack.channel_id': channelId,
             'slack.thread_ts': threadTs,
+            'slack.user_id': userId,
           },
           async () => {
             if (path) {
