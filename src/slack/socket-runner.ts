@@ -16,6 +16,7 @@ type SlackSocketConfig = {
   threads?: 'required' | 'any';
   channel_allowlist?: string[]; // simple wildcard prefix match, e.g., CENG*
   allowBotMessages?: boolean; // allow bot_message events (default: false)
+  allowGuests?: boolean; // allow guest users (single/multi-channel guests) (default: false)
 };
 
 export class SlackSocketRunner {
@@ -31,7 +32,18 @@ export class SlackSocketRunner {
   private limiter?: RateLimiter;
   private botUserId?: string;
   private allowBotMessages: boolean = false;
+  private allowGuests: boolean = false;
   private processedKeys: Map<string, number> = new Map();
+  private userInfoCache: Map<
+    string,
+    {
+      isGuest: boolean;
+      email?: string;
+      name?: string;
+      realName?: string;
+      timestamp: number;
+    }
+  > = new Map();
   private adapter?: SlackAdapter;
   private retryCount = 0;
 
@@ -48,6 +60,10 @@ export class SlackSocketRunner {
       opts.allowBotMessages === true ||
       slackAny.allow_bot_messages === true ||
       process.env.VISOR_SLACK_ALLOW_BOT_MESSAGES === 'true';
+    this.allowGuests =
+      opts.allowGuests === true ||
+      slackAny.allow_guests === true ||
+      process.env.VISOR_SLACK_ALLOW_GUESTS === 'true';
     this.engine = engine;
     this.cfg = cfg;
   }
@@ -170,6 +186,59 @@ export class SlackSocketRunner {
     );
   }
 
+  /**
+   * Fetch and cache user info including guest status, email, and name.
+   * Results are cached for 5 minutes to avoid excessive API calls.
+   */
+  private async fetchUserInfo(userId: string): Promise<{
+    isGuest: boolean;
+    email?: string;
+    name?: string;
+    realName?: string;
+  } | null> {
+    if (!userId || userId === 'unknown') return null;
+    if (!this.client) return null;
+
+    // Check cache first (5 minute TTL)
+    const cached = this.userInfoCache.get(userId);
+    const now = Date.now();
+    if (cached && now - cached.timestamp < 5 * 60 * 1000) {
+      return cached;
+    }
+
+    // Clean up old cache entries
+    for (const [k, v] of this.userInfoCache.entries()) {
+      if (now - v.timestamp > 5 * 60 * 1000) this.userInfoCache.delete(k);
+    }
+
+    try {
+      const info = await this.client.getUserInfo(userId);
+      if (!info.ok || !info.user) {
+        return null;
+      }
+      // is_restricted = multi-channel guest, is_ultra_restricted = single-channel guest
+      const userInfo = {
+        isGuest: info.user.is_restricted === true || info.user.is_ultra_restricted === true,
+        email: info.user.email,
+        name: info.user.name,
+        realName: info.user.real_name,
+        timestamp: now,
+      };
+      this.userInfoCache.set(userId, userInfo);
+      return userInfo;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Check if user is a guest (single-channel or multi-channel guest).
+   */
+  private async isGuestUser(userId: string): Promise<boolean> {
+    const info = await this.fetchUserInfo(userId);
+    return info?.isGuest ?? false;
+  }
+
   private async handleMessage(raw: string): Promise<void> {
     let env: any;
     try {
@@ -218,6 +287,17 @@ export class SlackSocketRunner {
         logger.debug('[SlackSocket] Dropping self-bot message');
       }
       return;
+    }
+
+    // Filter out guest users (single-channel and multi-channel guests) unless explicitly allowed
+    if (!this.allowGuests && ev.user) {
+      const isGuest = await this.isGuestUser(String(ev.user));
+      if (isGuest) {
+        if (process.env.VISOR_DEBUG === 'true') {
+          logger.debug(`[SlackSocket] Dropping message from guest user: ${String(ev.user)}`);
+        }
+        return;
+      }
     }
 
     // Info-level receipt log for observability
@@ -392,6 +472,9 @@ export class SlackSocketRunner {
           slackClient: this.client || parentCtx.slackClient,
         });
       } catch {}
+      // Fetch user info for tracing (may already be cached from guest check)
+      // Note: We intentionally exclude PII (email, real_name) from traces for privacy compliance
+      const userInfo = await this.fetchUserInfo(userId);
       try {
         await withActiveSpan(
           'visor.run',
@@ -401,6 +484,9 @@ export class SlackSocketRunner {
             'slack.channel_id': channelId,
             'slack.thread_ts': threadTs,
             'slack.user_id': userId,
+            // Only include non-PII user info in traces (username is not PII, but email/real_name are)
+            ...(userInfo?.name && { 'slack.user_name': userInfo.name }),
+            ...(userInfo?.isGuest !== undefined && { 'slack.user_is_guest': userInfo.isGuest }),
           },
           async () => {
             if (path) {

@@ -96,6 +96,49 @@ export class SlackClient {
     return String(resp.user_id);
   }
 
+  /**
+   * Fetch user info from Slack API.
+   * Returns user profile including guest status flags, email, and display name.
+   */
+  async getUserInfo(userId: string): Promise<{
+    ok: boolean;
+    user?: {
+      id: string;
+      name?: string; // username
+      real_name?: string; // full name
+      email?: string; // requires users:read.email scope
+      is_restricted?: boolean; // Multi-channel guest
+      is_ultra_restricted?: boolean; // Single-channel guest
+      is_bot?: boolean;
+      is_app_user?: boolean;
+      deleted?: boolean;
+    };
+  }> {
+    try {
+      const resp: any = await this.api('users.info', { user: userId });
+      if (!resp || resp.ok !== true || !resp.user) {
+        return { ok: false };
+      }
+      return {
+        ok: true,
+        user: {
+          id: resp.user.id,
+          name: resp.user.name,
+          real_name: resp.user.real_name || resp.user.profile?.real_name,
+          email: resp.user.profile?.email,
+          is_restricted: resp.user.is_restricted,
+          is_ultra_restricted: resp.user.is_ultra_restricted,
+          is_bot: resp.user.is_bot,
+          is_app_user: resp.user.is_app_user,
+          deleted: resp.user.deleted,
+        },
+      };
+    } catch (e) {
+      console.warn(`Slack users.info failed: ${e instanceof Error ? e.message : String(e)}`);
+      return { ok: false };
+    }
+  }
+
   async fetchThreadReplies(
     channel: string,
     thread_ts: string,

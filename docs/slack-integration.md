@@ -122,6 +122,11 @@ slack:
   # to mention/threads/channel allowlist gating).
   allow_bot_messages: false
 
+  # Optional: allow guest users (default: false)
+  # When false, single-channel and multi-channel guests are ignored.
+  # Set to true to allow guest users to interact with the bot.
+  allow_guests: false
+
   # Optional: rate limiting
   rate_limiting:
     enabled: true
@@ -163,6 +168,7 @@ checks:
 | `threads` | string | `"any"` | `"required"` to only respond in threads |
 | `channel_allowlist` | string[] | `[]` | Limit to specific channels (supports `*` wildcard) |
 | `allow_bot_messages` | boolean | `false` | Allow `bot_message` events to trigger runs |
+| `allow_guests` | boolean | `false` | Allow guest users (single/multi-channel) to trigger runs |
 | `show_raw_output` | boolean | `false` | Post raw JSON output (for debugging) |
 | `reactions.enabled` | boolean | `true` | Enable reaction management |
 | `reactions.ack` | string | `"eyes"` | Reaction name for acknowledgement |
