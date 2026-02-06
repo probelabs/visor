@@ -42,11 +42,11 @@ jest.mock('../../src/check-execution-engine', () => {
         .mockImplementation(async (_prInfo, _checks, _unused1, _config, _unused2, _debug) => {
           // Return GroupedCheckResults format
           return {
-            default: [
+            'security-review': [
               {
                 checkName: 'security-review',
                 content: `## Security Issues Found\n\n- **CRITICAL**: Potential hardcoded API key detected (src/test.ts:10)\n- **WARNING**: Consider using a more efficient data structure (src/test.ts:25)\n\n## Suggestions\n\n- Consider adding input validation\n- Add unit tests for new functionality`,
-                group: 'default',
+                group: 'security-review',
                 debug: {
                   provider: 'google',
                   model: 'gemini-2.0-flash-exp',
@@ -258,11 +258,11 @@ describe('GitHub PR Workflow Integration', () => {
       // Verify review structure (new GroupedCheckResults format)
       expect(review).toEqual(
         expect.objectContaining({
-          default: expect.arrayContaining([
+          'security-review': expect.arrayContaining([
             expect.objectContaining({
               checkName: 'security-review',
-              content: expect.stringContaining('Security Issues Found'),
-              group: 'default',
+              content: expect.stringContaining('hardcoded API key'),
+              group: 'security-review',
             }),
           ]),
         })

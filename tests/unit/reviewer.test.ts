@@ -140,7 +140,10 @@ jest.mock('../../src/check-execution-engine', () => {
             let content = '';
             if (checkIssues.length > 0) {
               content += checkIssues
-                .map(i => `- **${i.severity.toUpperCase()}**: ${i.message} (${i.file}:${i.line})`)
+                .map(
+                  i =>
+                    `- **${i.severity.toUpperCase()}**: ${i.message} (${i.file}:${i.line}) [${i.category}]`
+                )
                 .join('\n');
             }
             // Suggestions content generation removed as suggestions field is deprecated
@@ -180,7 +183,7 @@ jest.mock('../../src/ai-review-service', () => {
             file: 'src/test.ts',
             line: 5,
             ruleId: 'security/dangerous-eval',
-            message: 'Dangerous eval usage detected',
+            message: 'Dangerous eval usage detected - security vulnerability',
             severity: 'critical',
             category: 'security',
           });
