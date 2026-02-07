@@ -52,6 +52,14 @@ export class SlackOutputAdapter implements ScheduleOutputAdapter {
       // Build message
       const message = this.buildMessage(schedule, result);
 
+      // Skip posting if message is empty (pipeline already handled output)
+      if (!message) {
+        logger.debug(
+          `[SlackOutputAdapter] Skipping post for schedule ${schedule.id} - pipeline handled output`
+        );
+        return;
+      }
+
       // Post message
       await this.client.chat.postMessage({
         channel: targetChannel,
@@ -116,10 +124,29 @@ export class SlackOutputAdapter implements ScheduleOutputAdapter {
    * Build the message to post
    */
   private buildMessage(schedule: Schedule, result: ScheduleExecutionResult): string {
+    // Handle simple reminders (no workflow, just text)
+    if (!schedule.workflow && result.output) {
+      const output = result.output as any;
+      // Pipeline already handled output - don't double-post
+      if (output.type === 'pipeline_executed') {
+        return ''; // Return empty to skip posting
+      }
+      // Simple reminder fallback - just post the message text
+      if (output.type === 'simple_reminder' && output.message) {
+        return output.message;
+      }
+      // If workflowInputs has text, use that
+      if (schedule.workflowInputs?.text) {
+        return schedule.workflowInputs.text as string;
+      }
+    }
+
     const parts: string[] = [];
 
     if (result.success) {
-      parts.push(`*Scheduled workflow completed: ${schedule.workflow}*`);
+      if (schedule.workflow) {
+        parts.push(`*Scheduled workflow completed: ${schedule.workflow}*`);
+      }
 
       // Add output if available
       if (result.output) {
@@ -128,10 +155,7 @@ export class SlackOutputAdapter implements ScheduleOutputAdapter {
             ? result.output
             : JSON.stringify(result.output, null, 2);
 
-        // Handle legacy reminder format
-        if (typeof result.output === 'object' && (result.output as any).isLegacy) {
-          parts.push((result.output as any).message || outputStr);
-        } else if (outputStr.length > 2000) {
+        if (outputStr.length > 2000) {
           parts.push(`\`\`\`\n${outputStr.substring(0, 1900)}...\n(truncated)\n\`\`\``);
         } else if (outputStr.trim()) {
           parts.push(`\`\`\`\n${outputStr}\n\`\`\``);
@@ -142,7 +166,8 @@ export class SlackOutputAdapter implements ScheduleOutputAdapter {
         parts.push(`_Completed in ${result.executionTimeMs}ms_`);
       }
     } else {
-      parts.push(`*Scheduled workflow failed: ${schedule.workflow}*`);
+      const workflowName = schedule.workflow || 'reminder';
+      parts.push(`*Scheduled ${workflowName} failed*`);
 
       if (this.config.includeErrorDetails && result.error) {
         parts.push(`Error: ${result.error}`);

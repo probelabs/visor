@@ -62,7 +62,11 @@ export function extractSlackContext(webhookData: Map<string, unknown>): SlackWeb
       if (event) {
         const userId = event.user || '';
         const channel = event.channel || '';
-        const threadTs = event.thread_ts || event.ts || '';
+        // Only use thread_ts if it's actually a threaded message
+        // A message is in a thread if thread_ts exists AND differs from ts
+        // (thread_ts === ts means it's the parent message of a thread, not a reply)
+        const isInThread = event.thread_ts && event.thread_ts !== event.ts;
+        const threadTs = isInThread ? event.thread_ts : undefined;
 
         if (userId && channel) {
           return {
@@ -141,29 +145,40 @@ export async function executeScheduleTool(
       },
     },
     availableWorkflows,
-    permissions,
-    {
-      outputType: args.output_type as 'slack' | 'github' | 'webhook' | 'none' | undefined,
-      outputTarget: args.output_target as string | undefined,
-    }
+    permissions
   );
 
-  // Map the tool arguments
+  // Map the tool arguments - AI provides structured data
   const toolArgs: ScheduleToolArgs = {
     action: args.action as any,
+    // What to do
+    reminder_text: args.reminder_text as string | undefined,
     workflow: args.workflow as string | undefined,
-    expression: args.expression as string | undefined,
-    inputs: args.inputs as Record<string, unknown> | undefined,
-    output_type: args.output_type as 'slack' | 'github' | 'webhook' | 'none' | undefined,
-    output_target: args.output_target as string | undefined,
+    workflow_inputs: args.workflow_inputs as Record<string, unknown> | undefined,
+    // Where to send
+    target_type: args.target_type as 'channel' | 'dm' | 'thread' | 'user' | undefined,
+    target_id: args.target_id as string | undefined,
+    thread_ts: args.thread_ts as string | undefined,
+    // When to run
+    is_recurring: args.is_recurring as boolean | undefined,
+    cron: args.cron as string | undefined,
+    run_at: args.run_at as string | undefined,
+    original_expression: args.original_expression as string | undefined,
+    // For cancel/pause/resume
     schedule_id: args.schedule_id as string | undefined,
   };
 
-  // Store Slack-specific output context in the metadata
-  if (!toolArgs.output_type && slackContext.channel) {
-    // Default to Slack output if in Slack context
-    toolArgs.output_type = 'slack';
-    toolArgs.output_target = slackContext.channel;
+  // If AI didn't provide target, default to current Slack context
+  if (!toolArgs.target_type && slackContext.channel) {
+    // Only use 'thread' if we're actually in a thread
+    if (slackContext.threadTs) {
+      toolArgs.target_type = 'thread';
+      toolArgs.target_id = slackContext.channel;
+      toolArgs.thread_ts = slackContext.threadTs;
+    } else {
+      toolArgs.target_type = slackContext.channelType === 'channel' ? 'channel' : 'dm';
+      toolArgs.target_id = slackContext.channel;
+    }
   }
 
   try {

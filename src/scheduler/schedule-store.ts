@@ -44,7 +44,7 @@ export interface Schedule {
   originalExpression: string; // User's natural language input
 
   // What to execute
-  workflow: string; // Workflow/check ID to run
+  workflow?: string; // Workflow/check ID to run (undefined for simple text reminders)
   workflowInputs?: Record<string, unknown>; // Input parameters for the workflow
 
   // Output routing (optional - workflows can handle their own output)
@@ -146,16 +146,13 @@ export class ScheduleStore {
     try {
       const resolvedPath = path.resolve(process.cwd(), this.filePath);
       const content = await fs.readFile(resolvedPath, 'utf-8');
-      const data = JSON.parse(content) as { schedules?: Schedule[]; reminders?: Schedule[] };
+      const data = JSON.parse(content) as { schedules?: Schedule[] };
 
-      // Support both 'schedules' (new) and 'reminders' (legacy migration)
-      const scheduleList = data.schedules || data.reminders || [];
+      const scheduleList = data.schedules || [];
 
       if (Array.isArray(scheduleList)) {
         for (const schedule of scheduleList) {
-          // Migrate legacy reminder format if needed
-          const migrated = this.migrateFromLegacy(schedule);
-          this.schedules.set(migrated.id, migrated);
+          this.schedules.set(schedule.id, schedule);
         }
         logger.info(
           `[ScheduleStore] Loaded ${this.schedules.size} schedules from ${this.filePath}`
@@ -172,70 +169,6 @@ export class ScheduleStore {
     }
 
     this.initialized = true;
-  }
-
-  /**
-   * Migrate from legacy reminder format to new schedule format
-   */
-  private migrateFromLegacy(data: any): Schedule {
-    // If it's already in new format, return as-is
-    if (data.workflow !== undefined) {
-      return data as Schedule;
-    }
-
-    // Migrate from old reminder format
-    const legacy = data as {
-      id: string;
-      userId: string;
-      userName?: string;
-      timezone: string;
-      schedule: string;
-      runAt?: number;
-      isRecurring: boolean;
-      originalExpression: string;
-      target: 'dm' | 'channel';
-      channel: string;
-      threadTs?: string;
-      prompt: string;
-      status: 'active' | 'paused' | 'completed' | 'failed';
-      createdAt: number;
-      lastRunAt?: number;
-      nextRunAt?: number;
-      runCount: number;
-      failureCount: number;
-    };
-
-    // Create a migration workflow that processes the prompt with AI and posts to Slack
-    return {
-      id: legacy.id,
-      creatorId: legacy.userId,
-      creatorContext: `slack:${legacy.userId}`,
-      creatorName: legacy.userName,
-      timezone: legacy.timezone,
-      schedule: legacy.schedule,
-      runAt: legacy.runAt,
-      isRecurring: legacy.isRecurring,
-      originalExpression: legacy.originalExpression,
-      // Use a special workflow that processes the prompt and posts result
-      workflow: '__legacy_reminder__',
-      workflowInputs: {
-        prompt: legacy.prompt,
-      },
-      outputContext: {
-        type: 'slack',
-        target: legacy.channel,
-        threadId: legacy.threadTs,
-        metadata: {
-          target: legacy.target, // 'dm' or 'channel'
-        },
-      },
-      status: legacy.status,
-      createdAt: legacy.createdAt,
-      lastRunAt: legacy.lastRunAt,
-      nextRunAt: legacy.nextRunAt,
-      runCount: legacy.runCount,
-      failureCount: legacy.failureCount,
-    };
   }
 
   /**
@@ -411,7 +344,7 @@ export class ScheduleStore {
   findByWorkflow(creatorId: string, workflowName: string): Schedule[] {
     const lowerWorkflow = workflowName.toLowerCase();
     return this.getByCreator(creatorId).filter(
-      s => s.status === 'active' && s.workflow.toLowerCase().includes(lowerWorkflow)
+      s => s.status === 'active' && s.workflow?.toLowerCase().includes(lowerWorkflow)
     );
   }
 

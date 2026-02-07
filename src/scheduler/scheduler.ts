@@ -11,6 +11,7 @@ import { getNextRunTime } from './schedule-parser';
 import { logger } from '../logger';
 import type { VisorConfig, StaticCronJob } from '../types/config';
 import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
+import { getPromptStateManager } from '../slack/prompt-state';
 
 /**
  * Output adapter interface for sending schedule results to different destinations
@@ -67,6 +68,7 @@ export class Scheduler {
   private running = false;
   private engine?: StateMachineExecutionEngine;
   private outputAdapters: Map<string, ScheduleOutputAdapter> = new Map();
+  private executionContext: Record<string, unknown> = {};
 
   constructor(visorConfig: VisorConfig, config?: SchedulerConfig) {
     this.visorConfig = visorConfig;
@@ -85,6 +87,13 @@ export class Scheduler {
    */
   setEngine(engine: StateMachineExecutionEngine): void {
     this.engine = engine;
+  }
+
+  /**
+   * Set the execution context (e.g., Slack client) for workflow executions
+   */
+  setExecutionContext(context: Record<string, unknown>): void {
+    this.executionContext = { ...this.executionContext, ...context };
   }
 
   /**
@@ -446,7 +455,8 @@ export class Scheduler {
    * Execute a scheduled workflow
    */
   private async executeSchedule(schedule: Schedule): Promise<void> {
-    logger.info(`[Scheduler] Executing schedule ${schedule.id}: workflow="${schedule.workflow}"`);
+    const description = schedule.workflow || 'reminder';
+    logger.info(`[Scheduler] Executing schedule ${schedule.id}: ${description}`);
 
     const startTime = Date.now();
     let result: ScheduleExecutionResult;
@@ -504,14 +514,14 @@ export class Scheduler {
    * Execute the workflow for a schedule
    */
   private async executeWorkflow(schedule: Schedule): Promise<unknown> {
+    // Handle simple reminders (no workflow set) - run through default chat workflow
+    if (!schedule.workflow) {
+      return this.executeSimpleReminder(schedule);
+    }
+
     if (!this.engine) {
       logger.warn('[Scheduler] No execution engine set, skipping workflow execution');
       return { message: 'No execution engine configured' };
-    }
-
-    // Handle legacy reminder migration
-    if (schedule.workflow === '__legacy_reminder__') {
-      return this.executeLegacyReminder(schedule);
     }
 
     // Check if the workflow exists
@@ -565,22 +575,114 @@ export class Scheduler {
   }
 
   /**
-   * Execute a legacy reminder (migrated from old format)
-   * This runs the prompt through AI and returns the result
+   * Execute a simple reminder by running it through the visor pipeline
+   * This treats the reminder text as if the user sent it as a Slack message
    */
-  private async executeLegacyReminder(schedule: Schedule): Promise<unknown> {
-    const prompt = schedule.workflowInputs?.prompt as string;
-    if (!prompt) {
-      return { message: 'Legacy reminder executed (no prompt)' };
+  private async executeSimpleReminder(schedule: Schedule): Promise<unknown> {
+    const reminderText = schedule.workflowInputs?.text as string;
+    if (!reminderText) {
+      return { message: 'Reminder!', type: 'simple_reminder' };
     }
 
-    // For legacy reminders, we need to find an AI check or create an ad-hoc one
-    // For now, just return a placeholder - the output adapter will handle it
-    return {
-      message: `Reminder: ${prompt}`,
-      isLegacy: true,
-      prompt,
+    // Get all checks from config - same pattern as socket-runner.ts
+    const allChecks = Object.keys(this.visorConfig.checks || {});
+    if (allChecks.length === 0) {
+      logger.warn('[Scheduler] No checks configured, returning reminder text directly');
+      return { message: reminderText, type: 'simple_reminder' };
+    }
+
+    logger.info(`[Scheduler] Running reminder through visor pipeline (${allChecks.length} checks)`);
+
+    // Build synthetic Slack event - same structure as real Slack messages
+    const syntheticPayload = {
+      event: {
+        type: 'message',
+        subtype: 'scheduled_reminder',
+        text: reminderText,
+        user: schedule.creatorId,
+        channel: schedule.outputContext?.target,
+        ts: String(Date.now() / 1000),
+        // No thread_ts - this is a new message, not a reply
+      },
+      slack_conversation: {
+        current: {
+          user: schedule.creatorName || schedule.creatorId,
+          text: reminderText,
+        },
+        messages: [
+          {
+            user: schedule.creatorName || schedule.creatorId,
+            text: reminderText,
+          },
+        ],
+      },
+      // Include schedule context for any checks that need it
+      schedule: {
+        id: schedule.id,
+        isReminder: true,
+        creatorId: schedule.creatorId,
+        creatorContext: schedule.creatorContext,
+      },
     };
+
+    // Create webhook context map - use the endpoint from Slack config (same as socket-runner)
+    const webhookData = new Map<string, unknown>();
+    const slackEndpoint = (this.visorConfig as any).slack?.endpoint || '/bots/slack/support';
+    webhookData.set(slackEndpoint, syntheticPayload);
+
+    // Seed the first message in PromptStateManager so human-input checks can consume it
+    // This is the same pattern socket-runner.ts uses for real Slack messages
+    const channel = schedule.outputContext?.target || '';
+    const threadTs = syntheticPayload.event.ts;
+    if (channel && threadTs) {
+      const mgr = getPromptStateManager();
+      mgr.setFirstMessage(channel, threadTs, reminderText);
+    }
+
+    // Clone config for this run and ensure Slack frontend is present
+    const cfgForRun: VisorConfig = JSON.parse(JSON.stringify(this.visorConfig));
+    const fronts = Array.isArray(cfgForRun.frontends) ? cfgForRun.frontends : [];
+    if (!fronts.some((f: any) => f && f.name === 'slack')) {
+      fronts.push({ name: 'slack' });
+    }
+    cfgForRun.frontends = fronts;
+
+    // Create a new engine instance
+    const runEngine = new StateMachineExecutionEngine();
+
+    // Set execution context with reminder text and Slack client
+    // This provides input for human-input checks and allows Slack frontend to post
+    runEngine.setExecutionContext({
+      ...this.executionContext,
+      cliMessage: reminderText,
+    });
+
+    try {
+      // Execute ALL checks - let the visor engine route based on config
+      // This is the same pattern socket-runner.ts uses for Slack messages
+      await runEngine.executeChecks({
+        checks: allChecks,
+        showDetails: true,
+        outputFormat: 'json',
+        config: cfgForRun,
+        webhookContext: { webhookData, eventType: 'schedule' },
+        debug: process.env.VISOR_DEBUG === 'true',
+      } as any);
+
+      // The visor pipeline handles output via frontends (Slack, etc.)
+      // We return success - the actual response was posted by the pipeline
+      return {
+        message: 'Reminder processed through pipeline',
+        type: 'pipeline_executed',
+        reminderText,
+      };
+    } catch (error) {
+      logger.error(
+        `[Scheduler] Failed to run reminder through pipeline: ${error instanceof Error ? error.message : error}`
+      );
+      // Fallback to just returning the reminder text for posting
+      return { message: reminderText, type: 'simple_reminder' };
+    }
   }
 
   /**

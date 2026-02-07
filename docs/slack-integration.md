@@ -474,8 +474,23 @@ Log messages include:
 - `[slack-frontend]` - Message posting and reactions
 - `[prompt-state]` - Human input state management
 
+## Scheduled Reminders
+
+The scheduler integrates with Slack to deliver scheduled reminders and workflow results. See [Scheduler](./scheduler.md) for full documentation.
+
+Quick example:
+```
+User: "remind me to check PRs every day at 9am"
+Bot: Schedule created! Will remind you every day at 9am.
+```
+
+When the schedule fires:
+1. For simple reminders: The text runs through the visor pipeline, and the AI response is posted back
+2. For workflow schedules: The workflow executes and results are posted via `SlackOutputAdapter`
+
 ## Related Documentation
 
+- [Scheduler](./scheduler.md) - Schedule workflows and reminders
 - [Human Input Provider](./human-input-provider.md) - Detailed documentation on the `human-input` check type
 - [Bot Transports RFC](./bot-transports-rfc.md) - Technical design document for Slack integration
 - [Recipes](./recipes.md) - Common workflow patterns including chat loops

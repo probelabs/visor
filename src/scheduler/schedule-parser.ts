@@ -164,6 +164,24 @@ function detectRecurringPattern(expr: string): RecurringPattern | null {
     }
   }
 
+  // Every minute (singular, no number)
+  if (expr.match(/every\s+minute\b/i) && !expr.match(/every\s+\d+\s+minute/i)) {
+    return {
+      frequency: 'minute',
+      interval: 1,
+      minute: 0,
+    };
+  }
+
+  // Every hour (singular, no number)
+  if (expr.match(/every\s+hour\b/i) && !expr.match(/every\s+\d+\s+hour/i)) {
+    return {
+      frequency: 'hourly',
+      interval: 1,
+      minute: minute ?? 0,
+    };
+  }
+
   // Every N minutes/hours
   const intervalMatch = expr.match(/every\s+(\d+)\s+(minute|hour)s?/i);
   if (intervalMatch) {

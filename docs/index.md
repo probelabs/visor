@@ -116,6 +116,7 @@ The test framework allows you to write integration tests for your Visor workflow
 |----------|-------------|
 | [GitHub Checks](./GITHUB_CHECKS.md) | GitHub Checks API integration for PR status reporting |
 | [Slack Integration](./slack-integration.md) | Bidirectional Slack integration via Socket Mode |
+| [Scheduler](./scheduler.md) | Schedule workflows and reminders to run at specified times |
 | [Deployment](./DEPLOYMENT.md) | Cloudflare Pages deployment for landing page |
 
 ---

@@ -31,11 +31,7 @@ jest.mock('../../../src/scheduler/schedule-store', () => {
 
 // Mock the schedule parser
 jest.mock('../../../src/scheduler/schedule-parser', () => ({
-  parseScheduleExpression: jest.fn().mockReturnValue({
-    type: 'one-time',
-    runAt: new Date(Date.now() + 3600000), // 1 hour from now
-    cronExpression: null,
-  }),
+  isValidCronExpression: jest.fn().mockReturnValue(true),
   getNextRunTime: jest.fn().mockReturnValue(new Date(Date.now() + 3600000)),
 }));
 
@@ -68,7 +64,8 @@ describe('Schedule Tool Permissions', () => {
       const args: ScheduleToolArgs = {
         action: 'create',
         workflow: 'daily-report',
-        expression: 'in 1 hour',
+        is_recurring: false,
+        run_at: new Date(Date.now() + 3600000).toISOString(), // 1 hour from now
       };
 
       const context: ScheduleToolContext = {
@@ -89,7 +86,8 @@ describe('Schedule Tool Permissions', () => {
       const args: ScheduleToolArgs = {
         action: 'create',
         workflow: 'daily-report',
-        expression: 'in 1 hour',
+        is_recurring: false,
+        run_at: new Date(Date.now() + 3600000).toISOString(),
       };
 
       const context: ScheduleToolContext = {
@@ -111,7 +109,8 @@ describe('Schedule Tool Permissions', () => {
       const args: ScheduleToolArgs = {
         action: 'create',
         workflow: 'daily-report',
-        expression: 'in 1 hour',
+        is_recurring: false,
+        run_at: new Date(Date.now() + 3600000).toISOString(),
       };
 
       const context: ScheduleToolContext = {
@@ -132,9 +131,11 @@ describe('Schedule Tool Permissions', () => {
       const args: ScheduleToolArgs = {
         action: 'create',
         workflow: 'team-report',
-        expression: 'every Monday at 9am',
-        output_type: 'slack',
-        output_target: '#general',
+        is_recurring: true,
+        cron: '0 9 * * 1', // Every Monday at 9am
+        target_type: 'channel',
+        target_id: 'C12345',
+        original_expression: 'every Monday at 9am',
       };
 
       const context: ScheduleToolContext = {
@@ -154,9 +155,10 @@ describe('Schedule Tool Permissions', () => {
       const args: ScheduleToolArgs = {
         action: 'create',
         workflow: 'team-report',
-        expression: 'every Monday at 9am',
-        output_type: 'slack',
-        output_target: '#general',
+        is_recurring: true,
+        cron: '0 9 * * 1',
+        target_type: 'channel',
+        target_id: 'C12345',
       };
 
       const context: ScheduleToolContext = {
@@ -176,12 +178,17 @@ describe('Schedule Tool Permissions', () => {
 
   describe('DM schedule permissions', () => {
     it('should allow DM schedule when allow_dm is true', async () => {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(9, 0, 0, 0);
+
       const args: ScheduleToolArgs = {
         action: 'create',
         workflow: 'reminder',
-        expression: 'tomorrow at 9am',
-        output_type: 'slack',
-        output_target: '@otheruser',
+        is_recurring: false,
+        run_at: tomorrow.toISOString(),
+        target_type: 'user',
+        target_id: 'U67890',
       };
 
       const context: ScheduleToolContext = {
@@ -198,12 +205,17 @@ describe('Schedule Tool Permissions', () => {
     });
 
     it('should deny DM schedule when allow_dm is false', async () => {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(9, 0, 0, 0);
+
       const args: ScheduleToolArgs = {
         action: 'create',
         workflow: 'reminder',
-        expression: 'tomorrow at 9am',
-        output_type: 'slack',
-        output_target: '@otheruser',
+        is_recurring: false,
+        run_at: tomorrow.toISOString(),
+        target_type: 'user',
+        target_id: 'U67890',
       };
 
       const context: ScheduleToolContext = {
@@ -226,7 +238,8 @@ describe('Schedule Tool Permissions', () => {
       const args: ScheduleToolArgs = {
         action: 'create',
         workflow: 'report-daily',
-        expression: 'every day at 9am',
+        is_recurring: true,
+        cron: '0 9 * * *', // Every day at 9am
       };
 
       const context: ScheduleToolContext = {
@@ -246,7 +259,8 @@ describe('Schedule Tool Permissions', () => {
       const args: ScheduleToolArgs = {
         action: 'create',
         workflow: 'security-scan',
-        expression: 'every day at 9am',
+        is_recurring: true,
+        cron: '0 9 * * *',
       };
 
       const context: ScheduleToolContext = {
@@ -267,7 +281,8 @@ describe('Schedule Tool Permissions', () => {
       const args: ScheduleToolArgs = {
         action: 'create',
         workflow: 'admin-reset',
-        expression: 'in 1 hour',
+        is_recurring: false,
+        run_at: new Date(Date.now() + 3600000).toISOString(),
       };
 
       const context: ScheduleToolContext = {
@@ -288,7 +303,8 @@ describe('Schedule Tool Permissions', () => {
       const args: ScheduleToolArgs = {
         action: 'create',
         workflow: 'admin-report',
-        expression: 'in 1 hour',
+        is_recurring: false,
+        run_at: new Date(Date.now() + 3600000).toISOString(),
       };
 
       const context: ScheduleToolContext = {
@@ -310,7 +326,8 @@ describe('Schedule Tool Permissions', () => {
       const args: ScheduleToolArgs = {
         action: 'create',
         workflow: 'any-workflow-name',
-        expression: 'in 1 hour',
+        is_recurring: false,
+        run_at: new Date(Date.now() + 3600000).toISOString(),
       };
 
       const context: ScheduleToolContext = {
@@ -331,7 +348,8 @@ describe('Schedule Tool Permissions', () => {
       const args: ScheduleToolArgs = {
         action: 'create',
         workflow: 'report-v1',
-        expression: 'in 1 hour',
+        is_recurring: false,
+        run_at: new Date(Date.now() + 3600000).toISOString(),
       };
 
       const context: ScheduleToolContext = {
@@ -350,7 +368,8 @@ describe('Schedule Tool Permissions', () => {
       const args2: ScheduleToolArgs = {
         action: 'create',
         workflow: 'report-v10',
-        expression: 'in 1 hour',
+        is_recurring: false,
+        run_at: new Date(Date.now() + 3600000).toISOString(),
       };
 
       const result2 = await handleScheduleAction(args2, context);
@@ -363,7 +382,8 @@ describe('Schedule Tool Permissions', () => {
       const args: ScheduleToolArgs = {
         action: 'create',
         workflow: 'report-daily',
-        expression: 'every day at 9am',
+        is_recurring: true,
+        cron: '0 9 * * *',
       };
 
       const context: ScheduleToolContext = {
@@ -386,9 +406,10 @@ describe('Schedule Tool Permissions', () => {
       const args: ScheduleToolArgs = {
         action: 'create',
         workflow: 'report-daily',
-        expression: 'every day at 9am',
-        output_type: 'slack',
-        output_target: '#general',
+        is_recurring: true,
+        cron: '0 9 * * *',
+        target_type: 'channel',
+        target_id: 'C12345',
       };
 
       const context: ScheduleToolContext = {
@@ -703,29 +724,34 @@ describe('Schedule Tool Actions', () => {
   });
 
   describe('create action validation', () => {
-    it('should require expression', async () => {
+    it('should require timing (cron or run_at)', async () => {
       const result = await handleScheduleAction(
         { action: 'create', workflow: 'test' },
         { userId: 'user123', contextType: 'cli' }
       );
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('specify when');
+      expect(result.error).toContain('cron');
     });
 
-    it('should require workflow', async () => {
+    it('should require content (reminder_text or workflow)', async () => {
       const result = await handleScheduleAction(
-        { action: 'create', expression: 'in 1 hour' },
+        { action: 'create', cron: '0 9 * * *' },
         { userId: 'user123', contextType: 'cli' }
       );
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('specify which workflow');
+      expect(result.error).toContain('reminder_text');
     });
 
     it('should validate workflow exists when availableWorkflows provided', async () => {
       const result = await handleScheduleAction(
-        { action: 'create', workflow: 'nonexistent', expression: 'in 1 hour' },
+        {
+          action: 'create',
+          workflow: 'nonexistent',
+          is_recurring: false,
+          run_at: new Date(Date.now() + 3600000).toISOString(),
+        },
         {
           userId: 'user123',
           contextType: 'cli',
@@ -736,6 +762,169 @@ describe('Schedule Tool Actions', () => {
       expect(result.success).toBe(false);
       // Check that error mentions available workflows
       expect(result.error).toContain('Available workflows');
+    });
+
+    it('should validate cron expression format', async () => {
+      // Mock isValidCronExpression to return false for invalid cron
+      const { isValidCronExpression } = require('../../../src/scheduler/schedule-parser');
+      (isValidCronExpression as jest.Mock).mockReturnValueOnce(false);
+
+      const result = await handleScheduleAction(
+        { action: 'create', workflow: 'test', cron: 'invalid-cron' },
+        { userId: 'user123', contextType: 'cli' }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('not a valid cron expression');
+    });
+
+    it('should validate run_at is in the future', async () => {
+      const pastDate = new Date(Date.now() - 3600000).toISOString(); // 1 hour ago
+
+      const result = await handleScheduleAction(
+        { action: 'create', workflow: 'test', run_at: pastDate },
+        { userId: 'user123', contextType: 'cli' }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('past');
+    });
+
+    it('should require target_id when target_type is specified', async () => {
+      const result = await handleScheduleAction(
+        {
+          action: 'create',
+          workflow: 'test',
+          cron: '0 9 * * *',
+          target_type: 'channel',
+        },
+        { userId: 'user123', contextType: 'cli' }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('target_id');
+    });
+  });
+
+  describe('List action filtering', () => {
+    beforeEach(() => {
+      const mockStore =
+        require('../../../src/scheduler/schedule-store').ScheduleStore.getInstance();
+      mockStore.getByCreator.mockReset();
+    });
+
+    it('should filter out personal DM schedules when listing from a channel', async () => {
+      const mockStore =
+        require('../../../src/scheduler/schedule-store').ScheduleStore.getInstance();
+
+      // Mock schedules: one channel schedule, one personal DM schedule
+      // Use longer IDs since display truncates to 8 chars
+      mockStore.getByCreator.mockReturnValue([
+        {
+          id: 'chan1234-channel-schedule',
+          creatorId: 'user123',
+          status: 'active',
+          workflow: 'channel-workflow',
+          outputContext: { type: 'slack', target: 'C123456' }, // Channel target
+        },
+        {
+          id: 'pers5678-personal-schedule',
+          creatorId: 'user123',
+          status: 'active',
+          workflow: 'personal-workflow',
+          outputContext: { type: 'slack', target: 'D09SZABNLG3' }, // DM target
+        },
+      ]);
+
+      const context: ScheduleToolContext = {
+        userId: 'user123',
+        contextType: 'slack:user123',
+        scheduleType: 'channel',
+        allowedScheduleType: 'channel', // In a channel context
+      };
+
+      const result = await handleScheduleAction({ action: 'list' }, context);
+
+      expect(result.success).toBe(true);
+      // Should only show the channel schedule, not the DM schedule
+      // Check for workflow name since IDs are truncated
+      expect(result.message).toContain('channel-workflow');
+      expect(result.message).not.toContain('personal-workflow');
+    });
+
+    it('should show only personal DM schedules when listing from a DM', async () => {
+      const mockStore =
+        require('../../../src/scheduler/schedule-store').ScheduleStore.getInstance();
+
+      // Mock schedules: one channel schedule, one personal DM schedule
+      mockStore.getByCreator.mockReturnValue([
+        {
+          id: 'chan1234-channel-schedule',
+          creatorId: 'user123',
+          status: 'active',
+          workflow: 'channel-workflow',
+          outputContext: { type: 'slack', target: 'C123456' }, // Channel target
+        },
+        {
+          id: 'pers5678-personal-schedule',
+          creatorId: 'user123',
+          status: 'active',
+          workflow: 'personal-workflow',
+          outputContext: { type: 'slack', target: 'D09SZABNLG3' }, // DM target
+        },
+      ]);
+
+      const context: ScheduleToolContext = {
+        userId: 'user123',
+        contextType: 'slack:user123',
+        scheduleType: 'personal',
+        allowedScheduleType: 'personal', // In a DM context
+      };
+
+      const result = await handleScheduleAction({ action: 'list' }, context);
+
+      expect(result.success).toBe(true);
+      // Should only show the personal DM schedule, not the channel schedule
+      // Check for workflow name since IDs are truncated
+      expect(result.message).toContain('personal-workflow');
+      expect(result.message).not.toContain('channel-workflow');
+    });
+
+    it('should show all schedules when allowedScheduleType is not set', async () => {
+      const mockStore =
+        require('../../../src/scheduler/schedule-store').ScheduleStore.getInstance();
+
+      mockStore.getByCreator.mockReturnValue([
+        {
+          id: 'chan1234-channel-schedule',
+          creatorId: 'user123',
+          status: 'active',
+          workflow: 'channel-workflow',
+          outputContext: { type: 'slack', target: 'C123456' },
+        },
+        {
+          id: 'pers5678-personal-schedule',
+          creatorId: 'user123',
+          status: 'active',
+          workflow: 'personal-workflow',
+          outputContext: { type: 'slack', target: 'D09SZABNLG3' },
+        },
+      ]);
+
+      const context: ScheduleToolContext = {
+        userId: 'user123',
+        contextType: 'cli',
+        scheduleType: 'personal',
+        // No allowedScheduleType set
+      };
+
+      const result = await handleScheduleAction({ action: 'list' }, context);
+
+      expect(result.success).toBe(true);
+      // Should show both schedules
+      // Check for workflow names since IDs are truncated
+      expect(result.message).toContain('channel-workflow');
+      expect(result.message).toContain('personal-workflow');
     });
   });
 });

@@ -141,6 +141,12 @@ export class SlackSocketRunner {
         });
         this.genericScheduler.setEngine(this.engine);
 
+        // Pass Slack client to scheduler so it can inject into workflow executions
+        this.genericScheduler.setExecutionContext({
+          slack: this.client,
+          slackClient: this.client,
+        });
+
         // Register Slack output adapter
         this.genericScheduler.registerOutputAdapter(createSlackOutputAdapter(this.client));
 

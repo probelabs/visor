@@ -4,7 +4,7 @@
  */
 import { CustomToolDefinition } from '../types/config';
 import { ScheduleStore, Schedule, ScheduleOutputContext } from './schedule-store';
-import { parseScheduleExpression, getNextRunTime } from './schedule-parser';
+import { isValidCronExpression, getNextRunTime } from './schedule-parser';
 import { logger } from '../logger';
 
 /**
@@ -136,16 +136,40 @@ function checkSchedulePermissions(
 export type ScheduleAction = 'create' | 'list' | 'cancel' | 'pause' | 'resume';
 
 /**
- * Tool input arguments
+ * Target type for where to send the reminder/output
+ */
+export type TargetType = 'channel' | 'dm' | 'thread' | 'user';
+
+/**
+ * Tool input arguments - AI provides structured data, no parsing needed
  */
 export interface ScheduleToolArgs {
   action: ScheduleAction;
-  workflow?: string; // For create: workflow/check ID to run
-  expression?: string; // For create: natural language time (e.g., "every Monday at 9am")
-  inputs?: Record<string, unknown>; // For create: workflow inputs
-  output_type?: 'slack' | 'github' | 'webhook' | 'none'; // For create: output destination
-  output_target?: string; // For create: target channel/repo/URL
-  schedule_id?: string; // For cancel/pause/resume: the schedule ID to act on
+
+  // For create action - AI extracts and structures all of this:
+  /** What to say/do when the schedule fires */
+  reminder_text?: string;
+  /** Where to send: channel, dm (to self), thread, or user (DM to specific user) */
+  target_type?: TargetType;
+  /** The Slack channel ID (C... for channels, D... for DMs) */
+  target_id?: string;
+  /** For thread replies: the thread_ts to reply to */
+  thread_ts?: string;
+  /** Is this a recurring schedule? */
+  is_recurring?: boolean;
+  /** For recurring: cron expression (AI generates this, e.g., "* * * * *" for every minute) */
+  cron?: string;
+  /** For one-time: ISO 8601 timestamp when to run */
+  run_at?: string;
+  /** Original natural language expression (for display only) */
+  original_expression?: string;
+  /** Optional workflow to run instead of just sending reminder_text */
+  workflow?: string;
+  /** Optional workflow inputs */
+  workflow_inputs?: Record<string, unknown>;
+
+  // For cancel/pause/resume actions:
+  schedule_id?: string;
 }
 
 /**
@@ -217,11 +241,14 @@ function formatSchedule(schedule: Schedule): string {
     ? schedule.originalExpression
     : new Date(schedule.runAt!).toLocaleString();
   const status = schedule.status !== 'active' ? ` (${schedule.status})` : '';
-  const workflow =
-    schedule.workflow.length > 30 ? schedule.workflow.substring(0, 27) + '...' : schedule.workflow;
+  // For simple reminders, show the reminder text; for workflows, show the workflow name
+  const displayName =
+    schedule.workflow || (schedule.workflowInputs?.text as string) || 'scheduled message';
+  const truncatedName =
+    displayName.length > 30 ? displayName.substring(0, 27) + '...' : displayName;
   const output = schedule.outputContext?.type || 'none';
 
-  return `\`${schedule.id.substring(0, 8)}\` - "${workflow}" - ${time} (→ ${output})${status}`;
+  return `\`${schedule.id.substring(0, 8)}\` - "${truncatedName}" - ${time} (→ ${output})${status}`;
 }
 
 /**
@@ -231,6 +258,10 @@ function formatCreateConfirmation(schedule: Schedule): string {
   const outputDesc = schedule.outputContext?.type
     ? `${schedule.outputContext.type}${schedule.outputContext.target ? `:${schedule.outputContext.target}` : ''}`
     : 'none';
+
+  // For simple reminders, show the reminder text; for workflows, show the workflow name
+  const displayName =
+    schedule.workflow || (schedule.workflowInputs?.text as string) || 'scheduled message';
 
   if (schedule.isRecurring) {
     const nextRun = schedule.nextRunAt
@@ -245,7 +276,7 @@ function formatCreateConfirmation(schedule: Schedule): string {
 
     return `**Schedule created!**
 
-**Workflow**: ${schedule.workflow}
+**${schedule.workflow ? 'Workflow' : 'Reminder'}**: ${displayName}
 **When**: ${schedule.originalExpression}
 **Output**: ${outputDesc}
 **Next run**: ${nextRun}
@@ -262,7 +293,7 @@ ID: \`${schedule.id.substring(0, 8)}\``;
 
     return `**Schedule created!**
 
-**Workflow**: ${schedule.workflow}
+**${schedule.workflow ? 'Workflow' : 'Reminder'}**: ${displayName}
 **When**: ${when}
 **Output**: ${outputDesc}
 
@@ -330,40 +361,83 @@ export async function handleScheduleAction(
 }
 
 /**
- * Handle create action
+ * Handle create action - AI provides structured data, minimal parsing needed
  */
 async function handleCreate(
   args: ScheduleToolArgs,
   context: ScheduleToolContext,
   store: ScheduleStore
 ): Promise<ScheduleToolResult> {
-  // Validate required fields
-  if (!args.expression) {
+  // Validate: need either reminder_text or workflow
+  if (!args.reminder_text && !args.workflow) {
     return {
       success: false,
-      message: 'Missing schedule expression',
+      message: 'Missing reminder content',
+      error: 'Please specify either reminder_text (what to say) or workflow (what to run)',
+    };
+  }
+
+  // Validate: need either cron (recurring) or run_at (one-time)
+  if (!args.cron && !args.run_at) {
+    return {
+      success: false,
+      message: 'Missing schedule timing',
       error:
-        'Please specify when the schedule should run (e.g., "in 2 hours", "every Monday at 9am")',
+        'Please specify either cron (for recurring, e.g., "* * * * *") or run_at (ISO timestamp for one-time)',
     };
   }
 
-  if (!args.workflow) {
+  // Validate cron format if provided
+  if (args.cron && !isValidCronExpression(args.cron)) {
     return {
       success: false,
-      message: 'Missing workflow',
-      error: 'Please specify which workflow to run',
+      message: 'Invalid cron expression',
+      error: `"${args.cron}" is not a valid cron expression. Format: "minute hour day-of-month month day-of-week"`,
     };
   }
 
-  // Determine requested schedule type based on output target
-  const requestedScheduleType = determineScheduleType(
-    context.contextType,
-    args.output_type,
-    args.output_target
-  );
+  // Validate run_at format if provided
+  let runAtTimestamp: number | undefined;
+  if (args.run_at) {
+    const parsed = new Date(args.run_at);
+    if (isNaN(parsed.getTime())) {
+      return {
+        success: false,
+        message: 'Invalid run_at timestamp',
+        error: `"${args.run_at}" is not a valid ISO 8601 timestamp`,
+      };
+    }
+    if (parsed.getTime() <= Date.now()) {
+      return {
+        success: false,
+        message: 'run_at must be in the future',
+        error: 'Cannot schedule a reminder in the past',
+      };
+    }
+    runAtTimestamp = parsed.getTime();
+  }
 
-  // Check permissions for dynamic schedule creation
-  const permissionCheck = checkSchedulePermissions(context, args.workflow, requestedScheduleType);
+  // Validate target_id is provided when target_type is specified
+  if (args.target_type && !args.target_id) {
+    return {
+      success: false,
+      message: 'Missing target_id',
+      error: `target_type "${args.target_type}" requires a target_id (channel ID, user ID, or thread_ts)`,
+    };
+  }
+
+  // Determine schedule type from target
+  // 'channel' -> channel schedule, 'user' -> dm schedule, 'dm' or 'thread' -> personal
+  let scheduleType: ScheduleType = 'personal';
+  if (args.target_type === 'channel') {
+    scheduleType = 'channel';
+  } else if (args.target_type === 'user') {
+    scheduleType = 'dm'; // Sending to a specific user is a DM schedule
+  }
+
+  // Check permissions
+  const workflowName = args.workflow || 'reminder';
+  const permissionCheck = checkSchedulePermissions(context, workflowName, scheduleType);
   if (!permissionCheck.allowed) {
     logger.warn(
       `[ScheduleTool] Permission denied for user ${context.userId}: ${permissionCheck.reason}`
@@ -375,8 +449,12 @@ async function handleCreate(
     };
   }
 
-  // Validate workflow exists if we have available workflows
-  if (context.availableWorkflows && !context.availableWorkflows.includes(args.workflow)) {
+  // Validate workflow exists if specified and we have available workflows
+  if (
+    args.workflow &&
+    context.availableWorkflows &&
+    !context.availableWorkflows.includes(args.workflow)
+  ) {
     return {
       success: false,
       message: `Workflow "${args.workflow}" not found`,
@@ -385,40 +463,53 @@ async function handleCreate(
   }
 
   try {
-    // Parse the schedule expression
     const timezone = context.timezone || 'UTC';
-    const parsed = parseScheduleExpression(args.expression, timezone);
+    const isRecurring = args.is_recurring === true || !!args.cron;
 
-    // Build output context
+    // Build output context from AI-provided target info
     let outputContext: ScheduleOutputContext | undefined;
-    if (args.output_type && args.output_type !== 'none') {
+    if (args.target_type && args.target_id) {
       outputContext = {
-        type: args.output_type,
-        target: args.output_target,
+        type: 'slack', // Currently only Slack supported
+        target: args.target_id, // Channel ID (C... or D...)
+        threadId: args.thread_ts, // Thread timestamp for replies
+        metadata: {
+          targetType: args.target_type,
+          reminderText: args.reminder_text,
+        },
       };
     }
 
-    // Create the schedule
+    // Calculate next run time
+    let nextRunAt: number | undefined;
+    if (isRecurring && args.cron) {
+      nextRunAt = getNextRunTime(args.cron, timezone).getTime();
+    } else if (runAtTimestamp) {
+      nextRunAt = runAtTimestamp;
+    }
+
+    // Create the schedule - AI has done all the parsing
+    // workflow is only set when explicitly provided (e.g., from YAML cron jobs)
+    // For simple reminders, workflow is undefined and scheduler posts text directly
     const schedule = store.create({
       creatorId: context.userId,
       creatorContext: context.contextType,
       creatorName: context.userName,
       timezone,
-      schedule: parsed.cronExpression || '',
-      runAt: parsed.type === 'one-time' ? parsed.runAt?.getTime() : undefined,
-      isRecurring: parsed.type === 'recurring',
-      originalExpression: args.expression,
-      workflow: args.workflow,
-      workflowInputs: args.inputs,
+      schedule: args.cron || '',
+      runAt: runAtTimestamp,
+      isRecurring,
+      originalExpression: args.original_expression || args.cron || args.run_at || '',
+      workflow: args.workflow, // Only set if explicitly provided
+      workflowInputs:
+        args.workflow_inputs || (args.reminder_text ? { text: args.reminder_text } : undefined),
       outputContext,
-      nextRunAt:
-        parsed.type === 'recurring' && parsed.cronExpression
-          ? getNextRunTime(parsed.cronExpression, timezone).getTime()
-          : parsed.runAt?.getTime(),
+      nextRunAt,
     });
 
+    const displayText = args.reminder_text || args.workflow || 'scheduled task';
     logger.info(
-      `[ScheduleTool] Created schedule ${schedule.id} for user ${context.userId}: workflow="${args.workflow}"`
+      `[ScheduleTool] Created schedule ${schedule.id} for user ${context.userId}: "${displayText}"`
     );
 
     return {
@@ -602,33 +693,101 @@ async function handlePauseResume(
 
 /**
  * Get the schedule tool definition for registration with AI providers
+ *
+ * The AI is responsible for:
+ * 1. Extracting the target (channel ID, user ID, thread_ts) from the conversation context
+ * 2. Determining if the schedule is recurring or one-time
+ * 3. Generating the cron expression OR ISO timestamp
+ * 4. Extracting the reminder text or workflow name
  */
 export function getScheduleToolDefinition(): CustomToolDefinition {
   return {
     name: 'schedule',
-    description: `Schedule, list, and manage workflow executions at specified times.
+    description: `Schedule, list, and manage reminders or workflow executions.
+
+YOU (the AI) must extract and structure all scheduling parameters. Do NOT pass natural language time expressions - convert them to cron or ISO timestamps.
 
 ACTIONS:
-- create: Schedule a new workflow execution
+- create: Schedule a new reminder or workflow
 - list: Show user's active schedules
 - cancel: Remove a schedule by ID
 - pause/resume: Temporarily disable/enable a schedule
 
-EXAMPLES:
-User: "run daily-report every Monday at 9am"
-→ action: create, workflow: daily-report, expression: "every Monday at 9am"
+FOR CREATE ACTION - Extract these from user's request:
+1. WHAT: Either reminder_text (message to send) OR workflow (workflow ID to run)
+2. WHERE: Use the CURRENT channel from context
+   - target_id: The channel ID from context (C... for channels, D... for DMs)
+   - target_type: "channel" for public/private channels, "dm" for direct messages
+   - ONLY use target_type="thread" with thread_ts if user is INSIDE a thread
+   - When NOT in a thread, reminders post as NEW messages (not thread replies)
+3. WHEN: Either cron (for recurring) OR run_at (ISO 8601 for one-time)
+   - Recurring: Generate cron expression (minute hour day-of-month month day-of-week)
+   - One-time: Generate ISO 8601 timestamp
 
-User: "schedule security-scan in 2 hours and post to #security"
-→ action: create, workflow: security-scan, expression: "in 2 hours", output_type: slack, output_target: #security
+CRON EXAMPLES:
+- "every minute" → cron: "* * * * *"
+- "every hour" → cron: "0 * * * *"
+- "every day at 9am" → cron: "0 9 * * *"
+- "every Monday at 9am" → cron: "0 9 * * 1"
+- "weekdays at 8:30am" → cron: "30 8 * * 1-5"
+- "every 5 minutes" → cron: "*/5 * * * *"
 
-User: "list my schedules" or "what schedules do I have?"
-→ action: list
+ONE-TIME EXAMPLES:
+- "in 2 hours" → run_at: "<ISO timestamp 2 hours from now>"
+- "tomorrow at 3pm" → run_at: "2026-02-08T15:00:00Z"
+
+USAGE EXAMPLES:
+
+User in DM: "remind me to check builds every day at 9am"
+→ {
+    "action": "create",
+    "reminder_text": "check builds",
+    "is_recurring": true,
+    "cron": "0 9 * * *",
+    "target_type": "dm",
+    "target_id": "<DM channel ID from context, e.g., D09SZABNLG3>",
+    "original_expression": "every day at 9am"
+  }
+
+User in #security channel: "run security-scan every Monday at 10am"
+→ {
+    "action": "create",
+    "workflow": "security-scan",
+    "is_recurring": true,
+    "cron": "0 10 * * 1",
+    "target_type": "channel",
+    "target_id": "<channel ID from context, e.g., C05ABC123>",
+    "original_expression": "every Monday at 10am"
+  }
+
+User in DM: "remind me in 2 hours to review the PR"
+→ {
+    "action": "create",
+    "reminder_text": "review the PR",
+    "is_recurring": false,
+    "run_at": "2026-02-07T18:00:00Z",
+    "target_type": "dm",
+    "target_id": "<DM channel ID from context>",
+    "original_expression": "in 2 hours"
+  }
+
+User inside a thread: "remind me about this tomorrow"
+→ {
+    "action": "create",
+    "reminder_text": "Check this thread",
+    "is_recurring": false,
+    "run_at": "2026-02-08T09:00:00Z",
+    "target_type": "thread",
+    "target_id": "<channel ID>",
+    "thread_ts": "<thread_ts from context>",
+    "original_expression": "tomorrow"
+  }
+
+User: "list my schedules"
+→ { "action": "list" }
 
 User: "cancel schedule abc123"
-→ action: cancel, schedule_id: abc123
-
-User: "pause schedule def456"
-→ action: pause, schedule_id: def456`,
+→ { "action": "cancel", "schedule_id": "abc123" }`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -637,28 +796,59 @@ User: "pause schedule def456"
           enum: ['create', 'list', 'cancel', 'pause', 'resume'],
           description: 'What to do: create new, list existing, cancel/pause/resume by ID',
         },
+        // WHAT to do
+        reminder_text: {
+          type: 'string',
+          description: 'For create: the message/reminder text to send when triggered',
+        },
         workflow: {
           type: 'string',
-          description: 'For create: workflow/check ID to run',
-        },
-        expression: {
-          type: 'string',
           description:
-            'For create: natural language time expression (e.g., "in 2 hours", "every Monday at 9am", "tomorrow at 3pm")',
+            'For create: workflow/check ID to run (use instead of reminder_text for workflow execution)',
         },
-        inputs: {
+        workflow_inputs: {
           type: 'object',
           description: 'For create: optional inputs to pass to the workflow',
         },
-        output_type: {
+        // WHERE to send
+        target_type: {
           type: 'string',
-          enum: ['slack', 'github', 'webhook', 'none'],
-          description: 'For create: where to send results (default: none)',
+          enum: ['channel', 'dm', 'thread', 'user'],
+          description:
+            'For create: where to send output. channel=public/private channel, dm=DM to self (current DM channel), user=DM to specific user, thread=reply in current thread',
         },
-        output_target: {
+        target_id: {
           type: 'string',
-          description: 'For create: target channel, repo, or URL for output',
+          description:
+            'For create: Slack channel ID. Channels start with C, DMs start with D. Always use the channel ID from the current context.',
         },
+        thread_ts: {
+          type: 'string',
+          description:
+            'For create with target_type=thread: the thread timestamp to reply to. Get this from the current thread context.',
+        },
+        // WHEN to run
+        is_recurring: {
+          type: 'boolean',
+          description:
+            'For create: true for recurring schedules (cron), false for one-time (run_at)',
+        },
+        cron: {
+          type: 'string',
+          description:
+            'For create recurring: cron expression (minute hour day-of-month month day-of-week). Examples: "0 9 * * *" (daily 9am), "* * * * *" (every minute), "0 9 * * 1" (Mondays 9am)',
+        },
+        run_at: {
+          type: 'string',
+          description:
+            'For create one-time: ISO 8601 timestamp when to run (e.g., "2026-02-07T15:00:00Z")',
+        },
+        original_expression: {
+          type: 'string',
+          description:
+            'For create: the original natural language expression from user (for display only)',
+        },
+        // For cancel/pause/resume
         schedule_id: {
           type: 'string',
           description:
