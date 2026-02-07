@@ -322,6 +322,8 @@ interface AIProviderConfig {
     bashConfig?: BashConfig;
     /** Completion prompt for post-completion validation/review (runs after attempt_completion) */
     completion_prompt?: string;
+    /** Enable the schedule tool for scheduling workflow executions (requires scheduler configuration) */
+    enable_scheduler?: boolean;
 }
 /**
  * Unified MCP server/tool entry - type detected by which properties are present
@@ -1087,6 +1089,81 @@ interface SandboxDefaults {
     env_passthrough?: string[];
 }
 /**
+ * Static cron job defined in YAML configuration
+ * These are always executed by the scheduler daemon
+ */
+interface StaticCronJob {
+    /** Cron expression (e.g., "0 9 * * 1" for every Monday at 9am) */
+    schedule: string;
+    /** Workflow/check ID to run */
+    workflow: string;
+    /** Optional workflow inputs */
+    inputs?: Record<string, unknown>;
+    /** Output destination configuration */
+    output?: {
+        /** Output type: slack, github, webhook, or none */
+        type: 'slack' | 'github' | 'webhook' | 'none';
+        /** Target (channel name, repo, URL) */
+        target?: string;
+        /** Thread ID for threaded outputs */
+        thread_id?: string;
+    };
+    /** Description for logging/display */
+    description?: string;
+    /** Enable/disable this job (default: true) */
+    enabled?: boolean;
+    /** Timezone for schedule (default: UTC or scheduler default) */
+    timezone?: string;
+}
+/**
+ * Scheduler limits configuration
+ */
+interface SchedulerLimitsConfig {
+    /** Maximum schedules per user (default: 25) */
+    max_per_user?: number;
+    /** Maximum recurring schedules per user (default: 10) */
+    max_recurring_per_user?: number;
+    /** Maximum total schedules (default: 1000) */
+    max_global?: number;
+}
+/**
+ * Scheduler permissions for dynamic schedule creation
+ */
+interface SchedulerPermissionsConfig {
+    /** Allow personal schedules (via DM or CLI) */
+    allow_personal?: boolean;
+    /** Allow channel schedules (in Slack channels) */
+    allow_channel?: boolean;
+    /** Allow DM schedules (to specific users) */
+    allow_dm?: boolean;
+    /** List of allowed workflow patterns (glob-style, e.g., "report-*") */
+    allowed_workflows?: string[];
+    /** List of denied workflow patterns */
+    denied_workflows?: string[];
+}
+/**
+ * Scheduler configuration for workflow scheduling
+ */
+interface SchedulerConfig {
+    /** Enable/disable the scheduler (default: true) */
+    enabled?: boolean;
+    /** Storage configuration */
+    storage?: {
+        /** Path to schedules JSON file (default: .visor/schedules.json) */
+        path?: string;
+    };
+    /** Limits for dynamic schedules */
+    limits?: SchedulerLimitsConfig;
+    /** Default timezone (IANA format, e.g., "America/New_York") */
+    default_timezone?: string;
+    /** Check interval in milliseconds (default: 60000) */
+    check_interval_ms?: number;
+    /** Permissions for dynamic schedule creation (via AI tool) */
+    permissions?: SchedulerPermissionsConfig;
+    /** Static cron jobs defined in configuration (always executed) */
+    cron?: Record<string, StaticCronJob>;
+}
+/**
  * Main Visor configuration
  */
 interface VisorConfig {
@@ -1155,6 +1232,8 @@ interface VisorConfig {
     sandbox_defaults?: SandboxDefaults;
     /** Slack configuration */
     slack?: SlackConfig;
+    /** Scheduler configuration for scheduled workflow execution */
+    scheduler?: SchedulerConfig;
 }
 /**
  * Workspace isolation configuration
@@ -1382,6 +1461,11 @@ interface ExecutionContext {
         webhookData?: Map<string, unknown>;
         eventType?: string;
     };
+    /**
+     * Callback for capturing AI responses - used by scheduler to store previousResponse
+     * for recurring reminders. The text passed is the AI response before mrkdwn formatting.
+     */
+    responseCapture?: (text: string) => void;
 }
 
 interface VisorOptions {

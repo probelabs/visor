@@ -721,19 +721,19 @@ function __getOrCreateNdjsonPath() {
   try {
     if (process.env.VISOR_TELEMETRY_SINK && process.env.VISOR_TELEMETRY_SINK !== "file")
       return null;
-    const path22 = require("path");
-    const fs20 = require("fs");
+    const path23 = require("path");
+    const fs21 = require("fs");
     if (process.env.VISOR_FALLBACK_TRACE_FILE) {
       __ndjsonPath = process.env.VISOR_FALLBACK_TRACE_FILE;
-      const dir = path22.dirname(__ndjsonPath);
-      if (!fs20.existsSync(dir)) fs20.mkdirSync(dir, { recursive: true });
+      const dir = path23.dirname(__ndjsonPath);
+      if (!fs21.existsSync(dir)) fs21.mkdirSync(dir, { recursive: true });
       return __ndjsonPath;
     }
-    const outDir = process.env.VISOR_TRACE_DIR || path22.join(process.cwd(), "output", "traces");
-    if (!fs20.existsSync(outDir)) fs20.mkdirSync(outDir, { recursive: true });
+    const outDir = process.env.VISOR_TRACE_DIR || path23.join(process.cwd(), "output", "traces");
+    if (!fs21.existsSync(outDir)) fs21.mkdirSync(outDir, { recursive: true });
     if (!__ndjsonPath) {
       const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      __ndjsonPath = path22.join(outDir, `${ts}.ndjson`);
+      __ndjsonPath = path23.join(outDir, `${ts}.ndjson`);
     }
     return __ndjsonPath;
   } catch {
@@ -742,11 +742,11 @@ function __getOrCreateNdjsonPath() {
 }
 function _appendRunMarker() {
   try {
-    const fs20 = require("fs");
+    const fs21 = require("fs");
     const p = __getOrCreateNdjsonPath();
     if (!p) return;
     const line = { name: "visor.run", attributes: { started: true } };
-    fs20.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
+    fs21.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
   } catch {
   }
 }
@@ -5500,9 +5500,9 @@ function configureLiquidWithExtensions(liquid) {
   });
   liquid.registerFilter("get", (obj, pathExpr) => {
     if (obj == null) return void 0;
-    const path22 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
-    if (!path22) return obj;
-    const parts = path22.split(".");
+    const path23 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
+    if (!path23) return obj;
+    const parts = path23.split(".");
     let cur = obj;
     for (const p of parts) {
       if (cur == null) return void 0;
@@ -5621,9 +5621,9 @@ function configureLiquidWithExtensions(liquid) {
           }
         }
         const defaultRole = typeof rolesCfg.default === "string" && rolesCfg.default.trim() ? rolesCfg.default.trim() : void 0;
-        const getNested = (obj, path22) => {
-          if (!obj || !path22) return void 0;
-          const parts = path22.split(".");
+        const getNested = (obj, path23) => {
+          if (!obj || !path23) return void 0;
+          const parts = path23.split(".");
           let cur = obj;
           for (const p of parts) {
             if (cur == null) return void 0;
@@ -5775,8 +5775,8 @@ var init_liquid_extensions = __esm({
 async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs20 = await import("fs/promises");
-    const path22 = await import("path");
+    const fs21 = await import("fs/promises");
+    const path23 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
@@ -5784,24 +5784,24 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
       templateContent = String(checkConfig.template.content);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path22.resolve(process.cwd(), file);
-      templateContent = await fs20.readFile(resolved, "utf-8");
+      const resolved = path23.resolve(process.cwd(), file);
+      templateContent = await fs21.readFile(resolved, "utf-8");
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path22.join(__dirname, "output", sanitized, "template.liquid"),
+          path23.join(__dirname, "output", sanitized, "template.liquid"),
           // bundled: dist/output/
-          path22.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path23.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // source: output/
-          path22.join(process.cwd(), "output", sanitized, "template.liquid"),
+          path23.join(process.cwd(), "output", sanitized, "template.liquid"),
           // fallback: cwd/output/
-          path22.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          path23.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
           // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs20.readFile(p, "utf-8");
+            templateContent = await fs21.readFile(p, "utf-8");
             if (templateContent) break;
           } catch {
           }
@@ -6206,7 +6206,7 @@ async function processDiffWithOutline(diffContent) {
   }
   try {
     const originalProbePath = process.env.PROBE_PATH;
-    const fs20 = require("fs");
+    const fs21 = require("fs");
     const possiblePaths = [
       // Relative to current working directory (most common in production)
       path6.join(process.cwd(), "node_modules/@probelabs/probe/bin/probe-binary"),
@@ -6217,7 +6217,7 @@ async function processDiffWithOutline(diffContent) {
     ];
     let probeBinaryPath;
     for (const candidatePath of possiblePaths) {
-      if (fs20.existsSync(candidatePath)) {
+      if (fs21.existsSync(candidatePath)) {
         probeBinaryPath = candidatePath;
         break;
       }
@@ -7275,8 +7275,8 @@ ${schemaString}`);
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs20 = require("fs");
-              const path22 = require("path");
+              const fs21 = require("fs");
+              const path23 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const provider = this.config.provider || "auto";
               const model = this.config.model || "default";
@@ -7390,20 +7390,20 @@ ${"=".repeat(60)}
 `;
               readableVersion += `${"=".repeat(60)}
 `;
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path22.join(process.cwd(), "debug-artifacts");
-              if (!fs20.existsSync(debugArtifactsDir)) {
-                fs20.mkdirSync(debugArtifactsDir, { recursive: true });
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path23.join(process.cwd(), "debug-artifacts");
+              if (!fs21.existsSync(debugArtifactsDir)) {
+                fs21.mkdirSync(debugArtifactsDir, { recursive: true });
               }
-              const debugFile = path22.join(
+              const debugFile = path23.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.json`
               );
-              fs20.writeFileSync(debugFile, debugJson, "utf-8");
-              const readableFile = path22.join(
+              fs21.writeFileSync(debugFile, debugJson, "utf-8");
+              const readableFile = path23.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.txt`
               );
-              fs20.writeFileSync(readableFile, readableVersion, "utf-8");
+              fs21.writeFileSync(readableFile, readableVersion, "utf-8");
               log(`
 \u{1F4BE} Full debug info saved to:`);
               log(`   JSON: ${debugFile}`);
@@ -7436,8 +7436,8 @@ ${"=".repeat(60)}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs20 = require("fs");
-              const path22 = require("path");
+              const fs21 = require("fs");
+              const path23 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny2 = agent;
               let fullHistory = [];
@@ -7448,8 +7448,8 @@ ${"=".repeat(60)}
               } else if (agentAny2._messages) {
                 fullHistory = agentAny2._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path22.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path22.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path23.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path23.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -7461,7 +7461,7 @@ ${"=".repeat(60)}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs20.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs21.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -7488,7 +7488,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs20.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs21.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -7497,11 +7497,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs20 = require("fs");
-              const path22 = require("path");
+              const fs21 = require("fs");
+              const path23 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path22.join(process.cwd(), "debug-artifacts");
-              const responseFile = path22.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path23.join(process.cwd(), "debug-artifacts");
+              const responseFile = path23.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -7534,7 +7534,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs20.writeFileSync(responseFile, responseContent, "utf-8");
+              fs21.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -7550,9 +7550,9 @@ ${"=".repeat(60)}
                 await agentAny._telemetryConfig.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${agentAny._traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs20 = require("fs");
-                  if (fs20.existsSync(agentAny._traceFilePath)) {
-                    const stats = fs20.statSync(agentAny._traceFilePath);
+                  const fs21 = require("fs");
+                  if (fs21.existsSync(agentAny._traceFilePath)) {
+                    const stats = fs21.statSync(agentAny._traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::${agentAny._traceFilePath} (${stats.size} bytes)`
                     );
@@ -7747,8 +7747,8 @@ ${schemaString}`);
           const model = this.config.model || "default";
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs20 = require("fs");
-              const path22 = require("path");
+              const fs21 = require("fs");
+              const path23 = require("path");
               const os2 = require("os");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const debugData = {
@@ -7822,18 +7822,18 @@ ${"=".repeat(60)}
               readableVersion += `${"=".repeat(60)}
 `;
               const tempDir = os2.tmpdir();
-              const promptFile = path22.join(tempDir, `visor-prompt-${timestamp}.txt`);
-              fs20.writeFileSync(promptFile, prompt, "utf-8");
+              const promptFile = path23.join(tempDir, `visor-prompt-${timestamp}.txt`);
+              fs21.writeFileSync(promptFile, prompt, "utf-8");
               log(`
 \u{1F4BE} Prompt saved to: ${promptFile}`);
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path22.join(process.cwd(), "debug-artifacts");
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path23.join(process.cwd(), "debug-artifacts");
               try {
-                const base = path22.join(
+                const base = path23.join(
                   debugArtifactsDir,
                   `prompt-${_checkName || "unknown"}-${timestamp}`
                 );
-                fs20.writeFileSync(base + ".json", debugJson, "utf-8");
-                fs20.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
+                fs21.writeFileSync(base + ".json", debugJson, "utf-8");
+                fs21.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
                 log(`
 \u{1F4BE} Full debug info saved to directory: ${debugArtifactsDir}`);
               } catch {
@@ -7878,8 +7878,8 @@ $ ${cliCommand}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs20 = require("fs");
-              const path22 = require("path");
+              const fs21 = require("fs");
+              const path23 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny = agent;
               let fullHistory = [];
@@ -7890,8 +7890,8 @@ $ ${cliCommand}
               } else if (agentAny._messages) {
                 fullHistory = agentAny._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path22.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path22.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path23.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path23.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -7903,7 +7903,7 @@ $ ${cliCommand}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs20.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs21.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -7930,7 +7930,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs20.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs21.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -7939,11 +7939,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs20 = require("fs");
-              const path22 = require("path");
+              const fs21 = require("fs");
+              const path23 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path22.join(process.cwd(), "debug-artifacts");
-              const responseFile = path22.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path23.join(process.cwd(), "debug-artifacts");
+              const responseFile = path23.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -7976,7 +7976,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs20.writeFileSync(responseFile, responseContent, "utf-8");
+              fs21.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -7994,9 +7994,9 @@ ${"=".repeat(60)}
                 await telemetry.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs20 = require("fs");
-                  if (fs20.existsSync(traceFilePath)) {
-                    const stats = fs20.statSync(traceFilePath);
+                  const fs21 = require("fs");
+                  if (fs21.existsSync(traceFilePath)) {
+                    const stats = fs21.statSync(traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::OpenTelemetry trace file size: ${stats.size} bytes`
                     );
@@ -8034,8 +8034,8 @@ ${"=".repeat(60)}
        * Load schema content from schema files or inline definitions
        */
       async loadSchemaContent(schema) {
-        const fs20 = require("fs").promises;
-        const path22 = require("path");
+        const fs21 = require("fs").promises;
+        const path23 = require("path");
         if (typeof schema === "object" && schema !== null) {
           log("\u{1F4CB} Using inline schema object from configuration");
           return JSON.stringify(schema);
@@ -8048,14 +8048,14 @@ ${"=".repeat(60)}
           }
         } catch {
         }
-        if ((schema.startsWith("./") || schema.includes(".json")) && !path22.isAbsolute(schema)) {
+        if ((schema.startsWith("./") || schema.includes(".json")) && !path23.isAbsolute(schema)) {
           if (schema.includes("..") || schema.includes("\0")) {
             throw new Error("Invalid schema path: path traversal not allowed");
           }
           try {
-            const schemaPath = path22.resolve(process.cwd(), schema);
+            const schemaPath = path23.resolve(process.cwd(), schema);
             log(`\u{1F4CB} Loading custom schema from file: ${schemaPath}`);
-            const schemaContent = await fs20.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs21.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch (error) {
             throw new Error(
@@ -8069,22 +8069,22 @@ ${"=".repeat(60)}
         }
         const candidatePaths = [
           // GitHub Action bundle location
-          path22.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
+          path23.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
           // Historical fallback when src/output was inadvertently bundled as output1/
-          path22.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
+          path23.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
           // Local dev (repo root)
-          path22.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
+          path23.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
         ];
         for (const schemaPath of candidatePaths) {
           try {
-            const schemaContent = await fs20.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs21.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch {
           }
         }
-        const distPath = path22.join(__dirname, "output", sanitizedSchemaName, "schema.json");
-        const distAltPath = path22.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
-        const cwdPath = path22.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
+        const distPath = path23.join(__dirname, "output", sanitizedSchemaName, "schema.json");
+        const distAltPath = path23.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
+        const cwdPath = path23.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
         throw new Error(
           `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath}, ${distAltPath}, and ${cwdPath}. Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
         );
@@ -10769,6 +10769,10 @@ var init_config_schema = __esm({
             slack: {
               $ref: "#/definitions/SlackConfig",
               description: "Slack configuration"
+            },
+            scheduler: {
+              $ref: "#/definitions/SchedulerConfig",
+              description: "Scheduler configuration for scheduled workflow execution"
             }
           },
           required: ["version"],
@@ -11333,7 +11337,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -11349,7 +11353,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -12021,7 +12025,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -12036,13 +12040,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798>>": {
+        "Record<string,Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798>": {
+        "Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407>": {
           type: "object",
           additionalProperties: false
         },
@@ -12679,6 +12683,177 @@ var init_config_schema = __esm({
             }
           },
           additionalProperties: false,
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        SchedulerConfig: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+              description: "Enable/disable the scheduler (default: true)"
+            },
+            storage: {
+              type: "object",
+              properties: {
+                path: {
+                  type: "string",
+                  description: "Path to schedules JSON file (default: .visor/schedules.json)"
+                }
+              },
+              additionalProperties: false,
+              description: "Storage configuration",
+              patternProperties: {
+                "^x-": {}
+              }
+            },
+            limits: {
+              $ref: "#/definitions/SchedulerLimitsConfig",
+              description: "Limits for dynamic schedules"
+            },
+            default_timezone: {
+              type: "string",
+              description: 'Default timezone (IANA format, e.g., "America/New_York")'
+            },
+            check_interval_ms: {
+              type: "number",
+              description: "Check interval in milliseconds (default: 60000)"
+            },
+            permissions: {
+              $ref: "#/definitions/SchedulerPermissionsConfig",
+              description: "Permissions for dynamic schedule creation (via AI tool)"
+            },
+            cron: {
+              $ref: "#/definitions/Record%3Cstring%2CStaticCronJob%3E",
+              description: "Static cron jobs defined in configuration (always executed)"
+            }
+          },
+          additionalProperties: false,
+          description: "Scheduler configuration for workflow scheduling",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        SchedulerLimitsConfig: {
+          type: "object",
+          properties: {
+            max_per_user: {
+              type: "number",
+              description: "Maximum schedules per user (default: 25)"
+            },
+            max_recurring_per_user: {
+              type: "number",
+              description: "Maximum recurring schedules per user (default: 10)"
+            },
+            max_global: {
+              type: "number",
+              description: "Maximum total schedules (default: 1000)"
+            }
+          },
+          additionalProperties: false,
+          description: "Scheduler limits configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        SchedulerPermissionsConfig: {
+          type: "object",
+          properties: {
+            allow_personal: {
+              type: "boolean",
+              description: "Allow personal schedules (via DM or CLI)"
+            },
+            allow_channel: {
+              type: "boolean",
+              description: "Allow channel schedules (in Slack channels)"
+            },
+            allow_dm: {
+              type: "boolean",
+              description: "Allow DM schedules (to specific users)"
+            },
+            allowed_workflows: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: 'List of allowed workflow patterns (glob-style, e.g., "report-*")'
+            },
+            denied_workflows: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "List of denied workflow patterns"
+            }
+          },
+          additionalProperties: false,
+          description: "Scheduler permissions for dynamic schedule creation",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        "Record<string,StaticCronJob>": {
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/StaticCronJob"
+          }
+        },
+        StaticCronJob: {
+          type: "object",
+          properties: {
+            schedule: {
+              type: "string",
+              description: 'Cron expression (e.g., "0 9 * * 1" for every Monday at 9am)'
+            },
+            workflow: {
+              type: "string",
+              description: "Workflow/check ID to run"
+            },
+            inputs: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Optional workflow inputs"
+            },
+            output: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  enum: ["slack", "github", "webhook", "none"],
+                  description: "Output type: slack, github, webhook, or none"
+                },
+                target: {
+                  type: "string",
+                  description: "Target (channel name, repo, URL)"
+                },
+                thread_id: {
+                  type: "string",
+                  description: "Thread ID for threaded outputs"
+                }
+              },
+              required: ["type"],
+              additionalProperties: false,
+              description: "Output destination configuration",
+              patternProperties: {
+                "^x-": {}
+              }
+            },
+            description: {
+              type: "string",
+              description: "Description for logging/display"
+            },
+            enabled: {
+              type: "boolean",
+              description: "Enable/disable this job (default: true)"
+            },
+            timezone: {
+              type: "string",
+              description: "Timezone for schedule (default: UTC or scheduler default)"
+            }
+          },
+          required: ["schedule", "workflow"],
+          additionalProperties: false,
+          description: "Static cron job defined in YAML configuration These are always executed by the scheduler daemon",
           patternProperties: {
             "^x-": {}
           }
@@ -14601,17 +14776,17 @@ var init_workflow_check_provider = __esm({
        * so it can be executed by the state machine as a nested workflow.
        */
       async loadWorkflowFromConfigPath(sourcePath, baseDir) {
-        const path22 = require("path");
-        const fs20 = require("fs");
+        const path23 = require("path");
+        const fs21 = require("fs");
         const yaml4 = require("js-yaml");
-        const resolved = path22.isAbsolute(sourcePath) ? sourcePath : path22.resolve(baseDir, sourcePath);
-        if (!fs20.existsSync(resolved)) {
+        const resolved = path23.isAbsolute(sourcePath) ? sourcePath : path23.resolve(baseDir, sourcePath);
+        if (!fs21.existsSync(resolved)) {
           throw new Error(`Workflow config not found at: ${resolved}`);
         }
-        const rawContent = fs20.readFileSync(resolved, "utf8");
+        const rawContent = fs21.readFileSync(resolved, "utf8");
         const rawData = yaml4.load(rawContent);
         if (rawData.imports && Array.isArray(rawData.imports)) {
-          const configDir = path22.dirname(resolved);
+          const configDir = path23.dirname(resolved);
           for (const source of rawData.imports) {
             const results = await this.registry.import(source, {
               basePath: configDir,
@@ -14641,8 +14816,8 @@ ${errors}`);
         if (!steps || Object.keys(steps).length === 0) {
           throw new Error(`Config '${resolved}' does not contain any steps to execute as a workflow`);
         }
-        const id = path22.basename(resolved).replace(/\.(ya?ml)$/i, "");
-        const name = loaded.name || `Workflow from ${path22.basename(resolved)}`;
+        const id = path23.basename(resolved).replace(/\.(ya?ml)$/i, "");
+        const name = loaded.name || `Workflow from ${path23.basename(resolved)}`;
         const workflowDef = {
           id,
           name,
@@ -14814,6 +14989,1300 @@ var init_workflow_tool_executor = __esm({
   }
 });
 
+// src/scheduler/schedule-store.ts
+var import_promises3, import_path4, import_uuid, ScheduleStore;
+var init_schedule_store = __esm({
+  "src/scheduler/schedule-store.ts"() {
+    "use strict";
+    import_promises3 = __toESM(require("fs/promises"));
+    import_path4 = __toESM(require("path"));
+    import_uuid = require("uuid");
+    init_logger();
+    ScheduleStore = class _ScheduleStore {
+      static instance;
+      schedules = /* @__PURE__ */ new Map();
+      filePath;
+      autoSave;
+      saveDebounceMs;
+      initialized = false;
+      saveTimeout = null;
+      limits;
+      // Concurrency protection
+      saveLock = Promise.resolve();
+      pendingSave = false;
+      dirtyCount = 0;
+      // Track unsaved changes
+      constructor(config, limits) {
+        this.filePath = config?.path || ".visor/schedules.json";
+        this.autoSave = config?.autoSave !== false;
+        this.saveDebounceMs = config?.saveDebounceMs ?? 1e3;
+        this.limits = {
+          maxPerUser: limits?.maxPerUser ?? 25,
+          maxRecurringPerUser: limits?.maxRecurringPerUser ?? 10,
+          maxGlobal: limits?.maxGlobal ?? 1e3
+        };
+      }
+      /**
+       * Get singleton instance
+       */
+      static getInstance(config, limits) {
+        if (!_ScheduleStore.instance) {
+          _ScheduleStore.instance = new _ScheduleStore(config, limits);
+        }
+        return _ScheduleStore.instance;
+      }
+      /**
+       * Create a new isolated instance (for testing)
+       */
+      static createIsolated(config, limits) {
+        return new _ScheduleStore(config, limits);
+      }
+      /**
+       * Reset singleton instance (for testing)
+       */
+      static resetInstance() {
+        if (_ScheduleStore.instance) {
+          _ScheduleStore.instance.schedules.clear();
+          if (_ScheduleStore.instance.saveTimeout) {
+            clearTimeout(_ScheduleStore.instance.saveTimeout);
+          }
+        }
+        _ScheduleStore.instance = void 0;
+      }
+      /**
+       * Initialize the store - load from file if it exists
+       */
+      async initialize() {
+        if (this.initialized) {
+          return;
+        }
+        try {
+          const resolvedPath = import_path4.default.resolve(process.cwd(), this.filePath);
+          const content = await import_promises3.default.readFile(resolvedPath, "utf-8");
+          const data = JSON.parse(content);
+          const scheduleList = data.schedules || [];
+          if (Array.isArray(scheduleList)) {
+            for (const schedule of scheduleList) {
+              this.schedules.set(schedule.id, schedule);
+            }
+            logger.info(
+              `[ScheduleStore] Loaded ${this.schedules.size} schedules from ${this.filePath}`
+            );
+          }
+        } catch (error) {
+          if (error.code !== "ENOENT") {
+            logger.warn(
+              `[ScheduleStore] Failed to load schedules: ${error instanceof Error ? error.message : "Unknown error"}`
+            );
+          } else {
+            logger.debug(`[ScheduleStore] No existing schedules file at ${this.filePath}`);
+          }
+        }
+        this.initialized = true;
+      }
+      /**
+       * Save schedules to file with atomic write and concurrency protection
+       */
+      async save() {
+        const previousLock = this.saveLock;
+        let releaseLock;
+        this.saveLock = new Promise((resolve10) => {
+          releaseLock = resolve10;
+        });
+        try {
+          await previousLock;
+          const resolvedPath = import_path4.default.resolve(process.cwd(), this.filePath);
+          const dir = import_path4.default.dirname(resolvedPath);
+          await import_promises3.default.mkdir(dir, { recursive: true });
+          const savedDirtyCount = this.dirtyCount;
+          const data = {
+            version: "2.0",
+            // New version for schedule format
+            savedAt: (/* @__PURE__ */ new Date()).toISOString(),
+            schedules: Array.from(this.schedules.values())
+          };
+          const tempPath = `${resolvedPath}.tmp.${Date.now()}`;
+          await import_promises3.default.writeFile(tempPath, JSON.stringify(data, null, 2), "utf-8");
+          await import_promises3.default.rename(tempPath, resolvedPath);
+          this.dirtyCount = Math.max(0, this.dirtyCount - savedDirtyCount);
+          this.pendingSave = false;
+          logger.debug(`[ScheduleStore] Saved ${this.schedules.size} schedules to ${this.filePath}`);
+        } finally {
+          releaseLock();
+        }
+      }
+      /**
+       * Schedule a debounced save operation with dirty tracking
+       */
+      scheduleSave() {
+        if (!this.autoSave) return;
+        this.dirtyCount++;
+        this.pendingSave = true;
+        if (this.saveTimeout) {
+          clearTimeout(this.saveTimeout);
+        }
+        this.saveTimeout = setTimeout(() => {
+          this.save().catch((error) => {
+            logger.error(
+              `[ScheduleStore] Auto-save failed: ${error instanceof Error ? error.message : "Unknown error"}`
+            );
+          });
+        }, this.saveDebounceMs);
+      }
+      /**
+       * Immediately save if there are pending changes (for critical operations)
+       */
+      async saveImmediate() {
+        if (!this.autoSave) return;
+        if (this.saveTimeout) {
+          clearTimeout(this.saveTimeout);
+          this.saveTimeout = null;
+        }
+        await this.save();
+      }
+      /**
+       * Create a new schedule (saves immediately to prevent data loss)
+       */
+      async createAsync(schedule) {
+        this.validateLimits(schedule.creatorId, schedule.isRecurring);
+        const newSchedule = {
+          ...schedule,
+          id: (0, import_uuid.v4)(),
+          createdAt: Date.now(),
+          runCount: 0,
+          failureCount: 0,
+          status: "active"
+        };
+        this.schedules.set(newSchedule.id, newSchedule);
+        await this.saveImmediate();
+        logger.info(
+          `[ScheduleStore] Created schedule ${newSchedule.id} for user ${newSchedule.creatorId}: workflow="${newSchedule.workflow}"`
+        );
+        return newSchedule;
+      }
+      /**
+       * Create a new schedule (synchronous, uses debounced save)
+       * @deprecated Use createAsync for reliable persistence
+       */
+      create(schedule) {
+        this.validateLimits(schedule.creatorId, schedule.isRecurring);
+        const newSchedule = {
+          ...schedule,
+          id: (0, import_uuid.v4)(),
+          createdAt: Date.now(),
+          runCount: 0,
+          failureCount: 0,
+          status: "active"
+        };
+        this.schedules.set(newSchedule.id, newSchedule);
+        this.scheduleSave();
+        logger.info(
+          `[ScheduleStore] Created schedule ${newSchedule.id} for user ${newSchedule.creatorId}: workflow="${newSchedule.workflow}"`
+        );
+        return newSchedule;
+      }
+      /**
+       * Validate schedule limits before creation
+       */
+      validateLimits(creatorId, isRecurring) {
+        if (this.limits.maxGlobal && this.schedules.size >= this.limits.maxGlobal) {
+          throw new Error(`Global schedule limit reached (${this.limits.maxGlobal})`);
+        }
+        const userSchedules = this.getByCreator(creatorId);
+        if (this.limits.maxPerUser && userSchedules.length >= this.limits.maxPerUser) {
+          throw new Error(
+            `You have reached the maximum number of schedules (${this.limits.maxPerUser})`
+          );
+        }
+        if (isRecurring && this.limits.maxRecurringPerUser) {
+          const recurringCount = userSchedules.filter((s) => s.isRecurring).length;
+          if (recurringCount >= this.limits.maxRecurringPerUser) {
+            throw new Error(
+              `You have reached the maximum number of recurring schedules (${this.limits.maxRecurringPerUser})`
+            );
+          }
+        }
+      }
+      /**
+       * Get a schedule by ID
+       */
+      get(id) {
+        return this.schedules.get(id);
+      }
+      /**
+       * Update a schedule
+       */
+      update(id, patch) {
+        const schedule = this.schedules.get(id);
+        if (!schedule) {
+          return void 0;
+        }
+        const updated = { ...schedule, ...patch, id: schedule.id };
+        this.schedules.set(id, updated);
+        this.scheduleSave();
+        return updated;
+      }
+      /**
+       * Delete a schedule (saves immediately to prevent data loss)
+       */
+      async deleteAsync(id) {
+        const deleted = this.schedules.delete(id);
+        if (deleted) {
+          await this.saveImmediate();
+          logger.info(`[ScheduleStore] Deleted schedule ${id}`);
+        }
+        return deleted;
+      }
+      /**
+       * Delete a schedule (synchronous, uses debounced save)
+       * @deprecated Use deleteAsync for reliable persistence
+       */
+      delete(id) {
+        const deleted = this.schedules.delete(id);
+        if (deleted) {
+          this.scheduleSave();
+          logger.info(`[ScheduleStore] Deleted schedule ${id}`);
+        }
+        return deleted;
+      }
+      /**
+       * Get all schedules for a specific creator
+       */
+      getByCreator(creatorId) {
+        return Array.from(this.schedules.values()).filter((s) => s.creatorId === creatorId);
+      }
+      /**
+       * Get all active schedules
+       */
+      getActiveSchedules() {
+        return Array.from(this.schedules.values()).filter((s) => s.status === "active");
+      }
+      /**
+       * Get all schedules due for execution
+       * @param now Current timestamp in milliseconds
+       */
+      getDueSchedules(now = Date.now()) {
+        return this.getActiveSchedules().filter((s) => {
+          if (!s.isRecurring && s.runAt) {
+            return s.runAt <= now;
+          }
+          if (s.isRecurring && s.nextRunAt) {
+            return s.nextRunAt <= now;
+          }
+          return false;
+        });
+      }
+      /**
+       * Find schedules by workflow name
+       */
+      findByWorkflow(creatorId, workflowName) {
+        const lowerWorkflow = workflowName.toLowerCase();
+        return this.getByCreator(creatorId).filter(
+          (s) => s.status === "active" && s.workflow?.toLowerCase().includes(lowerWorkflow)
+        );
+      }
+      /**
+       * Get schedule count statistics
+       */
+      getStats() {
+        const all = Array.from(this.schedules.values());
+        return {
+          total: all.length,
+          active: all.filter((s) => s.status === "active").length,
+          paused: all.filter((s) => s.status === "paused").length,
+          completed: all.filter((s) => s.status === "completed").length,
+          failed: all.filter((s) => s.status === "failed").length,
+          recurring: all.filter((s) => s.isRecurring).length,
+          oneTime: all.filter((s) => !s.isRecurring).length
+        };
+      }
+      /**
+       * Force immediate save (useful for shutdown)
+       */
+      async flush() {
+        if (this.saveTimeout) {
+          clearTimeout(this.saveTimeout);
+          this.saveTimeout = null;
+        }
+        await this.save();
+      }
+      /**
+       * Check if initialized
+       */
+      isInitialized() {
+        return this.initialized;
+      }
+      /**
+       * Check if there are unsaved changes
+       */
+      hasPendingChanges() {
+        return this.pendingSave || this.dirtyCount > 0;
+      }
+      /**
+       * Get all schedules (for iteration)
+       */
+      getAll() {
+        return Array.from(this.schedules.values());
+      }
+    };
+  }
+});
+
+// src/scheduler/schedule-parser.ts
+function getNextRunTime(cronExpression, _timezone = "UTC") {
+  const parts = cronExpression.split(" ");
+  if (parts.length !== 5) {
+    throw new Error(`Invalid cron expression: ${cronExpression}`);
+  }
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+  const now = /* @__PURE__ */ new Date();
+  const next = new Date(now);
+  next.setSeconds(0, 0);
+  next.setMinutes(next.getMinutes() + 1);
+  const maxAttempts = 365 * 24 * 60;
+  for (let i = 0; i < maxAttempts; i++) {
+    if (matchesCronPart(next.getMinutes(), minute) && matchesCronPart(next.getHours(), hour) && matchesCronPart(next.getDate(), dayOfMonth) && matchesCronPart(next.getMonth() + 1, month) && matchesCronPart(next.getDay(), dayOfWeek)) {
+      return next;
+    }
+    next.setMinutes(next.getMinutes() + 1);
+  }
+  const fallback = new Date(now);
+  fallback.setDate(fallback.getDate() + 1);
+  fallback.setHours(parseInt(hour, 10) || 9);
+  fallback.setMinutes(parseInt(minute, 10) || 0);
+  fallback.setSeconds(0, 0);
+  return fallback;
+}
+function matchesCronPart(value, cronPart) {
+  if (cronPart === "*") return true;
+  if (cronPart.startsWith("*/")) {
+    const step = parseInt(cronPart.slice(2), 10);
+    return value % step === 0;
+  }
+  if (cronPart.includes("-")) {
+    const [start, end] = cronPart.split("-").map((n) => parseInt(n, 10));
+    return value >= start && value <= end;
+  }
+  if (cronPart.includes(",")) {
+    return cronPart.split(",").map((n) => parseInt(n, 10)).includes(value);
+  }
+  return parseInt(cronPart, 10) === value;
+}
+function isValidCronExpression(expr) {
+  if (!expr || typeof expr !== "string") return false;
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return false;
+  const ranges = [
+    [0, 59],
+    // minute
+    [0, 23],
+    // hour
+    [1, 31],
+    // day of month
+    [1, 12],
+    // month
+    [0, 7]
+    // day of week (0 and 7 are Sunday)
+  ];
+  return parts.every((part, i) => {
+    if (part === "*") return true;
+    if (part.startsWith("*/")) {
+      const step = parseInt(part.slice(2), 10);
+      return !isNaN(step) && step > 0;
+    }
+    if (part.includes("-")) {
+      const [start, end] = part.split("-").map((n) => parseInt(n, 10));
+      return !isNaN(start) && !isNaN(end) && start >= ranges[i][0] && end <= ranges[i][1];
+    }
+    if (part.includes(",")) {
+      return part.split(",").every((n) => {
+        const val2 = parseInt(n, 10);
+        return !isNaN(val2) && val2 >= ranges[i][0] && val2 <= ranges[i][1];
+      });
+    }
+    const val = parseInt(part, 10);
+    return !isNaN(val) && val >= ranges[i][0] && val <= ranges[i][1];
+  });
+}
+var init_schedule_parser = __esm({
+  "src/scheduler/schedule-parser.ts"() {
+    "use strict";
+  }
+});
+
+// src/scheduler/schedule-tool.ts
+function matchGlobPattern(pattern, value) {
+  const regexPattern = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+  return new RegExp(`^${regexPattern}$`).test(value);
+}
+function isWorkflowAllowedByPatterns(workflow, allowedPatterns, deniedPatterns) {
+  if (deniedPatterns && deniedPatterns.length > 0) {
+    for (const pattern of deniedPatterns) {
+      if (matchGlobPattern(pattern, workflow)) {
+        return {
+          allowed: false,
+          reason: `Workflow "${workflow}" matches denied pattern "${pattern}"`
+        };
+      }
+    }
+  }
+  if (allowedPatterns && allowedPatterns.length > 0) {
+    for (const pattern of allowedPatterns) {
+      if (matchGlobPattern(pattern, workflow)) {
+        return { allowed: true };
+      }
+    }
+    return {
+      allowed: false,
+      reason: `Workflow "${workflow}" does not match any allowed patterns: ${allowedPatterns.join(", ")}`
+    };
+  }
+  return { allowed: true };
+}
+function checkSchedulePermissions(context2, workflow, requestedScheduleType) {
+  const permissions = context2.permissions;
+  const scheduleType = requestedScheduleType || context2.scheduleType || "personal";
+  if (context2.allowedScheduleType && scheduleType !== context2.allowedScheduleType) {
+    const contextNames = {
+      personal: "a direct message (DM)",
+      channel: "a channel",
+      dm: "a group DM"
+    };
+    const targetNames = {
+      personal: "personal",
+      channel: "channel",
+      dm: "group"
+    };
+    return {
+      allowed: false,
+      reason: `From ${contextNames[context2.allowedScheduleType]}, you can only create ${targetNames[context2.allowedScheduleType]} schedules. To create a ${targetNames[scheduleType]} schedule, please use the appropriate context.`
+    };
+  }
+  if (!permissions) {
+    return { allowed: true };
+  }
+  switch (scheduleType) {
+    case "personal":
+      if (permissions.allowPersonal === false) {
+        return {
+          allowed: false,
+          reason: "Personal schedules are not allowed in this configuration"
+        };
+      }
+      break;
+    case "channel":
+      if (permissions.allowChannel === false) {
+        return {
+          allowed: false,
+          reason: "Channel schedules are not allowed in this configuration"
+        };
+      }
+      break;
+    case "dm":
+      if (permissions.allowDm === false) {
+        return {
+          allowed: false,
+          reason: "DM schedules are not allowed in this configuration"
+        };
+      }
+      break;
+  }
+  return isWorkflowAllowedByPatterns(
+    workflow,
+    permissions.allowedWorkflows,
+    permissions.deniedWorkflows
+  );
+}
+function formatSchedule(schedule) {
+  const time = schedule.isRecurring ? schedule.originalExpression : new Date(schedule.runAt).toLocaleString();
+  const status = schedule.status !== "active" ? ` (${schedule.status})` : "";
+  const displayName = schedule.workflow || schedule.workflowInputs?.text || "scheduled message";
+  const truncatedName = displayName.length > 30 ? displayName.substring(0, 27) + "..." : displayName;
+  const output = schedule.outputContext?.type || "none";
+  return `\`${schedule.id.substring(0, 8)}\` - "${truncatedName}" - ${time} (\u2192 ${output})${status}`;
+}
+function formatCreateConfirmation(schedule) {
+  const outputDesc = schedule.outputContext?.type ? `${schedule.outputContext.type}${schedule.outputContext.target ? `:${schedule.outputContext.target}` : ""}` : "none";
+  const displayName = schedule.workflow || schedule.workflowInputs?.text || "scheduled message";
+  if (schedule.isRecurring) {
+    const nextRun = schedule.nextRunAt ? new Date(schedule.nextRunAt).toLocaleString("en-US", {
+      weekday: "long",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit"
+    }) : "calculating...";
+    return `**Schedule created!**
+
+**${schedule.workflow ? "Workflow" : "Reminder"}**: ${displayName}
+**When**: ${schedule.originalExpression}
+**Output**: ${outputDesc}
+**Next run**: ${nextRun}
+
+ID: \`${schedule.id.substring(0, 8)}\``;
+  } else {
+    const when = new Date(schedule.runAt).toLocaleString("en-US", {
+      weekday: "long",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit"
+    });
+    return `**Schedule created!**
+
+**${schedule.workflow ? "Workflow" : "Reminder"}**: ${displayName}
+**When**: ${when}
+**Output**: ${outputDesc}
+
+ID: \`${schedule.id.substring(0, 8)}\``;
+  }
+}
+function formatScheduleList(schedules) {
+  if (schedules.length === 0) {
+    return `You don't have any active schedules.
+
+To create one: "schedule daily-report every Monday at 9am"`;
+  }
+  const lines = schedules.map((s, i) => `${i + 1}. ${formatSchedule(s)}`);
+  return `**Your active schedules:**
+
+${lines.join("\n")}
+
+To cancel: "cancel schedule <id>"
+To pause: "pause schedule <id>"`;
+}
+async function handleScheduleAction(args, context2) {
+  const store = ScheduleStore.getInstance();
+  if (!store.isInitialized()) {
+    await store.initialize();
+  }
+  switch (args.action) {
+    case "create":
+      return handleCreate(args, context2, store);
+    case "list":
+      return handleList(context2, store);
+    case "cancel":
+      return handleCancel(args, context2, store);
+    case "pause":
+      return handlePauseResume(args, context2, store, "paused");
+    case "resume":
+      return handlePauseResume(args, context2, store, "active");
+    default:
+      return {
+        success: false,
+        message: `Unknown action: ${args.action}`,
+        error: `Supported actions: create, list, cancel, pause, resume`
+      };
+  }
+}
+async function handleCreate(args, context2, store) {
+  if (!args.reminder_text && !args.workflow) {
+    return {
+      success: false,
+      message: "Missing reminder content",
+      error: "Please specify either reminder_text (what to say) or workflow (what to run)"
+    };
+  }
+  if (!args.cron && !args.run_at) {
+    return {
+      success: false,
+      message: "Missing schedule timing",
+      error: 'Please specify either cron (for recurring, e.g., "* * * * *") or run_at (ISO timestamp for one-time)'
+    };
+  }
+  if (args.cron && !isValidCronExpression(args.cron)) {
+    return {
+      success: false,
+      message: "Invalid cron expression",
+      error: `"${args.cron}" is not a valid cron expression. Format: "minute hour day-of-month month day-of-week"`
+    };
+  }
+  let runAtTimestamp;
+  if (args.run_at) {
+    const parsed = new Date(args.run_at);
+    if (isNaN(parsed.getTime())) {
+      return {
+        success: false,
+        message: "Invalid run_at timestamp",
+        error: `"${args.run_at}" is not a valid ISO 8601 timestamp`
+      };
+    }
+    if (parsed.getTime() <= Date.now()) {
+      return {
+        success: false,
+        message: "run_at must be in the future",
+        error: "Cannot schedule a reminder in the past"
+      };
+    }
+    runAtTimestamp = parsed.getTime();
+  }
+  if (args.target_type && !args.target_id) {
+    return {
+      success: false,
+      message: "Missing target_id",
+      error: `target_type "${args.target_type}" requires a target_id (channel ID, user ID, or thread_ts)`
+    };
+  }
+  let scheduleType = "personal";
+  if (args.target_type === "channel") {
+    scheduleType = "channel";
+  } else if (args.target_type === "user") {
+    scheduleType = "dm";
+  }
+  const workflowName = args.workflow || "reminder";
+  const permissionCheck = checkSchedulePermissions(context2, workflowName, scheduleType);
+  if (!permissionCheck.allowed) {
+    logger.warn(
+      `[ScheduleTool] Permission denied for user ${context2.userId}: ${permissionCheck.reason}`
+    );
+    return {
+      success: false,
+      message: "Permission denied",
+      error: permissionCheck.reason || "You do not have permission to create this schedule"
+    };
+  }
+  if (args.workflow && context2.availableWorkflows && !context2.availableWorkflows.includes(args.workflow)) {
+    return {
+      success: false,
+      message: `Workflow "${args.workflow}" not found`,
+      error: `Available workflows: ${context2.availableWorkflows.slice(0, 5).join(", ")}${context2.availableWorkflows.length > 5 ? "..." : ""}`
+    };
+  }
+  try {
+    const timezone = context2.timezone || "UTC";
+    const isRecurring = args.is_recurring === true || !!args.cron;
+    let outputContext;
+    if (args.target_type && args.target_id) {
+      outputContext = {
+        type: "slack",
+        // Currently only Slack supported
+        target: args.target_id,
+        // Channel ID (C... or D...)
+        threadId: args.thread_ts,
+        // Thread timestamp for replies
+        metadata: {
+          targetType: args.target_type,
+          reminderText: args.reminder_text
+        }
+      };
+    }
+    let nextRunAt;
+    if (isRecurring && args.cron) {
+      nextRunAt = getNextRunTime(args.cron, timezone).getTime();
+    } else if (runAtTimestamp) {
+      nextRunAt = runAtTimestamp;
+    }
+    const schedule = store.create({
+      creatorId: context2.userId,
+      creatorContext: context2.contextType,
+      creatorName: context2.userName,
+      timezone,
+      schedule: args.cron || "",
+      runAt: runAtTimestamp,
+      isRecurring,
+      originalExpression: args.original_expression || args.cron || args.run_at || "",
+      workflow: args.workflow,
+      // Only set if explicitly provided
+      workflowInputs: args.workflow_inputs || (args.reminder_text ? { text: args.reminder_text } : void 0),
+      outputContext,
+      nextRunAt
+    });
+    const displayText = args.reminder_text || args.workflow || "scheduled task";
+    logger.info(
+      `[ScheduleTool] Created schedule ${schedule.id} for user ${context2.userId}: "${displayText}"`
+    );
+    return {
+      success: true,
+      message: formatCreateConfirmation(schedule),
+      schedule
+    };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : "Unknown error";
+    logger.warn(`[ScheduleTool] Failed to create schedule: ${errorMsg}`);
+    return {
+      success: false,
+      message: `Failed to create schedule: ${errorMsg}`,
+      error: errorMsg
+    };
+  }
+}
+async function handleList(context2, store) {
+  const schedules = store.getByCreator(context2.userId).filter((s) => s.status !== "completed");
+  let filteredSchedules = schedules;
+  if (context2.allowedScheduleType) {
+    filteredSchedules = schedules.filter((s) => {
+      const scheduleOutputType = s.outputContext?.type;
+      if (!scheduleOutputType || scheduleOutputType === "none") {
+        return context2.allowedScheduleType === "personal";
+      }
+      if (scheduleOutputType === "slack") {
+        const target = s.outputContext?.target || "";
+        if (target.startsWith("#") || target.match(/^C[A-Z0-9]+$/)) {
+          return context2.allowedScheduleType === "channel";
+        }
+        if (target.startsWith("@") || target.match(/^U[A-Z0-9]+$/)) {
+          return context2.allowedScheduleType === "dm";
+        }
+      }
+      return context2.allowedScheduleType === "personal";
+    });
+  }
+  return {
+    success: true,
+    message: formatScheduleList(filteredSchedules),
+    schedules: filteredSchedules
+  };
+}
+async function handleCancel(args, context2, store) {
+  let schedule;
+  if (args.schedule_id) {
+    const userSchedules = store.getByCreator(context2.userId);
+    schedule = userSchedules.find((s) => s.id === args.schedule_id);
+    if (!schedule) {
+      schedule = userSchedules.find((s) => s.id.startsWith(args.schedule_id));
+    }
+  }
+  if (!schedule) {
+    return {
+      success: false,
+      message: "Schedule not found",
+      error: `Could not find schedule with ID "${args.schedule_id}" in your schedules. Use "list my schedules" to see your schedules.`
+    };
+  }
+  if (schedule.creatorId !== context2.userId) {
+    logger.warn(
+      `[ScheduleTool] Attempted cross-user schedule cancellation: ${context2.userId} tried to cancel ${schedule.id} owned by ${schedule.creatorId}`
+    );
+    return {
+      success: false,
+      message: "Not your schedule",
+      error: "You can only cancel your own schedules."
+    };
+  }
+  store.delete(schedule.id);
+  logger.info(`[ScheduleTool] Cancelled schedule ${schedule.id} for user ${context2.userId}`);
+  return {
+    success: true,
+    message: `**Schedule cancelled!**
+
+Was: "${schedule.workflow}" scheduled for ${schedule.originalExpression}`
+  };
+}
+async function handlePauseResume(args, context2, store, newStatus) {
+  if (!args.schedule_id) {
+    return {
+      success: false,
+      message: "Missing schedule ID",
+      error: "Please specify which schedule to pause/resume."
+    };
+  }
+  const userSchedules = store.getByCreator(context2.userId);
+  let schedule = userSchedules.find((s) => s.id === args.schedule_id);
+  if (!schedule) {
+    schedule = userSchedules.find((s) => s.id.startsWith(args.schedule_id));
+  }
+  if (!schedule) {
+    return {
+      success: false,
+      message: "Schedule not found",
+      error: `Could not find schedule with ID "${args.schedule_id}" in your schedules.`
+    };
+  }
+  if (schedule.creatorId !== context2.userId) {
+    logger.warn(
+      `[ScheduleTool] Attempted cross-user schedule modification: ${context2.userId} tried to modify ${schedule.id} owned by ${schedule.creatorId}`
+    );
+    return {
+      success: false,
+      message: "Not your schedule",
+      error: "You can only modify your own schedules."
+    };
+  }
+  const updated = store.update(schedule.id, { status: newStatus });
+  const action = newStatus === "paused" ? "paused" : "resumed";
+  logger.info(`[ScheduleTool] ${action} schedule ${schedule.id} for user ${context2.userId}`);
+  return {
+    success: true,
+    message: `**Schedule ${action}!**
+
+"${schedule.workflow}" - ${schedule.originalExpression}`,
+    schedule: updated
+  };
+}
+function getScheduleToolDefinition() {
+  return {
+    name: "schedule",
+    description: `Schedule, list, and manage reminders or workflow executions.
+
+YOU (the AI) must extract and structure all scheduling parameters. Do NOT pass natural language time expressions - convert them to cron or ISO timestamps.
+
+ACTIONS:
+- create: Schedule a new reminder or workflow
+- list: Show user's active schedules
+- cancel: Remove a schedule by ID
+- pause/resume: Temporarily disable/enable a schedule
+
+FOR CREATE ACTION - Extract these from user's request:
+1. WHAT: Either reminder_text (message to send) OR workflow (workflow ID to run)
+2. WHERE: Use the CURRENT channel from context
+   - target_id: The channel ID from context (C... for channels, D... for DMs)
+   - target_type: "channel" for public/private channels, "dm" for direct messages
+   - ONLY use target_type="thread" with thread_ts if user is INSIDE a thread
+   - When NOT in a thread, reminders post as NEW messages (not thread replies)
+3. WHEN: Either cron (for recurring) OR run_at (ISO 8601 for one-time)
+   - Recurring: Generate cron expression (minute hour day-of-month month day-of-week)
+   - One-time: Generate ISO 8601 timestamp
+
+CRON EXAMPLES:
+- "every minute" \u2192 cron: "* * * * *"
+- "every hour" \u2192 cron: "0 * * * *"
+- "every day at 9am" \u2192 cron: "0 9 * * *"
+- "every Monday at 9am" \u2192 cron: "0 9 * * 1"
+- "weekdays at 8:30am" \u2192 cron: "30 8 * * 1-5"
+- "every 5 minutes" \u2192 cron: "*/5 * * * *"
+
+ONE-TIME EXAMPLES:
+- "in 2 hours" \u2192 run_at: "<ISO timestamp 2 hours from now>"
+- "tomorrow at 3pm" \u2192 run_at: "2026-02-08T15:00:00Z"
+
+USAGE EXAMPLES:
+
+User in DM: "remind me to check builds every day at 9am"
+\u2192 {
+    "action": "create",
+    "reminder_text": "check builds",
+    "is_recurring": true,
+    "cron": "0 9 * * *",
+    "target_type": "dm",
+    "target_id": "<DM channel ID from context, e.g., D09SZABNLG3>",
+    "original_expression": "every day at 9am"
+  }
+
+User in #security channel: "run security-scan every Monday at 10am"
+\u2192 {
+    "action": "create",
+    "workflow": "security-scan",
+    "is_recurring": true,
+    "cron": "0 10 * * 1",
+    "target_type": "channel",
+    "target_id": "<channel ID from context, e.g., C05ABC123>",
+    "original_expression": "every Monday at 10am"
+  }
+
+User in DM: "remind me in 2 hours to review the PR"
+\u2192 {
+    "action": "create",
+    "reminder_text": "review the PR",
+    "is_recurring": false,
+    "run_at": "2026-02-07T18:00:00Z",
+    "target_type": "dm",
+    "target_id": "<DM channel ID from context>",
+    "original_expression": "in 2 hours"
+  }
+
+User inside a thread: "remind me about this tomorrow"
+\u2192 {
+    "action": "create",
+    "reminder_text": "Check this thread",
+    "is_recurring": false,
+    "run_at": "2026-02-08T09:00:00Z",
+    "target_type": "thread",
+    "target_id": "<channel ID>",
+    "thread_ts": "<thread_ts from context>",
+    "original_expression": "tomorrow"
+  }
+
+User: "list my schedules"
+\u2192 { "action": "list" }
+
+User: "cancel schedule abc123"
+\u2192 { "action": "cancel", "schedule_id": "abc123" }`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["create", "list", "cancel", "pause", "resume"],
+          description: "What to do: create new, list existing, cancel/pause/resume by ID"
+        },
+        // WHAT to do
+        reminder_text: {
+          type: "string",
+          description: "For create: the message/reminder text to send when triggered"
+        },
+        workflow: {
+          type: "string",
+          description: "For create: workflow/check ID to run (use instead of reminder_text for workflow execution)"
+        },
+        workflow_inputs: {
+          type: "object",
+          description: "For create: optional inputs to pass to the workflow"
+        },
+        // WHERE to send
+        target_type: {
+          type: "string",
+          enum: ["channel", "dm", "thread", "user"],
+          description: "For create: where to send output. channel=public/private channel, dm=DM to self (current DM channel), user=DM to specific user, thread=reply in current thread"
+        },
+        target_id: {
+          type: "string",
+          description: "For create: Slack channel ID. Channels start with C, DMs start with D. Always use the channel ID from the current context."
+        },
+        thread_ts: {
+          type: "string",
+          description: "For create with target_type=thread: the thread timestamp to reply to. Get this from the current thread context."
+        },
+        // WHEN to run
+        is_recurring: {
+          type: "boolean",
+          description: "For create: true for recurring schedules (cron), false for one-time (run_at)"
+        },
+        cron: {
+          type: "string",
+          description: 'For create recurring: cron expression (minute hour day-of-month month day-of-week). Examples: "0 9 * * *" (daily 9am), "* * * * *" (every minute), "0 9 * * 1" (Mondays 9am)'
+        },
+        run_at: {
+          type: "string",
+          description: 'For create one-time: ISO 8601 timestamp when to run (e.g., "2026-02-07T15:00:00Z")'
+        },
+        original_expression: {
+          type: "string",
+          description: "For create: the original natural language expression from user (for display only)"
+        },
+        // For cancel/pause/resume
+        schedule_id: {
+          type: "string",
+          description: "For cancel/pause/resume: the schedule ID to act on (first 8 chars is enough)"
+        }
+      },
+      required: ["action"]
+    },
+    exec: ""
+    // Not used - this tool has a custom handler
+  };
+}
+function isScheduleTool(toolName) {
+  return toolName === "schedule";
+}
+function determineScheduleType(contextType, outputType, outputTarget) {
+  if (outputType === "slack" && outputTarget) {
+    if (outputTarget.startsWith("#") || outputTarget.match(/^C[A-Z0-9]+$/)) {
+      return "channel";
+    }
+    if (outputTarget.startsWith("@") || outputTarget.match(/^U[A-Z0-9]+$/)) {
+      return "dm";
+    }
+  }
+  if (contextType === "cli" || contextType.startsWith("github:")) {
+    return "personal";
+  }
+  return "personal";
+}
+function slackChannelTypeToScheduleType(channelType) {
+  switch (channelType) {
+    case "channel":
+      return "channel";
+    case "group":
+      return "dm";
+    // Group DMs map to 'dm' schedule type
+    case "dm":
+    default:
+      return "personal";
+  }
+}
+function buildScheduleToolContext(sources, availableWorkflows, permissions, outputInfo) {
+  if (sources.slackContext) {
+    const contextType = `slack:${sources.slackContext.userId}`;
+    const scheduleType = determineScheduleType(
+      contextType,
+      outputInfo?.outputType,
+      outputInfo?.outputTarget
+    );
+    let allowedScheduleType;
+    if (sources.slackContext.channelType) {
+      allowedScheduleType = slackChannelTypeToScheduleType(sources.slackContext.channelType);
+    }
+    let finalScheduleType = scheduleType;
+    if (!outputInfo?.outputType && sources.slackContext.channelType) {
+      finalScheduleType = slackChannelTypeToScheduleType(sources.slackContext.channelType);
+    }
+    return {
+      userId: sources.slackContext.userId,
+      userName: sources.slackContext.userName,
+      contextType,
+      timezone: sources.slackContext.timezone,
+      availableWorkflows,
+      scheduleType: finalScheduleType,
+      permissions,
+      allowedScheduleType
+    };
+  }
+  if (sources.githubContext) {
+    return {
+      userId: sources.githubContext.login,
+      contextType: `github:${sources.githubContext.login}`,
+      timezone: "UTC",
+      // GitHub doesn't provide timezone
+      availableWorkflows,
+      scheduleType: "personal",
+      permissions,
+      allowedScheduleType: "personal"
+      // GitHub context only allows personal schedules
+    };
+  }
+  return {
+    userId: sources.cliContext?.userId || process.env.USER || "cli-user",
+    contextType: "cli",
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+    availableWorkflows,
+    scheduleType: "personal",
+    permissions,
+    allowedScheduleType: "personal"
+    // CLI context only allows personal schedules
+  };
+}
+var init_schedule_tool = __esm({
+  "src/scheduler/schedule-tool.ts"() {
+    "use strict";
+    init_schedule_store();
+    init_schedule_parser();
+    init_logger();
+  }
+});
+
+// src/slack/prompt-state.ts
+var prompt_state_exports = {};
+__export(prompt_state_exports, {
+  PromptStateManager: () => PromptStateManager,
+  getPromptStateManager: () => getPromptStateManager,
+  resetPromptStateManager: () => resetPromptStateManager
+});
+function getPromptStateManager(ttlMs) {
+  if (!__promptState) __promptState = new PromptStateManager(ttlMs);
+  return __promptState;
+}
+function resetPromptStateManager() {
+  __promptState = void 0;
+}
+var PromptStateManager, __promptState;
+var init_prompt_state = __esm({
+  "src/slack/prompt-state.ts"() {
+    "use strict";
+    init_logger();
+    PromptStateManager = class {
+      waiting = /* @__PURE__ */ new Map();
+      // key: `${channel}:${threadTs}`
+      ttlMs;
+      timer;
+      firstMessage = /* @__PURE__ */ new Map();
+      summaryTs = /* @__PURE__ */ new Map();
+      // key: threadKey -> group -> ts
+      constructor(ttlMs = 60 * 60 * 1e3) {
+        this.ttlMs = ttlMs;
+        this.startCleanup();
+      }
+      key(channel, threadTs) {
+        return `${channel}:${threadTs}`;
+      }
+      setWaiting(channel, threadTs, info) {
+        const key = this.key(channel, threadTs);
+        const value = { ...info, timestamp: Date.now(), channel, threadTs };
+        this.waiting.set(key, value);
+        try {
+          logger.info(
+            `[prompt-state] waiting set for ${key} (check=${info.checkName}, prompt="${info.prompt.substring(
+              0,
+              60
+            )}\u2026")`
+          );
+        } catch {
+        }
+      }
+      getWaiting(channel, threadTs) {
+        const key = this.key(channel, threadTs);
+        const info = this.waiting.get(key);
+        if (!info) return void 0;
+        const age = Date.now() - info.timestamp;
+        if (age > this.ttlMs) {
+          this.waiting.delete(key);
+          try {
+            logger.warn(`[prompt-state] expired ${key} (age=${Math.round(age / 1e3)}s)`);
+          } catch {
+          }
+          return void 0;
+        }
+        return info;
+      }
+      clear(channel, threadTs) {
+        const key = this.key(channel, threadTs);
+        const had = this.waiting.delete(key);
+        if (had) {
+          try {
+            logger.info(`[prompt-state] cleared ${key}`);
+          } catch {
+          }
+        }
+        return had;
+      }
+      /** Merge updates into an existing waiting entry */
+      update(channel, threadTs, patch) {
+        const key = this.key(channel, threadTs);
+        const prev = this.waiting.get(key);
+        if (!prev) return void 0;
+        const next = { ...prev, ...patch };
+        this.waiting.set(key, next);
+        try {
+          if (patch.snapshotPath) {
+            logger.info(`[prompt-state] snapshotPath set for ${key}`);
+          }
+        } catch {
+        }
+        return next;
+      }
+      // First message capture helpers
+      setFirstMessage(channel, threadTs, text) {
+        const key = this.key(channel, threadTs);
+        if (!text || !text.trim()) return;
+        const existing = this.firstMessage.get(key);
+        if (!existing || existing.consumed) {
+          this.firstMessage.set(key, { text, consumed: false });
+        }
+      }
+      consumeFirstMessage(channel, threadTs) {
+        const key = this.key(channel, threadTs);
+        const entry = this.firstMessage.get(key);
+        if (entry && !entry.consumed) {
+          entry.consumed = true;
+          this.firstMessage.set(key, entry);
+          return entry.text;
+        }
+        return void 0;
+      }
+      hasUnconsumedFirstMessage(channel, threadTs) {
+        const key = this.key(channel, threadTs);
+        const e = this.firstMessage.get(key);
+        return !!(e && !e.consumed && e.text && e.text.trim());
+      }
+      startCleanup(intervalMs = 5 * 60 * 1e3) {
+        if (this.timer) clearInterval(this.timer);
+        this.timer = setInterval(() => this.cleanup(), intervalMs);
+        if (this.timer.unref) this.timer.unref();
+      }
+      cleanup() {
+        const now = Date.now();
+        let removed = 0;
+        for (const [key, info] of this.waiting.entries()) {
+          if (now - info.timestamp > this.ttlMs) {
+            this.waiting.delete(key);
+            removed++;
+          }
+        }
+        for (const [key] of this.firstMessage.entries()) {
+          const waitingInfo = this.waiting.get(key);
+          if (!waitingInfo) {
+            const entry = this.firstMessage.get(key);
+            if (entry?.consumed) {
+              this.firstMessage.delete(key);
+              removed++;
+            }
+          }
+        }
+        if (removed) {
+          try {
+            logger.info(`[prompt-state] cleanup removed ${removed} entries`);
+          } catch {
+          }
+        }
+        return removed;
+      }
+    };
+  }
+});
+
+// src/scheduler/scheduler.ts
+var import_node_cron;
+var init_scheduler = __esm({
+  "src/scheduler/scheduler.ts"() {
+    "use strict";
+    import_node_cron = __toESM(require("node-cron"));
+    init_schedule_store();
+    init_schedule_parser();
+    init_logger();
+    init_state_machine_execution_engine();
+    init_prompt_state();
+  }
+});
+
+// src/scheduler/cli-handler.ts
+var init_cli_handler = __esm({
+  "src/scheduler/cli-handler.ts"() {
+    "use strict";
+    init_schedule_store();
+    init_scheduler();
+    init_schedule_parser();
+    init_logger();
+    init_state_machine_execution_engine();
+  }
+});
+
+// src/scheduler/index.ts
+var init_scheduler2 = __esm({
+  "src/scheduler/index.ts"() {
+    "use strict";
+    init_schedule_store();
+    init_schedule_parser();
+    init_scheduler();
+    init_schedule_tool();
+    init_cli_handler();
+  }
+});
+
+// src/slack/schedule-tool-handler.ts
+function getChannelType(channelId) {
+  if (channelId.startsWith("D")) {
+    return "dm";
+  } else if (channelId.startsWith("G")) {
+    return "group";
+  }
+  return "channel";
+}
+function extractSlackContext(webhookData) {
+  try {
+    for (const payload of webhookData.values()) {
+      const p = payload;
+      if (!p || typeof p !== "object") continue;
+      const event = p.event;
+      const conversation = p.slack_conversation;
+      if (event) {
+        const userId = event.user || "";
+        const channel = event.channel || "";
+        const isInThread = event.thread_ts && event.thread_ts !== event.ts;
+        const threadTs = isInThread ? event.thread_ts : void 0;
+        if (userId && channel) {
+          return {
+            userId,
+            channel,
+            threadTs,
+            userName: conversation?.current?.user,
+            timezone: void 0,
+            // Will be fetched on-demand
+            channelType: getChannelType(channel)
+          };
+        }
+      }
+    }
+  } catch {
+  }
+  return null;
+}
+var init_schedule_tool_handler = __esm({
+  "src/slack/schedule-tool-handler.ts"() {
+    "use strict";
+    init_scheduler2();
+    init_logger();
+  }
+});
+
 // src/providers/mcp-custom-sse-server.ts
 var import_http, import_events, CustomToolsSSEServer;
 var init_mcp_custom_sse_server = __esm({
@@ -14824,6 +16293,8 @@ var init_mcp_custom_sse_server = __esm({
     import_http = __toESM(require("http"));
     import_events = require("events");
     init_workflow_tool_executor();
+    init_schedule_tool();
+    init_schedule_tool_handler();
     CustomToolsSSEServer = class _CustomToolsSSEServer {
       server = null;
       port = 0;
@@ -15343,6 +16814,62 @@ var init_mcp_custom_sse_server = __esm({
           let result;
           while (true) {
             try {
+              if (isScheduleTool(toolName)) {
+                const webhookData = this.workflowContext?.executionContext?.webhookContext?.webhookData;
+                const slackContext = webhookData ? extractSlackContext(webhookData) : null;
+                const visorCfg = this.workflowContext?.visorConfig;
+                const availableWorkflows = visorCfg?.checks ? Object.keys(visorCfg.checks) : void 0;
+                const schedulerPermissions = visorCfg?.scheduler?.permissions;
+                const permissions = schedulerPermissions ? {
+                  allowPersonal: schedulerPermissions.allow_personal,
+                  allowChannel: schedulerPermissions.allow_channel,
+                  allowDm: schedulerPermissions.allow_dm,
+                  allowedWorkflows: schedulerPermissions.allowed_workflows,
+                  deniedWorkflows: schedulerPermissions.denied_workflows
+                } : void 0;
+                const scheduleContext = buildScheduleToolContext(
+                  {
+                    slackContext: slackContext ? {
+                      userId: slackContext.userId,
+                      userName: slackContext.userName,
+                      timezone: slackContext.timezone,
+                      channelType: slackContext.channelType
+                    } : void 0
+                  },
+                  availableWorkflows,
+                  permissions,
+                  {
+                    outputType: args.output_type,
+                    outputTarget: args.output_target
+                  }
+                );
+                if (this.debug) {
+                  logger.debug(
+                    `[CustomToolsSSEServer:${this.sessionId}] Executing schedule tool for user ${scheduleContext.userId} (${scheduleContext.contextType})`
+                  );
+                }
+                const scheduleArgs = {
+                  action: args.action || "list",
+                  // What to do
+                  reminder_text: args.reminder_text,
+                  workflow: args.workflow,
+                  workflow_inputs: args.workflow_inputs,
+                  // Where to send
+                  target_type: args.target_type,
+                  target_id: args.target_id,
+                  thread_ts: args.thread_ts,
+                  // When to run
+                  is_recurring: args.is_recurring,
+                  cron: args.cron,
+                  run_at: args.run_at,
+                  original_expression: args.original_expression,
+                  // For cancel/pause/resume
+                  schedule_id: args.schedule_id
+                };
+                const scheduleResult = await handleScheduleAction(scheduleArgs, scheduleContext);
+                result = scheduleResult.success ? scheduleResult.message : `Error: ${scheduleResult.error}`;
+                break;
+              }
               const tool = this.tools.get(toolName);
               if (tool && isWorkflowTool(tool)) {
                 if (!this.workflowContext) {
@@ -15454,7 +16981,7 @@ var init_mcp_custom_sse_server = __esm({
 });
 
 // src/providers/ai-check-provider.ts
-var import_promises3, import_path4, AICheckProvider;
+var import_promises4, import_path5, AICheckProvider;
 var init_ai_check_provider = __esm({
   "src/providers/ai-check-provider.ts"() {
     "use strict";
@@ -15463,14 +16990,16 @@ var init_ai_check_provider = __esm({
     init_env_resolver();
     init_issue_filter();
     init_liquid_extensions();
-    import_promises3 = __toESM(require("fs/promises"));
-    import_path4 = __toESM(require("path"));
+    import_promises4 = __toESM(require("fs/promises"));
+    import_path5 = __toESM(require("path"));
     init_lazy_otel();
     init_state_capture();
     init_mcp_custom_sse_server();
     init_logger();
     init_workflow_tool_executor();
     init_sandbox();
+    init_schedule_tool();
+    init_schedule_tool_handler();
     AICheckProvider = class extends CheckProvider {
       aiReviewService;
       liquidEngine;
@@ -15626,7 +17155,7 @@ var init_ai_check_provider = __esm({
         const hasFileExtension = /\.[a-zA-Z0-9]{1,10}$/i.test(str);
         const hasPathSeparators = /[\/\\]/.test(str);
         const isRelativePath = /^\.{1,2}\//.test(str);
-        const isAbsolutePath = import_path4.default.isAbsolute(str);
+        const isAbsolutePath = import_path5.default.isAbsolute(str);
         const hasTypicalFileChars = /^[a-zA-Z0-9._\-\/\\:~]+$/.test(str);
         if (!(hasFileExtension || isRelativePath || isAbsolutePath || hasPathSeparators)) {
           return false;
@@ -15636,14 +17165,14 @@ var init_ai_check_provider = __esm({
         }
         try {
           let resolvedPath;
-          if (import_path4.default.isAbsolute(str)) {
-            resolvedPath = import_path4.default.normalize(str);
+          if (import_path5.default.isAbsolute(str)) {
+            resolvedPath = import_path5.default.normalize(str);
           } else {
-            resolvedPath = import_path4.default.resolve(process.cwd(), str);
+            resolvedPath = import_path5.default.resolve(process.cwd(), str);
           }
-          const fs20 = require("fs").promises;
+          const fs21 = require("fs").promises;
           try {
-            const stat = await fs20.stat(resolvedPath);
+            const stat = await fs21.stat(resolvedPath);
             return stat.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
@@ -15660,14 +17189,14 @@ var init_ai_check_provider = __esm({
           throw new Error("Prompt file must have .liquid extension");
         }
         let resolvedPath;
-        if (import_path4.default.isAbsolute(promptPath)) {
+        if (import_path5.default.isAbsolute(promptPath)) {
           resolvedPath = promptPath;
         } else {
-          resolvedPath = import_path4.default.resolve(process.cwd(), promptPath);
+          resolvedPath = import_path5.default.resolve(process.cwd(), promptPath);
         }
-        if (!import_path4.default.isAbsolute(promptPath)) {
-          const normalizedPath = import_path4.default.normalize(resolvedPath);
-          const currentDir = import_path4.default.resolve(process.cwd());
+        if (!import_path5.default.isAbsolute(promptPath)) {
+          const normalizedPath = import_path5.default.normalize(resolvedPath);
+          const currentDir = import_path5.default.resolve(process.cwd());
           if (!normalizedPath.startsWith(currentDir)) {
             throw new Error("Invalid prompt file path: path traversal detected");
           }
@@ -15676,7 +17205,7 @@ var init_ai_check_provider = __esm({
           throw new Error("Invalid prompt file path: path traversal detected");
         }
         try {
-          const promptContent = await import_promises3.default.readFile(resolvedPath, "utf-8");
+          const promptContent = await import_promises4.default.readFile(resolvedPath, "utf-8");
           return promptContent;
         } catch (error) {
           throw new Error(
@@ -16279,6 +17808,7 @@ ${preview}`);
           }
         }
         const workflowEntriesFromMcp = [];
+        const toolEntriesFromMcp = [];
         const mcpEntriesToRemove = [];
         for (const [serverName, serverConfig] of Object.entries(mcpServers)) {
           const cfg = serverConfig;
@@ -16289,31 +17819,71 @@ ${preview}`);
             });
             mcpEntriesToRemove.push(serverName);
             logger.debug(
-              `[AICheckProvider] Extracted workflow tool '${serverName}' from ai_mcp_servers`
+              `[AICheckProvider] Extracted workflow tool '${serverName}' (workflow=${cfg.workflow}) from ai_mcp_servers`
             );
+          } else if (cfg.tool && typeof cfg.tool === "string") {
+            toolEntriesFromMcp.push(cfg.tool);
+            mcpEntriesToRemove.push(serverName);
+            logger.debug(`[AICheckProvider] Extracted tool '${cfg.tool}' from ai_mcp_servers`);
           }
         }
         for (const name of mcpEntriesToRemove) {
           delete mcpServers[name];
         }
         if (workflowEntriesFromMcp.length > 0) {
-          if (customToolsToLoad.length > 0) {
-            const existingNames = new Set(
-              customToolsToLoad.map((item) => typeof item === "string" ? item : item.workflow)
-            );
-            for (const wf of workflowEntriesFromMcp) {
-              if (!existingNames.has(wf.workflow)) {
-                customToolsToLoad.push(wf);
-              }
+          const existingNames = new Set(
+            customToolsToLoad.map((item) => typeof item === "string" ? item : item.workflow)
+          );
+          for (const wf of workflowEntriesFromMcp) {
+            if (!existingNames.has(wf.workflow)) {
+              customToolsToLoad.push(wf);
             }
-          } else {
-            customToolsToLoad = workflowEntriesFromMcp;
           }
-          customToolsServerName = "__tools__";
+          if (!customToolsServerName) {
+            customToolsServerName = "__tools__";
+          }
         }
-        if (customToolsToLoad.length > 0 && customToolsServerName && !config.ai?.disableTools) {
+        if (toolEntriesFromMcp.length > 0) {
+          const existingNames = new Set(
+            customToolsToLoad.map((item) => typeof item === "string" ? item : item.workflow)
+          );
+          for (const toolName of toolEntriesFromMcp) {
+            if (!existingNames.has(toolName)) {
+              customToolsToLoad.push(toolName);
+            }
+          }
+          if (!customToolsServerName) {
+            customToolsServerName = "__tools__";
+          }
+        }
+        const sessionAny = sessionInfo;
+        const webhookData = sessionAny?.webhookContext?.webhookData || sessionAny?._parentContext?.webhookContext?.webhookData;
+        const slackContext = webhookData ? extractSlackContext(webhookData) : null;
+        const scheduleToolRequested = !config.ai?.disableTools && customToolsToLoad.some(
+          (tool) => tool === "schedule" || typeof tool === "object" && tool.workflow === "schedule"
+        );
+        if (scheduleToolRequested) {
+          customToolsToLoad = customToolsToLoad.filter(
+            (tool) => tool !== "schedule" && !(typeof tool === "object" && tool.workflow === "schedule")
+          );
+          if (!customToolsServerName) {
+            customToolsServerName = "__tools__";
+          }
+          const contextInfo = slackContext ? `user=${slackContext.userId}, channelType=${slackContext.channelType}` : "cli";
+          logger.debug(`[AICheckProvider] Schedule tool requested (${contextInfo})`);
+        }
+        const scheduleToolEnabled = scheduleToolRequested || config.ai?.enable_scheduler === true && !config.ai?.disableTools;
+        if ((customToolsToLoad.length > 0 || scheduleToolEnabled) && (customToolsServerName || scheduleToolEnabled) && !config.ai?.disableTools) {
+          if (!customToolsServerName) {
+            customToolsServerName = "__tools__";
+          }
           try {
             const customTools = this.loadCustomTools(customToolsToLoad, config);
+            if (scheduleToolEnabled) {
+              const scheduleTool = getScheduleToolDefinition();
+              customTools.set(scheduleTool.name, scheduleTool);
+              logger.debug(`[AICheckProvider] Added built-in schedule tool`);
+            }
             if (customTools.size > 0) {
               const sessionId = config.checkName || `ai-check-${Date.now()}`;
               const debug = aiConfig.debug || process.env.VISOR_DEBUG === "true";
@@ -16756,10 +18326,10 @@ ${processedPrompt}` : processedPrompt;
               continue;
             }
             const cfg = serverConfig;
-            const isValid = cfg.command || cfg.url || cfg.workflow || Object.keys(cfg).length === 0;
+            const isValid = cfg.command || cfg.url || cfg.workflow || cfg.tool || Object.keys(cfg).length === 0;
             if (!isValid) {
               logger.warn(
-                `[AICheckProvider] ai_mcp_servers_js: server "${serverName}" must have command, url, or workflow`
+                `[AICheckProvider] ai_mcp_servers_js: server "${serverName}" must have command, url, workflow, or tool`
               );
               continue;
             }
@@ -17366,7 +18936,7 @@ var init_template_context = __esm({
 });
 
 // src/providers/http-client-provider.ts
-var fs11, path12, HttpClientProvider;
+var fs12, path13, HttpClientProvider;
 var init_http_client_provider = __esm({
   "src/providers/http-client-provider.ts"() {
     "use strict";
@@ -17376,8 +18946,8 @@ var init_http_client_provider = __esm({
     init_sandbox();
     init_template_context();
     init_logger();
-    fs11 = __toESM(require("fs"));
-    path12 = __toESM(require("path"));
+    fs12 = __toESM(require("fs"));
+    path13 = __toESM(require("path"));
     HttpClientProvider = class extends CheckProvider {
       liquid;
       sandbox;
@@ -17472,14 +19042,14 @@ var init_http_client_provider = __esm({
             const parentContext = context2?._parentContext;
             const workingDirectory = parentContext?.workingDirectory;
             const workspaceEnabled = parentContext?.workspace?.isEnabled?.();
-            if (workspaceEnabled && workingDirectory && !path12.isAbsolute(resolvedOutputFile)) {
-              resolvedOutputFile = path12.join(workingDirectory, resolvedOutputFile);
+            if (workspaceEnabled && workingDirectory && !path13.isAbsolute(resolvedOutputFile)) {
+              resolvedOutputFile = path13.join(workingDirectory, resolvedOutputFile);
               logger.debug(
                 `[http_client] Resolved relative output_file to workspace: ${resolvedOutputFile}`
               );
             }
-            if (skipIfExists && fs11.existsSync(resolvedOutputFile)) {
-              const stats = fs11.statSync(resolvedOutputFile);
+            if (skipIfExists && fs12.existsSync(resolvedOutputFile)) {
+              const stats = fs12.statSync(resolvedOutputFile);
               logger.verbose(`[http_client] File cached: ${resolvedOutputFile} (${stats.size} bytes)`);
               return {
                 issues: [],
@@ -17690,13 +19260,13 @@ var init_http_client_provider = __esm({
               ]
             };
           }
-          const parentDir = path12.dirname(outputFile);
-          if (parentDir && !fs11.existsSync(parentDir)) {
-            fs11.mkdirSync(parentDir, { recursive: true });
+          const parentDir = path13.dirname(outputFile);
+          if (parentDir && !fs12.existsSync(parentDir)) {
+            fs12.mkdirSync(parentDir, { recursive: true });
           }
           const arrayBuffer = await response.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
-          fs11.writeFileSync(outputFile, buffer);
+          fs12.writeFileSync(outputFile, buffer);
           const contentType = response.headers.get("content-type") || "application/octet-stream";
           logger.verbose(`[http_client] Downloaded: ${outputFile} (${buffer.length} bytes)`);
           return {
@@ -18453,7 +20023,7 @@ var init_claude_code_types = __esm({
 function isClaudeCodeConstructor(value) {
   return typeof value === "function";
 }
-var import_promises4, import_path5, ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError, ClaudeCodeCheckProvider;
+var import_promises5, import_path6, ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError, ClaudeCodeCheckProvider;
 var init_claude_code_check_provider = __esm({
   "src/providers/claude-code-check-provider.ts"() {
     "use strict";
@@ -18461,8 +20031,8 @@ var init_claude_code_check_provider = __esm({
     init_env_resolver();
     init_issue_filter();
     init_liquid_extensions();
-    import_promises4 = __toESM(require("fs/promises"));
-    import_path5 = __toESM(require("path"));
+    import_promises5 = __toESM(require("fs/promises"));
+    import_path6 = __toESM(require("path"));
     init_claude_code_types();
     ClaudeCodeSDKNotInstalledError = class extends Error {
       constructor() {
@@ -18610,7 +20180,7 @@ var init_claude_code_check_provider = __esm({
         const hasFileExtension = /\.[a-zA-Z0-9]{1,10}$/i.test(str);
         const hasPathSeparators = /[\/\\]/.test(str);
         const isRelativePath = /^\.{1,2}\//.test(str);
-        const isAbsolutePath = import_path5.default.isAbsolute(str);
+        const isAbsolutePath = import_path6.default.isAbsolute(str);
         const hasTypicalFileChars = /^[a-zA-Z0-9._\-\/\\:~]+$/.test(str);
         if (!(hasFileExtension || isRelativePath || isAbsolutePath || hasPathSeparators)) {
           return false;
@@ -18620,13 +20190,13 @@ var init_claude_code_check_provider = __esm({
         }
         try {
           let resolvedPath;
-          if (import_path5.default.isAbsolute(str)) {
-            resolvedPath = import_path5.default.normalize(str);
+          if (import_path6.default.isAbsolute(str)) {
+            resolvedPath = import_path6.default.normalize(str);
           } else {
-            resolvedPath = import_path5.default.resolve(process.cwd(), str);
+            resolvedPath = import_path6.default.resolve(process.cwd(), str);
           }
           try {
-            const stat = await import_promises4.default.stat(resolvedPath);
+            const stat = await import_promises5.default.stat(resolvedPath);
             return stat.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
@@ -18643,14 +20213,14 @@ var init_claude_code_check_provider = __esm({
           throw new Error("Prompt file must have .liquid extension");
         }
         let resolvedPath;
-        if (import_path5.default.isAbsolute(promptPath)) {
+        if (import_path6.default.isAbsolute(promptPath)) {
           resolvedPath = promptPath;
         } else {
-          resolvedPath = import_path5.default.resolve(process.cwd(), promptPath);
+          resolvedPath = import_path6.default.resolve(process.cwd(), promptPath);
         }
-        if (!import_path5.default.isAbsolute(promptPath)) {
-          const normalizedPath = import_path5.default.normalize(resolvedPath);
-          const currentDir = import_path5.default.resolve(process.cwd());
+        if (!import_path6.default.isAbsolute(promptPath)) {
+          const normalizedPath = import_path6.default.normalize(resolvedPath);
+          const currentDir = import_path6.default.resolve(process.cwd());
           if (!normalizedPath.startsWith(currentDir)) {
             throw new Error("Invalid prompt file path: path traversal detected");
           }
@@ -18659,7 +20229,7 @@ var init_claude_code_check_provider = __esm({
           throw new Error("Invalid prompt file path: path traversal detected");
         }
         try {
-          const promptContent = await import_promises4.default.readFile(resolvedPath, "utf-8");
+          const promptContent = await import_promises5.default.readFile(resolvedPath, "utf-8");
           return promptContent;
         } catch (error) {
           throw new Error(
@@ -21211,14 +22781,14 @@ var require_util = __commonJS({
         }
         const port = url.port != null ? url.port : url.protocol === "https:" ? 443 : 80;
         let origin = url.origin != null ? url.origin : `${url.protocol}//${url.hostname}:${port}`;
-        let path22 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
+        let path23 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
         if (origin.endsWith("/")) {
           origin = origin.substring(0, origin.length - 1);
         }
-        if (path22 && !path22.startsWith("/")) {
-          path22 = `/${path22}`;
+        if (path23 && !path23.startsWith("/")) {
+          path23 = `/${path23}`;
         }
-        url = new URL(origin + path22);
+        url = new URL(origin + path23);
       }
       return url;
     }
@@ -22832,20 +24402,20 @@ var require_parseParams = __commonJS({
 var require_basename = __commonJS({
   "node_modules/@fastify/busboy/lib/utils/basename.js"(exports2, module2) {
     "use strict";
-    module2.exports = function basename4(path22) {
-      if (typeof path22 !== "string") {
+    module2.exports = function basename4(path23) {
+      if (typeof path23 !== "string") {
         return "";
       }
-      for (var i = path22.length - 1; i >= 0; --i) {
-        switch (path22.charCodeAt(i)) {
+      for (var i = path23.length - 1; i >= 0; --i) {
+        switch (path23.charCodeAt(i)) {
           case 47:
           // '/'
           case 92:
-            path22 = path22.slice(i + 1);
-            return path22 === ".." || path22 === "." ? "" : path22;
+            path23 = path23.slice(i + 1);
+            return path23 === ".." || path23 === "." ? "" : path23;
         }
       }
-      return path22 === ".." || path22 === "." ? "" : path22;
+      return path23 === ".." || path23 === "." ? "" : path23;
     };
   }
 });
@@ -25876,7 +27446,7 @@ var require_request = __commonJS({
     }
     var Request = class _Request {
       constructor(origin, {
-        path: path22,
+        path: path23,
         method,
         body,
         headers,
@@ -25890,11 +27460,11 @@ var require_request = __commonJS({
         throwOnError,
         expectContinue
       }, handler) {
-        if (typeof path22 !== "string") {
+        if (typeof path23 !== "string") {
           throw new InvalidArgumentError("path must be a string");
-        } else if (path22[0] !== "/" && !(path22.startsWith("http://") || path22.startsWith("https://")) && method !== "CONNECT") {
+        } else if (path23[0] !== "/" && !(path23.startsWith("http://") || path23.startsWith("https://")) && method !== "CONNECT") {
           throw new InvalidArgumentError("path must be an absolute URL or start with a slash");
-        } else if (invalidPathRegex.exec(path22) !== null) {
+        } else if (invalidPathRegex.exec(path23) !== null) {
           throw new InvalidArgumentError("invalid request path");
         }
         if (typeof method !== "string") {
@@ -25957,7 +27527,7 @@ var require_request = __commonJS({
         this.completed = false;
         this.aborted = false;
         this.upgrade = upgrade || null;
-        this.path = query ? util.buildURL(path22, query) : path22;
+        this.path = query ? util.buildURL(path23, query) : path23;
         this.origin = origin;
         this.idempotent = idempotent == null ? method === "HEAD" || method === "GET" : idempotent;
         this.blocking = blocking == null ? false : blocking;
@@ -26965,9 +28535,9 @@ var require_RedirectHandler = __commonJS({
           return this.handler.onHeaders(statusCode, headers, resume, statusText);
         }
         const { origin, pathname, search } = util.parseURL(new URL(this.location, this.opts.origin && new URL(this.opts.path, this.opts.origin)));
-        const path22 = search ? `${pathname}${search}` : pathname;
+        const path23 = search ? `${pathname}${search}` : pathname;
         this.opts.headers = cleanRequestHeaders(this.opts.headers, statusCode === 303, this.opts.origin !== origin);
-        this.opts.path = path22;
+        this.opts.path = path23;
         this.opts.origin = origin;
         this.opts.maxRedirections = 0;
         this.opts.query = null;
@@ -28209,7 +29779,7 @@ var require_client = __commonJS({
         writeH2(client, client[kHTTP2Session], request);
         return;
       }
-      const { body, method, path: path22, host, upgrade, headers, blocking, reset } = request;
+      const { body, method, path: path23, host, upgrade, headers, blocking, reset } = request;
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
         body.read(0);
@@ -28259,7 +29829,7 @@ var require_client = __commonJS({
       if (blocking) {
         socket[kBlocking] = true;
       }
-      let header = `${method} ${path22} HTTP/1.1\r
+      let header = `${method} ${path23} HTTP/1.1\r
 `;
       if (typeof host === "string") {
         header += `host: ${host}\r
@@ -28322,7 +29892,7 @@ upgrade: ${upgrade}\r
       return true;
     }
     function writeH2(client, session, request) {
-      const { body, method, path: path22, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
+      const { body, method, path: path23, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
       let headers;
       if (typeof reqHeaders === "string") headers = Request[kHTTP2CopyHeaders](reqHeaders.trim());
       else headers = reqHeaders;
@@ -28365,7 +29935,7 @@ upgrade: ${upgrade}\r
         });
         return true;
       }
-      headers[HTTP2_HEADER_PATH] = path22;
+      headers[HTTP2_HEADER_PATH] = path23;
       headers[HTTP2_HEADER_SCHEME] = "https";
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
@@ -30608,20 +32178,20 @@ var require_mock_utils = __commonJS({
       }
       return true;
     }
-    function safeUrl(path22) {
-      if (typeof path22 !== "string") {
-        return path22;
+    function safeUrl(path23) {
+      if (typeof path23 !== "string") {
+        return path23;
       }
-      const pathSegments = path22.split("?");
+      const pathSegments = path23.split("?");
       if (pathSegments.length !== 2) {
-        return path22;
+        return path23;
       }
       const qp = new URLSearchParams(pathSegments.pop());
       qp.sort();
       return [...pathSegments, qp.toString()].join("?");
     }
-    function matchKey(mockDispatch2, { path: path22, method, body, headers }) {
-      const pathMatch = matchValue(mockDispatch2.path, path22);
+    function matchKey(mockDispatch2, { path: path23, method, body, headers }) {
+      const pathMatch = matchValue(mockDispatch2.path, path23);
       const methodMatch = matchValue(mockDispatch2.method, method);
       const bodyMatch = typeof mockDispatch2.body !== "undefined" ? matchValue(mockDispatch2.body, body) : true;
       const headersMatch = matchHeaders(mockDispatch2, headers);
@@ -30639,7 +32209,7 @@ var require_mock_utils = __commonJS({
     function getMockDispatch(mockDispatches, key) {
       const basePath = key.query ? buildURL(key.path, key.query) : key.path;
       const resolvedPath = typeof basePath === "string" ? safeUrl(basePath) : basePath;
-      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path22 }) => matchValue(safeUrl(path22), resolvedPath));
+      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path23 }) => matchValue(safeUrl(path23), resolvedPath));
       if (matchedMockDispatches.length === 0) {
         throw new MockNotMatchedError(`Mock dispatch not matched for path '${resolvedPath}'`);
       }
@@ -30676,9 +32246,9 @@ var require_mock_utils = __commonJS({
       }
     }
     function buildKey(opts) {
-      const { path: path22, method, body, headers, query } = opts;
+      const { path: path23, method, body, headers, query } = opts;
       return {
-        path: path22,
+        path: path23,
         method,
         body,
         headers,
@@ -31127,10 +32697,10 @@ var require_pending_interceptors_formatter = __commonJS({
       }
       format(pendingInterceptors) {
         const withPrettyHeaders = pendingInterceptors.map(
-          ({ method, path: path22, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
+          ({ method, path: path23, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
             Method: method,
             Origin: origin,
-            Path: path22,
+            Path: path23,
             "Status code": statusCode,
             Persistent: persist ? "\u2705" : "\u274C",
             Invocations: timesInvoked,
@@ -35751,8 +37321,8 @@ var require_util6 = __commonJS({
         }
       }
     }
-    function validateCookiePath(path22) {
-      for (const char of path22) {
+    function validateCookiePath(path23) {
+      for (const char of path23) {
         const code = char.charCodeAt(0);
         if (code < 33 || char === ";") {
           throw new Error("Invalid cookie path");
@@ -37432,11 +39002,11 @@ var require_undici = __commonJS({
           if (typeof opts.path !== "string") {
             throw new InvalidArgumentError("invalid opts.path");
           }
-          let path22 = opts.path;
+          let path23 = opts.path;
           if (!opts.path.startsWith("/")) {
-            path22 = `/${path22}`;
+            path23 = `/${path23}`;
           }
-          url = new URL(util.parseOrigin(url).origin + path22);
+          url = new URL(util.parseOrigin(url).origin + path23);
         } else {
           if (!opts) {
             opts = typeof url === "object" ? url : {};
@@ -38461,155 +40031,6 @@ var init_interactive_prompt = __esm({
   }
 });
 
-// src/slack/prompt-state.ts
-var prompt_state_exports = {};
-__export(prompt_state_exports, {
-  PromptStateManager: () => PromptStateManager,
-  getPromptStateManager: () => getPromptStateManager,
-  resetPromptStateManager: () => resetPromptStateManager
-});
-function getPromptStateManager(ttlMs) {
-  if (!__promptState) __promptState = new PromptStateManager(ttlMs);
-  return __promptState;
-}
-function resetPromptStateManager() {
-  __promptState = void 0;
-}
-var PromptStateManager, __promptState;
-var init_prompt_state = __esm({
-  "src/slack/prompt-state.ts"() {
-    "use strict";
-    init_logger();
-    PromptStateManager = class {
-      waiting = /* @__PURE__ */ new Map();
-      // key: `${channel}:${threadTs}`
-      ttlMs;
-      timer;
-      firstMessage = /* @__PURE__ */ new Map();
-      summaryTs = /* @__PURE__ */ new Map();
-      // key: threadKey -> group -> ts
-      constructor(ttlMs = 60 * 60 * 1e3) {
-        this.ttlMs = ttlMs;
-        this.startCleanup();
-      }
-      key(channel, threadTs) {
-        return `${channel}:${threadTs}`;
-      }
-      setWaiting(channel, threadTs, info) {
-        const key = this.key(channel, threadTs);
-        const value = { ...info, timestamp: Date.now(), channel, threadTs };
-        this.waiting.set(key, value);
-        try {
-          logger.info(
-            `[prompt-state] waiting set for ${key} (check=${info.checkName}, prompt="${info.prompt.substring(
-              0,
-              60
-            )}\u2026")`
-          );
-        } catch {
-        }
-      }
-      getWaiting(channel, threadTs) {
-        const key = this.key(channel, threadTs);
-        const info = this.waiting.get(key);
-        if (!info) return void 0;
-        const age = Date.now() - info.timestamp;
-        if (age > this.ttlMs) {
-          this.waiting.delete(key);
-          try {
-            logger.warn(`[prompt-state] expired ${key} (age=${Math.round(age / 1e3)}s)`);
-          } catch {
-          }
-          return void 0;
-        }
-        return info;
-      }
-      clear(channel, threadTs) {
-        const key = this.key(channel, threadTs);
-        const had = this.waiting.delete(key);
-        if (had) {
-          try {
-            logger.info(`[prompt-state] cleared ${key}`);
-          } catch {
-          }
-        }
-        return had;
-      }
-      /** Merge updates into an existing waiting entry */
-      update(channel, threadTs, patch) {
-        const key = this.key(channel, threadTs);
-        const prev = this.waiting.get(key);
-        if (!prev) return void 0;
-        const next = { ...prev, ...patch };
-        this.waiting.set(key, next);
-        try {
-          if (patch.snapshotPath) {
-            logger.info(`[prompt-state] snapshotPath set for ${key}`);
-          }
-        } catch {
-        }
-        return next;
-      }
-      // First message capture helpers
-      setFirstMessage(channel, threadTs, text) {
-        const key = this.key(channel, threadTs);
-        if (!text || !text.trim()) return;
-        const existing = this.firstMessage.get(key);
-        if (!existing || existing.consumed) {
-          this.firstMessage.set(key, { text, consumed: false });
-        }
-      }
-      consumeFirstMessage(channel, threadTs) {
-        const key = this.key(channel, threadTs);
-        const entry = this.firstMessage.get(key);
-        if (entry && !entry.consumed) {
-          entry.consumed = true;
-          this.firstMessage.set(key, entry);
-          return entry.text;
-        }
-        return void 0;
-      }
-      hasUnconsumedFirstMessage(channel, threadTs) {
-        const key = this.key(channel, threadTs);
-        const e = this.firstMessage.get(key);
-        return !!(e && !e.consumed && e.text && e.text.trim());
-      }
-      startCleanup(intervalMs = 5 * 60 * 1e3) {
-        if (this.timer) clearInterval(this.timer);
-        this.timer = setInterval(() => this.cleanup(), intervalMs);
-        if (this.timer.unref) this.timer.unref();
-      }
-      cleanup() {
-        const now = Date.now();
-        let removed = 0;
-        for (const [key, info] of this.waiting.entries()) {
-          if (now - info.timestamp > this.ttlMs) {
-            this.waiting.delete(key);
-            removed++;
-          }
-        }
-        for (const [key] of this.firstMessage.entries()) {
-          const waitingInfo = this.waiting.get(key);
-          if (!waitingInfo) {
-            const entry = this.firstMessage.get(key);
-            if (entry?.consumed) {
-              this.firstMessage.delete(key);
-              removed++;
-            }
-          }
-        }
-        if (removed) {
-          try {
-            logger.info(`[prompt-state] cleanup removed ${removed} entries`);
-          } catch {
-          }
-        }
-        return removed;
-      }
-    };
-  }
-});
-
 // src/utils/stdin-reader.ts
 function isStdinAvailable() {
   return !process.stdin.isTTY;
@@ -38672,7 +40093,7 @@ var init_stdin_reader = __esm({
 });
 
 // src/providers/human-input-check-provider.ts
-var fs13, path14, HumanInputCheckProvider;
+var fs14, path15, HumanInputCheckProvider;
 var init_human_input_check_provider = __esm({
   "src/providers/human-input-check-provider.ts"() {
     "use strict";
@@ -38681,8 +40102,8 @@ var init_human_input_check_provider = __esm({
     init_prompt_state();
     init_liquid_extensions();
     init_stdin_reader();
-    fs13 = __toESM(require("fs"));
-    path14 = __toESM(require("path"));
+    fs14 = __toESM(require("fs"));
+    path15 = __toESM(require("path"));
     HumanInputCheckProvider = class _HumanInputCheckProvider extends CheckProvider {
       liquid;
       /**
@@ -38856,19 +40277,19 @@ var init_human_input_check_provider = __esm({
        */
       async tryReadFile(filePath) {
         try {
-          const absolutePath = path14.isAbsolute(filePath) ? filePath : path14.resolve(process.cwd(), filePath);
-          const normalizedPath = path14.normalize(absolutePath);
+          const absolutePath = path15.isAbsolute(filePath) ? filePath : path15.resolve(process.cwd(), filePath);
+          const normalizedPath = path15.normalize(absolutePath);
           const cwd = process.cwd();
-          if (!normalizedPath.startsWith(cwd + path14.sep) && normalizedPath !== cwd) {
+          if (!normalizedPath.startsWith(cwd + path15.sep) && normalizedPath !== cwd) {
             return null;
           }
           try {
-            await fs13.promises.access(normalizedPath, fs13.constants.R_OK);
-            const stats = await fs13.promises.stat(normalizedPath);
+            await fs14.promises.access(normalizedPath, fs14.constants.R_OK);
+            const stats = await fs14.promises.stat(normalizedPath);
             if (!stats.isFile()) {
               return null;
             }
-            const content = await fs13.promises.readFile(normalizedPath, "utf-8");
+            const content = await fs14.promises.readFile(normalizedPath, "utf-8");
             return content.trim();
           } catch {
             return null;
@@ -39310,13 +40731,13 @@ var init_script_check_provider = __esm({
 });
 
 // src/utils/worktree-manager.ts
-var fs14, fsp, path15, crypto, WorktreeManager, worktreeManager;
+var fs15, fsp, path16, crypto, WorktreeManager, worktreeManager;
 var init_worktree_manager = __esm({
   "src/utils/worktree-manager.ts"() {
     "use strict";
-    fs14 = __toESM(require("fs"));
+    fs15 = __toESM(require("fs"));
     fsp = __toESM(require("fs/promises"));
-    path15 = __toESM(require("path"));
+    path16 = __toESM(require("path"));
     crypto = __toESM(require("crypto"));
     init_command_executor();
     init_logger();
@@ -39332,7 +40753,7 @@ var init_worktree_manager = __esm({
         } catch {
           cwd = "/tmp";
         }
-        const defaultBasePath = process.env.VISOR_WORKTREE_PATH || path15.join(cwd, ".visor", "worktrees");
+        const defaultBasePath = process.env.VISOR_WORKTREE_PATH || path16.join(cwd, ".visor", "worktrees");
         this.config = {
           enabled: true,
           base_path: defaultBasePath,
@@ -39369,20 +40790,20 @@ var init_worktree_manager = __esm({
         }
         const reposDir = this.getReposDir();
         const worktreesDir = this.getWorktreesDir();
-        if (!fs14.existsSync(reposDir)) {
-          fs14.mkdirSync(reposDir, { recursive: true });
+        if (!fs15.existsSync(reposDir)) {
+          fs15.mkdirSync(reposDir, { recursive: true });
           logger.debug(`Created repos directory: ${reposDir}`);
         }
-        if (!fs14.existsSync(worktreesDir)) {
-          fs14.mkdirSync(worktreesDir, { recursive: true });
+        if (!fs15.existsSync(worktreesDir)) {
+          fs15.mkdirSync(worktreesDir, { recursive: true });
           logger.debug(`Created worktrees directory: ${worktreesDir}`);
         }
       }
       getReposDir() {
-        return path15.join(this.config.base_path, "repos");
+        return path16.join(this.config.base_path, "repos");
       }
       getWorktreesDir() {
-        return path15.join(this.config.base_path, "worktrees");
+        return path16.join(this.config.base_path, "worktrees");
       }
       /**
        * Generate a deterministic worktree ID based on repository and ref.
@@ -39400,8 +40821,8 @@ var init_worktree_manager = __esm({
       async getOrCreateBareRepo(repository, repoUrl, token, fetchDepth, cloneTimeoutMs) {
         const reposDir = this.getReposDir();
         const repoName = repository.replace(/\//g, "-");
-        const bareRepoPath = path15.join(reposDir, `${repoName}.git`);
-        if (fs14.existsSync(bareRepoPath)) {
+        const bareRepoPath = path16.join(reposDir, `${repoName}.git`);
+        if (fs15.existsSync(bareRepoPath)) {
           logger.debug(`Bare repository already exists: ${bareRepoPath}`);
           const verifyResult = await this.verifyBareRepoRemote(bareRepoPath, repoUrl);
           if (verifyResult === "timeout") {
@@ -39520,11 +40941,11 @@ var init_worktree_manager = __esm({
           options.cloneTimeoutMs
         );
         const worktreeId = this.generateWorktreeId(repository, ref);
-        let worktreePath = options.workingDirectory || path15.join(this.getWorktreesDir(), worktreeId);
+        let worktreePath = options.workingDirectory || path16.join(this.getWorktreesDir(), worktreeId);
         if (options.workingDirectory) {
           worktreePath = this.validatePath(options.workingDirectory);
         }
-        if (fs14.existsSync(worktreePath)) {
+        if (fs15.existsSync(worktreePath)) {
           logger.debug(`Worktree already exists: ${worktreePath}`);
           const metadata2 = await this.loadMetadata(worktreePath);
           if (metadata2) {
@@ -39765,9 +41186,9 @@ var init_worktree_manager = __esm({
         const result = await this.executeGitCommand(removeCmd, { timeout: 3e4 });
         if (result.exitCode !== 0) {
           logger.warn(`Failed to remove worktree via git: ${result.stderr}`);
-          if (fs14.existsSync(worktree_path)) {
+          if (fs15.existsSync(worktree_path)) {
             logger.debug(`Manually removing worktree directory`);
-            fs14.rmSync(worktree_path, { recursive: true, force: true });
+            fs15.rmSync(worktree_path, { recursive: true, force: true });
           }
         }
         this.activeWorktrees.delete(worktreeId);
@@ -39777,19 +41198,19 @@ var init_worktree_manager = __esm({
        * Save worktree metadata
        */
       async saveMetadata(worktreePath, metadata) {
-        const metadataPath = path15.join(worktreePath, ".visor-metadata.json");
-        fs14.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
+        const metadataPath = path16.join(worktreePath, ".visor-metadata.json");
+        fs15.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
       }
       /**
        * Load worktree metadata
        */
       async loadMetadata(worktreePath) {
-        const metadataPath = path15.join(worktreePath, ".visor-metadata.json");
-        if (!fs14.existsSync(metadataPath)) {
+        const metadataPath = path16.join(worktreePath, ".visor-metadata.json");
+        if (!fs15.existsSync(metadataPath)) {
           return null;
         }
         try {
-          const content = fs14.readFileSync(metadataPath, "utf8");
+          const content = fs15.readFileSync(metadataPath, "utf8");
           return JSON.parse(content);
         } catch (error) {
           logger.warn(`Failed to load metadata: ${error}`);
@@ -39801,14 +41222,14 @@ var init_worktree_manager = __esm({
        */
       async listWorktrees() {
         const worktreesDir = this.getWorktreesDir();
-        if (!fs14.existsSync(worktreesDir)) {
+        if (!fs15.existsSync(worktreesDir)) {
           return [];
         }
-        const entries = fs14.readdirSync(worktreesDir, { withFileTypes: true });
+        const entries = fs15.readdirSync(worktreesDir, { withFileTypes: true });
         const worktrees = [];
         for (const entry of entries) {
           if (!entry.isDirectory()) continue;
-          const worktreePath = path15.join(worktreesDir, entry.name);
+          const worktreePath = path16.join(worktreesDir, entry.name);
           const metadata = await this.loadMetadata(worktreePath);
           if (metadata) {
             worktrees.push({
@@ -39940,8 +41361,8 @@ var init_worktree_manager = __esm({
        * Validate path to prevent directory traversal
        */
       validatePath(userPath) {
-        const resolvedPath = path15.resolve(userPath);
-        if (!path15.isAbsolute(resolvedPath)) {
+        const resolvedPath = path16.resolve(userPath);
+        if (!path16.isAbsolute(resolvedPath)) {
           throw new Error("Path must be absolute");
         }
         const sensitivePatterns = [
@@ -41908,23 +43329,23 @@ __export(renderer_schema_exports, {
 });
 async function loadRendererSchema(name) {
   try {
-    const fs20 = await import("fs/promises");
-    const path22 = await import("path");
+    const fs21 = await import("fs/promises");
+    const path23 = await import("path");
     const sanitized = String(name).replace(/[^a-zA-Z0-9-]/g, "");
     if (!sanitized) return void 0;
     const candidates = [
       // When bundled with ncc, __dirname is dist/ and output/ is at dist/output/
-      path22.join(__dirname, "output", sanitized, "schema.json"),
+      path23.join(__dirname, "output", sanitized, "schema.json"),
       // When running from source, __dirname is src/state-machine/dispatch/ and output/ is at output/
-      path22.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
+      path23.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
       // When running from a checkout with output/ folder copied to CWD
-      path22.join(process.cwd(), "output", sanitized, "schema.json"),
+      path23.join(process.cwd(), "output", sanitized, "schema.json"),
       // Fallback: cwd/dist/output/
-      path22.join(process.cwd(), "dist", "output", sanitized, "schema.json")
+      path23.join(process.cwd(), "dist", "output", sanitized, "schema.json")
     ];
     for (const p of candidates) {
       try {
-        const raw = await fs20.readFile(p, "utf-8");
+        const raw = await fs21.readFile(p, "utf-8");
         return JSON.parse(raw);
       } catch {
       }
@@ -44208,8 +45629,8 @@ function updateStats2(results, state, isForEachIteration = false) {
 async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs20 = await import("fs/promises");
-    const path22 = await import("path");
+    const fs21 = await import("fs/promises");
+    const path23 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
@@ -44218,27 +45639,27 @@ async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
       logger.debug(`[LevelDispatch] Using inline template for ${checkId}`);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path22.resolve(process.cwd(), file);
-      templateContent = await fs20.readFile(resolved, "utf-8");
+      const resolved = path23.resolve(process.cwd(), file);
+      templateContent = await fs21.readFile(resolved, "utf-8");
       logger.debug(`[LevelDispatch] Using template file for ${checkId}: ${resolved}`);
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path22.join(__dirname, "output", sanitized, "template.liquid"),
+          path23.join(__dirname, "output", sanitized, "template.liquid"),
           // bundled: dist/output/
-          path22.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path23.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // source (from state-machine/states)
-          path22.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
+          path23.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
           // source (alternate)
-          path22.join(process.cwd(), "output", sanitized, "template.liquid"),
+          path23.join(process.cwd(), "output", sanitized, "template.liquid"),
           // fallback: cwd/output/
-          path22.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          path23.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
           // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs20.readFile(p, "utf-8");
+            templateContent = await fs21.readFile(p, "utf-8");
             if (templateContent) {
               logger.debug(`[LevelDispatch] Using schema template for ${checkId}: ${p}`);
               break;
@@ -44838,14 +46259,648 @@ var init_runner = __esm({
   }
 });
 
+// src/sandbox/docker-image-sandbox.ts
+var import_util2, import_child_process2, import_fs4, import_path7, import_os, import_crypto2, execFileAsync, EXEC_MAX_BUFFER, DockerImageSandbox;
+var init_docker_image_sandbox = __esm({
+  "src/sandbox/docker-image-sandbox.ts"() {
+    "use strict";
+    import_util2 = require("util");
+    import_child_process2 = require("child_process");
+    import_fs4 = require("fs");
+    import_path7 = require("path");
+    import_os = require("os");
+    import_crypto2 = require("crypto");
+    init_logger();
+    init_sandbox_telemetry();
+    execFileAsync = (0, import_util2.promisify)(import_child_process2.execFile);
+    EXEC_MAX_BUFFER = 50 * 1024 * 1024;
+    DockerImageSandbox = class {
+      name;
+      config;
+      containerId = null;
+      containerName;
+      repoPath;
+      visorDistPath;
+      cacheVolumeMounts;
+      constructor(name, config, repoPath, visorDistPath, cacheVolumeMounts = []) {
+        this.name = name;
+        this.config = config;
+        this.repoPath = repoPath;
+        this.visorDistPath = visorDistPath;
+        this.containerName = `visor-${name}-${(0, import_crypto2.randomUUID)().slice(0, 8)}`;
+        this.cacheVolumeMounts = cacheVolumeMounts;
+      }
+      /**
+       * Build the Docker image if needed (dockerfile or dockerfile_inline mode)
+       */
+      async buildImageIfNeeded() {
+        if (this.config.image) {
+          return this.config.image;
+        }
+        const imageName = `visor-sandbox-${this.name}`;
+        const buildMode = this.config.dockerfile_inline ? "inline" : "dockerfile";
+        return withActiveSpan2(
+          "visor.sandbox.build",
+          {
+            "visor.sandbox.name": this.name,
+            "visor.sandbox.build.mode": buildMode
+          },
+          async () => {
+            if (this.config.dockerfile_inline) {
+              if (!/^\s*FROM\s+/im.test(this.config.dockerfile_inline)) {
+                throw new Error(
+                  `Sandbox '${this.name}' has invalid dockerfile_inline: must contain a FROM instruction`
+                );
+              }
+              const tmpDir = (0, import_fs4.mkdtempSync)((0, import_path7.join)((0, import_os.tmpdir)(), "visor-build-"));
+              const dockerfilePath = (0, import_path7.join)(tmpDir, "Dockerfile");
+              (0, import_fs4.writeFileSync)(dockerfilePath, this.config.dockerfile_inline, "utf8");
+              try {
+                logger.info(`Building sandbox image '${imageName}' from inline Dockerfile`);
+                await execFileAsync(
+                  "docker",
+                  ["build", "-t", imageName, "-f", dockerfilePath, this.repoPath],
+                  {
+                    maxBuffer: EXEC_MAX_BUFFER,
+                    timeout: 3e5
+                  }
+                );
+              } finally {
+                try {
+                  (0, import_fs4.unlinkSync)(dockerfilePath);
+                } catch {
+                }
+              }
+              return imageName;
+            }
+            if (this.config.dockerfile) {
+              logger.info(`Building sandbox image '${imageName}' from ${this.config.dockerfile}`);
+              await execFileAsync(
+                "docker",
+                ["build", "-t", imageName, "-f", this.config.dockerfile, this.repoPath],
+                { maxBuffer: EXEC_MAX_BUFFER, timeout: 3e5 }
+              );
+              return imageName;
+            }
+            throw new Error(`Sandbox '${this.name}' has no image, dockerfile, or dockerfile_inline`);
+          }
+        );
+      }
+      /**
+       * Start the sandbox container
+       */
+      async start() {
+        const image = await this.buildImageIfNeeded();
+        const workdir = this.config.workdir || "/workspace";
+        const visorPath = this.config.visor_path || "/opt/visor";
+        const readOnlySuffix = this.config.read_only ? ":ro" : "";
+        const args = [
+          "docker",
+          "run",
+          "-d",
+          "--name",
+          this.containerName,
+          "-v",
+          `${this.repoPath}:${workdir}${readOnlySuffix}`,
+          "-v",
+          `${this.visorDistPath}:${visorPath}:ro`,
+          "-w",
+          workdir
+        ];
+        if (this.config.network === false) {
+          args.push("--network", "none");
+        }
+        if (this.config.resources?.memory) {
+          args.push("--memory", this.config.resources.memory);
+        }
+        if (this.config.resources?.cpu) {
+          args.push("--cpus", String(this.config.resources.cpu));
+        }
+        for (const mount of this.cacheVolumeMounts) {
+          args.push("-v", mount);
+        }
+        args.push(image, "sleep", "infinity");
+        logger.info(`Starting sandbox container '${this.containerName}'`);
+        const { stdout } = await execFileAsync(args[0], args.slice(1), {
+          maxBuffer: EXEC_MAX_BUFFER,
+          timeout: 6e4
+        });
+        this.containerId = stdout.trim();
+        addEvent2("visor.sandbox.container.started", {
+          container_name: this.containerName,
+          image
+        });
+      }
+      /**
+       * Execute a command inside the running container
+       */
+      async exec(options) {
+        if (!this.containerId) {
+          throw new Error(`Sandbox '${this.name}' is not started`);
+        }
+        const args = ["docker", "exec"];
+        for (const [key, value] of Object.entries(options.env)) {
+          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+            throw new Error(`Invalid environment variable name: '${key}'`);
+          }
+          args.push("-e", `${key}=${value}`);
+        }
+        args.push(this.containerName, "sh", "-c", options.command);
+        try {
+          const { stdout, stderr } = await execFileAsync(args[0], args.slice(1), {
+            maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER,
+            timeout: options.timeoutMs || 6e5
+          });
+          return { stdout, stderr, exitCode: 0 };
+        } catch (err) {
+          const execErr = err;
+          return {
+            stdout: execErr.stdout || "",
+            stderr: execErr.stderr || "",
+            exitCode: typeof execErr.code === "number" ? execErr.code : 1
+          };
+        }
+      }
+      /**
+       * Stop and remove the container
+       */
+      async stop() {
+        if (this.containerName) {
+          try {
+            await execFileAsync("docker", ["rm", "-f", this.containerName], {
+              maxBuffer: EXEC_MAX_BUFFER,
+              timeout: 3e4
+            });
+          } catch {
+          }
+          addEvent2("visor.sandbox.container.stopped", {
+            container_name: this.containerName
+          });
+          this.containerId = null;
+        }
+      }
+    };
+  }
+});
+
+// src/sandbox/docker-compose-sandbox.ts
+var import_util3, import_child_process3, import_crypto3, execFileAsync2, EXEC_MAX_BUFFER2, DockerComposeSandbox;
+var init_docker_compose_sandbox = __esm({
+  "src/sandbox/docker-compose-sandbox.ts"() {
+    "use strict";
+    import_util3 = require("util");
+    import_child_process3 = require("child_process");
+    import_crypto3 = require("crypto");
+    init_logger();
+    execFileAsync2 = (0, import_util3.promisify)(import_child_process3.execFile);
+    EXEC_MAX_BUFFER2 = 50 * 1024 * 1024;
+    DockerComposeSandbox = class {
+      name;
+      config;
+      projectName;
+      started = false;
+      constructor(name, config) {
+        this.name = name;
+        this.config = config;
+        this.projectName = `visor-${name}-${(0, import_crypto3.randomUUID)().slice(0, 8)}`;
+      }
+      /**
+       * Start the compose services
+       */
+      async start() {
+        if (!this.config.compose) {
+          throw new Error(`Sandbox '${this.name}' has no compose file specified`);
+        }
+        if (!this.config.service) {
+          throw new Error(`Sandbox '${this.name}' requires a 'service' field for compose mode`);
+        }
+        logger.info(`Starting compose sandbox '${this.name}' (project: ${this.projectName})`);
+        await execFileAsync2(
+          "docker",
+          ["compose", "-f", this.config.compose, "-p", this.projectName, "up", "-d"],
+          {
+            maxBuffer: EXEC_MAX_BUFFER2,
+            timeout: 12e4
+          }
+        );
+        this.started = true;
+      }
+      /**
+       * Execute a command inside the compose service
+       */
+      async exec(options) {
+        if (!this.started) {
+          throw new Error(`Compose sandbox '${this.name}' is not started`);
+        }
+        const service = this.config.service;
+        const args = [
+          "docker",
+          "compose",
+          "-f",
+          this.config.compose,
+          "-p",
+          this.projectName,
+          "exec",
+          "-T"
+          // non-interactive
+        ];
+        for (const [key, value] of Object.entries(options.env)) {
+          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+            throw new Error(`Invalid environment variable name: '${key}'`);
+          }
+          args.push("-e", `${key}=${value}`);
+        }
+        if (this.config.workdir) {
+          args.push("-w", this.config.workdir);
+        }
+        args.push(service, "sh", "-c", options.command);
+        try {
+          const { stdout, stderr } = await execFileAsync2(args[0], args.slice(1), {
+            maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER2,
+            timeout: options.timeoutMs || 6e5
+          });
+          return { stdout, stderr, exitCode: 0 };
+        } catch (err) {
+          const execErr = err;
+          return {
+            stdout: execErr.stdout || "",
+            stderr: execErr.stderr || "",
+            exitCode: typeof execErr.code === "number" ? execErr.code : 1
+          };
+        }
+      }
+      /**
+       * Stop and tear down the compose project
+       */
+      async stop() {
+        if (this.started && this.config.compose) {
+          try {
+            await execFileAsync2(
+              "docker",
+              ["compose", "-f", this.config.compose, "-p", this.projectName, "down"],
+              {
+                maxBuffer: EXEC_MAX_BUFFER2,
+                timeout: 6e4
+              }
+            );
+          } catch {
+          }
+          this.started = false;
+        }
+      }
+    };
+  }
+});
+
+// src/sandbox/cache-volume-manager.ts
+function pathHash(containerPath) {
+  return (0, import_crypto4.createHash)("sha256").update(containerPath).digest("hex").slice(0, 8);
+}
+function parseTtl(ttl) {
+  let ms = 0;
+  const dayMatch = ttl.match(/(\d+)d/);
+  const hourMatch = ttl.match(/(\d+)h/);
+  const minMatch = ttl.match(/(\d+)m/);
+  if (dayMatch) ms += parseInt(dayMatch[1], 10) * 864e5;
+  if (hourMatch) ms += parseInt(hourMatch[1], 10) * 36e5;
+  if (minMatch) ms += parseInt(minMatch[1], 10) * 6e4;
+  return ms || 6048e5;
+}
+var import_util4, import_child_process4, import_crypto4, execFileAsync3, EXEC_MAX_BUFFER3, CacheVolumeManager;
+var init_cache_volume_manager = __esm({
+  "src/sandbox/cache-volume-manager.ts"() {
+    "use strict";
+    import_util4 = require("util");
+    import_child_process4 = require("child_process");
+    import_crypto4 = require("crypto");
+    init_logger();
+    execFileAsync3 = (0, import_util4.promisify)(import_child_process4.execFile);
+    EXEC_MAX_BUFFER3 = 10 * 1024 * 1024;
+    CacheVolumeManager = class {
+      /**
+       * Resolve cache config into Docker volume mount specs.
+       *
+       * Volume naming: visor-cache-<prefix>-<sandboxName>-<pathHash>
+       *
+       * @param sandboxName - Name of the sandbox
+       * @param cacheConfig - Cache configuration from sandbox config
+       * @param gitBranch - Current git branch (used as default prefix)
+       * @returns Array of volume mount specs for docker run -v
+       */
+      async resolveVolumes(sandboxName, cacheConfig, gitBranch) {
+        const prefix = (cacheConfig.prefix || gitBranch).replace(/[^a-zA-Z0-9._-]/g, "-");
+        const volumes = [];
+        for (const containerPath of cacheConfig.paths) {
+          if (/\.\./.test(containerPath)) {
+            throw new Error(`Cache path '${containerPath}' must not contain '..' path traversal`);
+          }
+          const hash = pathHash(containerPath);
+          const volumeName = `visor-cache-${prefix}-${sandboxName}-${hash}`;
+          const exists = await this.volumeExists(volumeName);
+          if (!exists && cacheConfig.fallback_prefix) {
+            const fallbackPrefix = cacheConfig.fallback_prefix.replace(/[^a-zA-Z0-9._-]/g, "-");
+            const fallbackVolume = `visor-cache-${fallbackPrefix}-${sandboxName}-${hash}`;
+            const fallbackExists = await this.volumeExists(fallbackVolume);
+            if (fallbackExists) {
+              logger.info(`Cache miss for '${volumeName}', copying from fallback '${fallbackVolume}'`);
+              await this.copyVolume(fallbackVolume, volumeName);
+            } else {
+              await this.createVolume(volumeName);
+            }
+          } else if (!exists) {
+            await this.createVolume(volumeName);
+          }
+          await this.touchVolume(volumeName);
+          volumes.push({
+            volumeName,
+            mountSpec: `${volumeName}:${containerPath}`
+          });
+        }
+        return volumes;
+      }
+      /**
+       * Check if a Docker volume exists
+       */
+      async volumeExists(name) {
+        try {
+          await execFileAsync3("docker", ["volume", "inspect", name], {
+            maxBuffer: EXEC_MAX_BUFFER3,
+            timeout: 1e4
+          });
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      /**
+       * Create a Docker named volume
+       */
+      async createVolume(name) {
+        const now = (/* @__PURE__ */ new Date()).toISOString();
+        await execFileAsync3("docker", ["volume", "create", "--label", `visor.last-used=${now}`, name], {
+          maxBuffer: EXEC_MAX_BUFFER3,
+          timeout: 1e4
+        });
+      }
+      /**
+       * Copy data from one volume to another using a temp container
+       */
+      async copyVolume(source, target) {
+        await this.createVolume(target);
+        try {
+          await execFileAsync3(
+            "docker",
+            [
+              "run",
+              "--rm",
+              "-v",
+              `${source}:/src:ro`,
+              "-v",
+              `${target}:/dst`,
+              "alpine",
+              "sh",
+              "-c",
+              "cp -a /src/. /dst/"
+            ],
+            { maxBuffer: EXEC_MAX_BUFFER3, timeout: 6e4 }
+          );
+        } catch (err) {
+          logger.warn(`Failed to copy cache volume ${source} -> ${target}: ${err}`);
+        }
+      }
+      /**
+       * Update the last-used label on a volume.
+       * Docker doesn't support updating labels in-place, so we record via a temp file approach
+       * by simply re-creating volumes with updated labels if they don't exist.
+       * For existing volumes, we track usage time via the volume name pattern.
+       */
+      async touchVolume(_name) {
+      }
+      /**
+       * Evict expired cache volumes for a sandbox
+       */
+      async evictExpired(sandboxName, ttl, maxScopes) {
+        const ttlMs = ttl ? parseTtl(ttl) : 6048e5;
+        const maxScopesLimit = maxScopes || 10;
+        try {
+          const { stdout } = await execFileAsync3(
+            "docker",
+            ["volume", "ls", "--filter", "name=visor-cache-", "--format", "{{.Name}}"],
+            { maxBuffer: EXEC_MAX_BUFFER3, timeout: 1e4 }
+          );
+          const allVolumes = stdout.trim().split("\n").filter(Boolean);
+          const sandboxVolumes = allVolumes.filter((v) => v.includes(`-${sandboxName}-`));
+          if (sandboxVolumes.length === 0) return;
+          const scopeMap = /* @__PURE__ */ new Map();
+          for (const vol of sandboxVolumes) {
+            const match = vol.match(/^visor-cache-(.+)-\w{8}$/);
+            if (match) {
+              const prefix = match[1].replace(`-${sandboxName}`, "");
+              if (!scopeMap.has(prefix)) scopeMap.set(prefix, []);
+              scopeMap.get(prefix).push(vol);
+            }
+          }
+          const now = Date.now();
+          const inspectResults = await Promise.allSettled(
+            sandboxVolumes.map(async (vol) => {
+              const { stdout: inspectOut } = await execFileAsync3(
+                "docker",
+                ["volume", "inspect", vol, "--format", "{{.CreatedAt}}"],
+                { maxBuffer: EXEC_MAX_BUFFER3, timeout: 1e4 }
+              );
+              return { vol, createdAt: new Date(inspectOut.trim()).getTime() };
+            })
+          );
+          for (const result of inspectResults) {
+            if (result.status !== "fulfilled") continue;
+            const { vol, createdAt } = result.value;
+            if (now - createdAt > ttlMs) {
+              try {
+                logger.info(`Evicting expired cache volume: ${vol}`);
+                await execFileAsync3("docker", ["volume", "rm", vol], {
+                  maxBuffer: EXEC_MAX_BUFFER3,
+                  timeout: 1e4
+                });
+              } catch {
+              }
+            }
+          }
+          if (scopeMap.size > maxScopesLimit) {
+            const scopes = Array.from(scopeMap.keys());
+            const toRemove = scopes.slice(0, scopes.length - maxScopesLimit);
+            for (const scope of toRemove) {
+              const vols = scopeMap.get(scope) || [];
+              for (const vol of vols) {
+                try {
+                  logger.info(`Evicting cache volume (max_scopes exceeded): ${vol}`);
+                  await execFileAsync3("docker", ["volume", "rm", vol], {
+                    maxBuffer: EXEC_MAX_BUFFER3,
+                    timeout: 1e4
+                  });
+                } catch {
+                }
+              }
+            }
+          }
+        } catch {
+        }
+      }
+    };
+  }
+});
+
+// src/sandbox/sandbox-manager.ts
+var import_path8, import_fs5, SandboxManager;
+var init_sandbox_manager = __esm({
+  "src/sandbox/sandbox-manager.ts"() {
+    "use strict";
+    import_path8 = require("path");
+    import_fs5 = require("fs");
+    init_docker_image_sandbox();
+    init_docker_compose_sandbox();
+    init_cache_volume_manager();
+    init_logger();
+    init_sandbox_telemetry();
+    SandboxManager = class {
+      sandboxDefs;
+      repoPath;
+      gitBranch;
+      instances = /* @__PURE__ */ new Map();
+      cacheManager;
+      visorDistPath;
+      /** Get the resolved repository path (used by trace file relay) */
+      getRepoPath() {
+        return this.repoPath;
+      }
+      constructor(sandboxDefs, repoPath, gitBranch) {
+        this.sandboxDefs = sandboxDefs;
+        this.repoPath = (0, import_path8.resolve)(repoPath);
+        this.gitBranch = gitBranch;
+        this.cacheManager = new CacheVolumeManager();
+        this.visorDistPath = (0, import_fs5.existsSync)((0, import_path8.join)(__dirname, "index.js")) ? __dirname : (0, import_path8.resolve)((0, import_path8.dirname)(__dirname));
+      }
+      /**
+       * Resolve which sandbox a check should use.
+       * Returns null if the check should run on the host.
+       *
+       * Resolution order:
+       * 1. Check-level sandbox: (explicit override)
+       * 2. Workspace-level sandbox: (default)
+       * 3. null → run on host
+       */
+      resolveSandbox(checkSandbox, workspaceDefault) {
+        const name = checkSandbox || workspaceDefault;
+        if (!name) return null;
+        if (!this.sandboxDefs[name]) {
+          throw new Error(`Sandbox '${name}' is not defined in sandboxes configuration`);
+        }
+        return name;
+      }
+      /**
+       * Get or lazily start a sandbox instance by name.
+       */
+      async getOrStart(name) {
+        const existing = this.instances.get(name);
+        if (existing) return existing;
+        const config = this.sandboxDefs[name];
+        if (!config) {
+          throw new Error(`Sandbox '${name}' is not defined`);
+        }
+        const mode = config.compose ? "compose" : "image";
+        return withActiveSpan2(
+          "visor.sandbox.start",
+          {
+            "visor.sandbox.name": name,
+            "visor.sandbox.mode": mode
+          },
+          async () => {
+            let instance;
+            if (config.compose) {
+              const composeSandbox = new DockerComposeSandbox(name, config);
+              await composeSandbox.start();
+              instance = composeSandbox;
+            } else {
+              let cacheVolumeMounts = [];
+              if (config.cache) {
+                const volumes = await this.cacheManager.resolveVolumes(
+                  name,
+                  config.cache,
+                  this.gitBranch
+                );
+                cacheVolumeMounts = volumes.map((v) => v.mountSpec);
+              }
+              const imageSandbox = new DockerImageSandbox(
+                name,
+                config,
+                this.repoPath,
+                this.visorDistPath,
+                cacheVolumeMounts
+              );
+              await imageSandbox.start();
+              instance = imageSandbox;
+            }
+            this.instances.set(name, instance);
+            return instance;
+          }
+        );
+      }
+      /**
+       * Execute a command inside a named sandbox
+       */
+      async exec(name, options) {
+        const instance = await this.getOrStart(name);
+        return withActiveSpan2(
+          "visor.sandbox.exec",
+          {
+            "visor.sandbox.name": name
+          },
+          async (span) => {
+            const result = await instance.exec(options);
+            try {
+              span.setAttribute("visor.sandbox.exit_code", result.exitCode);
+            } catch {
+            }
+            return result;
+          }
+        );
+      }
+      /**
+       * Stop all running sandbox instances and run cache eviction
+       */
+      async stopAll() {
+        return withActiveSpan2("visor.sandbox.stopAll", void 0, async () => {
+          const stopPromises = Array.from(this.instances.entries()).map(async ([name, instance]) => {
+            try {
+              await instance.stop();
+              addEvent2("visor.sandbox.stopped", { "visor.sandbox.name": name });
+              logger.info(`Stopped sandbox '${name}'`);
+            } catch (err) {
+              logger.warn(`Failed to stop sandbox '${name}': ${err}`);
+            }
+            const config = this.sandboxDefs[name];
+            if (config?.cache) {
+              try {
+                await this.cacheManager.evictExpired(name, config.cache.ttl, config.cache.max_scopes);
+              } catch {
+              }
+            }
+          });
+          await Promise.allSettled(stopPromises);
+          this.instances.clear();
+        });
+      }
+    };
+  }
+});
+
 // src/utils/file-exclusion.ts
-var import_ignore, fs15, path16, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
+var import_ignore, fs16, path17, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
 var init_file_exclusion = __esm({
   "src/utils/file-exclusion.ts"() {
     "use strict";
     import_ignore = __toESM(require("ignore"));
-    fs15 = __toESM(require("fs"));
-    path16 = __toESM(require("path"));
+    fs16 = __toESM(require("fs"));
+    path17 = __toESM(require("path"));
     DEFAULT_EXCLUSION_PATTERNS = [
       "dist/",
       "build/",
@@ -44864,7 +46919,7 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to include (optional, defaults to common build artifacts)
        */
       constructor(workingDirectory = process.cwd(), additionalPatterns = DEFAULT_EXCLUSION_PATTERNS) {
-        const normalizedPath = path16.resolve(workingDirectory);
+        const normalizedPath = path17.resolve(workingDirectory);
         if (normalizedPath.includes("\0")) {
           throw new Error("Invalid workingDirectory: contains null bytes");
         }
@@ -44876,11 +46931,11 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to add to gitignore rules
        */
       loadGitignore(additionalPatterns) {
-        const gitignorePath = path16.resolve(this.workingDirectory, ".gitignore");
-        const resolvedWorkingDir = path16.resolve(this.workingDirectory);
+        const gitignorePath = path17.resolve(this.workingDirectory, ".gitignore");
+        const resolvedWorkingDir = path17.resolve(this.workingDirectory);
         try {
-          const relativePath = path16.relative(resolvedWorkingDir, gitignorePath);
-          if (relativePath.startsWith("..") || path16.isAbsolute(relativePath)) {
+          const relativePath = path17.relative(resolvedWorkingDir, gitignorePath);
+          if (relativePath.startsWith("..") || path17.isAbsolute(relativePath)) {
             throw new Error("Invalid gitignore path: path traversal detected");
           }
           if (relativePath !== ".gitignore") {
@@ -44890,8 +46945,8 @@ var init_file_exclusion = __esm({
           if (additionalPatterns && additionalPatterns.length > 0) {
             this.gitignore.add(additionalPatterns);
           }
-          if (fs15.existsSync(gitignorePath)) {
-            const rawContent = fs15.readFileSync(gitignorePath, "utf8");
+          if (fs16.existsSync(gitignorePath)) {
+            const rawContent = fs16.readFileSync(gitignorePath, "utf8");
             const gitignoreContent = rawContent.replace(/[\r\n]+/g, "\n").replace(/[\x00-\x09\x0B-\x1F\x7F]/g, "").split("\n").filter((line) => line.length < 1e3).join("\n").trim();
             this.gitignore.add(gitignoreContent);
             if (process.env.VISOR_DEBUG === "true") {
@@ -44923,13 +46978,13 @@ var git_repository_analyzer_exports = {};
 __export(git_repository_analyzer_exports, {
   GitRepositoryAnalyzer: () => GitRepositoryAnalyzer
 });
-var import_simple_git2, path17, fs16, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
+var import_simple_git2, path18, fs17, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
 var init_git_repository_analyzer = __esm({
   "src/git-repository-analyzer.ts"() {
     "use strict";
     import_simple_git2 = require("simple-git");
-    path17 = __toESM(require("path"));
-    fs16 = __toESM(require("fs"));
+    path18 = __toESM(require("path"));
+    fs17 = __toESM(require("fs"));
     init_file_exclusion();
     MAX_PATCH_SIZE = 50 * 1024;
     GitRepositoryAnalyzer = class {
@@ -45118,7 +47173,7 @@ ${file.patch}`).join("\n\n");
               console.error(`\u23ED\uFE0F  Skipping excluded file: ${file}`);
               continue;
             }
-            const filePath = path17.join(this.cwd, file);
+            const filePath = path18.join(this.cwd, file);
             const fileChange = await this.analyzeFileChange(file, status2, filePath, includeContext);
             changes.push(fileChange);
           }
@@ -45194,7 +47249,7 @@ ${file.patch}`).join("\n\n");
         let content;
         let truncated = false;
         try {
-          if (includeContext && status !== "added" && fs16.existsSync(filePath)) {
+          if (includeContext && status !== "added" && fs17.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const result = this.truncatePatch(diff, filename);
@@ -45204,7 +47259,7 @@ ${file.patch}`).join("\n\n");
               additions = lines.filter((line) => line.startsWith("+")).length;
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
-          } else if (status !== "added" && fs16.existsSync(filePath)) {
+          } else if (status !== "added" && fs17.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const lines = diff.split("\n");
@@ -45212,17 +47267,17 @@ ${file.patch}`).join("\n\n");
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
           }
-          if (status === "added" && fs16.existsSync(filePath)) {
+          if (status === "added" && fs17.existsSync(filePath)) {
             try {
-              const stats = fs16.statSync(filePath);
+              const stats = fs17.statSync(filePath);
               if (stats.isFile() && stats.size < 1024 * 1024) {
                 if (includeContext) {
-                  content = fs16.readFileSync(filePath, "utf8");
+                  content = fs17.readFileSync(filePath, "utf8");
                   const result = this.truncatePatch(content, filename);
                   patch = result.patch;
                   truncated = result.truncated;
                 }
-                const fileContent = includeContext ? content : fs16.readFileSync(filePath, "utf8");
+                const fileContent = includeContext ? content : fs17.readFileSync(filePath, "utf8");
                 additions = fileContent.split("\n").length;
               }
             } catch {
@@ -45313,12 +47368,12 @@ function shellEscape(str) {
 function sanitizePathComponent(name) {
   return name.replace(/\.\./g, "").replace(/[\/\\]/g, "-").replace(/^\.+/, "").trim() || "unnamed";
 }
-var fsp2, path18, WorkspaceManager;
+var fsp2, path19, WorkspaceManager;
 var init_workspace_manager = __esm({
   "src/utils/workspace-manager.ts"() {
     "use strict";
     fsp2 = __toESM(require("fs/promises"));
-    path18 = __toESM(require("path"));
+    path19 = __toESM(require("path"));
     init_command_executor();
     init_logger();
     WorkspaceManager = class _WorkspaceManager {
@@ -45352,7 +47407,7 @@ var init_workspace_manager = __esm({
         };
         this.basePath = this.config.basePath;
         const workspaceDirName = sanitizePathComponent(this.config.name || this.sessionId);
-        this.workspacePath = path18.join(this.basePath, workspaceDirName);
+        this.workspacePath = path19.join(this.basePath, workspaceDirName);
       }
       /**
        * Get or create a WorkspaceManager instance for a session
@@ -45447,7 +47502,7 @@ var init_workspace_manager = __esm({
           configuredMainProjectName || this.extractProjectName(this.originalPath)
         );
         this.usedNames.add(mainProjectName);
-        const mainProjectPath = path18.join(this.workspacePath, mainProjectName);
+        const mainProjectPath = path19.join(this.workspacePath, mainProjectName);
         const isGitRepo = await this.isGitRepository(this.originalPath);
         if (isGitRepo) {
           await this.createMainProjectWorktree(mainProjectPath);
@@ -45488,7 +47543,7 @@ var init_workspace_manager = __esm({
         let projectName = sanitizePathComponent(description || this.extractRepoName(repository));
         projectName = this.getUniqueName(projectName);
         this.usedNames.add(projectName);
-        const workspacePath = path18.join(this.workspacePath, projectName);
+        const workspacePath = path19.join(this.workspacePath, projectName);
         await fsp2.rm(workspacePath, { recursive: true, force: true });
         try {
           await fsp2.symlink(worktreePath, workspacePath);
@@ -45627,7 +47682,7 @@ var init_workspace_manager = __esm({
        * Extract project name from path
        */
       extractProjectName(dirPath) {
-        return path18.basename(dirPath);
+        return path19.basename(dirPath);
       }
       /**
        * Extract repository name from owner/repo format
@@ -45840,12 +47895,12 @@ var ndjson_sink_exports = {};
 __export(ndjson_sink_exports, {
   NdjsonSink: () => NdjsonSink
 });
-var import_fs6, import_path8, NdjsonSink;
+var import_fs6, import_path9, NdjsonSink;
 var init_ndjson_sink = __esm({
   "src/frontends/ndjson-sink.ts"() {
     "use strict";
     import_fs6 = __toESM(require("fs"));
-    import_path8 = __toESM(require("path"));
+    import_path9 = __toESM(require("path"));
     NdjsonSink = class {
       name = "ndjson-sink";
       cfg;
@@ -45877,8 +47932,8 @@ var init_ndjson_sink = __esm({
         this.unsub = void 0;
       }
       resolveFile(p) {
-        if (import_path8.default.isAbsolute(p)) return p;
-        return import_path8.default.join(process.cwd(), p);
+        if (import_path9.default.isAbsolute(p)) return p;
+        return import_path9.default.join(process.cwd(), p);
       }
     };
   }
@@ -47378,7 +49433,7 @@ var init_client = __esm({
       }
       /**
        * Fetch user info from Slack API.
-       * Returns user profile including guest status flags, email, and display name.
+       * Returns user profile including guest status flags, email, display name, and timezone.
        */
       async getUserInfo(userId) {
         try {
@@ -47397,11 +49452,32 @@ var init_client = __esm({
               is_ultra_restricted: resp.user.is_ultra_restricted,
               is_bot: resp.user.is_bot,
               is_app_user: resp.user.is_app_user,
-              deleted: resp.user.deleted
+              deleted: resp.user.deleted,
+              tz: resp.user.tz,
+              tz_offset: resp.user.tz_offset
             }
           };
         } catch (e) {
           console.warn(`Slack users.info failed: ${e instanceof Error ? e.message : String(e)}`);
+          return { ok: false };
+        }
+      }
+      /**
+       * Open a DM channel with a user.
+       * Returns the DM channel ID.
+       */
+      async openDM(userId) {
+        try {
+          const resp = await this.api("conversations.open", { users: userId });
+          if (!resp || resp.ok !== true || !resp.channel?.id) {
+            console.warn(`Slack conversations.open failed: ${resp?.error || "unknown_error"}`);
+            return { ok: false };
+          }
+          return { ok: true, channel: resp.channel.id };
+        } catch (e) {
+          console.warn(
+            `Slack conversations.open failed: ${e instanceof Error ? e.message : String(e)}`
+          );
           return { ok: false };
         }
       }
@@ -47535,16 +49611,16 @@ function extractMermaidDiagrams(text) {
 }
 async function renderMermaidToPng(mermaidCode) {
   const tmpDir = os.tmpdir();
-  const inputFile = path20.join(
+  const inputFile = path21.join(
     tmpDir,
     `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}.mmd`
   );
-  const outputFile = path20.join(
+  const outputFile = path21.join(
     tmpDir,
     `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}.png`
   );
   try {
-    fs18.writeFileSync(inputFile, mermaidCode, "utf-8");
+    fs19.writeFileSync(inputFile, mermaidCode, "utf-8");
     const chromiumPaths = [
       "/usr/bin/chromium",
       "/usr/bin/chromium-browser",
@@ -47553,7 +49629,7 @@ async function renderMermaidToPng(mermaidCode) {
     ];
     let chromiumPath;
     for (const p of chromiumPaths) {
-      if (fs18.existsSync(p)) {
+      if (fs19.existsSync(p)) {
         chromiumPath = p;
         break;
       }
@@ -47605,19 +49681,19 @@ async function renderMermaidToPng(mermaidCode) {
       console.warn(`Mermaid rendering failed: ${result.error}`);
       return null;
     }
-    if (!fs18.existsSync(outputFile)) {
+    if (!fs19.existsSync(outputFile)) {
       console.warn("Mermaid output file not created");
       return null;
     }
-    const pngBuffer = fs18.readFileSync(outputFile);
+    const pngBuffer = fs19.readFileSync(outputFile);
     return pngBuffer;
   } catch (e) {
     console.warn(`Mermaid rendering error: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   } finally {
     try {
-      if (fs18.existsSync(inputFile)) fs18.unlinkSync(inputFile);
-      if (fs18.existsSync(outputFile)) fs18.unlinkSync(outputFile);
+      if (fs19.existsSync(inputFile)) fs19.unlinkSync(inputFile);
+      if (fs19.existsSync(outputFile)) fs19.unlinkSync(outputFile);
     } catch {
     }
   }
@@ -47681,13 +49757,13 @@ function markdownToSlack(text) {
 function formatSlackText(text) {
   return markdownToSlack(text);
 }
-var import_child_process5, fs18, path20, os;
+var import_child_process5, fs19, path21, os;
 var init_markdown = __esm({
   "src/slack/markdown.ts"() {
     "use strict";
     import_child_process5 = require("child_process");
-    fs18 = __toESM(require("fs"));
-    path20 = __toESM(require("path"));
+    fs19 = __toESM(require("fs"));
+    path21 = __toESM(require("path"));
     os = __toESM(require("os"));
   }
 });
@@ -48135,6 +50211,13 @@ ${suffix}`;
           ctx.logger.info(
             `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs}`
           );
+          const responseCapture = ctx.responseCapture;
+          if (responseCapture && typeof responseCapture === "function") {
+            try {
+              responseCapture(processedText);
+            } catch {
+            }
+          }
         } catch (outerErr) {
           try {
             ctx.logger.warn(
@@ -48257,1407 +50340,7 @@ var init_summary = __esm({
   }
 });
 
-// src/sdk.ts
-var sdk_exports = {};
-__export(sdk_exports, {
-  loadConfig: () => loadConfig,
-  resolveChecks: () => resolveChecks,
-  runChecks: () => runChecks
-});
-module.exports = __toCommonJS(sdk_exports);
-
 // src/state-machine-execution-engine.ts
-init_runner();
-init_logger();
-
-// src/sandbox/sandbox-manager.ts
-var import_path7 = require("path");
-var import_fs5 = require("fs");
-
-// src/sandbox/docker-image-sandbox.ts
-var import_util2 = require("util");
-var import_child_process2 = require("child_process");
-var import_fs4 = require("fs");
-var import_path6 = require("path");
-var import_os = require("os");
-var import_crypto2 = require("crypto");
-init_logger();
-init_sandbox_telemetry();
-var execFileAsync = (0, import_util2.promisify)(import_child_process2.execFile);
-var EXEC_MAX_BUFFER = 50 * 1024 * 1024;
-var DockerImageSandbox = class {
-  name;
-  config;
-  containerId = null;
-  containerName;
-  repoPath;
-  visorDistPath;
-  cacheVolumeMounts;
-  constructor(name, config, repoPath, visorDistPath, cacheVolumeMounts = []) {
-    this.name = name;
-    this.config = config;
-    this.repoPath = repoPath;
-    this.visorDistPath = visorDistPath;
-    this.containerName = `visor-${name}-${(0, import_crypto2.randomUUID)().slice(0, 8)}`;
-    this.cacheVolumeMounts = cacheVolumeMounts;
-  }
-  /**
-   * Build the Docker image if needed (dockerfile or dockerfile_inline mode)
-   */
-  async buildImageIfNeeded() {
-    if (this.config.image) {
-      return this.config.image;
-    }
-    const imageName = `visor-sandbox-${this.name}`;
-    const buildMode = this.config.dockerfile_inline ? "inline" : "dockerfile";
-    return withActiveSpan2(
-      "visor.sandbox.build",
-      {
-        "visor.sandbox.name": this.name,
-        "visor.sandbox.build.mode": buildMode
-      },
-      async () => {
-        if (this.config.dockerfile_inline) {
-          if (!/^\s*FROM\s+/im.test(this.config.dockerfile_inline)) {
-            throw new Error(
-              `Sandbox '${this.name}' has invalid dockerfile_inline: must contain a FROM instruction`
-            );
-          }
-          const tmpDir = (0, import_fs4.mkdtempSync)((0, import_path6.join)((0, import_os.tmpdir)(), "visor-build-"));
-          const dockerfilePath = (0, import_path6.join)(tmpDir, "Dockerfile");
-          (0, import_fs4.writeFileSync)(dockerfilePath, this.config.dockerfile_inline, "utf8");
-          try {
-            logger.info(`Building sandbox image '${imageName}' from inline Dockerfile`);
-            await execFileAsync(
-              "docker",
-              ["build", "-t", imageName, "-f", dockerfilePath, this.repoPath],
-              {
-                maxBuffer: EXEC_MAX_BUFFER,
-                timeout: 3e5
-              }
-            );
-          } finally {
-            try {
-              (0, import_fs4.unlinkSync)(dockerfilePath);
-            } catch {
-            }
-          }
-          return imageName;
-        }
-        if (this.config.dockerfile) {
-          logger.info(`Building sandbox image '${imageName}' from ${this.config.dockerfile}`);
-          await execFileAsync(
-            "docker",
-            ["build", "-t", imageName, "-f", this.config.dockerfile, this.repoPath],
-            { maxBuffer: EXEC_MAX_BUFFER, timeout: 3e5 }
-          );
-          return imageName;
-        }
-        throw new Error(`Sandbox '${this.name}' has no image, dockerfile, or dockerfile_inline`);
-      }
-    );
-  }
-  /**
-   * Start the sandbox container
-   */
-  async start() {
-    const image = await this.buildImageIfNeeded();
-    const workdir = this.config.workdir || "/workspace";
-    const visorPath = this.config.visor_path || "/opt/visor";
-    const readOnlySuffix = this.config.read_only ? ":ro" : "";
-    const args = [
-      "docker",
-      "run",
-      "-d",
-      "--name",
-      this.containerName,
-      "-v",
-      `${this.repoPath}:${workdir}${readOnlySuffix}`,
-      "-v",
-      `${this.visorDistPath}:${visorPath}:ro`,
-      "-w",
-      workdir
-    ];
-    if (this.config.network === false) {
-      args.push("--network", "none");
-    }
-    if (this.config.resources?.memory) {
-      args.push("--memory", this.config.resources.memory);
-    }
-    if (this.config.resources?.cpu) {
-      args.push("--cpus", String(this.config.resources.cpu));
-    }
-    for (const mount of this.cacheVolumeMounts) {
-      args.push("-v", mount);
-    }
-    args.push(image, "sleep", "infinity");
-    logger.info(`Starting sandbox container '${this.containerName}'`);
-    const { stdout } = await execFileAsync(args[0], args.slice(1), {
-      maxBuffer: EXEC_MAX_BUFFER,
-      timeout: 6e4
-    });
-    this.containerId = stdout.trim();
-    addEvent2("visor.sandbox.container.started", {
-      container_name: this.containerName,
-      image
-    });
-  }
-  /**
-   * Execute a command inside the running container
-   */
-  async exec(options) {
-    if (!this.containerId) {
-      throw new Error(`Sandbox '${this.name}' is not started`);
-    }
-    const args = ["docker", "exec"];
-    for (const [key, value] of Object.entries(options.env)) {
-      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
-        throw new Error(`Invalid environment variable name: '${key}'`);
-      }
-      args.push("-e", `${key}=${value}`);
-    }
-    args.push(this.containerName, "sh", "-c", options.command);
-    try {
-      const { stdout, stderr } = await execFileAsync(args[0], args.slice(1), {
-        maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER,
-        timeout: options.timeoutMs || 6e5
-      });
-      return { stdout, stderr, exitCode: 0 };
-    } catch (err) {
-      const execErr = err;
-      return {
-        stdout: execErr.stdout || "",
-        stderr: execErr.stderr || "",
-        exitCode: typeof execErr.code === "number" ? execErr.code : 1
-      };
-    }
-  }
-  /**
-   * Stop and remove the container
-   */
-  async stop() {
-    if (this.containerName) {
-      try {
-        await execFileAsync("docker", ["rm", "-f", this.containerName], {
-          maxBuffer: EXEC_MAX_BUFFER,
-          timeout: 3e4
-        });
-      } catch {
-      }
-      addEvent2("visor.sandbox.container.stopped", {
-        container_name: this.containerName
-      });
-      this.containerId = null;
-    }
-  }
-};
-
-// src/sandbox/docker-compose-sandbox.ts
-var import_util3 = require("util");
-var import_child_process3 = require("child_process");
-var import_crypto3 = require("crypto");
-init_logger();
-var execFileAsync2 = (0, import_util3.promisify)(import_child_process3.execFile);
-var EXEC_MAX_BUFFER2 = 50 * 1024 * 1024;
-var DockerComposeSandbox = class {
-  name;
-  config;
-  projectName;
-  started = false;
-  constructor(name, config) {
-    this.name = name;
-    this.config = config;
-    this.projectName = `visor-${name}-${(0, import_crypto3.randomUUID)().slice(0, 8)}`;
-  }
-  /**
-   * Start the compose services
-   */
-  async start() {
-    if (!this.config.compose) {
-      throw new Error(`Sandbox '${this.name}' has no compose file specified`);
-    }
-    if (!this.config.service) {
-      throw new Error(`Sandbox '${this.name}' requires a 'service' field for compose mode`);
-    }
-    logger.info(`Starting compose sandbox '${this.name}' (project: ${this.projectName})`);
-    await execFileAsync2(
-      "docker",
-      ["compose", "-f", this.config.compose, "-p", this.projectName, "up", "-d"],
-      {
-        maxBuffer: EXEC_MAX_BUFFER2,
-        timeout: 12e4
-      }
-    );
-    this.started = true;
-  }
-  /**
-   * Execute a command inside the compose service
-   */
-  async exec(options) {
-    if (!this.started) {
-      throw new Error(`Compose sandbox '${this.name}' is not started`);
-    }
-    const service = this.config.service;
-    const args = [
-      "docker",
-      "compose",
-      "-f",
-      this.config.compose,
-      "-p",
-      this.projectName,
-      "exec",
-      "-T"
-      // non-interactive
-    ];
-    for (const [key, value] of Object.entries(options.env)) {
-      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
-        throw new Error(`Invalid environment variable name: '${key}'`);
-      }
-      args.push("-e", `${key}=${value}`);
-    }
-    if (this.config.workdir) {
-      args.push("-w", this.config.workdir);
-    }
-    args.push(service, "sh", "-c", options.command);
-    try {
-      const { stdout, stderr } = await execFileAsync2(args[0], args.slice(1), {
-        maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER2,
-        timeout: options.timeoutMs || 6e5
-      });
-      return { stdout, stderr, exitCode: 0 };
-    } catch (err) {
-      const execErr = err;
-      return {
-        stdout: execErr.stdout || "",
-        stderr: execErr.stderr || "",
-        exitCode: typeof execErr.code === "number" ? execErr.code : 1
-      };
-    }
-  }
-  /**
-   * Stop and tear down the compose project
-   */
-  async stop() {
-    if (this.started && this.config.compose) {
-      try {
-        await execFileAsync2(
-          "docker",
-          ["compose", "-f", this.config.compose, "-p", this.projectName, "down"],
-          {
-            maxBuffer: EXEC_MAX_BUFFER2,
-            timeout: 6e4
-          }
-        );
-      } catch {
-      }
-      this.started = false;
-    }
-  }
-};
-
-// src/sandbox/cache-volume-manager.ts
-var import_util4 = require("util");
-var import_child_process4 = require("child_process");
-var import_crypto4 = require("crypto");
-init_logger();
-var execFileAsync3 = (0, import_util4.promisify)(import_child_process4.execFile);
-var EXEC_MAX_BUFFER3 = 10 * 1024 * 1024;
-function pathHash(containerPath) {
-  return (0, import_crypto4.createHash)("sha256").update(containerPath).digest("hex").slice(0, 8);
-}
-function parseTtl(ttl) {
-  let ms = 0;
-  const dayMatch = ttl.match(/(\d+)d/);
-  const hourMatch = ttl.match(/(\d+)h/);
-  const minMatch = ttl.match(/(\d+)m/);
-  if (dayMatch) ms += parseInt(dayMatch[1], 10) * 864e5;
-  if (hourMatch) ms += parseInt(hourMatch[1], 10) * 36e5;
-  if (minMatch) ms += parseInt(minMatch[1], 10) * 6e4;
-  return ms || 6048e5;
-}
-var CacheVolumeManager = class {
-  /**
-   * Resolve cache config into Docker volume mount specs.
-   *
-   * Volume naming: visor-cache-<prefix>-<sandboxName>-<pathHash>
-   *
-   * @param sandboxName - Name of the sandbox
-   * @param cacheConfig - Cache configuration from sandbox config
-   * @param gitBranch - Current git branch (used as default prefix)
-   * @returns Array of volume mount specs for docker run -v
-   */
-  async resolveVolumes(sandboxName, cacheConfig, gitBranch) {
-    const prefix = (cacheConfig.prefix || gitBranch).replace(/[^a-zA-Z0-9._-]/g, "-");
-    const volumes = [];
-    for (const containerPath of cacheConfig.paths) {
-      if (/\.\./.test(containerPath)) {
-        throw new Error(`Cache path '${containerPath}' must not contain '..' path traversal`);
-      }
-      const hash = pathHash(containerPath);
-      const volumeName = `visor-cache-${prefix}-${sandboxName}-${hash}`;
-      const exists = await this.volumeExists(volumeName);
-      if (!exists && cacheConfig.fallback_prefix) {
-        const fallbackPrefix = cacheConfig.fallback_prefix.replace(/[^a-zA-Z0-9._-]/g, "-");
-        const fallbackVolume = `visor-cache-${fallbackPrefix}-${sandboxName}-${hash}`;
-        const fallbackExists = await this.volumeExists(fallbackVolume);
-        if (fallbackExists) {
-          logger.info(`Cache miss for '${volumeName}', copying from fallback '${fallbackVolume}'`);
-          await this.copyVolume(fallbackVolume, volumeName);
-        } else {
-          await this.createVolume(volumeName);
-        }
-      } else if (!exists) {
-        await this.createVolume(volumeName);
-      }
-      await this.touchVolume(volumeName);
-      volumes.push({
-        volumeName,
-        mountSpec: `${volumeName}:${containerPath}`
-      });
-    }
-    return volumes;
-  }
-  /**
-   * Check if a Docker volume exists
-   */
-  async volumeExists(name) {
-    try {
-      await execFileAsync3("docker", ["volume", "inspect", name], {
-        maxBuffer: EXEC_MAX_BUFFER3,
-        timeout: 1e4
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  /**
-   * Create a Docker named volume
-   */
-  async createVolume(name) {
-    const now = (/* @__PURE__ */ new Date()).toISOString();
-    await execFileAsync3("docker", ["volume", "create", "--label", `visor.last-used=${now}`, name], {
-      maxBuffer: EXEC_MAX_BUFFER3,
-      timeout: 1e4
-    });
-  }
-  /**
-   * Copy data from one volume to another using a temp container
-   */
-  async copyVolume(source, target) {
-    await this.createVolume(target);
-    try {
-      await execFileAsync3(
-        "docker",
-        [
-          "run",
-          "--rm",
-          "-v",
-          `${source}:/src:ro`,
-          "-v",
-          `${target}:/dst`,
-          "alpine",
-          "sh",
-          "-c",
-          "cp -a /src/. /dst/"
-        ],
-        { maxBuffer: EXEC_MAX_BUFFER3, timeout: 6e4 }
-      );
-    } catch (err) {
-      logger.warn(`Failed to copy cache volume ${source} -> ${target}: ${err}`);
-    }
-  }
-  /**
-   * Update the last-used label on a volume.
-   * Docker doesn't support updating labels in-place, so we record via a temp file approach
-   * by simply re-creating volumes with updated labels if they don't exist.
-   * For existing volumes, we track usage time via the volume name pattern.
-   */
-  async touchVolume(_name) {
-  }
-  /**
-   * Evict expired cache volumes for a sandbox
-   */
-  async evictExpired(sandboxName, ttl, maxScopes) {
-    const ttlMs = ttl ? parseTtl(ttl) : 6048e5;
-    const maxScopesLimit = maxScopes || 10;
-    try {
-      const { stdout } = await execFileAsync3(
-        "docker",
-        ["volume", "ls", "--filter", "name=visor-cache-", "--format", "{{.Name}}"],
-        { maxBuffer: EXEC_MAX_BUFFER3, timeout: 1e4 }
-      );
-      const allVolumes = stdout.trim().split("\n").filter(Boolean);
-      const sandboxVolumes = allVolumes.filter((v) => v.includes(`-${sandboxName}-`));
-      if (sandboxVolumes.length === 0) return;
-      const scopeMap = /* @__PURE__ */ new Map();
-      for (const vol of sandboxVolumes) {
-        const match = vol.match(/^visor-cache-(.+)-\w{8}$/);
-        if (match) {
-          const prefix = match[1].replace(`-${sandboxName}`, "");
-          if (!scopeMap.has(prefix)) scopeMap.set(prefix, []);
-          scopeMap.get(prefix).push(vol);
-        }
-      }
-      const now = Date.now();
-      const inspectResults = await Promise.allSettled(
-        sandboxVolumes.map(async (vol) => {
-          const { stdout: inspectOut } = await execFileAsync3(
-            "docker",
-            ["volume", "inspect", vol, "--format", "{{.CreatedAt}}"],
-            { maxBuffer: EXEC_MAX_BUFFER3, timeout: 1e4 }
-          );
-          return { vol, createdAt: new Date(inspectOut.trim()).getTime() };
-        })
-      );
-      for (const result of inspectResults) {
-        if (result.status !== "fulfilled") continue;
-        const { vol, createdAt } = result.value;
-        if (now - createdAt > ttlMs) {
-          try {
-            logger.info(`Evicting expired cache volume: ${vol}`);
-            await execFileAsync3("docker", ["volume", "rm", vol], {
-              maxBuffer: EXEC_MAX_BUFFER3,
-              timeout: 1e4
-            });
-          } catch {
-          }
-        }
-      }
-      if (scopeMap.size > maxScopesLimit) {
-        const scopes = Array.from(scopeMap.keys());
-        const toRemove = scopes.slice(0, scopes.length - maxScopesLimit);
-        for (const scope of toRemove) {
-          const vols = scopeMap.get(scope) || [];
-          for (const vol of vols) {
-            try {
-              logger.info(`Evicting cache volume (max_scopes exceeded): ${vol}`);
-              await execFileAsync3("docker", ["volume", "rm", vol], {
-                maxBuffer: EXEC_MAX_BUFFER3,
-                timeout: 1e4
-              });
-            } catch {
-            }
-          }
-        }
-      }
-    } catch {
-    }
-  }
-};
-
-// src/sandbox/sandbox-manager.ts
-init_logger();
-init_sandbox_telemetry();
-var SandboxManager = class {
-  sandboxDefs;
-  repoPath;
-  gitBranch;
-  instances = /* @__PURE__ */ new Map();
-  cacheManager;
-  visorDistPath;
-  /** Get the resolved repository path (used by trace file relay) */
-  getRepoPath() {
-    return this.repoPath;
-  }
-  constructor(sandboxDefs, repoPath, gitBranch) {
-    this.sandboxDefs = sandboxDefs;
-    this.repoPath = (0, import_path7.resolve)(repoPath);
-    this.gitBranch = gitBranch;
-    this.cacheManager = new CacheVolumeManager();
-    this.visorDistPath = (0, import_fs5.existsSync)((0, import_path7.join)(__dirname, "index.js")) ? __dirname : (0, import_path7.resolve)((0, import_path7.dirname)(__dirname));
-  }
-  /**
-   * Resolve which sandbox a check should use.
-   * Returns null if the check should run on the host.
-   *
-   * Resolution order:
-   * 1. Check-level sandbox: (explicit override)
-   * 2. Workspace-level sandbox: (default)
-   * 3. null → run on host
-   */
-  resolveSandbox(checkSandbox, workspaceDefault) {
-    const name = checkSandbox || workspaceDefault;
-    if (!name) return null;
-    if (!this.sandboxDefs[name]) {
-      throw new Error(`Sandbox '${name}' is not defined in sandboxes configuration`);
-    }
-    return name;
-  }
-  /**
-   * Get or lazily start a sandbox instance by name.
-   */
-  async getOrStart(name) {
-    const existing = this.instances.get(name);
-    if (existing) return existing;
-    const config = this.sandboxDefs[name];
-    if (!config) {
-      throw new Error(`Sandbox '${name}' is not defined`);
-    }
-    const mode = config.compose ? "compose" : "image";
-    return withActiveSpan2(
-      "visor.sandbox.start",
-      {
-        "visor.sandbox.name": name,
-        "visor.sandbox.mode": mode
-      },
-      async () => {
-        let instance;
-        if (config.compose) {
-          const composeSandbox = new DockerComposeSandbox(name, config);
-          await composeSandbox.start();
-          instance = composeSandbox;
-        } else {
-          let cacheVolumeMounts = [];
-          if (config.cache) {
-            const volumes = await this.cacheManager.resolveVolumes(
-              name,
-              config.cache,
-              this.gitBranch
-            );
-            cacheVolumeMounts = volumes.map((v) => v.mountSpec);
-          }
-          const imageSandbox = new DockerImageSandbox(
-            name,
-            config,
-            this.repoPath,
-            this.visorDistPath,
-            cacheVolumeMounts
-          );
-          await imageSandbox.start();
-          instance = imageSandbox;
-        }
-        this.instances.set(name, instance);
-        return instance;
-      }
-    );
-  }
-  /**
-   * Execute a command inside a named sandbox
-   */
-  async exec(name, options) {
-    const instance = await this.getOrStart(name);
-    return withActiveSpan2(
-      "visor.sandbox.exec",
-      {
-        "visor.sandbox.name": name
-      },
-      async (span) => {
-        const result = await instance.exec(options);
-        try {
-          span.setAttribute("visor.sandbox.exit_code", result.exitCode);
-        } catch {
-        }
-        return result;
-      }
-    );
-  }
-  /**
-   * Stop all running sandbox instances and run cache eviction
-   */
-  async stopAll() {
-    return withActiveSpan2("visor.sandbox.stopAll", void 0, async () => {
-      const stopPromises = Array.from(this.instances.entries()).map(async ([name, instance]) => {
-        try {
-          await instance.stop();
-          addEvent2("visor.sandbox.stopped", { "visor.sandbox.name": name });
-          logger.info(`Stopped sandbox '${name}'`);
-        } catch (err) {
-          logger.warn(`Failed to stop sandbox '${name}': ${err}`);
-        }
-        const config = this.sandboxDefs[name];
-        if (config?.cache) {
-          try {
-            await this.cacheManager.evictExpired(name, config.cache.ttl, config.cache.max_scopes);
-          } catch {
-          }
-        }
-      });
-      await Promise.allSettled(stopPromises);
-      this.instances.clear();
-    });
-  }
-};
-
-// src/state-machine-execution-engine.ts
-var path21 = __toESM(require("path"));
-var fs19 = __toESM(require("fs"));
-var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
-  workingDirectory;
-  executionContext;
-  debugServer;
-  _lastContext;
-  _lastRunner;
-  constructor(workingDirectory, octokit, debugServer) {
-    this.workingDirectory = workingDirectory || process.cwd();
-    this.debugServer = debugServer;
-  }
-  /**
-   * Execute checks using the state machine engine
-   *
-   * Converts CheckExecutionOptions -> executeGroupedChecks() -> AnalysisResult
-   */
-  async executeChecks(options) {
-    const startTime = Date.now();
-    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-    try {
-      if (options.config?.memory) {
-        const { MemoryStore: MemoryStore2 } = await Promise.resolve().then(() => (init_memory_store(), memory_store_exports));
-        const memoryStore = MemoryStore2.getInstance(options.config.memory);
-        await memoryStore.initialize();
-        logger.debug("Memory store initialized");
-      }
-      const { GitRepositoryAnalyzer: GitRepositoryAnalyzer2 } = await Promise.resolve().then(() => (init_git_repository_analyzer(), git_repository_analyzer_exports));
-      const gitAnalyzer = new GitRepositoryAnalyzer2(options.workingDirectory);
-      logger.info("Analyzing local git repository...");
-      const repositoryInfo = await gitAnalyzer.analyzeRepository();
-      if (!repositoryInfo.isGitRepository) {
-        return this.createErrorResult(
-          repositoryInfo,
-          "Not a git repository or no changes found",
-          startTime,
-          timestamp,
-          options.checks
-        );
-      }
-      const prInfo = gitAnalyzer.toPRInfo(repositoryInfo);
-      try {
-        const evt = options.webhookContext?.eventType;
-        if (evt) prInfo.eventType = evt;
-      } catch {
-      }
-      const filteredChecks = this.filterChecksByTags(
-        options.checks,
-        options.config,
-        options.tagFilter || options.config?.tag_filter
-      );
-      if (filteredChecks.length === 0) {
-        logger.warn("No checks match the tag filter criteria");
-        return this.createErrorResult(
-          repositoryInfo,
-          "No checks match the tag filter criteria",
-          startTime,
-          timestamp,
-          options.checks
-        );
-      }
-      try {
-        const map = options?.webhookContext?.webhookData;
-        if (map) {
-          const { CheckProviderRegistry: CheckProviderRegistry2 } = await Promise.resolve().then(() => (init_check_provider_registry(), check_provider_registry_exports));
-          const reg = CheckProviderRegistry2.getInstance();
-          const p = reg.getProvider("http_input");
-          if (p && typeof p.setWebhookContext === "function") p.setWebhookContext(map);
-          const prev = this.executionContext || {};
-          this.setExecutionContext({ ...prev, webhookContext: { webhookData: map } });
-        }
-      } catch {
-      }
-      logger.info(`Executing checks: ${filteredChecks.join(", ")}`);
-      const executionResult = await this.executeGroupedChecks(
-        prInfo,
-        filteredChecks,
-        options.timeout,
-        options.config,
-        options.outputFormat,
-        options.debug,
-        options.maxParallelism,
-        options.failFast,
-        options.tagFilter
-      );
-      const executionTime = Date.now() - startTime;
-      const reviewSummary = this.convertGroupedResultsToReviewSummary(
-        executionResult.results,
-        executionResult.statistics
-      );
-      let debugInfo;
-      if (options.debug && reviewSummary.debug) {
-        debugInfo = {
-          provider: reviewSummary.debug.provider,
-          model: reviewSummary.debug.model,
-          processingTime: reviewSummary.debug.processingTime,
-          parallelExecution: options.checks.length > 1,
-          checksExecuted: options.checks,
-          totalApiCalls: reviewSummary.debug.totalApiCalls || options.checks.length,
-          apiCallDetails: reviewSummary.debug.apiCallDetails
-        };
-      }
-      try {
-        const histSnap = this.getOutputHistorySnapshot();
-        reviewSummary.history = histSnap;
-      } catch {
-      }
-      return {
-        repositoryInfo,
-        reviewSummary,
-        executionTime,
-        timestamp,
-        checksExecuted: filteredChecks,
-        executionStatistics: executionResult.statistics,
-        debug: debugInfo
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error occurred";
-      logger.error("Error executing checks: " + message);
-      const strictEnv = process.env.VISOR_STRICT_ERRORS === "true";
-      if (strictEnv) {
-        throw error;
-      }
-      const fallbackRepositoryInfo = {
-        title: "Error during analysis",
-        body: `Error: ${message || "Unknown error"}`,
-        author: "system",
-        base: "main",
-        head: "HEAD",
-        files: [],
-        totalAdditions: 0,
-        totalDeletions: 0,
-        isGitRepository: false,
-        workingDirectory: options.workingDirectory || process.cwd()
-      };
-      return this.createErrorResult(
-        fallbackRepositoryInfo,
-        message || "Unknown error occurred",
-        startTime,
-        timestamp,
-        options.checks
-      );
-    }
-  }
-  /**
-   * Get execution context (used by state machine to propagate hooks)
-   */
-  getExecutionContext() {
-    return this.executionContext;
-  }
-  /**
-   * Set execution context for external callers
-   */
-  setExecutionContext(context2) {
-    this.executionContext = context2;
-  }
-  /**
-   * Reset per-run state (no-op for state machine engine)
-   *
-   * The state machine engine is stateless per-run by design.
-   * Each execution creates a fresh journal and context.
-   * This method exists only for backward compatibility with test framework.
-   *
-   * @deprecated This is a no-op. State machine engine doesn't maintain per-run state.
-   */
-  resetPerRunState() {
-  }
-  /**
-   * Execute grouped checks using the state machine engine
-   *
-   * M4: Production-ready with full telemetry and debug server support
-   */
-  async executeGroupedChecks(prInfo, checks, timeout, config, outputFormat, debug, maxParallelism, failFast, tagFilter, _pauseGate) {
-    if (debug) {
-      logger.info("[StateMachine] Using state machine engine");
-    }
-    if (!config) {
-      const { ConfigManager: ConfigManager2 } = await Promise.resolve().then(() => (init_config(), config_exports));
-      const configManager = new ConfigManager2();
-      config = await configManager.getDefaultConfig();
-      logger.debug("[StateMachine] Using default configuration (no config provided)");
-    }
-    const configWithTagFilter = tagFilter ? {
-      ...config,
-      tag_filter: tagFilter
-    } : config;
-    const context2 = this.buildEngineContext(
-      configWithTagFilter,
-      prInfo,
-      debug,
-      maxParallelism,
-      failFast,
-      checks
-      // Pass the explicit checks list
-    );
-    if (configWithTagFilter.sandboxes && Object.keys(configWithTagFilter.sandboxes).length > 0) {
-      try {
-        const { execSync } = require("child_process");
-        const gitBranch = execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf8" }).trim();
-        context2.sandboxManager = new SandboxManager(
-          configWithTagFilter.sandboxes,
-          this.workingDirectory,
-          gitBranch
-        );
-      } catch {
-        context2.sandboxManager = new SandboxManager(
-          configWithTagFilter.sandboxes,
-          this.workingDirectory,
-          "unknown"
-        );
-      }
-    }
-    const { initializeWorkspace: initializeWorkspace2 } = (init_build_engine_context(), __toCommonJS(build_engine_context_exports));
-    await initializeWorkspace2(context2);
-    context2.executionContext = this.getExecutionContext();
-    this._lastContext = context2;
-    let frontendsHost;
-    if (Array.isArray(configWithTagFilter.frontends) && configWithTagFilter.frontends.length > 0) {
-      try {
-        const { EventBus: EventBus2 } = await Promise.resolve().then(() => (init_event_bus(), event_bus_exports));
-        const { FrontendsHost: FrontendsHost2 } = await Promise.resolve().then(() => (init_host(), host_exports));
-        const bus = new EventBus2();
-        context2.eventBus = bus;
-        frontendsHost = new FrontendsHost2(bus, logger);
-        if (process.env.VISOR_DEBUG === "true") {
-          try {
-            const fns = (configWithTagFilter.frontends || []).map((f) => ({
-              name: f?.name,
-              hasConfig: !!f?.config,
-              cfg: f?.config || void 0
-            }));
-            logger.info(`[Frontends] Loading specs: ${JSON.stringify(fns)}`);
-          } catch {
-          }
-        }
-        await frontendsHost.load(configWithTagFilter.frontends);
-        let owner;
-        let name;
-        let prNum;
-        let headSha;
-        try {
-          const anyInfo = prInfo;
-          owner = anyInfo?.eventContext?.repository?.owner?.login || process.env.GITHUB_REPOSITORY?.split("/")?.[0];
-          name = anyInfo?.eventContext?.repository?.name || process.env.GITHUB_REPOSITORY?.split("/")?.[1];
-          prNum = typeof anyInfo?.number === "number" ? anyInfo.number : void 0;
-          headSha = anyInfo?.eventContext?.pull_request?.head?.sha || process.env.GITHUB_SHA;
-        } catch {
-        }
-        const repoObj = owner && name ? { owner, name } : void 0;
-        const octokit = this.executionContext?.octokit;
-        if (!headSha && repoObj && prNum && octokit && typeof octokit.rest?.pulls?.get === "function") {
-          try {
-            const { data } = await octokit.rest.pulls.get({
-              owner: repoObj.owner,
-              repo: repoObj.name,
-              pull_number: prNum
-            });
-            headSha = data && data.head && data.head.sha || headSha;
-          } catch {
-          }
-        }
-        try {
-          const prev = this.getExecutionContext() || {};
-          this.setExecutionContext({ ...prev, eventBus: bus });
-          try {
-            context2.executionContext = this.getExecutionContext();
-          } catch {
-          }
-        } catch {
-        }
-        await frontendsHost.startAll(() => ({
-          eventBus: bus,
-          logger,
-          // Provide the active (possibly tag-filtered) config so frontends can read groups, etc.
-          config: configWithTagFilter,
-          run: {
-            runId: context2.sessionId,
-            repo: repoObj,
-            pr: prNum,
-            headSha,
-            event: context2.event || prInfo?.eventType,
-            actor: prInfo?.eventContext?.sender?.login || (typeof process.env.GITHUB_ACTOR === "string" ? process.env.GITHUB_ACTOR : void 0)
-          },
-          octokit,
-          webhookContext: this.executionContext?.webhookContext,
-          // Surface any injected test doubles for Slack as well
-          slack: this.executionContext?.slack || this.executionContext?.slackClient
-        }));
-        try {
-          bus.on("HumanInputRequested", async (envelope) => {
-            try {
-              const ev = envelope && envelope.payload || envelope;
-              let channel = ev?.channel;
-              let threadTs = ev?.threadTs;
-              if (!channel || !threadTs) {
-                try {
-                  const anyCfg = configWithTagFilter || {};
-                  const slackCfg = anyCfg.slack || {};
-                  const endpoint = slackCfg.endpoint || "/bots/slack/support";
-                  const map = this.executionContext?.webhookContext?.webhookData;
-                  const payload = map?.get(endpoint);
-                  const e = payload?.event;
-                  const derivedTs = String(e?.thread_ts || e?.ts || e?.event_ts || "");
-                  const derivedCh = String(e?.channel || "");
-                  if (derivedCh && derivedTs) {
-                    channel = channel || derivedCh;
-                    threadTs = threadTs || derivedTs;
-                  }
-                } catch {
-                }
-              }
-              const checkId = String(ev?.checkId || "unknown");
-              const threadKey = ev?.threadKey || (channel && threadTs ? `${channel}:${threadTs}` : "session");
-              const baseDir = process.env.VISOR_SNAPSHOT_DIR || path21.resolve(process.cwd(), ".visor", "snapshots");
-              fs19.mkdirSync(baseDir, { recursive: true });
-              const filePath = path21.join(baseDir, `${threadKey}-${checkId}.json`);
-              await this.saveSnapshotToFile(filePath);
-              logger.info(`[Snapshot] Saved run snapshot: ${filePath}`);
-              try {
-                await bus.emit({
-                  type: "SnapshotSaved",
-                  checkId: ev?.checkId || "unknown",
-                  channel,
-                  threadTs,
-                  threadKey,
-                  filePath
-                });
-              } catch {
-              }
-            } catch (e) {
-              logger.warn(
-                `[Snapshot] Failed to save snapshot on HumanInputRequested: ${e instanceof Error ? e.message : String(e)}`
-              );
-            }
-          });
-        } catch {
-        }
-      } catch (err) {
-        logger.warn(
-          `[Frontends] Failed to initialize frontends: ${err instanceof Error ? err.message : String(err)}`
-        );
-      }
-    }
-    const runner = new StateMachineRunner(context2, this.debugServer);
-    this._lastRunner = runner;
-    try {
-      const result = await runner.run();
-      if (frontendsHost && typeof frontendsHost.stopAll === "function") {
-        try {
-          await frontendsHost.stopAll();
-        } catch {
-        }
-      }
-      if (debug) {
-        logger.info("[StateMachine] Execution complete");
-      }
-      try {
-        const { SessionRegistry: SessionRegistry2 } = await Promise.resolve().then(() => (init_session_registry(), session_registry_exports));
-        const sessionRegistry = SessionRegistry2.getInstance();
-        sessionRegistry.clearAllSessions();
-      } catch (error) {
-        logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
-      }
-      if (context2.workspace) {
-        try {
-          await context2.workspace.cleanup();
-        } catch (error) {
-          logger.debug(`[StateMachine] Failed to cleanup workspace: ${error}`);
-        }
-      }
-      return result;
-    } finally {
-      if (context2.sandboxManager) {
-        await context2.sandboxManager.stopAll().catch((err) => {
-          logger.warn(`Failed to stop sandboxes: ${err}`);
-        });
-        context2.sandboxManager = void 0;
-      }
-    }
-  }
-  /**
-   * Build the engine context for state machine execution
-   */
-  buildEngineContext(config, prInfo, debug, maxParallelism, failFast, requestedChecks) {
-    const { buildEngineContextForRun: buildEngineContextForRun2 } = (init_build_engine_context(), __toCommonJS(build_engine_context_exports));
-    return buildEngineContextForRun2(
-      this.workingDirectory,
-      config,
-      prInfo,
-      debug,
-      maxParallelism,
-      failFast,
-      requestedChecks
-    );
-  }
-  /**
-   * Get output history snapshot for test framework compatibility
-   * Extracts output history from the journal
-   */
-  getOutputHistorySnapshot() {
-    const journal = this._lastContext?.journal;
-    if (!journal) {
-      logger.debug("[StateMachine][DEBUG] getOutputHistorySnapshot: No journal found");
-      return {};
-    }
-    const sessionId = this._lastContext?.sessionId;
-    if (!sessionId) {
-      logger.debug("[StateMachine][DEBUG] getOutputHistorySnapshot: No sessionId found");
-      return {};
-    }
-    const snapshot = journal.beginSnapshot();
-    const allEntries = journal.readVisible(sessionId, snapshot, void 0);
-    logger.debug(
-      `[StateMachine][DEBUG] getOutputHistorySnapshot: Found ${allEntries.length} journal entries`
-    );
-    const outputHistory = {};
-    for (const entry of allEntries) {
-      const checkId = entry.checkId;
-      if (!outputHistory[checkId]) {
-        outputHistory[checkId] = [];
-      }
-      try {
-        if (entry && typeof entry.result === "object" && entry.result.__skipped) {
-          continue;
-        }
-      } catch {
-      }
-      const payload = entry.result.output !== void 0 ? entry.result.output : entry.result;
-      try {
-        if (payload && typeof payload === "object" && payload.forEachItems && Array.isArray(payload.forEachItems)) {
-          continue;
-        }
-      } catch {
-      }
-      if (payload !== void 0) outputHistory[checkId].push(payload);
-    }
-    logger.debug(
-      `[StateMachine][DEBUG] getOutputHistorySnapshot result: ${JSON.stringify(Object.keys(outputHistory))}`
-    );
-    for (const [checkId, outputs] of Object.entries(outputHistory)) {
-      logger.debug(`[StateMachine][DEBUG]   ${checkId}: ${outputs.length} outputs`);
-    }
-    return outputHistory;
-  }
-  /**
-   * Save a JSON snapshot of the last run's state and journal to a file (experimental).
-   * Does not include secrets. Intended for debugging and future resume support.
-   */
-  async saveSnapshotToFile(filePath) {
-    const fs20 = await import("fs/promises");
-    const ctx = this._lastContext;
-    const runner = this._lastRunner;
-    if (!ctx || !runner) {
-      throw new Error("No prior execution context to snapshot");
-    }
-    const journal = ctx.journal;
-    const snapshotId = journal.beginSnapshot();
-    const entries = journal.readVisible(ctx.sessionId, snapshotId, void 0);
-    const state = runner.getState();
-    const serializableState = serializeRunState(state);
-    const payload = {
-      version: 1,
-      sessionId: ctx.sessionId,
-      event: ctx.event,
-      wave: state.wave,
-      state: serializableState,
-      journal: entries,
-      requestedChecks: ctx.requestedChecks || []
-    };
-    await fs20.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
-  }
-  /**
-   * Load a snapshot JSON from file and return it. Resume support can build on this.
-   */
-  async loadSnapshotFromFile(filePath) {
-    const fs20 = await import("fs/promises");
-    const raw = await fs20.readFile(filePath, "utf8");
-    return JSON.parse(raw);
-  }
-  /**
-   * Filter checks by tag filter
-   */
-  filterChecksByTags(checks, config, tagFilter) {
-    return checks.filter((checkName) => {
-      const checkConfig = config?.checks?.[checkName];
-      if (!checkConfig) {
-        return true;
-      }
-      const checkTags = checkConfig.tags || [];
-      if (!tagFilter || !tagFilter.include && !tagFilter.exclude) {
-        return checkTags.length === 0;
-      }
-      if (checkTags.length === 0) {
-        return true;
-      }
-      if (tagFilter.exclude && tagFilter.exclude.length > 0) {
-        const hasExcludedTag = tagFilter.exclude.some((tag) => checkTags.includes(tag));
-        if (hasExcludedTag) return false;
-      }
-      if (tagFilter.include && tagFilter.include.length > 0) {
-        const hasIncludedTag = tagFilter.include.some((tag) => checkTags.includes(tag));
-        if (!hasIncludedTag) return false;
-      }
-      return true;
-    });
-  }
-  /**
-   * Create an error result in AnalysisResult format
-   */
-  createErrorResult(repositoryInfo, errorMessage, startTime, timestamp, checksExecuted) {
-    const executionTime = Date.now() - startTime;
-    return {
-      repositoryInfo,
-      reviewSummary: {
-        issues: [
-          {
-            file: "system",
-            line: 0,
-            endLine: void 0,
-            ruleId: "system/error",
-            message: errorMessage,
-            severity: "error",
-            category: "logic",
-            suggestion: void 0,
-            replacement: void 0
-          }
-        ]
-      },
-      executionTime,
-      timestamp,
-      checksExecuted
-    };
-  }
-  /**
-   * Convert GroupedCheckResults to ReviewSummary
-   * Aggregates all check results into a single ReviewSummary
-   */
-  convertGroupedResultsToReviewSummary(groupedResults, statistics) {
-    const { convertToReviewSummary: convertToReviewSummary2 } = (init_summary(), __toCommonJS(summary_exports));
-    return convertToReviewSummary2(groupedResults, statistics);
-  }
-  /**
-   * Evaluate failure conditions for a check result
-   *
-   * This method provides backward compatibility with the legacy engine by
-   * delegating to the FailureConditionEvaluator.
-   *
-   * @param checkName - The name of the check being evaluated
-   * @param reviewSummary - The review summary containing check results
-   * @param config - The Visor configuration containing failure conditions
-   * @param previousOutputs - Optional previous check outputs for cross-check conditions
-   * @param authorAssociation - Optional GitHub author association for permission checks
-   * @returns Array of failure condition evaluation results
-   */
-  async evaluateFailureConditions(checkName, reviewSummary, config, previousOutputs, authorAssociation) {
-    const { FailureConditionEvaluator: FailureConditionEvaluator2 } = await Promise.resolve().then(() => (init_failure_condition_evaluator(), failure_condition_evaluator_exports));
-    const evaluator = new FailureConditionEvaluator2();
-    const { addEvent: addEvent3 } = await Promise.resolve().then(() => (init_trace_helpers(), trace_helpers_exports));
-    const { addFailIfTriggered: addFailIfTriggered2 } = await Promise.resolve().then(() => (init_metrics(), metrics_exports));
-    const checkConfig = config.checks?.[checkName];
-    if (!checkConfig) {
-      return [];
-    }
-    const rawSchema = checkConfig.schema || "code-review";
-    const checkSchema = typeof rawSchema === "string" ? rawSchema : "code-review";
-    const checkGroup = checkConfig.group || "default";
-    const results = [];
-    if (config.fail_if) {
-      const failed = await evaluator.evaluateSimpleCondition(
-        checkName,
-        checkSchema,
-        checkGroup,
-        reviewSummary,
-        config.fail_if,
-        previousOutputs || {}
-      );
-      try {
-        addEvent3("fail_if.evaluated", {
-          "visor.check.id": checkName,
-          scope: "global",
-          expression: String(config.fail_if),
-          result: failed ? "triggered" : "not_triggered"
-        });
-        if (failed) {
-          addEvent3("fail_if.triggered", {
-            "visor.check.id": checkName,
-            scope: "global",
-            expression: String(config.fail_if)
-          });
-          addFailIfTriggered2(checkName, "global");
-        }
-      } catch {
-      }
-      results.push({
-        conditionName: "global_fail_if",
-        failed,
-        expression: config.fail_if,
-        message: failed ? `Global failure condition met: ${config.fail_if}` : void 0,
-        severity: "error",
-        haltExecution: false
-      });
-    }
-    if (checkConfig.fail_if) {
-      const failed = await evaluator.evaluateSimpleCondition(
-        checkName,
-        checkSchema,
-        checkGroup,
-        reviewSummary,
-        checkConfig.fail_if,
-        previousOutputs || {}
-      );
-      try {
-        addEvent3("fail_if.evaluated", {
-          "visor.check.id": checkName,
-          scope: "check",
-          expression: String(checkConfig.fail_if),
-          result: failed ? "triggered" : "not_triggered"
-        });
-        if (failed) {
-          addEvent3("fail_if.triggered", {
-            "visor.check.id": checkName,
-            scope: "check",
-            expression: String(checkConfig.fail_if)
-          });
-          addFailIfTriggered2(checkName, "check");
-        }
-      } catch {
-      }
-      results.push({
-        conditionName: `${checkName}_fail_if`,
-        failed,
-        expression: checkConfig.fail_if,
-        message: failed ? `Check failure condition met: ${checkConfig.fail_if}` : void 0,
-        severity: "error",
-        haltExecution: false
-      });
-    }
-    const globalConditions = config.failure_conditions;
-    const checkConditions = checkConfig.failure_conditions;
-    if (globalConditions || checkConditions) {
-      const legacyResults = await evaluator.evaluateConditions(
-        checkName,
-        checkSchema,
-        checkGroup,
-        reviewSummary,
-        globalConditions,
-        checkConditions,
-        previousOutputs,
-        authorAssociation
-      );
-      results.push(...legacyResults);
-    }
-    return results;
-  }
-  /**
-   * Get repository status
-   * @returns Repository status information
-   */
-  async getRepositoryStatus() {
-    try {
-      const { GitRepositoryAnalyzer: GitRepositoryAnalyzer2 } = await Promise.resolve().then(() => (init_git_repository_analyzer(), git_repository_analyzer_exports));
-      const analyzer = new GitRepositoryAnalyzer2(this.workingDirectory);
-      const info = await analyzer.analyzeRepository();
-      return {
-        isGitRepository: info.isGitRepository,
-        branch: info.head,
-        // Use head as branch name
-        hasChanges: info.isGitRepository && (info.files?.length > 0 || false),
-        filesChanged: info.isGitRepository ? info.files?.length || 0 : 0
-      };
-    } catch {
-      return {
-        isGitRepository: false,
-        hasChanges: false
-      };
-    }
-  }
-  /**
-   * Check if current directory is a git repository
-   * @returns True if git repository, false otherwise
-   */
-  async isGitRepository() {
-    const status = await this.getRepositoryStatus();
-    return status.isGitRepository;
-  }
-  /**
-   * Get list of available check types
-   * @returns Array of check type names
-   */
-  static getAvailableCheckTypes() {
-    const { CheckProviderRegistry: CheckProviderRegistry2 } = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports));
-    const registry = CheckProviderRegistry2.getInstance();
-    return registry.getAvailableProviders();
-  }
-  /**
-   * Validate check types and return valid/invalid lists
-   * @param checks - Array of check type names to validate
-   * @returns Object with valid and invalid check types
-   */
-  static validateCheckTypes(checks) {
-    const availableTypes = _StateMachineExecutionEngine.getAvailableCheckTypes();
-    const valid = [];
-    const invalid = [];
-    for (const check of checks) {
-      if (availableTypes.includes(check)) {
-        valid.push(check);
-      } else {
-        invalid.push(check);
-      }
-    }
-    return { valid, invalid };
-  }
-  /**
-   * Format the status column for execution statistics
-   * Used by execution-statistics-formatting tests
-   */
-  formatStatusColumn(stats) {
-    if (stats.skipped) {
-      if (stats.skipReason === "if_condition") {
-        return "\u23ED if";
-      } else if (stats.skipReason === "fail_fast") {
-        return "\u23ED ff";
-      } else if (stats.skipReason === "dependency_failed") {
-        return "\u23ED dep";
-      }
-      return "\u23ED";
-    }
-    const totalRuns = stats.totalRuns;
-    const successfulRuns = stats.successfulRuns;
-    const failedRuns = stats.failedRuns;
-    if (failedRuns > 0 && successfulRuns > 0) {
-      return `\u2714/\u2716 ${successfulRuns}/${totalRuns}`;
-    } else if (failedRuns > 0) {
-      return totalRuns === 1 ? "\u2716" : `\u2716 \xD7${totalRuns}`;
-    } else {
-      return totalRuns === 1 ? "\u2714" : `\u2714 \xD7${totalRuns}`;
-    }
-  }
-  /**
-   * Format the details column for execution statistics
-   * Used by execution-statistics-formatting tests
-   */
-  formatDetailsColumn(stats) {
-    const parts = [];
-    if (stats.outputsProduced !== void 0 && stats.outputsProduced > 0) {
-      parts.push(`\u2192${stats.outputsProduced}`);
-    }
-    if (stats.issuesBySeverity.critical > 0) {
-      parts.push(`${stats.issuesBySeverity.critical}\u{1F534}`);
-    }
-    if (stats.issuesBySeverity.error > 0 && stats.issuesBySeverity.critical === 0) {
-      parts.push(`${stats.issuesBySeverity.error}\u274C`);
-    }
-    if (stats.issuesBySeverity.warning > 0) {
-      parts.push(`${stats.issuesBySeverity.warning}\u26A0\uFE0F`);
-    }
-    if (stats.issuesBySeverity.info > 0 && stats.issuesBySeverity.critical === 0 && stats.issuesBySeverity.error === 0 && stats.issuesBySeverity.warning === 0) {
-      parts.push(`${stats.issuesBySeverity.info}\u{1F4A1}`);
-    }
-    if (stats.errorMessage) {
-      parts.push(this.truncate(stats.errorMessage, 40));
-    }
-    if (stats.skipCondition) {
-      parts.push(this.truncate(stats.skipCondition, 40));
-    }
-    return parts.join(" ");
-  }
-  /**
-   * Truncate a string to a maximum length
-   * Used by formatDetailsColumn
-   */
-  truncate(str, maxLength) {
-    if (str.length <= maxLength) {
-      return str;
-    }
-    return str.substring(0, maxLength - 3) + "...";
-  }
-};
 function serializeRunState(state) {
   return {
     ...state,
@@ -49680,8 +50363,803 @@ function serializeRunState(state) {
     ])
   };
 }
+var path22, fs20, StateMachineExecutionEngine;
+var init_state_machine_execution_engine = __esm({
+  "src/state-machine-execution-engine.ts"() {
+    "use strict";
+    init_runner();
+    init_logger();
+    init_sandbox_manager();
+    path22 = __toESM(require("path"));
+    fs20 = __toESM(require("fs"));
+    StateMachineExecutionEngine = class _StateMachineExecutionEngine {
+      workingDirectory;
+      executionContext;
+      debugServer;
+      _lastContext;
+      _lastRunner;
+      constructor(workingDirectory, octokit, debugServer) {
+        this.workingDirectory = workingDirectory || process.cwd();
+        this.debugServer = debugServer;
+      }
+      /**
+       * Execute checks using the state machine engine
+       *
+       * Converts CheckExecutionOptions -> executeGroupedChecks() -> AnalysisResult
+       */
+      async executeChecks(options) {
+        const startTime = Date.now();
+        const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+        try {
+          if (options.config?.memory) {
+            const { MemoryStore: MemoryStore2 } = await Promise.resolve().then(() => (init_memory_store(), memory_store_exports));
+            const memoryStore = MemoryStore2.getInstance(options.config.memory);
+            await memoryStore.initialize();
+            logger.debug("Memory store initialized");
+          }
+          const { GitRepositoryAnalyzer: GitRepositoryAnalyzer2 } = await Promise.resolve().then(() => (init_git_repository_analyzer(), git_repository_analyzer_exports));
+          const gitAnalyzer = new GitRepositoryAnalyzer2(options.workingDirectory);
+          logger.info("Analyzing local git repository...");
+          const repositoryInfo = await gitAnalyzer.analyzeRepository();
+          if (!repositoryInfo.isGitRepository) {
+            return this.createErrorResult(
+              repositoryInfo,
+              "Not a git repository or no changes found",
+              startTime,
+              timestamp,
+              options.checks
+            );
+          }
+          const prInfo = gitAnalyzer.toPRInfo(repositoryInfo);
+          try {
+            const evt = options.webhookContext?.eventType;
+            if (evt) prInfo.eventType = evt;
+          } catch {
+          }
+          const filteredChecks = this.filterChecksByTags(
+            options.checks,
+            options.config,
+            options.tagFilter || options.config?.tag_filter
+          );
+          if (filteredChecks.length === 0) {
+            logger.warn("No checks match the tag filter criteria");
+            return this.createErrorResult(
+              repositoryInfo,
+              "No checks match the tag filter criteria",
+              startTime,
+              timestamp,
+              options.checks
+            );
+          }
+          try {
+            const map = options?.webhookContext?.webhookData;
+            if (map) {
+              const { CheckProviderRegistry: CheckProviderRegistry2 } = await Promise.resolve().then(() => (init_check_provider_registry(), check_provider_registry_exports));
+              const reg = CheckProviderRegistry2.getInstance();
+              const p = reg.getProvider("http_input");
+              if (p && typeof p.setWebhookContext === "function") p.setWebhookContext(map);
+              const prev = this.executionContext || {};
+              this.setExecutionContext({ ...prev, webhookContext: { webhookData: map } });
+            }
+          } catch {
+          }
+          logger.info(`Executing checks: ${filteredChecks.join(", ")}`);
+          const executionResult = await this.executeGroupedChecks(
+            prInfo,
+            filteredChecks,
+            options.timeout,
+            options.config,
+            options.outputFormat,
+            options.debug,
+            options.maxParallelism,
+            options.failFast,
+            options.tagFilter
+          );
+          const executionTime = Date.now() - startTime;
+          const reviewSummary = this.convertGroupedResultsToReviewSummary(
+            executionResult.results,
+            executionResult.statistics
+          );
+          let debugInfo;
+          if (options.debug && reviewSummary.debug) {
+            debugInfo = {
+              provider: reviewSummary.debug.provider,
+              model: reviewSummary.debug.model,
+              processingTime: reviewSummary.debug.processingTime,
+              parallelExecution: options.checks.length > 1,
+              checksExecuted: options.checks,
+              totalApiCalls: reviewSummary.debug.totalApiCalls || options.checks.length,
+              apiCallDetails: reviewSummary.debug.apiCallDetails
+            };
+          }
+          try {
+            const histSnap = this.getOutputHistorySnapshot();
+            reviewSummary.history = histSnap;
+          } catch {
+          }
+          return {
+            repositoryInfo,
+            reviewSummary,
+            executionTime,
+            timestamp,
+            checksExecuted: filteredChecks,
+            executionStatistics: executionResult.statistics,
+            debug: debugInfo
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Unknown error occurred";
+          logger.error("Error executing checks: " + message);
+          const strictEnv = process.env.VISOR_STRICT_ERRORS === "true";
+          if (strictEnv) {
+            throw error;
+          }
+          const fallbackRepositoryInfo = {
+            title: "Error during analysis",
+            body: `Error: ${message || "Unknown error"}`,
+            author: "system",
+            base: "main",
+            head: "HEAD",
+            files: [],
+            totalAdditions: 0,
+            totalDeletions: 0,
+            isGitRepository: false,
+            workingDirectory: options.workingDirectory || process.cwd()
+          };
+          return this.createErrorResult(
+            fallbackRepositoryInfo,
+            message || "Unknown error occurred",
+            startTime,
+            timestamp,
+            options.checks
+          );
+        }
+      }
+      /**
+       * Get execution context (used by state machine to propagate hooks)
+       */
+      getExecutionContext() {
+        return this.executionContext;
+      }
+      /**
+       * Set execution context for external callers
+       */
+      setExecutionContext(context2) {
+        this.executionContext = context2;
+      }
+      /**
+       * Reset per-run state (no-op for state machine engine)
+       *
+       * The state machine engine is stateless per-run by design.
+       * Each execution creates a fresh journal and context.
+       * This method exists only for backward compatibility with test framework.
+       *
+       * @deprecated This is a no-op. State machine engine doesn't maintain per-run state.
+       */
+      resetPerRunState() {
+      }
+      /**
+       * Execute grouped checks using the state machine engine
+       *
+       * M4: Production-ready with full telemetry and debug server support
+       */
+      async executeGroupedChecks(prInfo, checks, timeout, config, outputFormat, debug, maxParallelism, failFast, tagFilter, _pauseGate) {
+        if (debug) {
+          logger.info("[StateMachine] Using state machine engine");
+        }
+        if (!config) {
+          const { ConfigManager: ConfigManager2 } = await Promise.resolve().then(() => (init_config(), config_exports));
+          const configManager = new ConfigManager2();
+          config = await configManager.getDefaultConfig();
+          logger.debug("[StateMachine] Using default configuration (no config provided)");
+        }
+        const configWithTagFilter = tagFilter ? {
+          ...config,
+          tag_filter: tagFilter
+        } : config;
+        const context2 = this.buildEngineContext(
+          configWithTagFilter,
+          prInfo,
+          debug,
+          maxParallelism,
+          failFast,
+          checks
+          // Pass the explicit checks list
+        );
+        if (configWithTagFilter.sandboxes && Object.keys(configWithTagFilter.sandboxes).length > 0) {
+          try {
+            const { execSync } = require("child_process");
+            const gitBranch = execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf8" }).trim();
+            context2.sandboxManager = new SandboxManager(
+              configWithTagFilter.sandboxes,
+              this.workingDirectory,
+              gitBranch
+            );
+          } catch {
+            context2.sandboxManager = new SandboxManager(
+              configWithTagFilter.sandboxes,
+              this.workingDirectory,
+              "unknown"
+            );
+          }
+        }
+        const { initializeWorkspace: initializeWorkspace2 } = (init_build_engine_context(), __toCommonJS(build_engine_context_exports));
+        await initializeWorkspace2(context2);
+        context2.executionContext = this.getExecutionContext();
+        this._lastContext = context2;
+        let frontendsHost;
+        if (Array.isArray(configWithTagFilter.frontends) && configWithTagFilter.frontends.length > 0) {
+          try {
+            const { EventBus: EventBus2 } = await Promise.resolve().then(() => (init_event_bus(), event_bus_exports));
+            const { FrontendsHost: FrontendsHost2 } = await Promise.resolve().then(() => (init_host(), host_exports));
+            const bus = new EventBus2();
+            context2.eventBus = bus;
+            frontendsHost = new FrontendsHost2(bus, logger);
+            if (process.env.VISOR_DEBUG === "true") {
+              try {
+                const fns = (configWithTagFilter.frontends || []).map((f) => ({
+                  name: f?.name,
+                  hasConfig: !!f?.config,
+                  cfg: f?.config || void 0
+                }));
+                logger.info(`[Frontends] Loading specs: ${JSON.stringify(fns)}`);
+              } catch {
+              }
+            }
+            await frontendsHost.load(configWithTagFilter.frontends);
+            let owner;
+            let name;
+            let prNum;
+            let headSha;
+            try {
+              const anyInfo = prInfo;
+              owner = anyInfo?.eventContext?.repository?.owner?.login || process.env.GITHUB_REPOSITORY?.split("/")?.[0];
+              name = anyInfo?.eventContext?.repository?.name || process.env.GITHUB_REPOSITORY?.split("/")?.[1];
+              prNum = typeof anyInfo?.number === "number" ? anyInfo.number : void 0;
+              headSha = anyInfo?.eventContext?.pull_request?.head?.sha || process.env.GITHUB_SHA;
+            } catch {
+            }
+            const repoObj = owner && name ? { owner, name } : void 0;
+            const octokit = this.executionContext?.octokit;
+            if (!headSha && repoObj && prNum && octokit && typeof octokit.rest?.pulls?.get === "function") {
+              try {
+                const { data } = await octokit.rest.pulls.get({
+                  owner: repoObj.owner,
+                  repo: repoObj.name,
+                  pull_number: prNum
+                });
+                headSha = data && data.head && data.head.sha || headSha;
+              } catch {
+              }
+            }
+            try {
+              const prev = this.getExecutionContext() || {};
+              this.setExecutionContext({ ...prev, eventBus: bus });
+              try {
+                context2.executionContext = this.getExecutionContext();
+              } catch {
+              }
+            } catch {
+            }
+            await frontendsHost.startAll(() => ({
+              eventBus: bus,
+              logger,
+              // Provide the active (possibly tag-filtered) config so frontends can read groups, etc.
+              config: configWithTagFilter,
+              run: {
+                runId: context2.sessionId,
+                repo: repoObj,
+                pr: prNum,
+                headSha,
+                event: context2.event || prInfo?.eventType,
+                actor: prInfo?.eventContext?.sender?.login || (typeof process.env.GITHUB_ACTOR === "string" ? process.env.GITHUB_ACTOR : void 0)
+              },
+              octokit,
+              webhookContext: this.executionContext?.webhookContext,
+              // Surface any injected test doubles for Slack as well
+              slack: this.executionContext?.slack || this.executionContext?.slackClient
+            }));
+            try {
+              bus.on("HumanInputRequested", async (envelope) => {
+                try {
+                  const ev = envelope && envelope.payload || envelope;
+                  let channel = ev?.channel;
+                  let threadTs = ev?.threadTs;
+                  if (!channel || !threadTs) {
+                    try {
+                      const anyCfg = configWithTagFilter || {};
+                      const slackCfg = anyCfg.slack || {};
+                      const endpoint = slackCfg.endpoint || "/bots/slack/support";
+                      const map = this.executionContext?.webhookContext?.webhookData;
+                      const payload = map?.get(endpoint);
+                      const e = payload?.event;
+                      const derivedTs = String(e?.thread_ts || e?.ts || e?.event_ts || "");
+                      const derivedCh = String(e?.channel || "");
+                      if (derivedCh && derivedTs) {
+                        channel = channel || derivedCh;
+                        threadTs = threadTs || derivedTs;
+                      }
+                    } catch {
+                    }
+                  }
+                  const checkId = String(ev?.checkId || "unknown");
+                  const threadKey = ev?.threadKey || (channel && threadTs ? `${channel}:${threadTs}` : "session");
+                  const baseDir = process.env.VISOR_SNAPSHOT_DIR || path22.resolve(process.cwd(), ".visor", "snapshots");
+                  fs20.mkdirSync(baseDir, { recursive: true });
+                  const filePath = path22.join(baseDir, `${threadKey}-${checkId}.json`);
+                  await this.saveSnapshotToFile(filePath);
+                  logger.info(`[Snapshot] Saved run snapshot: ${filePath}`);
+                  try {
+                    await bus.emit({
+                      type: "SnapshotSaved",
+                      checkId: ev?.checkId || "unknown",
+                      channel,
+                      threadTs,
+                      threadKey,
+                      filePath
+                    });
+                  } catch {
+                  }
+                } catch (e) {
+                  logger.warn(
+                    `[Snapshot] Failed to save snapshot on HumanInputRequested: ${e instanceof Error ? e.message : String(e)}`
+                  );
+                }
+              });
+            } catch {
+            }
+          } catch (err) {
+            logger.warn(
+              `[Frontends] Failed to initialize frontends: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        }
+        const runner = new StateMachineRunner(context2, this.debugServer);
+        this._lastRunner = runner;
+        try {
+          const result = await runner.run();
+          if (frontendsHost && typeof frontendsHost.stopAll === "function") {
+            try {
+              await frontendsHost.stopAll();
+            } catch {
+            }
+          }
+          if (debug) {
+            logger.info("[StateMachine] Execution complete");
+          }
+          try {
+            const { SessionRegistry: SessionRegistry2 } = await Promise.resolve().then(() => (init_session_registry(), session_registry_exports));
+            const sessionRegistry = SessionRegistry2.getInstance();
+            sessionRegistry.clearAllSessions();
+          } catch (error) {
+            logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
+          }
+          if (context2.workspace) {
+            try {
+              await context2.workspace.cleanup();
+            } catch (error) {
+              logger.debug(`[StateMachine] Failed to cleanup workspace: ${error}`);
+            }
+          }
+          return result;
+        } finally {
+          if (context2.sandboxManager) {
+            await context2.sandboxManager.stopAll().catch((err) => {
+              logger.warn(`Failed to stop sandboxes: ${err}`);
+            });
+            context2.sandboxManager = void 0;
+          }
+        }
+      }
+      /**
+       * Build the engine context for state machine execution
+       */
+      buildEngineContext(config, prInfo, debug, maxParallelism, failFast, requestedChecks) {
+        const { buildEngineContextForRun: buildEngineContextForRun2 } = (init_build_engine_context(), __toCommonJS(build_engine_context_exports));
+        return buildEngineContextForRun2(
+          this.workingDirectory,
+          config,
+          prInfo,
+          debug,
+          maxParallelism,
+          failFast,
+          requestedChecks
+        );
+      }
+      /**
+       * Get output history snapshot for test framework compatibility
+       * Extracts output history from the journal
+       */
+      getOutputHistorySnapshot() {
+        const journal = this._lastContext?.journal;
+        if (!journal) {
+          logger.debug("[StateMachine][DEBUG] getOutputHistorySnapshot: No journal found");
+          return {};
+        }
+        const sessionId = this._lastContext?.sessionId;
+        if (!sessionId) {
+          logger.debug("[StateMachine][DEBUG] getOutputHistorySnapshot: No sessionId found");
+          return {};
+        }
+        const snapshot = journal.beginSnapshot();
+        const allEntries = journal.readVisible(sessionId, snapshot, void 0);
+        logger.debug(
+          `[StateMachine][DEBUG] getOutputHistorySnapshot: Found ${allEntries.length} journal entries`
+        );
+        const outputHistory = {};
+        for (const entry of allEntries) {
+          const checkId = entry.checkId;
+          if (!outputHistory[checkId]) {
+            outputHistory[checkId] = [];
+          }
+          try {
+            if (entry && typeof entry.result === "object" && entry.result.__skipped) {
+              continue;
+            }
+          } catch {
+          }
+          const payload = entry.result.output !== void 0 ? entry.result.output : entry.result;
+          try {
+            if (payload && typeof payload === "object" && payload.forEachItems && Array.isArray(payload.forEachItems)) {
+              continue;
+            }
+          } catch {
+          }
+          if (payload !== void 0) outputHistory[checkId].push(payload);
+        }
+        logger.debug(
+          `[StateMachine][DEBUG] getOutputHistorySnapshot result: ${JSON.stringify(Object.keys(outputHistory))}`
+        );
+        for (const [checkId, outputs] of Object.entries(outputHistory)) {
+          logger.debug(`[StateMachine][DEBUG]   ${checkId}: ${outputs.length} outputs`);
+        }
+        return outputHistory;
+      }
+      /**
+       * Save a JSON snapshot of the last run's state and journal to a file (experimental).
+       * Does not include secrets. Intended for debugging and future resume support.
+       */
+      async saveSnapshotToFile(filePath) {
+        const fs21 = await import("fs/promises");
+        const ctx = this._lastContext;
+        const runner = this._lastRunner;
+        if (!ctx || !runner) {
+          throw new Error("No prior execution context to snapshot");
+        }
+        const journal = ctx.journal;
+        const snapshotId = journal.beginSnapshot();
+        const entries = journal.readVisible(ctx.sessionId, snapshotId, void 0);
+        const state = runner.getState();
+        const serializableState = serializeRunState(state);
+        const payload = {
+          version: 1,
+          sessionId: ctx.sessionId,
+          event: ctx.event,
+          wave: state.wave,
+          state: serializableState,
+          journal: entries,
+          requestedChecks: ctx.requestedChecks || []
+        };
+        await fs21.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+      }
+      /**
+       * Load a snapshot JSON from file and return it. Resume support can build on this.
+       */
+      async loadSnapshotFromFile(filePath) {
+        const fs21 = await import("fs/promises");
+        const raw = await fs21.readFile(filePath, "utf8");
+        return JSON.parse(raw);
+      }
+      /**
+       * Filter checks by tag filter
+       */
+      filterChecksByTags(checks, config, tagFilter) {
+        return checks.filter((checkName) => {
+          const checkConfig = config?.checks?.[checkName];
+          if (!checkConfig) {
+            return true;
+          }
+          const checkTags = checkConfig.tags || [];
+          if (!tagFilter || !tagFilter.include && !tagFilter.exclude) {
+            return checkTags.length === 0;
+          }
+          if (checkTags.length === 0) {
+            return true;
+          }
+          if (tagFilter.exclude && tagFilter.exclude.length > 0) {
+            const hasExcludedTag = tagFilter.exclude.some((tag) => checkTags.includes(tag));
+            if (hasExcludedTag) return false;
+          }
+          if (tagFilter.include && tagFilter.include.length > 0) {
+            const hasIncludedTag = tagFilter.include.some((tag) => checkTags.includes(tag));
+            if (!hasIncludedTag) return false;
+          }
+          return true;
+        });
+      }
+      /**
+       * Create an error result in AnalysisResult format
+       */
+      createErrorResult(repositoryInfo, errorMessage, startTime, timestamp, checksExecuted) {
+        const executionTime = Date.now() - startTime;
+        return {
+          repositoryInfo,
+          reviewSummary: {
+            issues: [
+              {
+                file: "system",
+                line: 0,
+                endLine: void 0,
+                ruleId: "system/error",
+                message: errorMessage,
+                severity: "error",
+                category: "logic",
+                suggestion: void 0,
+                replacement: void 0
+              }
+            ]
+          },
+          executionTime,
+          timestamp,
+          checksExecuted
+        };
+      }
+      /**
+       * Convert GroupedCheckResults to ReviewSummary
+       * Aggregates all check results into a single ReviewSummary
+       */
+      convertGroupedResultsToReviewSummary(groupedResults, statistics) {
+        const { convertToReviewSummary: convertToReviewSummary2 } = (init_summary(), __toCommonJS(summary_exports));
+        return convertToReviewSummary2(groupedResults, statistics);
+      }
+      /**
+       * Evaluate failure conditions for a check result
+       *
+       * This method provides backward compatibility with the legacy engine by
+       * delegating to the FailureConditionEvaluator.
+       *
+       * @param checkName - The name of the check being evaluated
+       * @param reviewSummary - The review summary containing check results
+       * @param config - The Visor configuration containing failure conditions
+       * @param previousOutputs - Optional previous check outputs for cross-check conditions
+       * @param authorAssociation - Optional GitHub author association for permission checks
+       * @returns Array of failure condition evaluation results
+       */
+      async evaluateFailureConditions(checkName, reviewSummary, config, previousOutputs, authorAssociation) {
+        const { FailureConditionEvaluator: FailureConditionEvaluator2 } = await Promise.resolve().then(() => (init_failure_condition_evaluator(), failure_condition_evaluator_exports));
+        const evaluator = new FailureConditionEvaluator2();
+        const { addEvent: addEvent3 } = await Promise.resolve().then(() => (init_trace_helpers(), trace_helpers_exports));
+        const { addFailIfTriggered: addFailIfTriggered2 } = await Promise.resolve().then(() => (init_metrics(), metrics_exports));
+        const checkConfig = config.checks?.[checkName];
+        if (!checkConfig) {
+          return [];
+        }
+        const rawSchema = checkConfig.schema || "code-review";
+        const checkSchema = typeof rawSchema === "string" ? rawSchema : "code-review";
+        const checkGroup = checkConfig.group || "default";
+        const results = [];
+        if (config.fail_if) {
+          const failed = await evaluator.evaluateSimpleCondition(
+            checkName,
+            checkSchema,
+            checkGroup,
+            reviewSummary,
+            config.fail_if,
+            previousOutputs || {}
+          );
+          try {
+            addEvent3("fail_if.evaluated", {
+              "visor.check.id": checkName,
+              scope: "global",
+              expression: String(config.fail_if),
+              result: failed ? "triggered" : "not_triggered"
+            });
+            if (failed) {
+              addEvent3("fail_if.triggered", {
+                "visor.check.id": checkName,
+                scope: "global",
+                expression: String(config.fail_if)
+              });
+              addFailIfTriggered2(checkName, "global");
+            }
+          } catch {
+          }
+          results.push({
+            conditionName: "global_fail_if",
+            failed,
+            expression: config.fail_if,
+            message: failed ? `Global failure condition met: ${config.fail_if}` : void 0,
+            severity: "error",
+            haltExecution: false
+          });
+        }
+        if (checkConfig.fail_if) {
+          const failed = await evaluator.evaluateSimpleCondition(
+            checkName,
+            checkSchema,
+            checkGroup,
+            reviewSummary,
+            checkConfig.fail_if,
+            previousOutputs || {}
+          );
+          try {
+            addEvent3("fail_if.evaluated", {
+              "visor.check.id": checkName,
+              scope: "check",
+              expression: String(checkConfig.fail_if),
+              result: failed ? "triggered" : "not_triggered"
+            });
+            if (failed) {
+              addEvent3("fail_if.triggered", {
+                "visor.check.id": checkName,
+                scope: "check",
+                expression: String(checkConfig.fail_if)
+              });
+              addFailIfTriggered2(checkName, "check");
+            }
+          } catch {
+          }
+          results.push({
+            conditionName: `${checkName}_fail_if`,
+            failed,
+            expression: checkConfig.fail_if,
+            message: failed ? `Check failure condition met: ${checkConfig.fail_if}` : void 0,
+            severity: "error",
+            haltExecution: false
+          });
+        }
+        const globalConditions = config.failure_conditions;
+        const checkConditions = checkConfig.failure_conditions;
+        if (globalConditions || checkConditions) {
+          const legacyResults = await evaluator.evaluateConditions(
+            checkName,
+            checkSchema,
+            checkGroup,
+            reviewSummary,
+            globalConditions,
+            checkConditions,
+            previousOutputs,
+            authorAssociation
+          );
+          results.push(...legacyResults);
+        }
+        return results;
+      }
+      /**
+       * Get repository status
+       * @returns Repository status information
+       */
+      async getRepositoryStatus() {
+        try {
+          const { GitRepositoryAnalyzer: GitRepositoryAnalyzer2 } = await Promise.resolve().then(() => (init_git_repository_analyzer(), git_repository_analyzer_exports));
+          const analyzer = new GitRepositoryAnalyzer2(this.workingDirectory);
+          const info = await analyzer.analyzeRepository();
+          return {
+            isGitRepository: info.isGitRepository,
+            branch: info.head,
+            // Use head as branch name
+            hasChanges: info.isGitRepository && (info.files?.length > 0 || false),
+            filesChanged: info.isGitRepository ? info.files?.length || 0 : 0
+          };
+        } catch {
+          return {
+            isGitRepository: false,
+            hasChanges: false
+          };
+        }
+      }
+      /**
+       * Check if current directory is a git repository
+       * @returns True if git repository, false otherwise
+       */
+      async isGitRepository() {
+        const status = await this.getRepositoryStatus();
+        return status.isGitRepository;
+      }
+      /**
+       * Get list of available check types
+       * @returns Array of check type names
+       */
+      static getAvailableCheckTypes() {
+        const { CheckProviderRegistry: CheckProviderRegistry2 } = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports));
+        const registry = CheckProviderRegistry2.getInstance();
+        return registry.getAvailableProviders();
+      }
+      /**
+       * Validate check types and return valid/invalid lists
+       * @param checks - Array of check type names to validate
+       * @returns Object with valid and invalid check types
+       */
+      static validateCheckTypes(checks) {
+        const availableTypes = _StateMachineExecutionEngine.getAvailableCheckTypes();
+        const valid = [];
+        const invalid = [];
+        for (const check of checks) {
+          if (availableTypes.includes(check)) {
+            valid.push(check);
+          } else {
+            invalid.push(check);
+          }
+        }
+        return { valid, invalid };
+      }
+      /**
+       * Format the status column for execution statistics
+       * Used by execution-statistics-formatting tests
+       */
+      formatStatusColumn(stats) {
+        if (stats.skipped) {
+          if (stats.skipReason === "if_condition") {
+            return "\u23ED if";
+          } else if (stats.skipReason === "fail_fast") {
+            return "\u23ED ff";
+          } else if (stats.skipReason === "dependency_failed") {
+            return "\u23ED dep";
+          }
+          return "\u23ED";
+        }
+        const totalRuns = stats.totalRuns;
+        const successfulRuns = stats.successfulRuns;
+        const failedRuns = stats.failedRuns;
+        if (failedRuns > 0 && successfulRuns > 0) {
+          return `\u2714/\u2716 ${successfulRuns}/${totalRuns}`;
+        } else if (failedRuns > 0) {
+          return totalRuns === 1 ? "\u2716" : `\u2716 \xD7${totalRuns}`;
+        } else {
+          return totalRuns === 1 ? "\u2714" : `\u2714 \xD7${totalRuns}`;
+        }
+      }
+      /**
+       * Format the details column for execution statistics
+       * Used by execution-statistics-formatting tests
+       */
+      formatDetailsColumn(stats) {
+        const parts = [];
+        if (stats.outputsProduced !== void 0 && stats.outputsProduced > 0) {
+          parts.push(`\u2192${stats.outputsProduced}`);
+        }
+        if (stats.issuesBySeverity.critical > 0) {
+          parts.push(`${stats.issuesBySeverity.critical}\u{1F534}`);
+        }
+        if (stats.issuesBySeverity.error > 0 && stats.issuesBySeverity.critical === 0) {
+          parts.push(`${stats.issuesBySeverity.error}\u274C`);
+        }
+        if (stats.issuesBySeverity.warning > 0) {
+          parts.push(`${stats.issuesBySeverity.warning}\u26A0\uFE0F`);
+        }
+        if (stats.issuesBySeverity.info > 0 && stats.issuesBySeverity.critical === 0 && stats.issuesBySeverity.error === 0 && stats.issuesBySeverity.warning === 0) {
+          parts.push(`${stats.issuesBySeverity.info}\u{1F4A1}`);
+        }
+        if (stats.errorMessage) {
+          parts.push(this.truncate(stats.errorMessage, 40));
+        }
+        if (stats.skipCondition) {
+          parts.push(this.truncate(stats.skipCondition, 40));
+        }
+        return parts.join(" ");
+      }
+      /**
+       * Truncate a string to a maximum length
+       * Used by formatDetailsColumn
+       */
+      truncate(str, maxLength) {
+        if (str.length <= maxLength) {
+          return str;
+        }
+        return str.substring(0, maxLength - 3) + "...";
+      }
+    };
+  }
+});
 
 // src/sdk.ts
+var sdk_exports = {};
+__export(sdk_exports, {
+  loadConfig: () => loadConfig,
+  resolveChecks: () => resolveChecks,
+  runChecks: () => runChecks
+});
+module.exports = __toCommonJS(sdk_exports);
+init_state_machine_execution_engine();
 init_config();
 async function loadConfig(configOrPath, options) {
   const cm = new ConfigManager();

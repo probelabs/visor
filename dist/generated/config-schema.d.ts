@@ -150,6 +150,10 @@ export declare const configSchema: {
                     readonly $ref: "#/definitions/SlackConfig";
                     readonly description: "Slack configuration";
                 };
+                readonly scheduler: {
+                    readonly $ref: "#/definitions/SchedulerConfig";
+                    readonly description: "Scheduler configuration for scheduled workflow execution";
+                };
             };
             readonly required: readonly ["version"];
             readonly patternProperties: {
@@ -698,7 +702,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -714,7 +718,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -1350,7 +1354,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1365,13 +1369,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798>': {
+        readonly 'Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };
@@ -2002,6 +2006,177 @@ export declare const configSchema: {
                 };
             };
             readonly additionalProperties: false;
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly SchedulerConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly enabled: {
+                    readonly type: "boolean";
+                    readonly description: "Enable/disable the scheduler (default: true)";
+                };
+                readonly storage: {
+                    readonly type: "object";
+                    readonly properties: {
+                        readonly path: {
+                            readonly type: "string";
+                            readonly description: "Path to schedules JSON file (default: .visor/schedules.json)";
+                        };
+                    };
+                    readonly additionalProperties: false;
+                    readonly description: "Storage configuration";
+                    readonly patternProperties: {
+                        readonly '^x-': {};
+                    };
+                };
+                readonly limits: {
+                    readonly $ref: "#/definitions/SchedulerLimitsConfig";
+                    readonly description: "Limits for dynamic schedules";
+                };
+                readonly default_timezone: {
+                    readonly type: "string";
+                    readonly description: "Default timezone (IANA format, e.g., \"America/New_York\")";
+                };
+                readonly check_interval_ms: {
+                    readonly type: "number";
+                    readonly description: "Check interval in milliseconds (default: 60000)";
+                };
+                readonly permissions: {
+                    readonly $ref: "#/definitions/SchedulerPermissionsConfig";
+                    readonly description: "Permissions for dynamic schedule creation (via AI tool)";
+                };
+                readonly cron: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2CStaticCronJob%3E";
+                    readonly description: "Static cron jobs defined in configuration (always executed)";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Scheduler configuration for workflow scheduling";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly SchedulerLimitsConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly max_per_user: {
+                    readonly type: "number";
+                    readonly description: "Maximum schedules per user (default: 25)";
+                };
+                readonly max_recurring_per_user: {
+                    readonly type: "number";
+                    readonly description: "Maximum recurring schedules per user (default: 10)";
+                };
+                readonly max_global: {
+                    readonly type: "number";
+                    readonly description: "Maximum total schedules (default: 1000)";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Scheduler limits configuration";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly SchedulerPermissionsConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly allow_personal: {
+                    readonly type: "boolean";
+                    readonly description: "Allow personal schedules (via DM or CLI)";
+                };
+                readonly allow_channel: {
+                    readonly type: "boolean";
+                    readonly description: "Allow channel schedules (in Slack channels)";
+                };
+                readonly allow_dm: {
+                    readonly type: "boolean";
+                    readonly description: "Allow DM schedules (to specific users)";
+                };
+                readonly allowed_workflows: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "List of allowed workflow patterns (glob-style, e.g., \"report-*\")";
+                };
+                readonly denied_workflows: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "List of denied workflow patterns";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Scheduler permissions for dynamic schedule creation";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly 'Record<string,StaticCronJob>': {
+            readonly type: "object";
+            readonly additionalProperties: {
+                readonly $ref: "#/definitions/StaticCronJob";
+            };
+        };
+        readonly StaticCronJob: {
+            readonly type: "object";
+            readonly properties: {
+                readonly schedule: {
+                    readonly type: "string";
+                    readonly description: "Cron expression (e.g., \"0 9 * * 1\" for every Monday at 9am)";
+                };
+                readonly workflow: {
+                    readonly type: "string";
+                    readonly description: "Workflow/check ID to run";
+                };
+                readonly inputs: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    readonly description: "Optional workflow inputs";
+                };
+                readonly output: {
+                    readonly type: "object";
+                    readonly properties: {
+                        readonly type: {
+                            readonly type: "string";
+                            readonly enum: readonly ["slack", "github", "webhook", "none"];
+                            readonly description: "Output type: slack, github, webhook, or none";
+                        };
+                        readonly target: {
+                            readonly type: "string";
+                            readonly description: "Target (channel name, repo, URL)";
+                        };
+                        readonly thread_id: {
+                            readonly type: "string";
+                            readonly description: "Thread ID for threaded outputs";
+                        };
+                    };
+                    readonly required: readonly ["type"];
+                    readonly additionalProperties: false;
+                    readonly description: "Output destination configuration";
+                    readonly patternProperties: {
+                        readonly '^x-': {};
+                    };
+                };
+                readonly description: {
+                    readonly type: "string";
+                    readonly description: "Description for logging/display";
+                };
+                readonly enabled: {
+                    readonly type: "boolean";
+                    readonly description: "Enable/disable this job (default: true)";
+                };
+                readonly timezone: {
+                    readonly type: "string";
+                    readonly description: "Timezone for schedule (default: UTC or scheduler default)";
+                };
+            };
+            readonly required: readonly ["schedule", "workflow"];
+            readonly additionalProperties: false;
+            readonly description: "Static cron job defined in YAML configuration These are always executed by the scheduler daemon";
             readonly patternProperties: {
                 readonly '^x-': {};
             };
