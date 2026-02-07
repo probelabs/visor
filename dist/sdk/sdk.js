@@ -171,6 +171,17 @@ var init_human_id = __esm({
 });
 
 // src/telemetry/lazy-otel.ts
+var lazy_otel_exports = {};
+__export(lazy_otel_exports, {
+  DiagConsoleLogger: () => DiagConsoleLogger,
+  DiagLogLevel: () => DiagLogLevel,
+  SpanKind: () => SpanKind,
+  SpanStatusCode: () => SpanStatusCode,
+  context: () => context,
+  diag: () => diag,
+  metrics: () => metrics,
+  trace: () => trace
+});
 function getOtelApi() {
   if (otelApiAttempted) return otelApi;
   otelApiAttempted = true;
@@ -243,7 +254,7 @@ function createNoOpMeter() {
     }
   };
 }
-var otelApi, otelApiAttempted, OTEL_API_MODULE, trace, context, metrics, SpanStatusCode;
+var otelApi, otelApiAttempted, OTEL_API_MODULE, trace, context, metrics, SpanStatusCode, SpanKind, diag, DiagConsoleLogger, DiagLogLevel;
 var init_lazy_otel = __esm({
   "src/telemetry/lazy-otel.ts"() {
     "use strict";
@@ -298,6 +309,71 @@ var init_lazy_otel = __esm({
       get ERROR() {
         const api = getOtelApi();
         return api?.SpanStatusCode?.ERROR ?? 2;
+      }
+    };
+    SpanKind = {
+      get INTERNAL() {
+        const api = getOtelApi();
+        return api?.SpanKind?.INTERNAL ?? 0;
+      },
+      get SERVER() {
+        const api = getOtelApi();
+        return api?.SpanKind?.SERVER ?? 1;
+      },
+      get CLIENT() {
+        const api = getOtelApi();
+        return api?.SpanKind?.CLIENT ?? 2;
+      },
+      get PRODUCER() {
+        const api = getOtelApi();
+        return api?.SpanKind?.PRODUCER ?? 3;
+      },
+      get CONSUMER() {
+        const api = getOtelApi();
+        return api?.SpanKind?.CONSUMER ?? 4;
+      }
+    };
+    diag = {
+      setLogger(logger2, level) {
+        const api = getOtelApi();
+        if (!api) return;
+        return api.diag.setLogger(logger2, level);
+      }
+    };
+    DiagConsoleLogger = {
+      get() {
+        const api = getOtelApi();
+        return api?.DiagConsoleLogger;
+      }
+    };
+    DiagLogLevel = {
+      get NONE() {
+        const api = getOtelApi();
+        return api?.DiagLogLevel?.NONE ?? 0;
+      },
+      get ERROR() {
+        const api = getOtelApi();
+        return api?.DiagLogLevel?.ERROR ?? 30;
+      },
+      get WARN() {
+        const api = getOtelApi();
+        return api?.DiagLogLevel?.WARN ?? 50;
+      },
+      get INFO() {
+        const api = getOtelApi();
+        return api?.DiagLogLevel?.INFO ?? 60;
+      },
+      get DEBUG() {
+        const api = getOtelApi();
+        return api?.DiagLogLevel?.DEBUG ?? 70;
+      },
+      get VERBOSE() {
+        const api = getOtelApi();
+        return api?.DiagLogLevel?.VERBOSE ?? 80;
+      },
+      get ALL() {
+        const api = getOtelApi();
+        return api?.DiagLogLevel?.ALL ?? 9999;
       }
     };
   }
@@ -581,11 +657,11 @@ function getTracer() {
 }
 async function withActiveSpan(name, attrs, fn) {
   const tracer = getTracer();
-  return await new Promise((resolve9, reject) => {
+  return await new Promise((resolve10, reject) => {
     const callback = async (span) => {
       try {
         const res = await fn(span);
-        resolve9(res);
+        resolve10(res);
       } catch (err) {
         try {
           if (err instanceof Error) span.recordException(err);
@@ -4714,6 +4790,412 @@ var init_workflow_inputs = __esm({
   }
 });
 
+// src/sandbox/env-filter.ts
+function matchesPattern(name, pattern) {
+  if (pattern === name) return true;
+  if (pattern.endsWith("*")) {
+    const prefix = pattern.slice(0, -1);
+    return name.startsWith(prefix);
+  }
+  return false;
+}
+function filterEnvForSandbox(checkEnv, hostEnv, passthroughPatterns, defaultPatterns) {
+  const result = {};
+  const defaults = defaultPatterns !== void 0 ? defaultPatterns : BUILTIN_PASSTHROUGH;
+  const patterns = [...defaults, ...passthroughPatterns || []];
+  for (const [key, value] of Object.entries(hostEnv)) {
+    if (value === void 0) continue;
+    if (patterns.some((pattern) => matchesPattern(key, pattern))) {
+      result[key] = value;
+    }
+  }
+  if (checkEnv) {
+    for (const [key, value] of Object.entries(checkEnv)) {
+      result[key] = String(value);
+    }
+  }
+  return result;
+}
+var BUILTIN_PASSTHROUGH;
+var init_env_filter = __esm({
+  "src/sandbox/env-filter.ts"() {
+    "use strict";
+    BUILTIN_PASSTHROUGH = ["PATH", "HOME", "USER", "CI", "NODE_ENV", "LANG"];
+  }
+});
+
+// src/sandbox/sandbox-telemetry.ts
+function getTraceHelpers() {
+  if (_attempted) return _traceHelpers;
+  _attempted = true;
+  try {
+    _traceHelpers = (init_trace_helpers(), __toCommonJS(trace_helpers_exports));
+  } catch {
+    _traceHelpers = null;
+  }
+  return _traceHelpers;
+}
+async function withActiveSpan2(name, attrs, fn) {
+  const helpers = getTraceHelpers();
+  if (helpers) {
+    return helpers.withActiveSpan(name, attrs, fn);
+  }
+  return fn({});
+}
+function addEvent2(name, attrs) {
+  const helpers = getTraceHelpers();
+  if (helpers) {
+    helpers.addEvent(name, attrs);
+  }
+}
+function setSpanError2(err) {
+  const helpers = getTraceHelpers();
+  if (helpers) {
+    helpers.setSpanError(err);
+  }
+}
+var _traceHelpers, _attempted;
+var init_sandbox_telemetry = __esm({
+  "src/sandbox/sandbox-telemetry.ts"() {
+    "use strict";
+    _traceHelpers = null;
+    _attempted = false;
+  }
+});
+
+// src/sandbox/trace-ingester.ts
+function getTracer2() {
+  try {
+    const helpers = (init_trace_helpers(), __toCommonJS(trace_helpers_exports));
+    return helpers.getTracer();
+  } catch {
+    return null;
+  }
+}
+function getOtelContext() {
+  try {
+    return init_lazy_otel(), __toCommonJS(lazy_otel_exports);
+  } catch {
+    return null;
+  }
+}
+function ingestChildTrace(filePath) {
+  let content;
+  try {
+    content = (0, import_fs.readFileSync)(filePath, "utf8");
+  } catch {
+    return;
+  }
+  const lines = content.split("\n");
+  const spans = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      spans.push(JSON.parse(trimmed));
+    } catch {
+    }
+  }
+  if (spans.length === 0) return;
+  const tracer = getTracer2();
+  if (!tracer) {
+    logger.info(`[trace-ingester] ${spans.length} child spans (OTel unavailable)`);
+    return;
+  }
+  const otel = getOtelContext();
+  for (const child of spans) {
+    if (!child.name) continue;
+    if (child.name === "visor.run" || child.name === "visor.event") continue;
+    if (!child.traceId && !child.startTime) continue;
+    try {
+      const spanOptions = {
+        attributes: {
+          "visor.sandbox.child_span": true,
+          ...child.attributes || {}
+        }
+      };
+      if (child.startTime) {
+        spanOptions.startTime = child.startTime;
+      }
+      const span = tracer.startSpan(`child: ${child.name}`, spanOptions);
+      if (Array.isArray(child.events)) {
+        for (const evt of child.events) {
+          const evtAttrs = evt.attributes || evt.attrs || {};
+          if (evt.time) {
+            span.addEvent(evt.name, evtAttrs, evt.time);
+          } else {
+            span.addEvent(evt.name, evtAttrs);
+          }
+        }
+      }
+      if (child.status && child.status.code === 2) {
+        try {
+          const { SpanStatusCode: SpanStatusCode2 } = otel || {};
+          span.setStatus({
+            code: SpanStatusCode2?.ERROR || 2,
+            message: child.status.message
+          });
+        } catch {
+        }
+      }
+      if (child.endTime) {
+        span.end(child.endTime);
+      } else {
+        span.end();
+      }
+    } catch {
+    }
+  }
+}
+var import_fs;
+var init_trace_ingester = __esm({
+  "src/sandbox/trace-ingester.ts"() {
+    "use strict";
+    import_fs = require("fs");
+    init_logger();
+  }
+});
+
+// src/sandbox/check-runner.ts
+var check_runner_exports = {};
+__export(check_runner_exports, {
+  CheckRunner: () => CheckRunner
+});
+function serializePRInfo(prInfo) {
+  return {
+    number: prInfo.number,
+    title: prInfo.title,
+    body: prInfo.body,
+    author: prInfo.author,
+    base: prInfo.base,
+    head: prInfo.head,
+    files: (prInfo.files || []).map((f) => ({
+      filename: f.filename,
+      status: f.status,
+      additions: f.additions,
+      deletions: f.deletions,
+      changes: f.changes,
+      patch: f.patch
+    })),
+    totalAdditions: prInfo.totalAdditions,
+    totalDeletions: prInfo.totalDeletions,
+    eventType: prInfo.eventType,
+    fullDiff: prInfo.fullDiff,
+    commitDiff: prInfo.commitDiff,
+    isIncremental: prInfo.isIncremental,
+    isIssue: prInfo.isIssue,
+    eventContext: prInfo.eventContext
+  };
+}
+var import_fs2, import_path2, import_crypto, CheckRunner;
+var init_check_runner = __esm({
+  "src/sandbox/check-runner.ts"() {
+    "use strict";
+    import_fs2 = require("fs");
+    import_path2 = require("path");
+    import_crypto = require("crypto");
+    init_env_filter();
+    init_logger();
+    init_sandbox_telemetry();
+    init_trace_ingester();
+    CheckRunner = class {
+      /**
+       * Execute a check inside a sandbox container.
+       *
+       * 1. Build CheckRunPayload JSON
+       * 2. Filter env vars through EnvFilter
+       * 3. Exec `node <visor_path>/cli-main.js --run-check` inside the sandbox
+       * 4. Parse CheckRunResult from stdout JSON
+       * 5. Return as ReviewSummary
+       */
+      static async runCheck(sandboxManager, sandboxName, sandboxConfig, checkConfig, prInfo, dependencyResults, timeoutMs, workspaceDefaults) {
+        return withActiveSpan2(
+          "visor.sandbox.runCheck",
+          {
+            "visor.sandbox.name": sandboxName,
+            "visor.check.name": checkConfig.name || "unknown"
+          },
+          async () => {
+            const dependencyOutputs = {};
+            if (dependencyResults) {
+              for (const [key, value] of dependencyResults) {
+                dependencyOutputs[key] = value;
+              }
+            }
+            const payload = {
+              check: checkConfig,
+              prInfo: serializePRInfo(prInfo),
+              dependencyOutputs: Object.keys(dependencyOutputs).length > 0 ? dependencyOutputs : void 0
+            };
+            const env = filterEnvForSandbox(
+              checkConfig.env,
+              process.env,
+              sandboxConfig.env_passthrough,
+              workspaceDefaults?.env_passthrough
+            );
+            const workdir = sandboxConfig.workdir || "/workspace";
+            let hostTracePath;
+            if (!sandboxConfig.read_only) {
+              const traceFileName = `.visor-trace-${(0, import_crypto.randomUUID)().slice(0, 8)}.ndjson`;
+              hostTracePath = (0, import_path2.join)(sandboxManager.getRepoPath(), traceFileName);
+              const containerTracePath = `${workdir}/${traceFileName}`;
+              try {
+                (0, import_fs2.writeFileSync)(hostTracePath, "", "utf8");
+              } catch {
+                hostTracePath = void 0;
+              }
+              if (hostTracePath) {
+                env["VISOR_FALLBACK_TRACE_FILE"] = containerTracePath;
+                env["VISOR_TELEMETRY_ENABLED"] = "true";
+                env["VISOR_TELEMETRY_SINK"] = "file";
+              }
+            }
+            const visorPath = sandboxConfig.visor_path || "/opt/visor";
+            if (!/^[a-zA-Z0-9/_.-]+$/.test(visorPath) || /\.\./.test(visorPath)) {
+              throw new Error(
+                `Invalid visor_path '${visorPath}': must be a safe absolute path without '..' traversal`
+              );
+            }
+            const payloadJson = JSON.stringify(payload);
+            env["NODE_PATH"] = `${workdir}/node_modules`;
+            const b64Payload = Buffer.from(payloadJson).toString("base64");
+            if (!/^[A-Za-z0-9+/=]+$/.test(b64Payload)) {
+              throw new Error("Unexpected characters in base64-encoded payload");
+            }
+            const command = `echo ${b64Payload} | base64 -d | node ${visorPath}/index.js --run-check -`;
+            logger.info(`Executing check in sandbox '${sandboxName}'`);
+            const result = await sandboxManager.exec(sandboxName, {
+              command,
+              env,
+              timeoutMs: timeoutMs || 6e5,
+              maxBuffer: 50 * 1024 * 1024
+            });
+            if (hostTracePath) {
+              try {
+                if ((0, import_fs2.existsSync)(hostTracePath)) {
+                  ingestChildTrace(hostTracePath);
+                  (0, import_fs2.unlinkSync)(hostTracePath);
+                }
+              } catch {
+                try {
+                  if ((0, import_fs2.existsSync)(hostTracePath)) (0, import_fs2.unlinkSync)(hostTracePath);
+                } catch {
+                }
+              }
+            }
+            const stdout = result.stdout.trim();
+            if (result.exitCode !== 0 && !stdout) {
+              setSpanError2(new Error(`Sandbox execution failed (exit ${result.exitCode})`));
+              return {
+                issues: [
+                  {
+                    severity: "error",
+                    message: `Sandbox execution failed (exit ${result.exitCode}): ${result.stderr.slice(0, 500)}`,
+                    file: "",
+                    line: 0,
+                    ruleId: "sandbox-execution-error",
+                    category: "logic"
+                  }
+                ]
+              };
+            }
+            const lines = stdout.split("\n");
+            let jsonLine;
+            for (let i = lines.length - 1; i >= 0; i--) {
+              const line = lines[i].trim();
+              if (line.startsWith("{")) {
+                jsonLine = line;
+                break;
+              }
+            }
+            if (!jsonLine) {
+              setSpanError2(new Error("No JSON output from sandboxed check"));
+              return {
+                issues: [
+                  {
+                    severity: "error",
+                    message: `No JSON output from sandboxed check. Stdout: ${stdout.slice(0, 500)}`,
+                    file: "",
+                    line: 0,
+                    ruleId: "sandbox-parse-error",
+                    category: "logic"
+                  }
+                ]
+              };
+            }
+            let checkRunResult;
+            try {
+              checkRunResult = JSON.parse(jsonLine);
+            } catch (parseErr) {
+              setSpanError2(parseErr);
+              return {
+                issues: [
+                  {
+                    severity: "error",
+                    message: `Invalid JSON from sandboxed check: ${jsonLine.slice(0, 200)}`,
+                    file: "",
+                    line: 0,
+                    ruleId: "sandbox-parse-error",
+                    category: "logic"
+                  }
+                ]
+              };
+            }
+            const summary = {
+              issues: checkRunResult.issues || [],
+              debug: checkRunResult.debug
+            };
+            if (checkRunResult.output !== void 0) {
+              summary.output = checkRunResult.output;
+            }
+            if (checkRunResult.content !== void 0) {
+              summary.content = checkRunResult.content;
+            }
+            return summary;
+          }
+        );
+      }
+    };
+  }
+});
+
+// src/state-machine/dispatch/sandbox-routing.ts
+async function executeWithSandboxRouting(checkId, checkConfig, context2, prInfo, dependencyResults, timeout, hostExecute) {
+  const sandboxManager = context2.sandboxManager;
+  if (!sandboxManager) {
+    return hostExecute();
+  }
+  const sandboxName = sandboxManager.resolveSandbox(
+    checkConfig.sandbox,
+    context2.config.sandbox
+  );
+  if (!sandboxName) {
+    return hostExecute();
+  }
+  const sandboxConfig = context2.config.sandboxes?.[sandboxName];
+  if (!sandboxConfig) {
+    throw new Error(`Sandbox '${sandboxName}' not found in sandboxes configuration`);
+  }
+  logger.info(`[SandboxRouting] Routing check '${checkId}' to sandbox '${sandboxName}'`);
+  const { CheckRunner: CheckRunner2 } = (init_check_runner(), __toCommonJS(check_runner_exports));
+  return CheckRunner2.runCheck(
+    sandboxManager,
+    sandboxName,
+    sandboxConfig,
+    checkConfig,
+    prInfo,
+    dependencyResults.size > 0 ? dependencyResults : void 0,
+    timeout,
+    context2.config.sandbox_defaults
+  );
+}
+var init_sandbox_routing = __esm({
+  "src/state-machine/dispatch/sandbox-routing.ts"() {
+    "use strict";
+    init_logger();
+  }
+});
+
 // src/state-machine/dispatch/history-snapshot.ts
 var history_snapshot_exports = {};
 __export(history_snapshot_exports, {
@@ -5247,14 +5729,14 @@ function createExtendedLiquid(options = {}) {
   configureLiquidWithExtensions(liquid);
   return liquid;
 }
-var import_liquidjs, import_async_hooks, import_promises2, import_path2, ReadFileTag, permissionsALS;
+var import_liquidjs, import_async_hooks, import_promises2, import_path3, ReadFileTag, permissionsALS;
 var init_liquid_extensions = __esm({
   "src/liquid-extensions.ts"() {
     "use strict";
     import_liquidjs = require("liquidjs");
     import_async_hooks = require("async_hooks");
     import_promises2 = __toESM(require("fs/promises"));
-    import_path2 = __toESM(require("path"));
+    import_path3 = __toESM(require("path"));
     init_author_permissions();
     init_memory_store();
     init_sandbox();
@@ -5271,7 +5753,7 @@ var init_liquid_extensions = __esm({
           return;
         }
         const projectRoot = process.cwd();
-        const resolvedPath = import_path2.default.resolve(projectRoot, filePath.toString());
+        const resolvedPath = import_path3.default.resolve(projectRoot, filePath.toString());
         if (!resolvedPath.startsWith(projectRoot)) {
           emitter.write("[Error: File path escapes project directory]");
           return;
@@ -7793,7 +8275,7 @@ ${"=".repeat(60)}
        * Generate mock response for testing
        */
       async generateMockResponse(_prompt, _checkName, _schema) {
-        await new Promise((resolve9) => setTimeout(resolve9, 500));
+        await new Promise((resolve10) => setTimeout(resolve10, 500));
         const name = (_checkName || "").toLowerCase();
         if (name.includes("extract-facts")) {
           const arr = Array.from({ length: 6 }, (_, i) => ({
@@ -8371,7 +8853,7 @@ var init_command_executor = __esm({
        * Execute command with stdin input
        */
       executeWithStdin(command, options) {
-        return new Promise((resolve9, reject) => {
+        return new Promise((resolve10, reject) => {
           const childProcess = (0, import_child_process.exec)(
             command,
             {
@@ -8383,7 +8865,7 @@ var init_command_executor = __esm({
               if (error && error.killed && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM")) {
                 reject(new Error(`Command timed out after ${options.timeout || 3e4}ms`));
               } else {
-                resolve9({
+                resolve10({
                   stdout: stdout || "",
                   stderr: stderr || "",
                   exitCode: error ? error.code || 1 : 0
@@ -8642,11 +9124,11 @@ var workflow_registry_exports = {};
 __export(workflow_registry_exports, {
   WorkflowRegistry: () => WorkflowRegistry
 });
-var import_fs, path8, yaml, import_ajv2, import_ajv_formats, WorkflowRegistry;
+var import_fs3, path8, yaml, import_ajv2, import_ajv_formats, WorkflowRegistry;
 var init_workflow_registry = __esm({
   "src/workflow-registry.ts"() {
     "use strict";
-    import_fs = require("fs");
+    import_fs3 = require("fs");
     path8 = __toESM(require("path"));
     yaml = __toESM(require("js-yaml"));
     init_logger();
@@ -8984,7 +9466,7 @@ var init_workflow_registry = __esm({
           return { content: await response.text(), resolvedSource: resolvedUrl, importBasePath };
         }
         const filePath = path8.isAbsolute(source) ? source : path8.resolve(basePath || process.cwd(), source);
-        const content = await import_fs.promises.readFile(filePath, "utf-8");
+        const content = await import_fs3.promises.readFile(filePath, "utf-8");
         return { content, resolvedSource: filePath, importBasePath: path8.dirname(filePath) };
       }
       /**
@@ -12787,6 +13269,49 @@ ${errors}`);
             }
           }
         }
+        if (config.sandboxes) {
+          const sandboxNames = Object.keys(config.sandboxes);
+          for (const [sandboxName, sandboxConfig] of Object.entries(config.sandboxes)) {
+            this.validateSandboxConfig(sandboxName, sandboxConfig, errors);
+          }
+          if (config.sandbox && !sandboxNames.includes(config.sandbox)) {
+            errors.push({
+              field: "sandbox",
+              message: `Top-level sandbox '${config.sandbox}' not found in sandboxes definitions. Available: ${sandboxNames.join(", ")}`,
+              value: config.sandbox
+            });
+          }
+          if (checksToValidate) {
+            for (const [checkName, checkConfig] of Object.entries(checksToValidate)) {
+              if (checkConfig.sandbox && !sandboxNames.includes(checkConfig.sandbox)) {
+                errors.push({
+                  field: `checks.${checkName}.sandbox`,
+                  message: `Check '${checkName}' references sandbox '${checkConfig.sandbox}' which is not defined. Available: ${sandboxNames.join(", ")}`,
+                  value: checkConfig.sandbox
+                });
+              }
+            }
+          }
+        } else {
+          if (config.sandbox) {
+            errors.push({
+              field: "sandbox",
+              message: `Top-level sandbox '${config.sandbox}' is set but no sandboxes are defined`,
+              value: config.sandbox
+            });
+          }
+          if (checksToValidate) {
+            for (const [checkName, checkConfig] of Object.entries(checksToValidate)) {
+              if (checkConfig.sandbox) {
+                errors.push({
+                  field: `checks.${checkName}.sandbox`,
+                  message: `Check '${checkName}' references sandbox '${checkConfig.sandbox}' but no sandboxes are defined`,
+                  value: checkConfig.sandbox
+                });
+              }
+            }
+          }
+        }
         if (config.ai_mcp_servers) {
           this.validateMcpServersObject(config.ai_mcp_servers, "ai_mcp_servers", errors, warnings);
         }
@@ -12820,6 +13345,106 @@ ${errors}`);
         if (!strict && warnings.length > 0) {
           for (const w of warnings) {
             logger.warn(`\u26A0\uFE0F  Config warning [${w.field}]: ${w.message}`);
+          }
+        }
+      }
+      /**
+       * Validate sandbox configuration
+       */
+      validateSandboxConfig(name, config, errors) {
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name)) {
+          errors.push({
+            field: `sandboxes.${name}`,
+            message: `Sandbox name '${name}' contains invalid characters. Only letters, numbers, dots, hyphens, underscores allowed.`
+          });
+        }
+        const modes = [
+          config.image ? "image" : null,
+          config.dockerfile || config.dockerfile_inline ? "dockerfile" : null,
+          config.compose ? "compose" : null
+        ].filter(Boolean);
+        if (modes.length === 0) {
+          errors.push({
+            field: `sandboxes.${name}`,
+            message: `Sandbox '${name}' must specify one of: image, dockerfile, dockerfile_inline, or compose`
+          });
+        } else if (modes.length > 1) {
+          errors.push({
+            field: `sandboxes.${name}`,
+            message: `Sandbox '${name}' has multiple modes (${modes.join(", ")}). Specify exactly one.`
+          });
+        }
+        if (config.compose && !config.service) {
+          errors.push({
+            field: `sandboxes.${name}.service`,
+            message: `Sandbox '${name}' uses compose mode but is missing required 'service' field`
+          });
+        }
+        if (config.dockerfile && /\.\./.test(config.dockerfile)) {
+          errors.push({
+            field: `sandboxes.${name}.dockerfile`,
+            message: `Dockerfile path '${config.dockerfile}' in sandbox '${name}' must not contain '..' path traversal`
+          });
+        }
+        if (config.compose && /\.\./.test(config.compose)) {
+          errors.push({
+            field: `sandboxes.${name}.compose`,
+            message: `Compose file path '${config.compose}' in sandbox '${name}' must not contain '..' path traversal`
+          });
+        }
+        if (config.workdir) {
+          if (!config.workdir.startsWith("/")) {
+            errors.push({
+              field: `sandboxes.${name}.workdir`,
+              message: `Workdir '${config.workdir}' in sandbox '${name}' must be an absolute path (start with /)`
+            });
+          }
+          if (/\.\./.test(config.workdir)) {
+            errors.push({
+              field: `sandboxes.${name}.workdir`,
+              message: `Workdir '${config.workdir}' in sandbox '${name}' must not contain '..' path traversal`
+            });
+          }
+        }
+        if (config.visor_path) {
+          if (!config.visor_path.startsWith("/")) {
+            errors.push({
+              field: `sandboxes.${name}.visor_path`,
+              message: `visor_path '${config.visor_path}' in sandbox '${name}' must be an absolute path (start with /)`
+            });
+          }
+          if (/\.\./.test(config.visor_path)) {
+            errors.push({
+              field: `sandboxes.${name}.visor_path`,
+              message: `visor_path '${config.visor_path}' in sandbox '${name}' must not contain '..' path traversal`
+            });
+          }
+        }
+        if (config.cache?.paths) {
+          for (const p of config.cache.paths) {
+            if (!p.startsWith("/")) {
+              errors.push({
+                field: `sandboxes.${name}.cache.paths`,
+                message: `Cache path '${p}' in sandbox '${name}' must be absolute (start with /)`,
+                value: p
+              });
+            }
+            if (/\.\./.test(p)) {
+              errors.push({
+                field: `sandboxes.${name}.cache.paths`,
+                message: `Cache path '${p}' in sandbox '${name}' must not contain '..' path traversal`,
+                value: p
+              });
+            }
+          }
+        }
+        if (config.resources?.cpu !== void 0) {
+          if (typeof config.resources.cpu !== "number" || config.resources.cpu <= 0) {
+            errors.push({
+              field: `sandboxes.${name}.resources.cpu`,
+              message: `CPU limit in sandbox '${name}' must be a positive number`,
+              value: config.resources.cpu
+            });
           }
         }
       }
@@ -13170,7 +13795,17 @@ ${errors}`);
                 const addl = e.params && e.params.additionalProperty || "unknown";
                 const fullField = pathStr ? `${pathStr}.${addl}` : addl;
                 const topLevel = !pathStr;
-                if (topLevel && (addl === "tests" || addl === "slack")) {
+                const allowedTopLevelKeys = /* @__PURE__ */ new Set([
+                  "tests",
+                  "slack",
+                  "sandboxes",
+                  "sandbox",
+                  "sandbox_defaults"
+                ]);
+                if (topLevel && allowedTopLevelKeys.has(addl)) {
+                  continue;
+                }
+                if (!topLevel && addl === "sandbox" && pathStr.match(/^(checks|steps)\.[^.]+$/)) {
                   continue;
                 }
                 warnings.push({
@@ -14239,7 +14874,7 @@ var init_mcp_custom_sse_server = __esm({
        * Returns the actual bound port number
        */
       async start() {
-        return new Promise((resolve9, reject) => {
+        return new Promise((resolve10, reject) => {
           try {
             this.server = import_http.default.createServer((req, res) => {
               this.handleRequest(req, res).catch((error) => {
@@ -14273,7 +14908,7 @@ var init_mcp_custom_sse_server = __esm({
                 );
               }
               this.startKeepalive();
-              resolve9(this.port);
+              resolve10(this.port);
             });
           } catch (error) {
             reject(error);
@@ -14336,7 +14971,7 @@ var init_mcp_custom_sse_server = __esm({
             logger.debug(
               `[CustomToolsSSEServer:${this.sessionId}] Grace period before stop: ${waitMs}ms (activeToolCalls=${this.activeToolCalls})`
             );
-            await new Promise((resolve9) => setTimeout(resolve9, waitMs));
+            await new Promise((resolve10) => setTimeout(resolve10, waitMs));
           }
         }
         if (this.activeToolCalls > 0) {
@@ -14345,7 +14980,7 @@ var init_mcp_custom_sse_server = __esm({
             `[CustomToolsSSEServer:${this.sessionId}] Waiting for ${this.activeToolCalls} active tool call(s) before stop`
           );
           while (this.activeToolCalls > 0 && Date.now() - startedAt < effectiveDrainTimeoutMs) {
-            await new Promise((resolve9) => setTimeout(resolve9, 250));
+            await new Promise((resolve10) => setTimeout(resolve10, 250));
           }
           if (this.activeToolCalls > 0) {
             logger.warn(
@@ -14370,21 +15005,21 @@ var init_mcp_custom_sse_server = __esm({
         }
         this.connections.clear();
         if (this.server) {
-          await new Promise((resolve9, reject) => {
+          await new Promise((resolve10, reject) => {
             const timeout = setTimeout(() => {
               if (this.debug) {
                 logger.debug(
                   `[CustomToolsSSEServer:${this.sessionId}] Force closing server after timeout`
                 );
               }
-              this.server?.close(() => resolve9());
+              this.server?.close(() => resolve10());
             }, 5e3);
             this.server.close((error) => {
               clearTimeout(timeout);
               if (error) {
                 reject(error);
               } else {
-                resolve9();
+                resolve10();
               }
             });
           });
@@ -14740,7 +15375,7 @@ var init_mcp_custom_sse_server = __esm({
               logger.warn(
                 `[CustomToolsSSEServer:${this.sessionId}] Tool ${toolName} failed (attempt ${attempt + 1}/${retryCount + 1}): ${errorMsg}. Retrying in ${delay}ms`
               );
-              await new Promise((resolve9) => setTimeout(resolve9, delay));
+              await new Promise((resolve10) => setTimeout(resolve10, delay));
               attempt++;
             }
           }
@@ -14819,7 +15454,7 @@ var init_mcp_custom_sse_server = __esm({
 });
 
 // src/providers/ai-check-provider.ts
-var import_promises3, import_path3, AICheckProvider;
+var import_promises3, import_path4, AICheckProvider;
 var init_ai_check_provider = __esm({
   "src/providers/ai-check-provider.ts"() {
     "use strict";
@@ -14829,7 +15464,7 @@ var init_ai_check_provider = __esm({
     init_issue_filter();
     init_liquid_extensions();
     import_promises3 = __toESM(require("fs/promises"));
-    import_path3 = __toESM(require("path"));
+    import_path4 = __toESM(require("path"));
     init_lazy_otel();
     init_state_capture();
     init_mcp_custom_sse_server();
@@ -14991,7 +15626,7 @@ var init_ai_check_provider = __esm({
         const hasFileExtension = /\.[a-zA-Z0-9]{1,10}$/i.test(str);
         const hasPathSeparators = /[\/\\]/.test(str);
         const isRelativePath = /^\.{1,2}\//.test(str);
-        const isAbsolutePath = import_path3.default.isAbsolute(str);
+        const isAbsolutePath = import_path4.default.isAbsolute(str);
         const hasTypicalFileChars = /^[a-zA-Z0-9._\-\/\\:~]+$/.test(str);
         if (!(hasFileExtension || isRelativePath || isAbsolutePath || hasPathSeparators)) {
           return false;
@@ -15001,10 +15636,10 @@ var init_ai_check_provider = __esm({
         }
         try {
           let resolvedPath;
-          if (import_path3.default.isAbsolute(str)) {
-            resolvedPath = import_path3.default.normalize(str);
+          if (import_path4.default.isAbsolute(str)) {
+            resolvedPath = import_path4.default.normalize(str);
           } else {
-            resolvedPath = import_path3.default.resolve(process.cwd(), str);
+            resolvedPath = import_path4.default.resolve(process.cwd(), str);
           }
           const fs20 = require("fs").promises;
           try {
@@ -15025,14 +15660,14 @@ var init_ai_check_provider = __esm({
           throw new Error("Prompt file must have .liquid extension");
         }
         let resolvedPath;
-        if (import_path3.default.isAbsolute(promptPath)) {
+        if (import_path4.default.isAbsolute(promptPath)) {
           resolvedPath = promptPath;
         } else {
-          resolvedPath = import_path3.default.resolve(process.cwd(), promptPath);
+          resolvedPath = import_path4.default.resolve(process.cwd(), promptPath);
         }
-        if (!import_path3.default.isAbsolute(promptPath)) {
-          const normalizedPath = import_path3.default.normalize(resolvedPath);
-          const currentDir = import_path3.default.resolve(process.cwd());
+        if (!import_path4.default.isAbsolute(promptPath)) {
+          const normalizedPath = import_path4.default.normalize(resolvedPath);
+          const currentDir = import_path4.default.resolve(process.cwd());
           if (!normalizedPath.startsWith(currentDir)) {
             throw new Error("Invalid prompt file path: path traversal detected");
           }
@@ -17818,7 +18453,7 @@ var init_claude_code_types = __esm({
 function isClaudeCodeConstructor(value) {
   return typeof value === "function";
 }
-var import_promises4, import_path4, ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError, ClaudeCodeCheckProvider;
+var import_promises4, import_path5, ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError, ClaudeCodeCheckProvider;
 var init_claude_code_check_provider = __esm({
   "src/providers/claude-code-check-provider.ts"() {
     "use strict";
@@ -17827,7 +18462,7 @@ var init_claude_code_check_provider = __esm({
     init_issue_filter();
     init_liquid_extensions();
     import_promises4 = __toESM(require("fs/promises"));
-    import_path4 = __toESM(require("path"));
+    import_path5 = __toESM(require("path"));
     init_claude_code_types();
     ClaudeCodeSDKNotInstalledError = class extends Error {
       constructor() {
@@ -17975,7 +18610,7 @@ var init_claude_code_check_provider = __esm({
         const hasFileExtension = /\.[a-zA-Z0-9]{1,10}$/i.test(str);
         const hasPathSeparators = /[\/\\]/.test(str);
         const isRelativePath = /^\.{1,2}\//.test(str);
-        const isAbsolutePath = import_path4.default.isAbsolute(str);
+        const isAbsolutePath = import_path5.default.isAbsolute(str);
         const hasTypicalFileChars = /^[a-zA-Z0-9._\-\/\\:~]+$/.test(str);
         if (!(hasFileExtension || isRelativePath || isAbsolutePath || hasPathSeparators)) {
           return false;
@@ -17985,10 +18620,10 @@ var init_claude_code_check_provider = __esm({
         }
         try {
           let resolvedPath;
-          if (import_path4.default.isAbsolute(str)) {
-            resolvedPath = import_path4.default.normalize(str);
+          if (import_path5.default.isAbsolute(str)) {
+            resolvedPath = import_path5.default.normalize(str);
           } else {
-            resolvedPath = import_path4.default.resolve(process.cwd(), str);
+            resolvedPath = import_path5.default.resolve(process.cwd(), str);
           }
           try {
             const stat = await import_promises4.default.stat(resolvedPath);
@@ -18008,14 +18643,14 @@ var init_claude_code_check_provider = __esm({
           throw new Error("Prompt file must have .liquid extension");
         }
         let resolvedPath;
-        if (import_path4.default.isAbsolute(promptPath)) {
+        if (import_path5.default.isAbsolute(promptPath)) {
           resolvedPath = promptPath;
         } else {
-          resolvedPath = import_path4.default.resolve(process.cwd(), promptPath);
+          resolvedPath = import_path5.default.resolve(process.cwd(), promptPath);
         }
-        if (!import_path4.default.isAbsolute(promptPath)) {
-          const normalizedPath = import_path4.default.normalize(resolvedPath);
-          const currentDir = import_path4.default.resolve(process.cwd());
+        if (!import_path5.default.isAbsolute(promptPath)) {
+          const normalizedPath = import_path5.default.normalize(resolvedPath);
+          const currentDir = import_path5.default.resolve(process.cwd());
           if (!normalizedPath.startsWith(currentDir)) {
             throw new Error("Invalid prompt file path: path traversal detected");
           }
@@ -23603,8 +24238,8 @@ var require_util2 = __commonJS({
     function createDeferredPromise() {
       let res;
       let rej;
-      const promise = new Promise((resolve9, reject) => {
-        res = resolve9;
+      const promise = new Promise((resolve10, reject) => {
+        res = resolve10;
         rej = reject;
       });
       return { promise, resolve: res, reject: rej };
@@ -25109,8 +25744,8 @@ Content-Type: ${value.type || "application/octet-stream"}\r
                 });
               }
             });
-            const busboyResolve = new Promise((resolve9, reject) => {
-              busboy.on("finish", resolve9);
+            const busboyResolve = new Promise((resolve10, reject) => {
+              busboy.on("finish", resolve10);
               busboy.on("error", (err) => reject(new TypeError(err)));
             });
             if (this.body !== null) for await (const chunk of consumeBody(this[kState].body)) busboy.write(chunk);
@@ -25644,9 +26279,9 @@ var require_dispatcher_base = __commonJS({
       }
       close(callback) {
         if (callback === void 0) {
-          return new Promise((resolve9, reject) => {
+          return new Promise((resolve10, reject) => {
             this.close((err, data) => {
-              return err ? reject(err) : resolve9(data);
+              return err ? reject(err) : resolve10(data);
             });
           });
         }
@@ -25684,12 +26319,12 @@ var require_dispatcher_base = __commonJS({
           err = null;
         }
         if (callback === void 0) {
-          return new Promise((resolve9, reject) => {
+          return new Promise((resolve10, reject) => {
             this.destroy(err, (err2, data) => {
               return err2 ? (
                 /* istanbul ignore next: should never error */
                 reject(err2)
-              ) : resolve9(data);
+              ) : resolve10(data);
             });
           });
         }
@@ -26751,16 +27386,16 @@ var require_client = __commonJS({
         return this[kNeedDrain] < 2;
       }
       async [kClose]() {
-        return new Promise((resolve9) => {
+        return new Promise((resolve10) => {
           if (!this[kSize]) {
-            resolve9(null);
+            resolve10(null);
           } else {
-            this[kClosedResolve] = resolve9;
+            this[kClosedResolve] = resolve10;
           }
         });
       }
       async [kDestroy](err) {
-        return new Promise((resolve9) => {
+        return new Promise((resolve10) => {
           const requests = this[kQueue].splice(this[kPendingIdx]);
           for (let i = 0; i < requests.length; i++) {
             const request = requests[i];
@@ -26771,7 +27406,7 @@ var require_client = __commonJS({
               this[kClosedResolve]();
               this[kClosedResolve] = null;
             }
-            resolve9();
+            resolve10();
           };
           if (this[kHTTP2Session] != null) {
             util.destroy(this[kHTTP2Session], err);
@@ -27351,7 +27986,7 @@ var require_client = __commonJS({
         });
       }
       try {
-        const socket = await new Promise((resolve9, reject) => {
+        const socket = await new Promise((resolve10, reject) => {
           client[kConnector]({
             host,
             hostname,
@@ -27363,7 +27998,7 @@ var require_client = __commonJS({
             if (err) {
               reject(err);
             } else {
-              resolve9(socket2);
+              resolve10(socket2);
             }
           });
         });
@@ -27987,12 +28622,12 @@ upgrade: ${upgrade}\r
           cb();
         }
       }
-      const waitForDrain = () => new Promise((resolve9, reject) => {
+      const waitForDrain = () => new Promise((resolve10, reject) => {
         assert(callback === null);
         if (socket[kError]) {
           reject(socket[kError]);
         } else {
-          callback = resolve9;
+          callback = resolve10;
         }
       });
       if (client[kHTTPConnVersion] === "h2") {
@@ -28338,8 +28973,8 @@ var require_pool_base = __commonJS({
         if (this[kQueue].isEmpty()) {
           return Promise.all(this[kClients].map((c) => c.close()));
         } else {
-          return new Promise((resolve9) => {
-            this[kClosedResolve] = resolve9;
+          return new Promise((resolve10) => {
+            this[kClosedResolve] = resolve10;
           });
         }
       }
@@ -28917,7 +29552,7 @@ var require_readable = __commonJS({
         if (this.closed) {
           return Promise.resolve(null);
         }
-        return new Promise((resolve9, reject) => {
+        return new Promise((resolve10, reject) => {
           const signalListenerCleanup = signal ? util.addAbortListener(signal, () => {
             this.destroy();
           }) : noop;
@@ -28926,7 +29561,7 @@ var require_readable = __commonJS({
             if (signal && signal.aborted) {
               reject(signal.reason || Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
             } else {
-              resolve9(null);
+              resolve10(null);
             }
           }).on("error", noop).on("data", function(chunk) {
             limit -= chunk.length;
@@ -28948,11 +29583,11 @@ var require_readable = __commonJS({
         throw new TypeError("unusable");
       }
       assert(!stream[kConsume]);
-      return new Promise((resolve9, reject) => {
+      return new Promise((resolve10, reject) => {
         stream[kConsume] = {
           type,
           stream,
-          resolve: resolve9,
+          resolve: resolve10,
           reject,
           length: 0,
           body: []
@@ -28987,12 +29622,12 @@ var require_readable = __commonJS({
       }
     }
     function consumeEnd(consume2) {
-      const { type, body, resolve: resolve9, stream, length } = consume2;
+      const { type, body, resolve: resolve10, stream, length } = consume2;
       try {
         if (type === "text") {
-          resolve9(toUSVString(Buffer.concat(body)));
+          resolve10(toUSVString(Buffer.concat(body)));
         } else if (type === "json") {
-          resolve9(JSON.parse(Buffer.concat(body)));
+          resolve10(JSON.parse(Buffer.concat(body)));
         } else if (type === "arrayBuffer") {
           const dst = new Uint8Array(length);
           let pos = 0;
@@ -29000,12 +29635,12 @@ var require_readable = __commonJS({
             dst.set(buf, pos);
             pos += buf.byteLength;
           }
-          resolve9(dst.buffer);
+          resolve10(dst.buffer);
         } else if (type === "blob") {
           if (!Blob2) {
             Blob2 = require("buffer").Blob;
           }
-          resolve9(new Blob2(body, { type: stream[kContentType] }));
+          resolve10(new Blob2(body, { type: stream[kContentType] }));
         }
         consumeFinish(consume2);
       } catch (err) {
@@ -29262,9 +29897,9 @@ var require_api_request = __commonJS({
     };
     function request(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve9, reject) => {
+        return new Promise((resolve10, reject) => {
           request.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve9(data);
+            return err ? reject(err) : resolve10(data);
           });
         });
       }
@@ -29437,9 +30072,9 @@ var require_api_stream = __commonJS({
     };
     function stream(opts, factory, callback) {
       if (callback === void 0) {
-        return new Promise((resolve9, reject) => {
+        return new Promise((resolve10, reject) => {
           stream.call(this, opts, factory, (err, data) => {
-            return err ? reject(err) : resolve9(data);
+            return err ? reject(err) : resolve10(data);
           });
         });
       }
@@ -29720,9 +30355,9 @@ var require_api_upgrade = __commonJS({
     };
     function upgrade(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve9, reject) => {
+        return new Promise((resolve10, reject) => {
           upgrade.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve9(data);
+            return err ? reject(err) : resolve10(data);
           });
         });
       }
@@ -29811,9 +30446,9 @@ var require_api_connect = __commonJS({
     };
     function connect(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve9, reject) => {
+        return new Promise((resolve10, reject) => {
           connect.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve9(data);
+            return err ? reject(err) : resolve10(data);
           });
         });
       }
@@ -30337,7 +30972,7 @@ var require_mock_interceptor = __commonJS({
 var require_mock_client = __commonJS({
   "node_modules/undici/lib/mock/mock-client.js"(exports2, module2) {
     "use strict";
-    var { promisify: promisify2 } = require("util");
+    var { promisify: promisify5 } = require("util");
     var Client2 = require_client();
     var { buildMockDispatch } = require_mock_utils();
     var {
@@ -30377,7 +31012,7 @@ var require_mock_client = __commonJS({
         return new MockInterceptor(opts, this[kDispatches]);
       }
       async [kClose]() {
-        await promisify2(this[kOriginalClose])();
+        await promisify5(this[kOriginalClose])();
         this[kConnected] = 0;
         this[kMockAgent][Symbols.kClients].delete(this[kOrigin]);
       }
@@ -30390,7 +31025,7 @@ var require_mock_client = __commonJS({
 var require_mock_pool = __commonJS({
   "node_modules/undici/lib/mock/mock-pool.js"(exports2, module2) {
     "use strict";
-    var { promisify: promisify2 } = require("util");
+    var { promisify: promisify5 } = require("util");
     var Pool = require_pool();
     var { buildMockDispatch } = require_mock_utils();
     var {
@@ -30430,7 +31065,7 @@ var require_mock_pool = __commonJS({
         return new MockInterceptor(opts, this[kDispatches]);
       }
       async [kClose]() {
-        await promisify2(this[kOriginalClose])();
+        await promisify5(this[kOriginalClose])();
         this[kConnected] = 0;
         this[kMockAgent][Symbols.kClients].delete(this[kOrigin]);
       }
@@ -33436,7 +34071,7 @@ var require_fetch = __commonJS({
       async function dispatch({ body }) {
         const url = requestCurrentURL(request);
         const agent = fetchParams.controller.dispatcher;
-        return new Promise((resolve9, reject) => agent.dispatch(
+        return new Promise((resolve10, reject) => agent.dispatch(
           {
             path: url.pathname + url.search,
             origin: url.origin,
@@ -33512,7 +34147,7 @@ var require_fetch = __commonJS({
                   }
                 }
               }
-              resolve9({
+              resolve10({
                 status,
                 statusText,
                 headersList: headers[kHeadersList],
@@ -33555,7 +34190,7 @@ var require_fetch = __commonJS({
                 const val = headersList[n + 1].toString("latin1");
                 headers[kHeadersList].append(key, val);
               }
-              resolve9({
+              resolve10({
                 status,
                 statusText: STATUS_CODES[status],
                 headersList: headers[kHeadersList],
@@ -37295,7 +37930,7 @@ var init_mcp_check_provider = __esm({
             logger.warn(
               `MCP ${transportName} failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${error instanceof Error ? error.message : String(error)}`
             );
-            await new Promise((resolve9) => setTimeout(resolve9, delay));
+            await new Promise((resolve10) => setTimeout(resolve10, delay));
             attempt += 1;
           } finally {
             try {
@@ -37562,7 +38197,7 @@ async function acquirePromptLock() {
     activePrompt = true;
     return;
   }
-  await new Promise((resolve9) => waiters.push(resolve9));
+  await new Promise((resolve10) => waiters.push(resolve10));
   activePrompt = true;
 }
 function releasePromptLock() {
@@ -37572,7 +38207,7 @@ function releasePromptLock() {
 }
 async function interactivePrompt(options) {
   await acquirePromptLock();
-  return new Promise((resolve9, reject) => {
+  return new Promise((resolve10, reject) => {
     const dbg = process.env.VISOR_DEBUG === "true";
     try {
       if (dbg) {
@@ -37659,12 +38294,12 @@ async function interactivePrompt(options) {
     };
     const finish = (value) => {
       cleanup();
-      resolve9(value);
+      resolve10(value);
     };
     if (options.timeout && options.timeout > 0) {
       timeoutId = setTimeout(() => {
         cleanup();
-        if (defaultValue !== void 0) return resolve9(defaultValue);
+        if (defaultValue !== void 0) return resolve10(defaultValue);
         return reject(new Error("Input timeout"));
       }, options.timeout);
     }
@@ -37796,7 +38431,7 @@ async function interactivePrompt(options) {
   });
 }
 async function simplePrompt(prompt) {
-  return new Promise((resolve9) => {
+  return new Promise((resolve10) => {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout
@@ -37812,7 +38447,7 @@ async function simplePrompt(prompt) {
     rl.question(`${prompt}
 > `, (answer) => {
       rl.close();
-      resolve9(answer.trim());
+      resolve10(answer.trim());
     });
   });
 }
@@ -37980,7 +38615,7 @@ function isStdinAvailable() {
   return !process.stdin.isTTY;
 }
 async function readStdin(timeout, maxSize = 1024 * 1024) {
-  return new Promise((resolve9, reject) => {
+  return new Promise((resolve10, reject) => {
     let data = "";
     let timeoutId;
     if (timeout) {
@@ -38007,7 +38642,7 @@ async function readStdin(timeout, maxSize = 1024 * 1024) {
     };
     const onEnd = () => {
       cleanup();
-      resolve9(data.trim());
+      resolve10(data.trim());
     };
     const onError = (err) => {
       cleanup();
@@ -40075,7 +40710,15 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
           session_id: context2.sessionId,
           wave: state.wave
         },
-        async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+        async () => executeWithSandboxRouting(
+          checkId,
+          checkConfig,
+          context2,
+          prInfo,
+          dependencyResults,
+          checkConfig.ai?.timeout || 18e5,
+          () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+        )
       );
       const enrichedIssues = (result.issues || []).map((issue) => ({
         ...issue,
@@ -40390,6 +41033,7 @@ var init_foreach_processor = __esm({
     init_stats_manager();
     init_routing();
     init_workflow_inputs();
+    init_sandbox_routing();
   }
 });
 
@@ -41054,7 +41698,15 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
         session_id: context2.sessionId,
         wave: state.wave
       },
-      async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+      async () => executeWithSandboxRouting(
+        checkId,
+        checkConfig,
+        context2,
+        prInfo,
+        dependencyResults,
+        checkConfig.ai?.timeout || 18e5,
+        () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+      )
     );
     const enrichedIssues = (result.issues || []).map((issue) => ({
       ...issue,
@@ -41244,6 +41896,7 @@ var init_execution_invoker = __esm({
     init_on_init_handlers();
     init_sandbox();
     init_workflow_inputs();
+    init_sandbox_routing();
     MAX_ON_INIT_ITEMS = 50;
   }
 });
@@ -41934,7 +42587,15 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
           session_id: context2.sessionId,
           wave: state.wave
         },
-        async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+        async () => executeWithSandboxRouting(
+          checkId,
+          checkConfig,
+          context2,
+          prInfo,
+          dependencyResults,
+          checkConfig.ai?.timeout || 18e5,
+          () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+        )
       );
       const enrichedIssues = (itemResult.issues || []).map((issue) => ({
         ...issue,
@@ -42941,7 +43602,15 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
         session_id: context2.sessionId,
         wave: state.wave
       },
-      async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+      async () => executeWithSandboxRouting(
+        checkId,
+        checkConfig2,
+        context2,
+        prInfo,
+        dependencyResults,
+        checkConfig2.ai?.timeout || 18e5,
+        () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+      )
     );
     try {
       const awaitingHumanInput = result?.awaitingHumanInput === true || result?.output && result.output.awaitingHumanInput === true;
@@ -43634,6 +44303,7 @@ var init_level_dispatch = __esm({
     init_fallback_ndjson();
     init_failure_condition_evaluator();
     init_workflow_inputs();
+    init_sandbox_routing();
   }
 });
 
@@ -44729,8 +45399,8 @@ var init_workspace_manager = __esm({
         );
         if (this.cleanupRequested && this.activeOperations === 0) {
           logger.debug(`[Workspace] All references released, proceeding with deferred cleanup`);
-          for (const resolve9 of this.cleanupResolvers) {
-            resolve9();
+          for (const resolve10 of this.cleanupResolvers) {
+            resolve10();
           }
           this.cleanupResolvers = [];
         }
@@ -44855,19 +45525,19 @@ var init_workspace_manager = __esm({
           );
           this.cleanupRequested = true;
           await Promise.race([
-            new Promise((resolve9) => {
+            new Promise((resolve10) => {
               if (this.activeOperations === 0) {
-                resolve9();
+                resolve10();
               } else {
-                this.cleanupResolvers.push(resolve9);
+                this.cleanupResolvers.push(resolve10);
               }
             }),
-            new Promise((resolve9) => {
+            new Promise((resolve10) => {
               setTimeout(() => {
                 logger.warn(
                   `[Workspace] Cleanup timeout after ${timeout}ms, proceeding anyway (${this.activeOperations} operations still active)`
                 );
-                resolve9();
+                resolve10();
               }, timeout);
             })
           ]);
@@ -45170,12 +45840,12 @@ var ndjson_sink_exports = {};
 __export(ndjson_sink_exports, {
   NdjsonSink: () => NdjsonSink
 });
-var import_fs2, import_path5, NdjsonSink;
+var import_fs6, import_path8, NdjsonSink;
 var init_ndjson_sink = __esm({
   "src/frontends/ndjson-sink.ts"() {
     "use strict";
-    import_fs2 = __toESM(require("fs"));
-    import_path5 = __toESM(require("path"));
+    import_fs6 = __toESM(require("fs"));
+    import_path8 = __toESM(require("path"));
     NdjsonSink = class {
       name = "ndjson-sink";
       cfg;
@@ -45196,7 +45866,7 @@ var init_ndjson_sink = __esm({
               payload: envelope && envelope.payload || envelope,
               safe: true
             });
-            await import_fs2.default.promises.appendFile(this.filePath, line + "\n");
+            await import_fs6.default.promises.appendFile(this.filePath, line + "\n");
           } catch (err) {
             ctx.logger.error("[ndjson-sink] Failed to write event:", err);
           }
@@ -45207,8 +45877,8 @@ var init_ndjson_sink = __esm({
         this.unsub = void 0;
       }
       resolveFile(p) {
-        if (import_path5.default.isAbsolute(p)) return p;
-        return import_path5.default.join(process.cwd(), p);
+        if (import_path8.default.isAbsolute(p)) return p;
+        return import_path8.default.join(process.cwd(), p);
       }
     };
   }
@@ -46031,8 +46701,8 @@ ${content}
        * Sleep utility
        */
       sleep(ms) {
-        return new Promise((resolve9) => {
-          const t = setTimeout(resolve9, ms);
+        return new Promise((resolve10) => {
+          const t = setTimeout(resolve10, ms);
           if (typeof t.unref === "function") {
             try {
               t.unref();
@@ -46306,8 +46976,8 @@ ${end}`);
       async updateGroupedComment(ctx, comments, group, changedIds) {
         const existingLock = this.updateLocks.get(group);
         let resolveLock;
-        const ourLock = new Promise((resolve9) => {
-          resolveLock = resolve9;
+        const ourLock = new Promise((resolve10) => {
+          resolveLock = resolve10;
         });
         this.updateLocks.set(group, ourLock);
         try {
@@ -46619,7 +47289,7 @@ ${blocks}
        * Sleep utility for enforcing delays
        */
       sleep(ms) {
-        return new Promise((resolve9) => setTimeout(resolve9, ms));
+        return new Promise((resolve10) => setTimeout(resolve10, ms));
       }
     };
   }
@@ -46892,8 +47562,8 @@ async function renderMermaidToPng(mermaidCode) {
     if (chromiumPath) {
       env.PUPPETEER_EXECUTABLE_PATH = chromiumPath;
     }
-    const result = await new Promise((resolve9) => {
-      const proc = (0, import_child_process2.spawn)(
+    const result = await new Promise((resolve10) => {
+      const proc = (0, import_child_process5.spawn)(
         "npx",
         [
           "--yes",
@@ -46922,13 +47592,13 @@ async function renderMermaidToPng(mermaidCode) {
       });
       proc.on("close", (code) => {
         if (code === 0) {
-          resolve9({ success: true });
+          resolve10({ success: true });
         } else {
-          resolve9({ success: false, error: stderr || `Exit code ${code}` });
+          resolve10({ success: false, error: stderr || `Exit code ${code}` });
         }
       });
       proc.on("error", (err) => {
-        resolve9({ success: false, error: err.message });
+        resolve10({ success: false, error: err.message });
       });
     });
     if (!result.success) {
@@ -47011,11 +47681,11 @@ function markdownToSlack(text) {
 function formatSlackText(text) {
   return markdownToSlack(text);
 }
-var import_child_process2, fs18, path20, os;
+var import_child_process5, fs18, path20, os;
 var init_markdown = __esm({
   "src/slack/markdown.ts"() {
     "use strict";
-    import_child_process2 = require("child_process");
+    import_child_process5 = require("child_process");
     fs18 = __toESM(require("fs"));
     path20 = __toESM(require("path"));
     os = __toESM(require("os"));
@@ -47599,6 +48269,617 @@ module.exports = __toCommonJS(sdk_exports);
 // src/state-machine-execution-engine.ts
 init_runner();
 init_logger();
+
+// src/sandbox/sandbox-manager.ts
+var import_path7 = require("path");
+var import_fs5 = require("fs");
+
+// src/sandbox/docker-image-sandbox.ts
+var import_util2 = require("util");
+var import_child_process2 = require("child_process");
+var import_fs4 = require("fs");
+var import_path6 = require("path");
+var import_os = require("os");
+var import_crypto2 = require("crypto");
+init_logger();
+init_sandbox_telemetry();
+var execFileAsync = (0, import_util2.promisify)(import_child_process2.execFile);
+var EXEC_MAX_BUFFER = 50 * 1024 * 1024;
+var DockerImageSandbox = class {
+  name;
+  config;
+  containerId = null;
+  containerName;
+  repoPath;
+  visorDistPath;
+  cacheVolumeMounts;
+  constructor(name, config, repoPath, visorDistPath, cacheVolumeMounts = []) {
+    this.name = name;
+    this.config = config;
+    this.repoPath = repoPath;
+    this.visorDistPath = visorDistPath;
+    this.containerName = `visor-${name}-${(0, import_crypto2.randomUUID)().slice(0, 8)}`;
+    this.cacheVolumeMounts = cacheVolumeMounts;
+  }
+  /**
+   * Build the Docker image if needed (dockerfile or dockerfile_inline mode)
+   */
+  async buildImageIfNeeded() {
+    if (this.config.image) {
+      return this.config.image;
+    }
+    const imageName = `visor-sandbox-${this.name}`;
+    const buildMode = this.config.dockerfile_inline ? "inline" : "dockerfile";
+    return withActiveSpan2(
+      "visor.sandbox.build",
+      {
+        "visor.sandbox.name": this.name,
+        "visor.sandbox.build.mode": buildMode
+      },
+      async () => {
+        if (this.config.dockerfile_inline) {
+          if (!/^\s*FROM\s+/im.test(this.config.dockerfile_inline)) {
+            throw new Error(
+              `Sandbox '${this.name}' has invalid dockerfile_inline: must contain a FROM instruction`
+            );
+          }
+          const tmpDir = (0, import_fs4.mkdtempSync)((0, import_path6.join)((0, import_os.tmpdir)(), "visor-build-"));
+          const dockerfilePath = (0, import_path6.join)(tmpDir, "Dockerfile");
+          (0, import_fs4.writeFileSync)(dockerfilePath, this.config.dockerfile_inline, "utf8");
+          try {
+            logger.info(`Building sandbox image '${imageName}' from inline Dockerfile`);
+            await execFileAsync(
+              "docker",
+              ["build", "-t", imageName, "-f", dockerfilePath, this.repoPath],
+              {
+                maxBuffer: EXEC_MAX_BUFFER,
+                timeout: 3e5
+              }
+            );
+          } finally {
+            try {
+              (0, import_fs4.unlinkSync)(dockerfilePath);
+            } catch {
+            }
+          }
+          return imageName;
+        }
+        if (this.config.dockerfile) {
+          logger.info(`Building sandbox image '${imageName}' from ${this.config.dockerfile}`);
+          await execFileAsync(
+            "docker",
+            ["build", "-t", imageName, "-f", this.config.dockerfile, this.repoPath],
+            { maxBuffer: EXEC_MAX_BUFFER, timeout: 3e5 }
+          );
+          return imageName;
+        }
+        throw new Error(`Sandbox '${this.name}' has no image, dockerfile, or dockerfile_inline`);
+      }
+    );
+  }
+  /**
+   * Start the sandbox container
+   */
+  async start() {
+    const image = await this.buildImageIfNeeded();
+    const workdir = this.config.workdir || "/workspace";
+    const visorPath = this.config.visor_path || "/opt/visor";
+    const readOnlySuffix = this.config.read_only ? ":ro" : "";
+    const args = [
+      "docker",
+      "run",
+      "-d",
+      "--name",
+      this.containerName,
+      "-v",
+      `${this.repoPath}:${workdir}${readOnlySuffix}`,
+      "-v",
+      `${this.visorDistPath}:${visorPath}:ro`,
+      "-w",
+      workdir
+    ];
+    if (this.config.network === false) {
+      args.push("--network", "none");
+    }
+    if (this.config.resources?.memory) {
+      args.push("--memory", this.config.resources.memory);
+    }
+    if (this.config.resources?.cpu) {
+      args.push("--cpus", String(this.config.resources.cpu));
+    }
+    for (const mount of this.cacheVolumeMounts) {
+      args.push("-v", mount);
+    }
+    args.push(image, "sleep", "infinity");
+    logger.info(`Starting sandbox container '${this.containerName}'`);
+    const { stdout } = await execFileAsync(args[0], args.slice(1), {
+      maxBuffer: EXEC_MAX_BUFFER,
+      timeout: 6e4
+    });
+    this.containerId = stdout.trim();
+    addEvent2("visor.sandbox.container.started", {
+      container_name: this.containerName,
+      image
+    });
+  }
+  /**
+   * Execute a command inside the running container
+   */
+  async exec(options) {
+    if (!this.containerId) {
+      throw new Error(`Sandbox '${this.name}' is not started`);
+    }
+    const args = ["docker", "exec"];
+    for (const [key, value] of Object.entries(options.env)) {
+      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+        throw new Error(`Invalid environment variable name: '${key}'`);
+      }
+      args.push("-e", `${key}=${value}`);
+    }
+    args.push(this.containerName, "sh", "-c", options.command);
+    try {
+      const { stdout, stderr } = await execFileAsync(args[0], args.slice(1), {
+        maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER,
+        timeout: options.timeoutMs || 6e5
+      });
+      return { stdout, stderr, exitCode: 0 };
+    } catch (err) {
+      const execErr = err;
+      return {
+        stdout: execErr.stdout || "",
+        stderr: execErr.stderr || "",
+        exitCode: typeof execErr.code === "number" ? execErr.code : 1
+      };
+    }
+  }
+  /**
+   * Stop and remove the container
+   */
+  async stop() {
+    if (this.containerName) {
+      try {
+        await execFileAsync("docker", ["rm", "-f", this.containerName], {
+          maxBuffer: EXEC_MAX_BUFFER,
+          timeout: 3e4
+        });
+      } catch {
+      }
+      addEvent2("visor.sandbox.container.stopped", {
+        container_name: this.containerName
+      });
+      this.containerId = null;
+    }
+  }
+};
+
+// src/sandbox/docker-compose-sandbox.ts
+var import_util3 = require("util");
+var import_child_process3 = require("child_process");
+var import_crypto3 = require("crypto");
+init_logger();
+var execFileAsync2 = (0, import_util3.promisify)(import_child_process3.execFile);
+var EXEC_MAX_BUFFER2 = 50 * 1024 * 1024;
+var DockerComposeSandbox = class {
+  name;
+  config;
+  projectName;
+  started = false;
+  constructor(name, config) {
+    this.name = name;
+    this.config = config;
+    this.projectName = `visor-${name}-${(0, import_crypto3.randomUUID)().slice(0, 8)}`;
+  }
+  /**
+   * Start the compose services
+   */
+  async start() {
+    if (!this.config.compose) {
+      throw new Error(`Sandbox '${this.name}' has no compose file specified`);
+    }
+    if (!this.config.service) {
+      throw new Error(`Sandbox '${this.name}' requires a 'service' field for compose mode`);
+    }
+    logger.info(`Starting compose sandbox '${this.name}' (project: ${this.projectName})`);
+    await execFileAsync2(
+      "docker",
+      ["compose", "-f", this.config.compose, "-p", this.projectName, "up", "-d"],
+      {
+        maxBuffer: EXEC_MAX_BUFFER2,
+        timeout: 12e4
+      }
+    );
+    this.started = true;
+  }
+  /**
+   * Execute a command inside the compose service
+   */
+  async exec(options) {
+    if (!this.started) {
+      throw new Error(`Compose sandbox '${this.name}' is not started`);
+    }
+    const service = this.config.service;
+    const args = [
+      "docker",
+      "compose",
+      "-f",
+      this.config.compose,
+      "-p",
+      this.projectName,
+      "exec",
+      "-T"
+      // non-interactive
+    ];
+    for (const [key, value] of Object.entries(options.env)) {
+      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+        throw new Error(`Invalid environment variable name: '${key}'`);
+      }
+      args.push("-e", `${key}=${value}`);
+    }
+    if (this.config.workdir) {
+      args.push("-w", this.config.workdir);
+    }
+    args.push(service, "sh", "-c", options.command);
+    try {
+      const { stdout, stderr } = await execFileAsync2(args[0], args.slice(1), {
+        maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER2,
+        timeout: options.timeoutMs || 6e5
+      });
+      return { stdout, stderr, exitCode: 0 };
+    } catch (err) {
+      const execErr = err;
+      return {
+        stdout: execErr.stdout || "",
+        stderr: execErr.stderr || "",
+        exitCode: typeof execErr.code === "number" ? execErr.code : 1
+      };
+    }
+  }
+  /**
+   * Stop and tear down the compose project
+   */
+  async stop() {
+    if (this.started && this.config.compose) {
+      try {
+        await execFileAsync2(
+          "docker",
+          ["compose", "-f", this.config.compose, "-p", this.projectName, "down"],
+          {
+            maxBuffer: EXEC_MAX_BUFFER2,
+            timeout: 6e4
+          }
+        );
+      } catch {
+      }
+      this.started = false;
+    }
+  }
+};
+
+// src/sandbox/cache-volume-manager.ts
+var import_util4 = require("util");
+var import_child_process4 = require("child_process");
+var import_crypto4 = require("crypto");
+init_logger();
+var execFileAsync3 = (0, import_util4.promisify)(import_child_process4.execFile);
+var EXEC_MAX_BUFFER3 = 10 * 1024 * 1024;
+function pathHash(containerPath) {
+  return (0, import_crypto4.createHash)("sha256").update(containerPath).digest("hex").slice(0, 8);
+}
+function parseTtl(ttl) {
+  let ms = 0;
+  const dayMatch = ttl.match(/(\d+)d/);
+  const hourMatch = ttl.match(/(\d+)h/);
+  const minMatch = ttl.match(/(\d+)m/);
+  if (dayMatch) ms += parseInt(dayMatch[1], 10) * 864e5;
+  if (hourMatch) ms += parseInt(hourMatch[1], 10) * 36e5;
+  if (minMatch) ms += parseInt(minMatch[1], 10) * 6e4;
+  return ms || 6048e5;
+}
+var CacheVolumeManager = class {
+  /**
+   * Resolve cache config into Docker volume mount specs.
+   *
+   * Volume naming: visor-cache-<prefix>-<sandboxName>-<pathHash>
+   *
+   * @param sandboxName - Name of the sandbox
+   * @param cacheConfig - Cache configuration from sandbox config
+   * @param gitBranch - Current git branch (used as default prefix)
+   * @returns Array of volume mount specs for docker run -v
+   */
+  async resolveVolumes(sandboxName, cacheConfig, gitBranch) {
+    const prefix = (cacheConfig.prefix || gitBranch).replace(/[^a-zA-Z0-9._-]/g, "-");
+    const volumes = [];
+    for (const containerPath of cacheConfig.paths) {
+      if (/\.\./.test(containerPath)) {
+        throw new Error(`Cache path '${containerPath}' must not contain '..' path traversal`);
+      }
+      const hash = pathHash(containerPath);
+      const volumeName = `visor-cache-${prefix}-${sandboxName}-${hash}`;
+      const exists = await this.volumeExists(volumeName);
+      if (!exists && cacheConfig.fallback_prefix) {
+        const fallbackPrefix = cacheConfig.fallback_prefix.replace(/[^a-zA-Z0-9._-]/g, "-");
+        const fallbackVolume = `visor-cache-${fallbackPrefix}-${sandboxName}-${hash}`;
+        const fallbackExists = await this.volumeExists(fallbackVolume);
+        if (fallbackExists) {
+          logger.info(`Cache miss for '${volumeName}', copying from fallback '${fallbackVolume}'`);
+          await this.copyVolume(fallbackVolume, volumeName);
+        } else {
+          await this.createVolume(volumeName);
+        }
+      } else if (!exists) {
+        await this.createVolume(volumeName);
+      }
+      await this.touchVolume(volumeName);
+      volumes.push({
+        volumeName,
+        mountSpec: `${volumeName}:${containerPath}`
+      });
+    }
+    return volumes;
+  }
+  /**
+   * Check if a Docker volume exists
+   */
+  async volumeExists(name) {
+    try {
+      await execFileAsync3("docker", ["volume", "inspect", name], {
+        maxBuffer: EXEC_MAX_BUFFER3,
+        timeout: 1e4
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  /**
+   * Create a Docker named volume
+   */
+  async createVolume(name) {
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    await execFileAsync3("docker", ["volume", "create", "--label", `visor.last-used=${now}`, name], {
+      maxBuffer: EXEC_MAX_BUFFER3,
+      timeout: 1e4
+    });
+  }
+  /**
+   * Copy data from one volume to another using a temp container
+   */
+  async copyVolume(source, target) {
+    await this.createVolume(target);
+    try {
+      await execFileAsync3(
+        "docker",
+        [
+          "run",
+          "--rm",
+          "-v",
+          `${source}:/src:ro`,
+          "-v",
+          `${target}:/dst`,
+          "alpine",
+          "sh",
+          "-c",
+          "cp -a /src/. /dst/"
+        ],
+        { maxBuffer: EXEC_MAX_BUFFER3, timeout: 6e4 }
+      );
+    } catch (err) {
+      logger.warn(`Failed to copy cache volume ${source} -> ${target}: ${err}`);
+    }
+  }
+  /**
+   * Update the last-used label on a volume.
+   * Docker doesn't support updating labels in-place, so we record via a temp file approach
+   * by simply re-creating volumes with updated labels if they don't exist.
+   * For existing volumes, we track usage time via the volume name pattern.
+   */
+  async touchVolume(_name) {
+  }
+  /**
+   * Evict expired cache volumes for a sandbox
+   */
+  async evictExpired(sandboxName, ttl, maxScopes) {
+    const ttlMs = ttl ? parseTtl(ttl) : 6048e5;
+    const maxScopesLimit = maxScopes || 10;
+    try {
+      const { stdout } = await execFileAsync3(
+        "docker",
+        ["volume", "ls", "--filter", "name=visor-cache-", "--format", "{{.Name}}"],
+        { maxBuffer: EXEC_MAX_BUFFER3, timeout: 1e4 }
+      );
+      const allVolumes = stdout.trim().split("\n").filter(Boolean);
+      const sandboxVolumes = allVolumes.filter((v) => v.includes(`-${sandboxName}-`));
+      if (sandboxVolumes.length === 0) return;
+      const scopeMap = /* @__PURE__ */ new Map();
+      for (const vol of sandboxVolumes) {
+        const match = vol.match(/^visor-cache-(.+)-\w{8}$/);
+        if (match) {
+          const prefix = match[1].replace(`-${sandboxName}`, "");
+          if (!scopeMap.has(prefix)) scopeMap.set(prefix, []);
+          scopeMap.get(prefix).push(vol);
+        }
+      }
+      const now = Date.now();
+      const inspectResults = await Promise.allSettled(
+        sandboxVolumes.map(async (vol) => {
+          const { stdout: inspectOut } = await execFileAsync3(
+            "docker",
+            ["volume", "inspect", vol, "--format", "{{.CreatedAt}}"],
+            { maxBuffer: EXEC_MAX_BUFFER3, timeout: 1e4 }
+          );
+          return { vol, createdAt: new Date(inspectOut.trim()).getTime() };
+        })
+      );
+      for (const result of inspectResults) {
+        if (result.status !== "fulfilled") continue;
+        const { vol, createdAt } = result.value;
+        if (now - createdAt > ttlMs) {
+          try {
+            logger.info(`Evicting expired cache volume: ${vol}`);
+            await execFileAsync3("docker", ["volume", "rm", vol], {
+              maxBuffer: EXEC_MAX_BUFFER3,
+              timeout: 1e4
+            });
+          } catch {
+          }
+        }
+      }
+      if (scopeMap.size > maxScopesLimit) {
+        const scopes = Array.from(scopeMap.keys());
+        const toRemove = scopes.slice(0, scopes.length - maxScopesLimit);
+        for (const scope of toRemove) {
+          const vols = scopeMap.get(scope) || [];
+          for (const vol of vols) {
+            try {
+              logger.info(`Evicting cache volume (max_scopes exceeded): ${vol}`);
+              await execFileAsync3("docker", ["volume", "rm", vol], {
+                maxBuffer: EXEC_MAX_BUFFER3,
+                timeout: 1e4
+              });
+            } catch {
+            }
+          }
+        }
+      }
+    } catch {
+    }
+  }
+};
+
+// src/sandbox/sandbox-manager.ts
+init_logger();
+init_sandbox_telemetry();
+var SandboxManager = class {
+  sandboxDefs;
+  repoPath;
+  gitBranch;
+  instances = /* @__PURE__ */ new Map();
+  cacheManager;
+  visorDistPath;
+  /** Get the resolved repository path (used by trace file relay) */
+  getRepoPath() {
+    return this.repoPath;
+  }
+  constructor(sandboxDefs, repoPath, gitBranch) {
+    this.sandboxDefs = sandboxDefs;
+    this.repoPath = (0, import_path7.resolve)(repoPath);
+    this.gitBranch = gitBranch;
+    this.cacheManager = new CacheVolumeManager();
+    this.visorDistPath = (0, import_fs5.existsSync)((0, import_path7.join)(__dirname, "index.js")) ? __dirname : (0, import_path7.resolve)((0, import_path7.dirname)(__dirname));
+  }
+  /**
+   * Resolve which sandbox a check should use.
+   * Returns null if the check should run on the host.
+   *
+   * Resolution order:
+   * 1. Check-level sandbox: (explicit override)
+   * 2. Workspace-level sandbox: (default)
+   * 3. null → run on host
+   */
+  resolveSandbox(checkSandbox, workspaceDefault) {
+    const name = checkSandbox || workspaceDefault;
+    if (!name) return null;
+    if (!this.sandboxDefs[name]) {
+      throw new Error(`Sandbox '${name}' is not defined in sandboxes configuration`);
+    }
+    return name;
+  }
+  /**
+   * Get or lazily start a sandbox instance by name.
+   */
+  async getOrStart(name) {
+    const existing = this.instances.get(name);
+    if (existing) return existing;
+    const config = this.sandboxDefs[name];
+    if (!config) {
+      throw new Error(`Sandbox '${name}' is not defined`);
+    }
+    const mode = config.compose ? "compose" : "image";
+    return withActiveSpan2(
+      "visor.sandbox.start",
+      {
+        "visor.sandbox.name": name,
+        "visor.sandbox.mode": mode
+      },
+      async () => {
+        let instance;
+        if (config.compose) {
+          const composeSandbox = new DockerComposeSandbox(name, config);
+          await composeSandbox.start();
+          instance = composeSandbox;
+        } else {
+          let cacheVolumeMounts = [];
+          if (config.cache) {
+            const volumes = await this.cacheManager.resolveVolumes(
+              name,
+              config.cache,
+              this.gitBranch
+            );
+            cacheVolumeMounts = volumes.map((v) => v.mountSpec);
+          }
+          const imageSandbox = new DockerImageSandbox(
+            name,
+            config,
+            this.repoPath,
+            this.visorDistPath,
+            cacheVolumeMounts
+          );
+          await imageSandbox.start();
+          instance = imageSandbox;
+        }
+        this.instances.set(name, instance);
+        return instance;
+      }
+    );
+  }
+  /**
+   * Execute a command inside a named sandbox
+   */
+  async exec(name, options) {
+    const instance = await this.getOrStart(name);
+    return withActiveSpan2(
+      "visor.sandbox.exec",
+      {
+        "visor.sandbox.name": name
+      },
+      async (span) => {
+        const result = await instance.exec(options);
+        try {
+          span.setAttribute("visor.sandbox.exit_code", result.exitCode);
+        } catch {
+        }
+        return result;
+      }
+    );
+  }
+  /**
+   * Stop all running sandbox instances and run cache eviction
+   */
+  async stopAll() {
+    return withActiveSpan2("visor.sandbox.stopAll", void 0, async () => {
+      const stopPromises = Array.from(this.instances.entries()).map(async ([name, instance]) => {
+        try {
+          await instance.stop();
+          addEvent2("visor.sandbox.stopped", { "visor.sandbox.name": name });
+          logger.info(`Stopped sandbox '${name}'`);
+        } catch (err) {
+          logger.warn(`Failed to stop sandbox '${name}': ${err}`);
+        }
+        const config = this.sandboxDefs[name];
+        if (config?.cache) {
+          try {
+            await this.cacheManager.evictExpired(name, config.cache.ttl, config.cache.max_scopes);
+          } catch {
+          }
+        }
+      });
+      await Promise.allSettled(stopPromises);
+      this.instances.clear();
+    });
+  }
+};
+
+// src/state-machine-execution-engine.ts
 var path21 = __toESM(require("path"));
 var fs19 = __toESM(require("fs"));
 var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
@@ -47794,6 +49075,23 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       checks
       // Pass the explicit checks list
     );
+    if (configWithTagFilter.sandboxes && Object.keys(configWithTagFilter.sandboxes).length > 0) {
+      try {
+        const { execSync } = require("child_process");
+        const gitBranch = execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf8" }).trim();
+        context2.sandboxManager = new SandboxManager(
+          configWithTagFilter.sandboxes,
+          this.workingDirectory,
+          gitBranch
+        );
+      } catch {
+        context2.sandboxManager = new SandboxManager(
+          configWithTagFilter.sandboxes,
+          this.workingDirectory,
+          "unknown"
+        );
+      }
+    }
     const { initializeWorkspace: initializeWorkspace2 } = (init_build_engine_context(), __toCommonJS(build_engine_context_exports));
     await initializeWorkspace2(context2);
     context2.executionContext = this.getExecutionContext();
@@ -47927,31 +49225,40 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
     }
     const runner = new StateMachineRunner(context2, this.debugServer);
     this._lastRunner = runner;
-    const result = await runner.run();
-    if (frontendsHost && typeof frontendsHost.stopAll === "function") {
-      try {
-        await frontendsHost.stopAll();
-      } catch {
-      }
-    }
-    if (debug) {
-      logger.info("[StateMachine] Execution complete");
-    }
     try {
-      const { SessionRegistry: SessionRegistry2 } = await Promise.resolve().then(() => (init_session_registry(), session_registry_exports));
-      const sessionRegistry = SessionRegistry2.getInstance();
-      sessionRegistry.clearAllSessions();
-    } catch (error) {
-      logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
-    }
-    if (context2.workspace) {
+      const result = await runner.run();
+      if (frontendsHost && typeof frontendsHost.stopAll === "function") {
+        try {
+          await frontendsHost.stopAll();
+        } catch {
+        }
+      }
+      if (debug) {
+        logger.info("[StateMachine] Execution complete");
+      }
       try {
-        await context2.workspace.cleanup();
+        const { SessionRegistry: SessionRegistry2 } = await Promise.resolve().then(() => (init_session_registry(), session_registry_exports));
+        const sessionRegistry = SessionRegistry2.getInstance();
+        sessionRegistry.clearAllSessions();
       } catch (error) {
-        logger.debug(`[StateMachine] Failed to cleanup workspace: ${error}`);
+        logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
+      }
+      if (context2.workspace) {
+        try {
+          await context2.workspace.cleanup();
+        } catch (error) {
+          logger.debug(`[StateMachine] Failed to cleanup workspace: ${error}`);
+        }
+      }
+      return result;
+    } finally {
+      if (context2.sandboxManager) {
+        await context2.sandboxManager.stopAll().catch((err) => {
+          logger.warn(`Failed to stop sandboxes: ${err}`);
+        });
+        context2.sandboxManager = void 0;
       }
     }
-    return result;
   }
   /**
    * Build the engine context for state machine execution
@@ -48130,7 +49437,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
   async evaluateFailureConditions(checkName, reviewSummary, config, previousOutputs, authorAssociation) {
     const { FailureConditionEvaluator: FailureConditionEvaluator2 } = await Promise.resolve().then(() => (init_failure_condition_evaluator(), failure_condition_evaluator_exports));
     const evaluator = new FailureConditionEvaluator2();
-    const { addEvent: addEvent2 } = await Promise.resolve().then(() => (init_trace_helpers(), trace_helpers_exports));
+    const { addEvent: addEvent3 } = await Promise.resolve().then(() => (init_trace_helpers(), trace_helpers_exports));
     const { addFailIfTriggered: addFailIfTriggered2 } = await Promise.resolve().then(() => (init_metrics(), metrics_exports));
     const checkConfig = config.checks?.[checkName];
     if (!checkConfig) {
@@ -48150,14 +49457,14 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
         previousOutputs || {}
       );
       try {
-        addEvent2("fail_if.evaluated", {
+        addEvent3("fail_if.evaluated", {
           "visor.check.id": checkName,
           scope: "global",
           expression: String(config.fail_if),
           result: failed ? "triggered" : "not_triggered"
         });
         if (failed) {
-          addEvent2("fail_if.triggered", {
+          addEvent3("fail_if.triggered", {
             "visor.check.id": checkName,
             scope: "global",
             expression: String(config.fail_if)
@@ -48185,14 +49492,14 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
         previousOutputs || {}
       );
       try {
-        addEvent2("fail_if.evaluated", {
+        addEvent3("fail_if.evaluated", {
           "visor.check.id": checkName,
           scope: "check",
           expression: String(checkConfig.fail_if),
           result: failed ? "triggered" : "not_triggered"
         });
         if (failed) {
-          addEvent2("fail_if.triggered", {
+          addEvent3("fail_if.triggered", {
             "visor.check.id": checkName,
             scope: "check",
             expression: String(checkConfig.fail_if)

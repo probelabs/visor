@@ -64,8 +64,62 @@ interface ReviewSummary {
 }
 
 /**
- * Types for Visor configuration system
+ * Types for Docker-based sandbox execution environments
  */
+
+/**
+ * Cache configuration for sandbox volumes
+ */
+interface SandboxCacheConfig {
+    /** Liquid template for cache scope prefix (default: git branch) */
+    prefix?: string;
+    /** Fallback prefix when current prefix has no cache */
+    fallback_prefix?: string;
+    /** Paths inside the container to cache */
+    paths: string[];
+    /** Time-to-live for cache volumes (e.g., "7d", "24h") */
+    ttl?: string;
+    /** Maximum number of cache scopes to keep */
+    max_scopes?: number;
+}
+/**
+ * Resource limits for sandbox containers
+ */
+interface SandboxResourceConfig {
+    /** Memory limit (e.g., "512m", "2g") */
+    memory?: string;
+    /** CPU limit (e.g., 1.0, 0.5) */
+    cpu?: number;
+}
+/**
+ * Configuration for a single sandbox environment
+ */
+interface SandboxConfig {
+    /** Docker image to use (e.g., "node:20-alpine") */
+    image?: string;
+    /** Path to Dockerfile (relative to config file or absolute) */
+    dockerfile?: string;
+    /** Inline Dockerfile content */
+    dockerfile_inline?: string;
+    /** Path to docker-compose file */
+    compose?: string;
+    /** Service name within the compose file */
+    service?: string;
+    /** Working directory inside container (default: /workspace) */
+    workdir?: string;
+    /** Glob patterns for host env vars to forward into sandbox */
+    env_passthrough?: string[];
+    /** Enable/disable network access (default: true) */
+    network?: boolean;
+    /** Mount repo as read-only (default: false) */
+    read_only?: boolean;
+    /** Resource limits */
+    resources?: SandboxResourceConfig;
+    /** Where visor is mounted inside container (default: /opt/visor) */
+    visor_path?: string;
+    /** Cache volume configuration */
+    cache?: SandboxCacheConfig;
+}
 
 /**
  * Failure condition severity levels
@@ -624,6 +678,8 @@ interface CheckConfig {
     cleanup_on_failure?: boolean;
     /** Keep worktree after workflow completion (default: false) */
     persist_worktree?: boolean;
+    /** Sandbox name to use for this check (overrides workspace-level default) */
+    sandbox?: string;
 }
 /**
  * Backoff policy for retries
@@ -1026,6 +1082,10 @@ interface WorkflowOutput {
     /** Value using JavaScript expression (alternative to value) */
     value_js?: string;
 }
+interface SandboxDefaults {
+    /** Base env var patterns for all sandboxes (replaces hardcoded defaults when set) */
+    env_passthrough?: string[];
+}
 /**
  * Main Visor configuration
  */
@@ -1087,6 +1147,12 @@ interface VisorConfig {
     }>;
     /** Workspace isolation configuration for sandboxed execution */
     workspace?: WorkspaceConfig;
+    /** Workspace-level default sandbox name (all checks use this unless overridden) */
+    sandbox?: string;
+    /** Named sandbox environment definitions */
+    sandboxes?: Record<string, SandboxConfig>;
+    /** Workspace-level sandbox defaults (env allowlist, etc.) */
+    sandbox_defaults?: SandboxDefaults;
     /** Slack configuration */
     slack?: SlackConfig;
 }
