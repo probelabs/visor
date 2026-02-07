@@ -97,6 +97,11 @@ export class ScheduleStore {
   private saveTimeout: NodeJS.Timeout | null = null;
   private limits: ScheduleLimits;
 
+  // Concurrency protection
+  private saveLock: Promise<void> = Promise.resolve();
+  private pendingSave = false;
+  private dirtyCount = 0; // Track unsaved changes
+
   private constructor(config?: ScheduleStoreConfig, limits?: ScheduleLimits) {
     this.filePath = config?.path || '.visor/schedules.json';
     this.autoSave = config?.autoSave !== false;
@@ -175,35 +180,59 @@ export class ScheduleStore {
   }
 
   /**
-   * Save schedules to file with atomic write
+   * Save schedules to file with atomic write and concurrency protection
    */
   async save(): Promise<void> {
-    const resolvedPath = path.resolve(process.cwd(), this.filePath);
-    const dir = path.dirname(resolvedPath);
+    // Use lock to prevent concurrent saves
+    const previousLock = this.saveLock;
+    let releaseLock: () => void;
+    this.saveLock = new Promise<void>(resolve => {
+      releaseLock = resolve;
+    });
 
-    // Ensure directory exists
-    await fs.mkdir(dir, { recursive: true });
+    try {
+      // Wait for any previous save to complete
+      await previousLock;
 
-    // Prepare data
-    const data = {
-      version: '2.0', // New version for schedule format
-      savedAt: new Date().toISOString(),
-      schedules: Array.from(this.schedules.values()),
-    };
+      const resolvedPath = path.resolve(process.cwd(), this.filePath);
+      const dir = path.dirname(resolvedPath);
 
-    // Atomic write: write to temp file, then rename
-    const tempPath = `${resolvedPath}.tmp.${Date.now()}`;
-    await fs.writeFile(tempPath, JSON.stringify(data, null, 2), 'utf-8');
-    await fs.rename(tempPath, resolvedPath);
+      // Ensure directory exists
+      await fs.mkdir(dir, { recursive: true });
 
-    logger.debug(`[ScheduleStore] Saved ${this.schedules.size} schedules to ${this.filePath}`);
+      // Capture current dirty count before saving
+      const savedDirtyCount = this.dirtyCount;
+
+      // Prepare data
+      const data = {
+        version: '2.0', // New version for schedule format
+        savedAt: new Date().toISOString(),
+        schedules: Array.from(this.schedules.values()),
+      };
+
+      // Atomic write: write to temp file, then rename
+      const tempPath = `${resolvedPath}.tmp.${Date.now()}`;
+      await fs.writeFile(tempPath, JSON.stringify(data, null, 2), 'utf-8');
+      await fs.rename(tempPath, resolvedPath);
+
+      // Reset dirty count (only subtract what we saved, in case new changes came in)
+      this.dirtyCount = Math.max(0, this.dirtyCount - savedDirtyCount);
+      this.pendingSave = false;
+
+      logger.debug(`[ScheduleStore] Saved ${this.schedules.size} schedules to ${this.filePath}`);
+    } finally {
+      releaseLock!();
+    }
   }
 
   /**
-   * Schedule a debounced save operation
+   * Schedule a debounced save operation with dirty tracking
    */
   private scheduleSave(): void {
     if (!this.autoSave) return;
+
+    this.dirtyCount++;
+    this.pendingSave = true;
 
     if (this.saveTimeout) {
       clearTimeout(this.saveTimeout);
@@ -219,7 +248,54 @@ export class ScheduleStore {
   }
 
   /**
-   * Create a new schedule
+   * Immediately save if there are pending changes (for critical operations)
+   */
+  private async saveImmediate(): Promise<void> {
+    if (!this.autoSave) return;
+
+    // Cancel any pending debounced save
+    if (this.saveTimeout) {
+      clearTimeout(this.saveTimeout);
+      this.saveTimeout = null;
+    }
+
+    // Save immediately
+    await this.save();
+  }
+
+  /**
+   * Create a new schedule (saves immediately to prevent data loss)
+   */
+  async createAsync(
+    schedule: Omit<Schedule, 'id' | 'createdAt' | 'runCount' | 'failureCount' | 'status'>
+  ): Promise<Schedule> {
+    // Validate limits
+    this.validateLimits(schedule.creatorId, schedule.isRecurring);
+
+    const newSchedule: Schedule = {
+      ...schedule,
+      id: uuidv4(),
+      createdAt: Date.now(),
+      runCount: 0,
+      failureCount: 0,
+      status: 'active',
+    };
+
+    this.schedules.set(newSchedule.id, newSchedule);
+
+    // Critical operation: save immediately to prevent data loss
+    await this.saveImmediate();
+
+    logger.info(
+      `[ScheduleStore] Created schedule ${newSchedule.id} for user ${newSchedule.creatorId}: workflow="${newSchedule.workflow}"`
+    );
+
+    return newSchedule;
+  }
+
+  /**
+   * Create a new schedule (synchronous, uses debounced save)
+   * @deprecated Use createAsync for reliable persistence
    */
   create(
     schedule: Omit<Schedule, 'id' | 'createdAt' | 'runCount' | 'failureCount' | 'status'>
@@ -298,7 +374,21 @@ export class ScheduleStore {
   }
 
   /**
-   * Delete a schedule
+   * Delete a schedule (saves immediately to prevent data loss)
+   */
+  async deleteAsync(id: string): Promise<boolean> {
+    const deleted = this.schedules.delete(id);
+    if (deleted) {
+      // Critical operation: save immediately to prevent data loss
+      await this.saveImmediate();
+      logger.info(`[ScheduleStore] Deleted schedule ${id}`);
+    }
+    return deleted;
+  }
+
+  /**
+   * Delete a schedule (synchronous, uses debounced save)
+   * @deprecated Use deleteAsync for reliable persistence
    */
   delete(id: string): boolean {
     const deleted = this.schedules.delete(id);
@@ -391,6 +481,13 @@ export class ScheduleStore {
    */
   isInitialized(): boolean {
     return this.initialized;
+  }
+
+  /**
+   * Check if there are unsaved changes
+   */
+  hasPendingChanges(): boolean {
+    return this.pendingSave || this.dirtyCount > 0;
   }
 
   /**
