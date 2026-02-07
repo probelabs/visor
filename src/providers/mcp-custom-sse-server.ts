@@ -9,6 +9,14 @@ import {
   WorkflowToolDefinition,
   WorkflowToolContext,
 } from './workflow-tool-executor';
+import {
+  isScheduleTool,
+  handleScheduleAction,
+  buildScheduleToolContext,
+  ScheduleToolArgs,
+} from '../scheduler/schedule-tool';
+// Legacy Slack-specific imports for backwards compatibility
+import { extractSlackContext } from '../slack/schedule-tool-handler';
 
 /**
  * MCP Protocol message types
@@ -746,6 +754,74 @@ export class CustomToolsSSEServer implements CustomMCPServer {
 
       while (true) {
         try {
+          // Check if this is the schedule tool
+          if (isScheduleTool(toolName)) {
+            // Extract context from various sources
+            const webhookData = this.workflowContext?.executionContext?.webhookContext?.webhookData;
+            const slackContext = webhookData
+              ? extractSlackContext(webhookData as Map<string, unknown>)
+              : null;
+
+            // Get available workflows from visor config if available
+            const visorCfg = (this.workflowContext as any)?.visorConfig;
+            const availableWorkflows = visorCfg?.checks ? Object.keys(visorCfg.checks) : undefined;
+
+            // Extract scheduler permissions from config
+            const schedulerPermissions = visorCfg?.scheduler?.permissions;
+            const permissions = schedulerPermissions
+              ? {
+                  allowPersonal: schedulerPermissions.allow_personal,
+                  allowChannel: schedulerPermissions.allow_channel,
+                  allowDm: schedulerPermissions.allow_dm,
+                  allowedWorkflows: schedulerPermissions.allowed_workflows,
+                  deniedWorkflows: schedulerPermissions.denied_workflows,
+                }
+              : undefined;
+
+            // Build generic schedule tool context
+            const scheduleContext = buildScheduleToolContext(
+              {
+                slackContext: slackContext
+                  ? {
+                      userId: slackContext.userId,
+                      userName: slackContext.userName,
+                      timezone: slackContext.timezone,
+                      channelType: slackContext.channelType,
+                    }
+                  : undefined,
+              },
+              availableWorkflows,
+              permissions,
+              {
+                outputType: args.output_type as 'slack' | 'github' | 'webhook' | 'none' | undefined,
+                outputTarget: args.output_target as string | undefined,
+              }
+            );
+
+            if (this.debug) {
+              logger.debug(
+                `[CustomToolsSSEServer:${this.sessionId}] Executing schedule tool for user ${scheduleContext.userId} (${scheduleContext.contextType})`
+              );
+            }
+
+            // Execute generic schedule tool
+            const scheduleArgs: ScheduleToolArgs = {
+              action: (args.action as 'create' | 'list' | 'cancel' | 'pause' | 'resume') || 'list',
+              workflow: args.workflow as string | undefined,
+              expression: args.expression as string | undefined,
+              inputs: args.inputs as Record<string, unknown> | undefined,
+              output_type: args.output_type as 'slack' | 'github' | 'webhook' | 'none' | undefined,
+              output_target: args.output_target as string | undefined,
+              schedule_id: args.schedule_id as string | undefined,
+            };
+            const scheduleResult = await handleScheduleAction(scheduleArgs, scheduleContext);
+
+            result = scheduleResult.success
+              ? scheduleResult.message
+              : `Error: ${scheduleResult.error}`;
+            break;
+          }
+
           // Check if this is a workflow tool
           const tool = this.tools.get(toolName);
           if (tool && isWorkflowTool(tool)) {

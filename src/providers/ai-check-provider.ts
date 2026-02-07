@@ -25,6 +25,9 @@ import {
 } from './workflow-tool-executor';
 import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import type Sandbox from '@nyariv/sandboxjs';
+import { getScheduleToolDefinition } from '../scheduler/schedule-tool';
+// Legacy Slack context extraction for backwards compatibility
+import { extractSlackContext } from '../slack/schedule-tool-handler';
 
 /**
  * AI-powered check provider using probe agent
@@ -1172,10 +1175,39 @@ export class AICheckProvider extends CheckProvider {
       customToolsServerName = '__tools__';
     }
 
-    if (customToolsToLoad.length > 0 && customToolsServerName && !config.ai?.disableTools) {
+    // Option 5: Automatically inject schedule tool when Slack context is available
+    const sessionAny = sessionInfo as any;
+    const webhookData =
+      sessionAny?.webhookContext?.webhookData ||
+      sessionAny?._parentContext?.webhookContext?.webhookData;
+    const slackContext = webhookData
+      ? extractSlackContext(webhookData as Map<string, unknown>)
+      : null;
+    if (slackContext && !config.ai?.disableTools) {
+      // Slack context is available, inject the schedule tool
+      if (!customToolsServerName) {
+        customToolsServerName = '__slack_tools__';
+      }
+      logger.debug(
+        `[AICheckProvider] Slack context detected (user=${slackContext.userId}), schedule tool will be available`
+      );
+    }
+
+    if (
+      (customToolsToLoad.length > 0 || slackContext) &&
+      customToolsServerName &&
+      !config.ai?.disableTools
+    ) {
       try {
         // Load custom tools from global config (now supports workflows too)
         const customTools = this.loadCustomTools(customToolsToLoad, config);
+
+        // Add schedule tool if Slack context is available
+        if (slackContext) {
+          const scheduleTool = getScheduleToolDefinition();
+          customTools.set(scheduleTool.name, scheduleTool);
+          logger.debug(`[AICheckProvider] Added schedule tool to custom tools`);
+        }
 
         if (customTools.size > 0) {
           const sessionId = (config as any).checkName || `ai-check-${Date.now()}`;
