@@ -593,6 +593,39 @@ export class Scheduler {
 
     logger.info(`[Scheduler] Running reminder through visor pipeline (${allChecks.length} checks)`);
 
+    // Fetch thread history if this is a thread-based reminder
+    const channel = schedule.outputContext?.target || '';
+    const threadId = schedule.outputContext?.threadId;
+    let threadMessages: Array<{ user: string; text: string }> = [];
+
+    if (threadId && channel && this.executionContext.slackClient) {
+      try {
+        const slackClient = this.executionContext.slackClient as {
+          fetchThreadReplies: (
+            channel: string,
+            thread_ts: string,
+            limit?: number
+          ) => Promise<Array<{ ts: string; user?: string; text?: string }>>;
+        };
+        const replies = await slackClient.fetchThreadReplies(channel, threadId, 40);
+        threadMessages = replies
+          .filter(m => m.text)
+          .map(m => ({
+            user: m.user || 'unknown',
+            text: m.text || '',
+          }));
+        logger.debug(
+          `[Scheduler] Fetched ${threadMessages.length} thread messages for reminder ${schedule.id}`
+        );
+      } catch (error) {
+        logger.warn(
+          `[Scheduler] Failed to fetch thread history: ${
+            error instanceof Error ? error.message : error
+          }`
+        );
+      }
+    }
+
     // Build synthetic Slack event - same structure as real Slack messages
     const syntheticPayload = {
       event: {
@@ -600,21 +633,23 @@ export class Scheduler {
         subtype: 'scheduled_reminder',
         text: reminderText,
         user: schedule.creatorId,
-        channel: schedule.outputContext?.target,
+        channel: channel,
         ts: String(Date.now() / 1000),
-        // No thread_ts - this is a new message, not a reply
+        thread_ts: threadId, // Include thread_ts if this is a thread reply
       },
       slack_conversation: {
         current: {
           user: schedule.creatorName || schedule.creatorId,
           text: reminderText,
         },
-        messages: [
-          {
-            user: schedule.creatorName || schedule.creatorId,
-            text: reminderText,
-          },
-        ],
+        // Include thread history if available, otherwise just the reminder
+        messages:
+          threadMessages.length > 0
+            ? [
+                ...threadMessages,
+                { user: schedule.creatorName || schedule.creatorId, text: reminderText },
+              ]
+            : [{ user: schedule.creatorName || schedule.creatorId, text: reminderText }],
       },
       // Include schedule context for any checks that need it
       schedule: {
@@ -632,7 +667,6 @@ export class Scheduler {
 
     // Seed the first message in PromptStateManager so human-input checks can consume it
     // This is the same pattern socket-runner.ts uses for real Slack messages
-    const channel = schedule.outputContext?.target || '';
     const threadTs = syntheticPayload.event.ts;
     if (channel && threadTs) {
       const mgr = getPromptStateManager();
