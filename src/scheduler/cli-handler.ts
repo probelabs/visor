@@ -352,17 +352,49 @@ async function handleCreate(
 }
 
 /**
+ * Get the current CLI user identifier
+ */
+function getCurrentCliUser(): string {
+  return process.env.USER || process.env.USERNAME || 'cli-user';
+}
+
+/**
+ * Verify ownership of a schedule (for CLI operations)
+ * Returns true if the user owns the schedule or --force is used
+ */
+function verifyOwnership(
+  schedule: { creatorId: string; creatorContext?: string },
+  flags: Record<string, string | boolean>,
+  operation: string
+): boolean {
+  const currentUser = getCurrentCliUser();
+  const isOwner = schedule.creatorContext === 'cli' && schedule.creatorId === currentUser;
+  const forceFlag = flags.force === true;
+
+  if (!isOwner && !forceFlag) {
+    console.error(`Error: You do not own this schedule.`);
+    console.error(`  Owner: ${schedule.creatorId} (${schedule.creatorContext || 'unknown'})`);
+    console.error(`  You:   ${currentUser} (cli)`);
+    console.log();
+    console.log(`Use --force to ${operation} schedules you don't own.`);
+    return false;
+  }
+
+  return true;
+}
+
+/**
  * Handle 'schedule cancel' - cancel a schedule
  */
 async function handleCancel(
   positional: string[],
-  _flags: Record<string, string | boolean>
+  flags: Record<string, string | boolean>
 ): Promise<void> {
   const scheduleId = positional[0];
 
   if (!scheduleId) {
     console.error('Error: Schedule ID is required');
-    console.log('Usage: visor schedule cancel <id>');
+    console.log('Usage: visor schedule cancel <id> [--force]');
     process.exit(1);
   }
 
@@ -382,6 +414,11 @@ async function handleCancel(
     process.exit(1);
   }
 
+  // Verify ownership
+  if (!verifyOwnership(schedule, flags, 'cancel')) {
+    process.exit(1);
+  }
+
   store.delete(schedule.id);
 
   console.log('Schedule cancelled successfully!');
@@ -396,13 +433,13 @@ async function handleCancel(
  */
 async function handlePause(
   positional: string[],
-  _flags: Record<string, string | boolean>
+  flags: Record<string, string | boolean>
 ): Promise<void> {
   const scheduleId = positional[0];
 
   if (!scheduleId) {
     console.error('Error: Schedule ID is required');
-    console.log('Usage: visor schedule pause <id>');
+    console.log('Usage: visor schedule pause <id> [--force]');
     process.exit(1);
   }
 
@@ -418,6 +455,11 @@ async function handlePause(
 
   if (!schedule) {
     console.error(`Schedule not found: ${scheduleId}`);
+    process.exit(1);
+  }
+
+  // Verify ownership
+  if (!verifyOwnership(schedule, flags, 'pause')) {
     process.exit(1);
   }
 
@@ -435,13 +477,13 @@ async function handlePause(
  */
 async function handleResume(
   positional: string[],
-  _flags: Record<string, string | boolean>
+  flags: Record<string, string | boolean>
 ): Promise<void> {
   const scheduleId = positional[0];
 
   if (!scheduleId) {
     console.error('Error: Schedule ID is required');
-    console.log('Usage: visor schedule resume <id>');
+    console.log('Usage: visor schedule resume <id> [--force]');
     process.exit(1);
   }
 
@@ -457,6 +499,11 @@ async function handleResume(
 
   if (!schedule) {
     console.error(`Schedule not found: ${scheduleId}`);
+    process.exit(1);
+  }
+
+  // Verify ownership
+  if (!verifyOwnership(schedule, flags, 'resume')) {
     process.exit(1);
   }
 
