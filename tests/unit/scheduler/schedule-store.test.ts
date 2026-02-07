@@ -467,4 +467,91 @@ describe('ScheduleStore', () => {
       expect(all).toEqual([]);
     });
   });
+
+  describe('previousResponse', () => {
+    beforeEach(async () => {
+      ScheduleStore.resetInstance();
+      store = ScheduleStore.getInstance();
+      await store.initialize();
+    });
+
+    it('should store and retrieve previousResponse', () => {
+      const schedule = store.create(
+        createScheduleData({
+          creatorId: 'user1',
+          workflow: 'daily-report',
+          isRecurring: true,
+          schedule: '0 9 * * *',
+        })
+      );
+
+      // Update with previousResponse
+      store.update(schedule.id, {
+        previousResponse: 'Here is the status report from yesterday: 5 tasks completed.',
+      });
+
+      const updated = store.get(schedule.id);
+      expect(updated?.previousResponse).toBe(
+        'Here is the status report from yesterday: 5 tasks completed.'
+      );
+    });
+
+    it('should update previousResponse on subsequent runs', () => {
+      const schedule = store.create(
+        createScheduleData({
+          creatorId: 'user1',
+          workflow: 'weekly-summary',
+          isRecurring: true,
+          schedule: '0 9 * * 1',
+        })
+      );
+
+      // First run
+      store.update(schedule.id, {
+        previousResponse: 'Week 1 summary: 10 tasks completed.',
+        lastRunAt: Date.now(),
+        runCount: 1,
+      });
+
+      // Second run
+      store.update(schedule.id, {
+        previousResponse: 'Week 2 summary: 15 tasks completed.',
+        lastRunAt: Date.now(),
+        runCount: 2,
+      });
+
+      const updated = store.get(schedule.id);
+      expect(updated?.previousResponse).toBe('Week 2 summary: 15 tasks completed.');
+      expect(updated?.runCount).toBe(2);
+    });
+
+    it('should persist previousResponse across save/load', async () => {
+      const schedule = store.create(
+        createScheduleData({
+          creatorId: 'user1',
+          workflow: 'test',
+          isRecurring: true,
+          schedule: '0 9 * * *',
+        })
+      );
+
+      store.update(schedule.id, {
+        previousResponse: 'Persisted response text',
+      });
+
+      // Mock file system to return our schedule with previousResponse
+      const savedData = {
+        schedules: [store.get(schedule.id)],
+      };
+      mockFs.readFile.mockResolvedValue(JSON.stringify(savedData));
+
+      // Reset and reload
+      ScheduleStore.resetInstance();
+      const newStore = ScheduleStore.getInstance();
+      await newStore.initialize();
+
+      const loaded = newStore.get(schedule.id);
+      expect(loaded?.previousResponse).toBe('Persisted response text');
+    });
+  });
 });

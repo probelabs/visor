@@ -626,12 +626,25 @@ export class Scheduler {
       }
     }
 
+    // Build context message that includes previous response if available
+    let contextualReminderText = reminderText;
+    if (schedule.isRecurring && schedule.previousResponse) {
+      contextualReminderText = `${reminderText}
+
+---
+**Previous Response (for context):**
+${schedule.previousResponse}
+---
+
+Please provide an updated response based on the reminder above. You may reference or build upon the previous response if relevant.`;
+    }
+
     // Build synthetic Slack event - same structure as real Slack messages
     const syntheticPayload = {
       event: {
         type: 'message',
         subtype: 'scheduled_reminder',
-        text: reminderText,
+        text: contextualReminderText,
         user: schedule.creatorId,
         channel: channel,
         ts: String(Date.now() / 1000),
@@ -640,16 +653,16 @@ export class Scheduler {
       slack_conversation: {
         current: {
           user: schedule.creatorName || schedule.creatorId,
-          text: reminderText,
+          text: contextualReminderText,
         },
         // Include thread history if available, otherwise just the reminder
         messages:
           threadMessages.length > 0
             ? [
                 ...threadMessages,
-                { user: schedule.creatorName || schedule.creatorId, text: reminderText },
+                { user: schedule.creatorName || schedule.creatorId, text: contextualReminderText },
               ]
-            : [{ user: schedule.creatorName || schedule.creatorId, text: reminderText }],
+            : [{ user: schedule.creatorName || schedule.creatorId, text: contextualReminderText }],
       },
       // Include schedule context for any checks that need it
       schedule: {
@@ -657,6 +670,7 @@ export class Scheduler {
         isReminder: true,
         creatorId: schedule.creatorId,
         creatorContext: schedule.creatorContext,
+        previousResponse: schedule.previousResponse,
       },
     };
 
@@ -684,11 +698,21 @@ export class Scheduler {
     // Create a new engine instance
     const runEngine = new StateMachineExecutionEngine();
 
+    // Set up response capture for recurring reminders
+    let capturedResponse: string | undefined;
+    const responseCapture = (text: string) => {
+      capturedResponse = text;
+      logger.debug(
+        `[Scheduler] Captured AI response for schedule ${schedule.id} (${text.length} chars)`
+      );
+    };
+
     // Set execution context with reminder text and Slack client
     // This provides input for human-input checks and allows Slack frontend to post
     runEngine.setExecutionContext({
       ...this.executionContext,
       cliMessage: reminderText,
+      responseCapture, // Callback for capturing AI responses
     });
 
     try {
@@ -705,10 +729,20 @@ export class Scheduler {
 
       // The visor pipeline handles output via frontends (Slack, etc.)
       // We return success - the actual response was posted by the pipeline
+
+      // Save captured response for recurring reminders (previousResponse feature)
+      if (schedule.isRecurring && capturedResponse) {
+        this.store.update(schedule.id, { previousResponse: capturedResponse });
+        logger.info(
+          `[Scheduler] Saved previousResponse for recurring schedule ${schedule.id} (${capturedResponse.length} chars)`
+        );
+      }
+
       return {
         message: 'Reminder processed through pipeline',
         type: 'pipeline_executed',
         reminderText,
+        capturedResponse,
       };
     } catch (error) {
       logger.error(

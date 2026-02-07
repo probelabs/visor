@@ -58,6 +58,9 @@ export interface Schedule {
   runCount: number;
   failureCount: number;
   lastError?: string;
+
+  // Previous execution response (for recurring reminders)
+  previousResponse?: string; // The AI response from the last execution
 }
 
 /**

@@ -553,6 +553,15 @@ export class SlackFrontend implements Frontend {
       ctx.logger.info(
         `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs}`
       );
+
+      // Capture response for scheduled reminders (allows storing previousResponse)
+      const responseCapture = (ctx as any).responseCapture as ((text: string) => void) | undefined;
+      if (responseCapture && typeof responseCapture === 'function') {
+        try {
+          // Store the original text (before mrkdwn formatting) for continuity
+          responseCapture(processedText);
+        } catch {}
+      }
     } catch (outerErr) {
       // Log errors instead of silently swallowing them
       try {
