@@ -365,6 +365,8 @@ export interface AIProviderConfig {
   bashConfig?: BashConfig;
   /** Completion prompt for post-completion validation/review (runs after attempt_completion) */
   completion_prompt?: string;
+  /** Enable the schedule tool for scheduling workflow executions (requires scheduler configuration) */
+  enable_scheduler?: boolean;
 }
 
 /**

@@ -62,9 +62,32 @@ function isWorkflowAllowedByPatterns(
  */
 function checkSchedulePermissions(
   context: ScheduleToolContext,
-  workflow: string
+  workflow: string,
+  requestedScheduleType?: ScheduleType
 ): { allowed: boolean; reason?: string } {
   const permissions = context.permissions;
+  const scheduleType = requestedScheduleType || context.scheduleType || 'personal';
+
+  // Enforce context-based restrictions first
+  // From a DM, can only create personal schedules
+  // From a channel, can only create channel schedules
+  // From a group DM, can only create dm/group schedules
+  if (context.allowedScheduleType && scheduleType !== context.allowedScheduleType) {
+    const contextNames: Record<ScheduleType, string> = {
+      personal: 'a direct message (DM)',
+      channel: 'a channel',
+      dm: 'a group DM',
+    };
+    const targetNames: Record<ScheduleType, string> = {
+      personal: 'personal',
+      channel: 'channel',
+      dm: 'group',
+    };
+    return {
+      allowed: false,
+      reason: `From ${contextNames[context.allowedScheduleType]}, you can only create ${targetNames[context.allowedScheduleType]} schedules. To create a ${targetNames[scheduleType]} schedule, please use the appropriate context.`,
+    };
+  }
 
   // No permissions configured - allow everything (backwards compatible)
   if (!permissions) {
@@ -72,8 +95,6 @@ function checkSchedulePermissions(
   }
 
   // Check schedule type permission
-  const scheduleType = context.scheduleType || 'personal';
-
   switch (scheduleType) {
     case 'personal':
       if (permissions.allowPersonal === false) {
@@ -167,6 +188,14 @@ export interface ScheduleToolContext {
   scheduleType?: ScheduleType;
   /** Permissions for dynamic schedule creation */
   permissions?: SchedulePermissions;
+  /**
+   * Allowed schedule type based on originating context.
+   * When set, only schedules of this type can be created/managed.
+   * - From DM: only 'personal' allowed
+   * - From channel: only 'channel' allowed
+   * - From group DM: only 'dm' allowed (targeting the group)
+   */
+  allowedScheduleType?: ScheduleType;
 }
 
 /**
@@ -326,8 +355,15 @@ async function handleCreate(
     };
   }
 
+  // Determine requested schedule type based on output target
+  const requestedScheduleType = determineScheduleType(
+    context.contextType,
+    args.output_type,
+    args.output_target
+  );
+
   // Check permissions for dynamic schedule creation
-  const permissionCheck = checkSchedulePermissions(context, args.workflow);
+  const permissionCheck = checkSchedulePermissions(context, args.workflow, requestedScheduleType);
   if (!permissionCheck.allowed) {
     logger.warn(
       `[ScheduleTool] Permission denied for user ${context.userId}: ${permissionCheck.reason}`
@@ -404,39 +440,66 @@ async function handleCreate(
 
 /**
  * Handle list action
+ * Users can only see their own schedules to protect privacy
  */
 async function handleList(
   context: ScheduleToolContext,
   store: ScheduleStore
 ): Promise<ScheduleToolResult> {
+  // Only show schedules created by this user - protects privacy of personal schedules
   const schedules = store.getByCreator(context.userId).filter(s => s.status !== 'completed');
+
+  // If in a specific context, optionally filter to show only relevant schedules
+  let filteredSchedules = schedules;
+  if (context.allowedScheduleType) {
+    // Map schedule output context to schedule type for filtering
+    filteredSchedules = schedules.filter(s => {
+      const scheduleOutputType = s.outputContext?.type;
+      if (!scheduleOutputType || scheduleOutputType === 'none') {
+        return context.allowedScheduleType === 'personal';
+      }
+      if (scheduleOutputType === 'slack') {
+        const target = s.outputContext?.target || '';
+        if (target.startsWith('#') || target.match(/^C[A-Z0-9]+$/)) {
+          return context.allowedScheduleType === 'channel';
+        }
+        if (target.startsWith('@') || target.match(/^U[A-Z0-9]+$/)) {
+          return context.allowedScheduleType === 'dm';
+        }
+      }
+      return context.allowedScheduleType === 'personal';
+    });
+  }
 
   return {
     success: true,
-    message: formatScheduleList(schedules),
-    schedules,
+    message: formatScheduleList(filteredSchedules),
+    schedules: filteredSchedules,
   };
 }
 
 /**
  * Handle cancel action
+ * Only the creator can cancel their own schedules
  */
 async function handleCancel(
   args: ScheduleToolArgs,
   context: ScheduleToolContext,
   store: ScheduleStore
 ): Promise<ScheduleToolResult> {
-  // Try to find by ID first
+  // Try to find by ID - only search in user's own schedules
   let schedule: Schedule | undefined;
 
   if (args.schedule_id) {
-    // Try exact match
-    schedule = store.get(args.schedule_id);
+    // Only search in schedules created by this user
+    const userSchedules = store.getByCreator(context.userId);
+
+    // Try exact match first
+    schedule = userSchedules.find(s => s.id === args.schedule_id);
 
     // Try partial ID match (first 8 chars)
     if (!schedule) {
-      const allSchedules = store.getByCreator(context.userId);
-      schedule = allSchedules.find(s => s.id.startsWith(args.schedule_id!));
+      schedule = userSchedules.find(s => s.id.startsWith(args.schedule_id!));
     }
   }
 
@@ -444,12 +507,15 @@ async function handleCancel(
     return {
       success: false,
       message: 'Schedule not found',
-      error: `Could not find schedule with ID "${args.schedule_id}". Use "list my schedules" to see your schedules.`,
+      error: `Could not find schedule with ID "${args.schedule_id}" in your schedules. Use "list my schedules" to see your schedules.`,
     };
   }
 
-  // Verify ownership
+  // Double-check ownership (defensive - already filtered above)
   if (schedule.creatorId !== context.userId) {
+    logger.warn(
+      `[ScheduleTool] Attempted cross-user schedule cancellation: ${context.userId} tried to cancel ${schedule.id} owned by ${schedule.creatorId}`
+    );
     return {
       success: false,
       message: 'Not your schedule',
@@ -472,6 +538,7 @@ Was: "${schedule.workflow}" scheduled for ${schedule.originalExpression}`,
 
 /**
  * Handle pause/resume actions
+ * Only the creator can pause/resume their own schedules
  */
 async function handlePauseResume(
   args: ScheduleToolArgs,
@@ -487,25 +554,30 @@ async function handlePauseResume(
     };
   }
 
-  // Find the schedule
-  let schedule = store.get(args.schedule_id);
+  // Only search in schedules created by this user
+  const userSchedules = store.getByCreator(context.userId);
 
-  // Try partial ID match
+  // Try exact match first
+  let schedule = userSchedules.find(s => s.id === args.schedule_id);
+
+  // Try partial ID match (first 8 chars)
   if (!schedule) {
-    const allSchedules = store.getByCreator(context.userId);
-    schedule = allSchedules.find(s => s.id.startsWith(args.schedule_id!));
+    schedule = userSchedules.find(s => s.id.startsWith(args.schedule_id!));
   }
 
   if (!schedule) {
     return {
       success: false,
       message: 'Schedule not found',
-      error: `Could not find schedule with ID "${args.schedule_id}".`,
+      error: `Could not find schedule with ID "${args.schedule_id}" in your schedules.`,
     };
   }
 
-  // Verify ownership
+  // Double-check ownership (defensive - already filtered above)
   if (schedule.creatorId !== context.userId) {
+    logger.warn(
+      `[ScheduleTool] Attempted cross-user schedule modification: ${context.userId} tried to modify ${schedule.id} owned by ${schedule.creatorId}`
+    );
     return {
       success: false,
       message: 'Not your schedule',
@@ -635,6 +707,21 @@ function determineScheduleType(
 }
 
 /**
+ * Map Slack channel type to allowed schedule type
+ */
+function slackChannelTypeToScheduleType(channelType: 'channel' | 'dm' | 'group'): ScheduleType {
+  switch (channelType) {
+    case 'channel':
+      return 'channel';
+    case 'group':
+      return 'dm'; // Group DMs map to 'dm' schedule type
+    case 'dm':
+    default:
+      return 'personal';
+  }
+}
+
+/**
  * Build schedule tool context from various sources
  */
 export function buildScheduleToolContext(
@@ -661,10 +748,17 @@ export function buildScheduleToolContext(
       outputInfo?.outputTarget
     );
 
+    // Determine allowed schedule type based on originating Slack context
+    // This enforces that from a DM you can only create personal schedules, etc.
+    let allowedScheduleType: ScheduleType | undefined;
+    if (sources.slackContext.channelType) {
+      allowedScheduleType = slackChannelTypeToScheduleType(sources.slackContext.channelType);
+    }
+
     // Override schedule type based on Slack channel type if no explicit output
     let finalScheduleType = scheduleType;
     if (!outputInfo?.outputType && sources.slackContext.channelType) {
-      finalScheduleType = sources.slackContext.channelType === 'channel' ? 'channel' : 'personal';
+      finalScheduleType = slackChannelTypeToScheduleType(sources.slackContext.channelType);
     }
 
     return {
@@ -675,6 +769,7 @@ export function buildScheduleToolContext(
       availableWorkflows,
       scheduleType: finalScheduleType,
       permissions,
+      allowedScheduleType,
     };
   }
 
@@ -686,6 +781,7 @@ export function buildScheduleToolContext(
       availableWorkflows,
       scheduleType: 'personal',
       permissions,
+      allowedScheduleType: 'personal', // GitHub context only allows personal schedules
     };
   }
 
@@ -697,5 +793,6 @@ export function buildScheduleToolContext(
     availableWorkflows,
     scheduleType: 'personal',
     permissions,
+    allowedScheduleType: 'personal', // CLI context only allows personal schedules
   };
 }

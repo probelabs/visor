@@ -603,11 +603,14 @@ describe('Schedule Tool Actions', () => {
 
   describe('cancel action', () => {
     it('should cancel owned schedule', async () => {
-      mockStore.get.mockReturnValue({
-        id: 'sched-1',
-        creatorId: 'user123',
-        workflow: 'daily-report',
-      });
+      // Now we search in user's own schedules first via getByCreator
+      mockStore.getByCreator.mockReturnValue([
+        {
+          id: 'sched-1',
+          creatorId: 'user123',
+          workflow: 'daily-report',
+        },
+      ]);
 
       const result = await handleScheduleAction(
         { action: 'cancel', schedule_id: 'sched-1' },
@@ -619,11 +622,8 @@ describe('Schedule Tool Actions', () => {
     });
 
     it('should reject canceling other user schedule', async () => {
-      mockStore.get.mockReturnValue({
-        id: 'sched-1',
-        creatorId: 'other-user',
-        workflow: 'daily-report',
-      });
+      // Other user's schedule won't be in this user's getByCreator results
+      mockStore.getByCreator.mockReturnValue([]);
 
       const result = await handleScheduleAction(
         { action: 'cancel', schedule_id: 'sched-1' },
@@ -631,7 +631,7 @@ describe('Schedule Tool Actions', () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('only cancel your own');
+      expect(result.error).toContain('Could not find schedule');
       expect(mockStore.delete).not.toHaveBeenCalled();
     });
 
@@ -650,12 +650,15 @@ describe('Schedule Tool Actions', () => {
 
   describe('pause/resume actions', () => {
     it('should pause schedule', async () => {
-      mockStore.get.mockReturnValue({
-        id: 'sched-1',
-        creatorId: 'user123',
-        workflow: 'daily-report',
-        status: 'active',
-      });
+      // Now we search in user's own schedules first via getByCreator
+      mockStore.getByCreator.mockReturnValue([
+        {
+          id: 'sched-1',
+          creatorId: 'user123',
+          workflow: 'daily-report',
+          status: 'active',
+        },
+      ]);
       mockStore.update.mockReturnValue({
         id: 'sched-1',
         creatorId: 'user123',
@@ -673,12 +676,15 @@ describe('Schedule Tool Actions', () => {
     });
 
     it('should resume schedule', async () => {
-      mockStore.get.mockReturnValue({
-        id: 'sched-1',
-        creatorId: 'user123',
-        workflow: 'daily-report',
-        status: 'paused',
-      });
+      // Now we search in user's own schedules first via getByCreator
+      mockStore.getByCreator.mockReturnValue([
+        {
+          id: 'sched-1',
+          creatorId: 'user123',
+          workflow: 'daily-report',
+          status: 'paused',
+        },
+      ]);
       mockStore.update.mockReturnValue({
         id: 'sched-1',
         creatorId: 'user123',

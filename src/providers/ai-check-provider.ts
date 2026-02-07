@@ -1134,48 +1134,71 @@ export class AICheckProvider extends CheckProvider {
       }
     }
 
-    // Option 4: Extract workflow entries directly from ai_mcp_servers/ai_mcp_servers_js
-    // Entries with 'workflow' property are workflow tool references that need SSE server
+    // Option 4: Extract workflow and tool entries from ai_mcp_servers/ai_mcp_servers_js
+    // Unified format:
+    //   { workflow: 'name', inputs: {...} } → workflow tool
+    //   { tool: 'name' } → custom tool from tools: section or built-in (e.g., 'schedule')
     const workflowEntriesFromMcp: WorkflowToolReference[] = [];
+    const toolEntriesFromMcp: string[] = [];
     const mcpEntriesToRemove: string[] = [];
+
     for (const [serverName, serverConfig] of Object.entries(mcpServers)) {
-      // Cast to any to check for workflow property (extends McpServerConfig)
       const cfg = serverConfig as unknown as Record<string, unknown>;
+
       if (cfg.workflow && typeof cfg.workflow === 'string') {
-        // This is a workflow tool entry - extract it
+        // Workflow tool entry
         workflowEntriesFromMcp.push({
           workflow: cfg.workflow as string,
           args: cfg.inputs as Record<string, unknown> | undefined,
         });
         mcpEntriesToRemove.push(serverName);
         logger.debug(
-          `[AICheckProvider] Extracted workflow tool '${serverName}' from ai_mcp_servers`
+          `[AICheckProvider] Extracted workflow tool '${serverName}' (workflow=${cfg.workflow}) from ai_mcp_servers`
         );
+      } else if (cfg.tool && typeof cfg.tool === 'string') {
+        // Custom tool or built-in tool entry
+        toolEntriesFromMcp.push(cfg.tool as string);
+        mcpEntriesToRemove.push(serverName);
+        logger.debug(`[AICheckProvider] Extracted tool '${cfg.tool}' from ai_mcp_servers`);
       }
     }
-    // Remove workflow entries from mcpServers (they'll be exposed via SSE server)
+
+    // Remove extracted entries from mcpServers (they'll be exposed via SSE server)
     for (const name of mcpEntriesToRemove) {
       delete mcpServers[name];
     }
-    // Merge workflow entries with other custom tools
+
+    // Merge workflow entries with custom tools
     if (workflowEntriesFromMcp.length > 0) {
-      if (customToolsToLoad.length > 0) {
-        // Avoid duplicates
-        const existingNames = new Set(
-          customToolsToLoad.map(item => (typeof item === 'string' ? item : item.workflow))
-        );
-        for (const wf of workflowEntriesFromMcp) {
-          if (!existingNames.has(wf.workflow)) {
-            customToolsToLoad.push(wf);
-          }
+      const existingNames = new Set(
+        customToolsToLoad.map(item => (typeof item === 'string' ? item : item.workflow))
+      );
+      for (const wf of workflowEntriesFromMcp) {
+        if (!existingNames.has(wf.workflow)) {
+          customToolsToLoad.push(wf);
         }
-      } else {
-        customToolsToLoad = workflowEntriesFromMcp;
       }
-      customToolsServerName = '__tools__';
+      if (!customToolsServerName) {
+        customToolsServerName = '__tools__';
+      }
     }
 
-    // Option 5: Automatically inject schedule tool when Slack context is available
+    // Merge tool entries with custom tools
+    if (toolEntriesFromMcp.length > 0) {
+      const existingNames = new Set(
+        customToolsToLoad.map(item => (typeof item === 'string' ? item : item.workflow))
+      );
+      for (const toolName of toolEntriesFromMcp) {
+        if (!existingNames.has(toolName)) {
+          customToolsToLoad.push(toolName);
+        }
+      }
+      if (!customToolsServerName) {
+        customToolsServerName = '__tools__';
+      }
+    }
+
+    // Option 5: Handle built-in tools (currently just 'schedule')
     const sessionAny = sessionInfo as any;
     const webhookData =
       sessionAny?.webhookContext?.webhookData ||
@@ -1183,30 +1206,49 @@ export class AICheckProvider extends CheckProvider {
     const slackContext = webhookData
       ? extractSlackContext(webhookData as Map<string, unknown>)
       : null;
-    if (slackContext && !config.ai?.disableTools) {
-      // Slack context is available, inject the schedule tool
-      if (!customToolsServerName) {
-        customToolsServerName = '__slack_tools__';
-      }
-      logger.debug(
-        `[AICheckProvider] Slack context detected (user=${slackContext.userId}), schedule tool will be available`
+
+    // Check if "schedule" is requested in custom tools (from ai_custom_tools, ai_custom_tools_js, or ai_mcp_servers)
+    const scheduleToolRequested =
+      !config.ai?.disableTools &&
+      customToolsToLoad.some(
+        tool => tool === 'schedule' || (typeof tool === 'object' && tool.workflow === 'schedule')
       );
+
+    if (scheduleToolRequested) {
+      // Remove "schedule" from customToolsToLoad - we'll add the real built-in tool later
+      customToolsToLoad = customToolsToLoad.filter(
+        tool => tool !== 'schedule' && !(typeof tool === 'object' && tool.workflow === 'schedule')
+      );
+      if (!customToolsServerName) {
+        customToolsServerName = '__tools__';
+      }
+      const contextInfo = slackContext
+        ? `user=${slackContext.userId}, channelType=${slackContext.channelType}`
+        : 'cli';
+      logger.debug(`[AICheckProvider] Schedule tool requested (${contextInfo})`);
     }
 
+    // Legacy support: enable_scheduler: true also enables the schedule tool
+    const scheduleToolEnabled =
+      scheduleToolRequested || (config.ai?.enable_scheduler === true && !config.ai?.disableTools);
+
     if (
-      (customToolsToLoad.length > 0 || slackContext) &&
-      customToolsServerName &&
+      (customToolsToLoad.length > 0 || scheduleToolEnabled) &&
+      (customToolsServerName || scheduleToolEnabled) &&
       !config.ai?.disableTools
     ) {
+      if (!customToolsServerName) {
+        customToolsServerName = '__tools__';
+      }
       try {
-        // Load custom tools from global config (now supports workflows too)
+        // Load custom tools from global config (supports workflows and custom tools)
         const customTools = this.loadCustomTools(customToolsToLoad, config);
 
-        // Add schedule tool if Slack context is available
-        if (slackContext) {
+        // Add schedule tool if enabled (via ai_mcp_servers { tool: 'schedule' } or enable_scheduler)
+        if (scheduleToolEnabled) {
           const scheduleTool = getScheduleToolDefinition();
           customTools.set(scheduleTool.name, scheduleTool);
-          logger.debug(`[AICheckProvider] Added schedule tool to custom tools`);
+          logger.debug(`[AICheckProvider] Added built-in schedule tool`);
         }
 
         if (customTools.size > 0) {
