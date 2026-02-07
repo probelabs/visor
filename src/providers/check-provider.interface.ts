@@ -88,6 +88,11 @@ export interface ExecutionContext {
   eventBus?: import('../event-bus/event-bus').EventBus;
   /** Optional webhook context (e.g., Slack Events API payload) */
   webhookContext?: { webhookData?: Map<string, unknown>; eventType?: string };
+  /**
+   * Callback for capturing AI responses - used by scheduler to store previousResponse
+   * for recurring reminders. The text passed is the AI response before mrkdwn formatting.
+   */
+  responseCapture?: (text: string) => void;
 }
 
 /**

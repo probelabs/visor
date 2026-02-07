@@ -803,6 +803,13 @@ export async function main(): Promise<void> {
       await handleTestCommand(filteredArgv);
       return;
     }
+    // Check for schedule subcommand
+    if (filteredArgv.length > 2 && filteredArgv[2] === 'schedule') {
+      const { handleScheduleCommand } = await import('./scheduler/cli-handler');
+      const configManager = new ConfigManager();
+      await handleScheduleCommand(filteredArgv.slice(3), configManager);
+      return;
+    }
     // Check for code-review subcommands: run the built-in code-review suite
     // Aliases: code-review | review
     if (filteredArgv.length > 2 && ['code-review', 'review'].includes(filteredArgv[2])) {

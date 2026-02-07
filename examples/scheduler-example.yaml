@@ -1,0 +1,118 @@
+# Scheduler Example Configuration
+# Demonstrates static cron jobs and scheduler permissions
+version: "1.0"
+
+# Scheduler configuration
+scheduler:
+  enabled: true
+  storage:
+    path: .visor/schedules.json
+  default_timezone: America/New_York
+  check_interval_ms: 60000
+
+  # Limits for dynamic schedules created via AI tool
+  limits:
+    max_per_user: 25
+    max_recurring_per_user: 10
+    max_global: 1000
+
+  # Permissions for dynamic schedule creation
+  permissions:
+    allow_personal: true    # Allow personal schedules (via DM or CLI)
+    allow_channel: true     # Allow channel schedules (in Slack channels)
+    allow_dm: false         # Disable sending scheduled DMs to other users
+    allowed_workflows:      # Only these workflows can be scheduled dynamically
+      - "report-*"
+      - "status-*"
+      - "summary-*"
+    denied_workflows:       # Block admin and dangerous workflows
+      - "admin-*"
+      - "dangerous-*"
+      - "deploy-*"
+
+  # Static cron jobs (always execute, bypass permissions)
+  cron:
+    # Daily status report on weekdays
+    daily-status:
+      workflow: daily-status-report
+      schedule: "0 9 * * 1-5"  # Weekdays at 9am
+      timezone: America/New_York
+      output:
+        type: slack
+        target: "#team-updates"
+
+    # Weekly summary on Mondays
+    weekly-summary:
+      workflow: weekly-summary
+      schedule: "0 10 * * 1"   # Mondays at 10am
+      inputs:
+        include_metrics: true
+        include_trends: true
+      output:
+        type: slack
+        target: "#engineering"
+
+    # Hourly health check
+    health-check:
+      workflow: health-check
+      schedule: "0 * * * *"    # Every hour on the hour
+      output:
+        type: webhook
+        target: https://api.example.com/health-status
+
+    # Monthly audit report
+    monthly-audit:
+      workflow: monthly-audit
+      schedule: "0 8 1 * *"    # First day of month at 8am
+      inputs:
+        detailed: true
+      output:
+        type: slack
+        target: "#security"
+
+# Workflows that can be scheduled
+checks:
+  # Daily status report workflow
+  daily-status-report:
+    type: ai
+    prompt: |
+      Generate a brief daily status report for the team.
+      Include:
+      - Recent commits and changes
+      - Open issues and PRs
+      - Any blockers or concerns
+
+  # Weekly summary workflow
+  weekly-summary:
+    type: ai
+    prompt: |
+      Generate a weekly summary report.
+      {% if inputs.include_metrics %}Include key metrics and statistics.{% endif %}
+      {% if inputs.include_trends %}Include trend analysis.{% endif %}
+
+  # Health check workflow
+  health-check:
+    type: command
+    command: "echo 'Health check passed at $(date)'"
+
+  # Monthly audit workflow
+  monthly-audit:
+    type: ai
+    prompt: |
+      Perform a monthly security and compliance audit.
+      {% if inputs.detailed %}Provide detailed findings.{% endif %}
+
+  # Report workflow that can be dynamically scheduled
+  report-team-status:
+    type: ai
+    prompt: "Generate a team status report"
+
+  # Status workflow that can be dynamically scheduled
+  status-quick:
+    type: command
+    command: "echo 'Quick status: All systems operational'"
+
+  # Summary workflow that can be dynamically scheduled
+  summary-daily:
+    type: ai
+    prompt: "Summarize today's activities"

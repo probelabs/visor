@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import { logger } from '../logger';
-import type { VisorConfig } from '../types/config';
+import type { VisorConfig, SchedulerConfig } from '../types/config';
 import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
 import { SlackClient } from './client';
 import { SlackAdapter } from './adapter';
@@ -8,6 +8,8 @@ import { CachePrewarmer } from './cache-prewarmer';
 import { RateLimiter, type RateLimitConfig } from './rate-limiter';
 import type { SlackBotConfig } from '../types/bot';
 import { withActiveSpan } from '../telemetry/trace-helpers';
+import { Scheduler } from '../scheduler/scheduler';
+import { createSlackOutputAdapter } from './slack-output-adapter';
 
 type SlackSocketConfig = {
   appToken?: string; // xapp- token
@@ -46,6 +48,7 @@ export class SlackSocketRunner {
   > = new Map();
   private adapter?: SlackAdapter;
   private retryCount = 0;
+  private genericScheduler?: Scheduler;
 
   constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: SlackSocketConfig) {
     const app = opts.appToken || process.env.SLACK_APP_TOKEN || '';
@@ -119,6 +122,40 @@ export class SlackSocketRunner {
         logger.info('[SlackSocket] Rate limiter enabled');
       }
     } catch {}
+
+    // Initialize generic scheduler
+    try {
+      const schedulerCfg = this.cfg.scheduler as SchedulerConfig | undefined;
+
+      if (schedulerCfg?.enabled !== false && this.client) {
+        this.genericScheduler = new Scheduler(this.cfg, {
+          storagePath: schedulerCfg?.storage?.path,
+          limits: schedulerCfg?.limits
+            ? {
+                maxPerUser: schedulerCfg.limits.max_per_user,
+                maxRecurringPerUser: schedulerCfg.limits.max_recurring_per_user,
+                maxGlobal: schedulerCfg.limits.max_global,
+              }
+            : undefined,
+          defaultTimezone: schedulerCfg?.default_timezone,
+        });
+        this.genericScheduler.setEngine(this.engine);
+
+        // Pass Slack client to scheduler so it can inject into workflow executions
+        this.genericScheduler.setExecutionContext({
+          slack: this.client,
+          slackClient: this.client,
+        });
+
+        // Register Slack output adapter
+        this.genericScheduler.registerOutputAdapter(createSlackOutputAdapter(this.client));
+
+        await this.genericScheduler.start();
+        logger.info('[SlackSocket] Scheduler enabled');
+      }
+    } catch (e) {
+      logger.warn(`[SlackSocket] Scheduler init failed: ${e instanceof Error ? e.message : e}`);
+    }
 
     const url = await this.openConnection();
     await this.connect(url);
@@ -527,6 +564,41 @@ export class SlackSocketRunner {
         `[SlackSocket] Engine execution failed: ${e instanceof Error ? e.message : String(e)}`
       );
     }
+  }
+
+  /**
+   * Stop the socket runner and clean up resources
+   */
+  async stop(): Promise<void> {
+    // Stop the generic scheduler if active
+    if (this.genericScheduler) {
+      try {
+        await this.genericScheduler.stop();
+        logger.info('[SlackSocket] Generic scheduler stopped');
+      } catch (e) {
+        logger.warn(
+          `[SlackSocket] Error stopping generic scheduler: ${e instanceof Error ? e.message : e}`
+        );
+      }
+    }
+
+    // Close WebSocket connection
+    if (this.ws) {
+      try {
+        this.ws.close();
+        this.ws = undefined;
+        logger.info('[SlackSocket] WebSocket closed');
+      } catch {
+        // Best effort
+      }
+    }
+  }
+
+  /**
+   * Get the scheduler instance
+   */
+  getScheduler(): Scheduler | undefined {
+    return this.genericScheduler;
   }
 
   /** Lazily construct a SlackAdapter for conversation context (cache-first thread fetch) */

@@ -79,7 +79,15 @@ function isFile(p: string): boolean {
 function listFilesRecursive(root: string, predicate: (p: string) => boolean): string[] {
   const out: string[] = [];
   const stack: string[] = [root];
-  const ignoreDirs = new Set(['.git', 'node_modules', 'dist', 'output', 'tmp', '.schema-tmp']);
+  const ignoreDirs = new Set([
+    '.git',
+    'node_modules',
+    'dist',
+    'output',
+    'tmp',
+    '.schema-tmp',
+    '.visor',
+  ]);
   while (stack.length) {
     const cur = stack.pop() as string;
     let entries: string[] = [];

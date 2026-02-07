@@ -25,6 +25,9 @@ import {
 } from './workflow-tool-executor';
 import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import type Sandbox from '@nyariv/sandboxjs';
+import { getScheduleToolDefinition } from '../scheduler/schedule-tool';
+// Legacy Slack context extraction for backwards compatibility
+import { extractSlackContext } from '../slack/schedule-tool-handler';
 
 /**
  * AI-powered check provider using probe agent
@@ -1131,51 +1134,122 @@ export class AICheckProvider extends CheckProvider {
       }
     }
 
-    // Option 4: Extract workflow entries directly from ai_mcp_servers/ai_mcp_servers_js
-    // Entries with 'workflow' property are workflow tool references that need SSE server
+    // Option 4: Extract workflow and tool entries from ai_mcp_servers/ai_mcp_servers_js
+    // Unified format:
+    //   { workflow: 'name', inputs: {...} } → workflow tool
+    //   { tool: 'name' } → custom tool from tools: section or built-in (e.g., 'schedule')
     const workflowEntriesFromMcp: WorkflowToolReference[] = [];
+    const toolEntriesFromMcp: string[] = [];
     const mcpEntriesToRemove: string[] = [];
+
     for (const [serverName, serverConfig] of Object.entries(mcpServers)) {
-      // Cast to any to check for workflow property (extends McpServerConfig)
       const cfg = serverConfig as unknown as Record<string, unknown>;
+
       if (cfg.workflow && typeof cfg.workflow === 'string') {
-        // This is a workflow tool entry - extract it
+        // Workflow tool entry
         workflowEntriesFromMcp.push({
           workflow: cfg.workflow as string,
           args: cfg.inputs as Record<string, unknown> | undefined,
         });
         mcpEntriesToRemove.push(serverName);
         logger.debug(
-          `[AICheckProvider] Extracted workflow tool '${serverName}' from ai_mcp_servers`
+          `[AICheckProvider] Extracted workflow tool '${serverName}' (workflow=${cfg.workflow}) from ai_mcp_servers`
         );
+      } else if (cfg.tool && typeof cfg.tool === 'string') {
+        // Custom tool or built-in tool entry
+        toolEntriesFromMcp.push(cfg.tool as string);
+        mcpEntriesToRemove.push(serverName);
+        logger.debug(`[AICheckProvider] Extracted tool '${cfg.tool}' from ai_mcp_servers`);
       }
     }
-    // Remove workflow entries from mcpServers (they'll be exposed via SSE server)
+
+    // Remove extracted entries from mcpServers (they'll be exposed via SSE server)
     for (const name of mcpEntriesToRemove) {
       delete mcpServers[name];
     }
-    // Merge workflow entries with other custom tools
+
+    // Merge workflow entries with custom tools
     if (workflowEntriesFromMcp.length > 0) {
-      if (customToolsToLoad.length > 0) {
-        // Avoid duplicates
-        const existingNames = new Set(
-          customToolsToLoad.map(item => (typeof item === 'string' ? item : item.workflow))
-        );
-        for (const wf of workflowEntriesFromMcp) {
-          if (!existingNames.has(wf.workflow)) {
-            customToolsToLoad.push(wf);
-          }
+      const existingNames = new Set(
+        customToolsToLoad.map(item => (typeof item === 'string' ? item : item.workflow))
+      );
+      for (const wf of workflowEntriesFromMcp) {
+        if (!existingNames.has(wf.workflow)) {
+          customToolsToLoad.push(wf);
         }
-      } else {
-        customToolsToLoad = workflowEntriesFromMcp;
       }
-      customToolsServerName = '__tools__';
+      if (!customToolsServerName) {
+        customToolsServerName = '__tools__';
+      }
     }
 
-    if (customToolsToLoad.length > 0 && customToolsServerName && !config.ai?.disableTools) {
+    // Merge tool entries with custom tools
+    if (toolEntriesFromMcp.length > 0) {
+      const existingNames = new Set(
+        customToolsToLoad.map(item => (typeof item === 'string' ? item : item.workflow))
+      );
+      for (const toolName of toolEntriesFromMcp) {
+        if (!existingNames.has(toolName)) {
+          customToolsToLoad.push(toolName);
+        }
+      }
+      if (!customToolsServerName) {
+        customToolsServerName = '__tools__';
+      }
+    }
+
+    // Option 5: Handle built-in tools (currently just 'schedule')
+    const sessionAny = sessionInfo as any;
+    const webhookData =
+      sessionAny?.webhookContext?.webhookData ||
+      sessionAny?._parentContext?.webhookContext?.webhookData;
+    const slackContext = webhookData
+      ? extractSlackContext(webhookData as Map<string, unknown>)
+      : null;
+
+    // Check if "schedule" is requested in custom tools (from ai_custom_tools, ai_custom_tools_js, or ai_mcp_servers)
+    const scheduleToolRequested =
+      !config.ai?.disableTools &&
+      customToolsToLoad.some(
+        tool => tool === 'schedule' || (typeof tool === 'object' && tool.workflow === 'schedule')
+      );
+
+    if (scheduleToolRequested) {
+      // Remove "schedule" from customToolsToLoad - we'll add the real built-in tool later
+      customToolsToLoad = customToolsToLoad.filter(
+        tool => tool !== 'schedule' && !(typeof tool === 'object' && tool.workflow === 'schedule')
+      );
+      if (!customToolsServerName) {
+        customToolsServerName = '__tools__';
+      }
+      const contextInfo = slackContext
+        ? `user=${slackContext.userId}, channelType=${slackContext.channelType}`
+        : 'cli';
+      logger.debug(`[AICheckProvider] Schedule tool requested (${contextInfo})`);
+    }
+
+    // Legacy support: enable_scheduler: true also enables the schedule tool
+    const scheduleToolEnabled =
+      scheduleToolRequested || (config.ai?.enable_scheduler === true && !config.ai?.disableTools);
+
+    if (
+      (customToolsToLoad.length > 0 || scheduleToolEnabled) &&
+      (customToolsServerName || scheduleToolEnabled) &&
+      !config.ai?.disableTools
+    ) {
+      if (!customToolsServerName) {
+        customToolsServerName = '__tools__';
+      }
       try {
-        // Load custom tools from global config (now supports workflows too)
+        // Load custom tools from global config (supports workflows and custom tools)
         const customTools = this.loadCustomTools(customToolsToLoad, config);
+
+        // Add schedule tool if enabled (via ai_mcp_servers { tool: 'schedule' } or enable_scheduler)
+        if (scheduleToolEnabled) {
+          const scheduleTool = getScheduleToolDefinition();
+          customTools.set(scheduleTool.name, scheduleTool);
+          logger.debug(`[AICheckProvider] Added built-in schedule tool`);
+        }
 
         if (customTools.size > 0) {
           const sessionId = (config as any).checkName || `ai-check-${Date.now()}`;
@@ -1749,7 +1823,8 @@ export class AICheckProvider extends CheckProvider {
       // 1. External stdio MCP server: has 'command'
       // 2. External SSE/HTTP MCP server: has 'url'
       // 3. Workflow tool reference: has 'workflow'
-      // 4. Auto-detect from tools: section: empty object {}
+      // 4. Custom/built-in tool reference: has 'tool'
+      // 5. Auto-detect from tools: section: empty object {}
       const validServers: Record<string, import('../types/config').McpServerConfig> = {};
       for (const [serverName, serverConfig] of Object.entries(result as Record<string, unknown>)) {
         if (typeof serverConfig !== 'object' || serverConfig === null) {
@@ -1759,11 +1834,12 @@ export class AICheckProvider extends CheckProvider {
           continue;
         }
         const cfg = serverConfig as Record<string, unknown>;
-        // Accept: command (stdio), url (sse/http), workflow (workflow tool), or empty {} (auto-detect)
-        const isValid = cfg.command || cfg.url || cfg.workflow || Object.keys(cfg).length === 0;
+        // Accept: command (stdio), url (sse/http), workflow (workflow tool), tool (custom/built-in), or empty {} (auto-detect)
+        const isValid =
+          cfg.command || cfg.url || cfg.workflow || cfg.tool || Object.keys(cfg).length === 0;
         if (!isValid) {
           logger.warn(
-            `[AICheckProvider] ai_mcp_servers_js: server "${serverName}" must have command, url, or workflow`
+            `[AICheckProvider] ai_mcp_servers_js: server "${serverName}" must have command, url, workflow, or tool`
           );
           continue;
         }

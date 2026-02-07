@@ -127,6 +127,7 @@ Additional guides:
 - execution limits (run caps for safety): [docs/limits.md](docs/limits.md)
 - output formatting limits and truncation controls: [docs/output-formatting.md](docs/output-formatting.md)
 - live execution visualizer and control API: [docs/debug-visualizer.md](docs/debug-visualizer.md)
+- scheduler for cron jobs and dynamic schedules: [docs/scheduler.md](docs/scheduler.md)
 
 ## 🧪 Integration Tests
 
