@@ -168,8 +168,11 @@ export class DockerImageSandbox implements SandboxInstance {
 
     const args: string[] = ['docker', 'exec'];
 
-    // Pass environment variables
+    // Pass environment variables (validate keys to prevent argument injection)
     for (const [key, value] of Object.entries(options.env)) {
+      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+        throw new Error(`Invalid environment variable name: '${key}'`);
+      }
       args.push('-e', `${key}=${value}`);
     }
 

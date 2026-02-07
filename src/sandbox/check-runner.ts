@@ -117,8 +117,13 @@ export class CheckRunner {
           }
         }
 
-        // Build the command
+        // Build the command (validate visorPath to prevent shell injection inside container)
         const visorPath = sandboxConfig.visor_path || '/opt/visor';
+        if (!/^[a-zA-Z0-9/_.-]+$/.test(visorPath)) {
+          throw new Error(
+            `Invalid visor_path '${visorPath}': only alphanumerics, slashes, dots, hyphens, underscores allowed`
+          );
+        }
         const payloadJson = JSON.stringify(payload);
 
         // Allow child visor to resolve externalized npm packages (e.g. @opentelemetry/*)

@@ -62,6 +62,10 @@ export class CacheVolumeManager {
     const volumes: ResolvedVolume[] = [];
 
     for (const containerPath of cacheConfig.paths) {
+      // Reject path traversal attempts (absolute-path check is in config validation)
+      if (/\.\./.test(containerPath)) {
+        throw new Error(`Cache path '${containerPath}' must not contain '..' path traversal`);
+      }
       const hash = pathHash(containerPath);
       const volumeName = `visor-cache-${prefix}-${sandboxName}-${hash}`;
 

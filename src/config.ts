@@ -934,13 +934,20 @@ export class ConfigManager {
       });
     }
 
-    // Validate cache paths are absolute
+    // Validate cache paths are absolute and safe
     if (config.cache?.paths) {
       for (const p of config.cache.paths) {
         if (!p.startsWith('/')) {
           errors.push({
             field: `sandboxes.${name}.cache.paths`,
             message: `Cache path '${p}' in sandbox '${name}' must be absolute (start with /)`,
+            value: p,
+          });
+        }
+        if (/\.\./.test(p)) {
+          errors.push({
+            field: `sandboxes.${name}.cache.paths`,
+            message: `Cache path '${p}' in sandbox '${name}' must not contain '..' path traversal`,
             value: p,
           });
         }
