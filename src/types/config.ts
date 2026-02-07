@@ -735,6 +735,8 @@ export interface CheckConfig {
   cleanup_on_failure?: boolean;
   /** Keep worktree after workflow completion (default: false) */
   persist_worktree?: boolean;
+  /** Sandbox name to use for this check (overrides workspace-level default) */
+  sandbox?: string;
 }
 
 /**
@@ -1181,6 +1183,11 @@ export interface WorkflowOutput {
   value_js?: string;
 }
 
+export interface SandboxDefaults {
+  /** Base env var patterns for all sandboxes (replaces hardcoded defaults when set) */
+  env_passthrough?: string[];
+}
+
 /**
  * Main Visor configuration
  */
@@ -1242,6 +1249,12 @@ export interface VisorConfig {
   }>;
   /** Workspace isolation configuration for sandboxed execution */
   workspace?: WorkspaceConfig;
+  /** Workspace-level default sandbox name (all checks use this unless overridden) */
+  sandbox?: string;
+  /** Named sandbox environment definitions */
+  sandboxes?: Record<string, import('../sandbox/types').SandboxConfig>;
+  /** Workspace-level sandbox defaults (env allowlist, etc.) */
+  sandbox_defaults?: SandboxDefaults;
   /** Slack configuration */
   slack?: SlackConfig;
 }

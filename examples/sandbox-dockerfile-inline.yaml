@@ -1,0 +1,22 @@
+version: "2.0"
+
+# Inline Dockerfile: install custom tools in the sandbox image
+sandboxes:
+  jq-env:
+    dockerfile_inline: |
+      FROM alpine:3.19
+      RUN apk add --no-cache jq
+
+sandbox: jq-env
+
+checks:
+  parse-json:
+    type: command
+    exec: |
+      echo '{"name":"visor","version":"2.0"}' | jq -r '.name'
+
+  transform-json:
+    type: command
+    depends_on: [parse-json]
+    exec: |
+      echo '[{"severity":"high"},{"severity":"low"}]' | jq '[.[] | select(.severity == "high")] | length'

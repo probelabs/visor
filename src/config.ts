@@ -786,6 +786,56 @@ export class ConfigManager {
       }
     }
 
+    // Validate sandbox configuration
+    if (config.sandboxes) {
+      const sandboxNames = Object.keys(config.sandboxes);
+      for (const [sandboxName, sandboxConfig] of Object.entries(config.sandboxes)) {
+        this.validateSandboxConfig(sandboxName, sandboxConfig, errors);
+      }
+
+      // Validate top-level sandbox reference
+      if (config.sandbox && !sandboxNames.includes(config.sandbox)) {
+        errors.push({
+          field: 'sandbox',
+          message: `Top-level sandbox '${config.sandbox}' not found in sandboxes definitions. Available: ${sandboxNames.join(', ')}`,
+          value: config.sandbox,
+        });
+      }
+
+      // Validate check-level sandbox references
+      if (checksToValidate) {
+        for (const [checkName, checkConfig] of Object.entries(checksToValidate)) {
+          if (checkConfig.sandbox && !sandboxNames.includes(checkConfig.sandbox)) {
+            errors.push({
+              field: `checks.${checkName}.sandbox`,
+              message: `Check '${checkName}' references sandbox '${checkConfig.sandbox}' which is not defined. Available: ${sandboxNames.join(', ')}`,
+              value: checkConfig.sandbox,
+            });
+          }
+        }
+      }
+    } else {
+      // If no sandboxes defined, check that nothing references them
+      if (config.sandbox) {
+        errors.push({
+          field: 'sandbox',
+          message: `Top-level sandbox '${config.sandbox}' is set but no sandboxes are defined`,
+          value: config.sandbox,
+        });
+      }
+      if (checksToValidate) {
+        for (const [checkName, checkConfig] of Object.entries(checksToValidate)) {
+          if (checkConfig.sandbox) {
+            errors.push({
+              field: `checks.${checkName}.sandbox`,
+              message: `Check '${checkName}' references sandbox '${checkConfig.sandbox}' but no sandboxes are defined`,
+              value: checkConfig.sandbox,
+            });
+          }
+        }
+      }
+    }
+
     // Validate global MCP servers if present
     if (config.ai_mcp_servers) {
       this.validateMcpServersObject(config.ai_mcp_servers, 'ai_mcp_servers', errors, warnings);
@@ -837,6 +887,125 @@ export class ConfigManager {
     if (!strict && warnings.length > 0) {
       for (const w of warnings) {
         logger.warn(`⚠️  Config warning [${w.field}]: ${w.message}`);
+      }
+    }
+  }
+
+  /**
+   * Validate sandbox configuration
+   */
+  private validateSandboxConfig(
+    name: string,
+    config: import('./sandbox/types').SandboxConfig,
+    errors: ConfigValidationError[]
+  ): void {
+    // Validate sandbox name (prevent command injection via config keys)
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name)) {
+      errors.push({
+        field: `sandboxes.${name}`,
+        message: `Sandbox name '${name}' contains invalid characters. Only letters, numbers, dots, hyphens, underscores allowed.`,
+      });
+    }
+
+    // Must have exactly one mode
+    const modes = [
+      config.image ? 'image' : null,
+      config.dockerfile || config.dockerfile_inline ? 'dockerfile' : null,
+      config.compose ? 'compose' : null,
+    ].filter(Boolean);
+
+    if (modes.length === 0) {
+      errors.push({
+        field: `sandboxes.${name}`,
+        message: `Sandbox '${name}' must specify one of: image, dockerfile, dockerfile_inline, or compose`,
+      });
+    } else if (modes.length > 1) {
+      errors.push({
+        field: `sandboxes.${name}`,
+        message: `Sandbox '${name}' has multiple modes (${modes.join(', ')}). Specify exactly one.`,
+      });
+    }
+
+    // Compose mode requires service
+    if (config.compose && !config.service) {
+      errors.push({
+        field: `sandboxes.${name}.service`,
+        message: `Sandbox '${name}' uses compose mode but is missing required 'service' field`,
+      });
+    }
+
+    // Validate file paths don't contain traversal
+    if (config.dockerfile && /\.\./.test(config.dockerfile)) {
+      errors.push({
+        field: `sandboxes.${name}.dockerfile`,
+        message: `Dockerfile path '${config.dockerfile}' in sandbox '${name}' must not contain '..' path traversal`,
+      });
+    }
+    if (config.compose && /\.\./.test(config.compose)) {
+      errors.push({
+        field: `sandboxes.${name}.compose`,
+        message: `Compose file path '${config.compose}' in sandbox '${name}' must not contain '..' path traversal`,
+      });
+    }
+
+    // Validate container paths are absolute and safe
+    if (config.workdir) {
+      if (!config.workdir.startsWith('/')) {
+        errors.push({
+          field: `sandboxes.${name}.workdir`,
+          message: `Workdir '${config.workdir}' in sandbox '${name}' must be an absolute path (start with /)`,
+        });
+      }
+      if (/\.\./.test(config.workdir)) {
+        errors.push({
+          field: `sandboxes.${name}.workdir`,
+          message: `Workdir '${config.workdir}' in sandbox '${name}' must not contain '..' path traversal`,
+        });
+      }
+    }
+    if (config.visor_path) {
+      if (!config.visor_path.startsWith('/')) {
+        errors.push({
+          field: `sandboxes.${name}.visor_path`,
+          message: `visor_path '${config.visor_path}' in sandbox '${name}' must be an absolute path (start with /)`,
+        });
+      }
+      if (/\.\./.test(config.visor_path)) {
+        errors.push({
+          field: `sandboxes.${name}.visor_path`,
+          message: `visor_path '${config.visor_path}' in sandbox '${name}' must not contain '..' path traversal`,
+        });
+      }
+    }
+
+    // Validate cache paths are absolute and safe
+    if (config.cache?.paths) {
+      for (const p of config.cache.paths) {
+        if (!p.startsWith('/')) {
+          errors.push({
+            field: `sandboxes.${name}.cache.paths`,
+            message: `Cache path '${p}' in sandbox '${name}' must be absolute (start with /)`,
+            value: p,
+          });
+        }
+        if (/\.\./.test(p)) {
+          errors.push({
+            field: `sandboxes.${name}.cache.paths`,
+            message: `Cache path '${p}' in sandbox '${name}' must not contain '..' path traversal`,
+            value: p,
+          });
+        }
+      }
+    }
+
+    // Validate resource limits
+    if (config.resources?.cpu !== undefined) {
+      if (typeof config.resources.cpu !== 'number' || config.resources.cpu <= 0) {
+        errors.push({
+          field: `sandboxes.${name}.resources.cpu`,
+          message: `CPU limit in sandbox '${name}' must be a positive number`,
+          value: config.resources.cpu,
+        });
       }
     }
   }
@@ -1285,8 +1454,21 @@ export class ConfigManager {
             //   be present when loading a suite file.
             // - 'slack' holds inbound Slack settings (socket/webhook); older
             //   schema snapshots may not include it yet.
-            if (topLevel && (addl === 'tests' || addl === 'slack')) {
+            // - 'sandboxes', 'sandbox', 'sandbox_defaults' are sandbox
+            //   execution keys that may not yet be in the generated schema.
+            const allowedTopLevelKeys = new Set([
+              'tests',
+              'slack',
+              'sandboxes',
+              'sandbox',
+              'sandbox_defaults',
+            ]);
+            if (topLevel && allowedTopLevelKeys.has(addl)) {
               // Do not warn for these keys.
+              continue;
+            }
+            // At check level, allow 'sandbox' without warning
+            if (!topLevel && addl === 'sandbox' && pathStr.match(/^(checks|steps)\.[^.]+$/)) {
               continue;
             }
             warnings.push({

@@ -1,0 +1,26 @@
+version: "2.0"
+
+# Environment variable forwarding into sandbox containers
+sandboxes:
+  node-env:
+    image: "node:20-alpine"
+    # Forward host env vars matching these patterns into the container
+    env_passthrough:
+      - "CI"
+      - "NODE_*"
+      - "GITHUB_*"
+
+sandbox: node-env
+
+checks:
+  check-env:
+    type: command
+    # Check-level env vars are always injected (override host vars)
+    env:
+      MY_VAR: hello
+      BUILD_MODE: production
+    exec: "echo \"MY_VAR=$MY_VAR BUILD_MODE=$BUILD_MODE\""
+
+  check-passthrough:
+    type: command
+    exec: "echo \"CI=$CI NODE_ENV=$NODE_ENV\""

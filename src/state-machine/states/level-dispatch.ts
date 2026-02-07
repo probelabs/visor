@@ -31,6 +31,7 @@ import { emitMermaidFromMarkdown } from '../../utils/mermaid-telemetry';
 import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from '../../telemetry/fallback-ndjson';
 import { FailureConditionEvaluator } from '../../failure-condition-evaluator';
 import { resolveWorkflowInputs } from '../context/workflow-inputs';
+import { executeWithSandboxRouting } from '../dispatch/sandbox-routing';
 
 /**
  * Map check name to focus for AI provider
@@ -922,7 +923,7 @@ async function executeCheckWithForEachItems(
         });
       } catch {}
 
-      // Execute provider with telemetry
+      // Execute provider with telemetry (sandbox routing if configured)
       const itemResult = await withActiveSpan(
         `visor.check.${checkId}`,
         {
@@ -932,7 +933,16 @@ async function executeCheckWithForEachItems(
           session_id: context.sessionId,
           wave: state.wave,
         },
-        async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+        async () =>
+          executeWithSandboxRouting(
+            checkId,
+            checkConfig,
+            context,
+            prInfo,
+            dependencyResults,
+            checkConfig.ai?.timeout || 1800000,
+            () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+          )
       );
 
       // Enrich issues
@@ -1032,7 +1042,7 @@ async function executeCheckWithForEachItems(
             } as any;
             enrichedResult.issues = [...(enrichedResult.issues || []), issue];
             if (Array.isArray(enrichedIssues)) {
-              enrichedIssues.push(issue);
+              enrichedIssues.push(issue as any);
             }
           }
         }
@@ -1104,8 +1114,8 @@ async function executeCheckWithForEachItems(
             };
 
             enrichedResult.issues = [...(enrichedResult.issues || []), failIssue];
-            enrichedIssues.push(failIssue);
-            allIssues.push(failIssue);
+            enrichedIssues.push(failIssue as any);
+            allIssues.push(failIssue as any);
 
             // Re-check if iteration has fatal issues after adding fail_if issue
             const nowHasFatalIssues = enrichedResult.issues.some((issue: ReviewIssue) => {
@@ -2221,7 +2231,7 @@ async function executeSingleCheck(
       });
     } catch {}
 
-    // Execute provider with telemetry
+    // Execute provider with telemetry (sandbox routing if configured)
     const result = await withActiveSpan(
       `visor.check.${checkId}`,
       {
@@ -2230,7 +2240,16 @@ async function executeSingleCheck(
         session_id: context.sessionId,
         wave: state.wave,
       },
-      async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+      async () =>
+        executeWithSandboxRouting(
+          checkId,
+          checkConfig,
+          context,
+          prInfo,
+          dependencyResults,
+          checkConfig.ai?.timeout || 1800000,
+          () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+        )
     );
 
     // Special case: human-input style checks that intentionally pause the run

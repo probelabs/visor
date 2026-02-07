@@ -6,6 +6,7 @@ import type { GitHubCheckService } from '../github-check-service';
 import type { ReviewSummary } from '../reviewer';
 import type { CheckExecutionStats } from './execution';
 import type { WorkspaceManager } from '../utils/workspace-manager';
+import type { SandboxManager } from '../sandbox/sandbox-manager';
 
 /**
  * Engine execution modes
@@ -130,6 +131,8 @@ export interface EngineContext {
   executionContext?: import('../providers/check-provider.interface').ExecutionContext;
   /** PR information for test fixture data and AI provider context */
   prInfo?: import('../pr-analyzer').PRInfo;
+  /** Sandbox manager for Docker-based check execution */
+  sandboxManager?: SandboxManager;
 }
 
 /**

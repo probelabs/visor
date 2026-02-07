@@ -126,6 +126,14 @@ Example configurations demonstrating various Visor features and use cases.
 - **`failure-conditions-github-style.yaml`** - GitHub-style failure conditions
 - **`failure-conditions-migration.yaml`** - Migration patterns for failure conditions
 
+### Sandbox Examples
+- **`sandbox-basic.yaml`** - Basic Docker sandbox with image mode
+- **`sandbox-cache.yaml`** - Sandbox with cache volume mounts
+- **`sandbox-dockerfile-inline.yaml`** - Sandbox with inline Dockerfile
+- **`sandbox-env-passthrough.yaml`** - Sandbox environment variable passthrough
+- **`sandbox-multi-env.yaml`** - Multiple sandbox environments per check
+- **`sandbox-read-only.yaml`** - Read-only sandbox with network isolation
+
 ### Integration Examples
 - **`jira-simple-example.yaml`** - Simple JIRA integration
 - **`jira-single-issue-workflow.yaml`** - Single JIRA issue workflow
@@ -404,6 +412,28 @@ visor --config examples/bedrock-config.yaml --provider bedrock
 
 # Claude Code SDK integration
 visor --config examples/claude-code-config.yaml
+```
+
+## 🐳 Sandbox Examples
+
+```bash
+# Basic Docker sandbox
+visor --config examples/sandbox-basic.yaml
+
+# Sandbox with cache volumes
+visor --config examples/sandbox-cache.yaml
+
+# Inline Dockerfile sandbox
+visor --config examples/sandbox-dockerfile-inline.yaml
+
+# Environment variable passthrough
+visor --config examples/sandbox-env-passthrough.yaml
+
+# Multiple sandbox environments
+visor --config examples/sandbox-multi-env.yaml
+
+# Read-only sandbox with network isolation
+visor --config examples/sandbox-read-only.yaml
 ```
 
 ## 🔧 MCP & Tools Examples

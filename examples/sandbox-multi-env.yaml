@@ -1,0 +1,27 @@
+version: "2.0"
+
+# Multiple sandbox environments with per-check overrides
+sandboxes:
+  node-env:
+    image: "node:20-alpine"
+  alpine-env:
+    image: "alpine:3.19"
+
+# Default: all checks run in node-env
+sandbox: node-env
+
+checks:
+  build:
+    type: command
+    exec: "node -e \"console.log('build OK')\""
+
+  system-check:
+    type: command
+    # Override: this check runs in alpine-env instead of node-env
+    sandbox: alpine-env
+    exec: "cat /etc/os-release | head -1"
+
+  final:
+    type: command
+    depends_on: [build, system-check]
+    exec: "echo 'all checks passed'"

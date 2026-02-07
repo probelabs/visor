@@ -1,0 +1,33 @@
+version: "2.0"
+
+# Secure execution: read-only workspace + no network access
+sandboxes:
+  secure-env:
+    image: "node:20-alpine"
+    read_only: true
+    network: false
+
+sandbox: secure-env
+
+checks:
+  read-source:
+    type: command
+    exec: "cat package.json | head -5"
+
+  verify-read-only:
+    type: command
+    exec: |
+      if touch /workspace/test-file 2>/dev/null; then
+        echo "ERROR: workspace is writable" >&2
+        exit 1
+      fi
+      echo "workspace is read-only as expected"
+
+  verify-no-network:
+    type: command
+    exec: |
+      if wget -q --timeout=2 https://example.com -O /dev/null 2>/dev/null; then
+        echo "ERROR: network is available" >&2
+        exit 1
+      fi
+      echo "network is disabled as expected"

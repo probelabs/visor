@@ -9,6 +9,7 @@ import { buildDependencyResultsWithScope } from './dependency-gating';
 import { updateStats, hasFatalIssues } from './stats-manager';
 import { handleRouting, checkLoopBudget, evaluateGoto } from '../states/routing';
 import { resolveWorkflowInputs } from '../context/workflow-inputs';
+import { executeWithSandboxRouting } from './sandbox-routing';
 
 /**
  * Execute a check once per forEach item (map fanout path).
@@ -280,7 +281,16 @@ export async function executeCheckWithForEachItems(
           session_id: context.sessionId,
           wave: state.wave,
         },
-        async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+        async () =>
+          executeWithSandboxRouting(
+            checkId,
+            checkConfig,
+            context,
+            prInfo,
+            dependencyResults,
+            checkConfig.ai?.timeout || 1800000,
+            () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+          )
       );
 
       const enrichedIssues = (result.issues || []).map((issue: ReviewIssue) => ({

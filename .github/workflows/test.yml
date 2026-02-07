@@ -1,0 +1,75 @@
+name: Test Action
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  checks: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (first to ensure dist/ exists)
+        run: npm run build --ignore-scripts
+
+      - name: Run tests
+        run: npm test
+      
+      - name: Test basic action functionality
+        uses: ./
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          owner: 'octocat'
+          repo: 'Hello-World'
+          ai-model: 'mock'
+          ai-provider: 'mock'
+          config-path: '.visor.test.yaml'
+          comment-on-pr: 'false'  # Disable commenting in tests
+
+  test-scenarios:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (first to ensure dist/ exists)
+        run: npm run build --ignore-scripts
+        
+      - name: Run act scenario tests
+        run: npm test -- tests/scenarios/
+        
+      - name: Test PR review functionality (mock)
+        uses: ./
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-review: 'false'
+          ai-model: 'mock'
+          ai-provider: 'mock'
+          config-path: '.visor.test.yaml'
+          comment-on-pr: 'false'  # Disable commenting in tests
+        env:
+          GITHUB_EVENT_NAME: 'repository'

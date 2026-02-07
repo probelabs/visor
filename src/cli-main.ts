@@ -22,6 +22,186 @@ import { DebugVisualizerServer } from './debug-visualizer/ws-server';
 import open from 'open';
 
 /**
+ * Execute a single check in sandbox mode (--run-check).
+ * Reads CheckRunPayload from argument or stdin, executes one check,
+ * writes CheckRunResult JSON to stdout. All logging goes to stderr.
+ */
+async function runCheckMode(payloadArg?: string): Promise<void> {
+  // Force all logging to stderr so stdout is reserved for JSON result
+  configureLoggerFromCli({ output: 'json', debug: false, verbose: false, quiet: true });
+
+  // Initialize telemetry when enabled (sandbox child trace relay)
+  let telemetryEnabled = false;
+  if (process.env.VISOR_TELEMETRY_ENABLED === 'true') {
+    try {
+      const { initTelemetry } = await import('./telemetry/opentelemetry');
+      await initTelemetry({ enabled: true });
+      telemetryEnabled = true;
+    } catch {
+      // Telemetry not available — continue without it
+    }
+  }
+
+  let payloadJson: string;
+  if (payloadArg && payloadArg !== '-') {
+    payloadJson = payloadArg;
+  } else {
+    // Read from stdin
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) {
+      chunks.push(chunk as Buffer);
+    }
+    payloadJson = Buffer.concat(chunks).toString('utf8');
+  }
+
+  let payload: import('./sandbox/types').CheckRunPayload;
+  try {
+    payload = JSON.parse(payloadJson);
+  } catch {
+    const errorResult = { issues: [], output: null, error: 'Invalid JSON payload' };
+    process.stdout.write(JSON.stringify(errorResult) + '\n');
+    return process.exit(1);
+  }
+
+  if (!payload.check || !payload.prInfo) {
+    const errorResult = { issues: [], output: null, error: 'Missing check or prInfo in payload' };
+    process.stdout.write(JSON.stringify(errorResult) + '\n');
+    return process.exit(1);
+  }
+
+  try {
+    const { CheckProviderRegistry } = await import('./providers/check-provider-registry');
+    const registry = CheckProviderRegistry.getInstance();
+
+    const checkConfig = payload.check;
+    const providerType = checkConfig.type || 'ai';
+    const provider = registry.getProviderOrThrow(providerType);
+
+    // Reconstruct PRInfo from serialized form
+    const prInfo: PRInfo = {
+      number: payload.prInfo.number,
+      title: payload.prInfo.title,
+      body: payload.prInfo.body,
+      author: payload.prInfo.author,
+      base: payload.prInfo.base,
+      head: payload.prInfo.head,
+      files: payload.prInfo.files.map(f => ({
+        filename: f.filename,
+        status: f.status as 'added' | 'removed' | 'modified' | 'renamed',
+        additions: f.additions,
+        deletions: f.deletions,
+        changes: f.changes,
+        patch: f.patch,
+      })),
+      totalAdditions: payload.prInfo.totalAdditions,
+      totalDeletions: payload.prInfo.totalDeletions,
+      eventType: payload.prInfo.eventType as import('./types/config').EventTrigger | undefined,
+      fullDiff: payload.prInfo.fullDiff,
+      commitDiff: payload.prInfo.commitDiff,
+      isIncremental: payload.prInfo.isIncremental,
+      isIssue: payload.prInfo.isIssue,
+      eventContext: payload.prInfo.eventContext,
+    };
+
+    // Build provider config
+    const providerConfig: import('./providers/check-provider.interface').CheckProviderConfig = {
+      type: providerType,
+      prompt: checkConfig.prompt,
+      exec: checkConfig.exec,
+      focus: checkConfig.focus,
+      schema: checkConfig.schema,
+      group: checkConfig.group,
+      eventContext: prInfo.eventContext,
+      env: checkConfig.env,
+      ai: checkConfig.ai || {},
+      ai_provider: checkConfig.ai_provider,
+      ai_model: checkConfig.ai_model,
+      claude_code: checkConfig.claude_code,
+      transform: checkConfig.transform,
+      transform_js: checkConfig.transform_js,
+      forEach: checkConfig.forEach,
+      ...checkConfig,
+    };
+
+    // Build dependency results map if provided
+    let dependencyResults: Map<string, import('./reviewer').ReviewSummary> | undefined;
+    if (payload.dependencyOutputs) {
+      dependencyResults = new Map();
+      for (const [key, value] of Object.entries(payload.dependencyOutputs)) {
+        dependencyResults.set(key, value as import('./reviewer').ReviewSummary);
+      }
+    }
+
+    // Wrap execution in OTel span when telemetry is enabled
+    let result: import('./reviewer').ReviewSummary;
+    if (telemetryEnabled) {
+      try {
+        const { withActiveSpan, setSpanAttributes } = await import('./telemetry/trace-helpers');
+        result = await withActiveSpan(
+          `visor.sandbox.child.${checkConfig.type || 'check'}`,
+          {
+            'visor.check.type': providerType,
+            'visor.check.exec': checkConfig.exec || '',
+          },
+          async () => {
+            const r = await provider.execute(prInfo, providerConfig, dependencyResults);
+            try {
+              setSpanAttributes({
+                'visor.check.output.type': typeof (r as any).output,
+                'visor.check.issues_count': (r.issues || []).length,
+              });
+            } catch {}
+            return r;
+          }
+        );
+      } catch {
+        // Fallback if span fails
+        result = await provider.execute(prInfo, providerConfig, dependencyResults);
+      }
+    } else {
+      result = await provider.execute(prInfo, providerConfig, dependencyResults);
+    }
+
+    // Build CheckRunResult
+    const extResult = result as import('./reviewer').ReviewSummary & {
+      output?: unknown;
+      content?: string;
+    };
+    const checkRunResult: import('./sandbox/types').CheckRunResult = {
+      issues: result.issues || [],
+      output: extResult.output,
+      content: extResult.content,
+      debug: result.debug,
+    };
+
+    // Flush telemetry before writing result (ensures NDJSON is written)
+    if (telemetryEnabled) {
+      try {
+        const { shutdownTelemetry } = await import('./telemetry/opentelemetry');
+        await shutdownTelemetry();
+      } catch {}
+    }
+
+    process.stdout.write(JSON.stringify(checkRunResult) + '\n');
+  } catch (err) {
+    // Flush telemetry even on error
+    if (telemetryEnabled) {
+      try {
+        const { shutdownTelemetry } = await import('./telemetry/opentelemetry');
+        await shutdownTelemetry();
+      } catch {}
+    }
+    const errorResult = {
+      issues: [],
+      output: null,
+      error: err instanceof Error ? err.message : String(err),
+    };
+    process.stdout.write(JSON.stringify(errorResult) + '\n');
+    process.exit(1);
+  }
+}
+
+/**
  * Handle the validate subcommand
  */
 async function handleValidateCommand(argv: string[], configManager: ConfigManager): Promise<void> {
@@ -561,6 +741,14 @@ export async function main(): Promise<void> {
     // any argument parsing side-effects (e.g., extra positional args like 'test').
     // Also filter out the --cli flag if it exists (used to force CLI mode in GH Actions)
     let filteredArgv = process.argv.filter(arg => arg !== '--cli');
+
+    // Check for --run-check mode before standard CLI parsing
+    const runCheckIndex = process.argv.indexOf('--run-check');
+    if (runCheckIndex !== -1) {
+      const payloadArg = process.argv[runCheckIndex + 1];
+      await runCheckMode(payloadArg);
+      return;
+    }
 
     // EARLY: ensure trace dir and fallback NDJSON file exist BEFORE any early exits
     try {

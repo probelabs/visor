@@ -1,0 +1,32 @@
+version: "2.0"
+
+# Cache volumes: persist data between sandbox runs
+sandboxes:
+  node-env:
+    image: "node:20-alpine"
+    cache:
+      paths:
+        - "/tmp/cache"
+        - "/root/.npm"
+      ttl: "7d"
+      max_scopes: 5
+
+sandbox: node-env
+
+checks:
+  warm-cache:
+    type: command
+    exec: |
+      mkdir -p /tmp/cache
+      echo "cached-data" > /tmp/cache/result.txt
+      echo "cache warmed"
+
+  read-cache:
+    type: command
+    depends_on: [warm-cache]
+    exec: |
+      if [ -f /tmp/cache/result.txt ]; then
+        echo "cache hit: $(cat /tmp/cache/result.txt)"
+      else
+        echo "cache miss"
+      fi

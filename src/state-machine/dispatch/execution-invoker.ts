@@ -22,6 +22,7 @@ import {
 } from './on-init-handlers';
 import { createSecureSandbox, compileAndRun } from '../../utils/sandbox';
 import { resolveWorkflowInputs } from '../context/workflow-inputs';
+import { executeWithSandboxRouting } from '../dispatch/sandbox-routing';
 
 /**
  * Normalize on_init.run items to array format
@@ -702,7 +703,16 @@ export async function executeSingleCheck(
         session_id: context.sessionId,
         wave: state.wave,
       },
-      async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+      async () =>
+        executeWithSandboxRouting(
+          checkId,
+          checkConfig,
+          context,
+          prInfo,
+          dependencyResults,
+          checkConfig.ai?.timeout || 1800000,
+          () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+        )
     );
 
     const enrichedIssues = (result.issues || []).map((issue: ReviewIssue) => ({

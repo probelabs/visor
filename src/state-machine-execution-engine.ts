@@ -7,6 +7,7 @@ import type { EngineContext } from './types/engine';
 import { ExecutionJournal } from './snapshot-store';
 import { logger } from './logger';
 import type { DebugVisualizerServer } from './debug-visualizer/ws-server';
+import { SandboxManager } from './sandbox/sandbox-manager';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -273,6 +274,26 @@ export class StateMachineExecutionEngine {
       checks // Pass the explicit checks list
     );
 
+    // Create SandboxManager if sandboxes are configured
+    if (configWithTagFilter.sandboxes && Object.keys(configWithTagFilter.sandboxes).length > 0) {
+      try {
+        const { execSync } = require('child_process');
+        const gitBranch = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8' }).trim();
+        context.sandboxManager = new SandboxManager(
+          configWithTagFilter.sandboxes,
+          this.workingDirectory,
+          gitBranch
+        );
+      } catch {
+        // If git branch detection fails, use 'unknown'
+        context.sandboxManager = new SandboxManager(
+          configWithTagFilter.sandboxes,
+          this.workingDirectory,
+          'unknown'
+        );
+      }
+    }
+
     // Initialize workspace isolation (if enabled)
     const { initializeWorkspace } = require('./state-machine/context/build-engine-context');
     await initializeWorkspace(context);
@@ -441,40 +462,51 @@ export class StateMachineExecutionEngine {
     // Create and run state machine with debug server support (M4)
     const runner = new StateMachineRunner(context, this.debugServer);
     this._lastRunner = runner;
-    const result = await runner.run();
 
-    // Stop frontends if started
-    if (frontendsHost && typeof frontendsHost.stopAll === 'function') {
-      try {
-        await frontendsHost.stopAll();
-      } catch {}
-    }
-
-    if (debug) {
-      logger.info('[StateMachine] Execution complete');
-    }
-
-    // Post-grouped comments via legacy reviewer is removed; GitHub frontend handles comments
-
-    // Cleanup AI sessions after execution
     try {
-      const { SessionRegistry } = await import('./session-registry');
-      const sessionRegistry = SessionRegistry.getInstance();
-      sessionRegistry.clearAllSessions();
-    } catch (error) {
-      logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
-    }
+      const result = await runner.run();
 
-    // Cleanup workspace if enabled
-    if (context.workspace) {
+      // Stop frontends if started
+      if (frontendsHost && typeof frontendsHost.stopAll === 'function') {
+        try {
+          await frontendsHost.stopAll();
+        } catch {}
+      }
+
+      if (debug) {
+        logger.info('[StateMachine] Execution complete');
+      }
+
+      // Post-grouped comments via legacy reviewer is removed; GitHub frontend handles comments
+
+      // Cleanup AI sessions after execution
       try {
-        await context.workspace.cleanup();
+        const { SessionRegistry } = await import('./session-registry');
+        const sessionRegistry = SessionRegistry.getInstance();
+        sessionRegistry.clearAllSessions();
       } catch (error) {
-        logger.debug(`[StateMachine] Failed to cleanup workspace: ${error}`);
+        logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
+      }
+
+      // Cleanup workspace if enabled
+      if (context.workspace) {
+        try {
+          await context.workspace.cleanup();
+        } catch (error) {
+          logger.debug(`[StateMachine] Failed to cleanup workspace: ${error}`);
+        }
+      }
+
+      return result;
+    } finally {
+      // Cleanup sandbox containers
+      if (context.sandboxManager) {
+        await context.sandboxManager.stopAll().catch(err => {
+          logger.warn(`Failed to stop sandboxes: ${err}`);
+        });
+        context.sandboxManager = undefined;
       }
     }
-
-    return result;
   }
 
   /**

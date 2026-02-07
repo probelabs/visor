@@ -1,0 +1,46 @@
+version: "1.0"
+
+# Project-specific configuration with multiple extends
+extends:
+  - default  # Start with Visor defaults
+  - ./team-config.yaml  # Apply team standards
+
+# Project-specific overrides
+checks:
+  # Re-enable style check that was disabled in team config
+  style:
+    type: command
+    exec: npm run lint
+    on: [pr_opened]
+    group: formatting
+
+  # Add project-specific documentation check
+  docs:
+    type: ai
+    prompt: |
+      Review the documentation changes:
+      - Check for spelling and grammar
+      - Ensure technical accuracy
+      - Verify code examples work
+      - Check for broken links
+    on: [pr_opened, pr_updated]
+    triggers:
+      - "*.md"
+      - "docs/**/*"
+    group: documentation
+
+  # Project-specific integration tests
+  integration:
+    type: command
+    exec: npm run test:integration
+    on: [pr_opened]
+    depends_on: [tests]
+    group: testing
+
+# Project uses lower parallelism
+max_parallelism: 2
+
+# Project-specific environment variables
+env:
+  NODE_ENV: test
+  CI: true
