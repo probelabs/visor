@@ -348,6 +348,42 @@ This allows reminders like "check how many Jira tickets were created this week" 
 }
 ```
 
+### Response Continuity (previousResponse)
+
+For **recurring** simple reminders, the scheduler saves the AI response after each execution. On subsequent runs, the previous response is included in the context, allowing the AI to reference or build upon its earlier answer.
+
+**How it works:**
+1. Reminder fires and runs through the visor pipeline
+2. AI generates a response, which is posted to Slack
+3. The response text is saved as `previousResponse` in the schedule store
+4. On the next run, the reminder text includes the previous response:
+   ```
+   <original reminder text>
+
+   ---
+   **Previous Response (for context):**
+   <AI's previous response>
+   ---
+
+   Please provide an updated response based on the reminder above.
+   ```
+
+**Example use case:**
+```
+User: "Every day at 9am, tell me how many Jira tickets were created"
+
+Day 1: AI responds with "5 tickets were created yesterday"
+Day 2: AI sees previous response and can say "8 tickets today (up from 5 yesterday)"
+```
+
+This feature enables continuity for status updates, progress tracking, and any recurring reminder where historical context is valuable. The AI can:
+- Compare current data to previous runs
+- Track trends over time
+- Provide delta/change information
+- Reference what was said before
+
+**Note:** One-time schedules do not save previousResponse since they only execute once.
+
 ## Architecture
 
 ### File Structure
@@ -450,6 +486,7 @@ interface Schedule {
   runCount: number;
   failureCount: number;
   lastError?: string;                  // Last error message if failed
+  previousResponse?: string;           // AI response from last run (recurring only)
   createdAt: number;                   // Creation timestamp
 }
 ```
