@@ -1,8 +1,9 @@
 /**
- * Natural language schedule parsing using chrono-node
- * Supports both one-time and recurring schedule expressions
+ * Schedule parsing utilities
+ * Note: Natural language parsing is handled by the AI which generates
+ * cron expressions or ISO timestamps directly. This module provides
+ * validation and helper functions.
  */
-import * as chrono from 'chrono-node';
 
 /**
  * Parsed schedule result
@@ -66,11 +67,10 @@ interface RecurringPattern {
 export function parseScheduleExpression(
   expression: string,
   userTimezone: string = 'UTC',
-  referenceDate?: Date
+  _referenceDate?: Date
 ): ParsedSchedule {
   const trimmedExpr = expression.trim();
   const normalizedExpr = trimmedExpr.toLowerCase();
-  const refDate = referenceDate || new Date();
 
   // First check if it's a standard cron expression (5 space-separated parts)
   if (isValidCronExpression(trimmedExpr)) {
@@ -94,27 +94,26 @@ export function parseScheduleExpression(
     };
   }
 
-  // Try to parse as a one-time schedule using chrono
-  const parsed = chrono.parseDate(expression, refDate, { forwardDate: true });
-
-  if (!parsed) {
-    throw new Error(
-      `Could not parse schedule expression: "${expression}". Try formats like "in 2 hours", "tomorrow at 3pm", "every Monday at 9am", or a cron expression like "0 9 * * 1".`
-    );
+  // Try to parse as ISO 8601 timestamp for one-time schedules
+  const isoDate = new Date(expression);
+  if (!isNaN(isoDate.getTime())) {
+    // Valid ISO date
+    if (isoDate.getTime() <= Date.now()) {
+      throw new Error(`Schedule time must be in the future: "${expression}"`);
+    }
+    return {
+      type: 'one-time',
+      runAt: isoDate,
+      timezone: userTimezone,
+      description: formatOneTimeDescription(isoDate),
+    };
   }
 
-  // Ensure the parsed date is in the future
-  if (parsed.getTime() <= Date.now()) {
-    // Add 24 hours if it parsed to a past time today
-    parsed.setDate(parsed.getDate() + 1);
-  }
-
-  return {
-    type: 'one-time',
-    runAt: parsed,
-    timezone: userTimezone,
-    description: formatOneTimeDescription(parsed),
-  };
+  // Could not parse - provide helpful error
+  throw new Error(
+    `Could not parse schedule expression: "${expression}". ` +
+      `Use a cron expression (e.g., "0 9 * * 1" for Monday 9am) or ISO timestamp (e.g., "2026-02-08T15:00:00Z").`
+  );
 }
 
 /**

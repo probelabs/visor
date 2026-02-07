@@ -1,6 +1,7 @@
 /**
  * Unit tests for schedule-parser.ts
- * Tests natural language parsing and cron expression handling
+ * Tests cron expression handling and recurring pattern parsing
+ * Note: Natural language parsing like "in 2 hours" is now handled by the AI
  */
 import {
   parseScheduleExpression,
@@ -11,45 +12,21 @@ import {
 describe('parseScheduleExpression', () => {
   const timezone = 'America/New_York';
 
-  describe('One-time expressions', () => {
-    it('should parse "in X hours"', () => {
-      const now = Date.now();
-      const result = parseScheduleExpression('in 2 hours', timezone);
+  describe('ISO timestamp expressions', () => {
+    it('should parse valid ISO 8601 timestamp', () => {
+      const futureDate = new Date(Date.now() + 3600000); // 1 hour from now
+      const result = parseScheduleExpression(futureDate.toISOString(), timezone);
 
       expect(result.type).toBe('one-time');
       expect(result.runAt).toBeDefined();
-      // Should be roughly 2 hours from now
-      const diff = result.runAt!.getTime() - now;
-      expect(diff).toBeGreaterThan(7100000); // ~1h58m
-      expect(diff).toBeLessThan(7300000); // ~2h2m
+      expect(result.runAt!.getTime()).toBeCloseTo(futureDate.getTime(), -3);
     });
 
-    it('should parse "in X minutes"', () => {
-      const now = Date.now();
-      const result = parseScheduleExpression('in 30 minutes', timezone);
-
-      expect(result.type).toBe('one-time');
-      const diff = result.runAt!.getTime() - now;
-      expect(diff).toBeGreaterThan(1700000); // ~28m
-      expect(diff).toBeLessThan(1900000); // ~32m
-    });
-
-    it('should parse "tomorrow at 9am"', () => {
-      const result = parseScheduleExpression('tomorrow at 9am', timezone);
-
-      expect(result.type).toBe('one-time');
-      expect(result.runAt).toBeDefined();
-      expect(result.runAt!.getTime()).toBeGreaterThan(Date.now());
-    });
-
-    it('should parse "next Monday"', () => {
-      const result = parseScheduleExpression('next Monday', timezone);
-
-      expect(result.type).toBe('one-time');
-      expect(result.runAt).toBeDefined();
-      // Should be a Monday
-      const day = result.runAt!.getDay();
-      expect(day).toBe(1); // Monday = 1
+    it('should throw for past ISO timestamps', () => {
+      const pastDate = new Date(Date.now() - 3600000); // 1 hour ago
+      expect(() => {
+        parseScheduleExpression(pastDate.toISOString(), timezone);
+      }).toThrow('must be in the future');
     });
   });
 
@@ -134,23 +111,21 @@ describe('parseScheduleExpression', () => {
       expect(result.type).toBe('recurring');
     });
 
-    it('should handle extra whitespace', () => {
-      const result = parseScheduleExpression('  in  2  hours  ', timezone);
-
-      expect(result.type).toBe('one-time');
-      expect(result.runAt).toBeDefined();
-    });
-
     it('should throw for invalid expressions', () => {
       expect(() => {
         parseScheduleExpression('whenever', timezone);
       }).toThrow();
     });
 
-    it('should adjust past times to future', () => {
-      // "yesterday at 9am" should be adjusted forward by chrono's forwardDate option
-      const result = parseScheduleExpression('9am', timezone);
-      expect(result.runAt!.getTime()).toBeGreaterThan(Date.now() - 1000);
+    it('should throw for natural language (not supported)', () => {
+      // These expressions require AI to convert - parseScheduleExpression only handles cron/ISO
+      expect(() => {
+        parseScheduleExpression('in 2 hours', timezone);
+      }).toThrow('Could not parse');
+
+      expect(() => {
+        parseScheduleExpression('tomorrow at 3pm', timezone);
+      }).toThrow('Could not parse');
     });
   });
 });
