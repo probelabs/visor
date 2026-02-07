@@ -98,7 +98,7 @@ export class SlackClient {
 
   /**
    * Fetch user info from Slack API.
-   * Returns user profile including guest status flags, email, and display name.
+   * Returns user profile including guest status flags, email, display name, and timezone.
    */
   async getUserInfo(userId: string): Promise<{
     ok: boolean;
@@ -112,6 +112,8 @@ export class SlackClient {
       is_bot?: boolean;
       is_app_user?: boolean;
       deleted?: boolean;
+      tz?: string; // IANA timezone (e.g., "America/New_York")
+      tz_offset?: number; // Timezone offset in seconds from UTC
     };
   }> {
     try {
@@ -131,10 +133,32 @@ export class SlackClient {
           is_bot: resp.user.is_bot,
           is_app_user: resp.user.is_app_user,
           deleted: resp.user.deleted,
+          tz: resp.user.tz,
+          tz_offset: resp.user.tz_offset,
         },
       };
     } catch (e) {
       console.warn(`Slack users.info failed: ${e instanceof Error ? e.message : String(e)}`);
+      return { ok: false };
+    }
+  }
+
+  /**
+   * Open a DM channel with a user.
+   * Returns the DM channel ID.
+   */
+  async openDM(userId: string): Promise<{ ok: boolean; channel?: string }> {
+    try {
+      const resp: any = await this.api('conversations.open', { users: userId });
+      if (!resp || resp.ok !== true || !resp.channel?.id) {
+        console.warn(`Slack conversations.open failed: ${resp?.error || 'unknown_error'}`);
+        return { ok: false };
+      }
+      return { ok: true, channel: resp.channel.id };
+    } catch (e) {
+      console.warn(
+        `Slack conversations.open failed: ${e instanceof Error ? e.message : String(e)}`
+      );
       return { ok: false };
     }
   }

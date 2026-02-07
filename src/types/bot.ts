@@ -86,6 +86,42 @@ export interface SlackRateLimitConfig {
   storage?: SlackRateLimitStorageConfig;
 }
 
+/**
+ * Limits configuration for Slack reminders
+ */
+export interface SlackReminderLimitsConfig {
+  /** Maximum reminders per user (default: 25) */
+  max_per_user?: number;
+  /** Maximum recurring reminders per user (default: 10) */
+  max_recurring_per_user?: number;
+  /** Maximum reminders per channel (default: 100) */
+  max_per_channel?: number;
+  /** Maximum total reminders (default: 1000) */
+  max_global?: number;
+}
+
+/**
+ * Storage configuration for Slack reminders
+ */
+export interface SlackReminderStorageConfig {
+  /** Path to the reminders JSON file (default: .visor/reminders.json) */
+  path?: string;
+}
+
+/**
+ * Configuration for Slack reminders/scheduling feature
+ */
+export interface SlackRemindersConfig {
+  /** Enable/disable reminders feature (default: true) */
+  enabled?: boolean;
+  /** Storage configuration */
+  storage?: SlackReminderStorageConfig;
+  /** Reminder limits */
+  limits?: SlackReminderLimitsConfig;
+  /** Default timezone for reminders (default: UTC) */
+  default_timezone?: string;
+}
+
 export interface SlackBotConfig {
   id: string;
   endpoint: string;
@@ -118,4 +154,6 @@ export interface SlackConfig {
   cache_prewarming?: SlackCachePrewarmingConfig;
   rate_limiting?: SlackRateLimitConfig;
   workflow?: string;
+  /** Reminders/scheduling configuration */
+  reminders?: SlackRemindersConfig;
 }

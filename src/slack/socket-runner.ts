@@ -6,12 +6,10 @@ import { SlackClient } from './client';
 import { SlackAdapter } from './adapter';
 import { CachePrewarmer } from './cache-prewarmer';
 import { RateLimiter, type RateLimitConfig } from './rate-limiter';
-import type { SlackBotConfig, SlackRemindersConfig } from '../types/bot';
+import type { SlackBotConfig } from '../types/bot';
 import { withActiveSpan } from '../telemetry/trace-helpers';
 import { Scheduler } from '../scheduler/scheduler';
 import { createSlackOutputAdapter } from './slack-output-adapter';
-// Legacy import for backwards compatibility
-import { SlackReminderScheduler } from './slack-reminder-scheduler';
 
 type SlackSocketConfig = {
   appToken?: string; // xapp- token
@@ -50,7 +48,6 @@ export class SlackSocketRunner {
   > = new Map();
   private adapter?: SlackAdapter;
   private retryCount = 0;
-  private reminderScheduler?: SlackReminderScheduler;
   private genericScheduler?: Scheduler;
 
   constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: SlackSocketConfig) {
@@ -126,15 +123,11 @@ export class SlackSocketRunner {
       }
     } catch {}
 
-    // Initialize scheduler (prefer new generic scheduler, fall back to legacy reminder scheduler)
+    // Initialize generic scheduler
     try {
       const schedulerCfg = this.cfg.scheduler as SchedulerConfig | undefined;
-      const slackAny3: any = (this.cfg as any).slack || {};
-      const remindersCfg = slackAny3.reminders as SlackRemindersConfig | undefined;
 
-      // Use new generic scheduler if available, otherwise fall back to legacy
       if (schedulerCfg?.enabled !== false && this.client) {
-        // Create generic scheduler
         this.genericScheduler = new Scheduler(this.cfg, {
           storagePath: schedulerCfg?.storage?.path,
           limits: schedulerCfg?.limits
@@ -152,24 +145,7 @@ export class SlackSocketRunner {
         this.genericScheduler.registerOutputAdapter(createSlackOutputAdapter(this.client));
 
         await this.genericScheduler.start();
-        logger.info('[SlackSocket] Generic scheduler enabled');
-      } else if (remindersCfg?.enabled !== false && this.client) {
-        // Fall back to legacy reminder scheduler for backwards compatibility
-        this.reminderScheduler = new SlackReminderScheduler(this.client, this.cfg, {
-          storagePath: remindersCfg?.storage?.path,
-          limits: remindersCfg?.limits
-            ? {
-                maxPerUser: remindersCfg.limits.max_per_user,
-                maxRecurringPerUser: remindersCfg.limits.max_recurring_per_user,
-                maxPerChannel: remindersCfg.limits.max_per_channel,
-                maxGlobal: remindersCfg.limits.max_global,
-              }
-            : undefined,
-          defaultTimezone: remindersCfg?.default_timezone,
-        });
-        this.reminderScheduler.setEngine(this.engine);
-        await this.reminderScheduler.start();
-        logger.info('[SlackSocket] Legacy reminder scheduler enabled');
+        logger.info('[SlackSocket] Scheduler enabled');
       }
     } catch (e) {
       logger.warn(`[SlackSocket] Scheduler init failed: ${e instanceof Error ? e.message : e}`);
@@ -600,18 +576,6 @@ export class SlackSocketRunner {
       }
     }
 
-    // Stop the legacy reminder scheduler if active
-    if (this.reminderScheduler) {
-      try {
-        await this.reminderScheduler.stop();
-        logger.info('[SlackSocket] Legacy reminder scheduler stopped');
-      } catch (e) {
-        logger.warn(
-          `[SlackSocket] Error stopping reminder scheduler: ${e instanceof Error ? e.message : e}`
-        );
-      }
-    }
-
     // Close WebSocket connection
     if (this.ws) {
       try {
@@ -625,15 +589,7 @@ export class SlackSocketRunner {
   }
 
   /**
-   * Get the reminder scheduler instance (for external access to store)
-   * @deprecated Use getScheduler() instead for the generic scheduler
-   */
-  getReminderScheduler(): SlackReminderScheduler | undefined {
-    return this.reminderScheduler;
-  }
-
-  /**
-   * Get the generic scheduler instance
+   * Get the scheduler instance
    */
   getScheduler(): Scheduler | undefined {
     return this.genericScheduler;

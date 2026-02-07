@@ -1,15 +1,19 @@
 /**
  * Handler for executing the schedule tool within the MCP custom tools server context
  * This integrates the schedule tool with the AI check provider's custom tools system
+ *
+ * This is a Slack-specific adapter that translates between Slack context and the
+ * generic frontend-agnostic scheduler.
  */
 import { CustomToolDefinition } from '../types/config';
 import {
   handleScheduleAction,
   getScheduleToolDefinition,
+  buildScheduleToolContext,
   ScheduleToolArgs,
-  ScheduleToolContext,
-} from './schedule-tool';
-import { ReminderStore } from './reminder-store';
+  ScheduleStore,
+  SchedulePermissions,
+} from '../scheduler';
 import { SlackClient } from './client';
 import { logger } from '../logger';
 
@@ -108,7 +112,9 @@ export function createScheduleToolWithContext(
 export async function executeScheduleTool(
   args: Record<string, unknown>,
   slackContext: SlackWebhookContext,
-  slackClient?: SlackClient
+  slackClient?: SlackClient,
+  availableWorkflows?: string[],
+  permissions?: SchedulePermissions
 ): Promise<string> {
   // Fetch user timezone if client is available and not already set
   let timezone = slackContext.timezone;
@@ -124,21 +130,41 @@ export async function executeScheduleTool(
     }
   }
 
-  const toolContext: ScheduleToolContext = {
-    userId: slackContext.userId,
-    userName: slackContext.userName,
-    channel: slackContext.channel,
-    threadTs: slackContext.threadTs,
-    timezone: timezone || 'UTC',
-  };
+  // Build the generic tool context from Slack context
+  const toolContext = buildScheduleToolContext(
+    {
+      slackContext: {
+        userId: slackContext.userId,
+        userName: slackContext.userName,
+        timezone: timezone || 'UTC',
+        channelType: slackContext.channelType,
+      },
+    },
+    availableWorkflows,
+    permissions,
+    {
+      outputType: args.output_type as 'slack' | 'github' | 'webhook' | 'none' | undefined,
+      outputTarget: args.output_target as string | undefined,
+    }
+  );
 
+  // Map the tool arguments
   const toolArgs: ScheduleToolArgs = {
     action: args.action as any,
-    target: args.target as any,
+    workflow: args.workflow as string | undefined,
     expression: args.expression as string | undefined,
-    prompt: args.prompt as string | undefined,
-    reminder_id: args.reminder_id as string | undefined,
+    inputs: args.inputs as Record<string, unknown> | undefined,
+    output_type: args.output_type as 'slack' | 'github' | 'webhook' | 'none' | undefined,
+    output_target: args.output_target as string | undefined,
+    schedule_id: args.schedule_id as string | undefined,
   };
+
+  // Store Slack-specific output context in the metadata
+  if (!toolArgs.output_type && slackContext.channel) {
+    // Default to Slack output if in Slack context
+    toolArgs.output_type = 'slack';
+    toolArgs.output_target = slackContext.channel;
+  }
 
   try {
     const result = await handleScheduleAction(toolArgs, toolContext);
@@ -163,12 +189,15 @@ export function isScheduleToolCall(toolName: string): boolean {
 }
 
 /**
- * Initialize the reminder store if not already initialized
+ * Initialize the schedule store if not already initialized
  */
-export async function ensureReminderStoreInitialized(): Promise<ReminderStore> {
-  const store = ReminderStore.getInstance();
+export async function ensureScheduleStoreInitialized(): Promise<ScheduleStore> {
+  const store = ScheduleStore.getInstance();
   if (!store.isInitialized()) {
     await store.initialize();
   }
   return store;
 }
+
+// Legacy alias for backwards compatibility
+export const ensureReminderStoreInitialized = ensureScheduleStoreInitialized;

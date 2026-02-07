@@ -161,6 +161,10 @@ export const configSchema = {
           $ref: '#/definitions/SlackConfig',
           description: 'Slack configuration',
         },
+        scheduler: {
+          $ref: '#/definitions/SchedulerConfig',
+          description: 'Scheduler configuration for scheduled workflow execution',
+        },
       },
       required: ['version'],
       patternProperties: {
@@ -755,7 +759,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -772,7 +776,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1455,7 +1459,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1470,14 +1474,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798>>':
+    'Record<string,Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-43798>': {
+    'Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407>': {
       type: 'object',
       additionalProperties: false,
     },
@@ -2121,6 +2125,178 @@ export const configSchema = {
         },
       },
       additionalProperties: false,
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SchedulerConfig: {
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'boolean',
+          description: 'Enable/disable the scheduler (default: true)',
+        },
+        storage: {
+          type: 'object',
+          properties: {
+            path: {
+              type: 'string',
+              description: 'Path to schedules JSON file (default: .visor/schedules.json)',
+            },
+          },
+          additionalProperties: false,
+          description: 'Storage configuration',
+          patternProperties: {
+            '^x-': {},
+          },
+        },
+        limits: {
+          $ref: '#/definitions/SchedulerLimitsConfig',
+          description: 'Limits for dynamic schedules',
+        },
+        default_timezone: {
+          type: 'string',
+          description: 'Default timezone (IANA format, e.g., "America/New_York")',
+        },
+        check_interval_ms: {
+          type: 'number',
+          description: 'Check interval in milliseconds (default: 60000)',
+        },
+        permissions: {
+          $ref: '#/definitions/SchedulerPermissionsConfig',
+          description: 'Permissions for dynamic schedule creation (via AI tool)',
+        },
+        cron: {
+          $ref: '#/definitions/Record%3Cstring%2CStaticCronJob%3E',
+          description: 'Static cron jobs defined in configuration (always executed)',
+        },
+      },
+      additionalProperties: false,
+      description: 'Scheduler configuration for workflow scheduling',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SchedulerLimitsConfig: {
+      type: 'object',
+      properties: {
+        max_per_user: {
+          type: 'number',
+          description: 'Maximum schedules per user (default: 25)',
+        },
+        max_recurring_per_user: {
+          type: 'number',
+          description: 'Maximum recurring schedules per user (default: 10)',
+        },
+        max_global: {
+          type: 'number',
+          description: 'Maximum total schedules (default: 1000)',
+        },
+      },
+      additionalProperties: false,
+      description: 'Scheduler limits configuration',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SchedulerPermissionsConfig: {
+      type: 'object',
+      properties: {
+        allow_personal: {
+          type: 'boolean',
+          description: 'Allow personal schedules (via DM or CLI)',
+        },
+        allow_channel: {
+          type: 'boolean',
+          description: 'Allow channel schedules (in Slack channels)',
+        },
+        allow_dm: {
+          type: 'boolean',
+          description: 'Allow DM schedules (to specific users)',
+        },
+        allowed_workflows: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'List of allowed workflow patterns (glob-style, e.g., "report-*")',
+        },
+        denied_workflows: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'List of denied workflow patterns',
+        },
+      },
+      additionalProperties: false,
+      description: 'Scheduler permissions for dynamic schedule creation',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    'Record<string,StaticCronJob>': {
+      type: 'object',
+      additionalProperties: {
+        $ref: '#/definitions/StaticCronJob',
+      },
+    },
+    StaticCronJob: {
+      type: 'object',
+      properties: {
+        schedule: {
+          type: 'string',
+          description: 'Cron expression (e.g., "0 9 * * 1" for every Monday at 9am)',
+        },
+        workflow: {
+          type: 'string',
+          description: 'Workflow/check ID to run',
+        },
+        inputs: {
+          $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+          description: 'Optional workflow inputs',
+        },
+        output: {
+          type: 'object',
+          properties: {
+            type: {
+              type: 'string',
+              enum: ['slack', 'github', 'webhook', 'none'],
+              description: 'Output type: slack, github, webhook, or none',
+            },
+            target: {
+              type: 'string',
+              description: 'Target (channel name, repo, URL)',
+            },
+            thread_id: {
+              type: 'string',
+              description: 'Thread ID for threaded outputs',
+            },
+          },
+          required: ['type'],
+          additionalProperties: false,
+          description: 'Output destination configuration',
+          patternProperties: {
+            '^x-': {},
+          },
+        },
+        description: {
+          type: 'string',
+          description: 'Description for logging/display',
+        },
+        enabled: {
+          type: 'boolean',
+          description: 'Enable/disable this job (default: true)',
+        },
+        timezone: {
+          type: 'string',
+          description: 'Timezone for schedule (default: UTC or scheduler default)',
+        },
+      },
+      required: ['schedule', 'workflow'],
+      additionalProperties: false,
+      description:
+        'Static cron job defined in YAML configuration These are always executed by the scheduler daemon',
       patternProperties: {
         '^x-': {},
       },
