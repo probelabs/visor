@@ -4,7 +4,7 @@
  */
 
 import { promisify } from 'util';
-import { exec as execCb } from 'child_process';
+import { execFile as execFileCb } from 'child_process';
 import { writeFileSync, unlinkSync, mkdtempSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -13,7 +13,7 @@ import { SandboxConfig, SandboxExecOptions, SandboxExecResult, SandboxInstance }
 import { logger } from '../logger';
 import { withActiveSpan, addEvent } from './sandbox-telemetry';
 
-const execAsync = promisify(execCb);
+const execFileAsync = promisify(execFileCb);
 
 const EXEC_MAX_BUFFER = 50 * 1024 * 1024; // 50MB
 
@@ -67,10 +67,14 @@ export class DockerImageSandbox implements SandboxInstance {
 
           try {
             logger.info(`Building sandbox image '${imageName}' from inline Dockerfile`);
-            await execAsync(`docker build -t ${imageName} -f ${dockerfilePath} ${this.repoPath}`, {
-              maxBuffer: EXEC_MAX_BUFFER,
-              timeout: 300000,
-            });
+            await execFileAsync(
+              'docker',
+              ['build', '-t', imageName, '-f', dockerfilePath, this.repoPath],
+              {
+                maxBuffer: EXEC_MAX_BUFFER,
+                timeout: 300000,
+              }
+            );
           } finally {
             try {
               unlinkSync(dockerfilePath);
@@ -84,8 +88,9 @@ export class DockerImageSandbox implements SandboxInstance {
 
         if (this.config.dockerfile) {
           logger.info(`Building sandbox image '${imageName}' from ${this.config.dockerfile}`);
-          await execAsync(
-            `docker build -t ${imageName} -f ${this.config.dockerfile} ${this.repoPath}`,
+          await execFileAsync(
+            'docker',
+            ['build', '-t', imageName, '-f', this.config.dockerfile, this.repoPath],
             { maxBuffer: EXEC_MAX_BUFFER, timeout: 300000 }
           );
           return imageName;
@@ -140,10 +145,12 @@ export class DockerImageSandbox implements SandboxInstance {
     // Image and keep-alive command
     args.push(image, 'sleep', 'infinity');
 
-    const cmd = args.map(a => (a.includes(' ') ? `"${a}"` : a)).join(' ');
     logger.info(`Starting sandbox container '${this.containerName}'`);
 
-    const { stdout } = await execAsync(cmd, { maxBuffer: EXEC_MAX_BUFFER, timeout: 60000 });
+    const { stdout } = await execFileAsync(args[0], args.slice(1), {
+      maxBuffer: EXEC_MAX_BUFFER,
+      timeout: 60000,
+    });
     this.containerId = stdout.trim();
     addEvent('visor.sandbox.container.started', {
       container_name: this.containerName,
@@ -168,18 +175,8 @@ export class DockerImageSandbox implements SandboxInstance {
 
     args.push(this.containerName, 'sh', '-c', options.command);
 
-    const cmd = args
-      .map((a, i) => {
-        // Quote the last argument (the shell command) and env values
-        if (i === args.length - 1 || (i > 0 && args[i - 1] === '-e')) {
-          return `'${a.replace(/'/g, "'\\''")}'`;
-        }
-        return a.includes(' ') ? `"${a}"` : a;
-      })
-      .join(' ');
-
     try {
-      const { stdout, stderr } = await execAsync(cmd, {
+      const { stdout, stderr } = await execFileAsync(args[0], args.slice(1), {
         maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER,
         timeout: options.timeoutMs || 600000,
       });
@@ -200,7 +197,7 @@ export class DockerImageSandbox implements SandboxInstance {
   async stop(): Promise<void> {
     if (this.containerName) {
       try {
-        await execAsync(`docker rm -f ${this.containerName}`, {
+        await execFileAsync('docker', ['rm', '-f', this.containerName], {
           maxBuffer: EXEC_MAX_BUFFER,
           timeout: 30000,
         });

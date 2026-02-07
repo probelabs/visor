@@ -899,6 +899,14 @@ export class ConfigManager {
     config: import('./sandbox/types').SandboxConfig,
     errors: ConfigValidationError[]
   ): void {
+    // Validate sandbox name (prevent command injection via config keys)
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name)) {
+      errors.push({
+        field: `sandboxes.${name}`,
+        message: `Sandbox name '${name}' contains invalid characters. Only letters, numbers, dots, hyphens, underscores allowed.`,
+      });
+    }
+
     // Must have exactly one mode
     const modes = [
       config.image ? 'image' : null,

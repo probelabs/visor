@@ -1,31 +1,36 @@
 import { CacheVolumeManager } from '../../src/sandbox/cache-volume-manager';
 
-// Mock child_process.exec
+// Mock child_process.execFile
 jest.mock('child_process', () => ({
-  exec: jest.fn(),
+  execFile: jest.fn(),
 }));
 
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 
 describe('CacheVolumeManager', () => {
   let manager: CacheVolumeManager;
-  let mockExec: jest.Mock;
+  let mockExecFile: jest.Mock;
 
   beforeEach(() => {
     manager = new CacheVolumeManager();
-    mockExec = exec as jest.Mock;
-    mockExec.mockReset();
+    mockExecFile = execFile as jest.Mock;
+    mockExecFile.mockReset();
   });
 
   describe('resolveVolumes', () => {
     it('should create volume names with sandbox name and path hash', async () => {
       // Mock volume doesn't exist + create succeeds
-      mockExec.mockImplementation(
-        (cmd: string, _opts: unknown, cb?: (err: unknown, result: unknown) => void) => {
-          if (cmd.includes('volume inspect')) {
+      mockExecFile.mockImplementation(
+        (
+          _cmd: string,
+          args: string[],
+          _opts: unknown,
+          cb?: (err: unknown, result: unknown) => void
+        ) => {
+          if (args.includes('inspect')) {
             // Volume doesn't exist
             if (cb) cb(new Error('not found'), null);
-          } else if (cmd.includes('volume create')) {
+          } else if (args.includes('create')) {
             if (cb) cb(null, { stdout: '', stderr: '' });
           }
         }
@@ -45,11 +50,16 @@ describe('CacheVolumeManager', () => {
     });
 
     it('should sanitize branch names in prefix', async () => {
-      mockExec.mockImplementation(
-        (cmd: string, _opts: unknown, cb?: (err: unknown, result: unknown) => void) => {
-          if (cmd.includes('volume inspect')) {
+      mockExecFile.mockImplementation(
+        (
+          _cmd: string,
+          args: string[],
+          _opts: unknown,
+          cb?: (err: unknown, result: unknown) => void
+        ) => {
+          if (args.includes('inspect')) {
             if (cb) cb(new Error('not found'), null);
-          } else if (cmd.includes('volume create')) {
+          } else if (args.includes('create')) {
             if (cb) cb(null, { stdout: '', stderr: '' });
           }
         }
@@ -69,11 +79,16 @@ describe('CacheVolumeManager', () => {
 
   describe('volume naming', () => {
     it('should produce deterministic volume names for the same path', async () => {
-      mockExec.mockImplementation(
-        (cmd: string, _opts: unknown, cb?: (err: unknown, result: unknown) => void) => {
-          if (cmd.includes('volume inspect')) {
+      mockExecFile.mockImplementation(
+        (
+          _cmd: string,
+          args: string[],
+          _opts: unknown,
+          cb?: (err: unknown, result: unknown) => void
+        ) => {
+          if (args.includes('inspect')) {
             if (cb) cb(new Error('not found'), null);
-          } else if (cmd.includes('volume create')) {
+          } else if (args.includes('create')) {
             if (cb) cb(null, { stdout: '', stderr: '' });
           }
         }
@@ -82,12 +97,17 @@ describe('CacheVolumeManager', () => {
       const volumes1 = await manager.resolveVolumes('env', { paths: ['/go/pkg/mod'] }, 'main');
 
       // Reset mock to allow re-creation
-      mockExec.mockReset();
-      mockExec.mockImplementation(
-        (cmd: string, _opts: unknown, cb?: (err: unknown, result: unknown) => void) => {
-          if (cmd.includes('volume inspect')) {
+      mockExecFile.mockReset();
+      mockExecFile.mockImplementation(
+        (
+          _cmd: string,
+          args: string[],
+          _opts: unknown,
+          cb?: (err: unknown, result: unknown) => void
+        ) => {
+          if (args.includes('inspect')) {
             if (cb) cb(new Error('not found'), null);
-          } else if (cmd.includes('volume create')) {
+          } else if (args.includes('create')) {
             if (cb) cb(null, { stdout: '', stderr: '' });
           }
         }

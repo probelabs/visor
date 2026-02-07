@@ -1,9 +1,9 @@
 import { DockerImageSandbox } from '../../src/sandbox/docker-image-sandbox';
 import { SandboxConfig } from '../../src/sandbox/types';
 
-// Mock child_process.exec
+// Mock child_process.execFile
 jest.mock('child_process', () => ({
-  exec: jest.fn(),
+  execFile: jest.fn(),
 }));
 
 // Mock fs operations
@@ -20,15 +20,15 @@ jest.mock('crypto', () => ({
   randomUUID: jest.fn(() => 'test-uuid-1234-5678'),
 }));
 
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 
 describe('DockerImageSandbox', () => {
   let sandbox: DockerImageSandbox;
-  let mockExec: jest.Mock;
+  let mockExecFile: jest.Mock;
 
   beforeEach(() => {
-    mockExec = exec as jest.Mock;
-    mockExec.mockReset();
+    mockExecFile = execFile as jest.Mock;
+    mockExecFile.mockReset();
   });
 
   describe('constructor', () => {
@@ -57,9 +57,14 @@ describe('DockerImageSandbox', () => {
 
       sandbox = new DockerImageSandbox('test', config, '/repo', '/visor/dist');
 
-      // Mock exec to simulate docker run
-      mockExec.mockImplementation(
-        (cmd: string, _opts: unknown, cb?: (err: unknown, result: unknown) => void) => {
+      // Mock execFile to simulate docker run
+      mockExecFile.mockImplementation(
+        (
+          _cmd: string,
+          _args: string[],
+          _opts: unknown,
+          cb?: (err: unknown, result: unknown) => void
+        ) => {
           if (cb) {
             cb(null, { stdout: 'container-id-123', stderr: '' });
           } else {

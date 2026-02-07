@@ -4,12 +4,12 @@
  */
 
 import { promisify } from 'util';
-import { exec as execCb } from 'child_process';
+import { execFile as execFileCb } from 'child_process';
 import { randomUUID } from 'crypto';
 import { SandboxConfig, SandboxExecOptions, SandboxExecResult, SandboxInstance } from './types';
 import { logger } from '../logger';
 
-const execAsync = promisify(execCb);
+const execFileAsync = promisify(execFileCb);
 
 const EXEC_MAX_BUFFER = 50 * 1024 * 1024; // 50MB
 
@@ -38,10 +38,14 @@ export class DockerComposeSandbox implements SandboxInstance {
 
     logger.info(`Starting compose sandbox '${this.name}' (project: ${this.projectName})`);
 
-    await execAsync(`docker compose -f ${this.config.compose} -p ${this.projectName} up -d`, {
-      maxBuffer: EXEC_MAX_BUFFER,
-      timeout: 120000,
-    });
+    await execFileAsync(
+      'docker',
+      ['compose', '-f', this.config.compose!, '-p', this.projectName, 'up', '-d'],
+      {
+        maxBuffer: EXEC_MAX_BUFFER,
+        timeout: 120000,
+      }
+    );
 
     this.started = true;
   }
@@ -78,17 +82,8 @@ export class DockerComposeSandbox implements SandboxInstance {
 
     args.push(service, 'sh', '-c', options.command);
 
-    const cmd = args
-      .map((a, i) => {
-        if (i === args.length - 1 || (i > 0 && args[i - 1] === '-e')) {
-          return `'${a.replace(/'/g, "'\\''")}'`;
-        }
-        return a.includes(' ') ? `"${a}"` : a;
-      })
-      .join(' ');
-
     try {
-      const { stdout, stderr } = await execAsync(cmd, {
+      const { stdout, stderr } = await execFileAsync(args[0], args.slice(1), {
         maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER,
         timeout: options.timeoutMs || 600000,
       });
@@ -109,10 +104,14 @@ export class DockerComposeSandbox implements SandboxInstance {
   async stop(): Promise<void> {
     if (this.started && this.config.compose) {
       try {
-        await execAsync(`docker compose -f ${this.config.compose} -p ${this.projectName} down`, {
-          maxBuffer: EXEC_MAX_BUFFER,
-          timeout: 60000,
-        });
+        await execFileAsync(
+          'docker',
+          ['compose', '-f', this.config.compose!, '-p', this.projectName, 'down'],
+          {
+            maxBuffer: EXEC_MAX_BUFFER,
+            timeout: 60000,
+          }
+        );
       } catch {
         // May already be stopped
       }

@@ -1,9 +1,9 @@
 import { DockerComposeSandbox } from '../../src/sandbox/docker-compose-sandbox';
 import { SandboxConfig } from '../../src/sandbox/types';
 
-// Mock child_process.exec
+// Mock child_process.execFile
 jest.mock('child_process', () => ({
-  exec: jest.fn(),
+  execFile: jest.fn(),
 }));
 
 jest.mock('crypto', () => ({

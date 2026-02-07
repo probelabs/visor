@@ -4,12 +4,12 @@
  */
 
 import { promisify } from 'util';
-import { exec as execCb } from 'child_process';
+import { execFile as execFileCb } from 'child_process';
 import { createHash } from 'crypto';
 import { SandboxCacheConfig } from './types';
 import { logger } from '../logger';
 
-const execAsync = promisify(execCb);
+const execFileAsync = promisify(execFileCb);
 const EXEC_MAX_BUFFER = 10 * 1024 * 1024;
 
 /**
@@ -102,7 +102,7 @@ export class CacheVolumeManager {
    */
   private async volumeExists(name: string): Promise<boolean> {
     try {
-      await execAsync(`docker volume inspect ${name}`, {
+      await execFileAsync('docker', ['volume', 'inspect', name], {
         maxBuffer: EXEC_MAX_BUFFER,
         timeout: 10000,
       });
@@ -117,7 +117,7 @@ export class CacheVolumeManager {
    */
   private async createVolume(name: string): Promise<void> {
     const now = new Date().toISOString();
-    await execAsync(`docker volume create --label visor.last-used=${now} ${name}`, {
+    await execFileAsync('docker', ['volume', 'create', '--label', `visor.last-used=${now}`, name], {
       maxBuffer: EXEC_MAX_BUFFER,
       timeout: 10000,
     });
@@ -129,8 +129,20 @@ export class CacheVolumeManager {
   private async copyVolume(source: string, target: string): Promise<void> {
     await this.createVolume(target);
     try {
-      await execAsync(
-        `docker run --rm -v ${source}:/src:ro -v ${target}:/dst alpine sh -c "cp -a /src/. /dst/"`,
+      await execFileAsync(
+        'docker',
+        [
+          'run',
+          '--rm',
+          '-v',
+          `${source}:/src:ro`,
+          '-v',
+          `${target}:/dst`,
+          'alpine',
+          'sh',
+          '-c',
+          'cp -a /src/. /dst/',
+        ],
         { maxBuffer: EXEC_MAX_BUFFER, timeout: 60000 }
       );
     } catch (err) {
@@ -160,8 +172,9 @@ export class CacheVolumeManager {
 
     try {
       // List all visor cache volumes for this sandbox
-      const { stdout } = await execAsync(
-        `docker volume ls --filter "name=visor-cache-" --format "{{.Name}}"`,
+      const { stdout } = await execFileAsync(
+        'docker',
+        ['volume', 'ls', '--filter', 'name=visor-cache-', '--format', '{{.Name}}'],
         { maxBuffer: EXEC_MAX_BUFFER, timeout: 10000 }
       );
 
@@ -186,14 +199,15 @@ export class CacheVolumeManager {
       const now = Date.now();
       for (const vol of sandboxVolumes) {
         try {
-          const { stdout: inspectOut } = await execAsync(
-            `docker volume inspect ${vol} --format "{{.CreatedAt}}"`,
+          const { stdout: inspectOut } = await execFileAsync(
+            'docker',
+            ['volume', 'inspect', vol, '--format', '{{.CreatedAt}}'],
             { maxBuffer: EXEC_MAX_BUFFER, timeout: 10000 }
           );
           const createdAt = new Date(inspectOut.trim()).getTime();
           if (now - createdAt > ttlMs) {
             logger.info(`Evicting expired cache volume: ${vol}`);
-            await execAsync(`docker volume rm ${vol}`, {
+            await execFileAsync('docker', ['volume', 'rm', vol], {
               maxBuffer: EXEC_MAX_BUFFER,
               timeout: 10000,
             });
@@ -213,7 +227,7 @@ export class CacheVolumeManager {
           for (const vol of vols) {
             try {
               logger.info(`Evicting cache volume (max_scopes exceeded): ${vol}`);
-              await execAsync(`docker volume rm ${vol}`, {
+              await execFileAsync('docker', ['volume', 'rm', vol], {
                 maxBuffer: EXEC_MAX_BUFFER,
                 timeout: 10000,
               });
