@@ -581,11 +581,11 @@ function getTracer() {
 }
 async function withActiveSpan(name, attrs, fn) {
   const tracer = getTracer();
-  return await new Promise((resolve10, reject) => {
+  return await new Promise((resolve9, reject) => {
     const callback = async (span) => {
       try {
         const res = await fn(span);
-        resolve10(res);
+        resolve9(res);
       } catch (err) {
         try {
           if (err instanceof Error) span.recordException(err);
@@ -4714,353 +4714,6 @@ var init_workflow_inputs = __esm({
   }
 });
 
-// src/sandbox/env-filter.ts
-function matchesPattern(name, pattern) {
-  if (pattern === name) return true;
-  if (pattern.endsWith("*")) {
-    const prefix = pattern.slice(0, -1);
-    return name.startsWith(prefix);
-  }
-  return false;
-}
-function filterEnvForSandbox(checkEnv, hostEnv, passthroughPatterns, defaultPatterns) {
-  const result = {};
-  const defaults = defaultPatterns !== void 0 ? defaultPatterns : BUILTIN_PASSTHROUGH;
-  const patterns = [...defaults, ...passthroughPatterns || []];
-  for (const [key, value] of Object.entries(hostEnv)) {
-    if (value === void 0) continue;
-    if (patterns.some((pattern) => matchesPattern(key, pattern))) {
-      result[key] = value;
-    }
-  }
-  if (checkEnv) {
-    for (const [key, value] of Object.entries(checkEnv)) {
-      result[key] = String(value);
-    }
-  }
-  return result;
-}
-var BUILTIN_PASSTHROUGH;
-var init_env_filter = __esm({
-  "src/sandbox/env-filter.ts"() {
-    "use strict";
-    BUILTIN_PASSTHROUGH = ["PATH", "HOME", "USER", "CI", "NODE_ENV", "LANG"];
-  }
-});
-
-// src/sandbox/sandbox-telemetry.ts
-function getTraceHelpers() {
-  if (_attempted) return _traceHelpers;
-  _attempted = true;
-  try {
-    _traceHelpers = (init_trace_helpers(), __toCommonJS(trace_helpers_exports));
-  } catch {
-    _traceHelpers = null;
-  }
-  return _traceHelpers;
-}
-async function withActiveSpan2(name, attrs, fn) {
-  const helpers = getTraceHelpers();
-  if (helpers) {
-    return helpers.withActiveSpan(name, attrs, fn);
-  }
-  return fn({});
-}
-function addEvent2(name, attrs) {
-  const helpers = getTraceHelpers();
-  if (helpers) {
-    helpers.addEvent(name, attrs);
-  }
-}
-function setSpanError2(err) {
-  const helpers = getTraceHelpers();
-  if (helpers) {
-    helpers.setSpanError(err);
-  }
-}
-var _traceHelpers, _attempted;
-var init_sandbox_telemetry = __esm({
-  "src/sandbox/sandbox-telemetry.ts"() {
-    "use strict";
-    _traceHelpers = null;
-    _attempted = false;
-  }
-});
-
-// src/sandbox/trace-ingester.ts
-function ingestChildTrace(filePath) {
-  let content;
-  try {
-    content = (0, import_fs.readFileSync)(filePath, "utf8");
-  } catch {
-    return;
-  }
-  const lines = content.split("\n");
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const span = JSON.parse(trimmed);
-      const attrs = {
-        "visor.sandbox.child_span": true,
-        ...span.attributes || {}
-      };
-      if (span.name) {
-        attrs["child_span_name"] = span.name;
-      }
-      if (Array.isArray(span.events)) {
-        for (const evt of span.events) {
-          addEvent2(`visor.sandbox.child: ${evt.name || span.name}`, {
-            ...attrs,
-            ...evt.attrs || {}
-          });
-        }
-      } else {
-        addEvent2(`visor.sandbox.child: ${span.name || "unknown"}`, attrs);
-      }
-    } catch {
-    }
-  }
-}
-var import_fs;
-var init_trace_ingester = __esm({
-  "src/sandbox/trace-ingester.ts"() {
-    "use strict";
-    import_fs = require("fs");
-    init_sandbox_telemetry();
-  }
-});
-
-// src/sandbox/check-runner.ts
-var check_runner_exports = {};
-__export(check_runner_exports, {
-  CheckRunner: () => CheckRunner
-});
-function serializePRInfo(prInfo) {
-  return {
-    number: prInfo.number,
-    title: prInfo.title,
-    body: prInfo.body,
-    author: prInfo.author,
-    base: prInfo.base,
-    head: prInfo.head,
-    files: (prInfo.files || []).map((f) => ({
-      filename: f.filename,
-      status: f.status,
-      additions: f.additions,
-      deletions: f.deletions,
-      changes: f.changes,
-      patch: f.patch
-    })),
-    totalAdditions: prInfo.totalAdditions,
-    totalDeletions: prInfo.totalDeletions,
-    eventType: prInfo.eventType,
-    fullDiff: prInfo.fullDiff,
-    commitDiff: prInfo.commitDiff,
-    isIncremental: prInfo.isIncremental,
-    isIssue: prInfo.isIssue,
-    eventContext: prInfo.eventContext
-  };
-}
-var import_fs2, import_path2, import_crypto, CheckRunner;
-var init_check_runner = __esm({
-  "src/sandbox/check-runner.ts"() {
-    "use strict";
-    import_fs2 = require("fs");
-    import_path2 = require("path");
-    import_crypto = require("crypto");
-    init_env_filter();
-    init_logger();
-    init_sandbox_telemetry();
-    init_trace_ingester();
-    CheckRunner = class {
-      /**
-       * Execute a check inside a sandbox container.
-       *
-       * 1. Build CheckRunPayload JSON
-       * 2. Filter env vars through EnvFilter
-       * 3. Exec `node <visor_path>/cli-main.js --run-check` inside the sandbox
-       * 4. Parse CheckRunResult from stdout JSON
-       * 5. Return as ReviewSummary
-       */
-      static async runCheck(sandboxManager, sandboxName, sandboxConfig, checkConfig, prInfo, dependencyResults, timeoutMs, workspaceDefaults) {
-        return withActiveSpan2(
-          "visor.sandbox.runCheck",
-          {
-            "visor.sandbox.name": sandboxName,
-            "visor.check.name": checkConfig.name || "unknown"
-          },
-          async () => {
-            const dependencyOutputs = {};
-            if (dependencyResults) {
-              for (const [key, value] of dependencyResults) {
-                dependencyOutputs[key] = value;
-              }
-            }
-            const payload = {
-              check: checkConfig,
-              prInfo: serializePRInfo(prInfo),
-              dependencyOutputs: Object.keys(dependencyOutputs).length > 0 ? dependencyOutputs : void 0
-            };
-            const env = filterEnvForSandbox(
-              checkConfig.env,
-              process.env,
-              sandboxConfig.env_passthrough,
-              workspaceDefaults?.env_passthrough
-            );
-            const workdir = sandboxConfig.workdir || "/workspace";
-            let hostTracePath;
-            if (!sandboxConfig.read_only) {
-              const traceFileName = `.visor-trace-${(0, import_crypto.randomUUID)().slice(0, 8)}.ndjson`;
-              hostTracePath = (0, import_path2.join)(sandboxManager.getRepoPath(), traceFileName);
-              const containerTracePath = `${workdir}/${traceFileName}`;
-              try {
-                (0, import_fs2.writeFileSync)(hostTracePath, "", "utf8");
-              } catch {
-                hostTracePath = void 0;
-              }
-              if (hostTracePath) {
-                env["VISOR_FALLBACK_TRACE_FILE"] = containerTracePath;
-                env["VISOR_TELEMETRY_ENABLED"] = "true";
-                env["VISOR_TELEMETRY_SINK"] = "file";
-              }
-            }
-            const visorPath = sandboxConfig.visor_path || "/opt/visor";
-            const payloadJson = JSON.stringify(payload);
-            const command = `echo '${payloadJson.replace(/'/g, "'\\''")}' | node ${visorPath}/index.js --run-check -`;
-            logger.info(`Executing check in sandbox '${sandboxName}'`);
-            const result = await sandboxManager.exec(sandboxName, {
-              command,
-              env,
-              timeoutMs: timeoutMs || 6e5,
-              maxBuffer: 50 * 1024 * 1024
-            });
-            if (hostTracePath) {
-              try {
-                if ((0, import_fs2.existsSync)(hostTracePath)) {
-                  ingestChildTrace(hostTracePath);
-                  (0, import_fs2.unlinkSync)(hostTracePath);
-                }
-              } catch {
-                try {
-                  if ((0, import_fs2.existsSync)(hostTracePath)) (0, import_fs2.unlinkSync)(hostTracePath);
-                } catch {
-                }
-              }
-            }
-            const stdout = result.stdout.trim();
-            if (result.exitCode !== 0 && !stdout) {
-              setSpanError2(new Error(`Sandbox execution failed (exit ${result.exitCode})`));
-              return {
-                issues: [
-                  {
-                    severity: "error",
-                    message: `Sandbox execution failed (exit ${result.exitCode}): ${result.stderr.slice(0, 500)}`,
-                    file: "",
-                    line: 0,
-                    ruleId: "sandbox-execution-error",
-                    category: "logic"
-                  }
-                ]
-              };
-            }
-            const lines = stdout.split("\n");
-            let jsonLine;
-            for (let i = lines.length - 1; i >= 0; i--) {
-              const line = lines[i].trim();
-              if (line.startsWith("{")) {
-                jsonLine = line;
-                break;
-              }
-            }
-            if (!jsonLine) {
-              setSpanError2(new Error("No JSON output from sandboxed check"));
-              return {
-                issues: [
-                  {
-                    severity: "error",
-                    message: `No JSON output from sandboxed check. Stdout: ${stdout.slice(0, 500)}`,
-                    file: "",
-                    line: 0,
-                    ruleId: "sandbox-parse-error",
-                    category: "logic"
-                  }
-                ]
-              };
-            }
-            let checkRunResult;
-            try {
-              checkRunResult = JSON.parse(jsonLine);
-            } catch (parseErr) {
-              setSpanError2(parseErr);
-              return {
-                issues: [
-                  {
-                    severity: "error",
-                    message: `Invalid JSON from sandboxed check: ${jsonLine.slice(0, 200)}`,
-                    file: "",
-                    line: 0,
-                    ruleId: "sandbox-parse-error",
-                    category: "logic"
-                  }
-                ]
-              };
-            }
-            const summary = {
-              issues: checkRunResult.issues || [],
-              debug: checkRunResult.debug
-            };
-            if (checkRunResult.output !== void 0) {
-              summary.output = checkRunResult.output;
-            }
-            if (checkRunResult.content !== void 0) {
-              summary.content = checkRunResult.content;
-            }
-            return summary;
-          }
-        );
-      }
-    };
-  }
-});
-
-// src/state-machine/dispatch/sandbox-routing.ts
-async function executeWithSandboxRouting(checkId, checkConfig, context2, prInfo, dependencyResults, timeout, hostExecute) {
-  const sandboxManager = context2.sandboxManager;
-  if (!sandboxManager) {
-    return hostExecute();
-  }
-  const sandboxName = sandboxManager.resolveSandbox(
-    checkConfig.sandbox,
-    context2.config.sandbox
-  );
-  if (!sandboxName) {
-    return hostExecute();
-  }
-  const sandboxConfig = context2.config.sandboxes?.[sandboxName];
-  if (!sandboxConfig) {
-    throw new Error(`Sandbox '${sandboxName}' not found in sandboxes configuration`);
-  }
-  logger.info(`[SandboxRouting] Routing check '${checkId}' to sandbox '${sandboxName}'`);
-  const { CheckRunner: CheckRunner2 } = (init_check_runner(), __toCommonJS(check_runner_exports));
-  return CheckRunner2.runCheck(
-    sandboxManager,
-    sandboxName,
-    sandboxConfig,
-    checkConfig,
-    prInfo,
-    dependencyResults.size > 0 ? dependencyResults : void 0,
-    timeout,
-    context2.config.sandbox_defaults
-  );
-}
-var init_sandbox_routing = __esm({
-  "src/state-machine/dispatch/sandbox-routing.ts"() {
-    "use strict";
-    init_logger();
-  }
-});
-
 // src/state-machine/dispatch/history-snapshot.ts
 var history_snapshot_exports = {};
 __export(history_snapshot_exports, {
@@ -5594,14 +5247,14 @@ function createExtendedLiquid(options = {}) {
   configureLiquidWithExtensions(liquid);
   return liquid;
 }
-var import_liquidjs, import_async_hooks, import_promises2, import_path3, ReadFileTag, permissionsALS;
+var import_liquidjs, import_async_hooks, import_promises2, import_path2, ReadFileTag, permissionsALS;
 var init_liquid_extensions = __esm({
   "src/liquid-extensions.ts"() {
     "use strict";
     import_liquidjs = require("liquidjs");
     import_async_hooks = require("async_hooks");
     import_promises2 = __toESM(require("fs/promises"));
-    import_path3 = __toESM(require("path"));
+    import_path2 = __toESM(require("path"));
     init_author_permissions();
     init_memory_store();
     init_sandbox();
@@ -5618,7 +5271,7 @@ var init_liquid_extensions = __esm({
           return;
         }
         const projectRoot = process.cwd();
-        const resolvedPath = import_path3.default.resolve(projectRoot, filePath.toString());
+        const resolvedPath = import_path2.default.resolve(projectRoot, filePath.toString());
         if (!resolvedPath.startsWith(projectRoot)) {
           emitter.write("[Error: File path escapes project directory]");
           return;
@@ -8140,7 +7793,7 @@ ${"=".repeat(60)}
        * Generate mock response for testing
        */
       async generateMockResponse(_prompt, _checkName, _schema) {
-        await new Promise((resolve10) => setTimeout(resolve10, 500));
+        await new Promise((resolve9) => setTimeout(resolve9, 500));
         const name = (_checkName || "").toLowerCase();
         if (name.includes("extract-facts")) {
           const arr = Array.from({ length: 6 }, (_, i) => ({
@@ -8694,13 +8347,13 @@ var init_command_executor = __esm({
        * Execute a shell command with optional stdin, environment, and timeout
        */
       async execute(command, options = {}) {
-        const execAsync4 = (0, import_util.promisify)(import_child_process.exec);
+        const execAsync = (0, import_util.promisify)(import_child_process.exec);
         const timeout = options.timeout || 3e4;
         if (options.stdin) {
           return this.executeWithStdin(command, options);
         }
         try {
-          const result = await execAsync4(command, {
+          const result = await execAsync(command, {
             cwd: options.cwd,
             env: options.env,
             timeout
@@ -8718,7 +8371,7 @@ var init_command_executor = __esm({
        * Execute command with stdin input
        */
       executeWithStdin(command, options) {
-        return new Promise((resolve10, reject) => {
+        return new Promise((resolve9, reject) => {
           const childProcess = (0, import_child_process.exec)(
             command,
             {
@@ -8730,7 +8383,7 @@ var init_command_executor = __esm({
               if (error && error.killed && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM")) {
                 reject(new Error(`Command timed out after ${options.timeout || 3e4}ms`));
               } else {
-                resolve10({
+                resolve9({
                   stdout: stdout || "",
                   stderr: stderr || "",
                   exitCode: error ? error.code || 1 : 0
@@ -8989,11 +8642,11 @@ var workflow_registry_exports = {};
 __export(workflow_registry_exports, {
   WorkflowRegistry: () => WorkflowRegistry
 });
-var import_fs3, path8, yaml, import_ajv2, import_ajv_formats, WorkflowRegistry;
+var import_fs, path8, yaml, import_ajv2, import_ajv_formats, WorkflowRegistry;
 var init_workflow_registry = __esm({
   "src/workflow-registry.ts"() {
     "use strict";
-    import_fs3 = require("fs");
+    import_fs = require("fs");
     path8 = __toESM(require("path"));
     yaml = __toESM(require("js-yaml"));
     init_logger();
@@ -9331,7 +8984,7 @@ var init_workflow_registry = __esm({
           return { content: await response.text(), resolvedSource: resolvedUrl, importBasePath };
         }
         const filePath = path8.isAbsolute(source) ? source : path8.resolve(basePath || process.cwd(), source);
-        const content = await import_fs3.promises.readFile(filePath, "utf-8");
+        const content = await import_fs.promises.readFile(filePath, "utf-8");
         return { content, resolvedSource: filePath, importBasePath: path8.dirname(filePath) };
       }
       /**
@@ -13134,49 +12787,6 @@ ${errors}`);
             }
           }
         }
-        if (config.sandboxes) {
-          const sandboxNames = Object.keys(config.sandboxes);
-          for (const [sandboxName, sandboxConfig] of Object.entries(config.sandboxes)) {
-            this.validateSandboxConfig(sandboxName, sandboxConfig, errors);
-          }
-          if (config.sandbox && !sandboxNames.includes(config.sandbox)) {
-            errors.push({
-              field: "sandbox",
-              message: `Top-level sandbox '${config.sandbox}' not found in sandboxes definitions. Available: ${sandboxNames.join(", ")}`,
-              value: config.sandbox
-            });
-          }
-          if (checksToValidate) {
-            for (const [checkName, checkConfig] of Object.entries(checksToValidate)) {
-              if (checkConfig.sandbox && !sandboxNames.includes(checkConfig.sandbox)) {
-                errors.push({
-                  field: `checks.${checkName}.sandbox`,
-                  message: `Check '${checkName}' references sandbox '${checkConfig.sandbox}' which is not defined. Available: ${sandboxNames.join(", ")}`,
-                  value: checkConfig.sandbox
-                });
-              }
-            }
-          }
-        } else {
-          if (config.sandbox) {
-            errors.push({
-              field: "sandbox",
-              message: `Top-level sandbox '${config.sandbox}' is set but no sandboxes are defined`,
-              value: config.sandbox
-            });
-          }
-          if (checksToValidate) {
-            for (const [checkName, checkConfig] of Object.entries(checksToValidate)) {
-              if (checkConfig.sandbox) {
-                errors.push({
-                  field: `checks.${checkName}.sandbox`,
-                  message: `Check '${checkName}' references sandbox '${checkConfig.sandbox}' but no sandboxes are defined`,
-                  value: checkConfig.sandbox
-                });
-              }
-            }
-          }
-        }
         if (config.ai_mcp_servers) {
           this.validateMcpServersObject(config.ai_mcp_servers, "ai_mcp_servers", errors, warnings);
         }
@@ -13210,53 +12820,6 @@ ${errors}`);
         if (!strict && warnings.length > 0) {
           for (const w of warnings) {
             logger.warn(`\u26A0\uFE0F  Config warning [${w.field}]: ${w.message}`);
-          }
-        }
-      }
-      /**
-       * Validate sandbox configuration
-       */
-      validateSandboxConfig(name, config, errors) {
-        const modes = [
-          config.image ? "image" : null,
-          config.dockerfile || config.dockerfile_inline ? "dockerfile" : null,
-          config.compose ? "compose" : null
-        ].filter(Boolean);
-        if (modes.length === 0) {
-          errors.push({
-            field: `sandboxes.${name}`,
-            message: `Sandbox '${name}' must specify one of: image, dockerfile, dockerfile_inline, or compose`
-          });
-        } else if (modes.length > 1) {
-          errors.push({
-            field: `sandboxes.${name}`,
-            message: `Sandbox '${name}' has multiple modes (${modes.join(", ")}). Specify exactly one.`
-          });
-        }
-        if (config.compose && !config.service) {
-          errors.push({
-            field: `sandboxes.${name}.service`,
-            message: `Sandbox '${name}' uses compose mode but is missing required 'service' field`
-          });
-        }
-        if (config.cache?.paths) {
-          for (const p of config.cache.paths) {
-            if (!p.startsWith("/")) {
-              errors.push({
-                field: `sandboxes.${name}.cache.paths`,
-                message: `Cache path '${p}' in sandbox '${name}' must be absolute (start with /)`,
-                value: p
-              });
-            }
-          }
-        }
-        if (config.resources?.cpu !== void 0) {
-          if (typeof config.resources.cpu !== "number" || config.resources.cpu <= 0) {
-            errors.push({
-              field: `sandboxes.${name}.resources.cpu`,
-              message: `CPU limit in sandbox '${name}' must be a positive number`,
-              value: config.resources.cpu
-            });
           }
         }
       }
@@ -13607,17 +13170,7 @@ ${errors}`);
                 const addl = e.params && e.params.additionalProperty || "unknown";
                 const fullField = pathStr ? `${pathStr}.${addl}` : addl;
                 const topLevel = !pathStr;
-                const allowedTopLevelKeys = /* @__PURE__ */ new Set([
-                  "tests",
-                  "slack",
-                  "sandboxes",
-                  "sandbox",
-                  "sandbox_defaults"
-                ]);
-                if (topLevel && allowedTopLevelKeys.has(addl)) {
-                  continue;
-                }
-                if (!topLevel && addl === "sandbox" && pathStr.match(/^(checks|steps)\.[^.]+$/)) {
+                if (topLevel && (addl === "tests" || addl === "slack")) {
                   continue;
                 }
                 warnings.push({
@@ -14686,7 +14239,7 @@ var init_mcp_custom_sse_server = __esm({
        * Returns the actual bound port number
        */
       async start() {
-        return new Promise((resolve10, reject) => {
+        return new Promise((resolve9, reject) => {
           try {
             this.server = import_http.default.createServer((req, res) => {
               this.handleRequest(req, res).catch((error) => {
@@ -14720,7 +14273,7 @@ var init_mcp_custom_sse_server = __esm({
                 );
               }
               this.startKeepalive();
-              resolve10(this.port);
+              resolve9(this.port);
             });
           } catch (error) {
             reject(error);
@@ -14783,7 +14336,7 @@ var init_mcp_custom_sse_server = __esm({
             logger.debug(
               `[CustomToolsSSEServer:${this.sessionId}] Grace period before stop: ${waitMs}ms (activeToolCalls=${this.activeToolCalls})`
             );
-            await new Promise((resolve10) => setTimeout(resolve10, waitMs));
+            await new Promise((resolve9) => setTimeout(resolve9, waitMs));
           }
         }
         if (this.activeToolCalls > 0) {
@@ -14792,7 +14345,7 @@ var init_mcp_custom_sse_server = __esm({
             `[CustomToolsSSEServer:${this.sessionId}] Waiting for ${this.activeToolCalls} active tool call(s) before stop`
           );
           while (this.activeToolCalls > 0 && Date.now() - startedAt < effectiveDrainTimeoutMs) {
-            await new Promise((resolve10) => setTimeout(resolve10, 250));
+            await new Promise((resolve9) => setTimeout(resolve9, 250));
           }
           if (this.activeToolCalls > 0) {
             logger.warn(
@@ -14817,21 +14370,21 @@ var init_mcp_custom_sse_server = __esm({
         }
         this.connections.clear();
         if (this.server) {
-          await new Promise((resolve10, reject) => {
+          await new Promise((resolve9, reject) => {
             const timeout = setTimeout(() => {
               if (this.debug) {
                 logger.debug(
                   `[CustomToolsSSEServer:${this.sessionId}] Force closing server after timeout`
                 );
               }
-              this.server?.close(() => resolve10());
+              this.server?.close(() => resolve9());
             }, 5e3);
             this.server.close((error) => {
               clearTimeout(timeout);
               if (error) {
                 reject(error);
               } else {
-                resolve10();
+                resolve9();
               }
             });
           });
@@ -15187,7 +14740,7 @@ var init_mcp_custom_sse_server = __esm({
               logger.warn(
                 `[CustomToolsSSEServer:${this.sessionId}] Tool ${toolName} failed (attempt ${attempt + 1}/${retryCount + 1}): ${errorMsg}. Retrying in ${delay}ms`
               );
-              await new Promise((resolve10) => setTimeout(resolve10, delay));
+              await new Promise((resolve9) => setTimeout(resolve9, delay));
               attempt++;
             }
           }
@@ -15266,7 +14819,7 @@ var init_mcp_custom_sse_server = __esm({
 });
 
 // src/providers/ai-check-provider.ts
-var import_promises3, import_path4, AICheckProvider;
+var import_promises3, import_path3, AICheckProvider;
 var init_ai_check_provider = __esm({
   "src/providers/ai-check-provider.ts"() {
     "use strict";
@@ -15276,7 +14829,7 @@ var init_ai_check_provider = __esm({
     init_issue_filter();
     init_liquid_extensions();
     import_promises3 = __toESM(require("fs/promises"));
-    import_path4 = __toESM(require("path"));
+    import_path3 = __toESM(require("path"));
     init_lazy_otel();
     init_state_capture();
     init_mcp_custom_sse_server();
@@ -15438,7 +14991,7 @@ var init_ai_check_provider = __esm({
         const hasFileExtension = /\.[a-zA-Z0-9]{1,10}$/i.test(str);
         const hasPathSeparators = /[\/\\]/.test(str);
         const isRelativePath = /^\.{1,2}\//.test(str);
-        const isAbsolutePath = import_path4.default.isAbsolute(str);
+        const isAbsolutePath = import_path3.default.isAbsolute(str);
         const hasTypicalFileChars = /^[a-zA-Z0-9._\-\/\\:~]+$/.test(str);
         if (!(hasFileExtension || isRelativePath || isAbsolutePath || hasPathSeparators)) {
           return false;
@@ -15448,10 +15001,10 @@ var init_ai_check_provider = __esm({
         }
         try {
           let resolvedPath;
-          if (import_path4.default.isAbsolute(str)) {
-            resolvedPath = import_path4.default.normalize(str);
+          if (import_path3.default.isAbsolute(str)) {
+            resolvedPath = import_path3.default.normalize(str);
           } else {
-            resolvedPath = import_path4.default.resolve(process.cwd(), str);
+            resolvedPath = import_path3.default.resolve(process.cwd(), str);
           }
           const fs20 = require("fs").promises;
           try {
@@ -15472,14 +15025,14 @@ var init_ai_check_provider = __esm({
           throw new Error("Prompt file must have .liquid extension");
         }
         let resolvedPath;
-        if (import_path4.default.isAbsolute(promptPath)) {
+        if (import_path3.default.isAbsolute(promptPath)) {
           resolvedPath = promptPath;
         } else {
-          resolvedPath = import_path4.default.resolve(process.cwd(), promptPath);
+          resolvedPath = import_path3.default.resolve(process.cwd(), promptPath);
         }
-        if (!import_path4.default.isAbsolute(promptPath)) {
-          const normalizedPath = import_path4.default.normalize(resolvedPath);
-          const currentDir = import_path4.default.resolve(process.cwd());
+        if (!import_path3.default.isAbsolute(promptPath)) {
+          const normalizedPath = import_path3.default.normalize(resolvedPath);
+          const currentDir = import_path3.default.resolve(process.cwd());
           if (!normalizedPath.startsWith(currentDir)) {
             throw new Error("Invalid prompt file path: path traversal detected");
           }
@@ -18265,7 +17818,7 @@ var init_claude_code_types = __esm({
 function isClaudeCodeConstructor(value) {
   return typeof value === "function";
 }
-var import_promises4, import_path5, ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError, ClaudeCodeCheckProvider;
+var import_promises4, import_path4, ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError, ClaudeCodeCheckProvider;
 var init_claude_code_check_provider = __esm({
   "src/providers/claude-code-check-provider.ts"() {
     "use strict";
@@ -18274,7 +17827,7 @@ var init_claude_code_check_provider = __esm({
     init_issue_filter();
     init_liquid_extensions();
     import_promises4 = __toESM(require("fs/promises"));
-    import_path5 = __toESM(require("path"));
+    import_path4 = __toESM(require("path"));
     init_claude_code_types();
     ClaudeCodeSDKNotInstalledError = class extends Error {
       constructor() {
@@ -18422,7 +17975,7 @@ var init_claude_code_check_provider = __esm({
         const hasFileExtension = /\.[a-zA-Z0-9]{1,10}$/i.test(str);
         const hasPathSeparators = /[\/\\]/.test(str);
         const isRelativePath = /^\.{1,2}\//.test(str);
-        const isAbsolutePath = import_path5.default.isAbsolute(str);
+        const isAbsolutePath = import_path4.default.isAbsolute(str);
         const hasTypicalFileChars = /^[a-zA-Z0-9._\-\/\\:~]+$/.test(str);
         if (!(hasFileExtension || isRelativePath || isAbsolutePath || hasPathSeparators)) {
           return false;
@@ -18432,10 +17985,10 @@ var init_claude_code_check_provider = __esm({
         }
         try {
           let resolvedPath;
-          if (import_path5.default.isAbsolute(str)) {
-            resolvedPath = import_path5.default.normalize(str);
+          if (import_path4.default.isAbsolute(str)) {
+            resolvedPath = import_path4.default.normalize(str);
           } else {
-            resolvedPath = import_path5.default.resolve(process.cwd(), str);
+            resolvedPath = import_path4.default.resolve(process.cwd(), str);
           }
           try {
             const stat = await import_promises4.default.stat(resolvedPath);
@@ -18455,14 +18008,14 @@ var init_claude_code_check_provider = __esm({
           throw new Error("Prompt file must have .liquid extension");
         }
         let resolvedPath;
-        if (import_path5.default.isAbsolute(promptPath)) {
+        if (import_path4.default.isAbsolute(promptPath)) {
           resolvedPath = promptPath;
         } else {
-          resolvedPath = import_path5.default.resolve(process.cwd(), promptPath);
+          resolvedPath = import_path4.default.resolve(process.cwd(), promptPath);
         }
-        if (!import_path5.default.isAbsolute(promptPath)) {
-          const normalizedPath = import_path5.default.normalize(resolvedPath);
-          const currentDir = import_path5.default.resolve(process.cwd());
+        if (!import_path4.default.isAbsolute(promptPath)) {
+          const normalizedPath = import_path4.default.normalize(resolvedPath);
+          const currentDir = import_path4.default.resolve(process.cwd());
           if (!normalizedPath.startsWith(currentDir)) {
             throw new Error("Invalid prompt file path: path traversal detected");
           }
@@ -20563,67 +20116,67 @@ var require_symbols = __commonJS({
   "node_modules/undici/lib/core/symbols.js"(exports2, module2) {
     "use strict";
     module2.exports = {
-      kClose: Symbol("close"),
-      kDestroy: Symbol("destroy"),
-      kDispatch: Symbol("dispatch"),
-      kUrl: Symbol("url"),
-      kWriting: Symbol("writing"),
-      kResuming: Symbol("resuming"),
-      kQueue: Symbol("queue"),
-      kConnect: Symbol("connect"),
-      kConnecting: Symbol("connecting"),
-      kHeadersList: Symbol("headers list"),
-      kKeepAliveDefaultTimeout: Symbol("default keep alive timeout"),
-      kKeepAliveMaxTimeout: Symbol("max keep alive timeout"),
-      kKeepAliveTimeoutThreshold: Symbol("keep alive timeout threshold"),
-      kKeepAliveTimeoutValue: Symbol("keep alive timeout"),
-      kKeepAlive: Symbol("keep alive"),
-      kHeadersTimeout: Symbol("headers timeout"),
-      kBodyTimeout: Symbol("body timeout"),
-      kServerName: Symbol("server name"),
-      kLocalAddress: Symbol("local address"),
-      kHost: Symbol("host"),
-      kNoRef: Symbol("no ref"),
-      kBodyUsed: Symbol("used"),
-      kRunning: Symbol("running"),
-      kBlocking: Symbol("blocking"),
-      kPending: Symbol("pending"),
-      kSize: Symbol("size"),
-      kBusy: Symbol("busy"),
-      kQueued: Symbol("queued"),
-      kFree: Symbol("free"),
-      kConnected: Symbol("connected"),
-      kClosed: Symbol("closed"),
-      kNeedDrain: Symbol("need drain"),
-      kReset: Symbol("reset"),
-      kDestroyed: Symbol.for("nodejs.stream.destroyed"),
-      kMaxHeadersSize: Symbol("max headers size"),
-      kRunningIdx: Symbol("running index"),
-      kPendingIdx: Symbol("pending index"),
-      kError: Symbol("error"),
-      kClients: Symbol("clients"),
-      kClient: Symbol("client"),
-      kParser: Symbol("parser"),
-      kOnDestroyed: Symbol("destroy callbacks"),
-      kPipelining: Symbol("pipelining"),
-      kSocket: Symbol("socket"),
-      kHostHeader: Symbol("host header"),
-      kConnector: Symbol("connector"),
-      kStrictContentLength: Symbol("strict content length"),
-      kMaxRedirections: Symbol("maxRedirections"),
-      kMaxRequests: Symbol("maxRequestsPerClient"),
-      kProxy: Symbol("proxy agent options"),
-      kCounter: Symbol("socket request counter"),
-      kInterceptors: Symbol("dispatch interceptors"),
-      kMaxResponseSize: Symbol("max response size"),
-      kHTTP2Session: Symbol("http2Session"),
-      kHTTP2SessionState: Symbol("http2Session state"),
-      kHTTP2BuildRequest: Symbol("http2 build request"),
-      kHTTP1BuildRequest: Symbol("http1 build request"),
-      kHTTP2CopyHeaders: Symbol("http2 copy headers"),
-      kHTTPConnVersion: Symbol("http connection version"),
-      kRetryHandlerDefaultRetry: Symbol("retry agent default retry"),
-      kConstruct: Symbol("constructable")
+      kClose: /* @__PURE__ */ Symbol("close"),
+      kDestroy: /* @__PURE__ */ Symbol("destroy"),
+      kDispatch: /* @__PURE__ */ Symbol("dispatch"),
+      kUrl: /* @__PURE__ */ Symbol("url"),
+      kWriting: /* @__PURE__ */ Symbol("writing"),
+      kResuming: /* @__PURE__ */ Symbol("resuming"),
+      kQueue: /* @__PURE__ */ Symbol("queue"),
+      kConnect: /* @__PURE__ */ Symbol("connect"),
+      kConnecting: /* @__PURE__ */ Symbol("connecting"),
+      kHeadersList: /* @__PURE__ */ Symbol("headers list"),
+      kKeepAliveDefaultTimeout: /* @__PURE__ */ Symbol("default keep alive timeout"),
+      kKeepAliveMaxTimeout: /* @__PURE__ */ Symbol("max keep alive timeout"),
+      kKeepAliveTimeoutThreshold: /* @__PURE__ */ Symbol("keep alive timeout threshold"),
+      kKeepAliveTimeoutValue: /* @__PURE__ */ Symbol("keep alive timeout"),
+      kKeepAlive: /* @__PURE__ */ Symbol("keep alive"),
+      kHeadersTimeout: /* @__PURE__ */ Symbol("headers timeout"),
+      kBodyTimeout: /* @__PURE__ */ Symbol("body timeout"),
+      kServerName: /* @__PURE__ */ Symbol("server name"),
+      kLocalAddress: /* @__PURE__ */ Symbol("local address"),
+      kHost: /* @__PURE__ */ Symbol("host"),
+      kNoRef: /* @__PURE__ */ Symbol("no ref"),
+      kBodyUsed: /* @__PURE__ */ Symbol("used"),
+      kRunning: /* @__PURE__ */ Symbol("running"),
+      kBlocking: /* @__PURE__ */ Symbol("blocking"),
+      kPending: /* @__PURE__ */ Symbol("pending"),
+      kSize: /* @__PURE__ */ Symbol("size"),
+      kBusy: /* @__PURE__ */ Symbol("busy"),
+      kQueued: /* @__PURE__ */ Symbol("queued"),
+      kFree: /* @__PURE__ */ Symbol("free"),
+      kConnected: /* @__PURE__ */ Symbol("connected"),
+      kClosed: /* @__PURE__ */ Symbol("closed"),
+      kNeedDrain: /* @__PURE__ */ Symbol("need drain"),
+      kReset: /* @__PURE__ */ Symbol("reset"),
+      kDestroyed: /* @__PURE__ */ Symbol.for("nodejs.stream.destroyed"),
+      kMaxHeadersSize: /* @__PURE__ */ Symbol("max headers size"),
+      kRunningIdx: /* @__PURE__ */ Symbol("running index"),
+      kPendingIdx: /* @__PURE__ */ Symbol("pending index"),
+      kError: /* @__PURE__ */ Symbol("error"),
+      kClients: /* @__PURE__ */ Symbol("clients"),
+      kClient: /* @__PURE__ */ Symbol("client"),
+      kParser: /* @__PURE__ */ Symbol("parser"),
+      kOnDestroyed: /* @__PURE__ */ Symbol("destroy callbacks"),
+      kPipelining: /* @__PURE__ */ Symbol("pipelining"),
+      kSocket: /* @__PURE__ */ Symbol("socket"),
+      kHostHeader: /* @__PURE__ */ Symbol("host header"),
+      kConnector: /* @__PURE__ */ Symbol("connector"),
+      kStrictContentLength: /* @__PURE__ */ Symbol("strict content length"),
+      kMaxRedirections: /* @__PURE__ */ Symbol("maxRedirections"),
+      kMaxRequests: /* @__PURE__ */ Symbol("maxRequestsPerClient"),
+      kProxy: /* @__PURE__ */ Symbol("proxy agent options"),
+      kCounter: /* @__PURE__ */ Symbol("socket request counter"),
+      kInterceptors: /* @__PURE__ */ Symbol("dispatch interceptors"),
+      kMaxResponseSize: /* @__PURE__ */ Symbol("max response size"),
+      kHTTP2Session: /* @__PURE__ */ Symbol("http2Session"),
+      kHTTP2SessionState: /* @__PURE__ */ Symbol("http2Session state"),
+      kHTTP2BuildRequest: /* @__PURE__ */ Symbol("http2 build request"),
+      kHTTP1BuildRequest: /* @__PURE__ */ Symbol("http1 build request"),
+      kHTTP2CopyHeaders: /* @__PURE__ */ Symbol("http2 copy headers"),
+      kHTTPConnVersion: /* @__PURE__ */ Symbol("http connection version"),
+      kRetryHandlerDefaultRetry: /* @__PURE__ */ Symbol("retry agent default retry"),
+      kConstruct: /* @__PURE__ */ Symbol("constructable")
     };
   }
 });
@@ -23618,7 +23171,7 @@ var require_constants2 = __commonJS({
 var require_global = __commonJS({
   "node_modules/undici/lib/fetch/global.js"(exports2, module2) {
     "use strict";
-    var globalOrigin = Symbol.for("undici.globalOrigin.1");
+    var globalOrigin = /* @__PURE__ */ Symbol.for("undici.globalOrigin.1");
     function getGlobalOrigin() {
       return globalThis[globalOrigin];
     }
@@ -24050,8 +23603,8 @@ var require_util2 = __commonJS({
     function createDeferredPromise() {
       let res;
       let rej;
-      const promise = new Promise((resolve10, reject) => {
-        res = resolve10;
+      const promise = new Promise((resolve9, reject) => {
+        res = resolve9;
         rej = reject;
       });
       return { promise, resolve: res, reject: rej };
@@ -24270,12 +23823,12 @@ var require_symbols2 = __commonJS({
   "node_modules/undici/lib/fetch/symbols.js"(exports2, module2) {
     "use strict";
     module2.exports = {
-      kUrl: Symbol("url"),
-      kHeaders: Symbol("headers"),
-      kSignal: Symbol("signal"),
-      kState: Symbol("state"),
-      kGuard: Symbol("guard"),
-      kRealm: Symbol("realm")
+      kUrl: /* @__PURE__ */ Symbol("url"),
+      kHeaders: /* @__PURE__ */ Symbol("headers"),
+      kSignal: /* @__PURE__ */ Symbol("signal"),
+      kState: /* @__PURE__ */ Symbol("state"),
+      kGuard: /* @__PURE__ */ Symbol("guard"),
+      kRealm: /* @__PURE__ */ Symbol("realm")
     };
   }
 });
@@ -25556,8 +25109,8 @@ Content-Type: ${value.type || "application/octet-stream"}\r
                 });
               }
             });
-            const busboyResolve = new Promise((resolve10, reject) => {
-              busboy.on("finish", resolve10);
+            const busboyResolve = new Promise((resolve9, reject) => {
+              busboy.on("finish", resolve9);
               busboy.on("error", (err) => reject(new TypeError(err)));
             });
             if (this.body !== null) for await (const chunk of consumeBody(this[kState].body)) busboy.write(chunk);
@@ -25669,7 +25222,7 @@ var require_request = __commonJS({
     var tokenRegExp = /^[\^_`a-zA-Z\-0-9!#$%&'*+.|~]+$/;
     var headerCharRegex = /[^\t\x20-\x7e\x80-\xff]/;
     var invalidPathRegex = /[^\u0021-\u00ff]/;
-    var kHandler = Symbol("handler");
+    var kHandler = /* @__PURE__ */ Symbol("handler");
     var channels = {};
     var extractBody;
     try {
@@ -26056,11 +25609,11 @@ var require_dispatcher_base = __commonJS({
       InvalidArgumentError
     } = require_errors();
     var { kDestroy, kClose, kDispatch, kInterceptors } = require_symbols();
-    var kDestroyed = Symbol("destroyed");
-    var kClosed = Symbol("closed");
-    var kOnDestroyed = Symbol("onDestroyed");
-    var kOnClosed = Symbol("onClosed");
-    var kInterceptedDispatch = Symbol("Intercepted Dispatch");
+    var kDestroyed = /* @__PURE__ */ Symbol("destroyed");
+    var kClosed = /* @__PURE__ */ Symbol("closed");
+    var kOnDestroyed = /* @__PURE__ */ Symbol("onDestroyed");
+    var kOnClosed = /* @__PURE__ */ Symbol("onClosed");
+    var kInterceptedDispatch = /* @__PURE__ */ Symbol("Intercepted Dispatch");
     var DispatcherBase = class extends Dispatcher {
       constructor() {
         super();
@@ -26091,9 +25644,9 @@ var require_dispatcher_base = __commonJS({
       }
       close(callback) {
         if (callback === void 0) {
-          return new Promise((resolve10, reject) => {
+          return new Promise((resolve9, reject) => {
             this.close((err, data) => {
-              return err ? reject(err) : resolve10(data);
+              return err ? reject(err) : resolve9(data);
             });
           });
         }
@@ -26131,12 +25684,12 @@ var require_dispatcher_base = __commonJS({
           err = null;
         }
         if (callback === void 0) {
-          return new Promise((resolve10, reject) => {
+          return new Promise((resolve9, reject) => {
             this.destroy(err, (err2, data) => {
               return err2 ? (
                 /* istanbul ignore next: should never error */
                 reject(err2)
-              ) : resolve10(data);
+              ) : resolve9(data);
             });
           });
         }
@@ -26715,7 +26268,7 @@ var require_RedirectHandler = __commonJS({
     var { InvalidArgumentError } = require_errors();
     var EE = require("events");
     var redirectableStatusCodes = [300, 301, 302, 303, 307, 308];
-    var kBody = Symbol("body");
+    var kBody = /* @__PURE__ */ Symbol("body");
     var BodyAsyncIterable = class {
       constructor(body) {
         this[kBody] = body;
@@ -26991,7 +26544,7 @@ var require_client = __commonJS({
     } = http22;
     var h2ExperimentalWarned = false;
     var FastBuffer = Buffer[Symbol.species];
-    var kClosedResolve = Symbol("kClosedResolve");
+    var kClosedResolve = /* @__PURE__ */ Symbol("kClosedResolve");
     var channels = {};
     try {
       const diagnosticsChannel = require("diagnostics_channel");
@@ -27198,16 +26751,16 @@ var require_client = __commonJS({
         return this[kNeedDrain] < 2;
       }
       async [kClose]() {
-        return new Promise((resolve10) => {
+        return new Promise((resolve9) => {
           if (!this[kSize]) {
-            resolve10(null);
+            resolve9(null);
           } else {
-            this[kClosedResolve] = resolve10;
+            this[kClosedResolve] = resolve9;
           }
         });
       }
       async [kDestroy](err) {
-        return new Promise((resolve10) => {
+        return new Promise((resolve9) => {
           const requests = this[kQueue].splice(this[kPendingIdx]);
           for (let i = 0; i < requests.length; i++) {
             const request = requests[i];
@@ -27218,7 +26771,7 @@ var require_client = __commonJS({
               this[kClosedResolve]();
               this[kClosedResolve] = null;
             }
-            resolve10();
+            resolve9();
           };
           if (this[kHTTP2Session] != null) {
             util.destroy(this[kHTTP2Session], err);
@@ -27798,7 +27351,7 @@ var require_client = __commonJS({
         });
       }
       try {
-        const socket = await new Promise((resolve10, reject) => {
+        const socket = await new Promise((resolve9, reject) => {
           client[kConnector]({
             host,
             hostname,
@@ -27810,7 +27363,7 @@ var require_client = __commonJS({
             if (err) {
               reject(err);
             } else {
-              resolve10(socket2);
+              resolve9(socket2);
             }
           });
         });
@@ -28434,12 +27987,12 @@ upgrade: ${upgrade}\r
           cb();
         }
       }
-      const waitForDrain = () => new Promise((resolve10, reject) => {
+      const waitForDrain = () => new Promise((resolve9, reject) => {
         assert(callback === null);
         if (socket[kError]) {
           reject(socket[kError]);
         } else {
-          callback = resolve10;
+          callback = resolve9;
         }
       });
       if (client[kHTTPConnVersion] === "h2") {
@@ -28662,7 +28215,7 @@ var require_pool_stats = __commonJS({
   "node_modules/undici/lib/pool-stats.js"(exports2, module2) {
     "use strict";
     var { kFree, kConnected, kPending, kQueued, kRunning, kSize } = require_symbols();
-    var kPool = Symbol("pool");
+    var kPool = /* @__PURE__ */ Symbol("pool");
     var PoolStats = class {
       constructor(pool) {
         this[kPool] = pool;
@@ -28698,18 +28251,18 @@ var require_pool_base = __commonJS({
     var FixedQueue = require_fixed_queue();
     var { kConnected, kSize, kRunning, kPending, kQueued, kBusy, kFree, kUrl, kClose, kDestroy, kDispatch } = require_symbols();
     var PoolStats = require_pool_stats();
-    var kClients = Symbol("clients");
-    var kNeedDrain = Symbol("needDrain");
-    var kQueue = Symbol("queue");
-    var kClosedResolve = Symbol("closed resolve");
-    var kOnDrain = Symbol("onDrain");
-    var kOnConnect = Symbol("onConnect");
-    var kOnDisconnect = Symbol("onDisconnect");
-    var kOnConnectionError = Symbol("onConnectionError");
-    var kGetDispatcher = Symbol("get dispatcher");
-    var kAddClient = Symbol("add client");
-    var kRemoveClient = Symbol("remove client");
-    var kStats = Symbol("stats");
+    var kClients = /* @__PURE__ */ Symbol("clients");
+    var kNeedDrain = /* @__PURE__ */ Symbol("needDrain");
+    var kQueue = /* @__PURE__ */ Symbol("queue");
+    var kClosedResolve = /* @__PURE__ */ Symbol("closed resolve");
+    var kOnDrain = /* @__PURE__ */ Symbol("onDrain");
+    var kOnConnect = /* @__PURE__ */ Symbol("onConnect");
+    var kOnDisconnect = /* @__PURE__ */ Symbol("onDisconnect");
+    var kOnConnectionError = /* @__PURE__ */ Symbol("onConnectionError");
+    var kGetDispatcher = /* @__PURE__ */ Symbol("get dispatcher");
+    var kAddClient = /* @__PURE__ */ Symbol("add client");
+    var kRemoveClient = /* @__PURE__ */ Symbol("remove client");
+    var kStats = /* @__PURE__ */ Symbol("stats");
     var PoolBase = class extends DispatcherBase {
       constructor() {
         super();
@@ -28785,8 +28338,8 @@ var require_pool_base = __commonJS({
         if (this[kQueue].isEmpty()) {
           return Promise.all(this[kClients].map((c) => c.close()));
         } else {
-          return new Promise((resolve10) => {
-            this[kClosedResolve] = resolve10;
+          return new Promise((resolve9) => {
+            this[kClosedResolve] = resolve9;
           });
         }
       }
@@ -28863,9 +28416,9 @@ var require_pool = __commonJS({
     var util = require_util();
     var { kUrl, kInterceptors } = require_symbols();
     var buildConnector = require_connect();
-    var kOptions = Symbol("options");
-    var kConnections = Symbol("connections");
-    var kFactory = Symbol("factory");
+    var kOptions = /* @__PURE__ */ Symbol("options");
+    var kConnections = /* @__PURE__ */ Symbol("connections");
+    var kFactory = /* @__PURE__ */ Symbol("factory");
     function defaultFactory(origin, opts) {
       return new Client2(origin, opts);
     }
@@ -28954,14 +28507,14 @@ var require_balanced_pool = __commonJS({
     var Pool = require_pool();
     var { kUrl, kInterceptors } = require_symbols();
     var { parseOrigin } = require_util();
-    var kFactory = Symbol("factory");
-    var kOptions = Symbol("options");
-    var kGreatestCommonDivisor = Symbol("kGreatestCommonDivisor");
-    var kCurrentWeight = Symbol("kCurrentWeight");
-    var kIndex = Symbol("kIndex");
-    var kWeight = Symbol("kWeight");
-    var kMaxWeightPerServer = Symbol("kMaxWeightPerServer");
-    var kErrorPenalty = Symbol("kErrorPenalty");
+    var kFactory = /* @__PURE__ */ Symbol("factory");
+    var kOptions = /* @__PURE__ */ Symbol("options");
+    var kGreatestCommonDivisor = /* @__PURE__ */ Symbol("kGreatestCommonDivisor");
+    var kCurrentWeight = /* @__PURE__ */ Symbol("kCurrentWeight");
+    var kIndex = /* @__PURE__ */ Symbol("kIndex");
+    var kWeight = /* @__PURE__ */ Symbol("kWeight");
+    var kMaxWeightPerServer = /* @__PURE__ */ Symbol("kMaxWeightPerServer");
+    var kErrorPenalty = /* @__PURE__ */ Symbol("kErrorPenalty");
     function getGreatestCommonDivisor(a, b) {
       if (b === 0) return a;
       return getGreatestCommonDivisor(b, a % b);
@@ -29124,14 +28677,14 @@ var require_agent = __commonJS({
     var util = require_util();
     var createRedirectInterceptor = require_redirectInterceptor();
     var { WeakRef: WeakRef2, FinalizationRegistry } = require_dispatcher_weakref()();
-    var kOnConnect = Symbol("onConnect");
-    var kOnDisconnect = Symbol("onDisconnect");
-    var kOnConnectionError = Symbol("onConnectionError");
-    var kMaxRedirections = Symbol("maxRedirections");
-    var kOnDrain = Symbol("onDrain");
-    var kFactory = Symbol("factory");
-    var kFinalizer = Symbol("finalizer");
-    var kOptions = Symbol("options");
+    var kOnConnect = /* @__PURE__ */ Symbol("onConnect");
+    var kOnDisconnect = /* @__PURE__ */ Symbol("onDisconnect");
+    var kOnConnectionError = /* @__PURE__ */ Symbol("onConnectionError");
+    var kMaxRedirections = /* @__PURE__ */ Symbol("maxRedirections");
+    var kOnDrain = /* @__PURE__ */ Symbol("onDrain");
+    var kFactory = /* @__PURE__ */ Symbol("factory");
+    var kFinalizer = /* @__PURE__ */ Symbol("finalizer");
+    var kOptions = /* @__PURE__ */ Symbol("options");
     function defaultFactory(origin, opts) {
       return opts && opts.connections === 1 ? new Client2(origin, opts) : new Pool(origin, opts);
     }
@@ -29240,11 +28793,11 @@ var require_readable = __commonJS({
     var util = require_util();
     var { ReadableStreamFrom, toUSVString } = require_util();
     var Blob2;
-    var kConsume = Symbol("kConsume");
-    var kReading = Symbol("kReading");
-    var kBody = Symbol("kBody");
-    var kAbort = Symbol("abort");
-    var kContentType = Symbol("kContentType");
+    var kConsume = /* @__PURE__ */ Symbol("kConsume");
+    var kReading = /* @__PURE__ */ Symbol("kReading");
+    var kBody = /* @__PURE__ */ Symbol("kBody");
+    var kAbort = /* @__PURE__ */ Symbol("abort");
+    var kContentType = /* @__PURE__ */ Symbol("kContentType");
     var noop = () => {
     };
     module2.exports = class BodyReadable extends Readable {
@@ -29364,7 +28917,7 @@ var require_readable = __commonJS({
         if (this.closed) {
           return Promise.resolve(null);
         }
-        return new Promise((resolve10, reject) => {
+        return new Promise((resolve9, reject) => {
           const signalListenerCleanup = signal ? util.addAbortListener(signal, () => {
             this.destroy();
           }) : noop;
@@ -29373,7 +28926,7 @@ var require_readable = __commonJS({
             if (signal && signal.aborted) {
               reject(signal.reason || Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
             } else {
-              resolve10(null);
+              resolve9(null);
             }
           }).on("error", noop).on("data", function(chunk) {
             limit -= chunk.length;
@@ -29395,11 +28948,11 @@ var require_readable = __commonJS({
         throw new TypeError("unusable");
       }
       assert(!stream[kConsume]);
-      return new Promise((resolve10, reject) => {
+      return new Promise((resolve9, reject) => {
         stream[kConsume] = {
           type,
           stream,
-          resolve: resolve10,
+          resolve: resolve9,
           reject,
           length: 0,
           body: []
@@ -29434,12 +28987,12 @@ var require_readable = __commonJS({
       }
     }
     function consumeEnd(consume2) {
-      const { type, body, resolve: resolve10, stream, length } = consume2;
+      const { type, body, resolve: resolve9, stream, length } = consume2;
       try {
         if (type === "text") {
-          resolve10(toUSVString(Buffer.concat(body)));
+          resolve9(toUSVString(Buffer.concat(body)));
         } else if (type === "json") {
-          resolve10(JSON.parse(Buffer.concat(body)));
+          resolve9(JSON.parse(Buffer.concat(body)));
         } else if (type === "arrayBuffer") {
           const dst = new Uint8Array(length);
           let pos = 0;
@@ -29447,12 +29000,12 @@ var require_readable = __commonJS({
             dst.set(buf, pos);
             pos += buf.byteLength;
           }
-          resolve10(dst.buffer);
+          resolve9(dst.buffer);
         } else if (type === "blob") {
           if (!Blob2) {
             Blob2 = require("buffer").Blob;
           }
-          resolve10(new Blob2(body, { type: stream[kContentType] }));
+          resolve9(new Blob2(body, { type: stream[kContentType] }));
         }
         consumeFinish(consume2);
       } catch (err) {
@@ -29532,8 +29085,8 @@ var require_abort_signal = __commonJS({
     "use strict";
     var { addAbortListener } = require_util();
     var { RequestAbortedError } = require_errors();
-    var kListener = Symbol("kListener");
-    var kSignal = Symbol("kSignal");
+    var kListener = /* @__PURE__ */ Symbol("kListener");
+    var kSignal = /* @__PURE__ */ Symbol("kSignal");
     function abort(self) {
       if (self.abort) {
         self.abort();
@@ -29709,9 +29262,9 @@ var require_api_request = __commonJS({
     };
     function request(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve10, reject) => {
+        return new Promise((resolve9, reject) => {
           request.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve10(data);
+            return err ? reject(err) : resolve9(data);
           });
         });
       }
@@ -29884,9 +29437,9 @@ var require_api_stream = __commonJS({
     };
     function stream(opts, factory, callback) {
       if (callback === void 0) {
-        return new Promise((resolve10, reject) => {
+        return new Promise((resolve9, reject) => {
           stream.call(this, opts, factory, (err, data) => {
-            return err ? reject(err) : resolve10(data);
+            return err ? reject(err) : resolve9(data);
           });
         });
       }
@@ -29922,7 +29475,7 @@ var require_api_pipeline = __commonJS({
     var { AsyncResource } = require("async_hooks");
     var { addSignal, removeSignal } = require_abort_signal();
     var assert = require("assert");
-    var kResume = Symbol("resume");
+    var kResume = /* @__PURE__ */ Symbol("resume");
     var PipelineRequest = class extends Readable {
       constructor() {
         super({ autoDestroy: true });
@@ -30167,9 +29720,9 @@ var require_api_upgrade = __commonJS({
     };
     function upgrade(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve10, reject) => {
+        return new Promise((resolve9, reject) => {
           upgrade.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve10(data);
+            return err ? reject(err) : resolve9(data);
           });
         });
       }
@@ -30258,9 +29811,9 @@ var require_api_connect = __commonJS({
     };
     function connect(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve10, reject) => {
+        return new Promise((resolve9, reject) => {
           connect.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve10(data);
+            return err ? reject(err) : resolve9(data);
           });
         });
       }
@@ -30316,25 +29869,25 @@ var require_mock_symbols = __commonJS({
   "node_modules/undici/lib/mock/mock-symbols.js"(exports2, module2) {
     "use strict";
     module2.exports = {
-      kAgent: Symbol("agent"),
-      kOptions: Symbol("options"),
-      kFactory: Symbol("factory"),
-      kDispatches: Symbol("dispatches"),
-      kDispatchKey: Symbol("dispatch key"),
-      kDefaultHeaders: Symbol("default headers"),
-      kDefaultTrailers: Symbol("default trailers"),
-      kContentLength: Symbol("content length"),
-      kMockAgent: Symbol("mock agent"),
-      kMockAgentSet: Symbol("mock agent set"),
-      kMockAgentGet: Symbol("mock agent get"),
-      kMockDispatch: Symbol("mock dispatch"),
-      kClose: Symbol("close"),
-      kOriginalClose: Symbol("original agent close"),
-      kOrigin: Symbol("origin"),
-      kIsMockActive: Symbol("is mock active"),
-      kNetConnect: Symbol("net connect"),
-      kGetNetConnect: Symbol("get net connect"),
-      kConnected: Symbol("connected")
+      kAgent: /* @__PURE__ */ Symbol("agent"),
+      kOptions: /* @__PURE__ */ Symbol("options"),
+      kFactory: /* @__PURE__ */ Symbol("factory"),
+      kDispatches: /* @__PURE__ */ Symbol("dispatches"),
+      kDispatchKey: /* @__PURE__ */ Symbol("dispatch key"),
+      kDefaultHeaders: /* @__PURE__ */ Symbol("default headers"),
+      kDefaultTrailers: /* @__PURE__ */ Symbol("default trailers"),
+      kContentLength: /* @__PURE__ */ Symbol("content length"),
+      kMockAgent: /* @__PURE__ */ Symbol("mock agent"),
+      kMockAgentSet: /* @__PURE__ */ Symbol("mock agent set"),
+      kMockAgentGet: /* @__PURE__ */ Symbol("mock agent get"),
+      kMockDispatch: /* @__PURE__ */ Symbol("mock dispatch"),
+      kClose: /* @__PURE__ */ Symbol("close"),
+      kOriginalClose: /* @__PURE__ */ Symbol("original agent close"),
+      kOrigin: /* @__PURE__ */ Symbol("origin"),
+      kIsMockActive: /* @__PURE__ */ Symbol("is mock active"),
+      kNetConnect: /* @__PURE__ */ Symbol("net connect"),
+      kGetNetConnect: /* @__PURE__ */ Symbol("get net connect"),
+      kConnected: /* @__PURE__ */ Symbol("connected")
     };
   }
 });
@@ -30784,7 +30337,7 @@ var require_mock_interceptor = __commonJS({
 var require_mock_client = __commonJS({
   "node_modules/undici/lib/mock/mock-client.js"(exports2, module2) {
     "use strict";
-    var { promisify: promisify5 } = require("util");
+    var { promisify: promisify2 } = require("util");
     var Client2 = require_client();
     var { buildMockDispatch } = require_mock_utils();
     var {
@@ -30824,7 +30377,7 @@ var require_mock_client = __commonJS({
         return new MockInterceptor(opts, this[kDispatches]);
       }
       async [kClose]() {
-        await promisify5(this[kOriginalClose])();
+        await promisify2(this[kOriginalClose])();
         this[kConnected] = 0;
         this[kMockAgent][Symbols.kClients].delete(this[kOrigin]);
       }
@@ -30837,7 +30390,7 @@ var require_mock_client = __commonJS({
 var require_mock_pool = __commonJS({
   "node_modules/undici/lib/mock/mock-pool.js"(exports2, module2) {
     "use strict";
-    var { promisify: promisify5 } = require("util");
+    var { promisify: promisify2 } = require("util");
     var Pool = require_pool();
     var { buildMockDispatch } = require_mock_utils();
     var {
@@ -30877,7 +30430,7 @@ var require_mock_pool = __commonJS({
         return new MockInterceptor(opts, this[kDispatches]);
       }
       async [kClose]() {
-        await promisify5(this[kOriginalClose])();
+        await promisify2(this[kOriginalClose])();
         this[kConnected] = 0;
         this[kMockAgent][Symbols.kClients].delete(this[kOrigin]);
       }
@@ -31106,12 +30659,12 @@ var require_proxy_agent = __commonJS({
     var DispatcherBase = require_dispatcher_base();
     var { InvalidArgumentError, RequestAbortedError } = require_errors();
     var buildConnector = require_connect();
-    var kAgent = Symbol("proxy agent");
-    var kClient = Symbol("proxy client");
-    var kProxyHeaders = Symbol("proxy headers");
-    var kRequestTls = Symbol("request tls settings");
-    var kProxyTls = Symbol("proxy tls settings");
-    var kConnectEndpoint = Symbol("connect endpoint function");
+    var kAgent = /* @__PURE__ */ Symbol("proxy agent");
+    var kClient = /* @__PURE__ */ Symbol("proxy client");
+    var kProxyHeaders = /* @__PURE__ */ Symbol("proxy headers");
+    var kRequestTls = /* @__PURE__ */ Symbol("request tls settings");
+    var kProxyTls = /* @__PURE__ */ Symbol("proxy tls settings");
+    var kConnectEndpoint = /* @__PURE__ */ Symbol("connect endpoint function");
     function defaultProtocolPort(protocol) {
       return protocol === "https:" ? 443 : 80;
     }
@@ -31519,7 +31072,7 @@ var require_RetryHandler = __commonJS({
 var require_global2 = __commonJS({
   "node_modules/undici/lib/global.js"(exports2, module2) {
     "use strict";
-    var globalDispatcher = Symbol.for("undici.globalDispatcher.1");
+    var globalDispatcher = /* @__PURE__ */ Symbol.for("undici.globalDispatcher.1");
     var { InvalidArgumentError } = require_errors();
     var Agent2 = require_agent();
     if (getGlobalDispatcher() === void 0) {
@@ -31594,8 +31147,8 @@ var require_headers = __commonJS({
     var util = require("util");
     var { webidl } = require_webidl();
     var assert = require("assert");
-    var kHeadersMap = Symbol("headers map");
-    var kHeadersSortedMap = Symbol("headers map sorted");
+    var kHeadersMap = /* @__PURE__ */ Symbol("headers map");
+    var kHeadersSortedMap = /* @__PURE__ */ Symbol("headers map sorted");
     function isHTTPWhiteSpaceCharCode(code) {
       return code === 10 || code === 13 || code === 9 || code === 32;
     }
@@ -31922,7 +31475,7 @@ var require_headers = __commonJS({
           callbackFn.apply(thisArg, [value, key, this]);
         }
       }
-      [Symbol.for("nodejs.util.inspect.custom")]() {
+      [/* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom")]() {
         webidl.brandCheck(this, _Headers);
         return this[kHeadersList];
       }
@@ -32382,7 +31935,7 @@ var require_request2 = __commonJS({
     var assert = require("assert");
     var { getMaxListeners, setMaxListeners, getEventListeners, defaultMaxListeners } = require("events");
     var TransformStream = globalThis.TransformStream;
-    var kAbortController = Symbol("abortController");
+    var kAbortController = /* @__PURE__ */ Symbol("abortController");
     var requestFinalizer = new FinalizationRegistry(({ signal, abort }) => {
       signal.removeEventListener("abort", abort);
     });
@@ -33883,7 +33436,7 @@ var require_fetch = __commonJS({
       async function dispatch({ body }) {
         const url = requestCurrentURL(request);
         const agent = fetchParams.controller.dispatcher;
-        return new Promise((resolve10, reject) => agent.dispatch(
+        return new Promise((resolve9, reject) => agent.dispatch(
           {
             path: url.pathname + url.search,
             origin: url.origin,
@@ -33959,7 +33512,7 @@ var require_fetch = __commonJS({
                   }
                 }
               }
-              resolve10({
+              resolve9({
                 status,
                 statusText,
                 headersList: headers[kHeadersList],
@@ -34002,7 +33555,7 @@ var require_fetch = __commonJS({
                 const val = headersList[n + 1].toString("latin1");
                 headers[kHeadersList].append(key, val);
               }
-              resolve10({
+              resolve9({
                 status,
                 statusText: STATUS_CODES[status],
                 headersList: headers[kHeadersList],
@@ -34028,12 +33581,12 @@ var require_symbols3 = __commonJS({
   "node_modules/undici/lib/fileapi/symbols.js"(exports2, module2) {
     "use strict";
     module2.exports = {
-      kState: Symbol("FileReader state"),
-      kResult: Symbol("FileReader result"),
-      kError: Symbol("FileReader error"),
-      kLastProgressEventFired: Symbol("FileReader last progress event fired timestamp"),
-      kEvents: Symbol("FileReader events"),
-      kAborted: Symbol("FileReader aborted")
+      kState: /* @__PURE__ */ Symbol("FileReader state"),
+      kResult: /* @__PURE__ */ Symbol("FileReader result"),
+      kError: /* @__PURE__ */ Symbol("FileReader error"),
+      kLastProgressEventFired: /* @__PURE__ */ Symbol("FileReader last progress event fired timestamp"),
+      kEvents: /* @__PURE__ */ Symbol("FileReader events"),
+      kAborted: /* @__PURE__ */ Symbol("FileReader aborted")
     };
   }
 });
@@ -34043,7 +33596,7 @@ var require_progressevent = __commonJS({
   "node_modules/undici/lib/fileapi/progressevent.js"(exports2, module2) {
     "use strict";
     var { webidl } = require_webidl();
-    var kState = Symbol("ProgressEvent state");
+    var kState = /* @__PURE__ */ Symbol("ProgressEvent state");
     var ProgressEvent = class _ProgressEvent extends Event {
       constructor(type, eventInitDict = {}) {
         type = webidl.converters.DOMString(type);
@@ -35993,14 +35546,14 @@ var require_symbols5 = __commonJS({
   "node_modules/undici/lib/websocket/symbols.js"(exports2, module2) {
     "use strict";
     module2.exports = {
-      kWebSocketURL: Symbol("url"),
-      kReadyState: Symbol("ready state"),
-      kController: Symbol("controller"),
-      kResponse: Symbol("response"),
-      kBinaryType: Symbol("binary type"),
-      kSentClose: Symbol("sent close"),
-      kReceivedClose: Symbol("received close"),
-      kByteParser: Symbol("byte parser")
+      kWebSocketURL: /* @__PURE__ */ Symbol("url"),
+      kReadyState: /* @__PURE__ */ Symbol("ready state"),
+      kController: /* @__PURE__ */ Symbol("controller"),
+      kResponse: /* @__PURE__ */ Symbol("response"),
+      kBinaryType: /* @__PURE__ */ Symbol("binary type"),
+      kSentClose: /* @__PURE__ */ Symbol("sent close"),
+      kReceivedClose: /* @__PURE__ */ Symbol("received close"),
+      kByteParser: /* @__PURE__ */ Symbol("byte parser")
     };
   }
 });
@@ -37742,7 +37295,7 @@ var init_mcp_check_provider = __esm({
             logger.warn(
               `MCP ${transportName} failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${error instanceof Error ? error.message : String(error)}`
             );
-            await new Promise((resolve10) => setTimeout(resolve10, delay));
+            await new Promise((resolve9) => setTimeout(resolve9, delay));
             attempt += 1;
           } finally {
             try {
@@ -38009,7 +37562,7 @@ async function acquirePromptLock() {
     activePrompt = true;
     return;
   }
-  await new Promise((resolve10) => waiters.push(resolve10));
+  await new Promise((resolve9) => waiters.push(resolve9));
   activePrompt = true;
 }
 function releasePromptLock() {
@@ -38019,7 +37572,7 @@ function releasePromptLock() {
 }
 async function interactivePrompt(options) {
   await acquirePromptLock();
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve9, reject) => {
     const dbg = process.env.VISOR_DEBUG === "true";
     try {
       if (dbg) {
@@ -38106,12 +37659,12 @@ async function interactivePrompt(options) {
     };
     const finish = (value) => {
       cleanup();
-      resolve10(value);
+      resolve9(value);
     };
     if (options.timeout && options.timeout > 0) {
       timeoutId = setTimeout(() => {
         cleanup();
-        if (defaultValue !== void 0) return resolve10(defaultValue);
+        if (defaultValue !== void 0) return resolve9(defaultValue);
         return reject(new Error("Input timeout"));
       }, options.timeout);
     }
@@ -38243,7 +37796,7 @@ async function interactivePrompt(options) {
   });
 }
 async function simplePrompt(prompt) {
-  return new Promise((resolve10) => {
+  return new Promise((resolve9) => {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout
@@ -38259,7 +37812,7 @@ async function simplePrompt(prompt) {
     rl.question(`${prompt}
 > `, (answer) => {
       rl.close();
-      resolve10(answer.trim());
+      resolve9(answer.trim());
     });
   });
 }
@@ -38427,7 +37980,7 @@ function isStdinAvailable() {
   return !process.stdin.isTTY;
 }
 async function readStdin(timeout, maxSize = 1024 * 1024) {
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve9, reject) => {
     let data = "";
     let timeoutId;
     if (timeout) {
@@ -38454,7 +38007,7 @@ async function readStdin(timeout, maxSize = 1024 * 1024) {
     };
     const onEnd = () => {
       cleanup();
-      resolve10(data.trim());
+      resolve9(data.trim());
     };
     const onError = (err) => {
       cleanup();
@@ -40522,15 +40075,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
           session_id: context2.sessionId,
           wave: state.wave
         },
-        async () => executeWithSandboxRouting(
-          checkId,
-          checkConfig,
-          context2,
-          prInfo,
-          dependencyResults,
-          checkConfig.ai?.timeout || 18e5,
-          () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-        )
+        async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
       );
       const enrichedIssues = (result.issues || []).map((issue) => ({
         ...issue,
@@ -40845,7 +40390,6 @@ var init_foreach_processor = __esm({
     init_stats_manager();
     init_routing();
     init_workflow_inputs();
-    init_sandbox_routing();
   }
 });
 
@@ -41510,15 +41054,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
         session_id: context2.sessionId,
         wave: state.wave
       },
-      async () => executeWithSandboxRouting(
-        checkId,
-        checkConfig,
-        context2,
-        prInfo,
-        dependencyResults,
-        checkConfig.ai?.timeout || 18e5,
-        () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-      )
+      async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
     );
     const enrichedIssues = (result.issues || []).map((issue) => ({
       ...issue,
@@ -41708,7 +41244,6 @@ var init_execution_invoker = __esm({
     init_on_init_handlers();
     init_sandbox();
     init_workflow_inputs();
-    init_sandbox_routing();
     MAX_ON_INIT_ITEMS = 50;
   }
 });
@@ -42399,15 +41934,7 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
           session_id: context2.sessionId,
           wave: state.wave
         },
-        async () => executeWithSandboxRouting(
-          checkId,
-          checkConfig,
-          context2,
-          prInfo,
-          dependencyResults,
-          checkConfig.ai?.timeout || 18e5,
-          () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-        )
+        async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
       );
       const enrichedIssues = (itemResult.issues || []).map((issue) => ({
         ...issue,
@@ -43414,15 +42941,7 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
         session_id: context2.sessionId,
         wave: state.wave
       },
-      async () => executeWithSandboxRouting(
-        checkId,
-        checkConfig2,
-        context2,
-        prInfo,
-        dependencyResults,
-        checkConfig2.ai?.timeout || 18e5,
-        () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-      )
+      async () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
     );
     try {
       const awaitingHumanInput = result?.awaitingHumanInput === true || result?.output && result.output.awaitingHumanInput === true;
@@ -44115,7 +43634,6 @@ var init_level_dispatch = __esm({
     init_fallback_ndjson();
     init_failure_condition_evaluator();
     init_workflow_inputs();
-    init_sandbox_routing();
   }
 });
 
@@ -45211,8 +44729,8 @@ var init_workspace_manager = __esm({
         );
         if (this.cleanupRequested && this.activeOperations === 0) {
           logger.debug(`[Workspace] All references released, proceeding with deferred cleanup`);
-          for (const resolve10 of this.cleanupResolvers) {
-            resolve10();
+          for (const resolve9 of this.cleanupResolvers) {
+            resolve9();
           }
           this.cleanupResolvers = [];
         }
@@ -45337,19 +44855,19 @@ var init_workspace_manager = __esm({
           );
           this.cleanupRequested = true;
           await Promise.race([
-            new Promise((resolve10) => {
+            new Promise((resolve9) => {
               if (this.activeOperations === 0) {
-                resolve10();
+                resolve9();
               } else {
-                this.cleanupResolvers.push(resolve10);
+                this.cleanupResolvers.push(resolve9);
               }
             }),
-            new Promise((resolve10) => {
+            new Promise((resolve9) => {
               setTimeout(() => {
                 logger.warn(
                   `[Workspace] Cleanup timeout after ${timeout}ms, proceeding anyway (${this.activeOperations} operations still active)`
                 );
-                resolve10();
+                resolve9();
               }, timeout);
             })
           ]);
@@ -45652,12 +45170,12 @@ var ndjson_sink_exports = {};
 __export(ndjson_sink_exports, {
   NdjsonSink: () => NdjsonSink
 });
-var import_fs5, import_path8, NdjsonSink;
+var import_fs2, import_path5, NdjsonSink;
 var init_ndjson_sink = __esm({
   "src/frontends/ndjson-sink.ts"() {
     "use strict";
-    import_fs5 = __toESM(require("fs"));
-    import_path8 = __toESM(require("path"));
+    import_fs2 = __toESM(require("fs"));
+    import_path5 = __toESM(require("path"));
     NdjsonSink = class {
       name = "ndjson-sink";
       cfg;
@@ -45678,7 +45196,7 @@ var init_ndjson_sink = __esm({
               payload: envelope && envelope.payload || envelope,
               safe: true
             });
-            await import_fs5.default.promises.appendFile(this.filePath, line + "\n");
+            await import_fs2.default.promises.appendFile(this.filePath, line + "\n");
           } catch (err) {
             ctx.logger.error("[ndjson-sink] Failed to write event:", err);
           }
@@ -45689,8 +45207,8 @@ var init_ndjson_sink = __esm({
         this.unsub = void 0;
       }
       resolveFile(p) {
-        if (import_path8.default.isAbsolute(p)) return p;
-        return import_path8.default.join(process.cwd(), p);
+        if (import_path5.default.isAbsolute(p)) return p;
+        return import_path5.default.join(process.cwd(), p);
       }
     };
   }
@@ -46513,8 +46031,8 @@ ${content}
        * Sleep utility
        */
       sleep(ms) {
-        return new Promise((resolve10) => {
-          const t = setTimeout(resolve10, ms);
+        return new Promise((resolve9) => {
+          const t = setTimeout(resolve9, ms);
           if (typeof t.unref === "function") {
             try {
               t.unref();
@@ -46788,8 +46306,8 @@ ${end}`);
       async updateGroupedComment(ctx, comments, group, changedIds) {
         const existingLock = this.updateLocks.get(group);
         let resolveLock;
-        const ourLock = new Promise((resolve10) => {
-          resolveLock = resolve10;
+        const ourLock = new Promise((resolve9) => {
+          resolveLock = resolve9;
         });
         this.updateLocks.set(group, ourLock);
         try {
@@ -47101,7 +46619,7 @@ ${blocks}
        * Sleep utility for enforcing delays
        */
       sleep(ms) {
-        return new Promise((resolve10) => setTimeout(resolve10, ms));
+        return new Promise((resolve9) => setTimeout(resolve9, ms));
       }
     };
   }
@@ -47345,8 +46863,8 @@ async function renderMermaidToPng(mermaidCode) {
     if (chromiumPath) {
       env.PUPPETEER_EXECUTABLE_PATH = chromiumPath;
     }
-    const result = await new Promise((resolve10) => {
-      const proc = (0, import_child_process5.spawn)(
+    const result = await new Promise((resolve9) => {
+      const proc = (0, import_child_process2.spawn)(
         "npx",
         [
           "--yes",
@@ -47375,13 +46893,13 @@ async function renderMermaidToPng(mermaidCode) {
       });
       proc.on("close", (code) => {
         if (code === 0) {
-          resolve10({ success: true });
+          resolve9({ success: true });
         } else {
-          resolve10({ success: false, error: stderr || `Exit code ${code}` });
+          resolve9({ success: false, error: stderr || `Exit code ${code}` });
         }
       });
       proc.on("error", (err) => {
-        resolve10({ success: false, error: err.message });
+        resolve9({ success: false, error: err.message });
       });
     });
     if (!result.success) {
@@ -47464,11 +46982,11 @@ function markdownToSlack(text) {
 function formatSlackText(text) {
   return markdownToSlack(text);
 }
-var import_child_process5, fs18, path20, os;
+var import_child_process2, fs18, path20, os;
 var init_markdown = __esm({
   "src/slack/markdown.ts"() {
     "use strict";
-    import_child_process5 = require("child_process");
+    import_child_process2 = require("child_process");
     fs18 = __toESM(require("fs"));
     path20 = __toESM(require("path"));
     os = __toESM(require("os"));
@@ -48052,579 +47570,6 @@ module.exports = __toCommonJS(sdk_exports);
 // src/state-machine-execution-engine.ts
 init_runner();
 init_logger();
-
-// src/sandbox/sandbox-manager.ts
-var import_path7 = require("path");
-
-// src/sandbox/docker-image-sandbox.ts
-var import_util2 = require("util");
-var import_child_process2 = require("child_process");
-var import_fs4 = require("fs");
-var import_path6 = require("path");
-var import_os = require("os");
-var import_crypto2 = require("crypto");
-init_logger();
-init_sandbox_telemetry();
-var execAsync = (0, import_util2.promisify)(import_child_process2.exec);
-var EXEC_MAX_BUFFER = 50 * 1024 * 1024;
-var DockerImageSandbox = class {
-  name;
-  config;
-  containerId = null;
-  containerName;
-  repoPath;
-  visorDistPath;
-  cacheVolumeMounts;
-  constructor(name, config, repoPath, visorDistPath, cacheVolumeMounts = []) {
-    this.name = name;
-    this.config = config;
-    this.repoPath = repoPath;
-    this.visorDistPath = visorDistPath;
-    this.containerName = `visor-${name}-${(0, import_crypto2.randomUUID)().slice(0, 8)}`;
-    this.cacheVolumeMounts = cacheVolumeMounts;
-  }
-  /**
-   * Build the Docker image if needed (dockerfile or dockerfile_inline mode)
-   */
-  async buildImageIfNeeded() {
-    if (this.config.image) {
-      return this.config.image;
-    }
-    const imageName = `visor-sandbox-${this.name}`;
-    const buildMode = this.config.dockerfile_inline ? "inline" : "dockerfile";
-    return withActiveSpan2(
-      "visor.sandbox.build",
-      {
-        "visor.sandbox.name": this.name,
-        "visor.sandbox.build.mode": buildMode
-      },
-      async () => {
-        if (this.config.dockerfile_inline) {
-          const tmpDir = (0, import_fs4.mkdtempSync)((0, import_path6.join)((0, import_os.tmpdir)(), "visor-build-"));
-          const dockerfilePath = (0, import_path6.join)(tmpDir, "Dockerfile");
-          (0, import_fs4.writeFileSync)(dockerfilePath, this.config.dockerfile_inline, "utf8");
-          try {
-            logger.info(`Building sandbox image '${imageName}' from inline Dockerfile`);
-            await execAsync(`docker build -t ${imageName} -f ${dockerfilePath} ${this.repoPath}`, {
-              maxBuffer: EXEC_MAX_BUFFER,
-              timeout: 3e5
-            });
-          } finally {
-            try {
-              (0, import_fs4.unlinkSync)(dockerfilePath);
-            } catch {
-            }
-          }
-          return imageName;
-        }
-        if (this.config.dockerfile) {
-          logger.info(`Building sandbox image '${imageName}' from ${this.config.dockerfile}`);
-          await execAsync(
-            `docker build -t ${imageName} -f ${this.config.dockerfile} ${this.repoPath}`,
-            { maxBuffer: EXEC_MAX_BUFFER, timeout: 3e5 }
-          );
-          return imageName;
-        }
-        throw new Error(`Sandbox '${this.name}' has no image, dockerfile, or dockerfile_inline`);
-      }
-    );
-  }
-  /**
-   * Start the sandbox container
-   */
-  async start() {
-    const image = await this.buildImageIfNeeded();
-    const workdir = this.config.workdir || "/workspace";
-    const visorPath = this.config.visor_path || "/opt/visor";
-    const readOnlySuffix = this.config.read_only ? ":ro" : "";
-    const args = [
-      "docker",
-      "run",
-      "-d",
-      "--name",
-      this.containerName,
-      "-v",
-      `${this.repoPath}:${workdir}${readOnlySuffix}`,
-      "-v",
-      `${this.visorDistPath}:${visorPath}:ro`,
-      "-w",
-      workdir
-    ];
-    if (this.config.network === false) {
-      args.push("--network", "none");
-    }
-    if (this.config.resources?.memory) {
-      args.push("--memory", this.config.resources.memory);
-    }
-    if (this.config.resources?.cpu) {
-      args.push("--cpus", String(this.config.resources.cpu));
-    }
-    for (const mount of this.cacheVolumeMounts) {
-      args.push("-v", mount);
-    }
-    args.push(image, "sleep", "infinity");
-    const cmd = args.map((a) => a.includes(" ") ? `"${a}"` : a).join(" ");
-    logger.info(`Starting sandbox container '${this.containerName}'`);
-    const { stdout } = await execAsync(cmd, { maxBuffer: EXEC_MAX_BUFFER, timeout: 6e4 });
-    this.containerId = stdout.trim();
-    addEvent2("visor.sandbox.container.started", {
-      container_name: this.containerName,
-      image
-    });
-  }
-  /**
-   * Execute a command inside the running container
-   */
-  async exec(options) {
-    if (!this.containerId) {
-      throw new Error(`Sandbox '${this.name}' is not started`);
-    }
-    const args = ["docker", "exec"];
-    for (const [key, value] of Object.entries(options.env)) {
-      args.push("-e", `${key}=${value}`);
-    }
-    args.push(this.containerName, "sh", "-c", options.command);
-    const cmd = args.map((a, i) => {
-      if (i === args.length - 1 || i > 0 && args[i - 1] === "-e") {
-        return `'${a.replace(/'/g, "'\\''")}'`;
-      }
-      return a.includes(" ") ? `"${a}"` : a;
-    }).join(" ");
-    try {
-      const { stdout, stderr } = await execAsync(cmd, {
-        maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER,
-        timeout: options.timeoutMs || 6e5
-      });
-      return { stdout, stderr, exitCode: 0 };
-    } catch (err) {
-      const execErr = err;
-      return {
-        stdout: execErr.stdout || "",
-        stderr: execErr.stderr || "",
-        exitCode: typeof execErr.code === "number" ? execErr.code : 1
-      };
-    }
-  }
-  /**
-   * Stop and remove the container
-   */
-  async stop() {
-    if (this.containerName) {
-      try {
-        await execAsync(`docker rm -f ${this.containerName}`, {
-          maxBuffer: EXEC_MAX_BUFFER,
-          timeout: 3e4
-        });
-      } catch {
-      }
-      addEvent2("visor.sandbox.container.stopped", {
-        container_name: this.containerName
-      });
-      this.containerId = null;
-    }
-  }
-};
-
-// src/sandbox/docker-compose-sandbox.ts
-var import_util3 = require("util");
-var import_child_process3 = require("child_process");
-var import_crypto3 = require("crypto");
-init_logger();
-var execAsync2 = (0, import_util3.promisify)(import_child_process3.exec);
-var EXEC_MAX_BUFFER2 = 50 * 1024 * 1024;
-var DockerComposeSandbox = class {
-  name;
-  config;
-  projectName;
-  started = false;
-  constructor(name, config) {
-    this.name = name;
-    this.config = config;
-    this.projectName = `visor-${name}-${(0, import_crypto3.randomUUID)().slice(0, 8)}`;
-  }
-  /**
-   * Start the compose services
-   */
-  async start() {
-    if (!this.config.compose) {
-      throw new Error(`Sandbox '${this.name}' has no compose file specified`);
-    }
-    if (!this.config.service) {
-      throw new Error(`Sandbox '${this.name}' requires a 'service' field for compose mode`);
-    }
-    logger.info(`Starting compose sandbox '${this.name}' (project: ${this.projectName})`);
-    await execAsync2(`docker compose -f ${this.config.compose} -p ${this.projectName} up -d`, {
-      maxBuffer: EXEC_MAX_BUFFER2,
-      timeout: 12e4
-    });
-    this.started = true;
-  }
-  /**
-   * Execute a command inside the compose service
-   */
-  async exec(options) {
-    if (!this.started) {
-      throw new Error(`Compose sandbox '${this.name}' is not started`);
-    }
-    const service = this.config.service;
-    const args = [
-      "docker",
-      "compose",
-      "-f",
-      this.config.compose,
-      "-p",
-      this.projectName,
-      "exec",
-      "-T"
-      // non-interactive
-    ];
-    for (const [key, value] of Object.entries(options.env)) {
-      args.push("-e", `${key}=${value}`);
-    }
-    if (this.config.workdir) {
-      args.push("-w", this.config.workdir);
-    }
-    args.push(service, "sh", "-c", options.command);
-    const cmd = args.map((a, i) => {
-      if (i === args.length - 1 || i > 0 && args[i - 1] === "-e") {
-        return `'${a.replace(/'/g, "'\\''")}'`;
-      }
-      return a.includes(" ") ? `"${a}"` : a;
-    }).join(" ");
-    try {
-      const { stdout, stderr } = await execAsync2(cmd, {
-        maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER2,
-        timeout: options.timeoutMs || 6e5
-      });
-      return { stdout, stderr, exitCode: 0 };
-    } catch (err) {
-      const execErr = err;
-      return {
-        stdout: execErr.stdout || "",
-        stderr: execErr.stderr || "",
-        exitCode: typeof execErr.code === "number" ? execErr.code : 1
-      };
-    }
-  }
-  /**
-   * Stop and tear down the compose project
-   */
-  async stop() {
-    if (this.started && this.config.compose) {
-      try {
-        await execAsync2(`docker compose -f ${this.config.compose} -p ${this.projectName} down`, {
-          maxBuffer: EXEC_MAX_BUFFER2,
-          timeout: 6e4
-        });
-      } catch {
-      }
-      this.started = false;
-    }
-  }
-};
-
-// src/sandbox/cache-volume-manager.ts
-var import_util4 = require("util");
-var import_child_process4 = require("child_process");
-var import_crypto4 = require("crypto");
-init_logger();
-var execAsync3 = (0, import_util4.promisify)(import_child_process4.exec);
-var EXEC_MAX_BUFFER3 = 10 * 1024 * 1024;
-function pathHash(containerPath) {
-  return (0, import_crypto4.createHash)("sha256").update(containerPath).digest("hex").slice(0, 8);
-}
-function parseTtl(ttl) {
-  let ms = 0;
-  const dayMatch = ttl.match(/(\d+)d/);
-  const hourMatch = ttl.match(/(\d+)h/);
-  const minMatch = ttl.match(/(\d+)m/);
-  if (dayMatch) ms += parseInt(dayMatch[1], 10) * 864e5;
-  if (hourMatch) ms += parseInt(hourMatch[1], 10) * 36e5;
-  if (minMatch) ms += parseInt(minMatch[1], 10) * 6e4;
-  return ms || 6048e5;
-}
-var CacheVolumeManager = class {
-  /**
-   * Resolve cache config into Docker volume mount specs.
-   *
-   * Volume naming: visor-cache-<prefix>-<sandboxName>-<pathHash>
-   *
-   * @param sandboxName - Name of the sandbox
-   * @param cacheConfig - Cache configuration from sandbox config
-   * @param gitBranch - Current git branch (used as default prefix)
-   * @returns Array of volume mount specs for docker run -v
-   */
-  async resolveVolumes(sandboxName, cacheConfig, gitBranch) {
-    const prefix = (cacheConfig.prefix || gitBranch).replace(/[^a-zA-Z0-9._-]/g, "-");
-    const volumes = [];
-    for (const containerPath of cacheConfig.paths) {
-      const hash = pathHash(containerPath);
-      const volumeName = `visor-cache-${prefix}-${sandboxName}-${hash}`;
-      const exists = await this.volumeExists(volumeName);
-      if (!exists && cacheConfig.fallback_prefix) {
-        const fallbackPrefix = cacheConfig.fallback_prefix.replace(/[^a-zA-Z0-9._-]/g, "-");
-        const fallbackVolume = `visor-cache-${fallbackPrefix}-${sandboxName}-${hash}`;
-        const fallbackExists = await this.volumeExists(fallbackVolume);
-        if (fallbackExists) {
-          logger.info(`Cache miss for '${volumeName}', copying from fallback '${fallbackVolume}'`);
-          await this.copyVolume(fallbackVolume, volumeName);
-        } else {
-          await this.createVolume(volumeName);
-        }
-      } else if (!exists) {
-        await this.createVolume(volumeName);
-      }
-      await this.touchVolume(volumeName);
-      volumes.push({
-        volumeName,
-        mountSpec: `${volumeName}:${containerPath}`
-      });
-    }
-    return volumes;
-  }
-  /**
-   * Check if a Docker volume exists
-   */
-  async volumeExists(name) {
-    try {
-      await execAsync3(`docker volume inspect ${name}`, {
-        maxBuffer: EXEC_MAX_BUFFER3,
-        timeout: 1e4
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  /**
-   * Create a Docker named volume
-   */
-  async createVolume(name) {
-    const now = (/* @__PURE__ */ new Date()).toISOString();
-    await execAsync3(`docker volume create --label visor.last-used=${now} ${name}`, {
-      maxBuffer: EXEC_MAX_BUFFER3,
-      timeout: 1e4
-    });
-  }
-  /**
-   * Copy data from one volume to another using a temp container
-   */
-  async copyVolume(source, target) {
-    await this.createVolume(target);
-    try {
-      await execAsync3(
-        `docker run --rm -v ${source}:/src:ro -v ${target}:/dst alpine sh -c "cp -a /src/. /dst/"`,
-        { maxBuffer: EXEC_MAX_BUFFER3, timeout: 6e4 }
-      );
-    } catch (err) {
-      logger.warn(`Failed to copy cache volume ${source} -> ${target}: ${err}`);
-    }
-  }
-  /**
-   * Update the last-used label on a volume.
-   * Docker doesn't support updating labels in-place, so we record via a temp file approach
-   * by simply re-creating volumes with updated labels if they don't exist.
-   * For existing volumes, we track usage time via the volume name pattern.
-   */
-  async touchVolume(_name) {
-  }
-  /**
-   * Evict expired cache volumes for a sandbox
-   */
-  async evictExpired(sandboxName, ttl, maxScopes) {
-    const ttlMs = ttl ? parseTtl(ttl) : 6048e5;
-    const maxScopesLimit = maxScopes || 10;
-    try {
-      const { stdout } = await execAsync3(
-        `docker volume ls --filter "name=visor-cache-" --format "{{.Name}}"`,
-        { maxBuffer: EXEC_MAX_BUFFER3, timeout: 1e4 }
-      );
-      const allVolumes = stdout.trim().split("\n").filter(Boolean);
-      const sandboxVolumes = allVolumes.filter((v) => v.includes(`-${sandboxName}-`));
-      if (sandboxVolumes.length === 0) return;
-      const scopeMap = /* @__PURE__ */ new Map();
-      for (const vol of sandboxVolumes) {
-        const match = vol.match(/^visor-cache-(.+)-\w{8}$/);
-        if (match) {
-          const prefix = match[1].replace(`-${sandboxName}`, "");
-          if (!scopeMap.has(prefix)) scopeMap.set(prefix, []);
-          scopeMap.get(prefix).push(vol);
-        }
-      }
-      const now = Date.now();
-      for (const vol of sandboxVolumes) {
-        try {
-          const { stdout: inspectOut } = await execAsync3(
-            `docker volume inspect ${vol} --format "{{.CreatedAt}}"`,
-            { maxBuffer: EXEC_MAX_BUFFER3, timeout: 1e4 }
-          );
-          const createdAt = new Date(inspectOut.trim()).getTime();
-          if (now - createdAt > ttlMs) {
-            logger.info(`Evicting expired cache volume: ${vol}`);
-            await execAsync3(`docker volume rm ${vol}`, {
-              maxBuffer: EXEC_MAX_BUFFER3,
-              timeout: 1e4
-            });
-          }
-        } catch {
-        }
-      }
-      if (scopeMap.size > maxScopesLimit) {
-        const scopes = Array.from(scopeMap.keys());
-        const toRemove = scopes.slice(0, scopes.length - maxScopesLimit);
-        for (const scope of toRemove) {
-          const vols = scopeMap.get(scope) || [];
-          for (const vol of vols) {
-            try {
-              logger.info(`Evicting cache volume (max_scopes exceeded): ${vol}`);
-              await execAsync3(`docker volume rm ${vol}`, {
-                maxBuffer: EXEC_MAX_BUFFER3,
-                timeout: 1e4
-              });
-            } catch {
-            }
-          }
-        }
-      }
-    } catch {
-    }
-  }
-};
-
-// src/sandbox/sandbox-manager.ts
-init_logger();
-init_sandbox_telemetry();
-var SandboxManager = class {
-  sandboxDefs;
-  repoPath;
-  gitBranch;
-  instances = /* @__PURE__ */ new Map();
-  cacheManager;
-  visorDistPath;
-  /** Get the resolved repository path (used by trace file relay) */
-  getRepoPath() {
-    return this.repoPath;
-  }
-  constructor(sandboxDefs, repoPath, gitBranch) {
-    this.sandboxDefs = sandboxDefs;
-    this.repoPath = (0, import_path7.resolve)(repoPath);
-    this.gitBranch = gitBranch;
-    this.cacheManager = new CacheVolumeManager();
-    this.visorDistPath = (0, import_path7.resolve)((0, import_path7.dirname)(__dirname));
-  }
-  /**
-   * Resolve which sandbox a check should use.
-   * Returns null if the check should run on the host.
-   *
-   * Resolution order:
-   * 1. Check-level sandbox: (explicit override)
-   * 2. Workspace-level sandbox: (default)
-   * 3. null → run on host
-   */
-  resolveSandbox(checkSandbox, workspaceDefault) {
-    const name = checkSandbox || workspaceDefault;
-    if (!name) return null;
-    if (!this.sandboxDefs[name]) {
-      throw new Error(`Sandbox '${name}' is not defined in sandboxes configuration`);
-    }
-    return name;
-  }
-  /**
-   * Get or lazily start a sandbox instance by name.
-   */
-  async getOrStart(name) {
-    const existing = this.instances.get(name);
-    if (existing) return existing;
-    const config = this.sandboxDefs[name];
-    if (!config) {
-      throw new Error(`Sandbox '${name}' is not defined`);
-    }
-    const mode = config.compose ? "compose" : "image";
-    return withActiveSpan2(
-      "visor.sandbox.start",
-      {
-        "visor.sandbox.name": name,
-        "visor.sandbox.mode": mode
-      },
-      async () => {
-        let instance;
-        if (config.compose) {
-          const composeSandbox = new DockerComposeSandbox(name, config);
-          await composeSandbox.start();
-          instance = composeSandbox;
-        } else {
-          let cacheVolumeMounts = [];
-          if (config.cache) {
-            const volumes = await this.cacheManager.resolveVolumes(
-              name,
-              config.cache,
-              this.gitBranch
-            );
-            cacheVolumeMounts = volumes.map((v) => v.mountSpec);
-          }
-          const imageSandbox = new DockerImageSandbox(
-            name,
-            config,
-            this.repoPath,
-            this.visorDistPath,
-            cacheVolumeMounts
-          );
-          await imageSandbox.start();
-          instance = imageSandbox;
-        }
-        this.instances.set(name, instance);
-        return instance;
-      }
-    );
-  }
-  /**
-   * Execute a command inside a named sandbox
-   */
-  async exec(name, options) {
-    const instance = await this.getOrStart(name);
-    return withActiveSpan2(
-      "visor.sandbox.exec",
-      {
-        "visor.sandbox.name": name
-      },
-      async (span) => {
-        const result = await instance.exec(options);
-        try {
-          span.setAttribute("visor.sandbox.exit_code", result.exitCode);
-        } catch {
-        }
-        return result;
-      }
-    );
-  }
-  /**
-   * Stop all running sandbox instances and run cache eviction
-   */
-  async stopAll() {
-    return withActiveSpan2("visor.sandbox.stopAll", void 0, async () => {
-      const stopPromises = Array.from(this.instances.entries()).map(async ([name, instance]) => {
-        try {
-          await instance.stop();
-          addEvent2("visor.sandbox.stopped", { "visor.sandbox.name": name });
-          logger.info(`Stopped sandbox '${name}'`);
-        } catch (err) {
-          logger.warn(`Failed to stop sandbox '${name}': ${err}`);
-        }
-        const config = this.sandboxDefs[name];
-        if (config?.cache) {
-          try {
-            await this.cacheManager.evictExpired(name, config.cache.ttl, config.cache.max_scopes);
-          } catch {
-          }
-        }
-      });
-      await Promise.allSettled(stopPromises);
-      this.instances.clear();
-    });
-  }
-};
-
-// src/state-machine-execution-engine.ts
 var path21 = __toESM(require("path"));
 var fs19 = __toESM(require("fs"));
 var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
@@ -48820,23 +47765,6 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       checks
       // Pass the explicit checks list
     );
-    if (configWithTagFilter.sandboxes && Object.keys(configWithTagFilter.sandboxes).length > 0) {
-      try {
-        const { execSync } = require("child_process");
-        const gitBranch = execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf8" }).trim();
-        context2.sandboxManager = new SandboxManager(
-          configWithTagFilter.sandboxes,
-          this.workingDirectory,
-          gitBranch
-        );
-      } catch {
-        context2.sandboxManager = new SandboxManager(
-          configWithTagFilter.sandboxes,
-          this.workingDirectory,
-          "unknown"
-        );
-      }
-    }
     const { initializeWorkspace: initializeWorkspace2 } = (init_build_engine_context(), __toCommonJS(build_engine_context_exports));
     await initializeWorkspace2(context2);
     context2.executionContext = this.getExecutionContext();
@@ -48970,40 +47898,31 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
     }
     const runner = new StateMachineRunner(context2, this.debugServer);
     this._lastRunner = runner;
-    try {
-      const result = await runner.run();
-      if (frontendsHost && typeof frontendsHost.stopAll === "function") {
-        try {
-          await frontendsHost.stopAll();
-        } catch {
-        }
-      }
-      if (debug) {
-        logger.info("[StateMachine] Execution complete");
-      }
+    const result = await runner.run();
+    if (frontendsHost && typeof frontendsHost.stopAll === "function") {
       try {
-        const { SessionRegistry: SessionRegistry2 } = await Promise.resolve().then(() => (init_session_registry(), session_registry_exports));
-        const sessionRegistry = SessionRegistry2.getInstance();
-        sessionRegistry.clearAllSessions();
-      } catch (error) {
-        logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
-      }
-      if (context2.workspace) {
-        try {
-          await context2.workspace.cleanup();
-        } catch (error) {
-          logger.debug(`[StateMachine] Failed to cleanup workspace: ${error}`);
-        }
-      }
-      return result;
-    } finally {
-      if (context2.sandboxManager) {
-        await context2.sandboxManager.stopAll().catch((err) => {
-          logger.warn(`Failed to stop sandboxes: ${err}`);
-        });
-        context2.sandboxManager = void 0;
+        await frontendsHost.stopAll();
+      } catch {
       }
     }
+    if (debug) {
+      logger.info("[StateMachine] Execution complete");
+    }
+    try {
+      const { SessionRegistry: SessionRegistry2 } = await Promise.resolve().then(() => (init_session_registry(), session_registry_exports));
+      const sessionRegistry = SessionRegistry2.getInstance();
+      sessionRegistry.clearAllSessions();
+    } catch (error) {
+      logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
+    }
+    if (context2.workspace) {
+      try {
+        await context2.workspace.cleanup();
+      } catch (error) {
+        logger.debug(`[StateMachine] Failed to cleanup workspace: ${error}`);
+      }
+    }
+    return result;
   }
   /**
    * Build the engine context for state machine execution
@@ -49182,7 +48101,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
   async evaluateFailureConditions(checkName, reviewSummary, config, previousOutputs, authorAssociation) {
     const { FailureConditionEvaluator: FailureConditionEvaluator2 } = await Promise.resolve().then(() => (init_failure_condition_evaluator(), failure_condition_evaluator_exports));
     const evaluator = new FailureConditionEvaluator2();
-    const { addEvent: addEvent3 } = await Promise.resolve().then(() => (init_trace_helpers(), trace_helpers_exports));
+    const { addEvent: addEvent2 } = await Promise.resolve().then(() => (init_trace_helpers(), trace_helpers_exports));
     const { addFailIfTriggered: addFailIfTriggered2 } = await Promise.resolve().then(() => (init_metrics(), metrics_exports));
     const checkConfig = config.checks?.[checkName];
     if (!checkConfig) {
@@ -49202,14 +48121,14 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
         previousOutputs || {}
       );
       try {
-        addEvent3("fail_if.evaluated", {
+        addEvent2("fail_if.evaluated", {
           "visor.check.id": checkName,
           scope: "global",
           expression: String(config.fail_if),
           result: failed ? "triggered" : "not_triggered"
         });
         if (failed) {
-          addEvent3("fail_if.triggered", {
+          addEvent2("fail_if.triggered", {
             "visor.check.id": checkName,
             scope: "global",
             expression: String(config.fail_if)
@@ -49237,14 +48156,14 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
         previousOutputs || {}
       );
       try {
-        addEvent3("fail_if.evaluated", {
+        addEvent2("fail_if.evaluated", {
           "visor.check.id": checkName,
           scope: "check",
           expression: String(checkConfig.fail_if),
           result: failed ? "triggered" : "not_triggered"
         });
         if (failed) {
-          addEvent3("fail_if.triggered", {
+          addEvent2("fail_if.triggered", {
             "visor.check.id": checkName,
             scope: "check",
             expression: String(checkConfig.fail_if)

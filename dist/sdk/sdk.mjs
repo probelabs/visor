@@ -1,12 +1,9 @@
 import {
   StateMachineRunner,
-  addEvent,
   check_provider_registry_exports,
   init_check_provider_registry,
-  init_runner,
-  init_sandbox_telemetry,
-  withActiveSpan
-} from "./chunk-VFONLNWT.mjs";
+  init_runner
+} from "./chunk-Y5QFNWOA.mjs";
 import {
   generateHumanId,
   init_human_id
@@ -20,15 +17,15 @@ import "./chunk-N7IVCCGH.mjs";
 import {
   ConfigManager,
   init_config
-} from "./chunk-WDFXUP2D.mjs";
+} from "./chunk-VTH6RX24.mjs";
 import "./chunk-NCWIZVOT.mjs";
 import "./chunk-QRXSDDYN.mjs";
 import {
   ExecutionJournal,
   init_snapshot_store
-} from "./chunk-YEIFVY4F.mjs";
-import "./chunk-44OT3CBW.mjs";
-import "./chunk-3A42LNSY.mjs";
+} from "./chunk-FLJAFTFG.mjs";
+import "./chunk-522XWLXC.mjs";
+import "./chunk-WVNQ56DO.mjs";
 import "./chunk-YCUWMIV5.mjs";
 import "./chunk-2N2X56PO.mjs";
 import "./chunk-25IC7KXZ.mjs";
@@ -46,7 +43,6 @@ import "./chunk-B7BVQM5K.mjs";
 import {
   __esm,
   __export,
-  __require,
   __toCommonJS
 } from "./chunk-J7LXIPZS.mjs";
 
@@ -143,8 +139,8 @@ var init_workspace_manager = __esm({
         );
         if (this.cleanupRequested && this.activeOperations === 0) {
           logger.debug(`[Workspace] All references released, proceeding with deferred cleanup`);
-          for (const resolve3 of this.cleanupResolvers) {
-            resolve3();
+          for (const resolve2 of this.cleanupResolvers) {
+            resolve2();
           }
           this.cleanupResolvers = [];
         }
@@ -269,19 +265,19 @@ var init_workspace_manager = __esm({
           );
           this.cleanupRequested = true;
           await Promise.race([
-            new Promise((resolve3) => {
+            new Promise((resolve2) => {
               if (this.activeOperations === 0) {
-                resolve3();
+                resolve2();
               } else {
-                this.cleanupResolvers.push(resolve3);
+                this.cleanupResolvers.push(resolve2);
               }
             }),
-            new Promise((resolve3) => {
+            new Promise((resolve2) => {
               setTimeout(() => {
                 logger.warn(
                   `[Workspace] Cleanup timeout after ${timeout}ms, proceeding anyway (${this.activeOperations} operations still active)`
                 );
-                resolve3();
+                resolve2();
               }, timeout);
             })
           ]);
@@ -583,579 +579,6 @@ var init_summary = __esm({
 // src/state-machine-execution-engine.ts
 init_runner();
 init_logger();
-
-// src/sandbox/sandbox-manager.ts
-import { resolve, dirname } from "path";
-
-// src/sandbox/docker-image-sandbox.ts
-init_logger();
-init_sandbox_telemetry();
-import { promisify } from "util";
-import { exec as execCb } from "child_process";
-import { writeFileSync, unlinkSync, mkdtempSync } from "fs";
-import { join } from "path";
-import { tmpdir } from "os";
-import { randomUUID } from "crypto";
-var execAsync = promisify(execCb);
-var EXEC_MAX_BUFFER = 50 * 1024 * 1024;
-var DockerImageSandbox = class {
-  name;
-  config;
-  containerId = null;
-  containerName;
-  repoPath;
-  visorDistPath;
-  cacheVolumeMounts;
-  constructor(name, config, repoPath, visorDistPath, cacheVolumeMounts = []) {
-    this.name = name;
-    this.config = config;
-    this.repoPath = repoPath;
-    this.visorDistPath = visorDistPath;
-    this.containerName = `visor-${name}-${randomUUID().slice(0, 8)}`;
-    this.cacheVolumeMounts = cacheVolumeMounts;
-  }
-  /**
-   * Build the Docker image if needed (dockerfile or dockerfile_inline mode)
-   */
-  async buildImageIfNeeded() {
-    if (this.config.image) {
-      return this.config.image;
-    }
-    const imageName = `visor-sandbox-${this.name}`;
-    const buildMode = this.config.dockerfile_inline ? "inline" : "dockerfile";
-    return withActiveSpan(
-      "visor.sandbox.build",
-      {
-        "visor.sandbox.name": this.name,
-        "visor.sandbox.build.mode": buildMode
-      },
-      async () => {
-        if (this.config.dockerfile_inline) {
-          const tmpDir = mkdtempSync(join(tmpdir(), "visor-build-"));
-          const dockerfilePath = join(tmpDir, "Dockerfile");
-          writeFileSync(dockerfilePath, this.config.dockerfile_inline, "utf8");
-          try {
-            logger.info(`Building sandbox image '${imageName}' from inline Dockerfile`);
-            await execAsync(`docker build -t ${imageName} -f ${dockerfilePath} ${this.repoPath}`, {
-              maxBuffer: EXEC_MAX_BUFFER,
-              timeout: 3e5
-            });
-          } finally {
-            try {
-              unlinkSync(dockerfilePath);
-            } catch {
-            }
-          }
-          return imageName;
-        }
-        if (this.config.dockerfile) {
-          logger.info(`Building sandbox image '${imageName}' from ${this.config.dockerfile}`);
-          await execAsync(
-            `docker build -t ${imageName} -f ${this.config.dockerfile} ${this.repoPath}`,
-            { maxBuffer: EXEC_MAX_BUFFER, timeout: 3e5 }
-          );
-          return imageName;
-        }
-        throw new Error(`Sandbox '${this.name}' has no image, dockerfile, or dockerfile_inline`);
-      }
-    );
-  }
-  /**
-   * Start the sandbox container
-   */
-  async start() {
-    const image = await this.buildImageIfNeeded();
-    const workdir = this.config.workdir || "/workspace";
-    const visorPath = this.config.visor_path || "/opt/visor";
-    const readOnlySuffix = this.config.read_only ? ":ro" : "";
-    const args = [
-      "docker",
-      "run",
-      "-d",
-      "--name",
-      this.containerName,
-      "-v",
-      `${this.repoPath}:${workdir}${readOnlySuffix}`,
-      "-v",
-      `${this.visorDistPath}:${visorPath}:ro`,
-      "-w",
-      workdir
-    ];
-    if (this.config.network === false) {
-      args.push("--network", "none");
-    }
-    if (this.config.resources?.memory) {
-      args.push("--memory", this.config.resources.memory);
-    }
-    if (this.config.resources?.cpu) {
-      args.push("--cpus", String(this.config.resources.cpu));
-    }
-    for (const mount of this.cacheVolumeMounts) {
-      args.push("-v", mount);
-    }
-    args.push(image, "sleep", "infinity");
-    const cmd = args.map((a) => a.includes(" ") ? `"${a}"` : a).join(" ");
-    logger.info(`Starting sandbox container '${this.containerName}'`);
-    const { stdout } = await execAsync(cmd, { maxBuffer: EXEC_MAX_BUFFER, timeout: 6e4 });
-    this.containerId = stdout.trim();
-    addEvent("visor.sandbox.container.started", {
-      container_name: this.containerName,
-      image
-    });
-  }
-  /**
-   * Execute a command inside the running container
-   */
-  async exec(options) {
-    if (!this.containerId) {
-      throw new Error(`Sandbox '${this.name}' is not started`);
-    }
-    const args = ["docker", "exec"];
-    for (const [key, value] of Object.entries(options.env)) {
-      args.push("-e", `${key}=${value}`);
-    }
-    args.push(this.containerName, "sh", "-c", options.command);
-    const cmd = args.map((a, i) => {
-      if (i === args.length - 1 || i > 0 && args[i - 1] === "-e") {
-        return `'${a.replace(/'/g, "'\\''")}'`;
-      }
-      return a.includes(" ") ? `"${a}"` : a;
-    }).join(" ");
-    try {
-      const { stdout, stderr } = await execAsync(cmd, {
-        maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER,
-        timeout: options.timeoutMs || 6e5
-      });
-      return { stdout, stderr, exitCode: 0 };
-    } catch (err) {
-      const execErr = err;
-      return {
-        stdout: execErr.stdout || "",
-        stderr: execErr.stderr || "",
-        exitCode: typeof execErr.code === "number" ? execErr.code : 1
-      };
-    }
-  }
-  /**
-   * Stop and remove the container
-   */
-  async stop() {
-    if (this.containerName) {
-      try {
-        await execAsync(`docker rm -f ${this.containerName}`, {
-          maxBuffer: EXEC_MAX_BUFFER,
-          timeout: 3e4
-        });
-      } catch {
-      }
-      addEvent("visor.sandbox.container.stopped", {
-        container_name: this.containerName
-      });
-      this.containerId = null;
-    }
-  }
-};
-
-// src/sandbox/docker-compose-sandbox.ts
-init_logger();
-import { promisify as promisify2 } from "util";
-import { exec as execCb2 } from "child_process";
-import { randomUUID as randomUUID2 } from "crypto";
-var execAsync2 = promisify2(execCb2);
-var EXEC_MAX_BUFFER2 = 50 * 1024 * 1024;
-var DockerComposeSandbox = class {
-  name;
-  config;
-  projectName;
-  started = false;
-  constructor(name, config) {
-    this.name = name;
-    this.config = config;
-    this.projectName = `visor-${name}-${randomUUID2().slice(0, 8)}`;
-  }
-  /**
-   * Start the compose services
-   */
-  async start() {
-    if (!this.config.compose) {
-      throw new Error(`Sandbox '${this.name}' has no compose file specified`);
-    }
-    if (!this.config.service) {
-      throw new Error(`Sandbox '${this.name}' requires a 'service' field for compose mode`);
-    }
-    logger.info(`Starting compose sandbox '${this.name}' (project: ${this.projectName})`);
-    await execAsync2(`docker compose -f ${this.config.compose} -p ${this.projectName} up -d`, {
-      maxBuffer: EXEC_MAX_BUFFER2,
-      timeout: 12e4
-    });
-    this.started = true;
-  }
-  /**
-   * Execute a command inside the compose service
-   */
-  async exec(options) {
-    if (!this.started) {
-      throw new Error(`Compose sandbox '${this.name}' is not started`);
-    }
-    const service = this.config.service;
-    const args = [
-      "docker",
-      "compose",
-      "-f",
-      this.config.compose,
-      "-p",
-      this.projectName,
-      "exec",
-      "-T"
-      // non-interactive
-    ];
-    for (const [key, value] of Object.entries(options.env)) {
-      args.push("-e", `${key}=${value}`);
-    }
-    if (this.config.workdir) {
-      args.push("-w", this.config.workdir);
-    }
-    args.push(service, "sh", "-c", options.command);
-    const cmd = args.map((a, i) => {
-      if (i === args.length - 1 || i > 0 && args[i - 1] === "-e") {
-        return `'${a.replace(/'/g, "'\\''")}'`;
-      }
-      return a.includes(" ") ? `"${a}"` : a;
-    }).join(" ");
-    try {
-      const { stdout, stderr } = await execAsync2(cmd, {
-        maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER2,
-        timeout: options.timeoutMs || 6e5
-      });
-      return { stdout, stderr, exitCode: 0 };
-    } catch (err) {
-      const execErr = err;
-      return {
-        stdout: execErr.stdout || "",
-        stderr: execErr.stderr || "",
-        exitCode: typeof execErr.code === "number" ? execErr.code : 1
-      };
-    }
-  }
-  /**
-   * Stop and tear down the compose project
-   */
-  async stop() {
-    if (this.started && this.config.compose) {
-      try {
-        await execAsync2(`docker compose -f ${this.config.compose} -p ${this.projectName} down`, {
-          maxBuffer: EXEC_MAX_BUFFER2,
-          timeout: 6e4
-        });
-      } catch {
-      }
-      this.started = false;
-    }
-  }
-};
-
-// src/sandbox/cache-volume-manager.ts
-init_logger();
-import { promisify as promisify3 } from "util";
-import { exec as execCb3 } from "child_process";
-import { createHash } from "crypto";
-var execAsync3 = promisify3(execCb3);
-var EXEC_MAX_BUFFER3 = 10 * 1024 * 1024;
-function pathHash(containerPath) {
-  return createHash("sha256").update(containerPath).digest("hex").slice(0, 8);
-}
-function parseTtl(ttl) {
-  let ms = 0;
-  const dayMatch = ttl.match(/(\d+)d/);
-  const hourMatch = ttl.match(/(\d+)h/);
-  const minMatch = ttl.match(/(\d+)m/);
-  if (dayMatch) ms += parseInt(dayMatch[1], 10) * 864e5;
-  if (hourMatch) ms += parseInt(hourMatch[1], 10) * 36e5;
-  if (minMatch) ms += parseInt(minMatch[1], 10) * 6e4;
-  return ms || 6048e5;
-}
-var CacheVolumeManager = class {
-  /**
-   * Resolve cache config into Docker volume mount specs.
-   *
-   * Volume naming: visor-cache-<prefix>-<sandboxName>-<pathHash>
-   *
-   * @param sandboxName - Name of the sandbox
-   * @param cacheConfig - Cache configuration from sandbox config
-   * @param gitBranch - Current git branch (used as default prefix)
-   * @returns Array of volume mount specs for docker run -v
-   */
-  async resolveVolumes(sandboxName, cacheConfig, gitBranch) {
-    const prefix = (cacheConfig.prefix || gitBranch).replace(/[^a-zA-Z0-9._-]/g, "-");
-    const volumes = [];
-    for (const containerPath of cacheConfig.paths) {
-      const hash = pathHash(containerPath);
-      const volumeName = `visor-cache-${prefix}-${sandboxName}-${hash}`;
-      const exists = await this.volumeExists(volumeName);
-      if (!exists && cacheConfig.fallback_prefix) {
-        const fallbackPrefix = cacheConfig.fallback_prefix.replace(/[^a-zA-Z0-9._-]/g, "-");
-        const fallbackVolume = `visor-cache-${fallbackPrefix}-${sandboxName}-${hash}`;
-        const fallbackExists = await this.volumeExists(fallbackVolume);
-        if (fallbackExists) {
-          logger.info(`Cache miss for '${volumeName}', copying from fallback '${fallbackVolume}'`);
-          await this.copyVolume(fallbackVolume, volumeName);
-        } else {
-          await this.createVolume(volumeName);
-        }
-      } else if (!exists) {
-        await this.createVolume(volumeName);
-      }
-      await this.touchVolume(volumeName);
-      volumes.push({
-        volumeName,
-        mountSpec: `${volumeName}:${containerPath}`
-      });
-    }
-    return volumes;
-  }
-  /**
-   * Check if a Docker volume exists
-   */
-  async volumeExists(name) {
-    try {
-      await execAsync3(`docker volume inspect ${name}`, {
-        maxBuffer: EXEC_MAX_BUFFER3,
-        timeout: 1e4
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  /**
-   * Create a Docker named volume
-   */
-  async createVolume(name) {
-    const now = (/* @__PURE__ */ new Date()).toISOString();
-    await execAsync3(`docker volume create --label visor.last-used=${now} ${name}`, {
-      maxBuffer: EXEC_MAX_BUFFER3,
-      timeout: 1e4
-    });
-  }
-  /**
-   * Copy data from one volume to another using a temp container
-   */
-  async copyVolume(source, target) {
-    await this.createVolume(target);
-    try {
-      await execAsync3(
-        `docker run --rm -v ${source}:/src:ro -v ${target}:/dst alpine sh -c "cp -a /src/. /dst/"`,
-        { maxBuffer: EXEC_MAX_BUFFER3, timeout: 6e4 }
-      );
-    } catch (err) {
-      logger.warn(`Failed to copy cache volume ${source} -> ${target}: ${err}`);
-    }
-  }
-  /**
-   * Update the last-used label on a volume.
-   * Docker doesn't support updating labels in-place, so we record via a temp file approach
-   * by simply re-creating volumes with updated labels if they don't exist.
-   * For existing volumes, we track usage time via the volume name pattern.
-   */
-  async touchVolume(_name) {
-  }
-  /**
-   * Evict expired cache volumes for a sandbox
-   */
-  async evictExpired(sandboxName, ttl, maxScopes) {
-    const ttlMs = ttl ? parseTtl(ttl) : 6048e5;
-    const maxScopesLimit = maxScopes || 10;
-    try {
-      const { stdout } = await execAsync3(
-        `docker volume ls --filter "name=visor-cache-" --format "{{.Name}}"`,
-        { maxBuffer: EXEC_MAX_BUFFER3, timeout: 1e4 }
-      );
-      const allVolumes = stdout.trim().split("\n").filter(Boolean);
-      const sandboxVolumes = allVolumes.filter((v) => v.includes(`-${sandboxName}-`));
-      if (sandboxVolumes.length === 0) return;
-      const scopeMap = /* @__PURE__ */ new Map();
-      for (const vol of sandboxVolumes) {
-        const match = vol.match(/^visor-cache-(.+)-\w{8}$/);
-        if (match) {
-          const prefix = match[1].replace(`-${sandboxName}`, "");
-          if (!scopeMap.has(prefix)) scopeMap.set(prefix, []);
-          scopeMap.get(prefix).push(vol);
-        }
-      }
-      const now = Date.now();
-      for (const vol of sandboxVolumes) {
-        try {
-          const { stdout: inspectOut } = await execAsync3(
-            `docker volume inspect ${vol} --format "{{.CreatedAt}}"`,
-            { maxBuffer: EXEC_MAX_BUFFER3, timeout: 1e4 }
-          );
-          const createdAt = new Date(inspectOut.trim()).getTime();
-          if (now - createdAt > ttlMs) {
-            logger.info(`Evicting expired cache volume: ${vol}`);
-            await execAsync3(`docker volume rm ${vol}`, {
-              maxBuffer: EXEC_MAX_BUFFER3,
-              timeout: 1e4
-            });
-          }
-        } catch {
-        }
-      }
-      if (scopeMap.size > maxScopesLimit) {
-        const scopes = Array.from(scopeMap.keys());
-        const toRemove = scopes.slice(0, scopes.length - maxScopesLimit);
-        for (const scope of toRemove) {
-          const vols = scopeMap.get(scope) || [];
-          for (const vol of vols) {
-            try {
-              logger.info(`Evicting cache volume (max_scopes exceeded): ${vol}`);
-              await execAsync3(`docker volume rm ${vol}`, {
-                maxBuffer: EXEC_MAX_BUFFER3,
-                timeout: 1e4
-              });
-            } catch {
-            }
-          }
-        }
-      }
-    } catch {
-    }
-  }
-};
-
-// src/sandbox/sandbox-manager.ts
-init_logger();
-init_sandbox_telemetry();
-var SandboxManager = class {
-  sandboxDefs;
-  repoPath;
-  gitBranch;
-  instances = /* @__PURE__ */ new Map();
-  cacheManager;
-  visorDistPath;
-  /** Get the resolved repository path (used by trace file relay) */
-  getRepoPath() {
-    return this.repoPath;
-  }
-  constructor(sandboxDefs, repoPath, gitBranch) {
-    this.sandboxDefs = sandboxDefs;
-    this.repoPath = resolve(repoPath);
-    this.gitBranch = gitBranch;
-    this.cacheManager = new CacheVolumeManager();
-    this.visorDistPath = resolve(dirname(__dirname));
-  }
-  /**
-   * Resolve which sandbox a check should use.
-   * Returns null if the check should run on the host.
-   *
-   * Resolution order:
-   * 1. Check-level sandbox: (explicit override)
-   * 2. Workspace-level sandbox: (default)
-   * 3. null → run on host
-   */
-  resolveSandbox(checkSandbox, workspaceDefault) {
-    const name = checkSandbox || workspaceDefault;
-    if (!name) return null;
-    if (!this.sandboxDefs[name]) {
-      throw new Error(`Sandbox '${name}' is not defined in sandboxes configuration`);
-    }
-    return name;
-  }
-  /**
-   * Get or lazily start a sandbox instance by name.
-   */
-  async getOrStart(name) {
-    const existing = this.instances.get(name);
-    if (existing) return existing;
-    const config = this.sandboxDefs[name];
-    if (!config) {
-      throw new Error(`Sandbox '${name}' is not defined`);
-    }
-    const mode = config.compose ? "compose" : "image";
-    return withActiveSpan(
-      "visor.sandbox.start",
-      {
-        "visor.sandbox.name": name,
-        "visor.sandbox.mode": mode
-      },
-      async () => {
-        let instance;
-        if (config.compose) {
-          const composeSandbox = new DockerComposeSandbox(name, config);
-          await composeSandbox.start();
-          instance = composeSandbox;
-        } else {
-          let cacheVolumeMounts = [];
-          if (config.cache) {
-            const volumes = await this.cacheManager.resolveVolumes(
-              name,
-              config.cache,
-              this.gitBranch
-            );
-            cacheVolumeMounts = volumes.map((v) => v.mountSpec);
-          }
-          const imageSandbox = new DockerImageSandbox(
-            name,
-            config,
-            this.repoPath,
-            this.visorDistPath,
-            cacheVolumeMounts
-          );
-          await imageSandbox.start();
-          instance = imageSandbox;
-        }
-        this.instances.set(name, instance);
-        return instance;
-      }
-    );
-  }
-  /**
-   * Execute a command inside a named sandbox
-   */
-  async exec(name, options) {
-    const instance = await this.getOrStart(name);
-    return withActiveSpan(
-      "visor.sandbox.exec",
-      {
-        "visor.sandbox.name": name
-      },
-      async (span) => {
-        const result = await instance.exec(options);
-        try {
-          span.setAttribute("visor.sandbox.exit_code", result.exitCode);
-        } catch {
-        }
-        return result;
-      }
-    );
-  }
-  /**
-   * Stop all running sandbox instances and run cache eviction
-   */
-  async stopAll() {
-    return withActiveSpan("visor.sandbox.stopAll", void 0, async () => {
-      const stopPromises = Array.from(this.instances.entries()).map(async ([name, instance]) => {
-        try {
-          await instance.stop();
-          addEvent("visor.sandbox.stopped", { "visor.sandbox.name": name });
-          logger.info(`Stopped sandbox '${name}'`);
-        } catch (err) {
-          logger.warn(`Failed to stop sandbox '${name}': ${err}`);
-        }
-        const config = this.sandboxDefs[name];
-        if (config?.cache) {
-          try {
-            await this.cacheManager.evictExpired(name, config.cache.ttl, config.cache.max_scopes);
-          } catch {
-          }
-        }
-      });
-      await Promise.allSettled(stopPromises);
-      this.instances.clear();
-    });
-  }
-};
-
-// src/state-machine-execution-engine.ts
 import * as path2 from "path";
 import * as fs from "fs";
 var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
@@ -1220,7 +643,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       try {
         const map = options?.webhookContext?.webhookData;
         if (map) {
-          const { CheckProviderRegistry } = await import("./check-provider-registry-CY4L3AUF.mjs");
+          const { CheckProviderRegistry } = await import("./check-provider-registry-SX5P7KIU.mjs");
           const reg = CheckProviderRegistry.getInstance();
           const p = reg.getProvider("http_input");
           if (p && typeof p.setWebhookContext === "function") p.setWebhookContext(map);
@@ -1333,7 +756,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       logger.info("[StateMachine] Using state machine engine");
     }
     if (!config) {
-      const { ConfigManager: ConfigManager2 } = await import("./config-35SOKRQG.mjs");
+      const { ConfigManager: ConfigManager2 } = await import("./config-JD533BBG.mjs");
       const configManager = new ConfigManager2();
       config = await configManager.getDefaultConfig();
       logger.debug("[StateMachine] Using default configuration (no config provided)");
@@ -1351,23 +774,6 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       checks
       // Pass the explicit checks list
     );
-    if (configWithTagFilter.sandboxes && Object.keys(configWithTagFilter.sandboxes).length > 0) {
-      try {
-        const { execSync } = __require("child_process");
-        const gitBranch = execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf8" }).trim();
-        context.sandboxManager = new SandboxManager(
-          configWithTagFilter.sandboxes,
-          this.workingDirectory,
-          gitBranch
-        );
-      } catch {
-        context.sandboxManager = new SandboxManager(
-          configWithTagFilter.sandboxes,
-          this.workingDirectory,
-          "unknown"
-        );
-      }
-    }
     const { initializeWorkspace: initializeWorkspace2 } = (init_build_engine_context(), __toCommonJS(build_engine_context_exports));
     await initializeWorkspace2(context);
     context.executionContext = this.getExecutionContext();
@@ -1376,7 +782,7 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
     if (Array.isArray(configWithTagFilter.frontends) && configWithTagFilter.frontends.length > 0) {
       try {
         const { EventBus } = await import("./event-bus-XV2TOQFU.mjs");
-        const { FrontendsHost } = await import("./host-HA7AE2YL.mjs");
+        const { FrontendsHost } = await import("./host-R2ZUUBXS.mjs");
         const bus = new EventBus();
         context.eventBus = bus;
         frontendsHost = new FrontendsHost(bus, logger);
@@ -1501,40 +907,31 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
     }
     const runner = new StateMachineRunner(context, this.debugServer);
     this._lastRunner = runner;
-    try {
-      const result = await runner.run();
-      if (frontendsHost && typeof frontendsHost.stopAll === "function") {
-        try {
-          await frontendsHost.stopAll();
-        } catch {
-        }
-      }
-      if (debug) {
-        logger.info("[StateMachine] Execution complete");
-      }
+    const result = await runner.run();
+    if (frontendsHost && typeof frontendsHost.stopAll === "function") {
       try {
-        const { SessionRegistry } = await import("./session-registry-6PV6SGEJ.mjs");
-        const sessionRegistry = SessionRegistry.getInstance();
-        sessionRegistry.clearAllSessions();
-      } catch (error) {
-        logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
-      }
-      if (context.workspace) {
-        try {
-          await context.workspace.cleanup();
-        } catch (error) {
-          logger.debug(`[StateMachine] Failed to cleanup workspace: ${error}`);
-        }
-      }
-      return result;
-    } finally {
-      if (context.sandboxManager) {
-        await context.sandboxManager.stopAll().catch((err) => {
-          logger.warn(`Failed to stop sandboxes: ${err}`);
-        });
-        context.sandboxManager = void 0;
+        await frontendsHost.stopAll();
+      } catch {
       }
     }
+    if (debug) {
+      logger.info("[StateMachine] Execution complete");
+    }
+    try {
+      const { SessionRegistry } = await import("./session-registry-6PV6SGEJ.mjs");
+      const sessionRegistry = SessionRegistry.getInstance();
+      sessionRegistry.clearAllSessions();
+    } catch (error) {
+      logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
+    }
+    if (context.workspace) {
+      try {
+        await context.workspace.cleanup();
+      } catch (error) {
+        logger.debug(`[StateMachine] Failed to cleanup workspace: ${error}`);
+      }
+    }
+    return result;
   }
   /**
    * Build the engine context for state machine execution
@@ -1711,9 +1108,9 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
    * @returns Array of failure condition evaluation results
    */
   async evaluateFailureConditions(checkName, reviewSummary, config, previousOutputs, authorAssociation) {
-    const { FailureConditionEvaluator } = await import("./failure-condition-evaluator-W6O24EDF.mjs");
+    const { FailureConditionEvaluator } = await import("./failure-condition-evaluator-H73G7YH7.mjs");
     const evaluator = new FailureConditionEvaluator();
-    const { addEvent: addEvent2 } = await import("./trace-helpers-3I4ACMTX.mjs");
+    const { addEvent } = await import("./trace-helpers-LUCR52GY.mjs");
     const { addFailIfTriggered } = await import("./metrics-CSBGJEWW.mjs");
     const checkConfig = config.checks?.[checkName];
     if (!checkConfig) {
@@ -1733,14 +1130,14 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
         previousOutputs || {}
       );
       try {
-        addEvent2("fail_if.evaluated", {
+        addEvent("fail_if.evaluated", {
           "visor.check.id": checkName,
           scope: "global",
           expression: String(config.fail_if),
           result: failed ? "triggered" : "not_triggered"
         });
         if (failed) {
-          addEvent2("fail_if.triggered", {
+          addEvent("fail_if.triggered", {
             "visor.check.id": checkName,
             scope: "global",
             expression: String(config.fail_if)
@@ -1768,14 +1165,14 @@ var StateMachineExecutionEngine = class _StateMachineExecutionEngine {
         previousOutputs || {}
       );
       try {
-        addEvent2("fail_if.evaluated", {
+        addEvent("fail_if.evaluated", {
           "visor.check.id": checkName,
           scope: "check",
           expression: String(checkConfig.fail_if),
           result: failed ? "triggered" : "not_triggered"
         });
         if (failed) {
-          addEvent2("fail_if.triggered", {
+          addEvent("fail_if.triggered", {
             "visor.check.id": checkName,
             scope: "check",
             expression: String(checkConfig.fail_if)
