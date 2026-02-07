@@ -115,10 +115,20 @@ export class ScheduleStore {
 
   /**
    * Get singleton instance
+   *
+   * Note: Config and limits are only applied on first call. Subsequent calls
+   * with different parameters will log a warning and return the existing instance.
+   * Use createIsolated() for testing with different configurations.
    */
   static getInstance(config?: ScheduleStoreConfig, limits?: ScheduleLimits): ScheduleStore {
     if (!ScheduleStore.instance) {
       ScheduleStore.instance = new ScheduleStore(config, limits);
+    } else if (config || limits) {
+      // Warn if trying to reconfigure an existing instance
+      logger.warn(
+        '[ScheduleStore] getInstance() called with config/limits but instance already exists. ' +
+          'Parameters ignored. Use createIsolated() for testing or resetInstance() first.'
+      );
     }
     return ScheduleStore.instance;
   }
