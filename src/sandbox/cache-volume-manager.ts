@@ -199,25 +199,32 @@ export class CacheVolumeManager {
         }
       }
 
-      // Check each volume's creation time for TTL expiry
+      // Check each volume's creation time for TTL expiry (parallel inspect)
       const now = Date.now();
-      for (const vol of sandboxVolumes) {
-        try {
+      const inspectResults = await Promise.allSettled(
+        sandboxVolumes.map(async vol => {
           const { stdout: inspectOut } = await execFileAsync(
             'docker',
             ['volume', 'inspect', vol, '--format', '{{.CreatedAt}}'],
             { maxBuffer: EXEC_MAX_BUFFER, timeout: 10000 }
           );
-          const createdAt = new Date(inspectOut.trim()).getTime();
-          if (now - createdAt > ttlMs) {
+          return { vol, createdAt: new Date(inspectOut.trim()).getTime() };
+        })
+      );
+
+      for (const result of inspectResults) {
+        if (result.status !== 'fulfilled') continue;
+        const { vol, createdAt } = result.value;
+        if (now - createdAt > ttlMs) {
+          try {
             logger.info(`Evicting expired cache volume: ${vol}`);
             await execFileAsync('docker', ['volume', 'rm', vol], {
               maxBuffer: EXEC_MAX_BUFFER,
               timeout: 10000,
             });
+          } catch {
+            // Volume may already be removed
           }
-        } catch {
-          // Skip volumes we can't inspect
         }
       }
 

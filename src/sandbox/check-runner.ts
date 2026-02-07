@@ -119,9 +119,9 @@ export class CheckRunner {
 
         // Build the command (validate visorPath to prevent shell injection inside container)
         const visorPath = sandboxConfig.visor_path || '/opt/visor';
-        if (!/^[a-zA-Z0-9/_.-]+$/.test(visorPath)) {
+        if (!/^[a-zA-Z0-9/_.-]+$/.test(visorPath) || /\.\./.test(visorPath)) {
           throw new Error(
-            `Invalid visor_path '${visorPath}': only alphanumerics, slashes, dots, hyphens, underscores allowed`
+            `Invalid visor_path '${visorPath}': must be a safe absolute path without '..' traversal`
           );
         }
         const payloadJson = JSON.stringify(payload);
@@ -131,8 +131,12 @@ export class CheckRunner {
         env['NODE_PATH'] = `${workdir}/node_modules`;
 
         // Base64-encode payload to avoid shell quoting issues (the command goes
-        // through two layers of sh -c quoting: check-runner → docker exec)
+        // through two layers of sh -c quoting: check-runner → docker exec).
+        // Base64 output is guaranteed to only contain [A-Za-z0-9+/=] which are shell-safe.
         const b64Payload = Buffer.from(payloadJson).toString('base64');
+        if (!/^[A-Za-z0-9+/=]+$/.test(b64Payload)) {
+          throw new Error('Unexpected characters in base64-encoded payload');
+        }
         const command = `echo ${b64Payload} | base64 -d | node ${visorPath}/index.js --run-check -`;
 
         logger.info(`Executing check in sandbox '${sandboxName}'`);

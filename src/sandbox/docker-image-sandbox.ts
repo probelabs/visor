@@ -60,6 +60,13 @@ export class DockerImageSandbox implements SandboxInstance {
       },
       async () => {
         if (this.config.dockerfile_inline) {
+          // Validate inline Dockerfile has a FROM instruction
+          if (!/^\s*FROM\s+/im.test(this.config.dockerfile_inline)) {
+            throw new Error(
+              `Sandbox '${this.name}' has invalid dockerfile_inline: must contain a FROM instruction`
+            );
+          }
+
           // Write inline Dockerfile to temp file
           const tmpDir = mkdtempSync(join(tmpdir(), 'visor-build-'));
           const dockerfilePath = join(tmpDir, 'Dockerfile');
