@@ -1823,7 +1823,8 @@ export class AICheckProvider extends CheckProvider {
       // 1. External stdio MCP server: has 'command'
       // 2. External SSE/HTTP MCP server: has 'url'
       // 3. Workflow tool reference: has 'workflow'
-      // 4. Auto-detect from tools: section: empty object {}
+      // 4. Custom/built-in tool reference: has 'tool'
+      // 5. Auto-detect from tools: section: empty object {}
       const validServers: Record<string, import('../types/config').McpServerConfig> = {};
       for (const [serverName, serverConfig] of Object.entries(result as Record<string, unknown>)) {
         if (typeof serverConfig !== 'object' || serverConfig === null) {
@@ -1833,11 +1834,12 @@ export class AICheckProvider extends CheckProvider {
           continue;
         }
         const cfg = serverConfig as Record<string, unknown>;
-        // Accept: command (stdio), url (sse/http), workflow (workflow tool), or empty {} (auto-detect)
-        const isValid = cfg.command || cfg.url || cfg.workflow || Object.keys(cfg).length === 0;
+        // Accept: command (stdio), url (sse/http), workflow (workflow tool), tool (custom/built-in), or empty {} (auto-detect)
+        const isValid =
+          cfg.command || cfg.url || cfg.workflow || cfg.tool || Object.keys(cfg).length === 0;
         if (!isValid) {
           logger.warn(
-            `[AICheckProvider] ai_mcp_servers_js: server "${serverName}" must have command, url, or workflow`
+            `[AICheckProvider] ai_mcp_servers_js: server "${serverName}" must have command, url, workflow, or tool`
           );
           continue;
         }
