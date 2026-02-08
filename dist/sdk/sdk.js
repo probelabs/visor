@@ -4711,6 +4711,223 @@ var init_routing = __esm({
   }
 });
 
+// src/telemetry/state-capture.ts
+var state_capture_exports = {};
+__export(state_capture_exports, {
+  captureCheckInputContext: () => captureCheckInputContext,
+  captureCheckOutput: () => captureCheckOutput,
+  captureConditionalEvaluation: () => captureConditionalEvaluation,
+  captureForEachState: () => captureForEachState,
+  captureLiquidEvaluation: () => captureLiquidEvaluation,
+  captureProviderCall: () => captureProviderCall,
+  captureRoutingDecision: () => captureRoutingDecision,
+  captureStateSnapshot: () => captureStateSnapshot,
+  captureTransformJS: () => captureTransformJS,
+  sanitizeContextForTelemetry: () => sanitizeContextForTelemetry
+});
+function isSensitiveEnvVar(name) {
+  return SENSITIVE_ENV_PATTERNS.some((pattern) => pattern.test(name));
+}
+function sanitizeContextForTelemetry(context2) {
+  if (!context2 || typeof context2 !== "object") return context2;
+  const sanitized = { ...context2 };
+  if (sanitized.env && typeof sanitized.env === "object") {
+    const sanitizedEnv = {};
+    for (const [key, value] of Object.entries(sanitized.env)) {
+      if (isSensitiveEnvVar(key)) {
+        sanitizedEnv[key] = "[REDACTED]";
+      } else {
+        sanitizedEnv[key] = String(value);
+      }
+    }
+    sanitized.env = sanitizedEnv;
+  }
+  return sanitized;
+}
+function safeSerialize(value, maxLength = MAX_ATTRIBUTE_LENGTH) {
+  try {
+    if (value === void 0 || value === null) return String(value);
+    const seen = /* @__PURE__ */ new WeakSet();
+    const json = JSON.stringify(value, (key, val) => {
+      if (typeof val === "object" && val !== null) {
+        if (seen.has(val)) return "[Circular]";
+        seen.add(val);
+      }
+      if (typeof val === "string" && val.length > maxLength) {
+        return val.substring(0, maxLength) + "...[truncated]";
+      }
+      return val;
+    });
+    if (json.length > maxLength) {
+      return json.substring(0, maxLength) + "...[truncated]";
+    }
+    return json;
+  } catch (err) {
+    return `[Error serializing: ${err instanceof Error ? err.message : String(err)}]`;
+  }
+}
+function captureCheckInputContext(span, context2) {
+  try {
+    const sanitizedContext = sanitizeContextForTelemetry(context2);
+    const keys = Object.keys(sanitizedContext);
+    span.setAttribute("visor.check.input.keys", keys.join(","));
+    span.setAttribute("visor.check.input.count", keys.length);
+    span.setAttribute("visor.check.input.context", safeSerialize(sanitizedContext));
+    if (sanitizedContext.pr) {
+      span.setAttribute("visor.check.input.pr", safeSerialize(sanitizedContext.pr, 1e3));
+    }
+    if (sanitizedContext.outputs) {
+      span.setAttribute("visor.check.input.outputs", safeSerialize(sanitizedContext.outputs, 5e3));
+    }
+    if (sanitizedContext.env) {
+      span.setAttribute(
+        "visor.check.input.env_keys",
+        Object.keys(sanitizedContext.env).join(",")
+      );
+    }
+  } catch (err) {
+    try {
+      span.setAttribute("visor.check.input.error", String(err));
+    } catch {
+    }
+  }
+}
+function captureCheckOutput(span, output) {
+  try {
+    span.setAttribute("visor.check.output.type", typeof output);
+    if (Array.isArray(output)) {
+      span.setAttribute("visor.check.output.length", output.length);
+      const preview = output.slice(0, 10);
+      span.setAttribute("visor.check.output.preview", safeSerialize(preview, 2e3));
+    }
+    span.setAttribute("visor.check.output", safeSerialize(output));
+  } catch (err) {
+    try {
+      span.setAttribute("visor.check.output.error", String(err));
+    } catch {
+    }
+  }
+}
+function captureForEachState(span, items, index, currentItem) {
+  try {
+    span.setAttribute("visor.foreach.total", items.length);
+    span.setAttribute("visor.foreach.index", index);
+    span.setAttribute("visor.foreach.current_item", safeSerialize(currentItem, 500));
+    if (items.length <= MAX_ARRAY_ITEMS) {
+      span.setAttribute("visor.foreach.items", safeSerialize(items));
+    } else {
+      span.setAttribute(
+        "visor.foreach.items.preview",
+        safeSerialize(items.slice(0, MAX_ARRAY_ITEMS))
+      );
+      span.setAttribute("visor.foreach.items.truncated", true);
+    }
+  } catch (err) {
+    span.setAttribute("visor.foreach.error", String(err));
+  }
+}
+function captureLiquidEvaluation(span, template, context2, result) {
+  try {
+    span.setAttribute("visor.liquid.template", template.substring(0, 1e3));
+    span.setAttribute("visor.liquid.template.length", template.length);
+    span.setAttribute("visor.liquid.result", result.substring(0, 2e3));
+    span.setAttribute("visor.liquid.result.length", result.length);
+    span.setAttribute("visor.liquid.context", safeSerialize(context2, 3e3));
+  } catch (err) {
+    span.setAttribute("visor.liquid.error", String(err));
+  }
+}
+function captureTransformJS(span, code, input, output) {
+  try {
+    const codePreview = code.length > 2e3 ? code.substring(0, 2e3) + "...[truncated]" : code;
+    span.setAttribute("visor.transform.code", codePreview);
+    span.setAttribute("visor.transform.code.length", code.length);
+    span.setAttribute("visor.transform.input", safeSerialize(input, 2e3));
+    span.setAttribute("visor.transform.output", safeSerialize(output, 2e3));
+  } catch (err) {
+    span.setAttribute("visor.transform.error", String(err));
+  }
+}
+function captureProviderCall(span, providerType, request, response) {
+  try {
+    span.setAttribute("visor.provider.type", providerType);
+    const fullCapture = process.env.VISOR_TELEMETRY_FULL_CAPTURE === "true" || process.env.VISOR_TELEMETRY_FULL_CAPTURE === "1";
+    if (request.model) span.setAttribute("visor.provider.request.model", String(request.model));
+    if (request.prompt) {
+      span.setAttribute("visor.provider.request.prompt.length", request.prompt.length);
+      span.setAttribute("visor.provider.request.prompt.preview", request.prompt.substring(0, 500));
+      if (fullCapture) {
+        span.setAttribute("visor.provider.request.prompt", safeSerialize(request.prompt));
+      }
+    }
+    if (response.content) {
+      span.setAttribute("visor.provider.response.length", response.content.length);
+      span.setAttribute("visor.provider.response.preview", response.content.substring(0, 500));
+      if (fullCapture) {
+        span.setAttribute("visor.provider.response.content", safeSerialize(response.content));
+      }
+    }
+    if (response.tokens) {
+      span.setAttribute("visor.provider.response.tokens", response.tokens);
+    }
+  } catch (err) {
+    span.setAttribute("visor.provider.error", String(err));
+  }
+}
+function captureConditionalEvaluation(span, condition, result, context2) {
+  try {
+    span.setAttribute("visor.condition.expression", condition.substring(0, 500));
+    span.setAttribute("visor.condition.result", result);
+    span.setAttribute("visor.condition.context", safeSerialize(context2, 2e3));
+  } catch (err) {
+    span.setAttribute("visor.condition.error", String(err));
+  }
+}
+function captureRoutingDecision(span, action, target, condition) {
+  try {
+    span.setAttribute("visor.routing.action", action);
+    span.setAttribute("visor.routing.target", Array.isArray(target) ? target.join(",") : target);
+    if (condition) {
+      span.setAttribute("visor.routing.condition", condition.substring(0, 500));
+    }
+  } catch (err) {
+    span.setAttribute("visor.routing.error", String(err));
+  }
+}
+function captureStateSnapshot(span, checkId, outputs, memory) {
+  try {
+    span.addEvent("state.snapshot", {
+      "visor.snapshot.check_id": checkId,
+      "visor.snapshot.outputs": safeSerialize(outputs, 5e3),
+      "visor.snapshot.memory": safeSerialize(memory, 5e3),
+      "visor.snapshot.timestamp": (/* @__PURE__ */ new Date()).toISOString()
+    });
+  } catch (err) {
+    span.setAttribute("visor.snapshot.error", String(err));
+  }
+}
+var MAX_ATTRIBUTE_LENGTH, MAX_ARRAY_ITEMS, SENSITIVE_ENV_PATTERNS;
+var init_state_capture = __esm({
+  "src/telemetry/state-capture.ts"() {
+    "use strict";
+    MAX_ATTRIBUTE_LENGTH = 1e4;
+    MAX_ARRAY_ITEMS = 100;
+    SENSITIVE_ENV_PATTERNS = [
+      /api[_-]?key/i,
+      /secret/i,
+      /token/i,
+      /password/i,
+      /auth/i,
+      /credential/i,
+      /private[_-]?key/i,
+      /^sk-/i,
+      // OpenAI-style keys
+      /^AIza/i
+      // Google API keys
+    ];
+  }
+});
+
 // src/utils/mermaid-telemetry.ts
 function emitMermaidFromMarkdown(checkName, markdown, origin) {
   if (!markdown || typeof markdown !== "string") return 0;
@@ -6298,6 +6515,10 @@ var init_comment_metadata = __esm({
 function log(...args) {
   logger.debug(args.join(" "));
 }
+function getCurrentDateXml() {
+  const now = /* @__PURE__ */ new Date();
+  return `<current_date>${now.toISOString().split("T")[0]}</current_date>`;
+}
 function createProbeTracerAdapter(fallbackTracer) {
   const fallback = fallbackTracer && typeof fallbackTracer === "object" ? fallbackTracer : null;
   const emitEvent = (name, attrs) => {
@@ -6783,6 +7004,7 @@ ${customInstructions}
   </instructions>
 
   <context>
+    ${getCurrentDateXml()}
 ${prContext}${slackContextXml}
   </context>
 
@@ -6824,6 +7046,7 @@ ${customInstructions}
   </instructions>
 
   <context>
+    ${getCurrentDateXml()}
 ${prContext}${slackContextXml}
   </context>
 
@@ -6851,6 +7074,7 @@ ${customInstructions}
 </instructions>
 
 <context>
+  ${getCurrentDateXml()}
 ${prContext}${slackContextXml}
 </context>`;
       }
@@ -8582,223 +8806,6 @@ var init_issue_filter = __esm({
         this.fileCache.clear();
       }
     };
-  }
-});
-
-// src/telemetry/state-capture.ts
-var state_capture_exports = {};
-__export(state_capture_exports, {
-  captureCheckInputContext: () => captureCheckInputContext,
-  captureCheckOutput: () => captureCheckOutput,
-  captureConditionalEvaluation: () => captureConditionalEvaluation,
-  captureForEachState: () => captureForEachState,
-  captureLiquidEvaluation: () => captureLiquidEvaluation,
-  captureProviderCall: () => captureProviderCall,
-  captureRoutingDecision: () => captureRoutingDecision,
-  captureStateSnapshot: () => captureStateSnapshot,
-  captureTransformJS: () => captureTransformJS,
-  sanitizeContextForTelemetry: () => sanitizeContextForTelemetry
-});
-function isSensitiveEnvVar(name) {
-  return SENSITIVE_ENV_PATTERNS.some((pattern) => pattern.test(name));
-}
-function sanitizeContextForTelemetry(context2) {
-  if (!context2 || typeof context2 !== "object") return context2;
-  const sanitized = { ...context2 };
-  if (sanitized.env && typeof sanitized.env === "object") {
-    const sanitizedEnv = {};
-    for (const [key, value] of Object.entries(sanitized.env)) {
-      if (isSensitiveEnvVar(key)) {
-        sanitizedEnv[key] = "[REDACTED]";
-      } else {
-        sanitizedEnv[key] = String(value);
-      }
-    }
-    sanitized.env = sanitizedEnv;
-  }
-  return sanitized;
-}
-function safeSerialize(value, maxLength = MAX_ATTRIBUTE_LENGTH) {
-  try {
-    if (value === void 0 || value === null) return String(value);
-    const seen = /* @__PURE__ */ new WeakSet();
-    const json = JSON.stringify(value, (key, val) => {
-      if (typeof val === "object" && val !== null) {
-        if (seen.has(val)) return "[Circular]";
-        seen.add(val);
-      }
-      if (typeof val === "string" && val.length > maxLength) {
-        return val.substring(0, maxLength) + "...[truncated]";
-      }
-      return val;
-    });
-    if (json.length > maxLength) {
-      return json.substring(0, maxLength) + "...[truncated]";
-    }
-    return json;
-  } catch (err) {
-    return `[Error serializing: ${err instanceof Error ? err.message : String(err)}]`;
-  }
-}
-function captureCheckInputContext(span, context2) {
-  try {
-    const sanitizedContext = sanitizeContextForTelemetry(context2);
-    const keys = Object.keys(sanitizedContext);
-    span.setAttribute("visor.check.input.keys", keys.join(","));
-    span.setAttribute("visor.check.input.count", keys.length);
-    span.setAttribute("visor.check.input.context", safeSerialize(sanitizedContext));
-    if (sanitizedContext.pr) {
-      span.setAttribute("visor.check.input.pr", safeSerialize(sanitizedContext.pr, 1e3));
-    }
-    if (sanitizedContext.outputs) {
-      span.setAttribute("visor.check.input.outputs", safeSerialize(sanitizedContext.outputs, 5e3));
-    }
-    if (sanitizedContext.env) {
-      span.setAttribute(
-        "visor.check.input.env_keys",
-        Object.keys(sanitizedContext.env).join(",")
-      );
-    }
-  } catch (err) {
-    try {
-      span.setAttribute("visor.check.input.error", String(err));
-    } catch {
-    }
-  }
-}
-function captureCheckOutput(span, output) {
-  try {
-    span.setAttribute("visor.check.output.type", typeof output);
-    if (Array.isArray(output)) {
-      span.setAttribute("visor.check.output.length", output.length);
-      const preview = output.slice(0, 10);
-      span.setAttribute("visor.check.output.preview", safeSerialize(preview, 2e3));
-    }
-    span.setAttribute("visor.check.output", safeSerialize(output));
-  } catch (err) {
-    try {
-      span.setAttribute("visor.check.output.error", String(err));
-    } catch {
-    }
-  }
-}
-function captureForEachState(span, items, index, currentItem) {
-  try {
-    span.setAttribute("visor.foreach.total", items.length);
-    span.setAttribute("visor.foreach.index", index);
-    span.setAttribute("visor.foreach.current_item", safeSerialize(currentItem, 500));
-    if (items.length <= MAX_ARRAY_ITEMS) {
-      span.setAttribute("visor.foreach.items", safeSerialize(items));
-    } else {
-      span.setAttribute(
-        "visor.foreach.items.preview",
-        safeSerialize(items.slice(0, MAX_ARRAY_ITEMS))
-      );
-      span.setAttribute("visor.foreach.items.truncated", true);
-    }
-  } catch (err) {
-    span.setAttribute("visor.foreach.error", String(err));
-  }
-}
-function captureLiquidEvaluation(span, template, context2, result) {
-  try {
-    span.setAttribute("visor.liquid.template", template.substring(0, 1e3));
-    span.setAttribute("visor.liquid.template.length", template.length);
-    span.setAttribute("visor.liquid.result", result.substring(0, 2e3));
-    span.setAttribute("visor.liquid.result.length", result.length);
-    span.setAttribute("visor.liquid.context", safeSerialize(context2, 3e3));
-  } catch (err) {
-    span.setAttribute("visor.liquid.error", String(err));
-  }
-}
-function captureTransformJS(span, code, input, output) {
-  try {
-    const codePreview = code.length > 2e3 ? code.substring(0, 2e3) + "...[truncated]" : code;
-    span.setAttribute("visor.transform.code", codePreview);
-    span.setAttribute("visor.transform.code.length", code.length);
-    span.setAttribute("visor.transform.input", safeSerialize(input, 2e3));
-    span.setAttribute("visor.transform.output", safeSerialize(output, 2e3));
-  } catch (err) {
-    span.setAttribute("visor.transform.error", String(err));
-  }
-}
-function captureProviderCall(span, providerType, request, response) {
-  try {
-    span.setAttribute("visor.provider.type", providerType);
-    const fullCapture = process.env.VISOR_TELEMETRY_FULL_CAPTURE === "true" || process.env.VISOR_TELEMETRY_FULL_CAPTURE === "1";
-    if (request.model) span.setAttribute("visor.provider.request.model", String(request.model));
-    if (request.prompt) {
-      span.setAttribute("visor.provider.request.prompt.length", request.prompt.length);
-      span.setAttribute("visor.provider.request.prompt.preview", request.prompt.substring(0, 500));
-      if (fullCapture) {
-        span.setAttribute("visor.provider.request.prompt", safeSerialize(request.prompt));
-      }
-    }
-    if (response.content) {
-      span.setAttribute("visor.provider.response.length", response.content.length);
-      span.setAttribute("visor.provider.response.preview", response.content.substring(0, 500));
-      if (fullCapture) {
-        span.setAttribute("visor.provider.response.content", safeSerialize(response.content));
-      }
-    }
-    if (response.tokens) {
-      span.setAttribute("visor.provider.response.tokens", response.tokens);
-    }
-  } catch (err) {
-    span.setAttribute("visor.provider.error", String(err));
-  }
-}
-function captureConditionalEvaluation(span, condition, result, context2) {
-  try {
-    span.setAttribute("visor.condition.expression", condition.substring(0, 500));
-    span.setAttribute("visor.condition.result", result);
-    span.setAttribute("visor.condition.context", safeSerialize(context2, 2e3));
-  } catch (err) {
-    span.setAttribute("visor.condition.error", String(err));
-  }
-}
-function captureRoutingDecision(span, action, target, condition) {
-  try {
-    span.setAttribute("visor.routing.action", action);
-    span.setAttribute("visor.routing.target", Array.isArray(target) ? target.join(",") : target);
-    if (condition) {
-      span.setAttribute("visor.routing.condition", condition.substring(0, 500));
-    }
-  } catch (err) {
-    span.setAttribute("visor.routing.error", String(err));
-  }
-}
-function captureStateSnapshot(span, checkId, outputs, memory) {
-  try {
-    span.addEvent("state.snapshot", {
-      "visor.snapshot.check_id": checkId,
-      "visor.snapshot.outputs": safeSerialize(outputs, 5e3),
-      "visor.snapshot.memory": safeSerialize(memory, 5e3),
-      "visor.snapshot.timestamp": (/* @__PURE__ */ new Date()).toISOString()
-    });
-  } catch (err) {
-    span.setAttribute("visor.snapshot.error", String(err));
-  }
-}
-var MAX_ATTRIBUTE_LENGTH, MAX_ARRAY_ITEMS, SENSITIVE_ENV_PATTERNS;
-var init_state_capture = __esm({
-  "src/telemetry/state-capture.ts"() {
-    "use strict";
-    MAX_ATTRIBUTE_LENGTH = 1e4;
-    MAX_ARRAY_ITEMS = 100;
-    SENSITIVE_ENV_PATTERNS = [
-      /api[_-]?key/i,
-      /secret/i,
-      /token/i,
-      /password/i,
-      /auth/i,
-      /credential/i,
-      /private[_-]?key/i,
-      /^sk-/i,
-      // OpenAI-style keys
-      /^AIza/i
-      // Google API keys
-    ];
   }
 });
 
@@ -19314,7 +19321,9 @@ var init_log_check_provider = __esm({
         else logger.info(logOutput);
         const summary = {
           issues: [],
-          logOutput
+          logOutput,
+          content: renderedMessage
+          // Used by runner to build CheckResult
         };
         if (config.group === "chat") {
           summary.output = { text: renderedMessage };
@@ -42138,15 +42147,22 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
           session_id: context2.sessionId,
           wave: state.wave
         },
-        async () => executeWithSandboxRouting(
-          checkId,
-          checkConfig,
-          context2,
-          prInfo,
-          dependencyResults,
-          checkConfig.ai?.timeout || 18e5,
-          () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-        )
+        async (span) => {
+          const res = await executeWithSandboxRouting(
+            checkId,
+            checkConfig,
+            context2,
+            prInfo,
+            dependencyResults,
+            checkConfig.ai?.timeout || 18e5,
+            () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+          );
+          try {
+            captureCheckOutput(span, res.output);
+          } catch {
+          }
+          return res;
+        }
       );
       const enrichedIssues = (result.issues || []).map((issue) => ({
         ...issue,
@@ -42456,6 +42472,7 @@ var init_foreach_processor = __esm({
     init_logger();
     init_fallback_ndjson();
     init_trace_helpers();
+    init_state_capture();
     init_history_snapshot();
     init_dependency_gating();
     init_stats_manager();
@@ -43126,15 +43143,22 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
         session_id: context2.sessionId,
         wave: state.wave
       },
-      async () => executeWithSandboxRouting(
-        checkId,
-        checkConfig,
-        context2,
-        prInfo,
-        dependencyResults,
-        checkConfig.ai?.timeout || 18e5,
-        () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-      )
+      async (span) => {
+        const res = await executeWithSandboxRouting(
+          checkId,
+          checkConfig,
+          context2,
+          prInfo,
+          dependencyResults,
+          checkConfig.ai?.timeout || 18e5,
+          () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+        );
+        try {
+          captureCheckOutput(span, res.output);
+        } catch {
+        }
+        return res;
+      }
     );
     const enrichedIssues = (result.issues || []).map((issue) => ({
       ...issue,
@@ -43312,6 +43336,7 @@ var init_execution_invoker = __esm({
     "use strict";
     init_logger();
     init_trace_helpers();
+    init_state_capture();
     init_mermaid_telemetry();
     init_fallback_ndjson();
     init_history_snapshot();
@@ -44015,15 +44040,22 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
           session_id: context2.sessionId,
           wave: state.wave
         },
-        async () => executeWithSandboxRouting(
-          checkId,
-          checkConfig,
-          context2,
-          prInfo,
-          dependencyResults,
-          checkConfig.ai?.timeout || 18e5,
-          () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-        )
+        async (span) => {
+          const res = await executeWithSandboxRouting(
+            checkId,
+            checkConfig,
+            context2,
+            prInfo,
+            dependencyResults,
+            checkConfig.ai?.timeout || 18e5,
+            () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+          );
+          try {
+            captureCheckOutput(span, res.output);
+          } catch {
+          }
+          return res;
+        }
       );
       const enrichedIssues = (itemResult.issues || []).map((issue) => ({
         ...issue,
@@ -45030,15 +45062,22 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
         session_id: context2.sessionId,
         wave: state.wave
       },
-      async () => executeWithSandboxRouting(
-        checkId,
-        checkConfig2,
-        context2,
-        prInfo,
-        dependencyResults,
-        checkConfig2.ai?.timeout || 18e5,
-        () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-      )
+      async (span) => {
+        const res = await executeWithSandboxRouting(
+          checkId,
+          checkConfig2,
+          context2,
+          prInfo,
+          dependencyResults,
+          checkConfig2.ai?.timeout || 18e5,
+          () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+        );
+        try {
+          captureCheckOutput(span, res.output);
+        } catch {
+        }
+        return res;
+      }
     );
     try {
       const awaitingHumanInput = result?.awaitingHumanInput === true || result?.output && result.output.awaitingHumanInput === true;
@@ -45727,6 +45766,7 @@ var init_level_dispatch = __esm({
     init_logger();
     init_routing();
     init_trace_helpers();
+    init_state_capture();
     init_mermaid_telemetry();
     init_fallback_ndjson();
     init_failure_condition_evaluator();
@@ -50249,6 +50289,280 @@ ${suffix}`;
   }
 });
 
+// src/tui/chat-state.ts
+function getChatStateManager() {
+  if (!globalStateManager) {
+    globalStateManager = new ChatStateManager();
+  }
+  return globalStateManager;
+}
+var ChatStateManager, globalStateManager;
+var init_chat_state = __esm({
+  "src/tui/chat-state.ts"() {
+    "use strict";
+    ChatStateManager = class {
+      _history = [];
+      _isProcessing = false;
+      _waitingState;
+      _inputQueue = [];
+      _maxMessages;
+      _messageCounter = 0;
+      _statusText = "Ready";
+      constructor(options = {}) {
+        this._maxMessages = options.maxMessages ?? 1e3;
+      }
+      get history() {
+        return [...this._history];
+      }
+      get isProcessing() {
+        return this._isProcessing;
+      }
+      get isWaiting() {
+        return this._waitingState !== void 0;
+      }
+      get waitingState() {
+        return this._waitingState;
+      }
+      get hasQueuedInput() {
+        return this._inputQueue.length > 0;
+      }
+      get statusText() {
+        return this._statusText;
+      }
+      setStatus(text) {
+        this._statusText = text;
+      }
+      addMessage(role, content, checkId) {
+        const message = {
+          id: `msg-${++this._messageCounter}`,
+          role,
+          content,
+          timestamp: /* @__PURE__ */ new Date(),
+          checkId
+        };
+        this._history.push(message);
+        while (this._history.length > this._maxMessages) {
+          this._history.shift();
+        }
+        return message;
+      }
+      setProcessing(processing) {
+        this._isProcessing = processing;
+        if (processing) {
+          this._statusText = "Processing...";
+        } else if (!this._waitingState) {
+          this._statusText = "Ready";
+        }
+      }
+      setWaiting(state) {
+        this._waitingState = state;
+        if (state) {
+          this._statusText = "Awaiting input...";
+        } else if (!this._isProcessing) {
+          this._statusText = "Ready";
+        }
+      }
+      clearWaiting() {
+        this._waitingState = void 0;
+        if (!this._isProcessing) {
+          this._statusText = "Ready";
+        }
+      }
+      queueInput(input) {
+        this._inputQueue.push(input);
+      }
+      dequeueInput() {
+        return this._inputQueue.shift();
+      }
+      clearQueue() {
+        this._inputQueue = [];
+      }
+      clearHistory() {
+        this._history = [];
+      }
+      getRecentMessages(count) {
+        return this._history.slice(-count);
+      }
+      formatMessageForDisplay(message) {
+        const time = message.timestamp.toLocaleTimeString("en-US", {
+          hour12: false,
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit"
+        });
+        const roleLabel = message.role === "user" ? "You" : "Assistant";
+        return `${roleLabel}: [${time}]
+${message.content}`;
+      }
+      formatHistoryForDisplay() {
+        if (this._history.length === 0) {
+          return "No messages yet. Type a message to start...";
+        }
+        const separator = "\n\n";
+        return this._history.map((msg) => this.formatMessageForDisplay(msg)).join(separator);
+      }
+    };
+  }
+});
+
+// src/tui/tui-frontend.ts
+var tui_frontend_exports = {};
+__export(tui_frontend_exports, {
+  TuiFrontend: () => TuiFrontend
+});
+var TuiFrontend;
+var init_tui_frontend = __esm({
+  "src/tui/tui-frontend.ts"() {
+    "use strict";
+    init_chat_state();
+    init_json_text_extractor();
+    TuiFrontend = class {
+      name = "tui";
+      subs = [];
+      chatTui;
+      constructor(config) {
+        this.chatTui = config?.chatTui;
+      }
+      setChatTUI(tui) {
+        this.chatTui = tui;
+      }
+      start(ctx) {
+        const bus = ctx.eventBus;
+        try {
+          ctx.logger.info(`[tui-frontend] started; hasChatTui=${!!this.chatTui}`);
+        } catch {
+        }
+        this.subs.push(
+          bus.on("CheckCompleted", async (env) => {
+            try {
+              const ev = env && env.payload || env;
+              this.handleCheckCompleted(ctx, ev.checkId, ev.result);
+            } catch {
+            }
+          })
+        );
+        this.subs.push(
+          bus.on("CheckErrored", async (env) => {
+            const ev = env && env.payload || env;
+            const message = ev?.error?.message || "Execution error";
+            this.handleError(ctx, ev?.checkId, message);
+          })
+        );
+        this.subs.push(
+          bus.on("HumanInputRequested", async (env) => {
+            const ev = env && env.payload || env;
+            if (!ev || typeof ev.prompt !== "string" || !ev.checkId) return;
+            this.handleHumanInputRequested(ctx, ev);
+          })
+        );
+        this.subs.push(
+          bus.on("StateTransition", async (env) => {
+            const ev = env && env.payload || env;
+            this.handleStateTransition(ctx, ev);
+          })
+        );
+        this.subs.push(
+          bus.on("Shutdown", async (env) => {
+            const ev = env && env.payload || env;
+            const message = ev?.error?.message || "Workflow completed";
+            this.handleShutdown(ctx, message);
+          })
+        );
+      }
+      stop() {
+        for (const s of this.subs) s.unsubscribe();
+        this.subs = [];
+      }
+      handleCheckCompleted(ctx, checkId, result) {
+        try {
+          if (!this.chatTui) return;
+          const cfg = ctx.config || {};
+          const checkCfg = cfg.checks?.[checkId];
+          if (!checkCfg) return;
+          const providerType = checkCfg.type || "";
+          const isAi = providerType === "ai";
+          const isLogChat = providerType === "log" && checkCfg.group === "chat";
+          if (checkCfg.criticality === "internal") return;
+          if (!isAi && !isLogChat) return;
+          let text;
+          const out = result?.output;
+          if (out) {
+            const extracted = extractTextFromJson(out);
+            if (extracted) {
+              text = extracted.trim();
+            } else if (typeof out.text === "string" && out.text.trim()) {
+              text = out.text.trim();
+            }
+          }
+          if (!text && isAi && typeof result?.content === "string" && result.content.trim()) {
+            const schema = checkCfg.schema;
+            const isSimpleSchema = typeof schema === "string" ? ["plain", "text", "markdown", "code-review"].includes(schema) : schema === void 0 || schema === null;
+            if (isSimpleSchema) {
+              text = result.content.trim();
+            }
+          }
+          if (!text && isLogChat) {
+            const logResult = result;
+            if (typeof logResult?.logOutput === "string" && logResult.logOutput.trim()) {
+              text = logResult.logOutput.trim();
+            }
+          }
+          if (!text) return;
+          this.chatTui.addAssistantMessage(text, checkId);
+          try {
+            ctx.logger.info(`[tui-frontend] displayed AI response for ${checkId}`);
+          } catch {
+          }
+        } catch (err) {
+          try {
+            ctx.logger.warn(
+              `[tui-frontend] handleCheckCompleted failed: ${err instanceof Error ? err.message : String(err)}`
+            );
+          } catch {
+          }
+        }
+      }
+      handleError(_ctx, checkId, message) {
+        if (!this.chatTui) return;
+        const errorText = checkId ? `[Error in ${checkId}] ${message}` : `[Error] ${message}`;
+        this.chatTui.addSystemMessage(errorText);
+        this.chatTui.setStatus("Error occurred");
+      }
+      handleHumanInputRequested(_ctx, ev) {
+        if (!this.chatTui) return;
+        const stateManager = getChatStateManager();
+        stateManager.setWaiting({
+          checkId: String(ev.checkId),
+          prompt: String(ev.prompt),
+          placeholder: ev.placeholder,
+          multiline: ev.multiline,
+          timeout: ev.timeout,
+          defaultValue: ev.default,
+          allowEmpty: ev.allowEmpty
+        });
+        this.chatTui.setWaiting(true, ev.prompt);
+      }
+      handleStateTransition(_ctx, ev) {
+        if (!this.chatTui) return;
+        const to = ev?.to;
+        if (to === "Completed" || to === "Error") {
+          this.chatTui.setProcessing(false);
+          this.chatTui.setStatus(to === "Completed" ? "Workflow completed" : "Workflow failed");
+        } else if (to === "Running" || to === "Executing") {
+          this.chatTui.setProcessing(true);
+          this.chatTui.setStatus("Processing...");
+        } else if (to === "Waiting") {
+        }
+      }
+      handleShutdown(_ctx, message) {
+        if (!this.chatTui) return;
+        this.chatTui.setProcessing(false);
+        this.chatTui.setStatus(message);
+      }
+    };
+  }
+});
+
 // src/frontends/host.ts
 var host_exports = {};
 __export(host_exports, {
@@ -50278,6 +50592,9 @@ var init_host = __esm({
           } else if (spec.name === "slack") {
             const { SlackFrontend: SlackFrontend2 } = await Promise.resolve().then(() => (init_slack_frontend(), slack_frontend_exports));
             this.frontends.push(new SlackFrontend2(spec.config));
+          } else if (spec.name === "tui") {
+            const { TuiFrontend: TuiFrontend2 } = await Promise.resolve().then(() => (init_tui_frontend(), tui_frontend_exports));
+            this.frontends.push(new TuiFrontend2(spec.config));
           } else {
             this.log.warn(`[FrontendsHost] Unknown frontend '${spec.name}', skipping`);
           }
