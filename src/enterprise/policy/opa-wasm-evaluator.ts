@@ -8,7 +8,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 
 /**
  * OPA WASM Evaluator - loads and evaluates OPA policies locally.
@@ -133,7 +133,7 @@ export class OpaWasmEvaluator {
   private compileRego(regoFiles: string[]): Buffer {
     // Check that `opa` CLI is available
     try {
-      execSync('opa version', { stdio: 'pipe' });
+      execFileSync('opa', ['version'], { stdio: 'pipe' });
     } catch {
       throw new Error(
         'OPA CLI (`opa`) not found on PATH. Install it from https://www.openpolicyagent.org/docs/latest/#running-opa\n' +
@@ -172,7 +172,7 @@ export class OpaWasmEvaluator {
         bundleTar,
         ...regoFiles,
       ];
-      execSync(`opa ${args.join(' ')}`, {
+      execFileSync('opa', args, {
         stdio: 'pipe',
         timeout: 30000,
       });
@@ -187,7 +187,7 @@ export class OpaWasmEvaluator {
     // Extract policy.wasm from the tar.gz bundle
     // OPA bundles are tar.gz with /policy.wasm inside
     try {
-      execSync(`tar -xzf ${bundleTar} -C ${cacheDir} /policy.wasm`, {
+      execFileSync('tar', ['-xzf', bundleTar, '-C', cacheDir, '/policy.wasm'], {
         stdio: 'pipe',
       });
       const extractedWasm = path.join(cacheDir, 'policy.wasm');
@@ -198,7 +198,7 @@ export class OpaWasmEvaluator {
     } catch {
       // Some tar implementations don't like leading /
       try {
-        execSync(`tar -xzf ${bundleTar} -C ${cacheDir} policy.wasm`, {
+        execFileSync('tar', ['-xzf', bundleTar, '-C', cacheDir, 'policy.wasm'], {
           stdio: 'pipe',
         });
         const extractedWasm = path.join(cacheDir, 'policy.wasm');

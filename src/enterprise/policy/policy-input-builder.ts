@@ -109,6 +109,9 @@ export class PolicyInputBuilder {
         matched.push(roleName);
         continue;
       }
+
+      // Note: teams-based role resolution requires GitHub API access (read:org scope)
+      // and is not yet implemented. If configured, the role will not match via teams.
     }
 
     return matched;

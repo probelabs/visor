@@ -84,9 +84,17 @@ export class LicenseValidator {
       return process.env.VISOR_LICENSE.trim();
     }
 
-    // 2. File path from env
+    // 2. File path from env (validate against path traversal)
     if (process.env.VISOR_LICENSE_FILE) {
-      return this.readFile(process.env.VISOR_LICENSE_FILE);
+      const resolved = path.resolve(process.env.VISOR_LICENSE_FILE);
+      const home = process.env.HOME || process.env.USERPROFILE || '';
+      const allowedPrefixes = [process.cwd()];
+      if (home) allowedPrefixes.push(path.join(home, '.config', 'visor'));
+      const isSafe = allowedPrefixes.some(
+        prefix => resolved.startsWith(prefix + path.sep) || resolved === prefix
+      );
+      if (!isSafe) return null;
+      return this.readFile(resolved);
     }
 
     // 3. .visor-license in cwd

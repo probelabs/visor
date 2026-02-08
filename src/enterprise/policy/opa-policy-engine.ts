@@ -133,7 +133,14 @@ export class OpaPolicyEngine implements PolicyEngine {
     try {
       const result = await Promise.race([this.rawEvaluate(input, rulePath), this.timeoutPromise()]);
       return this.parseDecision(result);
-    } catch {
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      try {
+        const { logger } = require('../../logger');
+        logger.debug(`[PolicyEngine] Evaluation failed for ${rulePath}: ${msg}`);
+      } catch {
+        // logger not available
+      }
       return {
         allowed: this.fallback === 'allow',
         reason: `policy evaluation failed, fallback=${this.fallback}`,

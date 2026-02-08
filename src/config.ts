@@ -1360,11 +1360,18 @@ export class ConfigManager {
       });
     }
 
-    if (policy.engine === 'remote' && !policy.url) {
-      errors.push({
-        field: 'policy.url',
-        message: 'policy.url is required when policy.engine is "remote"',
-      });
+    if (policy.engine === 'remote') {
+      if (!policy.url) {
+        errors.push({
+          field: 'policy.url',
+          message: 'policy.url is required when policy.engine is "remote"',
+        });
+      } else if (typeof policy.url !== 'string' || !/^https?:\/\//i.test(policy.url)) {
+        errors.push({
+          field: 'policy.url',
+          message: 'policy.url must use http:// or https:// protocol',
+        });
+      }
     }
 
     if (policy.fallback !== undefined) {

@@ -14,6 +14,12 @@ export class OpaHttpEvaluator {
   private timeout: number;
 
   constructor(baseUrl: string, timeout: number = 5000) {
+    // Validate protocol — only allow http:// and https://
+    if (!/^https?:\/\//i.test(baseUrl)) {
+      throw new Error(
+        `OPA HTTP evaluator: url must use http:// or https:// protocol, got: ${baseUrl}`
+      );
+    }
     // Normalize: strip trailing slash
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.timeout = timeout;
