@@ -113,8 +113,9 @@ export class InputBar {
       this.clear();
     });
 
-    // Handle Tab for switching tabs (pass through to parent)
-    this.input.key(['tab', 'S-tab'], () => {
+    // Handle Shift+Tab for switching tabs (pass through to parent)
+    // Regular Tab is used for text input/autocomplete
+    this.input.key(['S-tab'], () => {
       this.onTab?.();
     });
 

@@ -28,3 +28,4 @@ export { TuiFrontend, type TuiFrontendConfig } from './tui-frontend';
 export { ChatBox, type ChatBoxOptions } from './components/chat-box';
 export { InputBar, type InputBarOptions } from './components/input-bar';
 export { StatusBar, type StatusBarOptions, type StatusMode } from './components/status-bar';
+export { TraceViewer, type TraceViewerOptions } from './components/trace-viewer';

@@ -12,6 +12,7 @@ import blessed from 'blessed';
 import { ChatBox } from './components/chat-box';
 import { InputBar } from './components/input-bar';
 import { StatusBar, StatusMode } from './components/status-bar';
+import { TraceViewer } from './components/trace-viewer';
 import { ChatStateManager, ChatMessage } from './chat-state';
 
 type Screen = blessed.Widgets.Screen;
@@ -49,21 +50,25 @@ export interface ChatTUIOptions {
   stateManager?: ChatStateManager;
   onMessageSubmit?: (message: string) => void | Promise<void>;
   onExit?: () => void;
+  traceFilePath?: string;
 }
 
 export class ChatTUI {
   private screen?: Screen;
   private mainPane?: Box;
   private logsPane?: Box;
+  private tracesPane?: Box;
   private chatBox?: ChatBox;
   private inputBar?: InputBar;
   private statusBar?: StatusBar;
   private logsBox?: Log;
-  private activeTab: 'chat' | 'logs' = 'chat';
+  private traceViewer?: TraceViewer;
+  private activeTab: 'chat' | 'logs' | 'traces' = 'chat';
 
   private stateManager: ChatStateManager;
   private onMessageSubmit?: (message: string) => void | Promise<void>;
   private onExit?: () => void;
+  private traceFilePath?: string;
 
   private consoleRestore?: () => void;
   private consoleExitHandler?: () => void;
@@ -77,10 +82,18 @@ export class ChatTUI {
     this.stateManager = options.stateManager ?? new ChatStateManager();
     this.onMessageSubmit = options.onMessageSubmit;
     this.onExit = options.onExit;
+    this.traceFilePath = options.traceFilePath;
   }
 
   getStateManager(): ChatStateManager {
     return this.stateManager;
+  }
+
+  setTraceFile(path: string): void {
+    this.traceFilePath = path;
+    if (this.traceViewer) {
+      this.traceViewer.setTraceFile(path);
+    }
   }
 
   start(): void {
@@ -103,6 +116,16 @@ export class ChatTUI {
 
     // Logs pane (hidden by default)
     this.logsPane = blessed.box({
+      parent: this.screen,
+      top: 0,
+      left: 0,
+      width: '100%',
+      height: '100%',
+      hidden: true,
+    });
+
+    // Traces pane (hidden by default)
+    this.tracesPane = blessed.box({
       parent: this.screen,
       top: 0,
       left: 0,
@@ -156,6 +179,17 @@ export class ChatTUI {
       },
     });
 
+    // Create trace viewer
+    this.traceViewer = new TraceViewer({
+      parent: this.tracesPane!,
+      traceFilePath: this.traceFilePath,
+    });
+
+    // Start watching the trace file if path is provided
+    if (this.traceFilePath) {
+      this.traceViewer.startWatching();
+    }
+
     // Setup key bindings
     this.setupKeyBindings();
 
@@ -184,10 +218,11 @@ export class ChatTUI {
   private setupKeyBindings(): void {
     if (!this.screen) return;
 
-    // Tab switching
-    this.screen.key(['tab', 'S-tab'], () => this.toggleTab());
+    // Tab switching (Shift+Tab to cycle, number keys for direct access)
+    this.screen.key(['S-tab'], () => this.toggleTab());
     this.screen.key(['1'], () => this.setActiveTab('chat'));
     this.screen.key(['2'], () => this.setActiveTab('logs'));
+    this.screen.key(['3'], () => this.setActiveTab('traces'));
 
     // Exit handling
     this.screen.key(['q'], () => {
@@ -223,6 +258,11 @@ export class ChatTUI {
     if (this.processExitHandler) {
       process.removeListener('exit', this.processExitHandler);
       this.processExitHandler = undefined;
+    }
+    // Clean up trace viewer to stop file watching
+    if (this.traceViewer) {
+      this.traceViewer.destroy();
+      this.traceViewer = undefined;
     }
     // Clean up input bar to cancel any active input sessions
     if (this.inputBar) {
@@ -515,22 +555,32 @@ export class ChatTUI {
   }
 
   private toggleTab(): void {
-    this.setActiveTab(this.activeTab === 'chat' ? 'logs' : 'chat');
+    const tabs: Array<'chat' | 'logs' | 'traces'> = ['chat', 'logs', 'traces'];
+    const currentIndex = tabs.indexOf(this.activeTab);
+    const nextIndex = (currentIndex + 1) % tabs.length;
+    this.setActiveTab(tabs[nextIndex]);
   }
 
-  private setActiveTab(tab: 'chat' | 'logs'): void {
+  private setActiveTab(tab: 'chat' | 'logs' | 'traces'): void {
     this.activeTab = tab;
     this.statusBar?.setActiveTab(tab);
 
-    if (this.mainPane && this.logsPane) {
+    if (this.mainPane && this.logsPane && this.tracesPane) {
+      // Hide all panes first
+      this.mainPane.hide();
+      this.logsPane.hide();
+      this.tracesPane.hide();
+
+      // Show the active pane
       if (tab === 'chat') {
-        this.logsPane.hide();
         this.mainPane.show();
         this.inputBar?.focus();
-      } else {
-        this.mainPane.hide();
+      } else if (tab === 'logs') {
         this.logsPane.show();
         this.logsBox?.focus();
+      } else {
+        this.tracesPane.show();
+        this.traceViewer?.focus();
       }
     }
 

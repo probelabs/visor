@@ -880,10 +880,27 @@ export async function main(): Promise<void> {
       !options.slack &&
       process.env.NODE_ENV !== 'test';
 
+    // Create trace file path for TUI mode (used for Traces tab visualization)
+    let tuiTraceFilePath: string | undefined;
+    if (shouldEnableTui) {
+      // Force file-based telemetry in TUI mode for the Traces tab
+      const tracesDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+      try {
+        fs.mkdirSync(tracesDir, { recursive: true });
+      } catch {}
+      const runTs = new Date().toISOString().replace(/[:.]/g, '-');
+      tuiTraceFilePath = path.join(tracesDir, `tui-${runTs}.ndjson`);
+      // Set environment variables to force file-based telemetry
+      process.env.VISOR_TELEMETRY_ENABLED = 'true';
+      process.env.VISOR_TELEMETRY_SINK = 'file';
+      process.env.VISOR_FALLBACK_TRACE_FILE = tuiTraceFilePath;
+    }
+
     if (shouldEnableTui) {
       try {
         // Use new ChatTUI for persistent chat interface
         chatTui = new ChatTUI({
+          traceFilePath: tuiTraceFilePath,
           onMessageSubmit: async (message: string) => {
             // Re-run workflow with the new user message
             // Use type assertion because runTuiWorkflow is set later
