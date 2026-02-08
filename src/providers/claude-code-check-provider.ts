@@ -531,8 +531,26 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
 
       // Pass MCP servers directly to the SDK - let it handle spawning and tool discovery
       if (claudeCodeConfig.mcpServers && Object.keys(claudeCodeConfig.mcpServers).length > 0) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (query as any).mcpServers = claudeCodeConfig.mcpServers;
+        // Policy engine: filter MCP servers whose allowed methods are all denied
+        const policyEngine = (sessionInfo as any)?._parentContext?.policyEngine;
+        let filteredServers = claudeCodeConfig.mcpServers;
+        if (policyEngine) {
+          const allowed: Record<string, any> = {};
+          for (const [name, serverCfg] of Object.entries(claudeCodeConfig.mcpServers)) {
+            const decision = await policyEngine.evaluateToolInvocation(
+              name,
+              '*',
+              (serverCfg as any).transport
+            );
+            if (decision.allowed) {
+              allowed[name] = serverCfg;
+            }
+          }
+          filteredServers = allowed;
+        }
+        if (Object.keys(filteredServers).length > 0) {
+          (query as any).mcpServers = filteredServers;
+        }
       }
 
       // Execute query with Claude Code

@@ -135,6 +135,16 @@ The test framework allows you to write integration tests for your Visor workflow
 
 ---
 
+## Enterprise Edition
+
+> Enterprise features require a Visor EE license. Contact **hello@probelabs.com** for licensing.
+
+| Document | Description |
+|----------|-------------|
+| [Enterprise Policy Engine (OPA)](./enterprise-policy.md) | Comprehensive guide to the OPA-based policy engine: installation, licensing, Rego policies, configuration, and troubleshooting |
+
+---
+
 ## Guides
 
 Best practices and style guides for writing maintainable workflows.

@@ -298,6 +298,23 @@ export class StateMachineExecutionEngine {
     const { initializeWorkspace } = require('./state-machine/context/build-engine-context');
     await initializeWorkspace(context);
 
+    // Initialize policy engine (enterprise — dynamic import, no-op if unavailable)
+    if (configWithTagFilter.policy?.engine && configWithTagFilter.policy.engine !== 'disabled') {
+      try {
+        logger.debug(
+          `[PolicyEngine] Loading enterprise policy engine (engine=${configWithTagFilter.policy.engine})`
+        );
+        // @ts-ignore — enterprise/ may not exist in OSS builds (caught at runtime)
+        const { loadEnterprisePolicyEngine } = await import('./enterprise/loader');
+        context.policyEngine = await loadEnterprisePolicyEngine(configWithTagFilter.policy);
+        logger.debug(
+          `[PolicyEngine] Initialized: ${context.policyEngine?.constructor?.name || 'unknown'}`
+        );
+      } catch {
+        // Enterprise module not available — continue with no policy engine
+      }
+    }
+
     // Copy execution context (hooks, etc.) from legacy engine
     context.executionContext = this.getExecutionContext();
 

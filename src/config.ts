@@ -874,6 +874,11 @@ export class ConfigManager {
       this.validateTagFilter(config.tag_filter as unknown as Record<string, unknown>, errors);
     }
 
+    // Validate policy configuration if present
+    if (config.policy) {
+      this.validatePolicyConfig(config.policy as any, errors, warnings);
+    }
+
     // In strict mode, treat warnings as errors
     if (strict && warnings.length > 0) {
       errors.push(...warnings);
@@ -1332,6 +1337,71 @@ export class ConfigManager {
   }
 
   /**
+   * Validate policy engine configuration
+   */
+  private validatePolicyConfig(
+    policy: Record<string, unknown>,
+    errors: ConfigValidationError[],
+    _warnings: ConfigValidationError[]
+  ): void {
+    const validEngines = ['local', 'remote', 'disabled'];
+    if (policy.engine && !validEngines.includes(policy.engine as string)) {
+      errors.push({
+        field: 'policy.engine',
+        message: `policy.engine must be one of: ${validEngines.join(', ')}`,
+        value: policy.engine,
+      });
+    }
+
+    if (policy.engine === 'local' && !policy.rules) {
+      errors.push({
+        field: 'policy.rules',
+        message: 'policy.rules is required when policy.engine is "local"',
+      });
+    }
+
+    if (policy.engine === 'remote' && !policy.url) {
+      errors.push({
+        field: 'policy.url',
+        message: 'policy.url is required when policy.engine is "remote"',
+      });
+    }
+
+    if (policy.fallback !== undefined) {
+      const validFallbacks = ['allow', 'deny'];
+      if (!validFallbacks.includes(policy.fallback as string)) {
+        errors.push({
+          field: 'policy.fallback',
+          message: `policy.fallback must be one of: ${validFallbacks.join(', ')}`,
+          value: policy.fallback,
+        });
+      }
+    }
+
+    if (policy.timeout !== undefined) {
+      if (typeof policy.timeout !== 'number' || policy.timeout < 0) {
+        errors.push({
+          field: 'policy.timeout',
+          message: 'policy.timeout must be a non-negative number (milliseconds)',
+          value: policy.timeout,
+        });
+      }
+    }
+
+    if (policy.roles && typeof policy.roles === 'object') {
+      for (const [roleName, roleConfig] of Object.entries(policy.roles as Record<string, any>)) {
+        if (typeof roleConfig !== 'object' || roleConfig === null) {
+          errors.push({
+            field: `policy.roles.${roleName}`,
+            message: `Role '${roleName}' must be an object with author_association, teams, or users`,
+            value: roleConfig,
+          });
+        }
+      }
+    }
+  }
+
+  /**
    * Validate MCP servers object shape and values (basic shape only)
    */
   private validateMcpServersObject(
@@ -1462,6 +1532,7 @@ export class ConfigManager {
               'sandboxes',
               'sandbox',
               'sandbox_defaults',
+              'policy',
             ]);
             if (topLevel && allowedTopLevelKeys.has(addl)) {
               // Do not warn for these keys.

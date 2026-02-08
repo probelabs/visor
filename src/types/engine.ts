@@ -133,6 +133,8 @@ export interface EngineContext {
   prInfo?: import('../pr-analyzer').PRInfo;
   /** Sandbox manager for Docker-based check execution */
   sandboxManager?: SandboxManager;
+  /** Policy engine for enterprise access control */
+  policyEngine?: import('../policy/types').PolicyEngine;
 }
 
 /**

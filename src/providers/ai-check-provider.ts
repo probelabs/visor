@@ -1005,6 +1005,24 @@ export class AICheckProvider extends CheckProvider {
       aiConfig.maxIterations = config.ai_max_iterations as number;
     }
 
+    // Policy engine: capability enforcement
+    const policyEngine = (sessionInfo as any)?._parentContext?.policyEngine;
+    if (policyEngine) {
+      const checkName = (config as any).checkName || 'unknown';
+      const decision = await policyEngine.evaluateCapabilities(checkName, {
+        allowEdit: aiConfig.allowEdit,
+        allowBash: aiConfig.allowBash,
+        allowedTools: aiConfig.allowedTools,
+      });
+      if (decision.capabilities) {
+        if (decision.capabilities.allowEdit === false) aiConfig.allowEdit = false;
+        if (decision.capabilities.allowBash === false) aiConfig.allowBash = false;
+        if (decision.capabilities.allowedTools) {
+          aiConfig.allowedTools = decision.capabilities.allowedTools;
+        }
+      }
+    }
+
     // Get custom prompt from config - REQUIRED, no fallbacks
     const customPrompt = config.prompt;
 

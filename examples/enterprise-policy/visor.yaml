@@ -1,0 +1,58 @@
+# OPA Policy Engine example configuration
+# Requires Visor Enterprise Edition (EE) and a valid license.
+# Contact hello@probelabs.com for licensing.
+
+version: "1.0"
+
+policy:
+  engine: local
+  rules: ./policies/
+  fallback: deny
+  timeout: 5000
+
+  roles:
+    admin:
+      author_association: [OWNER]
+      users: [cto-username]
+    developer:
+      author_association: [MEMBER, COLLABORATOR]
+    reviewer:
+      author_association: [MEMBER, COLLABORATOR, CONTRIBUTOR]
+    external:
+      author_association: [FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, NONE]
+
+steps:
+  security-scan:
+    type: ai
+    prompt: "Review for security issues"
+    policy:
+      require: reviewer
+
+  deploy-staging:
+    type: command
+    exec: ./deploy.sh staging
+    criticality: external
+    assume: "deployment approved"
+    policy:
+      require: [developer, admin]
+      deny: [external]
+
+  deploy-production:
+    type: command
+    exec: ./deploy.sh production
+    criticality: external
+    assume: "production deployment approved"
+    policy:
+      require: admin
+      rule: visor/deploy/production
+
+  ai-code-review:
+    type: ai
+    prompt: "Review code quality"
+    ai:
+      allowBash: true
+      allowEdit: true
+      mcpServers:
+        github:
+          command: gh-mcp
+          allowedMethods: ["search_*", "get_*"]

@@ -1754,6 +1754,55 @@ async function executeSingleCheck(
     }
   }
 
+  // Policy engine gating — after if-condition, before dependency gating
+  if (context.policyEngine && checkConfig) {
+    const decision = await context.policyEngine.evaluateCheckExecution(checkId, checkConfig);
+    if (!decision.allowed) {
+      logger.info(`⛔ Skipped (policy: ${decision.reason || 'denied'})`);
+      const emptyResult: ReviewSummary = { issues: [] };
+      try {
+        Object.defineProperty(emptyResult as any, '__skipped', {
+          value: 'policy_denied',
+          enumerable: false,
+        });
+      } catch {}
+      state.completedChecks.add(checkId);
+      const stats: CheckExecutionStats = {
+        checkName: checkId,
+        totalRuns: 0,
+        successfulRuns: 0,
+        failedRuns: 0,
+        skippedRuns: 0,
+        skipped: true,
+        skipReason: 'policy_denied',
+        skipCondition: decision.reason || 'policy denied',
+        totalDuration: 0,
+        issuesFound: 0,
+        issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
+      };
+      state.stats.set(checkId, stats);
+      logger.info(`[LevelDispatch] Recorded skip stats for ${checkId}: skipReason=policy_denied`);
+      try {
+        context.journal.commitEntry({
+          sessionId: context.sessionId,
+          checkId,
+          result: emptyResult as any,
+          event: context.event || 'manual',
+          scope: [],
+        });
+      } catch (error) {
+        logger.warn(`[LevelDispatch] Failed to commit policy-denied result to journal: ${error}`);
+      }
+      emitEvent({
+        type: 'CheckCompleted',
+        checkId,
+        scope: [],
+        result: emptyResult,
+      });
+      return emptyResult;
+    }
+  }
+
   const dependencies = checkConfig?.depends_on || [];
   const depList = Array.isArray(dependencies) ? dependencies : [dependencies];
 

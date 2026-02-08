@@ -89,5 +89,53 @@ jobs:
           comment-on-pr: 'false'
           add-reactions: 'false'
 
+  # Verify EE build and run enterprise tests
+  test-ee:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install OPA CLI
+        run: |
+          curl -L -o opa https://openpolicyagent.org/downloads/v1.4.2/opa_linux_amd64_static
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+          opa version
+
+      - name: Install dependencies
+        run: |
+          rm -rf node_modules
+          npm ci
+          npm install --no-save @rollup/rollup-linux-x64-gnu
+
+      - name: Build EE package
+        run: npm run build:ee
+
+      - name: Verify enterprise code in bundle
+        run: |
+          if grep -q "OpaPolicyEngine" dist/index.js && grep -q "LicenseValidator" dist/index.js; then
+            echo "✅ EE bundle contains enterprise code"
+          else
+            echo "❌ EE bundle is missing enterprise code"
+            exit 1
+          fi
+
+      - name: Verify EE CLI starts
+        run: |
+          ./dist/index.js --cli --version
+          ./dist/index.js --cli --help
+
+      - name: Run EE tests
+        run: npm run test:ee
+        env:
+          CI: true
+          NODE_OPTIONS: --max-old-space-size=6144
+
   # Consolidated scenario tests into the main 'test' job to avoid duplication.
   # If you need to split later, prefer a matrix or a reusable workflow.

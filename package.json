@@ -33,12 +33,14 @@
   "scripts": {
     "build:cli": "ncc build src/index.ts -o dist && cp -r defaults dist/ && cp -r output dist/ && cp -r docs dist/ && cp -r examples dist/ && cp -r src/debug-visualizer/ui dist/debug-visualizer/ && node scripts/inject-version.js && echo '#!/usr/bin/env node' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js",
     "build:sdk": "tsup src/sdk.ts --dts --sourcemap --format esm,cjs --out-dir dist/sdk",
-    "build": "npm run build:cli && npm run build:sdk",
+    "build": "./scripts/build-oss.sh",
+    "build:ee": "npm run build:cli && npm run build:sdk",
     "test": "jest && npm run test:yaml",
     "test:unit": "jest",
     "prepublishOnly": "npm run build",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
+    "test:ee": "jest --testPathPatterns='tests/ee' --no-coverage",
     "test:manual:bash": "RUN_MANUAL_TESTS=true jest tests/manual/bash-config-manual.test.ts",
     "lint": "eslint src tests --ext .ts",
     "lint:fix": "eslint src tests --ext .ts --fix",
@@ -56,6 +58,7 @@
     "deploy:site": "cd site && npx wrangler pages deploy . --project-name=visor-site --commit-dirty=true",
     "deploy:worker": "npx wrangler deploy",
     "deploy": "npm run deploy:site && npm run deploy:worker",
+    "publish:ee": "./scripts/publish-ee.sh",
     "release": "./scripts/release.sh",
     "release:patch": "./scripts/release.sh patch",
     "release:minor": "./scripts/release.sh minor",
@@ -128,7 +131,8 @@
     "@opentelemetry/sdk-metrics": "^1.30.1",
     "@opentelemetry/sdk-node": "^0.203.0",
     "@opentelemetry/sdk-trace-base": "^1.30.1",
-    "@opentelemetry/semantic-conventions": "^1.30.1"
+    "@opentelemetry/semantic-conventions": "^1.30.1",
+    "@open-policy-agent/opa-wasm": "^1.10.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",

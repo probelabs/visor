@@ -143,6 +143,11 @@ output/**/*.ndjson
 *.ndjson
 dist/output/**/*.ndjson
 
+# Enterprise license keys
+visor-private.pem
+visor-public.pem
+.visor-license
+
 # Local schema temp and scratch
 scripts/.schema-tmp/
 tmp/
