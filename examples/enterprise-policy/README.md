@@ -122,7 +122,7 @@ enterprise-policy/
 | `engine` | `local` \| `remote` \| `disabled` | Evaluation backend |
 | `rules` | `string` \| `string[]` | Path to `.rego` files or `.wasm` bundle (local mode) |
 | `url` | `string` | OPA server URL (remote mode) |
-| `fallback` | `allow` \| `deny` | Default decision on evaluation failure |
+| `fallback` | `allow` \| `deny` \| `warn` | Default decision on evaluation failure |
 | `timeout` | `number` | Evaluation timeout in ms (default: 5000) |
 | `roles` | `map` | Role definitions (see below) |
 
