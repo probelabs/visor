@@ -2198,14 +2198,19 @@ export const configSchema = {
           anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
           description: 'Path to .rego files or .wasm bundle (local mode)',
         },
+        data: {
+          type: 'string',
+          description: 'Path to a JSON file to load as OPA data document (local mode)',
+        },
         url: {
           type: 'string',
           description: 'OPA server URL (remote mode)',
         },
         fallback: {
           type: 'string',
-          enum: ['allow', 'deny'],
-          description: "Default decision when policy evaluation fails (default: 'deny')",
+          enum: ['allow', 'deny', 'warn'],
+          description:
+            "Default decision when policy evaluation fails (default: 'deny'). Use 'warn' for audit mode: violations are logged but not enforced.",
         },
         timeout: {
           type: 'number',

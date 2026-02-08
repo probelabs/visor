@@ -6,10 +6,13 @@ package visor.tool.invoke
 
 default allowed = true
 
+# Helper: actor has admin role
+is_admin { input.actor.roles[_] == "admin" }
+
 # Block destructive methods for non-admins
 allowed = false {
   endswith(input.tool.methodName, "_delete")
-  not input.actor.roles[_] == "admin"
+  not is_admin
 }
 
 # Block bash execution tool for externals

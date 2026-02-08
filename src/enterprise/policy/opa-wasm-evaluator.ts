@@ -24,6 +24,7 @@ import { execFileSync } from 'child_process';
  */
 export class OpaWasmEvaluator {
   private policy: any = null;
+  private dataDocument: object = {};
   private static CACHE_DIR = path.join(os.tmpdir(), 'visor-opa-cache');
 
   async initialize(rulesPath: string | string[]): Promise<void> {
@@ -55,12 +56,37 @@ export class OpaWasmEvaluator {
     }
   }
 
+  /**
+   * Load external data from a JSON file to use as the OPA data document.
+   * The loaded data will be passed to `policy.setData()` during evaluation,
+   * making it available in Rego via `data.<key>`.
+   */
+  loadData(dataPath: string): void {
+    const resolved = path.resolve(dataPath);
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`OPA data file not found: ${resolved}`);
+    }
+    const raw = fs.readFileSync(resolved, 'utf-8');
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        throw new Error('OPA data file must contain a JSON object (not an array or primitive)');
+      }
+      this.dataDocument = parsed;
+    } catch (err: any) {
+      if (err.message.startsWith('OPA data file must')) {
+        throw err;
+      }
+      throw new Error(`Failed to parse OPA data file ${resolved}: ${err.message}`);
+    }
+  }
+
   async evaluate(input: object): Promise<any> {
     if (!this.policy) {
       throw new Error('OPA WASM evaluator not initialized');
     }
 
-    this.policy.setData({});
+    this.policy.setData(this.dataDocument);
     const resultSet = this.policy.evaluate(input);
 
     if (Array.isArray(resultSet) && resultSet.length > 0) {

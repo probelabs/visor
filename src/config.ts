@@ -1342,7 +1342,7 @@ export class ConfigManager {
   private validatePolicyConfig(
     policy: Record<string, unknown>,
     errors: ConfigValidationError[],
-    _warnings: ConfigValidationError[]
+    warnings: ConfigValidationError[]
   ): void {
     const validEngines = ['local', 'remote', 'disabled'];
     if (policy.engine && !validEngines.includes(policy.engine as string)) {
@@ -1375,7 +1375,7 @@ export class ConfigManager {
     }
 
     if (policy.fallback !== undefined) {
-      const validFallbacks = ['allow', 'deny'];
+      const validFallbacks = ['allow', 'deny', 'warn'];
       if (!validFallbacks.includes(policy.fallback as string)) {
         errors.push({
           field: 'policy.fallback',
@@ -1395,6 +1395,16 @@ export class ConfigManager {
       }
     }
 
+    if (policy.data !== undefined) {
+      if (typeof policy.data !== 'string') {
+        errors.push({
+          field: 'policy.data',
+          message: 'policy.data must be a string (path to a JSON file)',
+          value: policy.data,
+        });
+      }
+    }
+
     if (policy.roles && typeof policy.roles === 'object') {
       for (const [roleName, roleConfig] of Object.entries(policy.roles as Record<string, any>)) {
         if (typeof roleConfig !== 'object' || roleConfig === null) {
@@ -1402,6 +1412,12 @@ export class ConfigManager {
             field: `policy.roles.${roleName}`,
             message: `Role '${roleName}' must be an object with author_association, teams, or users`,
             value: roleConfig,
+          });
+        } else if (Array.isArray(roleConfig.teams) && roleConfig.teams.length > 0) {
+          warnings.push({
+            field: `policy.roles.${roleName}.teams`,
+            message: `Role '${roleName}' uses 'teams' which is not yet implemented. Team-based role resolution requires a future update. Only author_association and users are currently supported.`,
+            value: roleConfig.teams,
           });
         }
       }

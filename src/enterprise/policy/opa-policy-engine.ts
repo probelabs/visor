@@ -11,6 +11,7 @@ import {
   PolicyInputBuilder,
   type ActorContext,
   type RepositoryContext,
+  type PullRequestContext,
 } from './policy-input-builder';
 
 /**
@@ -22,7 +23,7 @@ import {
  */
 export class OpaPolicyEngine implements PolicyEngine {
   private evaluator: OpaWasmEvaluator | OpaHttpEvaluator | null = null;
-  private fallback: 'allow' | 'deny';
+  private fallback: 'allow' | 'deny' | 'warn';
   private timeout: number;
   private config: PolicyConfig;
   private inputBuilder: PolicyInputBuilder | null = null;
@@ -51,7 +52,10 @@ export class OpaPolicyEngine implements PolicyEngine {
       baseBranch: process.env.GITHUB_BASE_REF,
       event: process.env.GITHUB_EVENT_NAME,
     };
-    this.inputBuilder = new PolicyInputBuilder(config, actor, repo);
+    const pullRequest: PullRequestContext = {
+      number: process.env.GITHUB_PR_NUMBER ? parseInt(process.env.GITHUB_PR_NUMBER, 10) : undefined,
+    };
+    this.inputBuilder = new PolicyInputBuilder(config, actor, repo, pullRequest);
 
     if (config.engine === 'local') {
       if (!config.rules) {
@@ -59,6 +63,9 @@ export class OpaPolicyEngine implements PolicyEngine {
       }
       const wasm = new OpaWasmEvaluator();
       await wasm.initialize(config.rules);
+      if (config.data) {
+        wasm.loadData(config.data);
+      }
       this.evaluator = wasm;
     } else if (config.engine === 'remote') {
       if (!config.url) {
@@ -71,11 +78,15 @@ export class OpaPolicyEngine implements PolicyEngine {
   }
 
   /**
-   * Update actor/repo context (e.g., after PR info becomes available).
+   * Update actor/repo/PR context (e.g., after PR info becomes available).
    * Called by the enterprise loader when engine context is enriched.
    */
-  setActorContext(actor: ActorContext, repo?: RepositoryContext): void {
-    this.inputBuilder = new PolicyInputBuilder(this.config, actor, repo);
+  setActorContext(
+    actor: ActorContext,
+    repo?: RepositoryContext,
+    pullRequest?: PullRequestContext
+  ): void {
+    this.inputBuilder = new PolicyInputBuilder(this.config, actor, repo, pullRequest);
   }
 
   async evaluateCheckExecution(checkId: string, checkConfig: unknown): Promise<PolicyDecision> {
@@ -131,18 +142,40 @@ export class OpaPolicyEngine implements PolicyEngine {
 
   private async doEvaluate(input: object, rulePath: string): Promise<PolicyDecision> {
     try {
+      try {
+        const { logger } = require('../../logger');
+        logger.debug(`[PolicyEngine] Evaluating ${rulePath}`, JSON.stringify(input));
+      } catch {
+        // logger not available
+      }
       const result = await Promise.race([this.rawEvaluate(input, rulePath), this.timeoutPromise()]);
-      return this.parseDecision(result);
+      const decision = this.parseDecision(result);
+      // In warn mode, override denied decisions to allowed but flag as warn
+      if (!decision.allowed && this.fallback === 'warn') {
+        decision.allowed = true;
+        decision.warn = true;
+        decision.reason = `audit: ${decision.reason || 'policy denied'}`;
+      }
+      try {
+        const { logger } = require('../../logger');
+        logger.debug(
+          `[PolicyEngine] Decision for ${rulePath}: allowed=${decision.allowed}, warn=${decision.warn || false}, reason=${decision.reason || 'none'}`
+        );
+      } catch {
+        // logger not available
+      }
+      return decision;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       try {
         const { logger } = require('../../logger');
-        logger.debug(`[PolicyEngine] Evaluation failed for ${rulePath}: ${msg}`);
+        logger.warn(`[PolicyEngine] Evaluation failed for ${rulePath}: ${msg}`);
       } catch {
         // logger not available
       }
       return {
-        allowed: this.fallback === 'allow',
+        allowed: this.fallback === 'allow' || this.fallback === 'warn',
+        warn: this.fallback === 'warn' ? true : undefined,
         reason: `policy evaluation failed, fallback=${this.fallback}`,
       };
     }
@@ -188,8 +221,9 @@ export class OpaPolicyEngine implements PolicyEngine {
   private parseDecision(result: any): PolicyDecision {
     if (result === undefined || result === null) {
       return {
-        allowed: this.fallback === 'allow',
-        reason: 'no policy result',
+        allowed: this.fallback === 'allow' || this.fallback === 'warn',
+        warn: this.fallback === 'warn' ? true : undefined,
+        reason: this.fallback === 'warn' ? 'audit: no policy result' : 'no policy result',
       };
     }
 
@@ -201,12 +235,6 @@ export class OpaPolicyEngine implements PolicyEngine {
 
     if (result.capabilities) {
       decision.capabilities = result.capabilities;
-    }
-    if (result.filteredMethods) {
-      decision.filteredMethods = result.filteredMethods;
-    }
-    if (result.redactPatterns) {
-      decision.redactPatterns = result.redactPatterns;
     }
 
     return decision;

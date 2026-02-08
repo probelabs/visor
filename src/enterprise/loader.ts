@@ -41,7 +41,7 @@ export async function loadEnterprisePolicyEngine(config: PolicyConfig): Promise<
     const msg = err instanceof Error ? err.message : String(err);
     try {
       const { logger } = require('../logger');
-      logger.debug(`[PolicyEngine] Enterprise policy init failed, falling back to default: ${msg}`);
+      logger.warn(`[PolicyEngine] Enterprise policy init failed, falling back to default: ${msg}`);
     } catch {
       // silent
     }

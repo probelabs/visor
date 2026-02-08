@@ -201,6 +201,98 @@ async function runCheckMode(payloadArg?: string): Promise<void> {
 }
 
 /**
+ * Handle the --dump-policy-input flag.
+ * Loads config, builds the OPA input document for the given check, and prints it to stdout.
+ */
+async function handleDumpPolicyInput(checkId: string, argv: string[]): Promise<void> {
+  const configManager = new ConfigManager();
+
+  // Parse --config from argv if present
+  const configFlagIndex = argv.indexOf('--config');
+  let configPath: string | undefined;
+  if (configFlagIndex !== -1 && argv[configFlagIndex + 1]) {
+    configPath = argv[configFlagIndex + 1];
+  }
+
+  // Load config
+  let config: import('./types/config').VisorConfig;
+  try {
+    if (configPath) {
+      config = await configManager.loadConfig(configPath);
+    } else {
+      config = await configManager.findAndLoadConfig();
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Error loading configuration: ${msg}`);
+    process.exit(1);
+    return; // unreachable, satisfies TS
+  }
+
+  // Find the check in config
+  const checks = config.checks || {};
+  const checkConfig = checks[checkId];
+  if (!checkConfig) {
+    const available = Object.keys(checks);
+    console.error(
+      `Error: check "${checkId}" not found in configuration.` +
+        (available.length > 0
+          ? ` Available checks: ${available.join(', ')}`
+          : ' No checks defined in configuration.')
+    );
+    process.exit(1);
+    return;
+  }
+
+  // Build actor context from environment (same pattern as OpaPolicyEngine.initialize)
+  const actor = {
+    authorAssociation: process.env.VISOR_AUTHOR_ASSOCIATION,
+    login: process.env.VISOR_AUTHOR_LOGIN || process.env.GITHUB_ACTOR,
+    isLocalMode: !process.env.GITHUB_ACTIONS,
+  };
+
+  // Build repository context from environment
+  const repo = {
+    owner: process.env.GITHUB_REPOSITORY_OWNER,
+    name: process.env.GITHUB_REPOSITORY?.split('/')[1],
+    branch: process.env.GITHUB_HEAD_REF,
+    baseBranch: process.env.GITHUB_BASE_REF,
+    event: process.env.GITHUB_EVENT_NAME,
+  };
+
+  // Build the PolicyInputBuilder with policy config (or empty defaults)
+  let PolicyInputBuilder: any;
+  try {
+    // @ts-ignore — enterprise/ may not exist in OSS builds (caught at runtime)
+    const mod = await import('./enterprise/policy/policy-input-builder');
+    PolicyInputBuilder = mod.PolicyInputBuilder;
+  } catch {
+    console.error('Error: --dump-policy-input requires the Enterprise Edition.');
+    console.error('The PolicyInputBuilder module is not available in the OSS build.');
+    process.exit(1);
+    return;
+  }
+
+  const policyConfig = (config as any).policy || { roles: {} };
+  const builder = new PolicyInputBuilder(policyConfig, actor, repo);
+
+  // Build the OPA input document for check execution
+  const input = builder.forCheckExecution({
+    id: checkId,
+    type: checkConfig.type || 'ai',
+    group: checkConfig.group,
+    tags: checkConfig.tags,
+    criticality: checkConfig.criticality,
+    sandbox: checkConfig.sandbox,
+    policy: (checkConfig as any).policy,
+  });
+
+  // Print pretty-printed JSON to stdout
+  console.log(JSON.stringify(input, null, 2));
+  process.exit(0);
+}
+
+/**
  * Handle the validate subcommand
  */
 async function handleValidateCommand(argv: string[], configManager: ConfigManager): Promise<void> {
@@ -650,6 +742,350 @@ async function handleTestCommand(argv: string[]): Promise<void> {
 }
 
 /**
+ * Handle the policy-check subcommand.
+ *
+ * Validates Rego policy files for syntax and WASM compatibility.
+ * Optionally evaluates against sample input JSON.
+ *
+ * Usage:
+ *   visor policy-check [path] [--config <config>] [--input <json-file>]
+ */
+async function handlePolicyCheckCommand(argv: string[]): Promise<void> {
+  const args = argv.slice(3); // skip node, script, 'policy-check'
+
+  const getArg = (name: string): string | undefined => {
+    const i = args.indexOf(name);
+    return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
+  };
+  const hasFlag = (name: string): boolean => args.includes(name);
+
+  const configPathArg = getArg('--config');
+  const inputFile = getArg('--input');
+  const verbose = hasFlag('--verbose') || hasFlag('-v');
+
+  // Determine the policy rules path: explicit positional arg > config > default
+  let rulesPath: string | string[] | undefined;
+
+  // Check for positional argument (first non-flag arg)
+  const flagsWithValues = new Set(['--config', '--input']);
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i];
+    if (token.startsWith('-')) {
+      if (flagsWithValues.has(token)) i++; // skip the value
+      continue;
+    }
+    // Skip values that follow flags (already handled above)
+    rulesPath = token;
+    break;
+  }
+
+  // If no positional path, try to read from config
+  if (!rulesPath) {
+    try {
+      const configManager = new ConfigManager();
+      let config;
+      if (configPathArg) {
+        config = await configManager.loadConfig(configPathArg);
+      } else {
+        config = await configManager.findAndLoadConfig().catch(() => null);
+      }
+      if (config?.policy?.rules) {
+        rulesPath = config.policy.rules;
+      }
+    } catch {
+      // Config loading failed, will report below
+    }
+  }
+
+  if (!rulesPath) {
+    console.error('Error: No policy path specified.');
+    console.error('');
+    console.error('Usage: visor policy-check [path] [--config <config>] [--input <json-file>]');
+    console.error('');
+    console.error(
+      'Provide a path to .rego files or a directory, or configure policy.rules in .visor.yaml'
+    );
+    process.exit(1);
+  }
+
+  console.log('Visor Policy Check\n');
+
+  const { execFileSync } = await import('child_process');
+
+  // Check that `opa` CLI is available
+  try {
+    const opaVersionOut = execFileSync('opa', ['version'], { stdio: 'pipe' }).toString().trim();
+    const firstLine = opaVersionOut.split('\n')[0] || opaVersionOut;
+    console.log(`OPA CLI: ${firstLine}`);
+  } catch {
+    console.error('Error: OPA CLI (`opa`) not found on PATH.');
+    console.error('');
+    console.error('Install it from https://www.openpolicyagent.org/docs/latest/#running-opa');
+    console.error('');
+    console.error('  macOS:  brew install opa');
+    console.error('  Linux:  curl -L -o /usr/local/bin/opa \\');
+    console.error(
+      '            https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static'
+    );
+    console.error('          chmod +x /usr/local/bin/opa');
+    process.exit(1);
+  }
+
+  // Resolve all .rego files from the provided path(s)
+  const pathsList = Array.isArray(rulesPath) ? rulesPath : [rulesPath];
+  const regoFiles: string[] = [];
+
+  for (const p of pathsList) {
+    const resolved = path.resolve(p);
+    if (!fs.existsSync(resolved)) {
+      console.error(`Error: Path not found: ${resolved}`);
+      process.exit(1);
+    }
+
+    const stat = fs.statSync(resolved);
+    if (stat.isDirectory()) {
+      const files = fs.readdirSync(resolved);
+      for (const f of files) {
+        if (f.endsWith('.rego')) {
+          regoFiles.push(path.join(resolved, f));
+        }
+      }
+    } else if (resolved.endsWith('.rego')) {
+      regoFiles.push(resolved);
+    } else if (resolved.endsWith('.wasm')) {
+      console.log(`\nPath is a pre-compiled WASM bundle: ${resolved}`);
+      console.log('Skipping syntax and compilation checks (already compiled).');
+      console.log('\nResult: PASS (pre-compiled WASM)');
+      process.exit(0);
+    }
+  }
+
+  if (regoFiles.length === 0) {
+    console.error(`\nError: No .rego files found in: ${pathsList.join(', ')}`);
+    process.exit(1);
+  }
+
+  console.log(`\nFound ${regoFiles.length} .rego file(s):`);
+  for (const f of regoFiles) {
+    console.log(`  ${path.relative(process.cwd(), f)}`);
+  }
+
+  let hasErrors = false;
+
+  // Step 1: Syntax validation with `opa check`
+  console.log('\n--- Syntax Validation (opa check) ---\n');
+
+  for (const f of regoFiles) {
+    const relPath = path.relative(process.cwd(), f);
+    try {
+      execFileSync('opa', ['check', f], { stdio: 'pipe', timeout: 15000 });
+      console.log(`  PASS  ${relPath}`);
+    } catch (err: any) {
+      hasErrors = true;
+      const stderr = err?.stderr?.toString() || err?.stdout?.toString() || '';
+      console.log(`  FAIL  ${relPath}`);
+      if (stderr) {
+        for (const line of stderr.trim().split('\n')) {
+          console.log(`        ${line}`);
+        }
+      }
+    }
+  }
+
+  if (hasErrors) {
+    console.log('\nSyntax validation failed. Fix errors above before continuing.');
+    console.log('\nResult: FAIL');
+    process.exit(1);
+  }
+
+  console.log('\nAll files passed syntax validation.');
+
+  // Step 2: WASM compilation check with `opa build`
+  console.log('\n--- WASM Compilation Check (opa build -t wasm -e visor) ---\n');
+
+  const os = await import('os');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-policy-check-'));
+  const bundlePath = path.join(tmpDir, 'bundle.tar.gz');
+
+  try {
+    const buildArgs = ['build', '-t', 'wasm', '-e', 'visor', '-o', bundlePath, ...regoFiles];
+
+    if (verbose) {
+      console.log(`  Running: opa ${buildArgs.join(' ')}`);
+    }
+
+    execFileSync('opa', buildArgs, { stdio: 'pipe', timeout: 30000 });
+    console.log('  PASS  WASM compilation succeeded.');
+
+    // Verify the bundle contains policy.wasm
+    try {
+      const listing = execFileSync('tar', ['-tzf', bundlePath], { stdio: 'pipe' }).toString();
+      if (listing.includes('policy.wasm')) {
+        console.log('  PASS  Bundle contains policy.wasm.');
+      } else {
+        console.log('  WARN  Bundle does not contain policy.wasm. Contents:');
+        for (const line of listing.trim().split('\n')) {
+          console.log(`        ${line}`);
+        }
+      }
+    } catch {
+      console.log('  WARN  Could not inspect bundle contents.');
+    }
+  } catch (err: any) {
+    hasErrors = true;
+    const stderr = err?.stderr?.toString() || err?.stdout?.toString() || '';
+    console.log('  FAIL  WASM compilation failed.');
+    if (stderr) {
+      for (const line of stderr.trim().split('\n')) {
+        console.log(`        ${line}`);
+      }
+    }
+    console.log('');
+    console.log('  Common causes:');
+    console.log('    - WASM-unsafe Rego patterns (e.g., `not set[_] == X`)');
+    console.log('    - Missing `package visor.*` declaration');
+    console.log('    - Conflicting package definitions across files');
+    console.log('');
+    console.log('  Tip: Use helper rules instead of negated iteration.');
+    console.log('  See: https://www.openpolicyagent.org/docs/latest/policy-language/#limitations');
+  } finally {
+    // Clean up temp directory
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {}
+  }
+
+  // Step 3: Optional evaluation against sample input
+  if (inputFile && !hasErrors) {
+    console.log('\n--- Policy Evaluation (sample input) ---\n');
+
+    const inputPath = path.resolve(inputFile);
+    if (!fs.existsSync(inputPath)) {
+      console.error(`  Error: Input file not found: ${inputPath}`);
+      hasErrors = true;
+    } else {
+      // Validate JSON
+      let inputData: unknown = undefined;
+      try {
+        const raw = fs.readFileSync(inputPath, 'utf8');
+        inputData = JSON.parse(raw);
+      } catch (parseErr) {
+        console.error(
+          `  Error: Invalid JSON in ${inputFile}: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`
+        );
+        hasErrors = true;
+      }
+
+      if (inputData !== undefined) {
+        // Evaluate all three policy scopes
+        const scopes = [
+          'data.visor.check.execute',
+          'data.visor.tool.invoke',
+          'data.visor.capability.resolve',
+        ];
+
+        // Build -d flags: one per unique directory containing .rego files
+        const dirs = Array.from(new Set(regoFiles.map(f => path.dirname(f))));
+        const dataArgs: string[] = [];
+        for (const d of dirs) {
+          dataArgs.push('-d', d);
+        }
+
+        for (const scope of scopes) {
+          try {
+            const evalArgs = ['eval', ...dataArgs, '-i', inputPath, '--format', 'pretty', scope];
+
+            const result = execFileSync('opa', evalArgs, { stdio: 'pipe', timeout: 15000 })
+              .toString()
+              .trim();
+            const scopeShort = scope.replace('data.visor.', '');
+            console.log(`  ${scopeShort}:`);
+            for (const line of result.split('\n')) {
+              console.log(`    ${line}`);
+            }
+          } catch (err: any) {
+            const stderr = err?.stderr?.toString() || '';
+            const scopeShort = scope.replace('data.visor.', '');
+            // "undefined" result is not an error -- the scope may not be defined
+            if (stderr.includes('undefined')) {
+              console.log(`  ${scopeShort}: (not defined)`);
+            } else {
+              console.log(`  ${scopeShort}: evaluation error`);
+              if (stderr) {
+                for (const line of stderr.trim().split('\n')) {
+                  console.log(`    ${line}`);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Final summary
+  console.log('');
+  if (hasErrors) {
+    console.log('Result: FAIL');
+    process.exit(1);
+  } else {
+    console.log('Result: PASS');
+    if (!inputFile) {
+      console.log('');
+      console.log('Tip: Use --input <json-file> to evaluate against sample input.');
+      console.log('     See docs/enterprise-policy.md for the input document schema.');
+    }
+    process.exit(0);
+  }
+}
+
+function buildChatTranscript(
+  groupedResults: GroupedCheckResults,
+  config: import('./types/config').VisorConfig
+): string {
+  const messages: string[] = [];
+  const checks = config.checks || {};
+  const separator = '\n\n' + '-'.repeat(60) + '\n\n';
+
+  for (const checkResults of Object.values(groupedResults)) {
+    for (const result of checkResults) {
+      const checkCfg: any = (checks as any)[result.checkName] || {};
+      const providerType = typeof checkCfg.type === 'string' ? checkCfg.type : '';
+      const group = (checkCfg.group as string) || result.group || '';
+      const schema = checkCfg.schema;
+      const isChatGroup = group === 'chat';
+      const isAi = providerType === 'ai';
+      const isLog = providerType === 'log';
+      const isSimpleSchema =
+        typeof schema === 'string' ? ['plain', 'text', 'markdown'].includes(schema) : false;
+
+      let text = extractTextFromJson(result.output);
+
+      if (!text && isAi && typeof result.content === 'string') {
+        if (isSimpleSchema || schema === undefined || schema === null) {
+          text = result.content.trim();
+        }
+      }
+
+      if (!text && isLog && isChatGroup && typeof result.content === 'string') {
+        text = result.content.trim();
+      }
+
+      if (!text && isChatGroup && typeof result.content === 'string') {
+        text = result.content.trim();
+      }
+
+      if (!text || text.trim().length === 0) continue;
+
+      const header = result.checkName ? result.checkName : 'chat';
+      messages.push(`${header}\n${text.trim()}`);
+    }
+  }
+
+  return messages.join(separator);
+}
+
+/**
  * Main CLI entry point for Visor
  */
 export async function main(): Promise<void> {
@@ -702,6 +1138,19 @@ export async function main(): Promise<void> {
     if (runCheckIndex !== -1) {
       const payloadArg = process.argv[runCheckIndex + 1];
       await runCheckMode(payloadArg);
+      return;
+    }
+
+    // Check for --dump-policy-input mode before standard CLI parsing
+    const dumpPolicyIndex = filteredArgv.indexOf('--dump-policy-input');
+    if (dumpPolicyIndex !== -1) {
+      const checkId = filteredArgv[dumpPolicyIndex + 1];
+      if (!checkId || checkId.startsWith('--')) {
+        console.error('Error: --dump-policy-input requires a check ID argument.');
+        console.error('Usage: visor --dump-policy-input <checkId> [--config <path>]');
+        process.exit(1);
+      }
+      await handleDumpPolicyInput(checkId, filteredArgv);
       return;
     }
 
@@ -763,6 +1212,11 @@ export async function main(): Promise<void> {
       const { handleScheduleCommand } = await import('./scheduler/cli-handler');
       const configManager = new ConfigManager();
       await handleScheduleCommand(filteredArgv.slice(3), configManager);
+      return;
+    }
+    // Check for policy-check subcommand
+    if (filteredArgv.length > 2 && filteredArgv[2] === 'policy-check') {
+      await handlePolicyCheckCommand(filteredArgv);
       return;
     }
     // Check for code-review subcommands: run the built-in code-review suite

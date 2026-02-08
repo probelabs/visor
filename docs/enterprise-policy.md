@@ -19,6 +19,7 @@ The OPA (Open Policy Agent) policy engine provides fine-grained, role-based acce
 - [Policy Scopes](#policy-scopes)
 - [Input Document Reference](#input-document-reference)
 - [Per-Step Policy Overrides](#per-step-policy-overrides)
+  - [Custom Rule Paths with `policy.rule`](#custom-rule-paths-with-policyrule)
 - [Local WASM Mode](#local-wasm-mode)
 - [Remote OPA Server Mode](#remote-opa-server-mode)
 - [Fallback Behavior](#fallback-behavior)
@@ -212,8 +213,9 @@ policy:
 |-------|------|---------|-------------|
 | `engine` | `local` \| `remote` \| `disabled` | `disabled` | Evaluation backend |
 | `rules` | `string` \| `string[]` | — | Path to `.rego` files, a directory, or a `.wasm` bundle (local mode only) |
+| `data` | `string` | — | Path to a JSON file to load as the OPA data document (local mode only). Contents are available in Rego via `data.<key>`. |
 | `url` | `string` | — | OPA server URL (remote mode only) |
-| `fallback` | `allow` \| `deny` | `allow` | Default decision when policy evaluation fails or times out |
+| `fallback` | `allow` \| `deny` \| `warn` | `allow` | Default decision when policy evaluation fails or times out. `warn` enables audit mode: violations are logged but checks are not blocked. |
 | `timeout` | `number` | `5000` | Evaluation timeout in milliseconds |
 | `roles` | `map` | — | Role definitions (see below) |
 
@@ -237,7 +239,9 @@ roles:
 |-----------|------|-------------|
 | `author_association` | `string[]` | GitHub author association values: `OWNER`, `MEMBER`, `COLLABORATOR`, `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `NONE` |
 | `users` | `string[]` | Explicit GitHub usernames |
-| `teams` | `string[]` | GitHub team slugs (requires GitHub API token with `read:org` scope) |
+| `teams` | `string[]` | GitHub team slugs (reserved for future use; see note below) |
+
+> **Note**: The `teams` field is reserved for future use and is **not currently enforced**. Team-based role resolution (matching GitHub team slugs via the GitHub API) is not yet implemented. If you configure `teams`, a validation warning will be emitted. Only `author_association` and `users` are currently used for role resolution.
 
 A user is assigned a role if they match **any** of the criteria (OR logic). A user can have **multiple roles**.
 
@@ -253,9 +257,10 @@ Create a `policies/` directory (or any name you choose) with `.rego` files:
 your-project/
   .visor.yaml
   policies/
-    check_execute.rego      # Check execution gating
+    check_execute.rego      # Check execution gating (default scope)
     tool_invoke.rego         # MCP tool access control
     capability_resolve.rego  # AI capability restrictions
+    deploy_production.rego   # Custom rule for production deploys (optional)
 ```
 
 ### Basic policy structure
@@ -297,10 +302,26 @@ allowed {
 }
 ```
 
+**Per-step YAML deny list**: When a step declares `policy.deny`, use a `denied` helper to block matching roles. Add `not denied` to every `allowed` rule so deny always takes precedence:
+```rego
+# Deny takes precedence — any actor role in the deny list blocks the check
+denied {
+  some i, j
+  input.check.policy.deny[i] == input.actor.roles[j]
+}
+
+# All allowed rules must include `not denied`
+allowed {
+  not denied
+  input.actor.roles[_] == "admin"
+}
+```
+
 **Per-step YAML requirements**: When a step declares `policy.require`, check it in Rego:
 ```rego
 # String require (e.g., require: admin)
 allowed {
+  not denied
   required := input.check.policy.require
   is_string(required)
   input.actor.roles[_] == required
@@ -308,16 +329,20 @@ allowed {
 
 # Array require (e.g., require: [developer, admin])
 allowed {
+  not denied
   required := input.check.policy.require
   is_array(required)
   required[_] == input.actor.roles[_]
 }
 ```
 
-**Local mode bypass**: Allow broader access when running locally:
+**Local mode bypass**: Allow broader access when running locally, but only for checks that have no explicit `policy.require` setting. This keeps sensitive steps (e.g. production deployments) protected even during local development:
 ```rego
+# Checks WITHOUT policy.require are allowed in local mode (convenience).
+# Checks WITH policy.require still enforce roles (security).
 allowed {
   input.actor.isLocalMode == true
+  not input.check.policy
 }
 ```
 
@@ -348,6 +373,66 @@ echo '{"actor":{"roles":["developer"],"isLocalMode":false},"check":{"id":"deploy
 # Run OPA unit tests (if you have _test.rego files)
 opa test policies/ -v
 ```
+
+### Validating policies with `visor policy-check`
+
+Visor includes a built-in policy validation command that checks your `.rego` files for syntax errors and WASM compilation compatibility in one step. This command does **not** require a license.
+
+```bash
+# Validate a directory of .rego files
+visor policy-check ./policies/
+
+# Validate a single .rego file
+visor policy-check ./policies/check_execute.rego
+
+# Use the policy.rules path from .visor.yaml automatically
+visor policy-check
+
+# Use a specific config file
+visor policy-check --config .visor.yaml
+
+# Validate and evaluate against sample input
+visor policy-check ./policies/ --input sample-input.json
+
+# Verbose output (shows the exact opa commands being run)
+visor policy-check ./policies/ --verbose
+```
+
+The command performs three checks:
+
+1. **Syntax validation** (`opa check`): Verifies each `.rego` file has valid Rego syntax.
+2. **WASM compilation** (`opa build -t wasm -e visor`): Confirms the policies can be compiled to WebAssembly, catching WASM-unsafe patterns early.
+3. **Sample evaluation** (optional, `--input`): Evaluates all three policy scopes (`check.execute`, `tool.invoke`, `capability.resolve`) against a provided JSON input file.
+
+Example sample input file for testing:
+
+```json
+{
+  "actor": {
+    "login": "alice",
+    "authorAssociation": "MEMBER",
+    "roles": ["developer"],
+    "isLocalMode": false
+  },
+  "check": {
+    "id": "security-scan",
+    "type": "ai",
+    "policy": {
+      "require": "developer"
+    }
+  },
+  "repository": {
+    "owner": "myorg",
+    "name": "myrepo",
+    "branch": "feat/new-feature",
+    "baseBranch": "main"
+  }
+}
+```
+
+Exit codes:
+- `0`: All checks passed
+- `1`: One or more checks failed (syntax errors, WASM compilation failure, or missing files)
 
 ### Pre-compiling WASM bundles
 
@@ -382,16 +467,25 @@ package visor.check.execute
 
 default allowed = false
 
+# Deny list from YAML policy.deny (see Per-Step Policy Overrides)
+denied {
+  some i, j
+  input.check.policy.deny[i] == input.actor.roles[j]
+}
+
 allowed {
+  not denied
   input.actor.roles[_] == "admin"
 }
 
 allowed {
+  not denied
   input.actor.roles[_] == "developer"
   not startswith(input.check.id, "deploy-production")
 }
 
-reason = "insufficient role for this check" { not allowed }
+reason = "role is in the deny list for this check" { denied }
+reason = "insufficient role for this check" { not denied; not allowed }
 ```
 
 When a check is denied, it is skipped with `skipReason: policy_denied`. The denial reason appears in the execution stats and JSON output.
@@ -490,11 +584,17 @@ Your Rego policies receive an `input` document with these fields:
     "baseBranch": "main",
     "event": "pull_request",
     "action": "synchronize"
+  },
+  "pullRequest": {
+    "number": 42,
+    "labels": ["approved", "ready-to-merge"],
+    "draft": false,
+    "changedFiles": 5
   }
 }
 ```
 
-> **Note**: Only the fields relevant to each scope are populated. For example, `check` is populated for `check.execute`, `tool` is populated for `tool.invoke`, etc. `actor` and `repository` are always available.
+> **Note**: Only the fields relevant to each scope are populated. For example, `check` is populated for `check.execute`, `tool` is populated for `tool.invoke`, etc. `actor`, `repository`, and `pullRequest` are always available when running in a PR context.
 
 ### Field descriptions
 
@@ -521,6 +621,10 @@ Your Rego policies receive an `input` document with these fields:
 | `repository.baseBranch` | string | Base branch for PRs |
 | `repository.event` | string | GitHub event type |
 | `repository.action` | string | GitHub event action |
+| `pullRequest.number` | number | PR number |
+| `pullRequest.labels` | string[] | Labels applied to the PR |
+| `pullRequest.draft` | boolean | `true` if the PR is a draft |
+| `pullRequest.changedFiles` | number | Number of files changed in the PR |
 
 ---
 
@@ -542,8 +646,156 @@ steps:
 | Field | Type | Description |
 |-------|------|-------------|
 | `require` | `string` \| `string[]` | Role(s) required to run the step (any match suffices) |
-| `deny` | `string[]` | Role(s) explicitly denied from running the step |
+| `deny` | `string[]` | Role(s) explicitly denied from running the step (deny takes precedence over allow) |
 | `rule` | `string` | Custom OPA rule path (overrides the default scope-based path) |
+
+### How `deny` works
+
+The `deny` field is an explicit blocklist. If any of the actor's resolved roles appear in the `deny` array, the check is **unconditionally blocked** -- even if the actor also has a role that would otherwise satisfy `require` or a hardcoded `allowed` rule. Deny always takes precedence over allow.
+
+**Example**: A user with both `developer` and `external` roles attempts to run this step:
+
+```yaml
+deploy-staging:
+  type: command
+  exec: ./deploy.sh staging
+  policy:
+    require: [developer, admin]
+    deny: [external]
+```
+
+Even though the user has the `developer` role (which satisfies `require`), the step is blocked because they also have the `external` role, which appears in `deny`.
+
+**Rego implementation**: The `deny` field is passed to OPA as `input.check.policy.deny`. Your Rego rules must include a `denied` helper that checks this field. The example policy in [`examples/enterprise-policy/policies/check_execute.rego`](../examples/enterprise-policy/policies/check_execute.rego) includes this enforcement:
+
+```rego
+# Explicit deny list from YAML policy.deny
+denied {
+  some i, j
+  input.check.policy.deny[i] == input.actor.roles[j]
+}
+
+# Every allowed rule includes `not denied` so deny takes precedence
+allowed {
+  not denied
+  input.actor.roles[_] == "admin"
+}
+```
+
+> **Important**: The `deny` field only takes effect if your Rego policy reads `input.check.policy.deny` and uses it to block the `allowed` decision. The YAML field alone does nothing -- it is data that your policy must act on. The example policies shipped with Visor include this enforcement out of the box.
+
+When a check is denied via `policy.deny`, the denial reason will be `"role is in the deny list for this check"` (distinct from the generic `"insufficient role for this check"` reason).
+
+### Custom Rule Paths with `policy.rule`
+
+By default, all check execution policies are evaluated against the `visor/check/execute` rule path (corresponding to `package visor.check.execute` in Rego). The `policy.rule` field lets you override this default and route a specific check to a completely different Rego package with its own specialized logic.
+
+#### When to use it
+
+Use a custom rule path when a check needs specialized policy logic that differs from the general `check.execute` rules. Common scenarios include:
+
+- **Production deployments** that require additional safeguards beyond role checks (e.g., branch restrictions, time-of-day controls)
+- **Sensitive operations** that need a dedicated approval workflow
+- **Environment-specific gates** where staging and production have different policy requirements
+- **Compliance checks** that must enforce domain-specific regulations
+
+#### How it works
+
+When a check declares `policy.rule`, the engine's `resolveRulePath` method returns the custom path instead of the default `visor/check/execute`. For WASM evaluation, the engine navigates the compiled result tree using the custom path segments. For remote OPA, the path is sent as the HTTP endpoint.
+
+The flow is:
+
+1. Check config has `policy.rule: visor/deploy/production`
+2. Engine calls `resolveRulePath('check.execute', 'visor/deploy/production')`
+3. The override is returned as-is: `visor/deploy/production`
+4. For WASM: the engine strips the `visor/` prefix and navigates `result.deploy.production`
+5. For remote OPA: a POST is sent to `${url}/v1/data/visor/deploy/production`
+
+#### Complete example
+
+**Step 1**: Declare the custom rule in your `.visor.yaml`:
+
+```yaml
+steps:
+  deploy-production:
+    type: command
+    exec: ./deploy.sh production
+    criticality: external
+    policy:
+      require: admin
+      rule: visor/deploy/production
+```
+
+**Step 2**: Create the corresponding Rego file. The package name must match the rule path, with slashes converted to dots:
+
+```rego
+# policies/deploy_production.rego
+package visor.deploy.production
+
+default allowed = false
+
+# Helper: check if actor is an admin (WASM-safe pattern)
+is_admin { input.actor.roles[_] == "admin" }
+
+# Only admins can deploy to production
+allowed {
+  is_admin
+}
+
+# Additionally require the PR to target the main branch
+allowed {
+  is_admin
+  input.repository.baseBranch == "main"
+}
+
+reason = "only admins can deploy to production" { not allowed }
+```
+
+**Step 3**: Place the file in the same directory as your other policies (the directory referenced by `policy.rules` in your top-level config). OPA compiles all `.rego` files in that directory together, so the custom package is automatically included.
+
+#### Important notes
+
+- **Package name must match the rule path**: The Rego `package` declaration uses dots as separators, while the YAML `rule` field uses slashes. They must correspond: `visor/deploy/production` in YAML maps to `package visor.deploy.production` in Rego.
+- **The `visor/` prefix is required**: Visor compiles WASM bundles with `-e visor` as the entrypoint. All rule paths must start with `visor/` so the engine can navigate the result tree correctly.
+- **Custom Rego files go in the policy directory**: The file must be in the same directory (or listed in the same `policy.rules` array) as your other `.rego` files. OPA compiles all files together into one WASM bundle.
+- **Custom rules must define `allowed`**: Like the default scopes, custom rules must export an `allowed` boolean. Optionally export a `reason` string for denial messages.
+- **The full input document is available**: Custom rules receive the same `input` document as the default `check.execute` scope, including `input.actor`, `input.repository`, and `input.check` (with the `policy` sub-object containing `require`, `deny`, and `rule`).
+- **Only one rule per check**: Each check can specify at most one `policy.rule`. If omitted, the default `visor/check/execute` path is used.
+
+#### Testing custom rules
+
+Use the OPA CLI to test your custom rule in isolation:
+
+```bash
+# Test the custom deploy rule with an admin actor
+echo '{
+  "actor": {"roles": ["admin"], "isLocalMode": false},
+  "check": {"id": "deploy-production", "type": "command"},
+  "repository": {"baseBranch": "main"}
+}' | opa eval -d policies/ -i /dev/stdin 'data.visor.deploy.production.allowed'
+
+# Expected output: true
+
+# Test with a non-admin actor (should be denied)
+echo '{
+  "actor": {"roles": ["developer"], "isLocalMode": false},
+  "check": {"id": "deploy-production", "type": "command"},
+  "repository": {"baseBranch": "main"}
+}' | opa eval -d policies/ -i /dev/stdin 'data.visor.deploy.production.allowed'
+
+# Expected output: false
+
+# Check the denial reason
+echo '{
+  "actor": {"roles": ["developer"], "isLocalMode": false},
+  "check": {"id": "deploy-production", "type": "command"},
+  "repository": {"baseBranch": "main"}
+}' | opa eval -d policies/ -i /dev/stdin 'data.visor.deploy.production.reason'
+
+# Expected output: "only admins can deploy to production"
+```
+
+See [`examples/enterprise-policy/policies/deploy_production.rego`](../examples/enterprise-policy/policies/deploy_production.rego) for the full working example.
 
 ---
 
@@ -573,6 +825,50 @@ policy:
 | Single file | `./policies/main.rego` | A single `.rego` file |
 | Multiple files | `[./policies/check.rego, ./policies/tool.rego]` | Array of `.rego` files |
 | WASM bundle | `./policy.wasm` | Pre-compiled WASM (skips `opa build` at startup) |
+
+### External data document
+
+You can load an external JSON file as the OPA data document using the `data` option. This makes the file's contents available in your Rego policies via `data.<key>`, allowing you to externalize dynamic configuration (allowed lists, thresholds, feature flags, etc.) without modifying your `.rego` files.
+
+```yaml
+policy:
+  engine: local
+  rules: ./policies/
+  data: ./policies/data.json
+```
+
+The JSON file must contain a top-level object. For example:
+
+```json
+{
+  "allowed_repos": ["visor", "probe"],
+  "protected_checks": {
+    "deploy-production": true,
+    "deploy-staging": true
+  },
+  "max_concurrent_deploys": 3
+}
+```
+
+You can then reference these values in your Rego policies:
+
+```rego
+package visor.check.execute
+
+# Use external data for dynamic configuration
+allowed {
+  data.protected_checks[input.check.id]
+  input.actor.roles[_] == "admin"
+}
+
+# Non-protected checks are allowed for developers
+allowed {
+  not data.protected_checks[input.check.id]
+  input.actor.roles[_] == "developer"
+}
+```
+
+> **Note**: The `data` option is only supported in `local` mode. For `remote` mode, load data directly into your OPA server using OPA's bundle or data APIs.
 
 ---
 
@@ -618,12 +914,40 @@ docker run -p 8181:8181 \
 
 ## Fallback Behavior
 
-The `fallback` setting controls what happens when policy evaluation fails:
+The `fallback` setting controls what happens when policy evaluation fails or a policy denies an action:
 
 | Setting | Behavior |
 |---------|----------|
 | `allow` (default) | On error/timeout, allow the action |
 | `deny` | On error/timeout, deny the action |
+| `warn` | Evaluate policies normally but never block execution. Denied actions are allowed to proceed, and a warning is logged instead. Use this for gradual policy rollout. |
+
+### Audit mode with `warn`
+
+The `warn` fallback is designed for **gradual policy rollout**. When deploying new policies, set `fallback: warn` to observe what would be denied without actually blocking any checks. This lets you:
+
+- Validate that your Rego policies match your intent before enforcing them
+- Identify unexpected denials in production without disrupting workflows
+- Gradually roll out policies: start with `warn`, review logs, then switch to `deny`
+
+In warn mode:
+- All policy evaluations run normally
+- Denied decisions are overridden to allowed, with the original reason prefixed by `audit:`
+- Warnings are emitted to the log: `[PolicyEngine] Audit: check '<id>' would be denied: <reason>`
+- If policy evaluation fails (error/timeout), the action is still allowed and a warning is logged
+
+```yaml
+# Example: observe policy decisions before enforcing
+policy:
+  engine: local
+  rules: ./policies/
+  fallback: warn   # log violations, don't block
+  roles:
+    admin:
+      author_association: [OWNER]
+    developer:
+      author_association: [MEMBER, COLLABORATOR]
+```
 
 Evaluation can fail due to:
 - WASM compilation errors (invalid Rego syntax)
@@ -722,6 +1046,7 @@ See [Author Permissions](./author-permissions.md) for the OSS permission functio
 
 **Symptom**: `opa build` fails at startup.
 
+- Run `visor policy-check ./policies/` to validate syntax and WASM compatibility in one step
 - Check your Rego syntax: `opa check policies/`
 - Avoid WASM-unsafe patterns (see [WASM compilation safety](#writing-rego-policies))
 - Ensure the entrypoint package exists: your `.rego` files must declare `package visor.*` packages
@@ -746,6 +1071,55 @@ See [Author Permissions](./author-permissions.md) for the OSS permission functio
 - Check firewall rules and network connectivity
 - Increase `timeout` if the server is slow
 - Check OPA server logs for errors
+
+### Dumping the OPA input document
+
+Use the `--dump-policy-input` flag to see the exact JSON input that Visor sends to OPA for a given check. This is invaluable for debugging Rego policies because you can feed the output directly into `opa eval`.
+
+```bash
+# Print the OPA input document for the "deploy-production" check
+visor --dump-policy-input deploy-production
+
+# With a specific config file
+visor --dump-policy-input deploy-production --config ./my-visor.yaml
+```
+
+Example output:
+
+```json
+{
+  "scope": "check.execute",
+  "check": {
+    "id": "deploy-production",
+    "type": "command",
+    "group": "deployment",
+    "tags": ["deploy", "production"],
+    "criticality": "external",
+    "policy": {
+      "require": "admin"
+    }
+  },
+  "actor": {
+    "login": "alice",
+    "roles": ["developer"],
+    "isLocalMode": true
+  },
+  "repository": {}
+}
+```
+
+You can pipe this directly into `opa eval` to test your policy:
+
+```bash
+visor --dump-policy-input deploy-production | \
+  opa eval -d policies/ -i /dev/stdin 'data.visor.check.execute'
+```
+
+**Notes**:
+- This flag does **not** require a license -- it is a debugging tool.
+- Actor context is derived from environment variables (`VISOR_AUTHOR_LOGIN`, `GITHUB_ACTOR`, `VISOR_AUTHOR_ASSOCIATION`, `GITHUB_ACTIONS`).
+- Repository context is derived from GitHub environment variables (`GITHUB_REPOSITORY_OWNER`, `GITHUB_REPOSITORY`, `GITHUB_HEAD_REF`, `GITHUB_BASE_REF`, `GITHUB_EVENT_NAME`).
+- When running locally (outside GitHub Actions), `actor.isLocalMode` is `true` and most repository fields will be empty.
 
 ### Timeout errors
 
@@ -789,17 +1163,73 @@ package visor.check.execute
 
 default allowed = false
 
-allowed { input.actor.roles[_] == "admin" }
+# Explicit deny list (policy.deny in YAML) — deny takes precedence
+denied {
+  some i, j
+  input.check.policy.deny[i] == input.actor.roles[j]
+}
 
 allowed {
+  not denied
+  input.actor.roles[_] == "admin"
+}
+
+allowed {
+  not denied
   required := input.check.policy.require
   is_string(required)
   input.actor.roles[_] == required
 }
 
-allowed { input.actor.isLocalMode == true }
+# Local mode: allow checks without explicit policy requirements
+allowed {
+  not denied
+  input.actor.isLocalMode == true
+  not input.check.policy
+}
 
-reason = "insufficient role" { not allowed }
+reason = "role is in the deny list" { denied }
+reason = "insufficient role" { not denied; not allowed }
+```
+
+### PR label and metadata policies
+
+Use the `pullRequest` fields to gate checks based on PR metadata. These fields are populated when Visor runs in a PR context (GitHub Actions or CLI with PR info).
+
+```rego
+# policies/check_execute.rego
+package visor.check.execute
+
+# Only allow deploy-production if PR has the "approved" label
+has_approved_label {
+  input.pullRequest.labels[_] == "approved"
+}
+
+allowed {
+  not denied
+  input.check.id == "deploy-production"
+  has_approved_label
+  input.actor.roles[_] == "admin"
+}
+
+# Block all checks on draft PRs
+allowed = false {
+  input.pullRequest.draft == true
+}
+
+# Deny checks that change too many files (e.g., > 100)
+allowed = false {
+  input.pullRequest.changedFiles > 100
+  input.check.id == "full-review"
+}
+
+reason = "PR must have 'approved' label for production deploy" {
+  input.check.id == "deploy-production"
+  not has_approved_label
+}
+reason = "checks are blocked on draft PRs" {
+  input.pullRequest.draft == true
+}
 ```
 
 ### Full example with all scopes

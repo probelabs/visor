@@ -47,6 +47,12 @@ export interface OpaInput {
     event?: string;
     action?: string;
   };
+  pullRequest?: {
+    number?: number;
+    labels?: string[];
+    draft?: boolean;
+    changedFiles?: number;
+  };
 }
 
 export interface ActorContext {
@@ -62,6 +68,13 @@ export interface RepositoryContext {
   baseBranch?: string;
   event?: string;
   action?: string;
+}
+
+export interface PullRequestContext {
+  number?: number;
+  labels?: string[];
+  draft?: boolean;
+  changedFiles?: number;
 }
 
 export interface CheckContext {
@@ -84,11 +97,18 @@ export class PolicyInputBuilder {
   private roles: Record<string, PolicyRoleConfig>;
   private actor: ActorContext;
   private repository?: RepositoryContext;
+  private pullRequest?: PullRequestContext;
 
-  constructor(policyConfig: PolicyConfig, actor: ActorContext, repository?: RepositoryContext) {
+  constructor(
+    policyConfig: PolicyConfig,
+    actor: ActorContext,
+    repository?: RepositoryContext,
+    pullRequest?: PullRequestContext
+  ) {
     this.roles = policyConfig.roles || {};
     this.actor = actor;
     this.repository = repository;
+    this.pullRequest = pullRequest;
   }
 
   /** Resolve which roles apply to the current actor. */
@@ -140,6 +160,7 @@ export class PolicyInputBuilder {
       },
       actor: this.buildActor(),
       repository: this.repository,
+      pullRequest: this.pullRequest,
     };
   }
 
@@ -149,6 +170,7 @@ export class PolicyInputBuilder {
       tool: { serverName, methodName, transport },
       actor: this.buildActor(),
       repository: this.repository,
+      pullRequest: this.pullRequest,
     };
   }
 
@@ -168,6 +190,7 @@ export class PolicyInputBuilder {
       capability: capabilities,
       actor: this.buildActor(),
       repository: this.repository,
+      pullRequest: this.pullRequest,
     };
   }
 }

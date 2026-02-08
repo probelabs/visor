@@ -8,16 +8,14 @@
 export interface PolicyDecision {
   allowed: boolean;
   reason?: string;
+  /** When true, the action is allowed but a policy violation was detected (audit/warn mode) */
+  warn?: boolean;
   /** For capability.resolve: modified capabilities */
   capabilities?: {
     allowEdit?: boolean;
     allowBash?: boolean;
     allowedTools?: string[];
   };
-  /** For tool.invoke: methods to remove */
-  filteredMethods?: string[];
-  /** For data.filter: redaction patterns */
-  redactPatterns?: string[];
 }
 
 /**
@@ -61,10 +59,12 @@ export interface PolicyConfig {
   engine: 'local' | 'remote' | 'disabled';
   /** Path to .rego files or .wasm bundle (local mode) */
   rules?: string | string[];
+  /** Path to a JSON file to load as OPA data document */
+  data?: string;
   /** OPA server URL (remote mode) */
   url?: string;
   /** Default decision when policy evaluation fails */
-  fallback?: 'allow' | 'deny';
+  fallback?: 'allow' | 'deny' | 'warn';
   /** Evaluation timeout in ms (default: 5000) */
   timeout?: number;
   /** Role definitions: map role names to conditions */
