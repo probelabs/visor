@@ -15,6 +15,29 @@ import { StatusBar, StatusMode } from './components/status-bar';
 import { TraceViewer } from './components/trace-viewer';
 import { ChatStateManager, ChatMessage } from './chat-state';
 
+// Blessed (unmaintained since 2017) crashes during screen.destroy() because its
+// layout getters access this.parent properties on elements whose parent is already
+// null. This monkey-patch guards all six layout methods against null parent.
+const BlessedElement = (blessed as any).widget?.Element?.prototype;
+if (BlessedElement) {
+  for (const method of [
+    '_getWidth',
+    '_getHeight',
+    '_getLeft',
+    '_getRight',
+    '_getTop',
+    '_getBottom',
+  ]) {
+    const orig = BlessedElement[method];
+    if (typeof orig === 'function') {
+      BlessedElement[method] = function (this: any, ...args: any[]) {
+        if (!this.parent) return 0;
+        return orig.apply(this, args);
+      };
+    }
+  }
+}
+
 type Screen = blessed.Widgets.Screen;
 type Box = blessed.Widgets.BoxElement;
 type Log = blessed.Widgets.Log;
@@ -289,7 +312,15 @@ export class ChatTUI {
       this.inputBar = undefined;
     }
     if (this.screen) {
-      this.screen.destroy();
+      const program = (this.screen as any).program;
+      try {
+        this.screen.destroy();
+      } catch {
+        // Blessed may throw during cleanup — ensure program cleanup still runs
+        try {
+          program?.destroy();
+        } catch {}
+      }
       this.screen = undefined;
     }
   }
