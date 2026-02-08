@@ -33,6 +33,7 @@ import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from '../../telemetry/fa
 import { FailureConditionEvaluator } from '../../failure-condition-evaluator';
 import { resolveWorkflowInputs } from '../context/workflow-inputs';
 import { executeWithSandboxRouting } from '../dispatch/sandbox-routing';
+import { applyPolicyGate } from '../dispatch/policy-gate';
 
 /**
  * Map check name to focus for AI provider
@@ -1756,26 +1757,15 @@ async function executeSingleCheck(
 
   // Policy engine gating — after if-condition, before dependency gating
   if (context.policyEngine && checkConfig) {
-    let decision: { allowed: boolean; warn?: boolean; reason?: string };
-    try {
-      decision = await context.policyEngine.evaluateCheckExecution(checkId, checkConfig);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.warn(`[PolicyEngine] Evaluation failed for check '${checkId}': ${msg}`);
-      decision = { allowed: false, reason: 'policy evaluation error' };
-    }
-    if (decision.warn) {
-      logger.warn(
-        `[PolicyEngine] Audit: check '${checkId}' would be denied: ${decision.reason || 'policy violation'}`
-      );
+    const gate = await applyPolicyGate(checkId, checkConfig, context.policyEngine);
+    if (gate.warn && gate.auditReason) {
       // Record audit violation in stats for visibility
       if (state.stats.has(checkId)) {
         const s = state.stats.get(checkId)!;
-        (s as any).policyAuditWarning = decision.reason || 'policy violation';
+        (s as any).policyAuditWarning = gate.auditReason;
       }
     }
-    if (!decision.allowed) {
-      logger.info(`⛔ Skipped (policy: ${decision.reason || 'denied'})`);
+    if (gate.skip) {
       const emptyResult: ReviewSummary = { issues: [] };
       try {
         Object.defineProperty(emptyResult as any, '__skipped', {
@@ -1792,7 +1782,7 @@ async function executeSingleCheck(
         skippedRuns: 0,
         skipped: true,
         skipReason: 'policy_denied',
-        skipCondition: decision.reason || 'policy denied',
+        skipCondition: gate.reason || 'policy denied',
         totalDuration: 0,
         issuesFound: 0,
         issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
