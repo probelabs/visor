@@ -10,7 +10,6 @@ import * as path from 'path';
 
 export interface LicensePayload {
   org: string;
-  tier: 'team' | 'enterprise';
   features: string[];
   exp: number;
   iat: number;
@@ -18,13 +17,10 @@ export interface LicensePayload {
 }
 
 export class LicenseValidator {
-  /**
-   * Ed25519 public key for license verification (PEM format).
-   * Replace with your actual public key before shipping.
-   */
+  /** Ed25519 public key for license verification (PEM format). */
   private static PUBLIC_KEY =
     '-----BEGIN PUBLIC KEY-----\n' +
-    'MCowBQYDK2VwAyEACfwlPwuBE4TZymWvG/mozNfwDRXHSuVWhs4mz+DyeWE=\n' +
+    'MCowBQYDK2VwAyEAI/Zd08EFmgIdrDm/HXd0l3/5GBt7R1PrdvhdmEXhJlU=\n' +
     '-----END PUBLIC KEY-----\n';
 
   private cache: { payload: LicensePayload; validatedAt: number } | null = null;
@@ -147,7 +143,6 @@ export class LicenseValidator {
       // Validate required fields
       if (
         !payload.org ||
-        !payload.tier ||
         !Array.isArray(payload.features) ||
         typeof payload.exp !== 'number' ||
         typeof payload.iat !== 'number' ||

@@ -63,7 +63,7 @@ function buildLicensePayload(overrides: Partial<LicensePayload> = {}): LicensePa
   const now = Math.floor(Date.now() / 1000);
   return {
     org: 'test-org',
-    tier: 'enterprise',
+
     features: ['policy'],
     exp: now + 3600,
     iat: now,
@@ -266,7 +266,6 @@ describe('Enterprise E2E: License Validator Happy Path', () => {
     // Should successfully decode and return the payload
     expect(result).not.toBeNull();
     expect(result!.org).toBe('test-org');
-    expect(result!.tier).toBe('enterprise');
     expect(result!.features).toEqual(['policy']);
     expect(result!.sub).toBe('test-license-001');
 
@@ -324,7 +323,6 @@ describe('Enterprise E2E: License Validator Happy Path', () => {
   it('rejects a JWT with missing required fields', async () => {
     // Sign a payload missing the 'org' field
     const payload = {
-      tier: 'enterprise',
       features: ['policy'],
       exp: Math.floor(Date.now() / 1000) + 3600,
       iat: Math.floor(Date.now() / 1000),

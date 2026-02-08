@@ -100,7 +100,7 @@ function createLicenseJWT(overrides: Record<string, unknown> = {}): string {
   const payload = Buffer.from(
     JSON.stringify({
       org: 'test-org',
-      tier: 'enterprise',
+
       features: ['policy'],
       exp: now + 3600,
       iat: now,

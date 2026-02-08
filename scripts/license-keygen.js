@@ -10,7 +10,6 @@
  *   node scripts/license-keygen.js sign \
  *     --private-key ./visor-private.pem \
  *     --org "Acme Corp" \
- *     --tier enterprise \
  *     --features policy,audit \
  *     --expires 365
  *
@@ -55,12 +54,11 @@ function keygen() {
 function sign(args) {
   const privKeyPath = getArg(args, '--private-key');
   const org = getArg(args, '--org');
-  const tier = getArg(args, '--tier') || 'enterprise';
   const featuresStr = getArg(args, '--features') || 'policy';
   const expiresDays = parseInt(getArg(args, '--expires') || '365', 10);
 
   if (!privKeyPath || !org) {
-    console.error('Usage: license-keygen.js sign --private-key <path> --org <name> [--tier team|enterprise] [--features f1,f2] [--expires days]');
+    console.error('Usage: license-keygen.js sign --private-key <path> --org <name> [--features f1,f2] [--expires days]');
     process.exit(1);
   }
 
@@ -70,7 +68,6 @@ function sign(args) {
   const now = Math.floor(Date.now() / 1000);
   const payload = {
     org,
-    tier,
     features: featuresStr.split(',').map(f => f.trim()),
     exp: now + expiresDays * 86400,
     iat: now,
@@ -83,7 +80,7 @@ function sign(args) {
   const signature = crypto.sign(null, Buffer.from(data), privateKey);
   const token = `${data}.${signature.toString('base64url')}`;
 
-  console.log(`✅ License JWT signed for "${org}" (${tier})`);
+  console.log(`✅ License JWT signed for "${org}"`);
   console.log(`   Features: ${payload.features.join(', ')}`);
   console.log(`   Expires:  ${new Date(payload.exp * 1000).toISOString().slice(0, 10)} (${expiresDays} days)`);
   console.log(`   License ID: ${payload.sub}`);
@@ -133,7 +130,6 @@ function verify(args) {
 
   console.log(`✅ Signature valid`);
   console.log(`   Org:      ${payload.org}`);
-  console.log(`   Tier:     ${payload.tier}`);
   console.log(`   Features: ${payload.features.join(', ')}`);
   console.log(`   Issued:   ${new Date(payload.iat * 1000).toISOString().slice(0, 10)}`);
   console.log(`   Expires:  ${new Date(payload.exp * 1000).toISOString().slice(0, 10)}${expired ? ' ⚠️  EXPIRED' : ''}`);
@@ -170,6 +166,6 @@ Commands:
 
 Examples:
   node scripts/license-keygen.js keygen
-  node scripts/license-keygen.js sign --private-key visor-private.pem --org "Acme" --features policy --expires 365
+  node scripts/license-keygen.js sign --private-key ~/.config/visor/license-private.pem --org "Acme" --features policy --expires 365
   node scripts/license-keygen.js verify --public-key visor-public.pem --token eyJ...`);
 }

@@ -53,7 +53,7 @@ describe('LicenseValidator', () => {
     const { privateKey } = generateTestKeyPair();
     const payload = {
       org: 'test-org',
-      tier: 'enterprise',
+
       features: ['policy'],
       exp: Math.floor(Date.now() / 1000) + 3600,
       iat: Math.floor(Date.now() / 1000),
