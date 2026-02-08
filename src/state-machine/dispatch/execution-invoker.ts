@@ -704,7 +704,7 @@ export async function executeSingleCheck(
         session_id: context.sessionId,
         wave: state.wave,
       },
-      async (span) => {
+      async span => {
         const res = await executeWithSandboxRouting(
           checkId,
           checkConfig,

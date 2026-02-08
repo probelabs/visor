@@ -25,6 +25,8 @@ interface DisplaySpan {
   status: 'ok' | 'error';
   checkId?: string;
   checkType?: string;
+  foreachIndex?: number; // forEach iteration index
+  wave?: number; // execution wave
   input?: string; // Truncated input preview
   output?: string; // Truncated output preview
   error?: string; // Error message if any
@@ -185,6 +187,11 @@ export class TraceViewer {
       error = this.truncate(attrs['visor.check.error'], 100);
     }
 
+    // Extract forEach index and wave for grouping
+    const foreachIndex =
+      attrs['visor.foreach.index'] !== undefined ? Number(attrs['visor.foreach.index']) : undefined;
+    const wave = attrs['wave'] !== undefined ? Number(attrs['wave']) : undefined;
+
     return {
       traceId: raw.traceId || '',
       spanId: raw.spanId || '',
@@ -196,6 +203,8 @@ export class TraceViewer {
       status: raw.status?.code === 2 ? 'error' : 'ok',
       checkId: attrs['visor.check.id'],
       checkType: attrs['visor.check.type'],
+      foreachIndex,
+      wave,
       input,
       output,
       error,
@@ -226,7 +235,9 @@ export class TraceViewer {
 
     // First try: Build parent-child relationships using parentSpanId
     this.rootSpans = [];
-    const hasParentRelationships = this.spans.some(s => s.parentSpanId && spanMap.has(s.parentSpanId));
+    const hasParentRelationships = this.spans.some(
+      s => s.parentSpanId && spanMap.has(s.parentSpanId)
+    );
 
     if (hasParentRelationships) {
       // Use actual parent-child relationships
@@ -258,11 +269,16 @@ export class TraceViewer {
 
   /**
    * Build a logical tree when parentSpanId is not available.
-   * Groups spans by:
-   * - visor.run as root
-   * - engine.state.* as children of run
-   * - visor.check.* grouped by checkId
-   * - visor.provider.* under their check
+   * Creates a natural execution flow:
+   * - Workflow Execution (root)
+   *   - LevelDispatch (wave 1)
+   *     - check-1 (executed during this phase)
+   *       - provider spans
+   *     - check-with-foreach (parent)
+   *       - [0] iteration 1
+   *       - [1] iteration 2
+   *   - LevelDispatch (wave 2)
+   *     - check-3
    */
   private buildLogicalTree(): void {
     // Filter out marker spans (no spanId)
@@ -286,89 +302,167 @@ export class TraceViewer {
       };
     }
 
-    // Group spans by category
-    const stateSpans: DisplaySpan[] = [];
-    const checkSpans = new Map<string, DisplaySpan[]>();
+    // Categorize spans
+    const levelDispatchSpans: DisplaySpan[] = [];
+    const otherStateSpans: DisplaySpan[] = [];
+    const checkSpans: DisplaySpan[] = [];
     const providerSpans: DisplaySpan[] = [];
-    const eventSpans: DisplaySpan[] = [];
     const otherSpans: DisplaySpan[] = [];
 
     for (const span of validSpans) {
       if (span === rootSpan) continue;
 
-      if (span.name.startsWith('engine.state.')) {
-        stateSpans.push(span);
+      if (span.name === 'engine.state.level_dispatch') {
+        levelDispatchSpans.push(span);
+      } else if (span.name.startsWith('engine.state.')) {
+        otherStateSpans.push(span);
       } else if (span.name.startsWith('visor.check') || span.checkId) {
-        const checkId = span.checkId || span.name;
-        if (!checkSpans.has(checkId)) {
-          checkSpans.set(checkId, []);
-        }
-        checkSpans.get(checkId)!.push(span);
+        checkSpans.push(span);
       } else if (span.name.startsWith('visor.provider') || span.name === 'visor.provider') {
         providerSpans.push(span);
-      } else if (span.name === 'visor.event') {
-        eventSpans.push(span);
       } else {
         otherSpans.push(span);
       }
     }
 
-    // Create state machine group if we have state spans
-    if (stateSpans.length > 0) {
-      const stateGroup: DisplaySpan = {
-        traceId: stateSpans[0].traceId,
-        spanId: 'state-machine-group',
-        name: 'State Machine',
-        startTime: Math.min(...stateSpans.map(s => s.startTime)),
-        endTime: Math.max(...stateSpans.map(s => s.endTime)),
-        duration: 0,
-        status: stateSpans.some(s => s.status === 'error') ? 'error' : 'ok',
-        children: stateSpans,
-      };
-      stateGroup.duration = stateGroup.endTime - stateGroup.startTime;
-      rootSpan.children.push(stateGroup);
-    }
+    // Sort level dispatch spans by start time
+    levelDispatchSpans.sort((a, b) => a.startTime - b.startTime);
 
-    // Create check groups
-    for (const [checkId, spans] of checkSpans) {
-      if (spans.length === 1) {
-        // Single span, add directly
-        rootSpan.children.push(spans[0]);
-      } else {
-        // Multiple spans for same check, group them
-        const checkGroup: DisplaySpan = {
-          traceId: spans[0].traceId,
-          spanId: `check-${checkId}`,
-          name: checkId,
-          checkId: checkId,
-          checkType: spans[0].checkType,
-          startTime: Math.min(...spans.map(s => s.startTime)),
-          endTime: Math.max(...spans.map(s => s.endTime)),
-          duration: 0,
-          status: spans.some(s => s.status === 'error') ? 'error' : 'ok',
-          input: spans.find(s => s.input)?.input,
-          output: spans.find(s => s.output)?.output,
-          error: spans.find(s => s.error)?.error,
-          children: spans,
-        };
-        checkGroup.duration = checkGroup.endTime - checkGroup.startTime;
-        rootSpan.children.push(checkGroup);
-      }
-    }
+    // Helper: check if a span falls within a time range
+    const spanWithinTime = (span: DisplaySpan, start: number, end: number): boolean => {
+      return span.startTime >= start && span.startTime <= end;
+    };
 
-    // Add provider spans (try to match to checks by checkId attribute)
-    for (const pSpan of providerSpans) {
-      const checkId = pSpan.checkId;
-      if (checkId) {
-        // Find matching check group and add as child
-        const checkGroup = rootSpan.children.find(c => c.checkId === checkId);
-        if (checkGroup) {
-          checkGroup.children.push(pSpan);
-          continue;
+    // Group forEach iterations by checkId
+    const groupForEachIterations = (checks: DisplaySpan[]): DisplaySpan[] => {
+      const byCheckId = new Map<string, DisplaySpan[]>();
+      const nonForEach: DisplaySpan[] = [];
+
+      for (const check of checks) {
+        if (check.foreachIndex !== undefined && check.checkId) {
+          if (!byCheckId.has(check.checkId)) {
+            byCheckId.set(check.checkId, []);
+          }
+          byCheckId.get(check.checkId)!.push(check);
+        } else {
+          nonForEach.push(check);
         }
       }
-      // No match, add to root
-      rootSpan.children.push(pSpan);
+
+      const result: DisplaySpan[] = [...nonForEach];
+
+      // Create parent nodes for forEach groups
+      for (const [checkId, iterations] of byCheckId) {
+        // Sort by index
+        iterations.sort((a, b) => (a.foreachIndex || 0) - (b.foreachIndex || 0));
+
+        if (iterations.length === 1) {
+          // Single iteration, just add it with index indicator
+          const iter = iterations[0];
+          iter.name = `[${iter.foreachIndex}] ${checkId}`;
+          result.push(iter);
+        } else {
+          // Multiple iterations, create parent group
+          const minStart = Math.min(...iterations.map(i => i.startTime));
+          const maxEnd = Math.max(...iterations.map(i => i.endTime));
+
+          const forEachParent: DisplaySpan = {
+            traceId: iterations[0].traceId,
+            spanId: `foreach-${checkId}`,
+            name: `${checkId} (forEach)`,
+            checkId: checkId,
+            checkType: iterations[0].checkType,
+            startTime: minStart,
+            endTime: maxEnd,
+            duration: maxEnd - minStart,
+            status: iterations.some(i => i.status === 'error') ? 'error' : 'ok',
+            children: [],
+          };
+
+          // Add iterations as children with index prefix
+          for (const iter of iterations) {
+            iter.name = `[${iter.foreachIndex}]`;
+            forEachParent.children.push(iter);
+          }
+
+          result.push(forEachParent);
+        }
+      }
+
+      return result;
+    };
+
+    // Nest checks under their LevelDispatch phase based on timing
+    for (const levelSpan of levelDispatchSpans) {
+      levelSpan.children = [];
+
+      // Find checks that started during this level dispatch
+      const checksInLevel = checkSpans.filter(c =>
+        spanWithinTime(c, levelSpan.startTime, levelSpan.endTime)
+      );
+
+      // Group forEach iterations
+      const groupedChecks = groupForEachIterations(checksInLevel);
+
+      for (const check of groupedChecks) {
+        // Find provider spans for this check (or its iterations)
+        const attachProviders = (span: DisplaySpan) => {
+          const providersForCheck = providerSpans.filter(
+            p => p.checkId === span.checkId && spanWithinTime(p, span.startTime, span.endTime)
+          );
+
+          for (const provider of providersForCheck) {
+            span.children.push(provider);
+            const idx = providerSpans.indexOf(provider);
+            if (idx >= 0) providerSpans.splice(idx, 1);
+          }
+
+          // Also attach to children (for forEach iterations)
+          for (const child of span.children) {
+            if (child.checkId) {
+              attachProviders(child);
+            }
+          }
+        };
+
+        attachProviders(check);
+        levelSpan.children.push(check);
+
+        // Mark original spans as used
+        for (const c of checksInLevel) {
+          const idx = checkSpans.indexOf(c);
+          if (idx >= 0) checkSpans.splice(idx, 1);
+        }
+      }
+
+      rootSpan.children.push(levelSpan);
+    }
+
+    // Handle remaining checks (not in any level dispatch)
+    if (checkSpans.length > 0) {
+      const groupedRemaining = groupForEachIterations([...checkSpans]);
+
+      for (const check of groupedRemaining) {
+        // Find provider spans for this check
+        const providersForCheck = providerSpans.filter(p => p.checkId === check.checkId);
+        for (const provider of providersForCheck) {
+          check.children.push(provider);
+          const idx = providerSpans.indexOf(provider);
+          if (idx >= 0) providerSpans.splice(idx, 1);
+        }
+
+        rootSpan.children.push(check);
+      }
+    }
+
+    // Add other state spans (Init, PlanReady, etc.) as siblings to level dispatch
+    for (const span of otherStateSpans) {
+      rootSpan.children.push(span);
+    }
+
+    // Add remaining provider spans
+    for (const span of providerSpans) {
+      rootSpan.children.push(span);
     }
 
     // Add other spans
