@@ -82,16 +82,27 @@ export class LicenseValidator {
 
     // 2. File path from env (validate against path traversal)
     if (process.env.VISOR_LICENSE_FILE) {
-      const resolved = path.normalize(path.resolve(process.env.VISOR_LICENSE_FILE));
-      if (resolved.includes('..')) return null;
+      // path.resolve() produces an absolute path with all '..' segments resolved,
+      // so a separate resolved.includes('..') check is unnecessary.
+      const resolved = path.resolve(process.env.VISOR_LICENSE_FILE);
       const home = process.env.HOME || process.env.USERPROFILE || '';
       const allowedPrefixes = [path.normalize(process.cwd())];
       if (home) allowedPrefixes.push(path.normalize(path.join(home, '.config', 'visor')));
+
+      // Resolve symlinks so an attacker cannot create a symlink inside an
+      // allowed prefix that points to an arbitrary file outside it.
+      let realPath: string;
+      try {
+        realPath = fs.realpathSync(resolved);
+      } catch {
+        return null; // File doesn't exist or isn't accessible
+      }
+
       const isSafe = allowedPrefixes.some(
-        prefix => resolved === prefix || resolved.startsWith(prefix + path.sep)
+        prefix => realPath === prefix || realPath.startsWith(prefix + path.sep)
       );
       if (!isSafe) return null;
-      return this.readFile(resolved);
+      return this.readFile(realPath);
     }
 
     // 3. .visor-license in cwd
@@ -134,6 +145,17 @@ export class LicenseValidator {
       const signature = Buffer.from(signatureB64, 'base64url');
 
       const publicKey = crypto.createPublicKey(LicenseValidator.PUBLIC_KEY);
+
+      // Validate that the loaded public key is actually Ed25519 (OID 1.3.101.112).
+      // This prevents algorithm-confusion attacks if the embedded key were ever
+      // swapped to a different type.
+      if (publicKey.asymmetricKeyType !== 'ed25519') {
+        return null;
+      }
+
+      // Ed25519 verification: algorithm must be null because EdDSA performs its
+      // own internal hashing (SHA-512) — passing a digest algorithm here would
+      // cause Node.js to throw. The key type is validated above.
       const isValid = crypto.verify(null, Buffer.from(data), publicKey, signature);
       if (!isValid) return null;
 

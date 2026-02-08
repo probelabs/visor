@@ -537,13 +537,24 @@ export class ClaudeCodeCheckProvider extends CheckProvider {
         if (policyEngine) {
           const allowed: Record<string, any> = {};
           for (const [name, serverCfg] of Object.entries(claudeCodeConfig.mcpServers)) {
-            const decision = await policyEngine.evaluateToolInvocation(
-              name,
-              '*',
-              (serverCfg as any).transport
-            );
-            if (decision.allowed) {
+            try {
+              const decision = await policyEngine.evaluateToolInvocation(
+                name,
+                '*',
+                (serverCfg as any).transport
+              );
+              if (decision.allowed) {
+                allowed[name] = serverCfg;
+              }
+            } catch (err) {
+              // Policy evaluation failed — continue without filtering this server
               allowed[name] = serverCfg;
+              try {
+                const { logger } = require('../logger');
+                logger.warn(
+                  `[PolicyEngine] Tool invocation evaluation failed for server '${name}': ${err instanceof Error ? err.message : err}`
+                );
+              } catch {}
             }
           }
           filteredServers = allowed;

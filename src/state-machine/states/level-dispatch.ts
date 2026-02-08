@@ -1756,11 +1756,23 @@ async function executeSingleCheck(
 
   // Policy engine gating — after if-condition, before dependency gating
   if (context.policyEngine && checkConfig) {
-    const decision = await context.policyEngine.evaluateCheckExecution(checkId, checkConfig);
+    let decision: { allowed: boolean; warn?: boolean; reason?: string };
+    try {
+      decision = await context.policyEngine.evaluateCheckExecution(checkId, checkConfig);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(`[PolicyEngine] Evaluation failed for check '${checkId}': ${msg}`);
+      decision = { allowed: false, reason: 'policy evaluation error' };
+    }
     if (decision.warn) {
       logger.warn(
         `[PolicyEngine] Audit: check '${checkId}' would be denied: ${decision.reason || 'policy violation'}`
       );
+      // Record audit violation in stats for visibility
+      if (state.stats.has(checkId)) {
+        const s = state.stats.get(checkId)!;
+        (s as any).policyAuditWarning = decision.reason || 'policy violation';
+      }
     }
     if (!decision.allowed) {
       logger.info(`⛔ Skipped (policy: ${decision.reason || 'denied'})`);

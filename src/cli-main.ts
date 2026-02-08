@@ -817,6 +817,9 @@ async function handlePolicyCheckCommand(argv: string[]): Promise<void> {
     const opaVersionOut = execFileSync('opa', ['version'], { stdio: 'pipe' }).toString().trim();
     const firstLine = opaVersionOut.split('\n')[0] || opaVersionOut;
     console.log(`OPA CLI: ${firstLine}`);
+    if (verbose) {
+      console.log(`OPA version details:\n${opaVersionOut}`);
+    }
   } catch {
     console.error('Error: OPA CLI (`opa`) not found on PATH.');
     console.error('');
@@ -877,6 +880,9 @@ async function handlePolicyCheckCommand(argv: string[]): Promise<void> {
 
   for (const f of regoFiles) {
     const relPath = path.relative(process.cwd(), f);
+    if (verbose) {
+      console.log(`Checking: ${f}`);
+    }
     try {
       execFileSync('opa', ['check', f], { stdio: 'pipe', timeout: 15000 });
       console.log(`  PASS  ${relPath}`);
@@ -920,6 +926,17 @@ async function handlePolicyCheckCommand(argv: string[]): Promise<void> {
     // Verify the bundle contains policy.wasm
     try {
       const listing = execFileSync('tar', ['-tzf', bundlePath], { stdio: 'pipe' }).toString();
+      if (verbose) {
+        const bundleStats = fs.statSync(bundlePath);
+        console.log(`  Bundle: ${bundlePath} (${bundleStats.size} bytes)`);
+        console.log(
+          `  Bundle contents:\n${listing
+            .trim()
+            .split('\n')
+            .map(l => `    ${l}`)
+            .join('\n')}`
+        );
+      }
       if (listing.includes('policy.wasm')) {
         console.log('  PASS  Bundle contains policy.wasm.');
       } else {

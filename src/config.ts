@@ -1360,6 +1360,34 @@ export class ConfigManager {
       });
     }
 
+    if (policy.rules && typeof policy.rules !== 'string' && !Array.isArray(policy.rules)) {
+      errors.push({
+        field: 'policy.rules',
+        message: 'policy.rules must be a string or array of strings',
+        value: policy.rules,
+      });
+    }
+    if (Array.isArray(policy.rules) && !policy.rules.every((r: unknown) => typeof r === 'string')) {
+      errors.push({
+        field: 'policy.rules',
+        message: 'policy.rules array must contain only strings',
+        value: policy.rules,
+      });
+    }
+
+    if (policy.engine === 'local' && policy.rules) {
+      const rulesPath = Array.isArray(policy.rules) ? policy.rules : [policy.rules];
+      for (const rp of rulesPath) {
+        if (typeof rp === 'string' && !fs.existsSync(path.resolve(rp))) {
+          warnings.push({
+            field: 'policy.rules',
+            message: `Policy rules path does not exist: ${rp}. It will be resolved at runtime.`,
+            value: rp,
+          });
+        }
+      }
+    }
+
     if (policy.engine === 'remote') {
       if (!policy.url) {
         errors.push({
@@ -1405,6 +1433,18 @@ export class ConfigManager {
       }
     }
 
+    if (
+      policy.data &&
+      typeof policy.data === 'string' &&
+      !fs.existsSync(path.resolve(policy.data))
+    ) {
+      warnings.push({
+        field: 'policy.data',
+        message: `Policy data file does not exist: ${policy.data}. It will be resolved at runtime.`,
+        value: policy.data,
+      });
+    }
+
     if (policy.roles && typeof policy.roles === 'object') {
       for (const [roleName, roleConfig] of Object.entries(policy.roles as Record<string, any>)) {
         if (typeof roleConfig !== 'object' || roleConfig === null) {
@@ -1413,12 +1453,36 @@ export class ConfigManager {
             message: `Role '${roleName}' must be an object with author_association, teams, or users`,
             value: roleConfig,
           });
-        } else if (Array.isArray(roleConfig.teams) && roleConfig.teams.length > 0) {
-          warnings.push({
-            field: `policy.roles.${roleName}.teams`,
-            message: `Role '${roleName}' uses 'teams' which is not yet implemented. Team-based role resolution requires a future update. Only author_association and users are currently supported.`,
-            value: roleConfig.teams,
-          });
+        } else {
+          if (Array.isArray(roleConfig.teams) && roleConfig.teams.length > 0) {
+            warnings.push({
+              field: `policy.roles.${roleName}.teams`,
+              message: `Role '${roleName}' uses 'teams' which is not yet implemented. Team-based role resolution requires a future update. Only author_association and users are currently supported.`,
+              value: roleConfig.teams,
+            });
+          }
+
+          const validAssociations = [
+            'OWNER',
+            'MEMBER',
+            'COLLABORATOR',
+            'CONTRIBUTOR',
+            'FIRST_TIME_CONTRIBUTOR',
+            'FIRST_TIMER',
+            'MANNEQUIN',
+            'NONE',
+          ];
+          if (roleConfig.author_association && Array.isArray(roleConfig.author_association)) {
+            for (const assoc of roleConfig.author_association) {
+              if (!validAssociations.includes(assoc)) {
+                warnings.push({
+                  field: `policy.roles.${roleName}.author_association`,
+                  message: `Unknown author_association value: '${assoc}'. Valid values: ${validAssociations.join(', ')}`,
+                  value: assoc,
+                });
+              }
+            }
+          }
         }
       }
     }

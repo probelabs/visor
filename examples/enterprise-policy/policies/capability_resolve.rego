@@ -20,3 +20,10 @@ capabilities["allowEdit"] = false {
 capabilities["allowBash"] = false {
   input.actor.roles[_] == "external"
 }
+
+reason = "edit capability restricted for non-developer/admin roles" {
+  capabilities["allowEdit"] == false
+}
+reason = "bash capability restricted for external contributors" {
+  capabilities["allowBash"] == false
+}

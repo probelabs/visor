@@ -262,3 +262,60 @@ test_multi_role_actor_developer_plus_reviewer_non_production {
     "actor": {"roles": ["developer", "reviewer"], "isLocalMode": false}
   }
 }
+
+# ---------------------------------------------------------------------------
+# Deny list tests
+# ---------------------------------------------------------------------------
+
+test_denied_blocks_admin_when_in_deny_list {
+  not allowed with input as {
+    "actor": {"roles": ["admin"], "isLocalMode": false},
+    "check": {"id": "sensitive-check", "type": "ai", "policy": {"deny": ["admin"]}}
+  }
+}
+
+test_denied_blocks_developer_when_in_deny_list {
+  not allowed with input as {
+    "actor": {"roles": ["developer"], "isLocalMode": false},
+    "check": {"id": "some-check", "type": "ai", "policy": {"deny": ["developer"]}}
+  }
+}
+
+test_denied_does_not_block_when_role_not_in_deny_list {
+  allowed with input as {
+    "actor": {"roles": ["admin"], "isLocalMode": false},
+    "check": {"id": "some-check", "type": "ai", "policy": {"deny": ["external"]}}
+  }
+}
+
+test_denied_with_empty_deny_list {
+  allowed with input as {
+    "actor": {"roles": ["admin"], "isLocalMode": false},
+    "check": {"id": "some-check", "type": "ai", "policy": {"deny": []}}
+  }
+}
+
+test_denied_reason_message {
+  reason == "role is in the deny list for this check" with input as {
+    "actor": {"roles": ["developer"], "isLocalMode": false},
+    "check": {"id": "some-check", "type": "ai", "policy": {"deny": ["developer"]}}
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Local mode + policy.require
+# ---------------------------------------------------------------------------
+
+test_local_mode_with_policy_require_enforces_roles {
+  not allowed with input as {
+    "actor": {"roles": [], "isLocalMode": true},
+    "check": {"id": "secure-deploy", "type": "command", "policy": {"require": "admin"}}
+  }
+}
+
+test_local_mode_with_policy_require_admin_allowed {
+  allowed with input as {
+    "actor": {"roles": ["admin"], "isLocalMode": true},
+    "check": {"id": "secure-deploy", "type": "command", "policy": {"require": "admin"}}
+  }
+}

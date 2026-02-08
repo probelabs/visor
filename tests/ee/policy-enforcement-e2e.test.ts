@@ -569,12 +569,12 @@ describeWasm('Policy enforcement E2E - OPA WASM evaluation (direct import)', () 
   async function createEngine(
     actorLogin: string,
     authorAssociation: string,
-    opts: { fallback?: 'allow' | 'deny'; localMode?: boolean } = {}
+    opts: { fallback?: 'allow' | 'deny' | 'warn'; localMode?: boolean } = {}
   ): Promise<void> {
     const config = {
       engine: 'local' as const,
       rules: testPoliciesDir,
-      fallback: (opts.fallback ?? 'deny') as 'allow' | 'deny',
+      fallback: (opts.fallback ?? 'deny') as 'allow' | 'deny' | 'warn',
       timeout: 10000,
       roles: {
         admin: { author_association: ['OWNER'] },
@@ -768,4 +768,256 @@ describeWasm('Policy enforcement E2E - OPA WASM evaluation (direct import)', () 
       expect(d.allowed).toBe(true);
     }
   }, 30_000);
+
+  // =========================================================================
+  // 15. Warn/audit fallback mode: overrides deny decisions to allowed with warn flag
+  // =========================================================================
+
+  describe('warn (audit) fallback mode', () => {
+    it('overrides deny decision to allowed with warn flag when policy denies', async () => {
+      // Create engine with fallback: 'warn'
+      await createEngine('external-user', 'NONE', { fallback: 'warn', localMode: false });
+
+      // Check with policy.require: admin -- external user would normally be denied
+      const decision = await engine!.evaluateCheckExecution('admin-check', {
+        type: 'log',
+        policy: { require: 'admin' },
+      });
+
+      // Decision should be overridden to allowed (from deny)
+      expect(decision.allowed).toBe(true);
+      // Warn flag should be set
+      expect(decision.warn).toBe(true);
+      // Reason should be prefixed with 'audit:'
+      expect(decision.reason).toMatch(/^audit:/);
+    }, 30_000);
+
+    it('does not set warn flag when policy naturally allows', async () => {
+      // Create engine with fallback: 'warn'
+      await createEngine('admin-user', 'OWNER', { fallback: 'warn', localMode: false });
+
+      // Check with policy.require: admin -- admin user is naturally allowed
+      const decision = await engine!.evaluateCheckExecution('admin-check', {
+        type: 'log',
+        policy: { require: 'admin' },
+      });
+
+      // Decision should be allowed (naturally)
+      expect(decision.allowed).toBe(true);
+      // Warn flag should NOT be set (no policy violation)
+      expect(decision.warn).toBeUndefined();
+      // Reason should be undefined or not prefixed with 'audit:'
+      if (decision.reason) {
+        expect(decision.reason).not.toMatch(/^audit:/);
+      }
+    }, 30_000);
+  });
+
+  // =========================================================================
+  // 16. Policy.deny enforcement: deny list takes precedence over allow
+  // =========================================================================
+
+  describe('policy.deny enforcement', () => {
+    let denyPoliciesDir: string;
+
+    beforeAll(() => {
+      // Create a WASM-safe rego policy that enforces policy.deny
+      denyPoliciesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-policy-deny-'));
+
+      const CHECK_EXECUTE_WITH_DENY_REGO = `package visor.check.execute
+
+default allowed = false
+
+# Helper: check if actor has a denied role
+is_denied {
+  denied_roles := input.check.policy.deny
+  is_array(denied_roles)
+  denied_roles[_] == input.actor.roles[_]
+}
+
+# Deny takes precedence: if actor has a denied role, block immediately
+allowed = false {
+  is_denied
+}
+
+# Allow if actor has admin role (and is not denied)
+allowed {
+  not is_denied
+  input.actor.roles[_] == "admin"
+}
+
+# Allow if actor has developer role (and is not denied)
+allowed {
+  not is_denied
+  input.actor.roles[_] == "developer"
+}
+
+# Allow if actor has the required role (and is not denied)
+allowed {
+  not is_denied
+  required := input.check.policy.require
+  is_string(required)
+  input.actor.roles[_] == required
+}
+
+# Allow if actor has one of the required roles (array form, and not denied)
+allowed {
+  not is_denied
+  required := input.check.policy.require
+  is_array(required)
+  required[_] == input.actor.roles[_]
+}
+
+# Local mode allows everything (unless explicitly denied)
+allowed {
+  not is_denied
+  input.actor.isLocalMode == true
+}
+
+reason = "policy denied: actor has a denied role" {
+  is_denied
+}
+
+reason = "policy denied: actor lacks required role" {
+  not allowed
+  not is_denied
+}
+`;
+
+      const TOOL_INVOKE_REGO = `package visor.tool.invoke
+
+default allowed = true
+`;
+
+      const CAPABILITY_RESOLVE_REGO = `package visor.capability.resolve
+`;
+
+      fs.writeFileSync(
+        path.join(denyPoliciesDir, 'check_execute.rego'),
+        CHECK_EXECUTE_WITH_DENY_REGO
+      );
+      fs.writeFileSync(path.join(denyPoliciesDir, 'tool_invoke.rego'), TOOL_INVOKE_REGO);
+      fs.writeFileSync(
+        path.join(denyPoliciesDir, 'capability_resolve.rego'),
+        CAPABILITY_RESOLVE_REGO
+      );
+    }, 30_000);
+
+    afterAll(() => {
+      if (denyPoliciesDir) {
+        try {
+          fs.rmSync(denyPoliciesDir, { recursive: true, force: true });
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+    });
+
+    it('blocks actor with denied role even if they would otherwise be allowed', async () => {
+      // Create a new engine with the deny-aware policies
+      const config = {
+        engine: 'local' as const,
+        rules: denyPoliciesDir,
+        fallback: 'deny' as const,
+        timeout: 10000,
+        roles: {
+          admin: { author_association: ['OWNER'] },
+          external: { author_association: ['NONE'] },
+        },
+      };
+
+      const denyEngine = new OpaPolicyEngine(config);
+
+      // Set actor as NONE -> maps to external role
+      process.env.VISOR_AUTHOR_LOGIN = 'external-user';
+      process.env.VISOR_AUTHOR_ASSOCIATION = 'NONE';
+      process.env.GITHUB_ACTIONS = 'true'; // non-local mode
+
+      await denyEngine.initialize(config);
+
+      // Check with policy.deny: ['external']
+      const decision = await denyEngine.evaluateCheckExecution('restricted-check', {
+        type: 'log',
+        policy: { deny: ['external'] },
+      });
+
+      // Should be denied because actor has the external role
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain('denied role');
+
+      await denyEngine.shutdown();
+    }, 30_000);
+
+    it('allows actor without denied role', async () => {
+      // Create a new engine with the deny-aware policies
+      const config = {
+        engine: 'local' as const,
+        rules: denyPoliciesDir,
+        fallback: 'deny' as const,
+        timeout: 10000,
+        roles: {
+          admin: { author_association: ['OWNER'] },
+          developer: { author_association: ['COLLABORATOR'] },
+          external: { author_association: ['NONE'] },
+        },
+      };
+
+      const denyEngine = new OpaPolicyEngine(config);
+
+      // Set actor as COLLABORATOR -> maps to developer role
+      process.env.VISOR_AUTHOR_LOGIN = 'dev-user';
+      process.env.VISOR_AUTHOR_ASSOCIATION = 'COLLABORATOR';
+      process.env.GITHUB_ACTIONS = 'true'; // non-local mode
+
+      await denyEngine.initialize(config);
+
+      // Check with policy.deny: ['external'] -- developer should be allowed
+      const decision = await denyEngine.evaluateCheckExecution('restricted-check', {
+        type: 'log',
+        policy: { deny: ['external'] },
+      });
+
+      // Should be allowed because developer is not in the deny list
+      expect(decision.allowed).toBe(true);
+
+      await denyEngine.shutdown();
+    }, 30_000);
+
+    it('deny takes precedence over allow when actor has both admin and denied roles', async () => {
+      // Create a new engine with the deny-aware policies
+      const config = {
+        engine: 'local' as const,
+        rules: denyPoliciesDir,
+        fallback: 'deny' as const,
+        timeout: 10000,
+        roles: {
+          admin: { author_association: ['OWNER'] },
+          external: { users: ['mixed-user'] }, // explicit user mapping
+        },
+      };
+
+      const denyEngine = new OpaPolicyEngine(config);
+
+      // Set actor as OWNER with login 'mixed-user'
+      // This will resolve to BOTH admin (via OWNER) AND external (via users list)
+      process.env.VISOR_AUTHOR_LOGIN = 'mixed-user';
+      process.env.VISOR_AUTHOR_ASSOCIATION = 'OWNER';
+      process.env.GITHUB_ACTIONS = 'true'; // non-local mode
+
+      await denyEngine.initialize(config);
+
+      // Check with policy.deny: ['external']
+      // Even though actor has admin role, they also have external role which is denied
+      const decision = await denyEngine.evaluateCheckExecution('restricted-check', {
+        type: 'log',
+        policy: { deny: ['external'] },
+      });
+
+      // Should be denied because deny takes precedence over allow
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toContain('denied role');
+
+      await denyEngine.shutdown();
+    }, 30_000);
+  });
 });

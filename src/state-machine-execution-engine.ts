@@ -310,9 +310,30 @@ export class StateMachineExecutionEngine {
         logger.debug(
           `[PolicyEngine] Initialized: ${context.policyEngine?.constructor?.name || 'unknown'}`
         );
-      } catch {
+      } catch (err) {
         // Enterprise module not available — continue with no policy engine
+        try {
+          logger.warn(
+            `[PolicyEngine] Enterprise policy engine init failed, using default: ${err instanceof Error ? err.message : err}`
+          );
+        } catch {}
       }
+    }
+
+    // Enrich policy engine with PR context once available
+    if (context.policyEngine && 'setActorContext' in context.policyEngine && prInfo) {
+      const actor = {
+        authorAssociation: prInfo.authorAssociation || process.env.VISOR_AUTHOR_ASSOCIATION,
+        login: prInfo.author || process.env.GITHUB_ACTOR,
+        isLocalMode: !process.env.GITHUB_ACTIONS,
+      };
+      const pullRequest = {
+        number: prInfo.number,
+        labels: prInfo.labels,
+        draft: (prInfo as any).draft,
+        changedFiles: prInfo.files?.length,
+      };
+      (context.policyEngine as any).setActorContext(actor, undefined, pullRequest);
     }
 
     // Copy execution context (hooks, etc.) from legacy engine
@@ -503,6 +524,15 @@ export class StateMachineExecutionEngine {
         sessionRegistry.clearAllSessions();
       } catch (error) {
         logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
+      }
+
+      // Cleanup policy engine if enabled
+      if (context.policyEngine) {
+        try {
+          await context.policyEngine.shutdown();
+        } catch (error) {
+          logger.debug(`[StateMachine] Failed to cleanup policy engine: ${error}`);
+        }
       }
 
       // Cleanup workspace if enabled

@@ -24,12 +24,7 @@ default allowed = false
 # avoids `not input.actor.roles[_] == "admin"` which is unsafe for WASM)
 is_admin { input.actor.roles[_] == "admin" }
 
-# Only admins can deploy to production
-allowed {
-  is_admin
-}
-
-# Additionally require the PR to target the main branch
+# Only admins can deploy to production, and only when targeting main
 allowed {
   is_admin
   input.repository.baseBranch == "main"

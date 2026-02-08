@@ -4,7 +4,12 @@
  * in compliance with the Elastic License 2.0.
  */
 
-import type { PolicyEngine, PolicyConfig, PolicyDecision } from '../../policy/types';
+import type {
+  PolicyEngine,
+  PolicyConfig,
+  PolicyDecision,
+  StepPolicyOverride,
+} from '../../policy/types';
 import { OpaWasmEvaluator } from './opa-wasm-evaluator';
 import { OpaHttpEvaluator } from './opa-http-evaluator';
 import {
@@ -27,6 +32,7 @@ export class OpaPolicyEngine implements PolicyEngine {
   private timeout: number;
   private config: PolicyConfig;
   private inputBuilder: PolicyInputBuilder | null = null;
+  private logger: any = null;
 
   constructor(config: PolicyConfig) {
     this.config = config;
@@ -35,9 +41,12 @@ export class OpaPolicyEngine implements PolicyEngine {
   }
 
   async initialize(config: PolicyConfig): Promise<void> {
-    this.config = config;
-    this.fallback = config.fallback || 'deny';
-    this.timeout = config.timeout || 5000;
+    // Resolve logger once at initialization
+    try {
+      this.logger = require('../../logger').logger;
+    } catch {
+      // logger not available in this context
+    }
 
     // Build actor/repo context from environment (available at engine init time)
     const actor: ActorContext = {
@@ -52,8 +61,11 @@ export class OpaPolicyEngine implements PolicyEngine {
       baseBranch: process.env.GITHUB_BASE_REF,
       event: process.env.GITHUB_EVENT_NAME,
     };
+    const prNum = process.env.GITHUB_PR_NUMBER
+      ? parseInt(process.env.GITHUB_PR_NUMBER, 10)
+      : undefined;
     const pullRequest: PullRequestContext = {
-      number: process.env.GITHUB_PR_NUMBER ? parseInt(process.env.GITHUB_PR_NUMBER, 10) : undefined,
+      number: prNum !== undefined && Number.isFinite(prNum) ? prNum : undefined,
     };
     this.inputBuilder = new PolicyInputBuilder(config, actor, repo, pullRequest);
 
@@ -91,17 +103,21 @@ export class OpaPolicyEngine implements PolicyEngine {
 
   async evaluateCheckExecution(checkId: string, checkConfig: unknown): Promise<PolicyDecision> {
     if (!this.evaluator || !this.inputBuilder) return { allowed: true };
-    const cfg = checkConfig as any;
+    const cfg =
+      checkConfig && typeof checkConfig === 'object'
+        ? (checkConfig as Record<string, unknown>)
+        : {};
+    const policyOverride = cfg.policy as StepPolicyOverride | undefined;
     const input = this.inputBuilder.forCheckExecution({
       id: checkId,
-      type: cfg.type || 'ai',
-      group: cfg.group,
-      tags: cfg.tags,
-      criticality: cfg.criticality,
-      sandbox: cfg.sandbox,
-      policy: cfg.policy,
+      type: (cfg.type as string) || 'ai',
+      group: cfg.group as string | undefined,
+      tags: cfg.tags as string[] | undefined,
+      criticality: cfg.criticality as string | undefined,
+      sandbox: cfg.sandbox as string | undefined,
+      policy: policyOverride,
     });
-    return this.doEvaluate(input, this.resolveRulePath('check.execute', cfg.policy?.rule));
+    return this.doEvaluate(input, this.resolveRulePath('check.execute', policyOverride?.rule));
   }
 
   async evaluateToolInvocation(
@@ -136,43 +152,38 @@ export class OpaPolicyEngine implements PolicyEngine {
   }
 
   private resolveRulePath(defaultScope: string, override?: string): string {
-    if (override) return override;
-    return `visor/${defaultScope.replace('.', '/')}`;
+    if (override) {
+      return override.startsWith('visor/') ? override : `visor/${override}`;
+    }
+    return `visor/${defaultScope.replace(/\./g, '/')}`;
   }
 
   private async doEvaluate(input: object, rulePath: string): Promise<PolicyDecision> {
     try {
+      this.logger?.debug(`[PolicyEngine] Evaluating ${rulePath}`, JSON.stringify(input));
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('policy evaluation timeout')), this.timeout);
+      });
       try {
-        const { logger } = require('../../logger');
-        logger.debug(`[PolicyEngine] Evaluating ${rulePath}`, JSON.stringify(input));
-      } catch {
-        // logger not available
-      }
-      const result = await Promise.race([this.rawEvaluate(input, rulePath), this.timeoutPromise()]);
-      const decision = this.parseDecision(result);
-      // In warn mode, override denied decisions to allowed but flag as warn
-      if (!decision.allowed && this.fallback === 'warn') {
-        decision.allowed = true;
-        decision.warn = true;
-        decision.reason = `audit: ${decision.reason || 'policy denied'}`;
-      }
-      try {
-        const { logger } = require('../../logger');
-        logger.debug(
+        const result = await Promise.race([this.rawEvaluate(input, rulePath), timeoutPromise]);
+        const decision = this.parseDecision(result);
+        // In warn mode, override denied decisions to allowed but flag as warn
+        if (!decision.allowed && this.fallback === 'warn') {
+          decision.allowed = true;
+          decision.warn = true;
+          decision.reason = `audit: ${decision.reason || 'policy denied'}`;
+        }
+        this.logger?.debug(
           `[PolicyEngine] Decision for ${rulePath}: allowed=${decision.allowed}, warn=${decision.warn || false}, reason=${decision.reason || 'none'}`
         );
-      } catch {
-        // logger not available
+        return decision;
+      } finally {
+        if (timer) clearTimeout(timer);
       }
-      return decision;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      try {
-        const { logger } = require('../../logger');
-        logger.warn(`[PolicyEngine] Evaluation failed for ${rulePath}: ${msg}`);
-      } catch {
-        // logger not available
-      }
+      this.logger?.warn(`[PolicyEngine] Evaluation failed for ${rulePath}: ${msg}`);
       return {
         allowed: this.fallback === 'allow' || this.fallback === 'warn',
         warn: this.fallback === 'warn' ? true : undefined,
@@ -210,12 +221,6 @@ export class OpaPolicyEngine implements PolicyEngine {
       }
     }
     return current;
-  }
-
-  private timeoutPromise(): Promise<never> {
-    return new Promise((_resolve, reject) => {
-      setTimeout(() => reject(new Error('policy evaluation timeout')), this.timeout);
-    });
   }
 
   private parseDecision(result: any): PolicyDecision {

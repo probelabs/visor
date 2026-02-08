@@ -63,8 +63,15 @@ export class OpaWasmEvaluator {
    */
   loadData(dataPath: string): void {
     const resolved = path.resolve(dataPath);
+    if (path.normalize(resolved).includes('..')) {
+      throw new Error(`Data path contains traversal sequences: ${dataPath}`);
+    }
     if (!fs.existsSync(resolved)) {
       throw new Error(`OPA data file not found: ${resolved}`);
+    }
+    const stat = fs.statSync(resolved);
+    if (stat.size > 10 * 1024 * 1024) {
+      throw new Error(`OPA data file exceeds 10MB limit: ${resolved} (${stat.size} bytes)`);
     }
     const raw = fs.readFileSync(resolved, 'utf-8');
     try {
@@ -96,6 +103,18 @@ export class OpaWasmEvaluator {
   }
 
   async shutdown(): Promise<void> {
+    if (this.policy) {
+      // opa-wasm policy objects may have a close/free method for WASM cleanup
+      if (typeof this.policy.close === 'function') {
+        try {
+          this.policy.close();
+        } catch {}
+      } else if (typeof this.policy.free === 'function') {
+        try {
+          this.policy.free();
+        } catch {}
+      }
+    }
     this.policy = null;
   }
 

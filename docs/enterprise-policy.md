@@ -215,7 +215,7 @@ policy:
 | `rules` | `string` \| `string[]` | — | Path to `.rego` files, a directory, or a `.wasm` bundle (local mode only) |
 | `data` | `string` | — | Path to a JSON file to load as the OPA data document (local mode only). Contents are available in Rego via `data.<key>`. |
 | `url` | `string` | — | OPA server URL (remote mode only) |
-| `fallback` | `allow` \| `deny` \| `warn` | `allow` | Default decision when policy evaluation fails or times out. `warn` enables audit mode: violations are logged but checks are not blocked. |
+| `fallback` | `allow` \| `deny` \| `warn` | `deny` | Default decision when policy evaluation fails or times out. `warn` enables audit mode: violations are logged but checks are not blocked. |
 | `timeout` | `number` | `5000` | Evaluation timeout in milliseconds |
 | `roles` | `map` | — | Role definitions (see below) |
 
@@ -425,10 +425,14 @@ Example sample input file for testing:
     "owner": "myorg",
     "name": "myrepo",
     "branch": "feat/new-feature",
-    "baseBranch": "main"
-  }
+    "baseBranch": "main",
+    "event": "pull_request"
+  },
+  "pullRequest": {}
 }
 ```
+
+> **Note**: The `pullRequest` object is shown as empty because those fields are not currently populated by the policy engine. See the [Input Document Reference](#input-document-reference) for details.
 
 Exit codes:
 - `0`: All checks passed
@@ -523,10 +527,14 @@ This scope works as an overlay on top of the static `allowedMethods`/`blockedMet
 ```rego
 package visor.capability.resolve
 
+# Helper rules for WASM-safe role checks
+is_developer { input.actor.roles[_] == "developer" }
+is_admin { input.actor.roles[_] == "admin" }
+
 # Disable file editing for non-developers
 capabilities["allowEdit"] = false {
-  not input.actor.roles[_] == "developer"
-  not input.actor.roles[_] == "admin"
+  not is_developer
+  not is_admin
 }
 
 # Disable bash for external contributors
@@ -582,19 +590,28 @@ Your Rego policies receive an `input` document with these fields:
     "name": "visor",
     "branch": "feat/new-feature",
     "baseBranch": "main",
-    "event": "pull_request",
-    "action": "synchronize"
+    "event": "pull_request"
+    // "action": "synchronize"  // Not currently populated
   },
   "pullRequest": {
-    "number": 42,
-    "labels": ["approved", "ready-to-merge"],
-    "draft": false,
-    "changedFiles": 5
+    // The following fields are not currently populated:
+    // "number": 42,
+    // "labels": ["approved", "ready-to-merge"],
+    // "draft": false,
+    // "changedFiles": 5
   }
 }
 ```
 
-> **Note**: Only the fields relevant to each scope are populated. For example, `check` is populated for `check.execute`, `tool` is populated for `tool.invoke`, etc. `actor`, `repository`, and `pullRequest` are always available when running in a PR context.
+> **Note**: Only the fields relevant to each scope are populated. For example, `check` is populated for `check.execute`, `tool` is populated for `tool.invoke`, etc.
+>
+> **Important**: Several fields in the `repository` and `pullRequest` objects are currently **not populated** and are reserved for future use:
+> - `repository.action` - Would contain the GitHub event action (e.g., "synchronize", "opened")
+> - `pullRequest.number`, `pullRequest.labels`, `pullRequest.draft`, `pullRequest.changedFiles` - Would contain PR metadata
+>
+> These fields are defined in the input schema but are not currently set by the policy engine during initialization. They are documented here for future compatibility. The `OpaPolicyEngine` class has a `setActorContext()` method that could be used to enrich this context after PR data is fetched, but this is not yet implemented in the main codebase.
+>
+> For now, use the `repository.owner`, `repository.name`, `repository.branch`, `repository.baseBranch`, and `repository.event` fields, along with `actor` fields, which are reliably populated from GitHub Actions environment variables.
 
 ### Field descriptions
 
@@ -615,16 +632,16 @@ Your Rego policies receive an `input` document with these fields:
 | `actor.authorAssociation` | string | Raw GitHub author association |
 | `actor.roles` | string[] | Resolved roles from `policy.roles` config |
 | `actor.isLocalMode` | boolean | `true` when running outside GitHub Actions |
-| `repository.owner` | string | Repository owner/organization |
-| `repository.name` | string | Repository name |
-| `repository.branch` | string | Current/head branch |
-| `repository.baseBranch` | string | Base branch for PRs |
-| `repository.event` | string | GitHub event type |
-| `repository.action` | string | GitHub event action |
-| `pullRequest.number` | number | PR number |
-| `pullRequest.labels` | string[] | Labels applied to the PR |
-| `pullRequest.draft` | boolean | `true` if the PR is a draft |
-| `pullRequest.changedFiles` | number | Number of files changed in the PR |
+| `repository.owner` | string | Repository owner/organization (from `GITHUB_REPOSITORY_OWNER`) |
+| `repository.name` | string | Repository name (from `GITHUB_REPOSITORY`) |
+| `repository.branch` | string | Current/head branch (from `GITHUB_HEAD_REF`) |
+| `repository.baseBranch` | string | Base branch for PRs (from `GITHUB_BASE_REF`) |
+| `repository.event` | string | GitHub event type (from `GITHUB_EVENT_NAME`) |
+| `repository.action` | string | **Not currently populated.** Reserved for future use. |
+| `pullRequest.number` | number | **Not currently populated.** Would require a `GITHUB_PR_NUMBER` env var, which is a custom variable that must be set manually (it is not provided by GitHub Actions by default). When running as a GitHub Action, PR context is also enriched automatically from the PR info, but this field is not yet wired up. Reserved for future use. |
+| `pullRequest.labels` | string[] | **Not currently populated.** Reserved for future use (requires PR data enrichment). |
+| `pullRequest.draft` | boolean | **Not currently populated.** Reserved for future use (requires PR data enrichment). |
+| `pullRequest.changedFiles` | number | **Not currently populated.** Reserved for future use (requires PR data enrichment). |
 
 ---
 
@@ -633,7 +650,7 @@ Your Rego policies receive an `input` document with these fields:
 Individual steps can declare policy requirements directly in YAML. This is a convenience shortcut that works without writing Rego (though your Rego must handle the `input.check.policy` field for it to take effect).
 
 ```yaml
-steps:
+checks:
   deploy-staging:
     type: command
     exec: ./deploy.sh staging
@@ -642,6 +659,8 @@ steps:
       deny: [external]              # These roles are explicitly blocked
       rule: visor/deploy/staging    # Optional: custom OPA rule path
 ```
+
+> **Note**: `steps:` is a supported alias for `checks:` for backward compatibility. This documentation uses `checks:` as the primary key.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -716,7 +735,7 @@ The flow is:
 **Step 1**: Declare the custom rule in your `.visor.yaml`:
 
 ```yaml
-steps:
+checks:
   deploy-production:
     type: command
     exec: ./deploy.sh production
@@ -756,7 +775,7 @@ reason = "only admins can deploy to production" { not allowed }
 #### Important notes
 
 - **Package name must match the rule path**: The Rego `package` declaration uses dots as separators, while the YAML `rule` field uses slashes. They must correspond: `visor/deploy/production` in YAML maps to `package visor.deploy.production` in Rego.
-- **The `visor/` prefix is required**: Visor compiles WASM bundles with `-e visor` as the entrypoint. All rule paths must start with `visor/` so the engine can navigate the result tree correctly.
+- **The `visor/` prefix is recommended**: If omitted, Visor will auto-prepend it (e.g., `deploy/production` becomes `visor/deploy/production`). Visor compiles WASM bundles with `-e visor` as the entrypoint, so all rule paths must ultimately start with `visor/` for the engine to navigate the result tree correctly.
 - **Custom Rego files go in the policy directory**: The file must be in the same directory (or listed in the same `policy.rules` array) as your other `.rego` files. OPA compiles all files together into one WASM bundle.
 - **Custom rules must define `allowed`**: Like the default scopes, custom rules must export an `allowed` boolean. Optionally export a `reason` string for denial messages.
 - **The full input document is available**: Custom rules receive the same `input` document as the default `check.execute` scope, including `input.actor`, `input.repository`, and `input.check` (with the `policy` sub-object containing `require`, `deny`, and `rule`).
@@ -1116,9 +1135,13 @@ visor --dump-policy-input deploy-production | \
 ```
 
 **Notes**:
-- This flag does **not** require a license -- it is a debugging tool.
+- This flag requires the **Enterprise Edition build** (the `src/enterprise/` modules must be present) but does **not** require a valid license key. It is a debugging tool that works without activation.
+- In OSS-only builds (where `src/enterprise/` is stripped), this flag is not available and will exit with an error.
 - Actor context is derived from environment variables (`VISOR_AUTHOR_LOGIN`, `GITHUB_ACTOR`, `VISOR_AUTHOR_ASSOCIATION`, `GITHUB_ACTIONS`).
 - Repository context is derived from GitHub environment variables (`GITHUB_REPOSITORY_OWNER`, `GITHUB_REPOSITORY`, `GITHUB_HEAD_REF`, `GITHUB_BASE_REF`, `GITHUB_EVENT_NAME`).
+- `repository.action` is **not populated** from any environment variable and will be absent.
+- `pullRequest.number` would require a `GITHUB_PR_NUMBER` environment variable, which is a custom env var that must be set manually (it is not provided by GitHub Actions by default and is not set by Visor). When running as a GitHub Action, PR context is enriched automatically from the PR info, but this field is not yet wired up to the policy input. It will be absent.
+- `pullRequest.labels`, `pullRequest.draft`, and `pullRequest.changedFiles` are **not currently populated** and will be absent.
 - When running locally (outside GitHub Actions), `actor.isLocalMode` is `true` and most repository fields will be empty.
 
 ### Timeout errors
@@ -1149,7 +1172,7 @@ policy:
     developer:
       author_association: [MEMBER, COLLABORATOR]
 
-steps:
+checks:
   security-scan:
     type: ai
     prompt: "Review for security issues"
@@ -1194,10 +1217,13 @@ reason = "insufficient role" { not denied; not allowed }
 
 ### PR label and metadata policies
 
-Use the `pullRequest` fields to gate checks based on PR metadata. These fields are populated when Visor runs in a PR context (GitHub Actions or CLI with PR info).
+> **⚠️ Important**: The `pullRequest.labels`, `pullRequest.draft`, and `pullRequest.changedFiles` fields are **not currently populated** by the policy engine. The example below shows how these fields *would* be used if they were available, but attempting to use them now will result in empty/undefined values. See the [Input Document Reference](#input-document-reference) section for details on which fields are currently populated.
+>
+> This example is provided for future compatibility and to illustrate the intended design. If you need PR metadata in your policies today, you will need to extend Visor to fetch PR data and call `setActorContext()` with the enriched context.
 
 ```rego
 # policies/check_execute.rego
+# FUTURE EXAMPLE - These fields are not yet populated
 package visor.check.execute
 
 # Only allow deploy-production if PR has the "approved" label

@@ -11,6 +11,7 @@ default allowed = false
 # This is WASM-safe: uses explicit iteration with `some` instead of
 # `not collection[_] == value`.
 denied {
+  input.check.policy
   some i, j
   input.check.policy.deny[i] == input.actor.roles[j]
 }
