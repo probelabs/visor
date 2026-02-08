@@ -122,7 +122,7 @@ visor --debug-server --debug-port 3456
 visor --help
 ```
 
-See full options and examples: [docs/NPM_USAGE.md](docs/NPM_USAGE.md)
+See full CLI options: [docs/commands.md](docs/commands.md)
 
 Additional guides:
 
