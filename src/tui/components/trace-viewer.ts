@@ -219,23 +219,32 @@ export class TraceViewer {
     const spanMap = new Map<string, DisplaySpan>();
     for (const span of this.spans) {
       span.children = []; // Reset children
-      spanMap.set(span.spanId, span);
+      if (span.spanId) {
+        spanMap.set(span.spanId, span);
+      }
     }
 
-    // Build parent-child relationships
+    // First try: Build parent-child relationships using parentSpanId
     this.rootSpans = [];
-    for (const span of this.spans) {
-      if (!span.parentSpanId) {
-        this.rootSpans.push(span);
-      } else {
-        const parent = spanMap.get(span.parentSpanId);
-        if (parent) {
-          parent.children.push(span);
-        } else {
-          // Orphaned span - treat as root
+    const hasParentRelationships = this.spans.some(s => s.parentSpanId && spanMap.has(s.parentSpanId));
+
+    if (hasParentRelationships) {
+      // Use actual parent-child relationships
+      for (const span of this.spans) {
+        if (!span.parentSpanId) {
           this.rootSpans.push(span);
+        } else {
+          const parent = spanMap.get(span.parentSpanId);
+          if (parent) {
+            parent.children.push(span);
+          } else {
+            this.rootSpans.push(span);
+          }
         }
       }
+    } else {
+      // Build logical hierarchy from span names and check IDs
+      this.buildLogicalTree();
     }
 
     // Sort children by start time
@@ -245,6 +254,129 @@ export class TraceViewer {
     };
     this.rootSpans.forEach(sortChildren);
     this.rootSpans.sort((a, b) => a.startTime - b.startTime);
+  }
+
+  /**
+   * Build a logical tree when parentSpanId is not available.
+   * Groups spans by:
+   * - visor.run as root
+   * - engine.state.* as children of run
+   * - visor.check.* grouped by checkId
+   * - visor.provider.* under their check
+   */
+  private buildLogicalTree(): void {
+    // Filter out marker spans (no spanId)
+    const validSpans = this.spans.filter(s => s.spanId);
+
+    // Find or create root span
+    let rootSpan = validSpans.find(s => s.name === 'visor.run');
+    if (!rootSpan) {
+      // Create synthetic root
+      const minStart = validSpans.reduce((min, s) => Math.min(min, s.startTime), Infinity);
+      const maxEnd = validSpans.reduce((max, s) => Math.max(max, s.endTime), 0);
+      rootSpan = {
+        traceId: validSpans[0]?.traceId || '',
+        spanId: 'synthetic-root',
+        name: 'Workflow Execution',
+        startTime: minStart,
+        endTime: maxEnd,
+        duration: maxEnd - minStart,
+        status: validSpans.some(s => s.status === 'error') ? 'error' : 'ok',
+        children: [],
+      };
+    }
+
+    // Group spans by category
+    const stateSpans: DisplaySpan[] = [];
+    const checkSpans = new Map<string, DisplaySpan[]>();
+    const providerSpans: DisplaySpan[] = [];
+    const eventSpans: DisplaySpan[] = [];
+    const otherSpans: DisplaySpan[] = [];
+
+    for (const span of validSpans) {
+      if (span === rootSpan) continue;
+
+      if (span.name.startsWith('engine.state.')) {
+        stateSpans.push(span);
+      } else if (span.name.startsWith('visor.check') || span.checkId) {
+        const checkId = span.checkId || span.name;
+        if (!checkSpans.has(checkId)) {
+          checkSpans.set(checkId, []);
+        }
+        checkSpans.get(checkId)!.push(span);
+      } else if (span.name.startsWith('visor.provider') || span.name === 'visor.provider') {
+        providerSpans.push(span);
+      } else if (span.name === 'visor.event') {
+        eventSpans.push(span);
+      } else {
+        otherSpans.push(span);
+      }
+    }
+
+    // Create state machine group if we have state spans
+    if (stateSpans.length > 0) {
+      const stateGroup: DisplaySpan = {
+        traceId: stateSpans[0].traceId,
+        spanId: 'state-machine-group',
+        name: 'State Machine',
+        startTime: Math.min(...stateSpans.map(s => s.startTime)),
+        endTime: Math.max(...stateSpans.map(s => s.endTime)),
+        duration: 0,
+        status: stateSpans.some(s => s.status === 'error') ? 'error' : 'ok',
+        children: stateSpans,
+      };
+      stateGroup.duration = stateGroup.endTime - stateGroup.startTime;
+      rootSpan.children.push(stateGroup);
+    }
+
+    // Create check groups
+    for (const [checkId, spans] of checkSpans) {
+      if (spans.length === 1) {
+        // Single span, add directly
+        rootSpan.children.push(spans[0]);
+      } else {
+        // Multiple spans for same check, group them
+        const checkGroup: DisplaySpan = {
+          traceId: spans[0].traceId,
+          spanId: `check-${checkId}`,
+          name: checkId,
+          checkId: checkId,
+          checkType: spans[0].checkType,
+          startTime: Math.min(...spans.map(s => s.startTime)),
+          endTime: Math.max(...spans.map(s => s.endTime)),
+          duration: 0,
+          status: spans.some(s => s.status === 'error') ? 'error' : 'ok',
+          input: spans.find(s => s.input)?.input,
+          output: spans.find(s => s.output)?.output,
+          error: spans.find(s => s.error)?.error,
+          children: spans,
+        };
+        checkGroup.duration = checkGroup.endTime - checkGroup.startTime;
+        rootSpan.children.push(checkGroup);
+      }
+    }
+
+    // Add provider spans (try to match to checks by checkId attribute)
+    for (const pSpan of providerSpans) {
+      const checkId = pSpan.checkId;
+      if (checkId) {
+        // Find matching check group and add as child
+        const checkGroup = rootSpan.children.find(c => c.checkId === checkId);
+        if (checkGroup) {
+          checkGroup.children.push(pSpan);
+          continue;
+        }
+      }
+      // No match, add to root
+      rootSpan.children.push(pSpan);
+    }
+
+    // Add other spans
+    for (const span of otherSpans) {
+      rootSpan.children.push(span);
+    }
+
+    this.rootSpans = [rootSpan];
   }
 
   private render(): void {
