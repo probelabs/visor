@@ -246,11 +246,11 @@ steps:
 
 Output structure: `{ text: string, ts: number }`
 
-> **Tip:** Use `--tui` mode for the best experience with human-input workflows:
+> **Tip:** Use `--tui` mode for interactive prompts and real-time visualization:
 > ```bash
 > visor --tui --config workflow.yaml
 > ```
-> See [Interactive TUI Mode](#interactive-tui-mode) for details.
+> TUI provides a chat-style interface for human-input prompts. See [Interactive TUI Mode](#interactive-tui-mode).
 
 ### 5. Log Check (`type: log`)
 
@@ -1341,7 +1341,7 @@ visor --config workflow.yaml --event pr_opened
 
 ### Interactive TUI Mode
 
-For workflows with `human-input` steps or iterative development, use TUI mode:
+TUI mode provides a persistent terminal interface for running any workflow:
 
 ```bash
 # Start interactive TUI

@@ -54,7 +54,7 @@ npm run build
 
 ### TUI Mode (Interactive Terminal Interface)
 
-The `--tui` flag enables a persistent chat-style interface for interactive workflows:
+The `--tui` flag enables a persistent terminal interface for any workflow. The workflow runs immediately, and you can re-run it by typing new messages after completion:
 
 ```bash
 # Start with TUI mode
