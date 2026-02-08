@@ -602,8 +602,28 @@ steps:
        (outputs["tests-full"] && outputs["tests-full"].error === false))
 ```
 
+## Enterprise Policy Engine (EE)
+
+For organizations that need centralized, auditable policy enforcement beyond inline `if`/`fail_if` expressions, Visor's Enterprise Edition includes an [OPA-based policy engine](./enterprise-policy.md).
+
+| Feature | Author Permissions (OSS) | Policy Engine (EE) |
+|---------|--------------------------|-------------------|
+| **License** | None (OSS) | EE license required |
+| **Mechanism** | JavaScript expressions in `if`/`fail_if` | OPA Rego policies |
+| **Scope** | Per-step conditions | Pre-execution gating, tool filtering, capability restriction |
+| **Role system** | `hasMinPermission()`, `isMember()`, etc. | Custom roles via `policy.roles` config |
+
+**When to use Author Permissions**: Simple permission checks for small teams with straightforward rules.
+
+**When to use the Policy Engine**: Centralized, auditable enforcement for organizations needing compliance, separation of duties, or complex role hierarchies. The policy engine evaluates before `if` conditions, providing an additional layer of control.
+
+Both systems work together -- author permission functions remain available even when the policy engine is active.
+
+Learn more: [Enterprise Policy Engine documentation](./enterprise-policy.md)
+
 ## Related Documentation
 
+- [Enterprise Policy Engine](./enterprise-policy.md) - OPA-based role-based access control (EE)
 - [Liquid Templates](./liquid-templates.md) - Template syntax and variables
 - [Debugging Guide](./debugging.md) - Debugging JavaScript expressions
 - [Command Provider](./command-provider.md) - Command execution and transforms

@@ -20,12 +20,20 @@ module.exports = [
       'no-console': 'off',
       'prefer-const': 'error',
       'no-var': 'error',
-      // Prefer our extended Liquid engine everywhere
+      // Prefer our extended Liquid engine everywhere; enforce enterprise import boundary
       'no-restricted-imports': [
         'warn',
         {
-          name: 'liquidjs',
-          message: 'Use createExtendedLiquid() from src/liquid-extensions instead of raw Liquid.',
+          paths: [
+            {
+              name: 'liquidjs',
+              message: 'Use createExtendedLiquid() from src/liquid-extensions instead of raw Liquid.',
+            },
+          ],
+          patterns: [{
+            group: ['*/enterprise/*', '!*/enterprise/loader'],
+            message: 'Enterprise code must only be imported via src/enterprise/loader.ts',
+          }],
         },
       ],
       

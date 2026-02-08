@@ -186,6 +186,7 @@ Visor is a general SDLC automation framework:
  - [Developer Experience Playbook](#-developer-experience-playbook)
  - [Tag-Based Check Filtering](#-tag-based-check-filtering)
  - [PR Comment Commands](#-pr-comment-commands)
+ - [Enterprise Policy Engine (EE)](#-enterprise-policy-engine-ee)
  - [Suppressing Warnings](#-suppressing-warnings)
  - [Troubleshooting](#-troubleshooting)
  - [Security Defaults](#-security-defaults)
@@ -306,6 +307,28 @@ steps:
 - `isOwner()`, `isMember()`, `isCollaborator()`, `isContributor()`, `isFirstTimer()` - Boolean checks
 
 Learn more: [docs/author-permissions.md](docs/author-permissions.md)
+
+## 🏢 Enterprise Policy Engine (EE)
+
+> **Enterprise Edition feature.** Requires a Visor EE license. Contact **hello@probelabs.com**.
+
+Add OPA-based role-based access control to gate checks, MCP tools, and AI capabilities using [Rego](https://www.openpolicyagent.org/docs/latest/policy-language/) policies.
+
+```yaml
+policy:
+  engine: local
+  rules: ./policies/
+  fallback: deny
+  roles:
+    admin:
+      author_association: [OWNER]
+    developer:
+      author_association: [MEMBER, COLLABORATOR]
+```
+
+Checks denied by policy are skipped with reason `policy_denied`. Without a valid license, the engine silently disables and all checks run normally.
+
+Learn more: [docs/enterprise-policy.md](docs/enterprise-policy.md) | [examples/enterprise-policy/](examples/enterprise-policy/)
 
 ## 🔇 Suppressing Warnings
 

@@ -47,6 +47,7 @@ export class TraceViewer {
   private lastModified = 0;
   private watchInterval?: NodeJS.Timeout;
   private showEngineStates = false; // Hidden by default
+  private destroyed = false;
 
   constructor(options: TraceViewerOptions) {
     this.traceFilePath = options.traceFilePath;
@@ -126,7 +127,7 @@ export class TraceViewer {
   }
 
   private async checkForUpdates(): Promise<void> {
-    if (!this.traceFilePath) return;
+    if (!this.traceFilePath || this.destroyed) return;
 
     try {
       const stats = fs.statSync(this.traceFilePath);
@@ -140,15 +141,15 @@ export class TraceViewer {
   }
 
   private async loadAndRender(): Promise<void> {
-    if (!this.traceFilePath) return;
+    if (!this.traceFilePath || this.destroyed) return;
 
     try {
       const spans = await this.parseTraceFile(this.traceFilePath);
       this.spans = spans;
       this.buildTree();
-      this.render();
+      if (!this.destroyed) this.render();
     } catch (error) {
-      this.contentBox.setContent(`Error loading traces: ${error}`);
+      if (!this.destroyed) this.contentBox.setContent(`Error loading traces: ${error}`);
     }
   }
 
@@ -490,6 +491,7 @@ export class TraceViewer {
   }
 
   private render(): void {
+    if (this.destroyed) return;
     const lines: string[] = [];
 
     // Filter spans to render based on settings
@@ -686,6 +688,7 @@ export class TraceViewer {
   }
 
   destroy(): void {
+    this.destroyed = true;
     this.stopWatching();
     this.container.destroy();
   }

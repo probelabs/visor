@@ -874,6 +874,11 @@ export class ConfigManager {
       this.validateTagFilter(config.tag_filter as unknown as Record<string, unknown>, errors);
     }
 
+    // Validate policy configuration if present
+    if (config.policy) {
+      this.validatePolicyConfig(config.policy as any, errors, warnings);
+    }
+
     // In strict mode, treat warnings as errors
     if (strict && warnings.length > 0) {
       errors.push(...warnings);
@@ -1332,6 +1337,204 @@ export class ConfigManager {
   }
 
   /**
+   * Validate policy engine configuration
+   */
+  private validatePolicyConfig(
+    policy: Record<string, unknown>,
+    errors: ConfigValidationError[],
+    warnings: ConfigValidationError[]
+  ): void {
+    const validEngines = ['local', 'remote', 'disabled'];
+    if (policy.engine && !validEngines.includes(policy.engine as string)) {
+      errors.push({
+        field: 'policy.engine',
+        message: `policy.engine must be one of: ${validEngines.join(', ')}`,
+        value: policy.engine,
+      });
+    }
+
+    if (policy.engine === 'local' && !policy.rules) {
+      errors.push({
+        field: 'policy.rules',
+        message: 'policy.rules is required when policy.engine is "local"',
+      });
+    }
+
+    if (policy.rules && typeof policy.rules !== 'string' && !Array.isArray(policy.rules)) {
+      errors.push({
+        field: 'policy.rules',
+        message: 'policy.rules must be a string or array of strings',
+        value: policy.rules,
+      });
+    }
+    if (Array.isArray(policy.rules) && !policy.rules.every((r: unknown) => typeof r === 'string')) {
+      errors.push({
+        field: 'policy.rules',
+        message: 'policy.rules array must contain only strings',
+        value: policy.rules,
+      });
+    }
+
+    if (policy.engine === 'local' && policy.rules) {
+      const rulesPath = Array.isArray(policy.rules) ? policy.rules : [policy.rules];
+      for (const rp of rulesPath) {
+        if (typeof rp === 'string' && !fs.existsSync(path.resolve(rp))) {
+          warnings.push({
+            field: 'policy.rules',
+            message: `Policy rules path does not exist: ${rp}. It will be resolved at runtime.`,
+            value: rp,
+          });
+        }
+      }
+    }
+
+    if (policy.engine === 'remote') {
+      if (!policy.url) {
+        errors.push({
+          field: 'policy.url',
+          message: 'policy.url is required when policy.engine is "remote"',
+        });
+      } else if (typeof policy.url !== 'string' || !/^https?:\/\//i.test(policy.url)) {
+        errors.push({
+          field: 'policy.url',
+          message: 'policy.url must use http:// or https:// protocol',
+        });
+      }
+    }
+
+    if (policy.fallback !== undefined) {
+      const validFallbacks = ['allow', 'deny', 'warn'];
+      if (!validFallbacks.includes(policy.fallback as string)) {
+        errors.push({
+          field: 'policy.fallback',
+          message: `policy.fallback must be one of: ${validFallbacks.join(', ')}`,
+          value: policy.fallback,
+        });
+      }
+    }
+
+    if (policy.timeout !== undefined) {
+      if (typeof policy.timeout !== 'number' || policy.timeout < 0) {
+        errors.push({
+          field: 'policy.timeout',
+          message: 'policy.timeout must be a non-negative number (milliseconds)',
+          value: policy.timeout,
+        });
+      }
+    }
+
+    if (policy.data !== undefined) {
+      if (typeof policy.data !== 'string') {
+        errors.push({
+          field: 'policy.data',
+          message: 'policy.data must be a string (path to a JSON file)',
+          value: policy.data,
+        });
+      }
+    }
+
+    if (
+      policy.data &&
+      typeof policy.data === 'string' &&
+      !fs.existsSync(path.resolve(policy.data))
+    ) {
+      warnings.push({
+        field: 'policy.data',
+        message: `Policy data file does not exist: ${policy.data}. It will be resolved at runtime.`,
+        value: policy.data,
+      });
+    }
+
+    if (policy.roles && typeof policy.roles === 'object') {
+      for (const [roleName, roleConfig] of Object.entries(policy.roles as Record<string, any>)) {
+        if (typeof roleConfig !== 'object' || roleConfig === null) {
+          errors.push({
+            field: `policy.roles.${roleName}`,
+            message: `Role '${roleName}' must be an object with author_association, teams, or users`,
+            value: roleConfig,
+          });
+        } else {
+          if (Array.isArray(roleConfig.teams) && roleConfig.teams.length > 0) {
+            warnings.push({
+              field: `policy.roles.${roleName}.teams`,
+              message: `Role '${roleName}' uses 'teams' which is not yet implemented. Team-based role resolution requires a future update. Only author_association and users are currently supported.`,
+              value: roleConfig.teams,
+            });
+          }
+
+          const validAssociations = [
+            'OWNER',
+            'MEMBER',
+            'COLLABORATOR',
+            'CONTRIBUTOR',
+            'FIRST_TIME_CONTRIBUTOR',
+            'FIRST_TIMER',
+            'MANNEQUIN',
+            'NONE',
+          ];
+          if (roleConfig.author_association && Array.isArray(roleConfig.author_association)) {
+            for (const assoc of roleConfig.author_association) {
+              if (!validAssociations.includes(assoc)) {
+                warnings.push({
+                  field: `policy.roles.${roleName}.author_association`,
+                  message: `Unknown author_association value: '${assoc}'. Valid values: ${validAssociations.join(', ')}`,
+                  value: assoc,
+                });
+              }
+            }
+          }
+
+          // Validate slack_users (should start with 'U')
+          if (Array.isArray(roleConfig.slack_users)) {
+            for (const uid of roleConfig.slack_users) {
+              if (typeof uid === 'string' && !uid.startsWith('U')) {
+                warnings.push({
+                  field: `policy.roles.${roleName}.slack_users`,
+                  message: `Slack user ID '${uid}' does not start with 'U'. Slack user IDs typically start with 'U' (e.g., U0123ABC).`,
+                  value: uid,
+                });
+              }
+            }
+          }
+
+          // Validate emails (should contain '@')
+          if (Array.isArray(roleConfig.emails)) {
+            for (const email of roleConfig.emails) {
+              if (typeof email === 'string' && !email.includes('@')) {
+                warnings.push({
+                  field: `policy.roles.${roleName}.emails`,
+                  message: `Email '${email}' does not contain '@'. Expected a valid email address.`,
+                  value: email,
+                });
+              }
+            }
+            if (roleConfig.emails.length > 0) {
+              warnings.push({
+                field: `policy.roles.${roleName}.emails`,
+                message: `Role '${roleName}' uses 'emails' for identity matching. This requires the Slack bot to have the 'users:read.email' OAuth scope.`,
+                value: roleConfig.emails,
+              });
+            }
+          }
+
+          // Validate slack_channels (should start with 'C')
+          if (Array.isArray(roleConfig.slack_channels)) {
+            for (const chId of roleConfig.slack_channels) {
+              if (typeof chId === 'string' && !chId.startsWith('C')) {
+                warnings.push({
+                  field: `policy.roles.${roleName}.slack_channels`,
+                  message: `Slack channel ID '${chId}' does not start with 'C'. Public channel IDs typically start with 'C' (e.g., C0123ENG).`,
+                  value: chId,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
    * Validate MCP servers object shape and values (basic shape only)
    */
   private validateMcpServersObject(
@@ -1462,6 +1665,7 @@ export class ConfigManager {
               'sandboxes',
               'sandbox',
               'sandbox_defaults',
+              'policy',
             ]);
             if (topLevel && allowedTopLevelKeys.has(addl)) {
               // Do not warn for these keys.

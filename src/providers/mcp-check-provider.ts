@@ -258,6 +258,41 @@ export class McpCheckProvider extends CheckProvider {
   ): Promise<ReviewSummary> {
     const cfg = config as McpCheckConfig;
 
+    // Policy engine: MCP method filtering
+    const policyEngine = (sessionInfo as any)?._parentContext?.policyEngine;
+    if (policyEngine && cfg.method) {
+      try {
+        const serverName = (config as any).checkName || cfg.server || 'unknown';
+        const decision = await policyEngine.evaluateToolInvocation(
+          serverName,
+          cfg.method,
+          cfg.transport
+        );
+        if (!decision.allowed) {
+          return {
+            issues: [
+              {
+                file: 'mcp',
+                line: 0,
+                ruleId: 'policy/tool_denied',
+                message: `MCP method '${cfg.method}' blocked by policy: ${decision.reason || 'denied'}`,
+                severity: 'error',
+                category: 'security',
+              },
+            ],
+          };
+        }
+      } catch (err) {
+        // Policy evaluation failed — continue without filtering
+        try {
+          const { logger } = require('../logger');
+          logger.warn(
+            `[PolicyEngine] Tool invocation evaluation failed: ${err instanceof Error ? err.message : err}`
+          );
+        } catch {}
+      }
+    }
+
     try {
       // Prepare template context
       const templateContext = {

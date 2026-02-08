@@ -9,6 +9,7 @@ import { ConfigManager } from './config';
 import { StateMachineExecutionEngine } from './state-machine-execution-engine';
 import { OutputFormatters, AnalysisResult } from './output-formatters';
 import { CheckResult, GroupedCheckResults } from './reviewer';
+import { extractTextFromJson } from './utils/json-text-extractor';
 import { PRInfo } from './pr-analyzer';
 import { logger, configureLoggerFromCli } from './logger';
 import { ChatTUI } from './tui/index';
@@ -198,6 +199,98 @@ async function runCheckMode(payloadArg?: string): Promise<void> {
     process.stdout.write(JSON.stringify(errorResult) + '\n');
     process.exit(1);
   }
+}
+
+/**
+ * Handle the --dump-policy-input flag.
+ * Loads config, builds the OPA input document for the given check, and prints it to stdout.
+ */
+async function handleDumpPolicyInput(checkId: string, argv: string[]): Promise<void> {
+  const configManager = new ConfigManager();
+
+  // Parse --config from argv if present
+  const configFlagIndex = argv.indexOf('--config');
+  let configPath: string | undefined;
+  if (configFlagIndex !== -1 && argv[configFlagIndex + 1]) {
+    configPath = argv[configFlagIndex + 1];
+  }
+
+  // Load config
+  let config: import('./types/config').VisorConfig;
+  try {
+    if (configPath) {
+      config = await configManager.loadConfig(configPath);
+    } else {
+      config = await configManager.findAndLoadConfig();
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Error loading configuration: ${msg}`);
+    process.exit(1);
+    return; // unreachable, satisfies TS
+  }
+
+  // Find the check in config
+  const checks = config.checks || {};
+  const checkConfig = checks[checkId];
+  if (!checkConfig) {
+    const available = Object.keys(checks);
+    console.error(
+      `Error: check "${checkId}" not found in configuration.` +
+        (available.length > 0
+          ? ` Available checks: ${available.join(', ')}`
+          : ' No checks defined in configuration.')
+    );
+    process.exit(1);
+    return;
+  }
+
+  // Build actor context from environment (same pattern as OpaPolicyEngine.initialize)
+  const actor = {
+    authorAssociation: process.env.VISOR_AUTHOR_ASSOCIATION,
+    login: process.env.VISOR_AUTHOR_LOGIN || process.env.GITHUB_ACTOR,
+    isLocalMode: !process.env.GITHUB_ACTIONS,
+  };
+
+  // Build repository context from environment
+  const repo = {
+    owner: process.env.GITHUB_REPOSITORY_OWNER,
+    name: process.env.GITHUB_REPOSITORY?.split('/')[1],
+    branch: process.env.GITHUB_HEAD_REF,
+    baseBranch: process.env.GITHUB_BASE_REF,
+    event: process.env.GITHUB_EVENT_NAME,
+  };
+
+  // Build the PolicyInputBuilder with policy config (or empty defaults)
+  let PolicyInputBuilder: any;
+  try {
+    // @ts-ignore — enterprise/ may not exist in OSS builds (caught at runtime)
+    const mod = await import('./enterprise/policy/policy-input-builder');
+    PolicyInputBuilder = mod.PolicyInputBuilder;
+  } catch {
+    console.error('Error: --dump-policy-input requires the Enterprise Edition.');
+    console.error('The PolicyInputBuilder module is not available in the OSS build.');
+    process.exit(1);
+    return;
+  }
+
+  const policyConfig = (config as any).policy || { roles: {} };
+  const builder = new PolicyInputBuilder(policyConfig, actor, repo);
+
+  // Build the OPA input document for check execution
+  const input = builder.forCheckExecution({
+    id: checkId,
+    type: checkConfig.type || 'ai',
+    group: checkConfig.group,
+    tags: checkConfig.tags,
+    criticality: checkConfig.criticality,
+    sandbox: checkConfig.sandbox,
+    policy: (checkConfig as any).policy,
+  });
+
+  // Print pretty-printed JSON to stdout
+  console.log(JSON.stringify(input, null, 2));
+  process.exit(0);
 }
 
 /**
@@ -649,6 +742,56 @@ async function handleTestCommand(argv: string[]): Promise<void> {
   }
 }
 
+// handlePolicyCheckCommand is extracted to src/policy/policy-check-command.ts
+// It is dynamically imported at the call site to keep the same lazy-loading behaviour.
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function buildChatTranscript(
+  groupedResults: GroupedCheckResults,
+  config: import('./types/config').VisorConfig
+): string {
+  const messages: string[] = [];
+  const checks = config.checks || {};
+  const separator = '\n\n' + '-'.repeat(60) + '\n\n';
+
+  for (const checkResults of Object.values(groupedResults)) {
+    for (const result of checkResults) {
+      const checkCfg: any = (checks as any)[result.checkName] || {};
+      const providerType = typeof checkCfg.type === 'string' ? checkCfg.type : '';
+      const group = (checkCfg.group as string) || result.group || '';
+      const schema = checkCfg.schema;
+      const isChatGroup = group === 'chat';
+      const isAi = providerType === 'ai';
+      const isLog = providerType === 'log';
+      const isSimpleSchema =
+        typeof schema === 'string' ? ['plain', 'text', 'markdown'].includes(schema) : false;
+
+      let text = extractTextFromJson(result.output);
+
+      if (!text && isAi && typeof result.content === 'string') {
+        if (isSimpleSchema || schema === undefined || schema === null) {
+          text = result.content.trim();
+        }
+      }
+
+      if (!text && isLog && isChatGroup && typeof result.content === 'string') {
+        text = result.content.trim();
+      }
+
+      if (!text && isChatGroup && typeof result.content === 'string') {
+        text = result.content.trim();
+      }
+
+      if (!text || text.trim().length === 0) continue;
+
+      const header = result.checkName ? result.checkName : 'chat';
+      messages.push(`${header}\n${text.trim()}`);
+    }
+  }
+
+  return messages.join(separator);
+}
+
 /**
  * Main CLI entry point for Visor
  */
@@ -702,6 +845,19 @@ export async function main(): Promise<void> {
     if (runCheckIndex !== -1) {
       const payloadArg = process.argv[runCheckIndex + 1];
       await runCheckMode(payloadArg);
+      return;
+    }
+
+    // Check for --dump-policy-input mode before standard CLI parsing
+    const dumpPolicyIndex = filteredArgv.indexOf('--dump-policy-input');
+    if (dumpPolicyIndex !== -1) {
+      const checkId = filteredArgv[dumpPolicyIndex + 1];
+      if (!checkId || checkId.startsWith('--')) {
+        console.error('Error: --dump-policy-input requires a check ID argument.');
+        console.error('Usage: visor --dump-policy-input <checkId> [--config <path>]');
+        process.exit(1);
+      }
+      await handleDumpPolicyInput(checkId, filteredArgv);
       return;
     }
 
@@ -763,6 +919,12 @@ export async function main(): Promise<void> {
       const { handleScheduleCommand } = await import('./scheduler/cli-handler');
       const configManager = new ConfigManager();
       await handleScheduleCommand(filteredArgv.slice(3), configManager);
+      return;
+    }
+    // Check for policy-check subcommand
+    if (filteredArgv.length > 2 && filteredArgv[2] === 'policy-check') {
+      const { handlePolicyCheckCommand } = await import('./policy/policy-check-command');
+      await handlePolicyCheckCommand(filteredArgv);
       return;
     }
     // Check for code-review subcommands: run the built-in code-review suite

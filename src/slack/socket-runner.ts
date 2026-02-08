@@ -435,6 +435,17 @@ export class SlackSocketRunner {
       payloadForContext = env.payload;
     }
 
+    // Stash Slack user info on payload for policy engine (pre-fetch to avoid duplicate API calls)
+    try {
+      const userId = String(ev.user || '');
+      if (userId) {
+        const userInfo = await this.fetchUserInfo(userId);
+        if (userInfo) {
+          payloadForContext = { ...payloadForContext, slack_user_info: userInfo };
+        }
+      }
+    } catch {}
+
     // Prepare webhookContext map for http_input provider reuse
     const map = new Map<string, unknown>();
     map.set(this.endpoint, payloadForContext);

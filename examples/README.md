@@ -134,6 +134,9 @@ Example configurations demonstrating various Visor features and use cases.
 - **`sandbox-multi-env.yaml`** - Multiple sandbox environments per check
 - **`sandbox-read-only.yaml`** - Read-only sandbox with network isolation
 
+### Enterprise Policy Examples (EE)
+- **`enterprise-policy/`** - OPA policy engine with role-based access control **(Enterprise Edition -- requires license, contact hello@probelabs.com)**
+
 ### Integration Examples
 - **`jira-simple-example.yaml`** - Simple JIRA integration
 - **`jira-single-issue-workflow.yaml`** - Single JIRA issue workflow
@@ -463,6 +466,26 @@ visor --config examples/workflows/quick-pr-check.yaml --input "pr_type=feature"
 # Workflow composition example (imports calculator-workflow)
 visor --config examples/workflows/workflow-composition-example.yaml
 ```
+
+## Enterprise Policy Engine (EE)
+
+> **Enterprise Edition feature.** Requires a Visor EE license.
+> Contact **hello@probelabs.com** for licensing.
+
+Role-based access control for checks, MCP tools, and AI capabilities using OPA (Open Policy Agent) policies:
+
+```bash
+# Install EE build
+npm install @probelabs/visor@ee
+
+# Set license
+export VISOR_LICENSE="<your-jwt-token>"
+
+# Run with policy enforcement
+visor --config examples/enterprise-policy/visor.yaml
+```
+
+See [`examples/enterprise-policy/README.md`](enterprise-policy/README.md) for full documentation, configuration reference, and Rego policy examples.
 
 ## 📚 Further Reading
 

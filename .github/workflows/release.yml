@@ -90,6 +90,64 @@ jobs:
           echo "🎉 Successfully published @probelabs/visor@$VERSION to npm!"
           echo "📦 Install with: npx -y @probelabs/visor"
 
+  # Publish Enterprise Edition with -ee version suffix
+  release-npm-ee:
+    runs-on: ubuntu-latest
+    needs: release-npm  # Publish EE after OSS succeeds
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Set version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "EE_VERSION=${VERSION}-ee" >> $GITHUB_ENV
+
+      - name: Build EE package
+        run: npm run build:ee
+
+      - name: Verify enterprise code in bundle
+        run: |
+          if grep -q "OpaPolicyEngine" dist/index.js && grep -q "LicenseValidator" dist/index.js; then
+            echo "✅ EE bundle contains enterprise code"
+          else
+            echo "❌ EE bundle is missing enterprise code"
+            exit 1
+          fi
+
+      - name: Set EE version
+        run: npm version "$EE_VERSION" --no-git-tag-version
+
+      - name: Publish EE to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm publish --access public --provenance --tag ee --ignore-scripts
+
+      - name: Post-release notification
+        if: success()
+        run: |
+          echo "🎉 Successfully published @probelabs/visor@$EE_VERSION to npm!"
+          echo "📦 Install with: npm install @probelabs/visor@ee"
+
   # GitHub Release creation with AI-generated notes
   create-release:
     runs-on: ubuntu-latest

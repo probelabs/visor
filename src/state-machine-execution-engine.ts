@@ -298,6 +298,67 @@ export class StateMachineExecutionEngine {
     const { initializeWorkspace } = require('./state-machine/context/build-engine-context');
     await initializeWorkspace(context);
 
+    // Initialize policy engine (enterprise — dynamic import, no-op if unavailable)
+    if (configWithTagFilter.policy?.engine && configWithTagFilter.policy.engine !== 'disabled') {
+      try {
+        logger.debug(
+          `[PolicyEngine] Loading enterprise policy engine (engine=${configWithTagFilter.policy.engine})`
+        );
+        // @ts-ignore — enterprise/ may not exist in OSS builds (caught at runtime)
+        const { loadEnterprisePolicyEngine } = await import('./enterprise/loader');
+        context.policyEngine = await loadEnterprisePolicyEngine(configWithTagFilter.policy);
+        logger.debug(
+          `[PolicyEngine] Initialized: ${context.policyEngine?.constructor?.name || 'unknown'}`
+        );
+      } catch (err) {
+        // Enterprise module not available — continue with no policy engine
+        try {
+          logger.warn(
+            `[PolicyEngine] Enterprise policy engine init failed, using default: ${err instanceof Error ? err.message : err}`
+          );
+        } catch {}
+      }
+    }
+
+    // Enrich policy engine with PR context once available
+    if (context.policyEngine && 'setActorContext' in context.policyEngine) {
+      const actor: any = {
+        authorAssociation: prInfo?.authorAssociation || process.env.VISOR_AUTHOR_ASSOCIATION,
+        login: prInfo?.author || process.env.GITHUB_ACTOR,
+        isLocalMode: !process.env.GITHUB_ACTIONS,
+      };
+
+      // Extract Slack identity from webhookData (stashed by socket-runner)
+      try {
+        const webhookData = (this.executionContext as any)?.webhookContext?.webhookData;
+        if (webhookData instanceof Map) {
+          const { extractSlackContext } = await import('./slack/schedule-tool-handler');
+          const slackCtx = extractSlackContext(webhookData);
+          if (slackCtx) {
+            // Read pre-fetched user info (stashed by socket-runner)
+            const payload = Array.from(webhookData.values())[0] as any;
+            const userInfo = payload?.slack_user_info;
+            actor.slack = {
+              userId: slackCtx.userId,
+              channelId: slackCtx.channel,
+              channelType: slackCtx.channelType,
+              email: userInfo?.email,
+            };
+          }
+        }
+      } catch {}
+
+      const pullRequest = prInfo
+        ? {
+            number: prInfo.number,
+            labels: prInfo.labels,
+            draft: (prInfo as any).draft,
+            changedFiles: prInfo.files?.length,
+          }
+        : undefined;
+      (context.policyEngine as any).setActorContext(actor, undefined, pullRequest);
+    }
+
     // Copy execution context (hooks, etc.) from legacy engine
     context.executionContext = this.getExecutionContext();
 
@@ -486,6 +547,15 @@ export class StateMachineExecutionEngine {
         sessionRegistry.clearAllSessions();
       } catch (error) {
         logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
+      }
+
+      // Cleanup policy engine if enabled
+      if (context.policyEngine) {
+        try {
+          await context.policyEngine.shutdown();
+        } catch (error) {
+          logger.debug(`[StateMachine] Failed to cleanup policy engine: ${error}`);
+        }
       }
 
       // Cleanup workspace if enabled

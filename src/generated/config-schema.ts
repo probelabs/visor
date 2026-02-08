@@ -165,6 +165,10 @@ export const configSchema = {
           $ref: '#/definitions/SchedulerConfig',
           description: 'Scheduler configuration for scheduled workflow execution',
         },
+        policy: {
+          $ref: '#/definitions/PolicyConfig',
+          description: 'Enterprise policy engine configuration (EE feature)',
+        },
       },
       required: ['version'],
       patternProperties: {
@@ -845,6 +849,10 @@ export const configSchema = {
         persist_worktree: {
           type: 'boolean',
           description: 'Keep worktree after workflow completion (default: false)',
+        },
+        policy: {
+          $ref: '#/definitions/StepPolicyOverride',
+          description: 'Per-step policy override (enterprise)',
         },
       },
       additionalProperties: false,
@@ -2177,6 +2185,50 @@ export const configSchema = {
         '^x-': {},
       },
     },
+    PolicyConfig: {
+      type: 'object',
+      properties: {
+        engine: {
+          type: 'string',
+          enum: ['local', 'remote', 'disabled'],
+          description:
+            "Policy engine mode: 'local' (WASM), 'remote' (HTTP OPA server), or 'disabled'",
+        },
+        rules: {
+          anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+          description: 'Path to .rego files or .wasm bundle (local mode)',
+        },
+        data: {
+          type: 'string',
+          description: 'Path to a JSON file to load as OPA data document (local mode)',
+        },
+        url: {
+          type: 'string',
+          description: 'OPA server URL (remote mode)',
+        },
+        fallback: {
+          type: 'string',
+          enum: ['allow', 'deny', 'warn'],
+          description:
+            "Default decision when policy evaluation fails (default: 'deny'). Use 'warn' for audit mode: violations are logged but not enforced.",
+        },
+        timeout: {
+          type: 'number',
+          description: 'Evaluation timeout in milliseconds (default: 5000)',
+        },
+        roles: {
+          type: 'object',
+          additionalProperties: {
+            $ref: '#/definitions/PolicyRoleConfig',
+          },
+          description: 'Role definitions: map role names to conditions',
+        },
+      },
+      additionalProperties: false,
+      patternProperties: {
+        '^x-': {},
+      },
+    },
     SchedulerLimitsConfig: {
       type: 'object',
       properties: {
@@ -2231,6 +2283,45 @@ export const configSchema = {
       },
       additionalProperties: false,
       description: 'Scheduler permissions for dynamic schedule creation',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    PolicyRoleConfig: {
+      type: 'object',
+      properties: {
+        author_association: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'GitHub author associations that map to this role',
+        },
+        teams: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'GitHub team slugs',
+        },
+        users: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Explicit GitHub usernames',
+        },
+        slack_users: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Slack user IDs (e.g., U0123ABC)',
+        },
+        emails: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Email addresses for identity matching',
+        },
+        slack_channels: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Slack channel IDs — role only applies when triggered from these channels',
+        },
+      },
+      additionalProperties: false,
       patternProperties: {
         '^x-': {},
       },
@@ -2297,6 +2388,28 @@ export const configSchema = {
       additionalProperties: false,
       description:
         'Static cron job defined in YAML configuration These are always executed by the scheduler daemon',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    StepPolicyOverride: {
+      type: 'object',
+      properties: {
+        require: {
+          anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+          description: 'Required role(s) — any of these roles suffices',
+        },
+        deny: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Explicit deny for roles',
+        },
+        rule: {
+          type: 'string',
+          description: 'Custom OPA rule path for this step',
+        },
+      },
+      additionalProperties: false,
       patternProperties: {
         '^x-': {},
       },

@@ -4,6 +4,7 @@
 
 // Import types from reviewer
 import type { ReviewIssue } from '../reviewer';
+import type { PolicyConfig, StepPolicyOverride } from '../policy/types';
 
 // Export Issue type for backward compatibility
 export type Issue = ReviewIssue;
@@ -739,6 +740,8 @@ export interface CheckConfig {
   persist_worktree?: boolean;
   /** Sandbox name to use for this check (overrides workspace-level default) */
   sandbox?: string;
+  /** Per-step policy override (enterprise) */
+  policy?: StepPolicyOverride;
 }
 
 /**
@@ -1340,6 +1343,8 @@ export interface VisorConfig {
   slack?: SlackConfig;
   /** Scheduler configuration for scheduled workflow execution */
   scheduler?: SchedulerConfig;
+  /** Enterprise policy engine configuration */
+  policy?: PolicyConfig;
 }
 
 /**

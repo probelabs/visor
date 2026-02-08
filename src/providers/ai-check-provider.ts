@@ -1005,6 +1005,41 @@ export class AICheckProvider extends CheckProvider {
       aiConfig.maxIterations = config.ai_max_iterations as number;
     }
 
+    // Policy engine: capability enforcement
+    const policyEngine = (sessionInfo as any)?._parentContext?.policyEngine;
+    if (policyEngine) {
+      try {
+        const checkName = (config as any).checkName || 'unknown';
+        const decision = await policyEngine.evaluateCapabilities(checkName, {
+          allowEdit: aiConfig.allowEdit,
+          allowBash: aiConfig.allowBash,
+          allowedTools: aiConfig.allowedTools,
+        });
+        if (decision.capabilities) {
+          if (decision.capabilities.allowEdit === false) aiConfig.allowEdit = false;
+          if (decision.capabilities.allowBash === false) aiConfig.allowBash = false;
+          if (decision.capabilities.allowedTools) {
+            if (aiConfig.allowedTools) {
+              // Intersect: policy can only restrict, not expand
+              aiConfig.allowedTools = aiConfig.allowedTools.filter((t: string) =>
+                decision.capabilities!.allowedTools!.includes(t)
+              );
+            } else {
+              aiConfig.allowedTools = decision.capabilities.allowedTools;
+            }
+          }
+        }
+      } catch (err) {
+        // Policy evaluation failed — continue without filtering
+        try {
+          const { logger } = require('../logger');
+          logger.warn(
+            `[PolicyEngine] Capability evaluation failed: ${err instanceof Error ? err.message : err}`
+          );
+        } catch {}
+      }
+    }
+
     // Get custom prompt from config - REQUIRED, no fallbacks
     const customPrompt = config.prompt;
 

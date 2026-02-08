@@ -33,6 +33,7 @@ import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from '../../telemetry/fa
 import { FailureConditionEvaluator } from '../../failure-condition-evaluator';
 import { resolveWorkflowInputs } from '../context/workflow-inputs';
 import { executeWithSandboxRouting } from '../dispatch/sandbox-routing';
+import { applyPolicyGate } from '../dispatch/policy-gate';
 
 /**
  * Map check name to focus for AI provider
@@ -1750,6 +1751,61 @@ async function executeSingleCheck(
         result: emptyResult,
       });
 
+      return emptyResult;
+    }
+  }
+
+  // Policy engine gating — after if-condition, before dependency gating
+  if (context.policyEngine && checkConfig) {
+    const gate = await applyPolicyGate(checkId, checkConfig, context.policyEngine);
+    if (gate.warn && gate.auditReason) {
+      // Record audit violation in stats for visibility
+      if (state.stats.has(checkId)) {
+        const s = state.stats.get(checkId)!;
+        (s as any).policyAuditWarning = gate.auditReason;
+      }
+    }
+    if (gate.skip) {
+      const emptyResult: ReviewSummary = { issues: [] };
+      try {
+        Object.defineProperty(emptyResult as any, '__skipped', {
+          value: 'policy_denied',
+          enumerable: false,
+        });
+      } catch {}
+      state.completedChecks.add(checkId);
+      const stats: CheckExecutionStats = {
+        checkName: checkId,
+        totalRuns: 0,
+        successfulRuns: 0,
+        failedRuns: 0,
+        skippedRuns: 0,
+        skipped: true,
+        skipReason: 'policy_denied',
+        skipCondition: gate.reason || 'policy denied',
+        totalDuration: 0,
+        issuesFound: 0,
+        issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
+      };
+      state.stats.set(checkId, stats);
+      logger.info(`[LevelDispatch] Recorded skip stats for ${checkId}: skipReason=policy_denied`);
+      try {
+        context.journal.commitEntry({
+          sessionId: context.sessionId,
+          checkId,
+          result: emptyResult as any,
+          event: context.event || 'manual',
+          scope: [],
+        });
+      } catch (error) {
+        logger.warn(`[LevelDispatch] Failed to commit policy-denied result to journal: ${error}`);
+      }
+      emitEvent({
+        type: 'CheckCompleted',
+        checkId,
+        scope: [],
+        result: emptyResult,
+      });
       return emptyResult;
     }
   }
