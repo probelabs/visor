@@ -40,7 +40,7 @@
     "prepublishOnly": "npm run build",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "test:ee": "jest --testPathPatterns='tests/ee' --no-coverage",
+    "test:ee": "jest --testPathPatterns='tests/ee' --testPathIgnorePatterns='/node_modules/' --no-coverage",
     "test:manual:bash": "RUN_MANUAL_TESTS=true jest tests/manual/bash-config-manual.test.ts",
     "lint": "eslint src tests --ext .ts",
     "lint:fix": "eslint src tests --ext .ts --fix",

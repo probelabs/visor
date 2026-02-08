@@ -24,25 +24,25 @@ import { DefaultPolicyEngine } from '../../src/policy/default-engine';
 // Helpers
 // ---------------------------------------------------------------------------
 
-const PROJECT_ROOT = path.resolve(__dirname, '../..');
-const PRIVATE_KEY_PATH = path.join(PROJECT_ROOT, 'visor-private.pem');
-
 /**
- * Read the real Ed25519 private key shipped with the repo (test-only key).
+ * Generate a fresh Ed25519 keypair for testing and patch LicenseValidator.
+ * This avoids needing the visor-private.pem file on disk (it's gitignored).
  */
-function loadPrivateKey(): crypto.KeyObject {
-  const pem = fs.readFileSync(PRIVATE_KEY_PATH, 'utf-8');
-  return crypto.createPrivateKey(pem);
-}
+const testKeyPair = crypto.generateKeyPairSync('ed25519');
+const testPublicKeyPem = testKeyPair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+
+// Patch LicenseValidator to use our test public key
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(LicenseValidator as any).PUBLIC_KEY = testPublicKeyPem;
 
 /**
- * Sign a JWT with the real Ed25519 private key.
+ * Sign a JWT with the generated test private key.
  *
  * Format: base64url(header).base64url(payload).base64url(signature)
  * Header: { "alg": "EdDSA", "typ": "JWT" }
  */
-function signJwt(payload: Record<string, unknown>): string {
-  const privateKey = loadPrivateKey();
+function signJwt(payload: Record<string, unknown> | LicensePayload): string {
+  const privateKey = testKeyPair.privateKey;
 
   const header = { alg: 'EdDSA', typ: 'JWT' };
   const headerB64 = Buffer.from(JSON.stringify(header)).toString('base64url');
@@ -303,7 +303,7 @@ describe('Enterprise E2E: License Validator Happy Path', () => {
 
   it('rejects a JWT with non-EdDSA algorithm header', async () => {
     const payload = buildLicensePayload();
-    const privateKey = loadPrivateKey();
+    const privateKey = testKeyPair.privateKey;
 
     // Create a JWT with wrong algorithm in header
     const header = { alg: 'RS256', typ: 'JWT' };

@@ -79,16 +79,20 @@ if (opaWasmCapable && !opaWasmNpmAvailable) {
 // ---------------------------------------------------------------------------
 
 const PROJECT_ROOT = path.resolve(__dirname, '../..');
-const PRIVATE_KEY_PATH = path.join(PROJECT_ROOT, 'visor-private.pem');
 const DIST_CLI = path.join(PROJECT_ROOT, 'dist/index.js');
+
+/**
+ * Generate a fresh Ed25519 keypair for testing.
+ * Avoids needing visor-private.pem on disk (it's gitignored).
+ */
+const testKeyPair = crypto.generateKeyPairSync('ed25519');
 
 // ---------------------------------------------------------------------------
 // JWT helper
 // ---------------------------------------------------------------------------
 
 function createLicenseJWT(overrides: Record<string, unknown> = {}): string {
-  const privateKeyPem = fs.readFileSync(PRIVATE_KEY_PATH, 'utf-8');
-  const privateKey = crypto.createPrivateKey(privateKeyPem);
+  const privateKey = testKeyPair.privateKey;
 
   const header = Buffer.from(JSON.stringify({ alg: 'EdDSA', typ: 'JWT' })).toString('base64url');
 
@@ -142,8 +146,8 @@ function execCLI(
     const out = execSync(shellCmd, {
       cwd: options.cwd,
       env: mergedEnv as NodeJS.ProcessEnv,
-      encoding: 'utf-8',
-      shell: true,
+      encoding: 'utf-8' as BufferEncoding,
+      shell: '/bin/sh',
       timeout: 45_000,
     }) as unknown as string;
     return typeof out === 'string' ? out : String(out);
