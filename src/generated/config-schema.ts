@@ -2305,6 +2305,21 @@ export const configSchema = {
           items: { type: 'string' },
           description: 'Explicit GitHub usernames',
         },
+        slack_users: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Slack user IDs (e.g., U0123ABC)',
+        },
+        emails: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Email addresses for identity matching',
+        },
+        slack_channels: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Slack channel IDs — role only applies when triggered from these channels',
+        },
       },
       additionalProperties: false,
       patternProperties: {

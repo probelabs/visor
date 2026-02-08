@@ -78,6 +78,12 @@ export interface PolicyRoleConfig {
   teams?: string[];
   /** Explicit GitHub usernames */
   users?: string[];
+  /** Slack user IDs (e.g., ["U0123ABC"]) */
+  slack_users?: string[];
+  /** Email addresses for identity matching (e.g., ["alice@co.com"]) */
+  emails?: string[];
+  /** Slack channel IDs — role only applies when triggered from these channels */
+  slack_channels?: string[];
 }
 
 export interface StepPolicyOverride {

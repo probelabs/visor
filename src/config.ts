@@ -1483,6 +1483,52 @@ export class ConfigManager {
               }
             }
           }
+
+          // Validate slack_users (should start with 'U')
+          if (Array.isArray(roleConfig.slack_users)) {
+            for (const uid of roleConfig.slack_users) {
+              if (typeof uid === 'string' && !uid.startsWith('U')) {
+                warnings.push({
+                  field: `policy.roles.${roleName}.slack_users`,
+                  message: `Slack user ID '${uid}' does not start with 'U'. Slack user IDs typically start with 'U' (e.g., U0123ABC).`,
+                  value: uid,
+                });
+              }
+            }
+          }
+
+          // Validate emails (should contain '@')
+          if (Array.isArray(roleConfig.emails)) {
+            for (const email of roleConfig.emails) {
+              if (typeof email === 'string' && !email.includes('@')) {
+                warnings.push({
+                  field: `policy.roles.${roleName}.emails`,
+                  message: `Email '${email}' does not contain '@'. Expected a valid email address.`,
+                  value: email,
+                });
+              }
+            }
+            if (roleConfig.emails.length > 0) {
+              warnings.push({
+                field: `policy.roles.${roleName}.emails`,
+                message: `Role '${roleName}' uses 'emails' for identity matching. This requires the Slack bot to have the 'users:read.email' OAuth scope.`,
+                value: roleConfig.emails,
+              });
+            }
+          }
+
+          // Validate slack_channels (should start with 'C')
+          if (Array.isArray(roleConfig.slack_channels)) {
+            for (const chId of roleConfig.slack_channels) {
+              if (typeof chId === 'string' && !chId.startsWith('C')) {
+                warnings.push({
+                  field: `policy.roles.${roleName}.slack_channels`,
+                  message: `Slack channel ID '${chId}' does not start with 'C'. Public channel IDs typically start with 'C' (e.g., C0123ENG).`,
+                  value: chId,
+                });
+              }
+            }
+          }
         }
       }
     }

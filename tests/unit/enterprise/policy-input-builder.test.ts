@@ -59,6 +59,96 @@ describe('PolicyInputBuilder', () => {
       );
       expect(builder.resolveRoles()).toEqual([]);
     });
+
+    describe('Slack identity', () => {
+      const slackPolicyConfig: PolicyConfig = {
+        engine: 'local',
+        rules: './policies/',
+        roles: {
+          admin: {
+            author_association: ['OWNER'],
+            users: ['cto-user'],
+            slack_users: ['U0123ADMIN'],
+            emails: ['admin@company.com'],
+          },
+          developer: {
+            author_association: ['MEMBER', 'COLLABORATOR'],
+            emails: ['alice@co.com', 'bob@co.com'],
+          },
+          'eng-channel': {
+            slack_channels: ['C0123ENG'],
+            slack_users: ['U0123ALICE', 'U0123BOB'],
+          },
+        },
+      };
+
+      it('resolves role by slack_users', () => {
+        const builder = new PolicyInputBuilder(slackPolicyConfig, {
+          isLocalMode: false,
+          slack: { userId: 'U0123ADMIN', channelId: 'C999', channelType: 'channel' },
+        });
+        expect(builder.resolveRoles()).toEqual(['admin']);
+      });
+
+      it('resolves role by email (case-insensitive)', () => {
+        const builder = new PolicyInputBuilder(slackPolicyConfig, {
+          isLocalMode: false,
+          slack: { email: 'ADMIN@Company.COM', channelId: 'C999', channelType: 'channel' },
+        });
+        expect(builder.resolveRoles()).toEqual(['admin']);
+      });
+
+      it('resolves developer role by email', () => {
+        const builder = new PolicyInputBuilder(slackPolicyConfig, {
+          isLocalMode: false,
+          slack: { email: 'alice@co.com', channelId: 'C999', channelType: 'channel' },
+        });
+        expect(builder.resolveRoles()).toEqual(['developer']);
+      });
+
+      it('applies slack_channels gate — role matches when channel is in list', () => {
+        const builder = new PolicyInputBuilder(slackPolicyConfig, {
+          isLocalMode: false,
+          slack: { userId: 'U0123ALICE', channelId: 'C0123ENG', channelType: 'channel' },
+        });
+        expect(builder.resolveRoles()).toEqual(['eng-channel']);
+      });
+
+      it('applies slack_channels gate — role does NOT match when channel is not in list', () => {
+        const builder = new PolicyInputBuilder(slackPolicyConfig, {
+          isLocalMode: false,
+          slack: { userId: 'U0123ALICE', channelId: 'C9999OTHER', channelType: 'channel' },
+        });
+        expect(builder.resolveRoles()).toEqual([]);
+      });
+
+      it('applies slack_channels gate — role does NOT match without Slack context', () => {
+        const builder = new PolicyInputBuilder(slackPolicyConfig, {
+          isLocalMode: false,
+        });
+        // eng-channel requires slack_channels AND slack_users, no slack context → no match
+        expect(builder.resolveRoles()).toEqual([]);
+      });
+
+      it('combines GitHub and Slack criteria (OR for identity)', () => {
+        const builder = new PolicyInputBuilder(slackPolicyConfig, {
+          authorAssociation: 'OWNER',
+          isLocalMode: false,
+          slack: { userId: 'U0123ALICE', channelId: 'C0123ENG', channelType: 'channel' },
+        });
+        // Should match admin (via author_association) AND eng-channel (via slack_users + channel gate)
+        expect(builder.resolveRoles()).toEqual(['admin', 'eng-channel']);
+      });
+
+      it('does not match slack-only roles when no Slack context is present', () => {
+        const builder = new PolicyInputBuilder(slackPolicyConfig, {
+          authorAssociation: 'CONTRIBUTOR',
+          isLocalMode: false,
+        });
+        // No GitHub or Slack match
+        expect(builder.resolveRoles()).toEqual([]);
+      });
+    });
   });
 
   describe('forCheckExecution', () => {
@@ -85,6 +175,39 @@ describe('PolicyInputBuilder', () => {
       expect(input.actor.roles).toEqual(['admin']);
       expect(input.actor.isLocalMode).toBe(false);
       expect(input.repository?.owner).toBe('org');
+    });
+
+    it('includes slack context in OPA input when present', () => {
+      const builder = new PolicyInputBuilder(basePolicyConfig, {
+        authorAssociation: 'OWNER',
+        isLocalMode: false,
+        slack: {
+          userId: 'U0123',
+          email: 'admin@co.com',
+          channelId: 'C0123',
+          channelType: 'channel',
+        },
+      });
+
+      const input = builder.forCheckExecution({ id: 'test', type: 'ai' });
+
+      expect(input.actor.slack).toEqual({
+        userId: 'U0123',
+        email: 'admin@co.com',
+        channelId: 'C0123',
+        channelType: 'channel',
+      });
+    });
+
+    it('omits slack from OPA input when not present', () => {
+      const builder = new PolicyInputBuilder(basePolicyConfig, {
+        authorAssociation: 'OWNER',
+        isLocalMode: false,
+      });
+
+      const input = builder.forCheckExecution({ id: 'test', type: 'ai' });
+
+      expect(input.actor.slack).toBeUndefined();
     });
   });
 

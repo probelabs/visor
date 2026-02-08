@@ -14,12 +14,18 @@ policy:
     admin:
       author_association: [OWNER]
       users: [cto-username]
+      slack_users: [U0123ADMIN]
+      emails: [admin@company.com]
     developer:
       author_association: [MEMBER, COLLABORATOR]
+      emails: [alice@co.com, bob@co.com]
     reviewer:
       author_association: [MEMBER, COLLABORATOR, CONTRIBUTOR]
     external:
       author_association: [FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, NONE]
+    eng-channel:
+      slack_channels: [C0123ENG]
+      slack_users: [U0123ALICE, U0123BOB]
 
 steps:
   security-scan:

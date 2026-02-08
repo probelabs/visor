@@ -38,6 +38,12 @@ export interface OpaInput {
     login?: string;
     roles: string[];
     isLocalMode: boolean;
+    slack?: {
+      userId?: string;
+      email?: string;
+      channelId?: string;
+      channelType?: 'channel' | 'dm' | 'group';
+    };
   };
   repository?: {
     owner?: string;
@@ -59,6 +65,12 @@ export interface ActorContext {
   authorAssociation?: string;
   login?: string;
   isLocalMode: boolean;
+  slack?: {
+    userId?: string;
+    email?: string;
+    channelId?: string;
+    channelType?: 'channel' | 'dm' | 'group';
+  };
 }
 
 export interface RepositoryContext {
@@ -116,22 +128,59 @@ export class PolicyInputBuilder {
     const matched: string[] = [];
 
     for (const [roleName, roleConfig] of Object.entries(this.roles)) {
+      let identityMatch = false;
+
       if (
         roleConfig.author_association &&
         this.actor.authorAssociation &&
         roleConfig.author_association.includes(this.actor.authorAssociation)
       ) {
-        matched.push(roleName);
-        continue;
+        identityMatch = true;
       }
 
-      if (roleConfig.users && this.actor.login && roleConfig.users.includes(this.actor.login)) {
-        matched.push(roleName);
-        continue;
+      if (
+        !identityMatch &&
+        roleConfig.users &&
+        this.actor.login &&
+        roleConfig.users.includes(this.actor.login)
+      ) {
+        identityMatch = true;
+      }
+
+      // Slack user ID match
+      if (
+        !identityMatch &&
+        roleConfig.slack_users &&
+        this.actor.slack?.userId &&
+        roleConfig.slack_users.includes(this.actor.slack.userId)
+      ) {
+        identityMatch = true;
+      }
+
+      // Email match (case-insensitive)
+      if (!identityMatch && roleConfig.emails && this.actor.slack?.email) {
+        const actorEmail = this.actor.slack.email.toLowerCase();
+        if (roleConfig.emails.some(e => e.toLowerCase() === actorEmail)) {
+          identityMatch = true;
+        }
       }
 
       // Note: teams-based role resolution requires GitHub API access (read:org scope)
       // and is not yet implemented. If configured, the role will not match via teams.
+
+      if (!identityMatch) continue;
+
+      // slack_channels gate: if set, the role only applies when triggered from one of these channels
+      if (roleConfig.slack_channels && roleConfig.slack_channels.length > 0) {
+        if (
+          !this.actor.slack?.channelId ||
+          !roleConfig.slack_channels.includes(this.actor.slack.channelId)
+        ) {
+          continue;
+        }
+      }
+
+      matched.push(roleName);
     }
 
     return matched;
@@ -143,6 +192,7 @@ export class PolicyInputBuilder {
       login: this.actor.login,
       roles: this.resolveRoles(),
       isLocalMode: this.actor.isLocalMode,
+      ...(this.actor.slack && { slack: this.actor.slack }),
     };
   }
 

@@ -321,18 +321,41 @@ export class StateMachineExecutionEngine {
     }
 
     // Enrich policy engine with PR context once available
-    if (context.policyEngine && 'setActorContext' in context.policyEngine && prInfo) {
-      const actor = {
-        authorAssociation: prInfo.authorAssociation || process.env.VISOR_AUTHOR_ASSOCIATION,
-        login: prInfo.author || process.env.GITHUB_ACTOR,
+    if (context.policyEngine && 'setActorContext' in context.policyEngine) {
+      const actor: any = {
+        authorAssociation: prInfo?.authorAssociation || process.env.VISOR_AUTHOR_ASSOCIATION,
+        login: prInfo?.author || process.env.GITHUB_ACTOR,
         isLocalMode: !process.env.GITHUB_ACTIONS,
       };
-      const pullRequest = {
-        number: prInfo.number,
-        labels: prInfo.labels,
-        draft: (prInfo as any).draft,
-        changedFiles: prInfo.files?.length,
-      };
+
+      // Extract Slack identity from webhookData (stashed by socket-runner)
+      try {
+        const webhookData = (this.executionContext as any)?.webhookContext?.webhookData;
+        if (webhookData instanceof Map) {
+          const { extractSlackContext } = await import('./slack/schedule-tool-handler');
+          const slackCtx = extractSlackContext(webhookData);
+          if (slackCtx) {
+            // Read pre-fetched user info (stashed by socket-runner)
+            const payload = Array.from(webhookData.values())[0] as any;
+            const userInfo = payload?.slack_user_info;
+            actor.slack = {
+              userId: slackCtx.userId,
+              channelId: slackCtx.channel,
+              channelType: slackCtx.channelType,
+              email: userInfo?.email,
+            };
+          }
+        }
+      } catch {}
+
+      const pullRequest = prInfo
+        ? {
+            number: prInfo.number,
+            labels: prInfo.labels,
+            draft: (prInfo as any).draft,
+            changedFiles: prInfo.files?.length,
+          }
+        : undefined;
       (context.policyEngine as any).setActorContext(actor, undefined, pullRequest);
     }
 

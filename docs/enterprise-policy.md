@@ -243,7 +243,33 @@ roles:
 
 > **Note**: The `teams` field is reserved for future use and is **not currently enforced**. Team-based role resolution (matching GitHub team slugs via the GitHub API) is not yet implemented. If you configure `teams`, a validation warning will be emitted. Only `author_association` and `users` are currently used for role resolution.
 
-A user is assigned a role if they match **any** of the criteria (OR logic). A user can have **multiple roles**.
+A user is assigned a role if they match **any** of the identity criteria (OR logic). A user can have **multiple roles**.
+
+### Slack identity fields
+
+When Visor runs via Slack (socket mode), the actor's Slack user ID, email, and channel are available for role resolution. Three additional sub-fields are supported in role definitions:
+
+```yaml
+roles:
+  admin:
+    author_association: [OWNER]
+    users: [cto-username]
+    slack_users: [U0123ADMIN]          # Slack user IDs
+    emails: [admin@company.com]        # Email addresses (case-insensitive)
+  eng-channel:
+    slack_channels: [C0123ENG]         # Channel gate: role only applies from this channel
+    slack_users: [U0123ALICE, U0123BOB]
+```
+
+| Sub-field | Type | Description |
+|-----------|------|-------------|
+| `slack_users` | `string[]` | Slack user IDs (e.g., `U0123ABC`). Matched against the triggering Slack user. |
+| `emails` | `string[]` | Email addresses. Matched case-insensitively against the Slack user's email. Requires the Slack bot to have the `users:read.email` OAuth scope. |
+| `slack_channels` | `string[]` | Slack channel IDs (e.g., `C0123ENG`). Acts as a **gate**: the role only applies when the action is triggered from one of these channels. Applied as an AND with any identity match. |
+
+**Identity matching** (`users`, `slack_users`, `emails`) is OR — matching any one is sufficient. **Channel gating** (`slack_channels`) is AND — if set on a role, the role only applies when the trigger comes from one of the listed channels.
+
+When Visor runs outside of Slack (e.g., GitHub Actions, CLI), the Slack fields are simply not present and roles that only define Slack criteria will not match.
 
 ---
 
@@ -583,7 +609,13 @@ Your Rego policies receive an `input` document with these fields:
     "login": "alice",
     "authorAssociation": "MEMBER",
     "roles": ["developer"],
-    "isLocalMode": false
+    "isLocalMode": false,
+    "slack": {
+      "userId": "U0123ALICE",
+      "email": "alice@company.com",
+      "channelId": "C0123ENG",
+      "channelType": "channel"
+    }
   },
   "repository": {
     "owner": "probelabs",
@@ -632,6 +664,10 @@ Your Rego policies receive an `input` document with these fields:
 | `actor.authorAssociation` | string | Raw GitHub author association |
 | `actor.roles` | string[] | Resolved roles from `policy.roles` config |
 | `actor.isLocalMode` | boolean | `true` when running outside GitHub Actions |
+| `actor.slack.userId` | string | Slack user ID (e.g., `U0123ABC`). Present only when triggered from Slack. |
+| `actor.slack.email` | string | Slack user's email address. Requires the bot's `users:read.email` OAuth scope. |
+| `actor.slack.channelId` | string | Slack channel ID where the action was triggered (e.g., `C0123ENG`). |
+| `actor.slack.channelType` | string | Channel type: `channel`, `dm`, or `group`. |
 | `repository.owner` | string | Repository owner/organization (from `GITHUB_REPOSITORY_OWNER`) |
 | `repository.name` | string | Repository name (from `GITHUB_REPOSITORY`) |
 | `repository.branch` | string | Current/head branch (from `GITHUB_HEAD_REF`) |
