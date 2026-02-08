@@ -86,12 +86,13 @@ export class LicenseValidator {
 
     // 2. File path from env (validate against path traversal)
     if (process.env.VISOR_LICENSE_FILE) {
-      const resolved = path.resolve(process.env.VISOR_LICENSE_FILE);
+      const resolved = path.normalize(path.resolve(process.env.VISOR_LICENSE_FILE));
+      if (resolved.includes('..')) return null;
       const home = process.env.HOME || process.env.USERPROFILE || '';
-      const allowedPrefixes = [process.cwd()];
-      if (home) allowedPrefixes.push(path.join(home, '.config', 'visor'));
+      const allowedPrefixes = [path.normalize(process.cwd())];
+      if (home) allowedPrefixes.push(path.normalize(path.join(home, '.config', 'visor')));
       const isSafe = allowedPrefixes.some(
-        prefix => resolved.startsWith(prefix + path.sep) || resolved === prefix
+        prefix => resolved === prefix || resolved.startsWith(prefix + path.sep)
       );
       if (!isSafe) return null;
       return this.readFile(resolved);

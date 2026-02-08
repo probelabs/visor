@@ -14,11 +14,26 @@ export class OpaHttpEvaluator {
   private timeout: number;
 
   constructor(baseUrl: string, timeout: number = 5000) {
-    // Validate protocol — only allow http:// and https://
-    if (!/^https?:\/\//i.test(baseUrl)) {
+    // Validate URL format and protocol
+    let parsed: URL;
+    try {
+      parsed = new URL(baseUrl);
+    } catch {
+      throw new Error(`OPA HTTP evaluator: invalid URL: ${baseUrl}`);
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
       throw new Error(
         `OPA HTTP evaluator: url must use http:// or https:// protocol, got: ${baseUrl}`
       );
+    }
+    // Block cloud metadata and link-local addresses
+    const hostname = parsed.hostname;
+    if (
+      hostname === '169.254.169.254' ||
+      hostname === 'metadata.google.internal' ||
+      hostname.endsWith('.internal')
+    ) {
+      throw new Error(`OPA HTTP evaluator: url must not point to cloud metadata services`);
     }
     // Normalize: strip trailing slash
     this.baseUrl = baseUrl.replace(/\/+$/, '');

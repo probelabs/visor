@@ -87,6 +87,10 @@ export class OpaWasmEvaluator {
 
     for (const p of paths) {
       const resolved = path.resolve(p);
+      // Reject paths containing '..' after resolution (path traversal)
+      if (path.normalize(resolved).includes('..')) {
+        throw new Error(`Policy path contains traversal sequences: ${p}`);
+      }
 
       // Direct .wasm file
       if (resolved.endsWith('.wasm') && fs.existsSync(resolved)) {
