@@ -46,6 +46,7 @@ export class TraceViewer {
   private rootSpans: DisplaySpan[] = [];
   private lastModified = 0;
   private watchInterval?: NodeJS.Timeout;
+  private showEngineStates = false; // Hidden by default
 
   constructor(options: TraceViewerOptions) {
     this.traceFilePath = options.traceFilePath;
@@ -55,7 +56,7 @@ export class TraceViewer {
       top: 0,
       left: 0,
       width: '100%',
-      height: '100%',
+      height: '100%-1', // Leave room for status bar
     });
 
     this.contentBox = blessed.log({
@@ -88,6 +89,21 @@ export class TraceViewer {
   setTraceFile(path: string): void {
     this.traceFilePath = path;
     this.startWatching();
+  }
+
+  /**
+   * Toggle visibility of engine state spans (WavePlanning, LevelDispatch, etc.)
+   */
+  toggleEngineStates(): void {
+    this.showEngineStates = !this.showEngineStates;
+    this.render();
+  }
+
+  /**
+   * Get the current visibility setting for engine states
+   */
+  isShowingEngineStates(): boolean {
+    return this.showEngineStates;
   }
 
   startWatching(): void {
@@ -476,6 +492,9 @@ export class TraceViewer {
   private render(): void {
     const lines: string[] = [];
 
+    // Filter spans to render based on settings
+    const spansToRender = this.getFilteredRootSpans();
+
     // Header
     lines.push('┌─────────────────────────────────────────────────────────────────────────────┐');
     lines.push('│                         OPENTELEMETRY TRACE VIEWER                          │');
@@ -486,12 +505,13 @@ export class TraceViewer {
       lines.push('│  Traces will appear here as the workflow executes.                         │');
       lines.push('└─────────────────────────────────────────────────────────────────────────────┘');
     } else {
-      // Summary
+      // Summary with engine states toggle indicator
       const totalDuration = this.calculateTotalDuration();
       const successCount = this.spans.filter(s => s.status === 'ok').length;
       const errorCount = this.spans.filter(s => s.status === 'error').length;
+      const engineLabel = this.showEngineStates ? 'Engine: ON ' : 'Engine: OFF';
       lines.push(
-        `│  Total Spans: ${this.spans.length.toString().padEnd(6)} ✓ Success: ${successCount.toString().padEnd(4)} ✗ Errors: ${errorCount.toString().padEnd(4)} Duration: ${this.formatDuration(totalDuration).padEnd(10)}│`
+        `│  Spans: ${this.spans.length.toString().padEnd(4)} ✓ ${successCount.toString().padEnd(3)} ✗ ${errorCount.toString().padEnd(3)} ${this.formatDuration(totalDuration).padEnd(8)} ${engineLabel.padEnd(12)}│`
       );
       lines.push('└─────────────────────────────────────────────────────────────────────────────┘');
       lines.push('');
@@ -499,22 +519,86 @@ export class TraceViewer {
       // Render tree with proper nesting
       lines.push('Execution Tree:');
       lines.push('───────────────');
-      for (let i = 0; i < this.rootSpans.length; i++) {
-        const root = this.rootSpans[i];
-        const isLast = i === this.rootSpans.length - 1;
+      for (let i = 0; i < spansToRender.length; i++) {
+        const root = spansToRender[i];
+        const isLast = i === spansToRender.length - 1;
         this.renderSpan(root, '', isLast, lines);
       }
 
-      // Legend
+      // Legend with keybinding help
       lines.push('');
       lines.push('───────────────────────────────────────────────────────────────────────────────');
       lines.push('Legend: ✓ = success  ✗ = error  ↳ IN/OUT/ERR = inputs/outputs/errors');
-      lines.push('Use Shift+Tab to switch tabs, scroll with mouse/arrows');
+      lines.push('Keys: e = toggle engine states | Shift+Tab = switch tabs | scroll with arrows');
     }
 
     // Clear and set new content
     this.contentBox.setContent(lines.join('\n'));
     this.contentBox.screen?.render();
+  }
+
+  /**
+   * Get filtered root spans based on current settings.
+   * When showEngineStates is false, removes LevelDispatch and other state spans,
+   * promoting their children (checks) to be direct children of the root.
+   */
+  private getFilteredRootSpans(): DisplaySpan[] {
+    if (this.showEngineStates) {
+      return this.rootSpans;
+    }
+
+    // Filter out engine states but keep their children
+    const result: DisplaySpan[] = [];
+
+    for (const root of this.rootSpans) {
+      const filteredRoot = this.filterEngineStates(root);
+      if (filteredRoot) {
+        result.push(filteredRoot);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Recursively filter out engine state spans while preserving their children.
+   */
+  private filterEngineStates(span: DisplaySpan): DisplaySpan | null {
+    const isEngineState = span.name.startsWith('engine.state.');
+
+    if (isEngineState) {
+      // Don't include this span, but return its children's filtered versions
+      // This effectively "flattens" the engine states out
+      return null;
+    }
+
+    // Not an engine state - include it but filter its children
+    const filteredChildren: DisplaySpan[] = [];
+
+    for (const child of span.children) {
+      const isChildEngineState = child.name.startsWith('engine.state.');
+
+      if (isChildEngineState) {
+        // Skip this child but add its grandchildren directly
+        for (const grandchild of child.children) {
+          const filtered = this.filterEngineStates(grandchild);
+          if (filtered) {
+            filteredChildren.push(filtered);
+          }
+        }
+      } else {
+        // Not an engine state - filter recursively
+        const filtered = this.filterEngineStates(child);
+        if (filtered) {
+          filteredChildren.push(filtered);
+        }
+      }
+    }
+
+    return {
+      ...span,
+      children: filteredChildren,
+    };
   }
 
   private renderSpan(span: DisplaySpan, prefix: string, isLast: boolean, lines: string[]): void {

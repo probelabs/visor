@@ -61,6 +61,8 @@ export class ChatTUI {
   private chatBox?: ChatBox;
   private inputBar?: InputBar;
   private statusBar?: StatusBar;
+  private logsStatusBar?: StatusBar;
+  private tracesStatusBar?: StatusBar;
   private logsBox?: Log;
   private traceViewer?: TraceViewer;
   private activeTab: 'chat' | 'logs' | 'traces' = 'chat';
@@ -160,13 +162,13 @@ export class ChatTUI {
       parent: this.mainPane,
     });
 
-    // Create logs box
+    // Create logs box (leave room for status bar at bottom)
     this.logsBox = blessed.log({
       parent: this.logsPane,
       top: 0,
       left: 0,
       width: '100%',
-      height: '100%',
+      height: '100%-1',
       label: ' Logs ',
       border: { type: 'line' },
       scrollable: true,
@@ -179,10 +181,20 @@ export class ChatTUI {
       },
     });
 
-    // Create trace viewer
+    // Create status bar for logs pane
+    this.logsStatusBar = new StatusBar({
+      parent: this.logsPane,
+    });
+
+    // Create trace viewer (leave room for status bar at bottom)
     this.traceViewer = new TraceViewer({
       parent: this.tracesPane!,
       traceFilePath: this.traceFilePath,
+    });
+
+    // Create status bar for traces pane
+    this.tracesStatusBar = new StatusBar({
+      parent: this.tracesPane,
     });
 
     // Start watching the trace file if path is provided
@@ -223,6 +235,13 @@ export class ChatTUI {
     this.screen.key(['1'], () => this.setActiveTab('chat'));
     this.screen.key(['2'], () => this.setActiveTab('logs'));
     this.screen.key(['3'], () => this.setActiveTab('traces'));
+
+    // Trace viewer controls (only active when on traces tab)
+    this.screen.key(['e'], () => {
+      if (this.activeTab === 'traces' && this.traceViewer) {
+        this.traceViewer.toggleEngineStates();
+      }
+    });
 
     // Exit handling
     this.screen.key(['q'], () => {
@@ -563,7 +582,11 @@ export class ChatTUI {
 
   private setActiveTab(tab: 'chat' | 'logs' | 'traces'): void {
     this.activeTab = tab;
+
+    // Update all status bars to show the current tab
     this.statusBar?.setActiveTab(tab);
+    this.logsStatusBar?.setActiveTab(tab);
+    this.tracesStatusBar?.setActiveTab(tab);
 
     if (this.mainPane && this.logsPane && this.tracesPane) {
       // Hide all panes first
