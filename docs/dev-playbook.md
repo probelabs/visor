@@ -66,6 +66,16 @@ npm test
 | `npm run simulate:issue` | Simulate GitHub issue event |
 | `npm run simulate:comment` | Simulate GitHub comment event |
 
+#### Running Locally
+| Command | Description |
+|---------|-------------|
+| `./dist/index.js --config .visor.yaml` | Run with config file |
+| `./dist/index.js --tui --config ./workflow.yaml` | Interactive TUI mode |
+| `./dist/index.js --debug-server --debug-port 3456` | Visual debugger |
+| `./dist/index.js --tui --debug` | TUI with debug logging |
+
+See [Debugging Guide](debugging.md) for complete local development documentation.
+
 ### Using Visor Effectively
 
 - **Start with defaults**: Copy `defaults/visor.yaml` or an example from `examples/`; run `npx -y @probelabs/visor@latest --check all --debug`.

@@ -56,6 +56,9 @@ export class FrontendsHost {
       } else if (spec.name === 'slack') {
         const { SlackFrontend } = await import('./slack-frontend');
         this.frontends.push(new SlackFrontend(spec.config as any));
+      } else if (spec.name === 'tui') {
+        const { TuiFrontend } = await import('../tui/tui-frontend');
+        this.frontends.push(new TuiFrontend(spec.config as any));
       } else {
         this.log.warn(`[FrontendsHost] Unknown frontend '${spec.name}', skipping`);
       }

@@ -38,7 +38,7 @@ checks:
     operation: set
     namespace: calculator
     key: number1
-    value_js: "parseFloat(outputs['get-number1'])"
+    value_js: "parseFloat(outputs['get-number1'].text)"
 
   # Step 3: Get second number
   get-number2:
@@ -55,7 +55,7 @@ checks:
     operation: set
     namespace: calculator
     key: number2
-    value_js: "parseFloat(outputs['get-number2'])"
+    value_js: "parseFloat(outputs['get-number2'].text)"
 
   # Step 5: Get operation
   get-operation:
@@ -72,7 +72,7 @@ checks:
     operation: set
     namespace: calculator
     key: operation
-    value_js: "outputs['get-operation'].trim()"
+    value_js: "outputs['get-operation'].text.trim()"
 
   # Step 7: Perform calculation using memory and JavaScript
   calculate:
@@ -122,7 +122,7 @@ checks:
       ║          CALCULATION RESULT            ║
       ╠════════════════════════════════════════╣
       ║                                        ║
-      ║  {{ outputs['get-number1'] }} {{ outputs['get-operation'] }} {{ outputs['get-number2'] }} = {{ outputs['calculate'] }}
+      ║  {{ outputs['get-number1'].text }} {{ outputs['get-operation'].text }} {{ outputs['get-number2'].text }} = {{ outputs['calculate'] }}
       ║                                        ║
       ╚════════════════════════════════════════╝
 

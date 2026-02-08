@@ -114,6 +114,26 @@ npx -y @probelabs/visor@latest --check security --output sarif --output-file res
 npx -y @probelabs/visor@latest --check all --output json --output-file visor-results.json
 ```
 
+### Interactive TUI Mode
+For workflows with human-input steps, use TUI mode for a chat-style interface:
+```bash
+npx -y @probelabs/visor@latest --tui --config ./my-workflow.yaml
+```
+
+TUI features:
+- Chat tab shows prompts and results
+- Logs tab (press `Tab` to switch) shows execution logs
+- Re-run workflows by typing new messages after completion
+- Press `q` to exit when done
+
+### Debug Server (Visual Debugger)
+Launch a web-based debugger to step through execution:
+```bash
+npx -y @probelabs/visor@latest --debug-server --debug-port 3456
+```
+
+See [Debugging Guide](./debugging.md) for more details.
+
 ## Configuration
 
 Create a `.visor.yaml` file in your project root:
