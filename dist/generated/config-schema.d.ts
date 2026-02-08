@@ -154,6 +154,10 @@ export declare const configSchema: {
                     readonly $ref: "#/definitions/SchedulerConfig";
                     readonly description: "Scheduler configuration for scheduled workflow execution";
                 };
+                readonly policy: {
+                    readonly $ref: "#/definitions/PolicyConfig";
+                    readonly description: "Enterprise policy engine configuration (EE feature)";
+                };
             };
             readonly required: readonly ["version"];
             readonly patternProperties: {
@@ -784,6 +788,10 @@ export declare const configSchema: {
                 readonly persist_worktree: {
                     readonly type: "boolean";
                     readonly description: "Keep worktree after workflow completion (default: false)";
+                };
+                readonly policy: {
+                    readonly $ref: "#/definitions/StepPolicyOverride";
+                    readonly description: "Per-step policy override (enterprise)";
                 };
             };
             readonly additionalProperties: false;
@@ -2058,6 +2066,55 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
+        readonly PolicyConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly engine: {
+                    readonly type: "string";
+                    readonly enum: readonly ["local", "remote", "disabled"];
+                    readonly description: "Policy engine mode: 'local' (WASM), 'remote' (HTTP OPA server), or 'disabled'";
+                };
+                readonly rules: {
+                    readonly anyOf: readonly [{
+                        readonly type: "string";
+                    }, {
+                        readonly type: "array";
+                        readonly items: {
+                            readonly type: "string";
+                        };
+                    }];
+                    readonly description: "Path to .rego files or .wasm bundle (local mode)";
+                };
+                readonly data: {
+                    readonly type: "string";
+                    readonly description: "Path to a JSON file to load as OPA data document (local mode)";
+                };
+                readonly url: {
+                    readonly type: "string";
+                    readonly description: "OPA server URL (remote mode)";
+                };
+                readonly fallback: {
+                    readonly type: "string";
+                    readonly enum: readonly ["allow", "deny", "warn"];
+                    readonly description: "Default decision when policy evaluation fails (default: 'deny'). Use 'warn' for audit mode: violations are logged but not enforced.";
+                };
+                readonly timeout: {
+                    readonly type: "number";
+                    readonly description: "Evaluation timeout in milliseconds (default: 5000)";
+                };
+                readonly roles: {
+                    readonly type: "object";
+                    readonly additionalProperties: {
+                        readonly $ref: "#/definitions/PolicyRoleConfig";
+                    };
+                    readonly description: "Role definitions: map role names to conditions";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
         readonly SchedulerLimitsConfig: {
             readonly type: "object";
             readonly properties: {
@@ -2112,6 +2169,57 @@ export declare const configSchema: {
             };
             readonly additionalProperties: false;
             readonly description: "Scheduler permissions for dynamic schedule creation";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly PolicyRoleConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly author_association: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "GitHub author associations that map to this role";
+                };
+                readonly teams: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "GitHub team slugs";
+                };
+                readonly users: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Explicit GitHub usernames";
+                };
+                readonly slack_users: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Slack user IDs (e.g., U0123ABC)";
+                };
+                readonly emails: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Email addresses for identity matching";
+                };
+                readonly slack_channels: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Slack channel IDs — role only applies when triggered from these channels";
+                };
+            };
+            readonly additionalProperties: false;
             readonly patternProperties: {
                 readonly '^x-': {};
             };
@@ -2177,6 +2285,37 @@ export declare const configSchema: {
             readonly required: readonly ["schedule", "workflow"];
             readonly additionalProperties: false;
             readonly description: "Static cron job defined in YAML configuration These are always executed by the scheduler daemon";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly StepPolicyOverride: {
+            readonly type: "object";
+            readonly properties: {
+                readonly require: {
+                    readonly anyOf: readonly [{
+                        readonly type: "string";
+                    }, {
+                        readonly type: "array";
+                        readonly items: {
+                            readonly type: "string";
+                        };
+                    }];
+                    readonly description: "Required role(s) — any of these roles suffices";
+                };
+                readonly deny: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Explicit deny for roles";
+                };
+                readonly rule: {
+                    readonly type: "string";
+                    readonly description: "Custom OPA rule path for this step";
+                };
+            };
+            readonly additionalProperties: false;
             readonly patternProperties: {
                 readonly '^x-': {};
             };

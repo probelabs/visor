@@ -5413,6 +5413,42 @@ var init_sandbox_routing = __esm({
   }
 });
 
+// src/state-machine/dispatch/policy-gate.ts
+async function applyPolicyGate(checkId, checkConfig, policyEngine) {
+  let decision;
+  try {
+    decision = await policyEngine.evaluateCheckExecution(checkId, checkConfig);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`[PolicyEngine] Evaluation failed for check '${checkId}': ${msg}`);
+    decision = { allowed: false, reason: "policy evaluation error" };
+  }
+  const auditReason = decision.reason || "policy violation";
+  if (decision.warn) {
+    logger.warn(`[PolicyEngine] Audit: check '${checkId}' would be denied: ${auditReason}`);
+  }
+  if (!decision.allowed) {
+    logger.info(`\u26D4 Skipped (policy: ${decision.reason || "denied"})`);
+    return {
+      skip: true,
+      reason: decision.reason || "policy denied",
+      warn: !!decision.warn,
+      auditReason: decision.warn ? auditReason : void 0
+    };
+  }
+  return {
+    skip: false,
+    warn: !!decision.warn,
+    auditReason: decision.warn ? auditReason : void 0
+  };
+}
+var init_policy_gate = __esm({
+  "src/state-machine/dispatch/policy-gate.ts"() {
+    "use strict";
+    init_logger();
+  }
+});
+
 // src/state-machine/dispatch/history-snapshot.ts
 var history_snapshot_exports = {};
 __export(history_snapshot_exports, {
@@ -10780,6 +10816,10 @@ var init_config_schema = __esm({
             scheduler: {
               $ref: "#/definitions/SchedulerConfig",
               description: "Scheduler configuration for scheduled workflow execution"
+            },
+            policy: {
+              $ref: "#/definitions/PolicyConfig",
+              description: "Enterprise policy engine configuration (EE feature)"
             }
           },
           required: ["version"],
@@ -11429,6 +11469,10 @@ var init_config_schema = __esm({
             persist_worktree: {
               type: "boolean",
               description: "Keep worktree after workflow completion (default: false)"
+            },
+            policy: {
+              $ref: "#/definitions/StepPolicyOverride",
+              description: "Per-step policy override (enterprise)"
             }
           },
           additionalProperties: false,
@@ -12742,6 +12786,48 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
+        PolicyConfig: {
+          type: "object",
+          properties: {
+            engine: {
+              type: "string",
+              enum: ["local", "remote", "disabled"],
+              description: "Policy engine mode: 'local' (WASM), 'remote' (HTTP OPA server), or 'disabled'"
+            },
+            rules: {
+              anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+              description: "Path to .rego files or .wasm bundle (local mode)"
+            },
+            data: {
+              type: "string",
+              description: "Path to a JSON file to load as OPA data document (local mode)"
+            },
+            url: {
+              type: "string",
+              description: "OPA server URL (remote mode)"
+            },
+            fallback: {
+              type: "string",
+              enum: ["allow", "deny", "warn"],
+              description: "Default decision when policy evaluation fails (default: 'deny'). Use 'warn' for audit mode: violations are logged but not enforced."
+            },
+            timeout: {
+              type: "number",
+              description: "Evaluation timeout in milliseconds (default: 5000)"
+            },
+            roles: {
+              type: "object",
+              additionalProperties: {
+                $ref: "#/definitions/PolicyRoleConfig"
+              },
+              description: "Role definitions: map role names to conditions"
+            }
+          },
+          additionalProperties: false,
+          patternProperties: {
+            "^x-": {}
+          }
+        },
         SchedulerLimitsConfig: {
           type: "object",
           properties: {
@@ -12796,6 +12882,45 @@ var init_config_schema = __esm({
           },
           additionalProperties: false,
           description: "Scheduler permissions for dynamic schedule creation",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        PolicyRoleConfig: {
+          type: "object",
+          properties: {
+            author_association: {
+              type: "array",
+              items: { type: "string" },
+              description: "GitHub author associations that map to this role"
+            },
+            teams: {
+              type: "array",
+              items: { type: "string" },
+              description: "GitHub team slugs"
+            },
+            users: {
+              type: "array",
+              items: { type: "string" },
+              description: "Explicit GitHub usernames"
+            },
+            slack_users: {
+              type: "array",
+              items: { type: "string" },
+              description: "Slack user IDs (e.g., U0123ABC)"
+            },
+            emails: {
+              type: "array",
+              items: { type: "string" },
+              description: "Email addresses for identity matching"
+            },
+            slack_channels: {
+              type: "array",
+              items: { type: "string" },
+              description: "Slack channel IDs \u2014 role only applies when triggered from these channels"
+            }
+          },
+          additionalProperties: false,
           patternProperties: {
             "^x-": {}
           }
@@ -12861,6 +12986,28 @@ var init_config_schema = __esm({
           required: ["schedule", "workflow"],
           additionalProperties: false,
           description: "Static cron job defined in YAML configuration These are always executed by the scheduler daemon",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        StepPolicyOverride: {
+          type: "object",
+          properties: {
+            require: {
+              anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+              description: "Required role(s) \u2014 any of these roles suffices"
+            },
+            deny: {
+              type: "array",
+              items: { type: "string" },
+              description: "Explicit deny for roles"
+            },
+            rule: {
+              type: "string",
+              description: "Custom OPA rule path for this step"
+            }
+          },
+          additionalProperties: false,
           patternProperties: {
             "^x-": {}
           }
@@ -13518,6 +13665,9 @@ ${errors}`);
         if (config.tag_filter) {
           this.validateTagFilter(config.tag_filter, errors);
         }
+        if (config.policy) {
+          this.validatePolicyConfig(config.policy, errors, warnings);
+        }
         if (strict && warnings.length > 0) {
           errors.push(...warnings);
         }
@@ -13877,6 +14027,179 @@ ${errors}`);
         }
       }
       /**
+       * Validate policy engine configuration
+       */
+      validatePolicyConfig(policy, errors, warnings) {
+        const validEngines = ["local", "remote", "disabled"];
+        if (policy.engine && !validEngines.includes(policy.engine)) {
+          errors.push({
+            field: "policy.engine",
+            message: `policy.engine must be one of: ${validEngines.join(", ")}`,
+            value: policy.engine
+          });
+        }
+        if (policy.engine === "local" && !policy.rules) {
+          errors.push({
+            field: "policy.rules",
+            message: 'policy.rules is required when policy.engine is "local"'
+          });
+        }
+        if (policy.rules && typeof policy.rules !== "string" && !Array.isArray(policy.rules)) {
+          errors.push({
+            field: "policy.rules",
+            message: "policy.rules must be a string or array of strings",
+            value: policy.rules
+          });
+        }
+        if (Array.isArray(policy.rules) && !policy.rules.every((r) => typeof r === "string")) {
+          errors.push({
+            field: "policy.rules",
+            message: "policy.rules array must contain only strings",
+            value: policy.rules
+          });
+        }
+        if (policy.engine === "local" && policy.rules) {
+          const rulesPath = Array.isArray(policy.rules) ? policy.rules : [policy.rules];
+          for (const rp of rulesPath) {
+            if (typeof rp === "string" && !fs9.existsSync(path10.resolve(rp))) {
+              warnings.push({
+                field: "policy.rules",
+                message: `Policy rules path does not exist: ${rp}. It will be resolved at runtime.`,
+                value: rp
+              });
+            }
+          }
+        }
+        if (policy.engine === "remote") {
+          if (!policy.url) {
+            errors.push({
+              field: "policy.url",
+              message: 'policy.url is required when policy.engine is "remote"'
+            });
+          } else if (typeof policy.url !== "string" || !/^https?:\/\//i.test(policy.url)) {
+            errors.push({
+              field: "policy.url",
+              message: "policy.url must use http:// or https:// protocol"
+            });
+          }
+        }
+        if (policy.fallback !== void 0) {
+          const validFallbacks = ["allow", "deny", "warn"];
+          if (!validFallbacks.includes(policy.fallback)) {
+            errors.push({
+              field: "policy.fallback",
+              message: `policy.fallback must be one of: ${validFallbacks.join(", ")}`,
+              value: policy.fallback
+            });
+          }
+        }
+        if (policy.timeout !== void 0) {
+          if (typeof policy.timeout !== "number" || policy.timeout < 0) {
+            errors.push({
+              field: "policy.timeout",
+              message: "policy.timeout must be a non-negative number (milliseconds)",
+              value: policy.timeout
+            });
+          }
+        }
+        if (policy.data !== void 0) {
+          if (typeof policy.data !== "string") {
+            errors.push({
+              field: "policy.data",
+              message: "policy.data must be a string (path to a JSON file)",
+              value: policy.data
+            });
+          }
+        }
+        if (policy.data && typeof policy.data === "string" && !fs9.existsSync(path10.resolve(policy.data))) {
+          warnings.push({
+            field: "policy.data",
+            message: `Policy data file does not exist: ${policy.data}. It will be resolved at runtime.`,
+            value: policy.data
+          });
+        }
+        if (policy.roles && typeof policy.roles === "object") {
+          for (const [roleName, roleConfig] of Object.entries(policy.roles)) {
+            if (typeof roleConfig !== "object" || roleConfig === null) {
+              errors.push({
+                field: `policy.roles.${roleName}`,
+                message: `Role '${roleName}' must be an object with author_association, teams, or users`,
+                value: roleConfig
+              });
+            } else {
+              if (Array.isArray(roleConfig.teams) && roleConfig.teams.length > 0) {
+                warnings.push({
+                  field: `policy.roles.${roleName}.teams`,
+                  message: `Role '${roleName}' uses 'teams' which is not yet implemented. Team-based role resolution requires a future update. Only author_association and users are currently supported.`,
+                  value: roleConfig.teams
+                });
+              }
+              const validAssociations = [
+                "OWNER",
+                "MEMBER",
+                "COLLABORATOR",
+                "CONTRIBUTOR",
+                "FIRST_TIME_CONTRIBUTOR",
+                "FIRST_TIMER",
+                "MANNEQUIN",
+                "NONE"
+              ];
+              if (roleConfig.author_association && Array.isArray(roleConfig.author_association)) {
+                for (const assoc of roleConfig.author_association) {
+                  if (!validAssociations.includes(assoc)) {
+                    warnings.push({
+                      field: `policy.roles.${roleName}.author_association`,
+                      message: `Unknown author_association value: '${assoc}'. Valid values: ${validAssociations.join(", ")}`,
+                      value: assoc
+                    });
+                  }
+                }
+              }
+              if (Array.isArray(roleConfig.slack_users)) {
+                for (const uid of roleConfig.slack_users) {
+                  if (typeof uid === "string" && !uid.startsWith("U")) {
+                    warnings.push({
+                      field: `policy.roles.${roleName}.slack_users`,
+                      message: `Slack user ID '${uid}' does not start with 'U'. Slack user IDs typically start with 'U' (e.g., U0123ABC).`,
+                      value: uid
+                    });
+                  }
+                }
+              }
+              if (Array.isArray(roleConfig.emails)) {
+                for (const email of roleConfig.emails) {
+                  if (typeof email === "string" && !email.includes("@")) {
+                    warnings.push({
+                      field: `policy.roles.${roleName}.emails`,
+                      message: `Email '${email}' does not contain '@'. Expected a valid email address.`,
+                      value: email
+                    });
+                  }
+                }
+                if (roleConfig.emails.length > 0) {
+                  warnings.push({
+                    field: `policy.roles.${roleName}.emails`,
+                    message: `Role '${roleName}' uses 'emails' for identity matching. This requires the Slack bot to have the 'users:read.email' OAuth scope.`,
+                    value: roleConfig.emails
+                  });
+                }
+              }
+              if (Array.isArray(roleConfig.slack_channels)) {
+                for (const chId of roleConfig.slack_channels) {
+                  if (typeof chId === "string" && !chId.startsWith("C")) {
+                    warnings.push({
+                      field: `policy.roles.${roleName}.slack_channels`,
+                      message: `Slack channel ID '${chId}' does not start with 'C'. Public channel IDs typically start with 'C' (e.g., C0123ENG).`,
+                      value: chId
+                    });
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      /**
        * Validate MCP servers object shape and values (basic shape only)
        */
       validateMcpServersObject(mcpServers, fieldPrefix, errors, _warnings) {
@@ -13982,7 +14305,8 @@ ${errors}`);
                   "slack",
                   "sandboxes",
                   "sandbox",
-                  "sandbox_defaults"
+                  "sandbox_defaults",
+                  "policy"
                 ]);
                 if (topLevel && allowedTopLevelKeys.has(addl)) {
                   continue;
@@ -16103,6 +16427,15 @@ var init_scheduler2 = __esm({
 });
 
 // src/slack/schedule-tool-handler.ts
+var schedule_tool_handler_exports = {};
+__export(schedule_tool_handler_exports, {
+  createScheduleToolWithContext: () => createScheduleToolWithContext,
+  ensureReminderStoreInitialized: () => ensureReminderStoreInitialized,
+  ensureScheduleStoreInitialized: () => ensureScheduleStoreInitialized,
+  executeScheduleTool: () => executeScheduleTool,
+  extractSlackContext: () => extractSlackContext,
+  isScheduleToolCall: () => isScheduleToolCall
+});
 function getChannelType(channelId) {
   if (channelId.startsWith("D")) {
     return "dm";
@@ -16140,11 +16473,100 @@ function extractSlackContext(webhookData) {
   }
   return null;
 }
+function createScheduleToolWithContext(slackContext, _slackClient) {
+  const baseDef = getScheduleToolDefinition();
+  return {
+    ...baseDef,
+    // Override the exec to handle the tool call with context
+    // This is a placeholder - the actual execution happens via executeScheduleTool
+    exec: JSON.stringify({
+      type: "schedule_tool",
+      context: slackContext
+    })
+  };
+}
+async function executeScheduleTool(args, slackContext, slackClient, availableWorkflows, permissions) {
+  let timezone = slackContext.timezone;
+  if (!timezone && slackClient && slackContext.userId) {
+    try {
+      const userInfo = await slackClient.getUserInfo(slackContext.userId);
+      if (userInfo.ok && userInfo.user?.tz) {
+        timezone = userInfo.user.tz;
+        slackContext.timezone = timezone;
+      }
+    } catch {
+    }
+  }
+  const toolContext = buildScheduleToolContext(
+    {
+      slackContext: {
+        userId: slackContext.userId,
+        userName: slackContext.userName,
+        timezone: timezone || "UTC",
+        channelType: slackContext.channelType
+      }
+    },
+    availableWorkflows,
+    permissions
+  );
+  const toolArgs = {
+    action: args.action,
+    // What to do
+    reminder_text: args.reminder_text,
+    workflow: args.workflow,
+    workflow_inputs: args.workflow_inputs,
+    // Where to send
+    target_type: args.target_type,
+    target_id: args.target_id,
+    thread_ts: args.thread_ts,
+    // When to run
+    is_recurring: args.is_recurring,
+    cron: args.cron,
+    run_at: args.run_at,
+    original_expression: args.original_expression,
+    // For cancel/pause/resume
+    schedule_id: args.schedule_id
+  };
+  if (!toolArgs.target_type && slackContext.channel) {
+    if (slackContext.threadTs) {
+      toolArgs.target_type = "thread";
+      toolArgs.target_id = slackContext.channel;
+      toolArgs.thread_ts = slackContext.threadTs;
+    } else {
+      toolArgs.target_type = slackContext.channelType === "channel" ? "channel" : "dm";
+      toolArgs.target_id = slackContext.channel;
+    }
+  }
+  try {
+    const result = await handleScheduleAction(toolArgs, toolContext);
+    if (result.success) {
+      return result.message;
+    } else {
+      return `Error: ${result.error || result.message}`;
+    }
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : "Unknown error";
+    logger.error(`[ScheduleToolHandler] Failed to execute schedule tool: ${errorMsg}`);
+    return `Error: ${errorMsg}`;
+  }
+}
+function isScheduleToolCall(toolName) {
+  return toolName === "schedule";
+}
+async function ensureScheduleStoreInitialized() {
+  const store = ScheduleStore.getInstance();
+  if (!store.isInitialized()) {
+    await store.initialize();
+  }
+  return store;
+}
+var ensureReminderStoreInitialized;
 var init_schedule_tool_handler = __esm({
   "src/slack/schedule-tool-handler.ts"() {
     "use strict";
     init_scheduler2();
     init_logger();
+    ensureReminderStoreInitialized = ensureScheduleStoreInitialized;
   }
 });
 
@@ -17574,6 +17996,38 @@ ${preview}`);
         }
         if (config.ai_max_iterations !== void 0 && aiConfig.maxIterations === void 0) {
           aiConfig.maxIterations = config.ai_max_iterations;
+        }
+        const policyEngine = sessionInfo?._parentContext?.policyEngine;
+        if (policyEngine) {
+          try {
+            const checkName = config.checkName || "unknown";
+            const decision = await policyEngine.evaluateCapabilities(checkName, {
+              allowEdit: aiConfig.allowEdit,
+              allowBash: aiConfig.allowBash,
+              allowedTools: aiConfig.allowedTools
+            });
+            if (decision.capabilities) {
+              if (decision.capabilities.allowEdit === false) aiConfig.allowEdit = false;
+              if (decision.capabilities.allowBash === false) aiConfig.allowBash = false;
+              if (decision.capabilities.allowedTools) {
+                if (aiConfig.allowedTools) {
+                  aiConfig.allowedTools = aiConfig.allowedTools.filter(
+                    (t) => decision.capabilities.allowedTools.includes(t)
+                  );
+                } else {
+                  aiConfig.allowedTools = decision.capabilities.allowedTools;
+                }
+              }
+            }
+          } catch (err) {
+            try {
+              const { logger: logger2 } = (init_logger(), __toCommonJS(logger_exports));
+              logger2.warn(
+                `[PolicyEngine] Capability evaluation failed: ${err instanceof Error ? err.message : err}`
+              );
+            } catch {
+            }
+          }
         }
         const customPrompt = config.prompt;
         if (!customPrompt) {
@@ -20250,7 +20704,36 @@ var init_claude_code_check_provider = __esm({
             query.tools = claudeCodeConfig.allowedTools.map((name) => ({ name }));
           }
           if (claudeCodeConfig.mcpServers && Object.keys(claudeCodeConfig.mcpServers).length > 0) {
-            query.mcpServers = claudeCodeConfig.mcpServers;
+            const policyEngine = sessionInfo?._parentContext?.policyEngine;
+            let filteredServers = claudeCodeConfig.mcpServers;
+            if (policyEngine) {
+              const allowed = {};
+              for (const [name, serverCfg] of Object.entries(claudeCodeConfig.mcpServers)) {
+                try {
+                  const decision = await policyEngine.evaluateToolInvocation(
+                    name,
+                    "*",
+                    serverCfg.transport
+                  );
+                  if (decision.allowed) {
+                    allowed[name] = serverCfg;
+                  }
+                } catch (err) {
+                  allowed[name] = serverCfg;
+                  try {
+                    const { logger: logger2 } = (init_logger(), __toCommonJS(logger_exports));
+                    logger2.warn(
+                      `[PolicyEngine] Tool invocation evaluation failed for server '${name}': ${err instanceof Error ? err.message : err}`
+                    );
+                  } catch {
+                  }
+                }
+              }
+              filteredServers = allowed;
+            }
+            if (Object.keys(filteredServers).length > 0) {
+              query.mcpServers = filteredServers;
+            }
           }
           let response;
           if (sessionInfo?.reuseSession && sessionInfo.parentSessionId) {
@@ -39122,6 +39605,39 @@ var init_mcp_check_provider = __esm({
       }
       async execute(prInfo, config, dependencyResults, sessionInfo) {
         const cfg = config;
+        const policyEngine = sessionInfo?._parentContext?.policyEngine;
+        if (policyEngine && cfg.method) {
+          try {
+            const serverName = config.checkName || cfg.server || "unknown";
+            const decision = await policyEngine.evaluateToolInvocation(
+              serverName,
+              cfg.method,
+              cfg.transport
+            );
+            if (!decision.allowed) {
+              return {
+                issues: [
+                  {
+                    file: "mcp",
+                    line: 0,
+                    ruleId: "policy/tool_denied",
+                    message: `MCP method '${cfg.method}' blocked by policy: ${decision.reason || "denied"}`,
+                    severity: "error",
+                    category: "security"
+                  }
+                ]
+              };
+            }
+          } catch (err) {
+            try {
+              const { logger: logger2 } = (init_logger(), __toCommonJS(logger_exports));
+              logger2.warn(
+                `[PolicyEngine] Tool invocation evaluation failed: ${err instanceof Error ? err.message : err}`
+              );
+            } catch {
+            }
+          }
+        }
         try {
           const templateContext = {
             pr: {
@@ -42836,6 +43352,48 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       return emptyResult;
     }
   }
+  if (context2.policyEngine && checkConfig) {
+    const gate = await applyPolicyGate(checkId, checkConfig, context2.policyEngine);
+    if (gate.skip) {
+      const emptyResult = { issues: [] };
+      try {
+        Object.defineProperty(emptyResult, "__skipped", {
+          value: "policy_denied",
+          enumerable: false
+        });
+      } catch {
+      }
+      state.completedChecks.add(checkId);
+      const stats = {
+        checkName: checkId,
+        totalRuns: 0,
+        successfulRuns: 0,
+        failedRuns: 0,
+        skippedRuns: 0,
+        skipped: true,
+        skipReason: "policy_denied",
+        skipCondition: gate.reason || "policy denied",
+        totalDuration: 0,
+        issuesFound: 0,
+        issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 }
+      };
+      state.stats.set(checkId, stats);
+      logger.info(`[LevelDispatch] Recorded skip stats for ${checkId}: skipReason=policy_denied`);
+      try {
+        context2.journal.commitEntry({
+          sessionId: context2.sessionId,
+          checkId,
+          result: emptyResult,
+          event: context2.event || "manual",
+          scope: []
+        });
+      } catch (error) {
+        logger.warn(`[LevelDispatch] Failed to commit policy-skipped result to journal: ${error}`);
+      }
+      emitEvent({ type: "CheckCompleted", checkId, scope: [], result: emptyResult });
+      return emptyResult;
+    }
+  }
   const dependencies = checkConfig?.depends_on || [];
   const depList = Array.isArray(dependencies) ? dependencies : [dependencies];
   const failedChecks = state.failedChecks;
@@ -43350,6 +43908,7 @@ var init_execution_invoker = __esm({
     init_sandbox();
     init_workflow_inputs();
     init_sandbox_routing();
+    init_policy_gate();
     MAX_ON_INIT_ITEMS = 50;
   }
 });
@@ -44662,6 +45221,59 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
       return emptyResult;
     }
   }
+  if (context2.policyEngine && checkConfig) {
+    const gate = await applyPolicyGate(checkId, checkConfig, context2.policyEngine);
+    if (gate.warn && gate.auditReason) {
+      if (state.stats.has(checkId)) {
+        const s = state.stats.get(checkId);
+        s.policyAuditWarning = gate.auditReason;
+      }
+    }
+    if (gate.skip) {
+      const emptyResult = { issues: [] };
+      try {
+        Object.defineProperty(emptyResult, "__skipped", {
+          value: "policy_denied",
+          enumerable: false
+        });
+      } catch {
+      }
+      state.completedChecks.add(checkId);
+      const stats = {
+        checkName: checkId,
+        totalRuns: 0,
+        successfulRuns: 0,
+        failedRuns: 0,
+        skippedRuns: 0,
+        skipped: true,
+        skipReason: "policy_denied",
+        skipCondition: gate.reason || "policy denied",
+        totalDuration: 0,
+        issuesFound: 0,
+        issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 }
+      };
+      state.stats.set(checkId, stats);
+      logger.info(`[LevelDispatch] Recorded skip stats for ${checkId}: skipReason=policy_denied`);
+      try {
+        context2.journal.commitEntry({
+          sessionId: context2.sessionId,
+          checkId,
+          result: emptyResult,
+          event: context2.event || "manual",
+          scope: []
+        });
+      } catch (error) {
+        logger.warn(`[LevelDispatch] Failed to commit policy-denied result to journal: ${error}`);
+      }
+      emitEvent({
+        type: "CheckCompleted",
+        checkId,
+        scope: [],
+        result: emptyResult
+      });
+      return emptyResult;
+    }
+  }
   const dependencies = checkConfig?.depends_on || [];
   const depList = Array.isArray(dependencies) ? dependencies : [dependencies];
   const failedChecks = state.failedChecks;
@@ -45772,6 +46384,7 @@ var init_level_dispatch = __esm({
     init_failure_condition_evaluator();
     init_workflow_inputs();
     init_sandbox_routing();
+    init_policy_gate();
   }
 });
 
@@ -50908,6 +51521,57 @@ var init_state_machine_execution_engine = __esm({
         }
         const { initializeWorkspace: initializeWorkspace2 } = (init_build_engine_context(), __toCommonJS(build_engine_context_exports));
         await initializeWorkspace2(context2);
+        if (configWithTagFilter.policy?.engine && configWithTagFilter.policy.engine !== "disabled") {
+          try {
+            logger.debug(
+              `[PolicyEngine] Loading enterprise policy engine (engine=${configWithTagFilter.policy.engine})`
+            );
+            const { loadEnterprisePolicyEngine } = await import("./enterprise/loader");
+            context2.policyEngine = await loadEnterprisePolicyEngine(configWithTagFilter.policy);
+            logger.debug(
+              `[PolicyEngine] Initialized: ${context2.policyEngine?.constructor?.name || "unknown"}`
+            );
+          } catch (err) {
+            try {
+              logger.warn(
+                `[PolicyEngine] Enterprise policy engine init failed, using default: ${err instanceof Error ? err.message : err}`
+              );
+            } catch {
+            }
+          }
+        }
+        if (context2.policyEngine && "setActorContext" in context2.policyEngine) {
+          const actor = {
+            authorAssociation: prInfo?.authorAssociation || process.env.VISOR_AUTHOR_ASSOCIATION,
+            login: prInfo?.author || process.env.GITHUB_ACTOR,
+            isLocalMode: !process.env.GITHUB_ACTIONS
+          };
+          try {
+            const webhookData = this.executionContext?.webhookContext?.webhookData;
+            if (webhookData instanceof Map) {
+              const { extractSlackContext: extractSlackContext2 } = await Promise.resolve().then(() => (init_schedule_tool_handler(), schedule_tool_handler_exports));
+              const slackCtx = extractSlackContext2(webhookData);
+              if (slackCtx) {
+                const payload = Array.from(webhookData.values())[0];
+                const userInfo = payload?.slack_user_info;
+                actor.slack = {
+                  userId: slackCtx.userId,
+                  channelId: slackCtx.channel,
+                  channelType: slackCtx.channelType,
+                  email: userInfo?.email
+                };
+              }
+            }
+          } catch {
+          }
+          const pullRequest = prInfo ? {
+            number: prInfo.number,
+            labels: prInfo.labels,
+            draft: prInfo.draft,
+            changedFiles: prInfo.files?.length
+          } : void 0;
+          context2.policyEngine.setActorContext(actor, void 0, pullRequest);
+        }
         context2.executionContext = this.getExecutionContext();
         this._lastContext = context2;
         let frontendsHost;
@@ -51056,6 +51720,13 @@ var init_state_machine_execution_engine = __esm({
             sessionRegistry.clearAllSessions();
           } catch (error) {
             logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
+          }
+          if (context2.policyEngine) {
+            try {
+              await context2.policyEngine.shutdown();
+            } catch (error) {
+              logger.debug(`[StateMachine] Failed to cleanup policy engine: ${error}`);
+            }
           }
           if (context2.workspace) {
             try {
