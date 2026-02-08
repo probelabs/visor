@@ -106,9 +106,11 @@ export class LogCheckProvider extends CheckProvider {
     // For chat-style logs (group: chat), also expose a structured
     // `output.text` field so frontends like Slack can post a clean
     // human-facing message without the level prefix.
-    const summary: ReviewSummary & { logOutput: string; output?: unknown } = {
+    // Also set `content` so it gets included in CheckResult for TUI display.
+    const summary: ReviewSummary & { logOutput: string; content: string; output?: unknown } = {
       issues: [],
       logOutput,
+      content: renderedMessage, // Used by runner to build CheckResult
     };
 
     if ((config as any).group === 'chat') {

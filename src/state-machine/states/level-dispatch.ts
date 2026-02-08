@@ -27,6 +27,7 @@ import type { CheckProviderConfig } from '../../providers/check-provider.interfa
 import type { CheckConfig } from '../../types/config';
 import { handleRouting, checkLoopBudget } from './routing';
 import { withActiveSpan, setSpanAttributes, addEvent } from '../../telemetry/trace-helpers';
+import { captureCheckOutput } from '../../telemetry/state-capture';
 import { emitMermaidFromMarkdown } from '../../utils/mermaid-telemetry';
 import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from '../../telemetry/fallback-ndjson';
 import { FailureConditionEvaluator } from '../../failure-condition-evaluator';
@@ -933,8 +934,8 @@ async function executeCheckWithForEachItems(
           session_id: context.sessionId,
           wave: state.wave,
         },
-        async () =>
-          executeWithSandboxRouting(
+        async span => {
+          const res = await executeWithSandboxRouting(
             checkId,
             checkConfig,
             context,
@@ -942,7 +943,12 @@ async function executeCheckWithForEachItems(
             dependencyResults,
             checkConfig.ai?.timeout || 1800000,
             () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-          )
+          );
+          try {
+            captureCheckOutput(span, (res as any).output);
+          } catch {}
+          return res;
+        }
       );
 
       // Enrich issues
@@ -2240,8 +2246,8 @@ async function executeSingleCheck(
         session_id: context.sessionId,
         wave: state.wave,
       },
-      async () =>
-        executeWithSandboxRouting(
+      async span => {
+        const res = await executeWithSandboxRouting(
           checkId,
           checkConfig,
           context,
@@ -2249,7 +2255,12 @@ async function executeSingleCheck(
           dependencyResults,
           checkConfig.ai?.timeout || 1800000,
           () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-        )
+        );
+        try {
+          captureCheckOutput(span, (res as any).output);
+        } catch {}
+        return res;
+      }
     );
 
     // Special case: human-input style checks that intentionally pause the run

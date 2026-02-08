@@ -96,6 +96,9 @@ visor validate --config .visor.yaml  # Validate specific config file
 # Run all checks with a table output
 visor --check all --output table
 
+# Interactive TUI mode (chat-style interface for human-input workflows)
+visor --tui --config ./my-workflow.yaml
+
 # Filter by tags (e.g., fast/local) and increase parallelism
 visor --tags fast,local --max-parallelism 5
 
@@ -112,14 +115,18 @@ visor --event all                 # Run all checks regardless of event filters (
 # Emit machine‑readable results and save to a file
 visor --check security --output json --output-file visor-results.json
 
+# Visual debugger with web UI
+visor --debug-server --debug-port 3456
+
 # Discover options
 visor --help
 ```
 
-See full options and examples: [docs/NPM_USAGE.md](docs/NPM_USAGE.md)
+See full CLI options: [docs/commands.md](docs/commands.md)
 
 Additional guides:
 
+- debugging and local development (TUI, debug server): [docs/debugging.md](docs/debugging.md)
 - fail conditions: [docs/fail-if.md](docs/fail-if.md)
 - forEach behavior and dependent propagation (including outputs_raw and history precedence): [docs/foreach-dependency-propagation.md](docs/foreach-dependency-propagation.md)
 - Failure routing and `on_finish` (with outputs_raw in routing JS): [docs/failure-routing.md](docs/failure-routing.md)
@@ -618,6 +625,28 @@ Learn more: [docs/sdk.md](docs/sdk.md)
 ## 🔍 Debugging
 
 Comprehensive debugging tools help troubleshoot configurations and data flows:
+
+### Running Locally
+
+```bash
+# Basic CLI run
+visor --config .visor.yaml --check all
+
+# TUI mode - interactive chat interface for human-input workflows
+visor --tui --config ./examples/calculator-config.yaml
+
+# Debug server - web UI for stepping through execution
+visor --debug-server --debug-port 3456
+
+# Combine options for full visibility
+visor --tui --config .visor.yaml --debug
+```
+
+**TUI Mode Features:**
+- Chat-style interface with persistent input bar
+- Press `Tab` to switch between Chat and Logs tabs
+- Re-run workflows by typing new messages after completion
+- Press `q` to exit when done
 
 ### Quick Debugging Tips
 

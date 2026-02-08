@@ -3,6 +3,7 @@
 This guide provides comprehensive debugging techniques and tools to help troubleshoot Visor configurations, checks, and transformations.
 
 ## Table of Contents
+- [Running Visor Locally](#running-visor-locally)
 - [Debug Mode](#debug-mode)
 - [Debugging JavaScript Expressions](#debugging-javascript-expressions)
 - [Debugging Liquid Templates](#debugging-liquid-templates)
@@ -12,6 +13,138 @@ This guide provides comprehensive debugging techniques and tools to help trouble
 - [Troubleshooting Tips](#troubleshooting-tips)
 - [Tracing with OpenTelemetry](#tracing-with-opentelemetry)
 - [Debug Visualizer](#debug-visualizer)
+
+## Running Visor Locally
+
+### Building from Source
+
+```bash
+# Install dependencies
+npm install
+
+# Build the project
+npm run build
+
+# Run the CLI
+./dist/cli-main.js --help
+# or
+./dist/index.js --help
+```
+
+### Basic CLI Usage
+
+```bash
+# Run with a config file
+./dist/index.js --config ./examples/calculator-config.yaml
+
+# Run specific checks only
+./dist/index.js --config .visor.yaml --check security,lint
+
+# Run with debug output
+./dist/index.js --config .visor.yaml --debug
+
+# Output in different formats
+./dist/index.js --config .visor.yaml --output json
+./dist/index.js --config .visor.yaml --output markdown
+./dist/index.js --config .visor.yaml --output sarif
+
+# Pass inline messages for human-input checks
+./dist/index.js --config ./examples/calculator-config.yaml --message "42"
+```
+
+### TUI Mode (Interactive Terminal Interface)
+
+The `--tui` flag enables a persistent terminal interface for any workflow. The workflow runs immediately, and you can re-run it by typing new messages after completion:
+
+```bash
+# Start with TUI mode
+./dist/index.js --tui --config ./examples/calculator-config.yaml
+
+# TUI with debug output (logs go to second tab)
+./dist/index.js --tui --config .visor.yaml --debug
+```
+
+**TUI Features:**
+- **Chat Tab**: Shows workflow prompts and results in a chat-like interface
+- **Logs Tab**: Press `Shift+Tab` or `2` to switch to logs view
+- **Traces Tab**: Real-time OpenTelemetry trace visualization with execution tree
+- **Persistent Input**: Type messages at any time to interact with the workflow
+- **Re-run Workflows**: After completion, type a new message to re-run
+
+**TUI Key Bindings:**
+| Key | Action |
+|-----|--------|
+| `Enter` | Submit input |
+| `Shift+Tab` | Cycle between Chat, Logs, and Traces tabs |
+| `1` / `2` / `3` | Switch to Chat / Logs / Traces tab directly |
+| `e` | Toggle engine state visibility (Traces tab only) |
+| `Escape` | Clear input |
+| `Ctrl+C` | Exit / Abort workflow |
+| `q` | Exit (when workflow is complete) |
+
+**Traces Tab Features:**
+- Real-time execution tree showing check hierarchy
+- forEach iterations grouped under parent check with index
+- IN/OUT/ERR lines showing inputs, outputs, and errors for each span
+- Press `e` to toggle engine state spans (LevelDispatch, WavePlanning, etc.)
+- Engine states hidden by default to focus on your checks
+
+### Debug Server (Visual Debugger)
+
+The debug server provides a web-based UI for stepping through workflow execution:
+
+```bash
+# Start with debug server
+./dist/index.js --config .visor.yaml --debug-server --debug-port 3456
+
+# For headless/CI environments (skip auto-opening browser)
+VISOR_NOBROWSER=true ./dist/index.js --config .visor.yaml --debug-server
+```
+
+Open http://localhost:3456 to view the visual debugger. You can:
+- Click "Start" to begin execution
+- Pause/resume workflow execution
+- View spans and timing information
+- See check outputs and errors
+
+### Combining Debug Options
+
+```bash
+# TUI + Debug mode (verbose logging in logs tab)
+./dist/index.js --tui --config .visor.yaml --debug
+
+# Debug server + Debug mode (full visibility)
+./dist/index.js --config .visor.yaml --debug-server --debug
+
+# Full tracing with Jaeger
+VISOR_TELEMETRY_ENABLED=true \
+VISOR_TELEMETRY_SINK=otlp \
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces \
+./dist/index.js --config .visor.yaml --debug
+```
+
+### Development Workflow Tips
+
+1. **Use TUI for interactive workflows**: When developing workflows with human-input checks, TUI mode provides the best experience.
+
+2. **Check logs and traces tabs**: In TUI mode, press `Shift+Tab` to cycle tabs. Use the Logs tab for detailed execution logs and the Traces tab for visual execution flow.
+
+3. **Use JSON output for debugging**: `--output json` gives you the full result structure to inspect.
+
+4. **Watch mode for rapid iteration**:
+   ```bash
+   # In one terminal - watch and rebuild
+   npm run build -- --watch
+
+   # In another terminal - run your workflow
+   ./dist/index.js --tui --config ./my-workflow.yaml
+   ```
+
+5. **Run tests for specific features**:
+   ```bash
+   npm test -- --testPathPattern="human-input"
+   npm test -- --testPathPattern="memory"
+   ```
 
 ## Debug Mode
 

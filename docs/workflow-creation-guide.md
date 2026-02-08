@@ -246,6 +246,12 @@ steps:
 
 Output structure: `{ text: string, ts: number }`
 
+> **Tip:** Use `--tui` mode for interactive prompts and real-time visualization:
+> ```bash
+> visor --tui --config workflow.yaml
+> ```
+> TUI provides a chat-style interface for human-input prompts. See [Interactive TUI Mode](#interactive-tui-mode).
+
 ### 5. Log Check (`type: log`)
 
 Output messages to the console/log. Useful for debugging workflows and displaying execution information.
@@ -1332,6 +1338,39 @@ visor test --validate
 # Simulate event
 visor --config workflow.yaml --event pr_opened
 ```
+
+### Interactive TUI Mode
+
+TUI mode provides a persistent terminal interface for running any workflow:
+
+```bash
+# Start interactive TUI
+visor --tui --config workflow.yaml
+
+# TUI with debug logging
+visor --tui --config workflow.yaml --debug
+```
+
+**TUI Tabs:**
+- **Chat (1)**: Interactive prompts and workflow results
+- **Logs (2)**: Execution logs and debug output
+- **Traces (3)**: Real-time OpenTelemetry execution tree
+
+**Key Bindings:**
+| Key | Action |
+|-----|--------|
+| `Shift+Tab` | Cycle between tabs |
+| `1` / `2` / `3` | Jump to Chat / Logs / Traces |
+| `e` | Toggle engine states in Traces tab |
+| `Enter` | Submit input |
+| `Ctrl+C` | Abort workflow |
+| `q` | Exit (when complete) |
+
+The Traces tab shows:
+- Execution tree with check hierarchy
+- forEach iterations grouped under parent
+- IN/OUT/ERR lines for each span
+- Press `e` to show/hide engine internals (LevelDispatch, WavePlanning)
 
 ---
 

@@ -4,6 +4,7 @@ import type { CheckExecutionStats } from '../../types/execution';
 import type { CheckConfig } from '../../types/config';
 import { logger } from '../../logger';
 import { withActiveSpan } from '../../telemetry/trace-helpers';
+import { captureCheckOutput } from '../../telemetry/state-capture';
 import { emitMermaidFromMarkdown } from '../../utils/mermaid-telemetry';
 import { emitNdjsonFallback } from '../../telemetry/fallback-ndjson';
 import { buildOutputHistoryFromJournal } from './history-snapshot';
@@ -703,8 +704,8 @@ export async function executeSingleCheck(
         session_id: context.sessionId,
         wave: state.wave,
       },
-      async () =>
-        executeWithSandboxRouting(
+      async span => {
+        const res = await executeWithSandboxRouting(
           checkId,
           checkConfig,
           context,
@@ -712,7 +713,13 @@ export async function executeSingleCheck(
           dependencyResults,
           checkConfig.ai?.timeout || 1800000,
           () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-        )
+        );
+        // Capture output in span for trace visualization
+        try {
+          captureCheckOutput(span, (res as any).output);
+        } catch {}
+        return res;
+      }
     );
 
     const enrichedIssues = (result.issues || []).map((issue: ReviewIssue) => ({

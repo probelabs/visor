@@ -11,8 +11,7 @@ import { OutputFormatters, AnalysisResult } from './output-formatters';
 import { CheckResult, GroupedCheckResults } from './reviewer';
 import { PRInfo } from './pr-analyzer';
 import { logger, configureLoggerFromCli } from './logger';
-import { TuiManager } from './tui';
-import { extractTextFromJson } from './utils/json-text-extractor';
+import { ChatTUI } from './tui/index';
 import * as fs from 'fs';
 import * as path from 'path';
 import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
@@ -650,60 +649,16 @@ async function handleTestCommand(argv: string[]): Promise<void> {
   }
 }
 
-function buildChatTranscript(
-  groupedResults: GroupedCheckResults,
-  config: import('./types/config').VisorConfig
-): string {
-  const messages: string[] = [];
-  const checks = config.checks || {};
-  const separator = '\n\n' + '-'.repeat(60) + '\n\n';
-
-  for (const checkResults of Object.values(groupedResults)) {
-    for (const result of checkResults) {
-      const checkCfg: any = (checks as any)[result.checkName] || {};
-      const providerType = typeof checkCfg.type === 'string' ? checkCfg.type : '';
-      const group = (checkCfg.group as string) || result.group || '';
-      const schema = checkCfg.schema;
-      const isChatGroup = group === 'chat';
-      const isAi = providerType === 'ai';
-      const isLog = providerType === 'log';
-      const isSimpleSchema =
-        typeof schema === 'string' ? ['plain', 'text', 'markdown'].includes(schema) : false;
-
-      let text = extractTextFromJson(result.output);
-
-      if (!text && isAi && typeof result.content === 'string') {
-        if (isSimpleSchema || schema === undefined || schema === null) {
-          text = result.content.trim();
-        }
-      }
-
-      if (!text && isLog && isChatGroup && typeof result.content === 'string') {
-        text = result.content.trim();
-      }
-
-      if (!text && isChatGroup && typeof result.content === 'string') {
-        text = result.content.trim();
-      }
-
-      if (!text || text.trim().length === 0) continue;
-
-      const header = result.checkName ? result.checkName : 'chat';
-      messages.push(`${header}\n${text.trim()}`);
-    }
-  }
-
-  return messages.join(separator);
-}
-
 /**
  * Main CLI entry point for Visor
  */
 export async function main(): Promise<void> {
   // Declare debugServer at function scope so it's accessible in catch/finally blocks
   let debugServer: DebugVisualizerServer | null = null;
-  let tui: TuiManager | null = null;
+  let chatTui: ChatTUI | null = null;
   let tuiConsoleRestore: (() => void) | null = null;
+  // Function to re-run workflow from TUI - set after setup is complete
+  let runTuiWorkflow: ((message: string) => Promise<void>) | null = null;
 
   try {
     // Preflight: detect obviously stale dist relative to src and warn early.
@@ -925,18 +880,61 @@ export async function main(): Promise<void> {
       !options.slack &&
       process.env.NODE_ENV !== 'test';
 
+    // Create trace file path for TUI mode (used for Traces tab visualization)
+    let tuiTraceFilePath: string | undefined;
+    if (shouldEnableTui) {
+      // Force file-based telemetry in TUI mode for the Traces tab
+      const tracesDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+      try {
+        fs.mkdirSync(tracesDir, { recursive: true });
+      } catch {}
+      const runTs = new Date().toISOString().replace(/[:.]/g, '-');
+      tuiTraceFilePath = path.join(tracesDir, `tui-${runTs}.ndjson`);
+      // Set environment variables to force file-based telemetry
+      process.env.VISOR_TELEMETRY_ENABLED = 'true';
+      process.env.VISOR_TELEMETRY_SINK = 'file';
+      process.env.VISOR_FALLBACK_TRACE_FILE = tuiTraceFilePath;
+    }
+
     if (shouldEnableTui) {
       try {
-        tui = new TuiManager();
-        tui.start();
-        tui.setRunning(true);
-        tuiConsoleRestore = tui.captureConsole();
+        // Use new ChatTUI for persistent chat interface
+        chatTui = new ChatTUI({
+          traceFilePath: tuiTraceFilePath,
+          onMessageSubmit: async (message: string) => {
+            // Re-run workflow with the new user message
+            // Use type assertion because runTuiWorkflow is set later
+            const runner = runTuiWorkflow as ((msg: string) => Promise<void>) | null;
+            if (runner) {
+              try {
+                await runner(message);
+              } catch (err) {
+                const errMsg = err instanceof Error ? err.message : String(err);
+                chatTui?.addSystemMessage(`Error: ${errMsg}`);
+                chatTui?.setRunning(false);
+              }
+            }
+          },
+          onExit: () => {
+            // Will be called when user presses 'q' to exit
+          },
+        });
+        chatTui.start();
+        chatTui.setRunning(true);
+        tuiConsoleRestore = chatTui.captureConsole();
+
+        // Set logger sink immediately after capturing console to prevent log corruption
+        logger.setSink((msg, _level) => chatTui?.appendLog(msg), {
+          passthrough: false,
+          errorMode: 'silent', // Don't output errors - they'd corrupt the TUI
+        });
+
         executionContext.hooks = executionContext.hooks || {};
         executionContext.hooks.onHumanInput = async request => {
-          if (!tui) throw new Error('TUI not available');
-          tui.setStatus('Awaiting input...');
+          if (!chatTui) throw new Error('TUI not available');
+          chatTui.setStatus('Awaiting input...');
           try {
-            const userInput = await tui.promptUser({
+            const userInput = await chatTui.promptUser({
               prompt: request.prompt,
               placeholder: request.placeholder,
               multiline: request.multiline,
@@ -944,28 +942,22 @@ export async function main(): Promise<void> {
               defaultValue: request.default,
               allowEmpty: request.allowEmpty,
             });
-            // Append user input to chat content
-            if (userInput && userInput.trim()) {
-              const currentChat = (tui as any).pendingChat || '';
-              const newChat = currentChat
-                ? `${currentChat}\n\n**You:** ${userInput.trim()}`
-                : `**You:** ${userInput.trim()}`;
-              tui.setChatContent(newChat);
-            }
             return userInput;
           } finally {
-            tui.setStatus('Running');
+            chatTui.setStatus('Running');
           }
         };
-        // Hook to update TUI chat content when AI checks complete
+        // Hook to update TUI chat content when checks complete
         executionContext.hooks.onCheckComplete = info => {
-          if (!tui) return;
+          if (!chatTui) return;
           const { checkConfig, result } = info;
-          // Only show AI/log checks with group=chat and criticality=info
-          const isAi = checkConfig?.type === 'ai';
-          const isLogChat = checkConfig?.type === 'log' && checkConfig?.group === 'chat';
-          if (!isAi && !isLogChat) return;
+          // Skip internal checks
           if (checkConfig?.criticality === 'internal') return;
+
+          // Show AI checks and all log checks in TUI
+          const isAi = checkConfig?.type === 'ai';
+          const isLog = checkConfig?.type === 'log';
+          if (!isAi && !isLog) return;
 
           // Extract text from result
           let text: string | undefined;
@@ -977,14 +969,14 @@ export async function main(): Promise<void> {
           }
           if (!text) return;
 
-          // Append to chat content
-          const currentChat = (tui as any).pendingChat || '';
-          const newChat = currentChat
-            ? `${currentChat}\n\n---\n\n**Assistant:** ${text}`
-            : `**Assistant:** ${text}`;
-          tui.setChatContent(newChat);
+          // Add to chat as assistant/system message
+          if (isLog) {
+            chatTui.addSystemMessage(text);
+          } else {
+            chatTui.addAssistantMessage(text, info.checkId);
+          }
         };
-        tui.setAbortHandler(() => {
+        chatTui.setAbortHandler(() => {
           void (async () => {
             try {
               logger.setSink(undefined);
@@ -996,7 +988,7 @@ export async function main(): Promise<void> {
               }
             } catch {}
             try {
-              tui?.stop();
+              chatTui?.stop();
             } catch {}
             try {
               await flushNdjson();
@@ -1007,23 +999,14 @@ export async function main(): Promise<void> {
             process.exit(130);
           })();
         });
-        logger.setSink((msg, _level) => tui?.appendLog(msg), {
-          passthrough: false,
-          errorMode: 'warn',
-          onError: error => {
-            const errMsg = error instanceof Error ? error.message : String(error);
-            console.error(`TUI log sink failed: ${errMsg}`);
-            logger.setSink(undefined);
-          },
-        });
       } catch (error) {
         if (tuiConsoleRestore) {
           tuiConsoleRestore();
           tuiConsoleRestore = null;
         }
         logger.setSink(undefined);
-        tui?.stop();
-        tui = null;
+        chatTui?.stop();
+        chatTui = null;
         try {
           if (executionContext.hooks?.onHumanInput) {
             delete executionContext.hooks.onHumanInput;
@@ -1543,6 +1526,95 @@ export async function main(): Promise<void> {
       );
     }
 
+    // Set up TUI workflow re-run function (if TUI is active)
+    if (chatTui) {
+      const tuiRef = chatTui;
+      runTuiWorkflow = async (message: string) => {
+        // Set running state
+        tuiRef.setRunning(true);
+        tuiRef.addUserMessage(message);
+
+        try {
+          // Create a fresh engine for this execution
+          const rerunEngine = new StateMachineExecutionEngine(
+            undefined,
+            undefined,
+            debugServer || undefined
+          );
+          rerunEngine.setExecutionContext(executionContext);
+
+          // Execute workflow
+          const rerunResult = await withActiveSpan(
+            'visor.run',
+            { 'visor.run.checks_configured': checksToRun.length, 'visor.run.source': 'tui-rerun' },
+            async () =>
+              rerunEngine.executeGroupedChecks(
+                prInfo,
+                checksToRun,
+                options.timeout,
+                config,
+                options.output,
+                options.debug || false,
+                options.maxParallelism,
+                options.failFast,
+                tagFilter,
+                async () => {} // No pause gate for TUI re-runs
+              )
+          );
+
+          // Show any errors and the last result in the chat
+          if (rerunResult?.results) {
+            const allRerunResults = Object.values(rerunResult.results).flat();
+
+            // First, display any errors from failed checks
+            for (const result of allRerunResults) {
+              const r = result as any;
+              if (r?.issues && Array.isArray(r.issues)) {
+                for (const issue of r.issues) {
+                  if (issue.severity === 'error' || issue.severity === 'critical') {
+                    const errorMsg = `Error: ${issue.message || 'Unknown error'}`;
+                    tuiRef.addSystemMessage(errorMsg);
+                  }
+                }
+              }
+            }
+
+            // Then show the last check's output if available
+            // Skip log checks since they're already shown by onCheckComplete hook
+            if (allRerunResults.length > 0) {
+              const lastResult = allRerunResults[allRerunResults.length - 1] as any;
+              const lastCheckName = lastResult?.checkName;
+              const lastCheckConfig = lastCheckName ? config.checks?.[lastCheckName] : undefined;
+              const isLogCheck = lastCheckConfig?.type === 'log';
+
+              // Only show result if it's not a log check (those are already shown in real-time)
+              if (!isLogCheck) {
+                let lastOutput: string | undefined;
+
+                if (lastResult?.output?.text) {
+                  lastOutput = String(lastResult.output.text).trim();
+                } else if (lastResult?.content) {
+                  lastOutput = String(lastResult.content).trim();
+                } else if (lastResult?.output && typeof lastResult.output === 'string') {
+                  lastOutput = lastResult.output.trim();
+                }
+
+                if (lastOutput) {
+                  tuiRef.addSystemMessage(lastOutput);
+                }
+              }
+            }
+          }
+
+          tuiRef.addSystemMessage(
+            'Workflow completed. Type a new message to run again, or press q to exit.'
+          );
+        } finally {
+          tuiRef.setRunning(false);
+        }
+      };
+    }
+
     // Wait for user to click "Start" if debug server is running
     if (debugServer) {
       await debugServer.waitForStartSignal();
@@ -1694,10 +1766,54 @@ export async function main(): Promise<void> {
       }
     }
 
-    if (tui) {
-      const chatTranscript = buildChatTranscript(groupedResultsToUse, config);
-      tui.setChatContent(chatTranscript);
-      tui.setOutput(output);
+    if (chatTui) {
+      // In chat mode, show any errors and the last check's output
+      const allResults = Object.values(groupedResultsToUse).flat();
+
+      // First, display any errors from failed checks
+      for (const result of allResults) {
+        const r = result as any;
+        if (r?.issues && Array.isArray(r.issues)) {
+          for (const issue of r.issues) {
+            if (issue.severity === 'error' || issue.severity === 'critical') {
+              const errorMsg = `Error: ${issue.message || 'Unknown error'}`;
+              chatTui.addSystemMessage(errorMsg);
+            }
+          }
+        }
+      }
+
+      // Then show the last check's output if available
+      // Skip log checks since they're already shown by onCheckComplete hook
+      if (allResults.length > 0) {
+        const lastResult = allResults[allResults.length - 1] as any;
+        const lastCheckName = lastResult?.checkName;
+        const lastCheckConfig = lastCheckName ? config.checks?.[lastCheckName] : undefined;
+        const isLogCheck = lastCheckConfig?.type === 'log';
+
+        // Only show result if it's not a log check (those are already shown in real-time)
+        if (!isLogCheck) {
+          let lastOutput: string | undefined;
+
+          // Try to extract meaningful output from the last result
+          if (lastResult?.output?.text) {
+            lastOutput = String(lastResult.output.text).trim();
+          } else if (lastResult?.content) {
+            lastOutput = String(lastResult.content).trim();
+          } else if (lastResult?.output && typeof lastResult.output === 'string') {
+            lastOutput = lastResult.output.trim();
+          }
+
+          if (lastOutput) {
+            chatTui.addSystemMessage(lastOutput);
+          }
+        }
+      }
+
+      chatTui.addSystemMessage(
+        'Workflow completed. Type a new message to run again, or press q to exit.'
+      );
+      chatTui.setRunning(false);
     }
 
     // Emit or save output
@@ -1713,7 +1829,7 @@ export async function main(): Promise<void> {
         );
         process.exit(1);
       }
-    } else if (!debugServer && !tui) {
+    } else if (!debugServer && !chatTui) {
       // Only print to console if debug server is not active
       console.log(output);
     }
@@ -1820,24 +1936,20 @@ export async function main(): Promise<void> {
     try {
       await shutdownTelemetry();
     } catch {}
-    if (tui) {
+    if (chatTui) {
+      // Keep TUI running indefinitely for persistent chat mode
+      // User can press 'q' to exit or Ctrl+C to abort
+      // setRunning(false) was already called at workflow completion to re-enable input
       try {
-        tui.setRunning(false);
+        // Wait indefinitely for user to exit (no timeout)
+        await chatTui.waitForExit();
       } catch {}
+      // User explicitly exited, now clean up
       try {
         logger.setSink(undefined);
       } catch {}
       try {
         if (tuiConsoleRestore) tuiConsoleRestore();
-      } catch {}
-      try {
-        const holdMs = (() => {
-          const raw = process.env.VISOR_TUI_HOLD_MS;
-          if (!raw) return 60000;
-          const parsed = parseInt(raw, 10);
-          return Number.isFinite(parsed) ? parsed : 60000;
-        })();
-        await tui.waitForExit(holdMs);
       } catch {}
     }
     process.exit(exitCode);
@@ -1909,9 +2021,9 @@ export async function main(): Promise<void> {
     try {
       await shutdownTelemetry();
     } catch {}
-    if (tui) {
+    if (chatTui) {
       try {
-        tui.setRunning(false);
+        chatTui.setRunning(false);
       } catch {}
       try {
         logger.setSink(undefined);
@@ -1926,7 +2038,7 @@ export async function main(): Promise<void> {
           const parsed = parseInt(raw, 10);
           return Number.isFinite(parsed) ? parsed : 60000;
         })();
-        await tui.waitForExit(holdMs);
+        await chatTui.waitForExit(holdMs);
       } catch {}
     }
     process.exit(1);

@@ -3,6 +3,7 @@ import type { ReviewIssue, ReviewSummary } from '../../reviewer';
 import { logger } from '../../logger';
 import { emitNdjsonSpanWithEvents } from '../../telemetry/fallback-ndjson';
 import { withActiveSpan } from '../../telemetry/trace-helpers';
+import { captureCheckOutput } from '../../telemetry/state-capture';
 import type { CheckProviderConfig } from '../../providers/check-provider.interface';
 import { buildOutputHistoryFromJournal } from './history-snapshot';
 import { buildDependencyResultsWithScope } from './dependency-gating';
@@ -281,8 +282,8 @@ export async function executeCheckWithForEachItems(
           session_id: context.sessionId,
           wave: state.wave,
         },
-        async () =>
-          executeWithSandboxRouting(
+        async span => {
+          const res = await executeWithSandboxRouting(
             checkId,
             checkConfig,
             context,
@@ -290,7 +291,12 @@ export async function executeCheckWithForEachItems(
             dependencyResults,
             checkConfig.ai?.timeout || 1800000,
             () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-          )
+          );
+          try {
+            captureCheckOutput(span, (res as any).output);
+          } catch {}
+          return res;
+        }
       );
 
       const enrichedIssues = (result.issues || []).map((issue: ReviewIssue) => ({

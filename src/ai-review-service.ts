@@ -17,6 +17,14 @@ function log(...args: unknown[]): void {
   logger.debug(args.join(' '));
 }
 
+/**
+ * Generate current date XML tag for AI context
+ */
+function getCurrentDateXml(): string {
+  const now = new Date();
+  return `<current_date>${now.toISOString().split('T')[0]}</current_date>`;
+}
+
 function createProbeTracerAdapter(fallbackTracer?: any) {
   const fallback = fallbackTracer && typeof fallbackTracer === 'object' ? fallbackTracer : null;
   const emitEvent = (name: string, attrs?: Record<string, unknown>) => {
@@ -701,6 +709,7 @@ ${customInstructions}
   </instructions>
 
   <context>
+    ${getCurrentDateXml()}
 ${prContext}${slackContextXml}
   </context>
 
@@ -752,6 +761,7 @@ ${customInstructions}
   </instructions>
 
   <context>
+    ${getCurrentDateXml()}
 ${prContext}${slackContextXml}
   </context>
 
@@ -783,6 +793,7 @@ ${customInstructions}
 </instructions>
 
 <context>
+  ${getCurrentDateXml()}
 ${prContext}${slackContextXml}
 </context>`;
   }
