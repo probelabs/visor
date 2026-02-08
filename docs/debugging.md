@@ -66,7 +66,8 @@ The `--tui` flag enables a persistent chat-style interface for interactive workf
 
 **TUI Features:**
 - **Chat Tab**: Shows workflow prompts and results in a chat-like interface
-- **Logs Tab**: Press `Tab` or `2` to switch to logs view
+- **Logs Tab**: Press `Shift+Tab` or `2` to switch to logs view
+- **Traces Tab**: Real-time OpenTelemetry trace visualization with execution tree
 - **Persistent Input**: Type messages at any time to interact with the workflow
 - **Re-run Workflows**: After completion, type a new message to re-run
 
@@ -74,11 +75,19 @@ The `--tui` flag enables a persistent chat-style interface for interactive workf
 | Key | Action |
 |-----|--------|
 | `Enter` | Submit input |
-| `Tab` | Switch between Chat and Logs tabs |
-| `1` / `2` | Switch to Chat / Logs tab directly |
+| `Shift+Tab` | Cycle between Chat, Logs, and Traces tabs |
+| `1` / `2` / `3` | Switch to Chat / Logs / Traces tab directly |
+| `e` | Toggle engine state visibility (Traces tab only) |
 | `Escape` | Clear input |
 | `Ctrl+C` | Exit / Abort workflow |
 | `q` | Exit (when workflow is complete) |
+
+**Traces Tab Features:**
+- Real-time execution tree showing check hierarchy
+- forEach iterations grouped under parent check with index
+- IN/OUT/ERR lines showing inputs, outputs, and errors for each span
+- Press `e` to toggle engine state spans (LevelDispatch, WavePlanning, etc.)
+- Engine states hidden by default to focus on your checks
 
 ### Debug Server (Visual Debugger)
 
@@ -118,7 +127,7 @@ OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces \
 
 1. **Use TUI for interactive workflows**: When developing workflows with human-input checks, TUI mode provides the best experience.
 
-2. **Check logs tab for errors**: In TUI mode, press `Tab` to switch to the logs tab to see detailed execution logs.
+2. **Check logs and traces tabs**: In TUI mode, press `Shift+Tab` to cycle tabs. Use the Logs tab for detailed execution logs and the Traces tab for visual execution flow.
 
 3. **Use JSON output for debugging**: `--output json` gives you the full result structure to inspect.
 

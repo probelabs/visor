@@ -121,8 +121,9 @@ npx -y @probelabs/visor@latest --tui --config ./my-workflow.yaml
 ```
 
 TUI features:
-- Chat tab shows prompts and results
-- Logs tab (press `Tab` to switch) shows execution logs
+- **Chat tab**: Shows prompts and results in chat-style interface
+- **Logs tab**: Press `Shift+Tab` or `2` to view execution logs
+- **Traces tab**: Press `3` for real-time OpenTelemetry trace visualization
 - Re-run workflows by typing new messages after completion
 - Press `q` to exit when done
 
