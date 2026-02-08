@@ -9,6 +9,7 @@ import { ConfigManager } from './config';
 import { StateMachineExecutionEngine } from './state-machine-execution-engine';
 import { OutputFormatters, AnalysisResult } from './output-formatters';
 import { CheckResult, GroupedCheckResults } from './reviewer';
+import { extractTextFromJson } from './utils/json-text-extractor';
 import { PRInfo } from './pr-analyzer';
 import { logger, configureLoggerFromCli } from './logger';
 import { ChatTUI } from './tui/index';
@@ -1056,6 +1057,7 @@ async function handlePolicyCheckCommand(argv: string[]): Promise<void> {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function buildChatTranscript(
   groupedResults: GroupedCheckResults,
   config: import('./types/config').VisorConfig
