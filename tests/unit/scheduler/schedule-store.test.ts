@@ -58,6 +58,12 @@ class InMemoryBackend implements ScheduleStoreBackend {
     return schedule;
   }
 
+  async importSchedule(schedule: Schedule): Promise<void> {
+    if (!this.schedules.has(schedule.id)) {
+      this.schedules.set(schedule.id, schedule);
+    }
+  }
+
   async get(id: string) {
     return this.schedules.get(id);
   }

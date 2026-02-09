@@ -88,6 +88,15 @@ function toDbRow(schedule: Schedule): ScheduleRow {
   };
 }
 
+function safeJsonParse<T = unknown>(value: string | null): T | undefined {
+  if (!value) return undefined;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Convert a database row to a Schedule object
  */
@@ -103,8 +112,8 @@ function fromDbRow(row: ScheduleRow): Schedule {
     isRecurring: row.is_recurring === 1,
     originalExpression: row.original_expression,
     workflow: row.workflow ?? undefined,
-    workflowInputs: row.workflow_inputs ? JSON.parse(row.workflow_inputs) : undefined,
-    outputContext: row.output_context ? JSON.parse(row.output_context) : undefined,
+    workflowInputs: safeJsonParse(row.workflow_inputs),
+    outputContext: safeJsonParse(row.output_context),
     status: row.status as Schedule['status'],
     createdAt: row.created_at,
     lastRunAt: row.last_run_at ?? undefined,
@@ -291,6 +300,55 @@ export class SqliteStoreBackend implements ScheduleStoreBackend {
     );
 
     return newSchedule;
+  }
+
+  async importSchedule(schedule: Schedule): Promise<void> {
+    const db = this.getDb();
+    const row = toDbRow(schedule);
+
+    db.prepare(
+      `
+      INSERT OR IGNORE INTO schedules (
+        id, creator_id, creator_context, creator_name, timezone,
+        schedule_expr, run_at, is_recurring, original_expression,
+        workflow, workflow_inputs, output_context,
+        status, created_at, last_run_at, next_run_at,
+        run_count, failure_count, last_error, previous_response,
+        claimed_by, claimed_at, lock_token
+      ) VALUES (
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?
+      )
+    `
+    ).run(
+      row.id,
+      row.creator_id,
+      row.creator_context,
+      row.creator_name,
+      row.timezone,
+      row.schedule_expr,
+      row.run_at,
+      row.is_recurring,
+      row.original_expression,
+      row.workflow,
+      row.workflow_inputs,
+      row.output_context,
+      row.status,
+      row.created_at,
+      row.last_run_at,
+      row.next_run_at,
+      row.run_count,
+      row.failure_count,
+      row.last_error,
+      row.previous_response,
+      row.claimed_by,
+      row.claimed_at,
+      row.lock_token
+    );
   }
 
   async get(id: string): Promise<Schedule | undefined> {

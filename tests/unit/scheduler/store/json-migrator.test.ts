@@ -64,10 +64,15 @@ describe('JSON → SQL Migration', () => {
     const count = await migrateJsonToBackend(jsonPath, backend);
     expect(count).toBe(2);
 
-    // Verify schedules exist in the database (they get new IDs)
+    // Verify schedules exist in the database with original IDs preserved
     const all = await backend.getAll();
     expect(all).toHaveLength(2);
     expect(all.map(s => s.workflow).sort()).toEqual(['daily-report', 'security-scan']);
+    // IDs are preserved from the original JSON
+    for (const original of schedules) {
+      const found = all.find(s => s.id === original.id);
+      expect(found).toBeDefined();
+    }
   });
 
   it('should handle missing JSON file gracefully', async () => {
@@ -118,16 +123,9 @@ describe('JSON → SQL Migration', () => {
     // Write file again (simulate re-migration attempt)
     fs.writeFileSync(jsonPath, JSON.stringify({ schedules }));
 
-    // Second run: schedules already exist (by workflow match, but with different IDs)
-    // Since create() generates new IDs, this will create a second entry.
-    // This is expected — the migrator's idempotency protects by ID, and since
-    // the first migration gives new IDs, a re-run would add duplicates.
-    // However, after the first migration the JSON file is renamed, so in practice
-    // this doesn't happen.
+    // Second run: schedules already exist with preserved original IDs — skipped
     const count2 = await migrateJsonToBackend(jsonPath, backend);
-    // Since the original IDs don't exist in DB (we generated new ones),
-    // it will migrate again
-    expect(count2).toBe(1);
+    expect(count2).toBe(0);
   });
 
   it('should skip schedules without ID', async () => {

@@ -176,10 +176,22 @@ export class Scheduler {
     await this.store.initialize();
 
     // Load static cron jobs from config (always executed, no permissions check)
-    await this.loadStaticCronJobs();
+    try {
+      await this.loadStaticCronJobs();
+    } catch (err) {
+      logger.error(
+        `[Scheduler] Failed to load static cron jobs: ${err instanceof Error ? err.message : err}`
+      );
+    }
 
     // Restore dynamic schedules from storage
-    await this.restoreSchedules();
+    try {
+      await this.restoreSchedules();
+    } catch (err) {
+      logger.error(
+        `[Scheduler] Failed to restore schedules: ${err instanceof Error ? err.message : err}`
+      );
+    }
 
     // Start periodic check for due schedules
     this.checkInterval = setInterval(() => {
@@ -621,8 +633,15 @@ export class Scheduler {
         try {
           const nextRun = getNextRunTime(schedule.schedule, schedule.timezone);
           await this.store.updateAsync(schedule.id, { nextRunAt: nextRun.getTime() });
-        } catch {
-          // Best effort
+        } catch (err) {
+          // If we can't compute next run, pause the schedule to prevent duplicate execution
+          logger.warn(
+            `[Scheduler] Failed to compute next run time for ${schedule.id}, pausing schedule: ${err instanceof Error ? err.message : err}`
+          );
+          await this.store.updateAsync(schedule.id, {
+            status: 'paused',
+            lastError: `Failed to compute next run time: ${err instanceof Error ? err.message : err}`,
+          });
         }
       }
     } catch (error) {

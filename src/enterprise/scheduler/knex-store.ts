@@ -60,6 +60,15 @@ function toNum(val: number | string | null | undefined): number | undefined {
   return typeof val === 'string' ? parseInt(val, 10) : val;
 }
 
+function safeJsonParse<T = unknown>(value: string | null): T | undefined {
+  if (!value) return undefined;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return undefined;
+  }
+}
+
 function fromDbRow(row: ScheduleRow): Schedule {
   return {
     id: row.id,
@@ -72,8 +81,8 @@ function fromDbRow(row: ScheduleRow): Schedule {
     isRecurring: row.is_recurring === true || row.is_recurring === 1,
     originalExpression: row.original_expression,
     workflow: row.workflow ?? undefined,
-    workflowInputs: row.workflow_inputs ? JSON.parse(row.workflow_inputs) : undefined,
-    outputContext: row.output_context ? JSON.parse(row.output_context) : undefined,
+    workflowInputs: safeJsonParse(row.workflow_inputs),
+    outputContext: safeJsonParse(row.output_context),
     status: row.status as Schedule['status'],
     createdAt: toNum(row.created_at)!,
     lastRunAt: toNum(row.last_run_at),
@@ -319,6 +328,13 @@ export class KnexStoreBackend implements ScheduleStoreBackend {
 
     logger.info(`[KnexStore] Created schedule ${newSchedule.id} for user ${newSchedule.creatorId}`);
     return newSchedule;
+  }
+
+  async importSchedule(schedule: Schedule): Promise<void> {
+    const knex = this.getKnex();
+    const existing = await knex('schedules').where('id', schedule.id).first();
+    if (existing) return; // Already imported (idempotent)
+    await knex('schedules').insert(toInsertRow(schedule));
   }
 
   async get(id: string): Promise<Schedule | undefined> {

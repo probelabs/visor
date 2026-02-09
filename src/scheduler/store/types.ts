@@ -37,6 +37,9 @@ export interface ScheduleStoreBackend {
     schedule: Omit<Schedule, 'id' | 'createdAt' | 'runCount' | 'failureCount' | 'status'>
   ): Promise<Schedule>;
 
+  /** Import a full schedule preserving its original ID (used for migration) */
+  importSchedule(schedule: Schedule): Promise<void>;
+
   /** Get a schedule by ID */
   get(id: string): Promise<Schedule | undefined>;
 
