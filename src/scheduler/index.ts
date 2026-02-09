@@ -16,6 +16,16 @@ export {
   ScheduleLimits,
 } from './schedule-store';
 
+// Store backends
+export type {
+  ScheduleStoreBackend,
+  ScheduleStoreStats,
+  StorageConfig,
+  HAConfig,
+} from './store/types';
+
+export { createStoreBackend } from './store/index';
+
 // Schedule parser
 export {
   parseScheduleExpression,

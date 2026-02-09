@@ -491,7 +491,7 @@ async function handleCreate(
     // Create the schedule - AI has done all the parsing
     // workflow is only set when explicitly provided (e.g., from YAML cron jobs)
     // For simple reminders, workflow is undefined and scheduler posts text directly
-    const schedule = store.create({
+    const schedule = await store.createAsync({
       creatorId: context.userId,
       creatorContext: context.contextType,
       creatorName: context.userName,
@@ -538,7 +538,8 @@ async function handleList(
   store: ScheduleStore
 ): Promise<ScheduleToolResult> {
   // Only show schedules created by this user - protects privacy of personal schedules
-  const schedules = store.getByCreator(context.userId).filter(s => s.status !== 'completed');
+  const allUserSchedules = await store.getByCreatorAsync(context.userId);
+  const schedules = allUserSchedules.filter(s => s.status !== 'completed');
 
   // If in a specific context, optionally filter to show only relevant schedules
   let filteredSchedules = schedules;
@@ -583,7 +584,7 @@ async function handleCancel(
 
   if (args.schedule_id) {
     // Only search in schedules created by this user
-    const userSchedules = store.getByCreator(context.userId);
+    const userSchedules = await store.getByCreatorAsync(context.userId);
 
     // Try exact match first
     schedule = userSchedules.find(s => s.id === args.schedule_id);
@@ -615,7 +616,7 @@ async function handleCancel(
   }
 
   // Delete the schedule
-  store.delete(schedule.id);
+  await store.deleteAsync(schedule.id);
 
   logger.info(`[ScheduleTool] Cancelled schedule ${schedule.id} for user ${context.userId}`);
 
@@ -646,7 +647,7 @@ async function handlePauseResume(
   }
 
   // Only search in schedules created by this user
-  const userSchedules = store.getByCreator(context.userId);
+  const userSchedules = await store.getByCreatorAsync(context.userId);
 
   // Try exact match first
   let schedule = userSchedules.find(s => s.id === args.schedule_id);
@@ -677,7 +678,7 @@ async function handlePauseResume(
   }
 
   // Update status
-  const updated = store.update(schedule.id, { status: newStatus });
+  const updated = await store.updateAsync(schedule.id, { status: newStatus });
 
   const action = newStatus === 'paused' ? 'paused' : 'resumed';
   logger.info(`[ScheduleTool] ${action} schedule ${schedule.id} for user ${context.userId}`);

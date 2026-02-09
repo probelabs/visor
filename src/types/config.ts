@@ -1250,6 +1250,60 @@ export interface SchedulerPermissionsConfig {
 }
 
 /**
+ * SSL/TLS configuration for scheduler database connections
+ */
+export interface SchedulerSslConfig {
+  /** Enable SSL (default: true when SslConfig object is provided) */
+  enabled?: boolean;
+  /** Reject unauthorized certificates (default: true) */
+  reject_unauthorized?: boolean;
+  /** Path to CA certificate PEM file */
+  ca?: string;
+  /** Path to client certificate PEM file */
+  cert?: string;
+  /** Path to client key PEM file */
+  key?: string;
+}
+
+/**
+ * Scheduler storage connection configuration
+ */
+export interface SchedulerStorageConnectionConfig {
+  /** SQLite database file path (default: '.visor/schedules.db') */
+  filename?: string;
+  /** Database host (PostgreSQL/MySQL/MSSQL) */
+  host?: string;
+  /** Database port (PostgreSQL/MySQL/MSSQL) */
+  port?: number;
+  /** Database name (PostgreSQL/MySQL/MSSQL) */
+  database?: string;
+  /** Database user (PostgreSQL/MySQL/MSSQL) */
+  user?: string;
+  /** Database password (PostgreSQL/MySQL/MSSQL) */
+  password?: string;
+  /** SSL/TLS configuration (PostgreSQL/MySQL/MSSQL) */
+  ssl?: boolean | SchedulerSslConfig;
+  /** Connection string URL (e.g., postgresql://user:pass@host/db) */
+  connection_string?: string;
+  /** Connection pool configuration */
+  pool?: { min?: number; max?: number };
+}
+
+/**
+ * Scheduler high-availability configuration
+ */
+export interface SchedulerHAConfig {
+  /** Enable distributed locking for multi-node deployments (default: false) */
+  enabled?: boolean;
+  /** Unique node identifier (default: hostname-pid) */
+  node_id?: string;
+  /** Lock time-to-live in seconds (default: 60) */
+  lock_ttl?: number;
+  /** Heartbeat interval for lock renewal in seconds (default: 15) */
+  heartbeat_interval?: number;
+}
+
+/**
  * Scheduler configuration for workflow scheduling
  */
 export interface SchedulerConfig {
@@ -1257,9 +1311,15 @@ export interface SchedulerConfig {
   enabled?: boolean;
   /** Storage configuration */
   storage?: {
-    /** Path to schedules JSON file (default: .visor/schedules.json) */
+    /** Path to schedules JSON file (legacy, triggers auto-migration) */
     path?: string;
+    /** Database driver (default: 'sqlite') */
+    driver?: 'sqlite' | 'postgresql' | 'mysql' | 'mssql';
+    /** Database connection configuration */
+    connection?: SchedulerStorageConnectionConfig;
   };
+  /** High-availability configuration for multi-node deployments */
+  ha?: SchedulerHAConfig;
   /** Limits for dynamic schedules */
   limits?: SchedulerLimitsConfig;
   /** Default timezone (IANA format, e.g., "America/New_York") */
