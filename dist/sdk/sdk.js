@@ -721,19 +721,19 @@ function __getOrCreateNdjsonPath() {
   try {
     if (process.env.VISOR_TELEMETRY_SINK && process.env.VISOR_TELEMETRY_SINK !== "file")
       return null;
-    const path23 = require("path");
-    const fs21 = require("fs");
+    const path24 = require("path");
+    const fs22 = require("fs");
     if (process.env.VISOR_FALLBACK_TRACE_FILE) {
       __ndjsonPath = process.env.VISOR_FALLBACK_TRACE_FILE;
-      const dir = path23.dirname(__ndjsonPath);
-      if (!fs21.existsSync(dir)) fs21.mkdirSync(dir, { recursive: true });
+      const dir = path24.dirname(__ndjsonPath);
+      if (!fs22.existsSync(dir)) fs22.mkdirSync(dir, { recursive: true });
       return __ndjsonPath;
     }
-    const outDir = process.env.VISOR_TRACE_DIR || path23.join(process.cwd(), "output", "traces");
-    if (!fs21.existsSync(outDir)) fs21.mkdirSync(outDir, { recursive: true });
+    const outDir = process.env.VISOR_TRACE_DIR || path24.join(process.cwd(), "output", "traces");
+    if (!fs22.existsSync(outDir)) fs22.mkdirSync(outDir, { recursive: true });
     if (!__ndjsonPath) {
       const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      __ndjsonPath = path23.join(outDir, `${ts}.ndjson`);
+      __ndjsonPath = path24.join(outDir, `${ts}.ndjson`);
     }
     return __ndjsonPath;
   } catch {
@@ -742,11 +742,11 @@ function __getOrCreateNdjsonPath() {
 }
 function _appendRunMarker() {
   try {
-    const fs21 = require("fs");
+    const fs22 = require("fs");
     const p = __getOrCreateNdjsonPath();
     if (!p) return;
     const line = { name: "visor.run", attributes: { started: true } };
-    fs21.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
+    fs22.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
   } catch {
   }
 }
@@ -5753,9 +5753,9 @@ function configureLiquidWithExtensions(liquid) {
   });
   liquid.registerFilter("get", (obj, pathExpr) => {
     if (obj == null) return void 0;
-    const path23 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
-    if (!path23) return obj;
-    const parts = path23.split(".");
+    const path24 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
+    if (!path24) return obj;
+    const parts = path24.split(".");
     let cur = obj;
     for (const p of parts) {
       if (cur == null) return void 0;
@@ -5874,9 +5874,9 @@ function configureLiquidWithExtensions(liquid) {
           }
         }
         const defaultRole = typeof rolesCfg.default === "string" && rolesCfg.default.trim() ? rolesCfg.default.trim() : void 0;
-        const getNested = (obj, path23) => {
-          if (!obj || !path23) return void 0;
-          const parts = path23.split(".");
+        const getNested = (obj, path24) => {
+          if (!obj || !path24) return void 0;
+          const parts = path24.split(".");
           let cur = obj;
           for (const p of parts) {
             if (cur == null) return void 0;
@@ -6028,8 +6028,8 @@ var init_liquid_extensions = __esm({
 async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs21 = await import("fs/promises");
-    const path23 = await import("path");
+    const fs22 = await import("fs/promises");
+    const path24 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
@@ -6037,24 +6037,24 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
       templateContent = String(checkConfig.template.content);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path23.resolve(process.cwd(), file);
-      templateContent = await fs21.readFile(resolved, "utf-8");
+      const resolved = path24.resolve(process.cwd(), file);
+      templateContent = await fs22.readFile(resolved, "utf-8");
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path23.join(__dirname, "output", sanitized, "template.liquid"),
+          path24.join(__dirname, "output", sanitized, "template.liquid"),
           // bundled: dist/output/
-          path23.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path24.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // source: output/
-          path23.join(process.cwd(), "output", sanitized, "template.liquid"),
+          path24.join(process.cwd(), "output", sanitized, "template.liquid"),
           // fallback: cwd/output/
-          path23.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          path24.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
           // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs21.readFile(p, "utf-8");
+            templateContent = await fs22.readFile(p, "utf-8");
             if (templateContent) break;
           } catch {
           }
@@ -6459,7 +6459,7 @@ async function processDiffWithOutline(diffContent) {
   }
   try {
     const originalProbePath = process.env.PROBE_PATH;
-    const fs21 = require("fs");
+    const fs22 = require("fs");
     const possiblePaths = [
       // Relative to current working directory (most common in production)
       path6.join(process.cwd(), "node_modules/@probelabs/probe/bin/probe-binary"),
@@ -6470,7 +6470,7 @@ async function processDiffWithOutline(diffContent) {
     ];
     let probeBinaryPath;
     for (const candidatePath of possiblePaths) {
-      if (fs21.existsSync(candidatePath)) {
+      if (fs22.existsSync(candidatePath)) {
         probeBinaryPath = candidatePath;
         break;
       }
@@ -7535,8 +7535,8 @@ ${schemaString}`);
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs21 = require("fs");
-              const path23 = require("path");
+              const fs22 = require("fs");
+              const path24 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const provider = this.config.provider || "auto";
               const model = this.config.model || "default";
@@ -7650,20 +7650,20 @@ ${"=".repeat(60)}
 `;
               readableVersion += `${"=".repeat(60)}
 `;
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path23.join(process.cwd(), "debug-artifacts");
-              if (!fs21.existsSync(debugArtifactsDir)) {
-                fs21.mkdirSync(debugArtifactsDir, { recursive: true });
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path24.join(process.cwd(), "debug-artifacts");
+              if (!fs22.existsSync(debugArtifactsDir)) {
+                fs22.mkdirSync(debugArtifactsDir, { recursive: true });
               }
-              const debugFile = path23.join(
+              const debugFile = path24.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.json`
               );
-              fs21.writeFileSync(debugFile, debugJson, "utf-8");
-              const readableFile = path23.join(
+              fs22.writeFileSync(debugFile, debugJson, "utf-8");
+              const readableFile = path24.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.txt`
               );
-              fs21.writeFileSync(readableFile, readableVersion, "utf-8");
+              fs22.writeFileSync(readableFile, readableVersion, "utf-8");
               log(`
 \u{1F4BE} Full debug info saved to:`);
               log(`   JSON: ${debugFile}`);
@@ -7696,8 +7696,8 @@ ${"=".repeat(60)}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs21 = require("fs");
-              const path23 = require("path");
+              const fs22 = require("fs");
+              const path24 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny2 = agent;
               let fullHistory = [];
@@ -7708,8 +7708,8 @@ ${"=".repeat(60)}
               } else if (agentAny2._messages) {
                 fullHistory = agentAny2._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path23.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path23.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path24.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path24.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -7721,7 +7721,7 @@ ${"=".repeat(60)}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs21.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs22.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -7748,7 +7748,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs21.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs22.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -7757,11 +7757,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs21 = require("fs");
-              const path23 = require("path");
+              const fs22 = require("fs");
+              const path24 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path23.join(process.cwd(), "debug-artifacts");
-              const responseFile = path23.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path24.join(process.cwd(), "debug-artifacts");
+              const responseFile = path24.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -7794,7 +7794,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs21.writeFileSync(responseFile, responseContent, "utf-8");
+              fs22.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -7810,9 +7810,9 @@ ${"=".repeat(60)}
                 await agentAny._telemetryConfig.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${agentAny._traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs21 = require("fs");
-                  if (fs21.existsSync(agentAny._traceFilePath)) {
-                    const stats = fs21.statSync(agentAny._traceFilePath);
+                  const fs22 = require("fs");
+                  if (fs22.existsSync(agentAny._traceFilePath)) {
+                    const stats = fs22.statSync(agentAny._traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::${agentAny._traceFilePath} (${stats.size} bytes)`
                     );
@@ -8007,8 +8007,8 @@ ${schemaString}`);
           const model = this.config.model || "default";
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs21 = require("fs");
-              const path23 = require("path");
+              const fs22 = require("fs");
+              const path24 = require("path");
               const os2 = require("os");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const debugData = {
@@ -8082,18 +8082,18 @@ ${"=".repeat(60)}
               readableVersion += `${"=".repeat(60)}
 `;
               const tempDir = os2.tmpdir();
-              const promptFile = path23.join(tempDir, `visor-prompt-${timestamp}.txt`);
-              fs21.writeFileSync(promptFile, prompt, "utf-8");
+              const promptFile = path24.join(tempDir, `visor-prompt-${timestamp}.txt`);
+              fs22.writeFileSync(promptFile, prompt, "utf-8");
               log(`
 \u{1F4BE} Prompt saved to: ${promptFile}`);
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path23.join(process.cwd(), "debug-artifacts");
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path24.join(process.cwd(), "debug-artifacts");
               try {
-                const base = path23.join(
+                const base = path24.join(
                   debugArtifactsDir,
                   `prompt-${_checkName || "unknown"}-${timestamp}`
                 );
-                fs21.writeFileSync(base + ".json", debugJson, "utf-8");
-                fs21.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
+                fs22.writeFileSync(base + ".json", debugJson, "utf-8");
+                fs22.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
                 log(`
 \u{1F4BE} Full debug info saved to directory: ${debugArtifactsDir}`);
               } catch {
@@ -8138,8 +8138,8 @@ $ ${cliCommand}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs21 = require("fs");
-              const path23 = require("path");
+              const fs22 = require("fs");
+              const path24 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny = agent;
               let fullHistory = [];
@@ -8150,8 +8150,8 @@ $ ${cliCommand}
               } else if (agentAny._messages) {
                 fullHistory = agentAny._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path23.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path23.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path24.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path24.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -8163,7 +8163,7 @@ $ ${cliCommand}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs21.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs22.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -8190,7 +8190,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs21.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs22.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -8199,11 +8199,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs21 = require("fs");
-              const path23 = require("path");
+              const fs22 = require("fs");
+              const path24 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path23.join(process.cwd(), "debug-artifacts");
-              const responseFile = path23.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path24.join(process.cwd(), "debug-artifacts");
+              const responseFile = path24.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -8236,7 +8236,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs21.writeFileSync(responseFile, responseContent, "utf-8");
+              fs22.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -8254,9 +8254,9 @@ ${"=".repeat(60)}
                 await telemetry.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs21 = require("fs");
-                  if (fs21.existsSync(traceFilePath)) {
-                    const stats = fs21.statSync(traceFilePath);
+                  const fs22 = require("fs");
+                  if (fs22.existsSync(traceFilePath)) {
+                    const stats = fs22.statSync(traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::OpenTelemetry trace file size: ${stats.size} bytes`
                     );
@@ -8294,8 +8294,8 @@ ${"=".repeat(60)}
        * Load schema content from schema files or inline definitions
        */
       async loadSchemaContent(schema) {
-        const fs21 = require("fs").promises;
-        const path23 = require("path");
+        const fs22 = require("fs").promises;
+        const path24 = require("path");
         if (typeof schema === "object" && schema !== null) {
           log("\u{1F4CB} Using inline schema object from configuration");
           return JSON.stringify(schema);
@@ -8308,14 +8308,14 @@ ${"=".repeat(60)}
           }
         } catch {
         }
-        if ((schema.startsWith("./") || schema.includes(".json")) && !path23.isAbsolute(schema)) {
+        if ((schema.startsWith("./") || schema.includes(".json")) && !path24.isAbsolute(schema)) {
           if (schema.includes("..") || schema.includes("\0")) {
             throw new Error("Invalid schema path: path traversal not allowed");
           }
           try {
-            const schemaPath = path23.resolve(process.cwd(), schema);
+            const schemaPath = path24.resolve(process.cwd(), schema);
             log(`\u{1F4CB} Loading custom schema from file: ${schemaPath}`);
-            const schemaContent = await fs21.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs22.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch (error) {
             throw new Error(
@@ -8329,22 +8329,22 @@ ${"=".repeat(60)}
         }
         const candidatePaths = [
           // GitHub Action bundle location
-          path23.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
+          path24.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
           // Historical fallback when src/output was inadvertently bundled as output1/
-          path23.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
+          path24.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
           // Local dev (repo root)
-          path23.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
+          path24.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
         ];
         for (const schemaPath of candidatePaths) {
           try {
-            const schemaContent = await fs21.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs22.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch {
           }
         }
-        const distPath = path23.join(__dirname, "output", sanitizedSchemaName, "schema.json");
-        const distAltPath = path23.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
-        const cwdPath = path23.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
+        const distPath = path24.join(__dirname, "output", sanitizedSchemaName, "schema.json");
+        const distAltPath = path24.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
+        const cwdPath = path24.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
         throw new Error(
           `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath}, ${distAltPath}, and ${cwdPath}. Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
         );
@@ -13641,6 +13641,55 @@ ${errors}`);
             }
           }
         }
+        if (config.scheduler?.ha?.enabled && (!config.scheduler.storage?.driver || config.scheduler.storage.driver === "sqlite")) {
+          warnings.push({
+            field: "scheduler.ha",
+            message: 'HA mode is enabled but storage driver is SQLite (single-node only). Distributed locking will use in-memory locks which do not coordinate across nodes. Use driver: "postgresql", "mysql", or "mssql" for true multi-node HA.'
+          });
+        }
+        const schedulerDriver = config.scheduler?.storage?.driver;
+        if (schedulerDriver && schedulerDriver !== "sqlite") {
+          const conn = config.scheduler?.storage?.connection;
+          if (!conn) {
+            errors.push({
+              field: "scheduler.storage.connection",
+              message: `The '${schedulerDriver}' driver requires a connection configuration.`
+            });
+          } else {
+            const hasConnStr = !!conn.connection_string;
+            const hasHost = !!conn.host;
+            const hasDb = !!conn.database;
+            if (!hasConnStr && !hasHost) {
+              errors.push({
+                field: "scheduler.storage.connection",
+                message: `The '${schedulerDriver}' driver requires either 'connection_string' or 'host' (with 'database') to be specified.`
+              });
+            }
+            if (!hasConnStr && hasHost && !hasDb) {
+              errors.push({
+                field: "scheduler.storage.connection.database",
+                message: `The '${schedulerDriver}' driver requires 'database' when using host-based connection.`
+              });
+            }
+            if (hasConnStr && hasHost) {
+              warnings.push({
+                field: "scheduler.storage.connection",
+                message: "Both connection_string and host are set. connection_string takes precedence; host/port/database/user/password will be ignored."
+              });
+            }
+            if (hasHost && !hasConnStr) {
+              const host = conn.host || "";
+              const ssl = conn.ssl;
+              const isLocal = host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "0.0.0.0" || host === "[::]";
+              if (!isLocal && !ssl) {
+                warnings.push({
+                  field: "scheduler.storage.connection.ssl",
+                  message: `SSL is not enabled for remote host '${host}'. Consider enabling SSL for secure database connections.`
+                });
+              }
+            }
+          }
+        }
         if (config.ai_mcp_servers) {
           this.validateMcpServersObject(config.ai_mcp_servers, "ai_mcp_servers", errors, warnings);
         }
@@ -15107,17 +15156,17 @@ var init_workflow_check_provider = __esm({
        * so it can be executed by the state machine as a nested workflow.
        */
       async loadWorkflowFromConfigPath(sourcePath, baseDir) {
-        const path23 = require("path");
-        const fs21 = require("fs");
+        const path24 = require("path");
+        const fs22 = require("fs");
         const yaml4 = require("js-yaml");
-        const resolved = path23.isAbsolute(sourcePath) ? sourcePath : path23.resolve(baseDir, sourcePath);
-        if (!fs21.existsSync(resolved)) {
+        const resolved = path24.isAbsolute(sourcePath) ? sourcePath : path24.resolve(baseDir, sourcePath);
+        if (!fs22.existsSync(resolved)) {
           throw new Error(`Workflow config not found at: ${resolved}`);
         }
-        const rawContent = fs21.readFileSync(resolved, "utf8");
+        const rawContent = fs22.readFileSync(resolved, "utf8");
         const rawData = yaml4.load(rawContent);
         if (rawData.imports && Array.isArray(rawData.imports)) {
-          const configDir = path23.dirname(resolved);
+          const configDir = path24.dirname(resolved);
           for (const source of rawData.imports) {
             const results = await this.registry.import(source, {
               basePath: configDir,
@@ -15147,8 +15196,8 @@ ${errors}`);
         if (!steps || Object.keys(steps).length === 0) {
           throw new Error(`Config '${resolved}' does not contain any steps to execute as a workflow`);
         }
-        const id = path23.basename(resolved).replace(/\.(ya?ml)$/i, "");
-        const name = loaded.name || `Workflow from ${path23.basename(resolved)}`;
+        const id = path24.basename(resolved).replace(/\.(ya?ml)$/i, "");
+        const name = loaded.name || `Workflow from ${path24.basename(resolved)}`;
         const workflowDef = {
           id,
           name,
@@ -15320,38 +15369,570 @@ var init_workflow_tool_executor = __esm({
   }
 });
 
+// src/scheduler/store/sqlite-store.ts
+function toDbRow(schedule) {
+  return {
+    id: schedule.id,
+    creator_id: schedule.creatorId,
+    creator_context: schedule.creatorContext ?? null,
+    creator_name: schedule.creatorName ?? null,
+    timezone: schedule.timezone,
+    schedule_expr: schedule.schedule,
+    run_at: schedule.runAt ?? null,
+    is_recurring: schedule.isRecurring ? 1 : 0,
+    original_expression: schedule.originalExpression,
+    workflow: schedule.workflow ?? null,
+    workflow_inputs: schedule.workflowInputs ? JSON.stringify(schedule.workflowInputs) : null,
+    output_context: schedule.outputContext ? JSON.stringify(schedule.outputContext) : null,
+    status: schedule.status,
+    created_at: schedule.createdAt,
+    last_run_at: schedule.lastRunAt ?? null,
+    next_run_at: schedule.nextRunAt ?? null,
+    run_count: schedule.runCount,
+    failure_count: schedule.failureCount,
+    last_error: schedule.lastError ?? null,
+    previous_response: schedule.previousResponse ?? null
+  };
+}
+function safeJsonParse(value) {
+  if (!value) return void 0;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return void 0;
+  }
+}
+function fromDbRow(row) {
+  return {
+    id: row.id,
+    creatorId: row.creator_id,
+    creatorContext: row.creator_context ?? void 0,
+    creatorName: row.creator_name ?? void 0,
+    timezone: row.timezone,
+    schedule: row.schedule_expr,
+    runAt: row.run_at ?? void 0,
+    isRecurring: row.is_recurring === 1,
+    originalExpression: row.original_expression,
+    workflow: row.workflow ?? void 0,
+    workflowInputs: safeJsonParse(row.workflow_inputs),
+    outputContext: safeJsonParse(row.output_context),
+    status: row.status,
+    createdAt: row.created_at,
+    lastRunAt: row.last_run_at ?? void 0,
+    nextRunAt: row.next_run_at ?? void 0,
+    runCount: row.run_count,
+    failureCount: row.failure_count,
+    lastError: row.last_error ?? void 0,
+    previousResponse: row.previous_response ?? void 0
+  };
+}
+var import_path4, import_fs4, import_uuid, SqliteStoreBackend;
+var init_sqlite_store = __esm({
+  "src/scheduler/store/sqlite-store.ts"() {
+    "use strict";
+    import_path4 = __toESM(require("path"));
+    import_fs4 = __toESM(require("fs"));
+    import_uuid = require("uuid");
+    init_logger();
+    SqliteStoreBackend = class {
+      db = null;
+      dbPath;
+      // In-memory locks (single-node only; SQLite doesn't support distributed locking)
+      locks = /* @__PURE__ */ new Map();
+      constructor(filename) {
+        this.dbPath = filename || ".visor/schedules.db";
+      }
+      async initialize() {
+        const resolvedPath = import_path4.default.resolve(process.cwd(), this.dbPath);
+        const dir = import_path4.default.dirname(resolvedPath);
+        import_fs4.default.mkdirSync(dir, { recursive: true });
+        const { createRequire } = require("module");
+        const runtimeRequire = createRequire(__filename);
+        let Database;
+        try {
+          Database = runtimeRequire("better-sqlite3");
+        } catch (err) {
+          const code = err?.code;
+          if (code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND") {
+            throw new Error(
+              "better-sqlite3 is required for SQLite schedule storage. Install it with: npm install better-sqlite3"
+            );
+          }
+          throw err;
+        }
+        this.db = new Database(resolvedPath);
+        this.db.pragma("journal_mode = WAL");
+        this.migrateSchema();
+        logger.info(`[SqliteStore] Initialized at ${this.dbPath}`);
+      }
+      async shutdown() {
+        if (this.db) {
+          this.db.close();
+          this.db = null;
+        }
+        this.locks.clear();
+      }
+      // --- Schema Migration ---
+      migrateSchema() {
+        const db = this.getDb();
+        db.exec(`
+      CREATE TABLE IF NOT EXISTS schedules (
+        id              VARCHAR(36)  PRIMARY KEY,
+        creator_id      VARCHAR(255) NOT NULL,
+        creator_context VARCHAR(255),
+        creator_name    VARCHAR(255),
+        timezone        VARCHAR(64)  NOT NULL DEFAULT 'UTC',
+        schedule_expr   VARCHAR(255),
+        run_at          BIGINT,
+        is_recurring    BOOLEAN      NOT NULL,
+        original_expression TEXT,
+        workflow        VARCHAR(255),
+        workflow_inputs TEXT,
+        output_context  TEXT,
+        status          VARCHAR(20)  NOT NULL,
+        created_at      BIGINT       NOT NULL,
+        last_run_at     BIGINT,
+        next_run_at     BIGINT,
+        run_count       INTEGER      NOT NULL DEFAULT 0,
+        failure_count   INTEGER      NOT NULL DEFAULT 0,
+        last_error      TEXT,
+        previous_response TEXT,
+        claimed_by      VARCHAR(255),
+        claimed_at      BIGINT,
+        lock_token      VARCHAR(36)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_schedules_creator_id
+        ON schedules(creator_id);
+
+      CREATE INDEX IF NOT EXISTS idx_schedules_status
+        ON schedules(status);
+
+      CREATE INDEX IF NOT EXISTS idx_schedules_status_next_run
+        ON schedules(status, next_run_at);
+
+      CREATE TABLE IF NOT EXISTS scheduler_locks (
+        lock_id     VARCHAR(255) PRIMARY KEY,
+        node_id     VARCHAR(255) NOT NULL,
+        lock_token  VARCHAR(36)  NOT NULL,
+        acquired_at BIGINT       NOT NULL,
+        expires_at  BIGINT       NOT NULL
+      );
+    `);
+      }
+      // --- Helpers ---
+      getDb() {
+        if (!this.db) {
+          throw new Error("[SqliteStore] Database not initialized. Call initialize() first.");
+        }
+        return this.db;
+      }
+      // --- CRUD ---
+      async create(schedule) {
+        const db = this.getDb();
+        const newSchedule = {
+          ...schedule,
+          id: (0, import_uuid.v4)(),
+          createdAt: Date.now(),
+          runCount: 0,
+          failureCount: 0,
+          status: "active"
+        };
+        const row = toDbRow(newSchedule);
+        db.prepare(
+          `
+      INSERT INTO schedules (
+        id, creator_id, creator_context, creator_name, timezone,
+        schedule_expr, run_at, is_recurring, original_expression,
+        workflow, workflow_inputs, output_context,
+        status, created_at, last_run_at, next_run_at,
+        run_count, failure_count, last_error, previous_response
+      ) VALUES (
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?, ?
+      )
+    `
+        ).run(
+          row.id,
+          row.creator_id,
+          row.creator_context,
+          row.creator_name,
+          row.timezone,
+          row.schedule_expr,
+          row.run_at,
+          row.is_recurring,
+          row.original_expression,
+          row.workflow,
+          row.workflow_inputs,
+          row.output_context,
+          row.status,
+          row.created_at,
+          row.last_run_at,
+          row.next_run_at,
+          row.run_count,
+          row.failure_count,
+          row.last_error,
+          row.previous_response
+        );
+        logger.info(
+          `[SqliteStore] Created schedule ${newSchedule.id} for user ${newSchedule.creatorId}`
+        );
+        return newSchedule;
+      }
+      async importSchedule(schedule) {
+        const db = this.getDb();
+        const row = toDbRow(schedule);
+        db.prepare(
+          `
+      INSERT OR IGNORE INTO schedules (
+        id, creator_id, creator_context, creator_name, timezone,
+        schedule_expr, run_at, is_recurring, original_expression,
+        workflow, workflow_inputs, output_context,
+        status, created_at, last_run_at, next_run_at,
+        run_count, failure_count, last_error, previous_response
+      ) VALUES (
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?, ?
+      )
+    `
+        ).run(
+          row.id,
+          row.creator_id,
+          row.creator_context,
+          row.creator_name,
+          row.timezone,
+          row.schedule_expr,
+          row.run_at,
+          row.is_recurring,
+          row.original_expression,
+          row.workflow,
+          row.workflow_inputs,
+          row.output_context,
+          row.status,
+          row.created_at,
+          row.last_run_at,
+          row.next_run_at,
+          row.run_count,
+          row.failure_count,
+          row.last_error,
+          row.previous_response
+        );
+      }
+      async get(id) {
+        const db = this.getDb();
+        const row = db.prepare("SELECT * FROM schedules WHERE id = ?").get(id);
+        return row ? fromDbRow(row) : void 0;
+      }
+      async update(id, patch) {
+        const db = this.getDb();
+        const existing = db.prepare("SELECT * FROM schedules WHERE id = ?").get(id);
+        if (!existing) return void 0;
+        const current = fromDbRow(existing);
+        const updated = { ...current, ...patch, id: current.id };
+        const row = toDbRow(updated);
+        db.prepare(
+          `
+      UPDATE schedules SET
+        creator_id = ?, creator_context = ?, creator_name = ?, timezone = ?,
+        schedule_expr = ?, run_at = ?, is_recurring = ?, original_expression = ?,
+        workflow = ?, workflow_inputs = ?, output_context = ?,
+        status = ?, last_run_at = ?, next_run_at = ?,
+        run_count = ?, failure_count = ?, last_error = ?, previous_response = ?
+      WHERE id = ?
+    `
+        ).run(
+          row.creator_id,
+          row.creator_context,
+          row.creator_name,
+          row.timezone,
+          row.schedule_expr,
+          row.run_at,
+          row.is_recurring,
+          row.original_expression,
+          row.workflow,
+          row.workflow_inputs,
+          row.output_context,
+          row.status,
+          row.last_run_at,
+          row.next_run_at,
+          row.run_count,
+          row.failure_count,
+          row.last_error,
+          row.previous_response,
+          row.id
+        );
+        return updated;
+      }
+      async delete(id) {
+        const db = this.getDb();
+        const result = db.prepare("DELETE FROM schedules WHERE id = ?").run(id);
+        if (result.changes > 0) {
+          logger.info(`[SqliteStore] Deleted schedule ${id}`);
+          return true;
+        }
+        return false;
+      }
+      // --- Queries ---
+      async getByCreator(creatorId) {
+        const db = this.getDb();
+        const rows = db.prepare("SELECT * FROM schedules WHERE creator_id = ?").all(creatorId);
+        return rows.map(fromDbRow);
+      }
+      async getActiveSchedules() {
+        const db = this.getDb();
+        const rows = db.prepare("SELECT * FROM schedules WHERE status = 'active'").all();
+        return rows.map(fromDbRow);
+      }
+      async getDueSchedules(now) {
+        const ts = now ?? Date.now();
+        const db = this.getDb();
+        const rows = db.prepare(
+          `SELECT * FROM schedules
+         WHERE status = 'active'
+         AND (
+           (is_recurring = 0 AND run_at IS NOT NULL AND run_at <= ?)
+           OR
+           (is_recurring = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?)
+         )`
+        ).all(ts, ts);
+        return rows.map(fromDbRow);
+      }
+      async findByWorkflow(creatorId, workflowName) {
+        const db = this.getDb();
+        const escaped = workflowName.toLowerCase().replace(/[%_\\]/g, "\\$&");
+        const pattern = `%${escaped}%`;
+        const rows = db.prepare(
+          `SELECT * FROM schedules
+         WHERE creator_id = ? AND status = 'active'
+         AND LOWER(workflow) LIKE ? ESCAPE '\\'`
+        ).all(creatorId, pattern);
+        return rows.map(fromDbRow);
+      }
+      async getAll() {
+        const db = this.getDb();
+        const rows = db.prepare("SELECT * FROM schedules").all();
+        return rows.map(fromDbRow);
+      }
+      async getStats() {
+        const db = this.getDb();
+        const row = db.prepare(
+          `SELECT
+          COUNT(*) as total,
+          SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active,
+          SUM(CASE WHEN status = 'paused' THEN 1 ELSE 0 END) as paused,
+          SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+          SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+          SUM(CASE WHEN is_recurring = 1 THEN 1 ELSE 0 END) as recurring,
+          SUM(CASE WHEN is_recurring = 0 THEN 1 ELSE 0 END) as one_time
+        FROM schedules`
+        ).get();
+        return {
+          total: row.total,
+          active: row.active,
+          paused: row.paused,
+          completed: row.completed,
+          failed: row.failed,
+          recurring: row.recurring,
+          oneTime: row.one_time
+        };
+      }
+      async validateLimits(creatorId, isRecurring, limits) {
+        const db = this.getDb();
+        if (limits.maxGlobal) {
+          const row = db.prepare("SELECT COUNT(*) as cnt FROM schedules").get();
+          if (row.cnt >= limits.maxGlobal) {
+            throw new Error(`Global schedule limit reached (${limits.maxGlobal})`);
+          }
+        }
+        if (limits.maxPerUser) {
+          const row = db.prepare("SELECT COUNT(*) as cnt FROM schedules WHERE creator_id = ?").get(creatorId);
+          if (row.cnt >= limits.maxPerUser) {
+            throw new Error(`You have reached the maximum number of schedules (${limits.maxPerUser})`);
+          }
+        }
+        if (isRecurring && limits.maxRecurringPerUser) {
+          const row = db.prepare("SELECT COUNT(*) as cnt FROM schedules WHERE creator_id = ? AND is_recurring = 1").get(creatorId);
+          if (row.cnt >= limits.maxRecurringPerUser) {
+            throw new Error(
+              `You have reached the maximum number of recurring schedules (${limits.maxRecurringPerUser})`
+            );
+          }
+        }
+      }
+      // --- HA Locking (in-memory for SQLite — single-node only) ---
+      async tryAcquireLock(scheduleId, nodeId, ttlSeconds) {
+        const now = Date.now();
+        const existing = this.locks.get(scheduleId);
+        if (existing && existing.expiresAt > now) {
+          if (existing.nodeId === nodeId) {
+            return existing.token;
+          }
+          return null;
+        }
+        const token = (0, import_uuid.v4)();
+        this.locks.set(scheduleId, {
+          nodeId,
+          token,
+          expiresAt: now + ttlSeconds * 1e3
+        });
+        return token;
+      }
+      async releaseLock(scheduleId, lockToken) {
+        const existing = this.locks.get(scheduleId);
+        if (existing && existing.token === lockToken) {
+          this.locks.delete(scheduleId);
+        }
+      }
+      async renewLock(scheduleId, lockToken, ttlSeconds) {
+        const existing = this.locks.get(scheduleId);
+        if (!existing || existing.token !== lockToken) {
+          return false;
+        }
+        existing.expiresAt = Date.now() + ttlSeconds * 1e3;
+        return true;
+      }
+      async flush() {
+      }
+    };
+  }
+});
+
+// src/scheduler/store/index.ts
+async function createStoreBackend(storageConfig, haConfig) {
+  const driver = storageConfig?.driver || "sqlite";
+  switch (driver) {
+    case "sqlite": {
+      const conn = storageConfig?.connection;
+      return new SqliteStoreBackend(conn?.filename);
+    }
+    case "postgresql":
+    case "mysql":
+    case "mssql": {
+      try {
+        const loaderPath = "../../enterprise/loader";
+        const { loadEnterpriseStoreBackend } = await import(loaderPath);
+        return await loadEnterpriseStoreBackend(driver, storageConfig, haConfig);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error(`[StoreFactory] Failed to load enterprise ${driver} backend: ${msg}`);
+        throw new Error(
+          `The ${driver} schedule storage driver requires a Visor Enterprise license. Install the enterprise package or use driver: 'sqlite' (default). Original error: ${msg}`
+        );
+      }
+    }
+    default:
+      throw new Error(`Unknown schedule storage driver: ${driver}`);
+  }
+}
+var init_store = __esm({
+  "src/scheduler/store/index.ts"() {
+    "use strict";
+    init_logger();
+    init_sqlite_store();
+  }
+});
+
+// src/scheduler/store/json-migrator.ts
+async function migrateJsonToBackend(jsonPath, backend) {
+  const resolvedPath = import_path5.default.resolve(process.cwd(), jsonPath);
+  let content;
+  try {
+    content = await import_promises3.default.readFile(resolvedPath, "utf-8");
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      return 0;
+    }
+    throw err;
+  }
+  let data;
+  try {
+    data = JSON.parse(content);
+  } catch {
+    logger.warn(`[JsonMigrator] Failed to parse ${jsonPath}, skipping migration`);
+    return 0;
+  }
+  const schedules = data.schedules;
+  if (!Array.isArray(schedules) || schedules.length === 0) {
+    logger.debug("[JsonMigrator] No schedules to migrate");
+    await renameToMigrated(resolvedPath);
+    return 0;
+  }
+  let migrated = 0;
+  for (const schedule of schedules) {
+    if (!schedule.id) {
+      logger.warn("[JsonMigrator] Skipping schedule without ID");
+      continue;
+    }
+    const existing = await backend.get(schedule.id);
+    if (existing) {
+      logger.debug(`[JsonMigrator] Schedule ${schedule.id} already exists, skipping`);
+      continue;
+    }
+    try {
+      await backend.importSchedule(schedule);
+      migrated++;
+    } catch (err) {
+      logger.warn(
+        `[JsonMigrator] Failed to migrate schedule ${schedule.id}: ${err instanceof Error ? err.message : err}`
+      );
+    }
+  }
+  await renameToMigrated(resolvedPath);
+  logger.info(`[JsonMigrator] Migrated ${migrated}/${schedules.length} schedules from ${jsonPath}`);
+  return migrated;
+}
+async function renameToMigrated(resolvedPath) {
+  const migratedPath = `${resolvedPath}.migrated`;
+  try {
+    await import_promises3.default.rename(resolvedPath, migratedPath);
+    logger.info(`[JsonMigrator] Backed up ${resolvedPath} \u2192 ${migratedPath}`);
+  } catch (err) {
+    logger.warn(
+      `[JsonMigrator] Failed to rename ${resolvedPath}: ${err instanceof Error ? err.message : err}`
+    );
+  }
+}
+var import_promises3, import_path5;
+var init_json_migrator = __esm({
+  "src/scheduler/store/json-migrator.ts"() {
+    "use strict";
+    import_promises3 = __toESM(require("fs/promises"));
+    import_path5 = __toESM(require("path"));
+    init_logger();
+  }
+});
+
 // src/scheduler/schedule-store.ts
-var import_promises3, import_path4, import_uuid, ScheduleStore;
+var ScheduleStore;
 var init_schedule_store = __esm({
   "src/scheduler/schedule-store.ts"() {
     "use strict";
-    import_promises3 = __toESM(require("fs/promises"));
-    import_path4 = __toESM(require("path"));
-    import_uuid = require("uuid");
     init_logger();
+    init_store();
+    init_json_migrator();
     ScheduleStore = class _ScheduleStore {
       static instance;
-      schedules = /* @__PURE__ */ new Map();
-      filePath;
-      autoSave;
-      saveDebounceMs;
+      backend = null;
       initialized = false;
-      saveTimeout = null;
       limits;
-      // Concurrency protection
-      saveLock = Promise.resolve();
-      pendingSave = false;
-      dirtyCount = 0;
-      // Track unsaved changes
-      constructor(config, limits) {
-        this.filePath = config?.path || ".visor/schedules.json";
-        this.autoSave = config?.autoSave !== false;
-        this.saveDebounceMs = config?.saveDebounceMs ?? 1e3;
+      config;
+      externalBackend = null;
+      constructor(config, limits, backend) {
+        this.config = config || {};
         this.limits = {
           maxPerUser: limits?.maxPerUser ?? 25,
           maxRecurringPerUser: limits?.maxRecurringPerUser ?? 10,
           maxGlobal: limits?.maxGlobal ?? 1e3
         };
+        if (backend) {
+          this.externalBackend = backend;
+        }
       }
       /**
        * Get singleton instance
@@ -15373,277 +15954,108 @@ var init_schedule_store = __esm({
       /**
        * Create a new isolated instance (for testing)
        */
-      static createIsolated(config, limits) {
-        return new _ScheduleStore(config, limits);
+      static createIsolated(config, limits, backend) {
+        return new _ScheduleStore(config, limits, backend);
       }
       /**
        * Reset singleton instance (for testing)
        */
       static resetInstance() {
         if (_ScheduleStore.instance) {
-          _ScheduleStore.instance.schedules.clear();
-          if (_ScheduleStore.instance.saveTimeout) {
-            clearTimeout(_ScheduleStore.instance.saveTimeout);
+          if (_ScheduleStore.instance.backend) {
+            _ScheduleStore.instance.backend.shutdown().catch(() => {
+            });
           }
         }
         _ScheduleStore.instance = void 0;
       }
       /**
-       * Initialize the store - load from file if it exists
+       * Initialize the store - creates backend and runs migrations
        */
       async initialize() {
         if (this.initialized) {
           return;
         }
+        if (this.externalBackend) {
+          this.backend = this.externalBackend;
+        } else {
+          this.backend = await createStoreBackend(this.config.storage, this.config.ha);
+        }
+        await this.backend.initialize();
+        const jsonPath = this.config.path || ".visor/schedules.json";
         try {
-          const resolvedPath = import_path4.default.resolve(process.cwd(), this.filePath);
-          const content = await import_promises3.default.readFile(resolvedPath, "utf-8");
-          const data = JSON.parse(content);
-          const scheduleList = data.schedules || [];
-          if (Array.isArray(scheduleList)) {
-            for (const schedule of scheduleList) {
-              this.schedules.set(schedule.id, schedule);
-            }
-            logger.info(
-              `[ScheduleStore] Loaded ${this.schedules.size} schedules from ${this.filePath}`
-            );
-          }
-        } catch (error) {
-          if (error.code !== "ENOENT") {
-            logger.warn(
-              `[ScheduleStore] Failed to load schedules: ${error instanceof Error ? error.message : "Unknown error"}`
-            );
-          } else {
-            logger.debug(`[ScheduleStore] No existing schedules file at ${this.filePath}`);
-          }
+          await migrateJsonToBackend(jsonPath, this.backend);
+        } catch (err) {
+          logger.warn(
+            `[ScheduleStore] JSON migration failed (non-fatal): ${err instanceof Error ? err.message : err}`
+          );
         }
         this.initialized = true;
       }
       /**
-       * Save schedules to file with atomic write and concurrency protection
-       */
-      async save() {
-        const previousLock = this.saveLock;
-        let releaseLock;
-        this.saveLock = new Promise((resolve10) => {
-          releaseLock = resolve10;
-        });
-        try {
-          await previousLock;
-          const resolvedPath = import_path4.default.resolve(process.cwd(), this.filePath);
-          const dir = import_path4.default.dirname(resolvedPath);
-          await import_promises3.default.mkdir(dir, { recursive: true });
-          const savedDirtyCount = this.dirtyCount;
-          const data = {
-            version: "2.0",
-            // New version for schedule format
-            savedAt: (/* @__PURE__ */ new Date()).toISOString(),
-            schedules: Array.from(this.schedules.values())
-          };
-          const tempPath = `${resolvedPath}.tmp.${Date.now()}`;
-          await import_promises3.default.writeFile(tempPath, JSON.stringify(data, null, 2), "utf-8");
-          await import_promises3.default.rename(tempPath, resolvedPath);
-          this.dirtyCount = Math.max(0, this.dirtyCount - savedDirtyCount);
-          this.pendingSave = false;
-          logger.debug(`[ScheduleStore] Saved ${this.schedules.size} schedules to ${this.filePath}`);
-        } finally {
-          releaseLock();
-        }
-      }
-      /**
-       * Schedule a debounced save operation with dirty tracking
-       */
-      scheduleSave() {
-        if (!this.autoSave) return;
-        this.dirtyCount++;
-        this.pendingSave = true;
-        if (this.saveTimeout) {
-          clearTimeout(this.saveTimeout);
-        }
-        this.saveTimeout = setTimeout(() => {
-          this.save().catch((error) => {
-            logger.error(
-              `[ScheduleStore] Auto-save failed: ${error instanceof Error ? error.message : "Unknown error"}`
-            );
-          });
-        }, this.saveDebounceMs);
-      }
-      /**
-       * Immediately save if there are pending changes (for critical operations)
-       */
-      async saveImmediate() {
-        if (!this.autoSave) return;
-        if (this.saveTimeout) {
-          clearTimeout(this.saveTimeout);
-          this.saveTimeout = null;
-        }
-        await this.save();
-      }
-      /**
-       * Create a new schedule (saves immediately to prevent data loss)
+       * Create a new schedule (async, persists immediately)
        */
       async createAsync(schedule) {
-        this.validateLimits(schedule.creatorId, schedule.isRecurring);
-        const newSchedule = {
-          ...schedule,
-          id: (0, import_uuid.v4)(),
-          createdAt: Date.now(),
-          runCount: 0,
-          failureCount: 0,
-          status: "active"
-        };
-        this.schedules.set(newSchedule.id, newSchedule);
-        await this.saveImmediate();
-        logger.info(
-          `[ScheduleStore] Created schedule ${newSchedule.id} for user ${newSchedule.creatorId}: workflow="${newSchedule.workflow}"`
-        );
-        return newSchedule;
-      }
-      /**
-       * Create a new schedule (synchronous, uses debounced save)
-       * @deprecated Use createAsync for reliable persistence
-       */
-      create(schedule) {
-        this.validateLimits(schedule.creatorId, schedule.isRecurring);
-        const newSchedule = {
-          ...schedule,
-          id: (0, import_uuid.v4)(),
-          createdAt: Date.now(),
-          runCount: 0,
-          failureCount: 0,
-          status: "active"
-        };
-        this.schedules.set(newSchedule.id, newSchedule);
-        this.scheduleSave();
-        logger.info(
-          `[ScheduleStore] Created schedule ${newSchedule.id} for user ${newSchedule.creatorId}: workflow="${newSchedule.workflow}"`
-        );
-        return newSchedule;
-      }
-      /**
-       * Validate schedule limits before creation
-       */
-      validateLimits(creatorId, isRecurring) {
-        if (this.limits.maxGlobal && this.schedules.size >= this.limits.maxGlobal) {
-          throw new Error(`Global schedule limit reached (${this.limits.maxGlobal})`);
-        }
-        const userSchedules = this.getByCreator(creatorId);
-        if (this.limits.maxPerUser && userSchedules.length >= this.limits.maxPerUser) {
-          throw new Error(
-            `You have reached the maximum number of schedules (${this.limits.maxPerUser})`
-          );
-        }
-        if (isRecurring && this.limits.maxRecurringPerUser) {
-          const recurringCount = userSchedules.filter((s) => s.isRecurring).length;
-          if (recurringCount >= this.limits.maxRecurringPerUser) {
-            throw new Error(
-              `You have reached the maximum number of recurring schedules (${this.limits.maxRecurringPerUser})`
-            );
-          }
-        }
+        const backend = this.getBackend();
+        await backend.validateLimits(schedule.creatorId, schedule.isRecurring, this.limits);
+        return backend.create(schedule);
       }
       /**
        * Get a schedule by ID
        */
-      get(id) {
-        return this.schedules.get(id);
+      async getAsync(id) {
+        return this.getBackend().get(id);
       }
       /**
        * Update a schedule
        */
-      update(id, patch) {
-        const schedule = this.schedules.get(id);
-        if (!schedule) {
-          return void 0;
-        }
-        const updated = { ...schedule, ...patch, id: schedule.id };
-        this.schedules.set(id, updated);
-        this.scheduleSave();
-        return updated;
+      async updateAsync(id, patch) {
+        return this.getBackend().update(id, patch);
       }
       /**
-       * Delete a schedule (saves immediately to prevent data loss)
+       * Delete a schedule
        */
       async deleteAsync(id) {
-        const deleted = this.schedules.delete(id);
-        if (deleted) {
-          await this.saveImmediate();
-          logger.info(`[ScheduleStore] Deleted schedule ${id}`);
-        }
-        return deleted;
-      }
-      /**
-       * Delete a schedule (synchronous, uses debounced save)
-       * @deprecated Use deleteAsync for reliable persistence
-       */
-      delete(id) {
-        const deleted = this.schedules.delete(id);
-        if (deleted) {
-          this.scheduleSave();
-          logger.info(`[ScheduleStore] Deleted schedule ${id}`);
-        }
-        return deleted;
+        return this.getBackend().delete(id);
       }
       /**
        * Get all schedules for a specific creator
        */
-      getByCreator(creatorId) {
-        return Array.from(this.schedules.values()).filter((s) => s.creatorId === creatorId);
+      async getByCreatorAsync(creatorId) {
+        return this.getBackend().getByCreator(creatorId);
       }
       /**
        * Get all active schedules
        */
-      getActiveSchedules() {
-        return Array.from(this.schedules.values()).filter((s) => s.status === "active");
+      async getActiveSchedulesAsync() {
+        return this.getBackend().getActiveSchedules();
       }
       /**
        * Get all schedules due for execution
        * @param now Current timestamp in milliseconds
        */
-      getDueSchedules(now = Date.now()) {
-        return this.getActiveSchedules().filter((s) => {
-          if (!s.isRecurring && s.runAt) {
-            return s.runAt <= now;
-          }
-          if (s.isRecurring && s.nextRunAt) {
-            return s.nextRunAt <= now;
-          }
-          return false;
-        });
+      async getDueSchedulesAsync(now = Date.now()) {
+        return this.getBackend().getDueSchedules(now);
       }
       /**
        * Find schedules by workflow name
        */
-      findByWorkflow(creatorId, workflowName) {
-        const lowerWorkflow = workflowName.toLowerCase();
-        return this.getByCreator(creatorId).filter(
-          (s) => s.status === "active" && s.workflow?.toLowerCase().includes(lowerWorkflow)
-        );
+      async findByWorkflowAsync(creatorId, workflowName) {
+        return this.getBackend().findByWorkflow(creatorId, workflowName);
       }
       /**
        * Get schedule count statistics
        */
-      getStats() {
-        const all = Array.from(this.schedules.values());
-        return {
-          total: all.length,
-          active: all.filter((s) => s.status === "active").length,
-          paused: all.filter((s) => s.status === "paused").length,
-          completed: all.filter((s) => s.status === "completed").length,
-          failed: all.filter((s) => s.status === "failed").length,
-          recurring: all.filter((s) => s.isRecurring).length,
-          oneTime: all.filter((s) => !s.isRecurring).length
-        };
+      async getStatsAsync() {
+        return this.getBackend().getStats();
       }
       /**
        * Force immediate save (useful for shutdown)
        */
       async flush() {
-        if (this.saveTimeout) {
-          clearTimeout(this.saveTimeout);
-          this.saveTimeout = null;
+        if (this.backend) {
+          await this.backend.flush();
         }
-        await this.save();
       }
       /**
        * Check if initialized
@@ -15655,13 +16067,32 @@ var init_schedule_store = __esm({
        * Check if there are unsaved changes
        */
       hasPendingChanges() {
-        return this.pendingSave || this.dirtyCount > 0;
+        return false;
       }
       /**
-       * Get all schedules (for iteration)
+       * Get all schedules
        */
-      getAll() {
-        return Array.from(this.schedules.values());
+      async getAllAsync() {
+        return this.getBackend().getAll();
+      }
+      /**
+       * Get the underlying backend (for HA lock operations)
+       */
+      getBackend() {
+        if (!this.backend) {
+          throw new Error("[ScheduleStore] Not initialized. Call initialize() first.");
+        }
+        return this.backend;
+      }
+      /**
+       * Shut down the backend cleanly
+       */
+      async shutdown() {
+        if (this.backend) {
+          await this.backend.shutdown();
+          this.backend = null;
+        }
+        this.initialized = false;
       }
     };
   }
@@ -16011,7 +16442,7 @@ async function handleCreate(args, context2, store) {
     } else if (runAtTimestamp) {
       nextRunAt = runAtTimestamp;
     }
-    const schedule = store.create({
+    const schedule = await store.createAsync({
       creatorId: context2.userId,
       creatorContext: context2.contextType,
       creatorName: context2.userName,
@@ -16046,7 +16477,8 @@ async function handleCreate(args, context2, store) {
   }
 }
 async function handleList(context2, store) {
-  const schedules = store.getByCreator(context2.userId).filter((s) => s.status !== "completed");
+  const allUserSchedules = await store.getByCreatorAsync(context2.userId);
+  const schedules = allUserSchedules.filter((s) => s.status !== "completed");
   let filteredSchedules = schedules;
   if (context2.allowedScheduleType) {
     filteredSchedules = schedules.filter((s) => {
@@ -16075,7 +16507,7 @@ async function handleList(context2, store) {
 async function handleCancel(args, context2, store) {
   let schedule;
   if (args.schedule_id) {
-    const userSchedules = store.getByCreator(context2.userId);
+    const userSchedules = await store.getByCreatorAsync(context2.userId);
     schedule = userSchedules.find((s) => s.id === args.schedule_id);
     if (!schedule) {
       schedule = userSchedules.find((s) => s.id.startsWith(args.schedule_id));
@@ -16098,7 +16530,7 @@ async function handleCancel(args, context2, store) {
       error: "You can only cancel your own schedules."
     };
   }
-  store.delete(schedule.id);
+  await store.deleteAsync(schedule.id);
   logger.info(`[ScheduleTool] Cancelled schedule ${schedule.id} for user ${context2.userId}`);
   return {
     success: true,
@@ -16115,7 +16547,7 @@ async function handlePauseResume(args, context2, store, newStatus) {
       error: "Please specify which schedule to pause/resume."
     };
   }
-  const userSchedules = store.getByCreator(context2.userId);
+  const userSchedules = await store.getByCreatorAsync(context2.userId);
   let schedule = userSchedules.find((s) => s.id === args.schedule_id);
   if (!schedule) {
     schedule = userSchedules.find((s) => s.id.startsWith(args.schedule_id));
@@ -16137,7 +16569,7 @@ async function handlePauseResume(args, context2, store, newStatus) {
       error: "You can only modify your own schedules."
     };
   }
-  const updated = store.update(schedule.id, { status: newStatus });
+  const updated = await store.updateAsync(schedule.id, { status: newStatus });
   const action = newStatus === "paused" ? "paused" : "resumed";
   logger.info(`[ScheduleTool] ${action} schedule ${schedule.id} for user ${context2.userId}`);
   return {
@@ -16419,6 +16851,7 @@ var init_scheduler2 = __esm({
   "src/scheduler/index.ts"() {
     "use strict";
     init_schedule_store();
+    init_store();
     init_schedule_parser();
     init_scheduler();
     init_schedule_tool();
@@ -17268,7 +17701,7 @@ var init_mcp_custom_sse_server = __esm({
 });
 
 // src/providers/ai-check-provider.ts
-var import_promises4, import_path5, AICheckProvider;
+var import_promises4, import_path6, AICheckProvider;
 var init_ai_check_provider = __esm({
   "src/providers/ai-check-provider.ts"() {
     "use strict";
@@ -17278,7 +17711,7 @@ var init_ai_check_provider = __esm({
     init_issue_filter();
     init_liquid_extensions();
     import_promises4 = __toESM(require("fs/promises"));
-    import_path5 = __toESM(require("path"));
+    import_path6 = __toESM(require("path"));
     init_lazy_otel();
     init_state_capture();
     init_mcp_custom_sse_server();
@@ -17442,7 +17875,7 @@ var init_ai_check_provider = __esm({
         const hasFileExtension = /\.[a-zA-Z0-9]{1,10}$/i.test(str);
         const hasPathSeparators = /[\/\\]/.test(str);
         const isRelativePath = /^\.{1,2}\//.test(str);
-        const isAbsolutePath = import_path5.default.isAbsolute(str);
+        const isAbsolutePath = import_path6.default.isAbsolute(str);
         const hasTypicalFileChars = /^[a-zA-Z0-9._\-\/\\:~]+$/.test(str);
         if (!(hasFileExtension || isRelativePath || isAbsolutePath || hasPathSeparators)) {
           return false;
@@ -17452,14 +17885,14 @@ var init_ai_check_provider = __esm({
         }
         try {
           let resolvedPath;
-          if (import_path5.default.isAbsolute(str)) {
-            resolvedPath = import_path5.default.normalize(str);
+          if (import_path6.default.isAbsolute(str)) {
+            resolvedPath = import_path6.default.normalize(str);
           } else {
-            resolvedPath = import_path5.default.resolve(process.cwd(), str);
+            resolvedPath = import_path6.default.resolve(process.cwd(), str);
           }
-          const fs21 = require("fs").promises;
+          const fs22 = require("fs").promises;
           try {
-            const stat = await fs21.stat(resolvedPath);
+            const stat = await fs22.stat(resolvedPath);
             return stat.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
@@ -17476,14 +17909,14 @@ var init_ai_check_provider = __esm({
           throw new Error("Prompt file must have .liquid extension");
         }
         let resolvedPath;
-        if (import_path5.default.isAbsolute(promptPath)) {
+        if (import_path6.default.isAbsolute(promptPath)) {
           resolvedPath = promptPath;
         } else {
-          resolvedPath = import_path5.default.resolve(process.cwd(), promptPath);
+          resolvedPath = import_path6.default.resolve(process.cwd(), promptPath);
         }
-        if (!import_path5.default.isAbsolute(promptPath)) {
-          const normalizedPath = import_path5.default.normalize(resolvedPath);
-          const currentDir = import_path5.default.resolve(process.cwd());
+        if (!import_path6.default.isAbsolute(promptPath)) {
+          const normalizedPath = import_path6.default.normalize(resolvedPath);
+          const currentDir = import_path6.default.resolve(process.cwd());
           if (!normalizedPath.startsWith(currentDir)) {
             throw new Error("Invalid prompt file path: path traversal detected");
           }
@@ -19255,7 +19688,7 @@ var init_template_context = __esm({
 });
 
 // src/providers/http-client-provider.ts
-var fs12, path13, HttpClientProvider;
+var fs13, path14, HttpClientProvider;
 var init_http_client_provider = __esm({
   "src/providers/http-client-provider.ts"() {
     "use strict";
@@ -19265,8 +19698,8 @@ var init_http_client_provider = __esm({
     init_sandbox();
     init_template_context();
     init_logger();
-    fs12 = __toESM(require("fs"));
-    path13 = __toESM(require("path"));
+    fs13 = __toESM(require("fs"));
+    path14 = __toESM(require("path"));
     HttpClientProvider = class extends CheckProvider {
       liquid;
       sandbox;
@@ -19361,14 +19794,14 @@ var init_http_client_provider = __esm({
             const parentContext = context2?._parentContext;
             const workingDirectory = parentContext?.workingDirectory;
             const workspaceEnabled = parentContext?.workspace?.isEnabled?.();
-            if (workspaceEnabled && workingDirectory && !path13.isAbsolute(resolvedOutputFile)) {
-              resolvedOutputFile = path13.join(workingDirectory, resolvedOutputFile);
+            if (workspaceEnabled && workingDirectory && !path14.isAbsolute(resolvedOutputFile)) {
+              resolvedOutputFile = path14.join(workingDirectory, resolvedOutputFile);
               logger.debug(
                 `[http_client] Resolved relative output_file to workspace: ${resolvedOutputFile}`
               );
             }
-            if (skipIfExists && fs12.existsSync(resolvedOutputFile)) {
-              const stats = fs12.statSync(resolvedOutputFile);
+            if (skipIfExists && fs13.existsSync(resolvedOutputFile)) {
+              const stats = fs13.statSync(resolvedOutputFile);
               logger.verbose(`[http_client] File cached: ${resolvedOutputFile} (${stats.size} bytes)`);
               return {
                 issues: [],
@@ -19579,13 +20012,13 @@ var init_http_client_provider = __esm({
               ]
             };
           }
-          const parentDir = path13.dirname(outputFile);
-          if (parentDir && !fs12.existsSync(parentDir)) {
-            fs12.mkdirSync(parentDir, { recursive: true });
+          const parentDir = path14.dirname(outputFile);
+          if (parentDir && !fs13.existsSync(parentDir)) {
+            fs13.mkdirSync(parentDir, { recursive: true });
           }
           const arrayBuffer = await response.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
-          fs12.writeFileSync(outputFile, buffer);
+          fs13.writeFileSync(outputFile, buffer);
           const contentType = response.headers.get("content-type") || "application/octet-stream";
           logger.verbose(`[http_client] Downloaded: ${outputFile} (${buffer.length} bytes)`);
           return {
@@ -20344,7 +20777,7 @@ var init_claude_code_types = __esm({
 function isClaudeCodeConstructor(value) {
   return typeof value === "function";
 }
-var import_promises5, import_path6, ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError, ClaudeCodeCheckProvider;
+var import_promises5, import_path7, ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError, ClaudeCodeCheckProvider;
 var init_claude_code_check_provider = __esm({
   "src/providers/claude-code-check-provider.ts"() {
     "use strict";
@@ -20353,7 +20786,7 @@ var init_claude_code_check_provider = __esm({
     init_issue_filter();
     init_liquid_extensions();
     import_promises5 = __toESM(require("fs/promises"));
-    import_path6 = __toESM(require("path"));
+    import_path7 = __toESM(require("path"));
     init_claude_code_types();
     ClaudeCodeSDKNotInstalledError = class extends Error {
       constructor() {
@@ -20501,7 +20934,7 @@ var init_claude_code_check_provider = __esm({
         const hasFileExtension = /\.[a-zA-Z0-9]{1,10}$/i.test(str);
         const hasPathSeparators = /[\/\\]/.test(str);
         const isRelativePath = /^\.{1,2}\//.test(str);
-        const isAbsolutePath = import_path6.default.isAbsolute(str);
+        const isAbsolutePath = import_path7.default.isAbsolute(str);
         const hasTypicalFileChars = /^[a-zA-Z0-9._\-\/\\:~]+$/.test(str);
         if (!(hasFileExtension || isRelativePath || isAbsolutePath || hasPathSeparators)) {
           return false;
@@ -20511,10 +20944,10 @@ var init_claude_code_check_provider = __esm({
         }
         try {
           let resolvedPath;
-          if (import_path6.default.isAbsolute(str)) {
-            resolvedPath = import_path6.default.normalize(str);
+          if (import_path7.default.isAbsolute(str)) {
+            resolvedPath = import_path7.default.normalize(str);
           } else {
-            resolvedPath = import_path6.default.resolve(process.cwd(), str);
+            resolvedPath = import_path7.default.resolve(process.cwd(), str);
           }
           try {
             const stat = await import_promises5.default.stat(resolvedPath);
@@ -20534,14 +20967,14 @@ var init_claude_code_check_provider = __esm({
           throw new Error("Prompt file must have .liquid extension");
         }
         let resolvedPath;
-        if (import_path6.default.isAbsolute(promptPath)) {
+        if (import_path7.default.isAbsolute(promptPath)) {
           resolvedPath = promptPath;
         } else {
-          resolvedPath = import_path6.default.resolve(process.cwd(), promptPath);
+          resolvedPath = import_path7.default.resolve(process.cwd(), promptPath);
         }
-        if (!import_path6.default.isAbsolute(promptPath)) {
-          const normalizedPath = import_path6.default.normalize(resolvedPath);
-          const currentDir = import_path6.default.resolve(process.cwd());
+        if (!import_path7.default.isAbsolute(promptPath)) {
+          const normalizedPath = import_path7.default.normalize(resolvedPath);
+          const currentDir = import_path7.default.resolve(process.cwd());
           if (!normalizedPath.startsWith(currentDir)) {
             throw new Error("Invalid prompt file path: path traversal detected");
           }
@@ -23131,14 +23564,14 @@ var require_util = __commonJS({
         }
         const port = url.port != null ? url.port : url.protocol === "https:" ? 443 : 80;
         let origin = url.origin != null ? url.origin : `${url.protocol}//${url.hostname}:${port}`;
-        let path23 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
+        let path24 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
         if (origin.endsWith("/")) {
           origin = origin.substring(0, origin.length - 1);
         }
-        if (path23 && !path23.startsWith("/")) {
-          path23 = `/${path23}`;
+        if (path24 && !path24.startsWith("/")) {
+          path24 = `/${path24}`;
         }
-        url = new URL(origin + path23);
+        url = new URL(origin + path24);
       }
       return url;
     }
@@ -24752,20 +25185,20 @@ var require_parseParams = __commonJS({
 var require_basename = __commonJS({
   "node_modules/@fastify/busboy/lib/utils/basename.js"(exports2, module2) {
     "use strict";
-    module2.exports = function basename4(path23) {
-      if (typeof path23 !== "string") {
+    module2.exports = function basename4(path24) {
+      if (typeof path24 !== "string") {
         return "";
       }
-      for (var i = path23.length - 1; i >= 0; --i) {
-        switch (path23.charCodeAt(i)) {
+      for (var i = path24.length - 1; i >= 0; --i) {
+        switch (path24.charCodeAt(i)) {
           case 47:
           // '/'
           case 92:
-            path23 = path23.slice(i + 1);
-            return path23 === ".." || path23 === "." ? "" : path23;
+            path24 = path24.slice(i + 1);
+            return path24 === ".." || path24 === "." ? "" : path24;
         }
       }
-      return path23 === ".." || path23 === "." ? "" : path23;
+      return path24 === ".." || path24 === "." ? "" : path24;
     };
   }
 });
@@ -27796,7 +28229,7 @@ var require_request = __commonJS({
     }
     var Request = class _Request {
       constructor(origin, {
-        path: path23,
+        path: path24,
         method,
         body,
         headers,
@@ -27810,11 +28243,11 @@ var require_request = __commonJS({
         throwOnError,
         expectContinue
       }, handler) {
-        if (typeof path23 !== "string") {
+        if (typeof path24 !== "string") {
           throw new InvalidArgumentError("path must be a string");
-        } else if (path23[0] !== "/" && !(path23.startsWith("http://") || path23.startsWith("https://")) && method !== "CONNECT") {
+        } else if (path24[0] !== "/" && !(path24.startsWith("http://") || path24.startsWith("https://")) && method !== "CONNECT") {
           throw new InvalidArgumentError("path must be an absolute URL or start with a slash");
-        } else if (invalidPathRegex.exec(path23) !== null) {
+        } else if (invalidPathRegex.exec(path24) !== null) {
           throw new InvalidArgumentError("invalid request path");
         }
         if (typeof method !== "string") {
@@ -27877,7 +28310,7 @@ var require_request = __commonJS({
         this.completed = false;
         this.aborted = false;
         this.upgrade = upgrade || null;
-        this.path = query ? util.buildURL(path23, query) : path23;
+        this.path = query ? util.buildURL(path24, query) : path24;
         this.origin = origin;
         this.idempotent = idempotent == null ? method === "HEAD" || method === "GET" : idempotent;
         this.blocking = blocking == null ? false : blocking;
@@ -28885,9 +29318,9 @@ var require_RedirectHandler = __commonJS({
           return this.handler.onHeaders(statusCode, headers, resume, statusText);
         }
         const { origin, pathname, search } = util.parseURL(new URL(this.location, this.opts.origin && new URL(this.opts.path, this.opts.origin)));
-        const path23 = search ? `${pathname}${search}` : pathname;
+        const path24 = search ? `${pathname}${search}` : pathname;
         this.opts.headers = cleanRequestHeaders(this.opts.headers, statusCode === 303, this.opts.origin !== origin);
-        this.opts.path = path23;
+        this.opts.path = path24;
         this.opts.origin = origin;
         this.opts.maxRedirections = 0;
         this.opts.query = null;
@@ -30129,7 +30562,7 @@ var require_client = __commonJS({
         writeH2(client, client[kHTTP2Session], request);
         return;
       }
-      const { body, method, path: path23, host, upgrade, headers, blocking, reset } = request;
+      const { body, method, path: path24, host, upgrade, headers, blocking, reset } = request;
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
         body.read(0);
@@ -30179,7 +30612,7 @@ var require_client = __commonJS({
       if (blocking) {
         socket[kBlocking] = true;
       }
-      let header = `${method} ${path23} HTTP/1.1\r
+      let header = `${method} ${path24} HTTP/1.1\r
 `;
       if (typeof host === "string") {
         header += `host: ${host}\r
@@ -30242,7 +30675,7 @@ upgrade: ${upgrade}\r
       return true;
     }
     function writeH2(client, session, request) {
-      const { body, method, path: path23, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
+      const { body, method, path: path24, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
       let headers;
       if (typeof reqHeaders === "string") headers = Request[kHTTP2CopyHeaders](reqHeaders.trim());
       else headers = reqHeaders;
@@ -30285,7 +30718,7 @@ upgrade: ${upgrade}\r
         });
         return true;
       }
-      headers[HTTP2_HEADER_PATH] = path23;
+      headers[HTTP2_HEADER_PATH] = path24;
       headers[HTTP2_HEADER_SCHEME] = "https";
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
@@ -32528,20 +32961,20 @@ var require_mock_utils = __commonJS({
       }
       return true;
     }
-    function safeUrl(path23) {
-      if (typeof path23 !== "string") {
-        return path23;
+    function safeUrl(path24) {
+      if (typeof path24 !== "string") {
+        return path24;
       }
-      const pathSegments = path23.split("?");
+      const pathSegments = path24.split("?");
       if (pathSegments.length !== 2) {
-        return path23;
+        return path24;
       }
       const qp = new URLSearchParams(pathSegments.pop());
       qp.sort();
       return [...pathSegments, qp.toString()].join("?");
     }
-    function matchKey(mockDispatch2, { path: path23, method, body, headers }) {
-      const pathMatch = matchValue(mockDispatch2.path, path23);
+    function matchKey(mockDispatch2, { path: path24, method, body, headers }) {
+      const pathMatch = matchValue(mockDispatch2.path, path24);
       const methodMatch = matchValue(mockDispatch2.method, method);
       const bodyMatch = typeof mockDispatch2.body !== "undefined" ? matchValue(mockDispatch2.body, body) : true;
       const headersMatch = matchHeaders(mockDispatch2, headers);
@@ -32559,7 +32992,7 @@ var require_mock_utils = __commonJS({
     function getMockDispatch(mockDispatches, key) {
       const basePath = key.query ? buildURL(key.path, key.query) : key.path;
       const resolvedPath = typeof basePath === "string" ? safeUrl(basePath) : basePath;
-      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path23 }) => matchValue(safeUrl(path23), resolvedPath));
+      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path24 }) => matchValue(safeUrl(path24), resolvedPath));
       if (matchedMockDispatches.length === 0) {
         throw new MockNotMatchedError(`Mock dispatch not matched for path '${resolvedPath}'`);
       }
@@ -32596,9 +33029,9 @@ var require_mock_utils = __commonJS({
       }
     }
     function buildKey(opts) {
-      const { path: path23, method, body, headers, query } = opts;
+      const { path: path24, method, body, headers, query } = opts;
       return {
-        path: path23,
+        path: path24,
         method,
         body,
         headers,
@@ -33047,10 +33480,10 @@ var require_pending_interceptors_formatter = __commonJS({
       }
       format(pendingInterceptors) {
         const withPrettyHeaders = pendingInterceptors.map(
-          ({ method, path: path23, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
+          ({ method, path: path24, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
             Method: method,
             Origin: origin,
-            Path: path23,
+            Path: path24,
             "Status code": statusCode,
             Persistent: persist ? "\u2705" : "\u274C",
             Invocations: timesInvoked,
@@ -37671,8 +38104,8 @@ var require_util6 = __commonJS({
         }
       }
     }
-    function validateCookiePath(path23) {
-      for (const char of path23) {
+    function validateCookiePath(path24) {
+      for (const char of path24) {
         const code = char.charCodeAt(0);
         if (code < 33 || char === ";") {
           throw new Error("Invalid cookie path");
@@ -39352,11 +39785,11 @@ var require_undici = __commonJS({
           if (typeof opts.path !== "string") {
             throw new InvalidArgumentError("invalid opts.path");
           }
-          let path23 = opts.path;
+          let path24 = opts.path;
           if (!opts.path.startsWith("/")) {
-            path23 = `/${path23}`;
+            path24 = `/${path24}`;
           }
-          url = new URL(util.parseOrigin(url).origin + path23);
+          url = new URL(util.parseOrigin(url).origin + path24);
         } else {
           if (!opts) {
             opts = typeof url === "object" ? url : {};
@@ -40625,7 +41058,7 @@ var init_stdin_reader = __esm({
 });
 
 // src/providers/human-input-check-provider.ts
-var fs14, path15, HumanInputCheckProvider;
+var fs15, path16, HumanInputCheckProvider;
 var init_human_input_check_provider = __esm({
   "src/providers/human-input-check-provider.ts"() {
     "use strict";
@@ -40634,8 +41067,8 @@ var init_human_input_check_provider = __esm({
     init_prompt_state();
     init_liquid_extensions();
     init_stdin_reader();
-    fs14 = __toESM(require("fs"));
-    path15 = __toESM(require("path"));
+    fs15 = __toESM(require("fs"));
+    path16 = __toESM(require("path"));
     HumanInputCheckProvider = class _HumanInputCheckProvider extends CheckProvider {
       liquid;
       /**
@@ -40809,19 +41242,19 @@ var init_human_input_check_provider = __esm({
        */
       async tryReadFile(filePath) {
         try {
-          const absolutePath = path15.isAbsolute(filePath) ? filePath : path15.resolve(process.cwd(), filePath);
-          const normalizedPath = path15.normalize(absolutePath);
+          const absolutePath = path16.isAbsolute(filePath) ? filePath : path16.resolve(process.cwd(), filePath);
+          const normalizedPath = path16.normalize(absolutePath);
           const cwd = process.cwd();
-          if (!normalizedPath.startsWith(cwd + path15.sep) && normalizedPath !== cwd) {
+          if (!normalizedPath.startsWith(cwd + path16.sep) && normalizedPath !== cwd) {
             return null;
           }
           try {
-            await fs14.promises.access(normalizedPath, fs14.constants.R_OK);
-            const stats = await fs14.promises.stat(normalizedPath);
+            await fs15.promises.access(normalizedPath, fs15.constants.R_OK);
+            const stats = await fs15.promises.stat(normalizedPath);
             if (!stats.isFile()) {
               return null;
             }
-            const content = await fs14.promises.readFile(normalizedPath, "utf-8");
+            const content = await fs15.promises.readFile(normalizedPath, "utf-8");
             return content.trim();
           } catch {
             return null;
@@ -41263,13 +41696,13 @@ var init_script_check_provider = __esm({
 });
 
 // src/utils/worktree-manager.ts
-var fs15, fsp, path16, crypto, WorktreeManager, worktreeManager;
+var fs16, fsp, path17, crypto, WorktreeManager, worktreeManager;
 var init_worktree_manager = __esm({
   "src/utils/worktree-manager.ts"() {
     "use strict";
-    fs15 = __toESM(require("fs"));
+    fs16 = __toESM(require("fs"));
     fsp = __toESM(require("fs/promises"));
-    path16 = __toESM(require("path"));
+    path17 = __toESM(require("path"));
     crypto = __toESM(require("crypto"));
     init_command_executor();
     init_logger();
@@ -41285,7 +41718,7 @@ var init_worktree_manager = __esm({
         } catch {
           cwd = "/tmp";
         }
-        const defaultBasePath = process.env.VISOR_WORKTREE_PATH || path16.join(cwd, ".visor", "worktrees");
+        const defaultBasePath = process.env.VISOR_WORKTREE_PATH || path17.join(cwd, ".visor", "worktrees");
         this.config = {
           enabled: true,
           base_path: defaultBasePath,
@@ -41322,20 +41755,20 @@ var init_worktree_manager = __esm({
         }
         const reposDir = this.getReposDir();
         const worktreesDir = this.getWorktreesDir();
-        if (!fs15.existsSync(reposDir)) {
-          fs15.mkdirSync(reposDir, { recursive: true });
+        if (!fs16.existsSync(reposDir)) {
+          fs16.mkdirSync(reposDir, { recursive: true });
           logger.debug(`Created repos directory: ${reposDir}`);
         }
-        if (!fs15.existsSync(worktreesDir)) {
-          fs15.mkdirSync(worktreesDir, { recursive: true });
+        if (!fs16.existsSync(worktreesDir)) {
+          fs16.mkdirSync(worktreesDir, { recursive: true });
           logger.debug(`Created worktrees directory: ${worktreesDir}`);
         }
       }
       getReposDir() {
-        return path16.join(this.config.base_path, "repos");
+        return path17.join(this.config.base_path, "repos");
       }
       getWorktreesDir() {
-        return path16.join(this.config.base_path, "worktrees");
+        return path17.join(this.config.base_path, "worktrees");
       }
       /**
        * Generate a deterministic worktree ID based on repository and ref.
@@ -41353,8 +41786,8 @@ var init_worktree_manager = __esm({
       async getOrCreateBareRepo(repository, repoUrl, token, fetchDepth, cloneTimeoutMs) {
         const reposDir = this.getReposDir();
         const repoName = repository.replace(/\//g, "-");
-        const bareRepoPath = path16.join(reposDir, `${repoName}.git`);
-        if (fs15.existsSync(bareRepoPath)) {
+        const bareRepoPath = path17.join(reposDir, `${repoName}.git`);
+        if (fs16.existsSync(bareRepoPath)) {
           logger.debug(`Bare repository already exists: ${bareRepoPath}`);
           const verifyResult = await this.verifyBareRepoRemote(bareRepoPath, repoUrl);
           if (verifyResult === "timeout") {
@@ -41473,11 +41906,11 @@ var init_worktree_manager = __esm({
           options.cloneTimeoutMs
         );
         const worktreeId = this.generateWorktreeId(repository, ref);
-        let worktreePath = options.workingDirectory || path16.join(this.getWorktreesDir(), worktreeId);
+        let worktreePath = options.workingDirectory || path17.join(this.getWorktreesDir(), worktreeId);
         if (options.workingDirectory) {
           worktreePath = this.validatePath(options.workingDirectory);
         }
-        if (fs15.existsSync(worktreePath)) {
+        if (fs16.existsSync(worktreePath)) {
           logger.debug(`Worktree already exists: ${worktreePath}`);
           const metadata2 = await this.loadMetadata(worktreePath);
           if (metadata2) {
@@ -41718,9 +42151,9 @@ var init_worktree_manager = __esm({
         const result = await this.executeGitCommand(removeCmd, { timeout: 3e4 });
         if (result.exitCode !== 0) {
           logger.warn(`Failed to remove worktree via git: ${result.stderr}`);
-          if (fs15.existsSync(worktree_path)) {
+          if (fs16.existsSync(worktree_path)) {
             logger.debug(`Manually removing worktree directory`);
-            fs15.rmSync(worktree_path, { recursive: true, force: true });
+            fs16.rmSync(worktree_path, { recursive: true, force: true });
           }
         }
         this.activeWorktrees.delete(worktreeId);
@@ -41730,19 +42163,19 @@ var init_worktree_manager = __esm({
        * Save worktree metadata
        */
       async saveMetadata(worktreePath, metadata) {
-        const metadataPath = path16.join(worktreePath, ".visor-metadata.json");
-        fs15.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
+        const metadataPath = path17.join(worktreePath, ".visor-metadata.json");
+        fs16.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
       }
       /**
        * Load worktree metadata
        */
       async loadMetadata(worktreePath) {
-        const metadataPath = path16.join(worktreePath, ".visor-metadata.json");
-        if (!fs15.existsSync(metadataPath)) {
+        const metadataPath = path17.join(worktreePath, ".visor-metadata.json");
+        if (!fs16.existsSync(metadataPath)) {
           return null;
         }
         try {
-          const content = fs15.readFileSync(metadataPath, "utf8");
+          const content = fs16.readFileSync(metadataPath, "utf8");
           return JSON.parse(content);
         } catch (error) {
           logger.warn(`Failed to load metadata: ${error}`);
@@ -41754,14 +42187,14 @@ var init_worktree_manager = __esm({
        */
       async listWorktrees() {
         const worktreesDir = this.getWorktreesDir();
-        if (!fs15.existsSync(worktreesDir)) {
+        if (!fs16.existsSync(worktreesDir)) {
           return [];
         }
-        const entries = fs15.readdirSync(worktreesDir, { withFileTypes: true });
+        const entries = fs16.readdirSync(worktreesDir, { withFileTypes: true });
         const worktrees = [];
         for (const entry of entries) {
           if (!entry.isDirectory()) continue;
-          const worktreePath = path16.join(worktreesDir, entry.name);
+          const worktreePath = path17.join(worktreesDir, entry.name);
           const metadata = await this.loadMetadata(worktreePath);
           if (metadata) {
             worktrees.push({
@@ -41893,8 +42326,8 @@ var init_worktree_manager = __esm({
        * Validate path to prevent directory traversal
        */
       validatePath(userPath) {
-        const resolvedPath = path16.resolve(userPath);
-        if (!path16.isAbsolute(resolvedPath)) {
+        const resolvedPath = path17.resolve(userPath);
+        if (!path17.isAbsolute(resolvedPath)) {
           throw new Error("Path must be absolute");
         }
         const sensitivePatterns = [
@@ -43920,23 +44353,23 @@ __export(renderer_schema_exports, {
 });
 async function loadRendererSchema(name) {
   try {
-    const fs21 = await import("fs/promises");
-    const path23 = await import("path");
+    const fs22 = await import("fs/promises");
+    const path24 = await import("path");
     const sanitized = String(name).replace(/[^a-zA-Z0-9-]/g, "");
     if (!sanitized) return void 0;
     const candidates = [
       // When bundled with ncc, __dirname is dist/ and output/ is at dist/output/
-      path23.join(__dirname, "output", sanitized, "schema.json"),
+      path24.join(__dirname, "output", sanitized, "schema.json"),
       // When running from source, __dirname is src/state-machine/dispatch/ and output/ is at output/
-      path23.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
+      path24.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
       // When running from a checkout with output/ folder copied to CWD
-      path23.join(process.cwd(), "output", sanitized, "schema.json"),
+      path24.join(process.cwd(), "output", sanitized, "schema.json"),
       // Fallback: cwd/dist/output/
-      path23.join(process.cwd(), "dist", "output", sanitized, "schema.json")
+      path24.join(process.cwd(), "dist", "output", sanitized, "schema.json")
     ];
     for (const p of candidates) {
       try {
-        const raw = await fs21.readFile(p, "utf-8");
+        const raw = await fs22.readFile(p, "utf-8");
         return JSON.parse(raw);
       } catch {
       }
@@ -46287,8 +46720,8 @@ function updateStats2(results, state, isForEachIteration = false) {
 async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs21 = await import("fs/promises");
-    const path23 = await import("path");
+    const fs22 = await import("fs/promises");
+    const path24 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
@@ -46297,27 +46730,27 @@ async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
       logger.debug(`[LevelDispatch] Using inline template for ${checkId}`);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path23.resolve(process.cwd(), file);
-      templateContent = await fs21.readFile(resolved, "utf-8");
+      const resolved = path24.resolve(process.cwd(), file);
+      templateContent = await fs22.readFile(resolved, "utf-8");
       logger.debug(`[LevelDispatch] Using template file for ${checkId}: ${resolved}`);
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path23.join(__dirname, "output", sanitized, "template.liquid"),
+          path24.join(__dirname, "output", sanitized, "template.liquid"),
           // bundled: dist/output/
-          path23.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path24.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // source (from state-machine/states)
-          path23.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
+          path24.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
           // source (alternate)
-          path23.join(process.cwd(), "output", sanitized, "template.liquid"),
+          path24.join(process.cwd(), "output", sanitized, "template.liquid"),
           // fallback: cwd/output/
-          path23.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          path24.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
           // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs21.readFile(p, "utf-8");
+            templateContent = await fs22.readFile(p, "utf-8");
             if (templateContent) {
               logger.debug(`[LevelDispatch] Using schema template for ${checkId}: ${p}`);
               break;
@@ -46920,14 +47353,14 @@ var init_runner = __esm({
 });
 
 // src/sandbox/docker-image-sandbox.ts
-var import_util2, import_child_process2, import_fs4, import_path7, import_os, import_crypto2, execFileAsync, EXEC_MAX_BUFFER, DockerImageSandbox;
+var import_util2, import_child_process2, import_fs5, import_path8, import_os, import_crypto2, execFileAsync, EXEC_MAX_BUFFER, DockerImageSandbox;
 var init_docker_image_sandbox = __esm({
   "src/sandbox/docker-image-sandbox.ts"() {
     "use strict";
     import_util2 = require("util");
     import_child_process2 = require("child_process");
-    import_fs4 = require("fs");
-    import_path7 = require("path");
+    import_fs5 = require("fs");
+    import_path8 = require("path");
     import_os = require("os");
     import_crypto2 = require("crypto");
     init_logger();
@@ -46972,9 +47405,9 @@ var init_docker_image_sandbox = __esm({
                   `Sandbox '${this.name}' has invalid dockerfile_inline: must contain a FROM instruction`
                 );
               }
-              const tmpDir = (0, import_fs4.mkdtempSync)((0, import_path7.join)((0, import_os.tmpdir)(), "visor-build-"));
-              const dockerfilePath = (0, import_path7.join)(tmpDir, "Dockerfile");
-              (0, import_fs4.writeFileSync)(dockerfilePath, this.config.dockerfile_inline, "utf8");
+              const tmpDir = (0, import_fs5.mkdtempSync)((0, import_path8.join)((0, import_os.tmpdir)(), "visor-build-"));
+              const dockerfilePath = (0, import_path8.join)(tmpDir, "Dockerfile");
+              (0, import_fs5.writeFileSync)(dockerfilePath, this.config.dockerfile_inline, "utf8");
               try {
                 logger.info(`Building sandbox image '${imageName}' from inline Dockerfile`);
                 await execFileAsync(
@@ -46987,7 +47420,7 @@ var init_docker_image_sandbox = __esm({
                 );
               } finally {
                 try {
-                  (0, import_fs4.unlinkSync)(dockerfilePath);
+                  (0, import_fs5.unlinkSync)(dockerfilePath);
                 } catch {
                 }
               }
@@ -47410,12 +47843,12 @@ var init_cache_volume_manager = __esm({
 });
 
 // src/sandbox/sandbox-manager.ts
-var import_path8, import_fs5, SandboxManager;
+var import_path9, import_fs6, SandboxManager;
 var init_sandbox_manager = __esm({
   "src/sandbox/sandbox-manager.ts"() {
     "use strict";
-    import_path8 = require("path");
-    import_fs5 = require("fs");
+    import_path9 = require("path");
+    import_fs6 = require("fs");
     init_docker_image_sandbox();
     init_docker_compose_sandbox();
     init_cache_volume_manager();
@@ -47434,10 +47867,10 @@ var init_sandbox_manager = __esm({
       }
       constructor(sandboxDefs, repoPath, gitBranch) {
         this.sandboxDefs = sandboxDefs;
-        this.repoPath = (0, import_path8.resolve)(repoPath);
+        this.repoPath = (0, import_path9.resolve)(repoPath);
         this.gitBranch = gitBranch;
         this.cacheManager = new CacheVolumeManager();
-        this.visorDistPath = (0, import_fs5.existsSync)((0, import_path8.join)(__dirname, "index.js")) ? __dirname : (0, import_path8.resolve)((0, import_path8.dirname)(__dirname));
+        this.visorDistPath = (0, import_fs6.existsSync)((0, import_path9.join)(__dirname, "index.js")) ? __dirname : (0, import_path9.resolve)((0, import_path9.dirname)(__dirname));
       }
       /**
        * Resolve which sandbox a check should use.
@@ -47554,13 +47987,13 @@ var init_sandbox_manager = __esm({
 });
 
 // src/utils/file-exclusion.ts
-var import_ignore, fs16, path17, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
+var import_ignore, fs17, path18, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
 var init_file_exclusion = __esm({
   "src/utils/file-exclusion.ts"() {
     "use strict";
     import_ignore = __toESM(require("ignore"));
-    fs16 = __toESM(require("fs"));
-    path17 = __toESM(require("path"));
+    fs17 = __toESM(require("fs"));
+    path18 = __toESM(require("path"));
     DEFAULT_EXCLUSION_PATTERNS = [
       "dist/",
       "build/",
@@ -47579,7 +48012,7 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to include (optional, defaults to common build artifacts)
        */
       constructor(workingDirectory = process.cwd(), additionalPatterns = DEFAULT_EXCLUSION_PATTERNS) {
-        const normalizedPath = path17.resolve(workingDirectory);
+        const normalizedPath = path18.resolve(workingDirectory);
         if (normalizedPath.includes("\0")) {
           throw new Error("Invalid workingDirectory: contains null bytes");
         }
@@ -47591,11 +48024,11 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to add to gitignore rules
        */
       loadGitignore(additionalPatterns) {
-        const gitignorePath = path17.resolve(this.workingDirectory, ".gitignore");
-        const resolvedWorkingDir = path17.resolve(this.workingDirectory);
+        const gitignorePath = path18.resolve(this.workingDirectory, ".gitignore");
+        const resolvedWorkingDir = path18.resolve(this.workingDirectory);
         try {
-          const relativePath = path17.relative(resolvedWorkingDir, gitignorePath);
-          if (relativePath.startsWith("..") || path17.isAbsolute(relativePath)) {
+          const relativePath = path18.relative(resolvedWorkingDir, gitignorePath);
+          if (relativePath.startsWith("..") || path18.isAbsolute(relativePath)) {
             throw new Error("Invalid gitignore path: path traversal detected");
           }
           if (relativePath !== ".gitignore") {
@@ -47605,8 +48038,8 @@ var init_file_exclusion = __esm({
           if (additionalPatterns && additionalPatterns.length > 0) {
             this.gitignore.add(additionalPatterns);
           }
-          if (fs16.existsSync(gitignorePath)) {
-            const rawContent = fs16.readFileSync(gitignorePath, "utf8");
+          if (fs17.existsSync(gitignorePath)) {
+            const rawContent = fs17.readFileSync(gitignorePath, "utf8");
             const gitignoreContent = rawContent.replace(/[\r\n]+/g, "\n").replace(/[\x00-\x09\x0B-\x1F\x7F]/g, "").split("\n").filter((line) => line.length < 1e3).join("\n").trim();
             this.gitignore.add(gitignoreContent);
             if (process.env.VISOR_DEBUG === "true") {
@@ -47638,13 +48071,13 @@ var git_repository_analyzer_exports = {};
 __export(git_repository_analyzer_exports, {
   GitRepositoryAnalyzer: () => GitRepositoryAnalyzer
 });
-var import_simple_git2, path18, fs17, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
+var import_simple_git2, path19, fs18, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
 var init_git_repository_analyzer = __esm({
   "src/git-repository-analyzer.ts"() {
     "use strict";
     import_simple_git2 = require("simple-git");
-    path18 = __toESM(require("path"));
-    fs17 = __toESM(require("fs"));
+    path19 = __toESM(require("path"));
+    fs18 = __toESM(require("fs"));
     init_file_exclusion();
     MAX_PATCH_SIZE = 50 * 1024;
     GitRepositoryAnalyzer = class {
@@ -47833,7 +48266,7 @@ ${file.patch}`).join("\n\n");
               console.error(`\u23ED\uFE0F  Skipping excluded file: ${file}`);
               continue;
             }
-            const filePath = path18.join(this.cwd, file);
+            const filePath = path19.join(this.cwd, file);
             const fileChange = await this.analyzeFileChange(file, status2, filePath, includeContext);
             changes.push(fileChange);
           }
@@ -47909,7 +48342,7 @@ ${file.patch}`).join("\n\n");
         let content;
         let truncated = false;
         try {
-          if (includeContext && status !== "added" && fs17.existsSync(filePath)) {
+          if (includeContext && status !== "added" && fs18.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const result = this.truncatePatch(diff, filename);
@@ -47919,7 +48352,7 @@ ${file.patch}`).join("\n\n");
               additions = lines.filter((line) => line.startsWith("+")).length;
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
-          } else if (status !== "added" && fs17.existsSync(filePath)) {
+          } else if (status !== "added" && fs18.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const lines = diff.split("\n");
@@ -47927,17 +48360,17 @@ ${file.patch}`).join("\n\n");
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
           }
-          if (status === "added" && fs17.existsSync(filePath)) {
+          if (status === "added" && fs18.existsSync(filePath)) {
             try {
-              const stats = fs17.statSync(filePath);
+              const stats = fs18.statSync(filePath);
               if (stats.isFile() && stats.size < 1024 * 1024) {
                 if (includeContext) {
-                  content = fs17.readFileSync(filePath, "utf8");
+                  content = fs18.readFileSync(filePath, "utf8");
                   const result = this.truncatePatch(content, filename);
                   patch = result.patch;
                   truncated = result.truncated;
                 }
-                const fileContent = includeContext ? content : fs17.readFileSync(filePath, "utf8");
+                const fileContent = includeContext ? content : fs18.readFileSync(filePath, "utf8");
                 additions = fileContent.split("\n").length;
               }
             } catch {
@@ -48028,12 +48461,12 @@ function shellEscape(str) {
 function sanitizePathComponent(name) {
   return name.replace(/\.\./g, "").replace(/[\/\\]/g, "-").replace(/^\.+/, "").trim() || "unnamed";
 }
-var fsp2, path19, WorkspaceManager;
+var fsp2, path20, WorkspaceManager;
 var init_workspace_manager = __esm({
   "src/utils/workspace-manager.ts"() {
     "use strict";
     fsp2 = __toESM(require("fs/promises"));
-    path19 = __toESM(require("path"));
+    path20 = __toESM(require("path"));
     init_command_executor();
     init_logger();
     WorkspaceManager = class _WorkspaceManager {
@@ -48067,7 +48500,7 @@ var init_workspace_manager = __esm({
         };
         this.basePath = this.config.basePath;
         const workspaceDirName = sanitizePathComponent(this.config.name || this.sessionId);
-        this.workspacePath = path19.join(this.basePath, workspaceDirName);
+        this.workspacePath = path20.join(this.basePath, workspaceDirName);
       }
       /**
        * Get or create a WorkspaceManager instance for a session
@@ -48162,7 +48595,7 @@ var init_workspace_manager = __esm({
           configuredMainProjectName || this.extractProjectName(this.originalPath)
         );
         this.usedNames.add(mainProjectName);
-        const mainProjectPath = path19.join(this.workspacePath, mainProjectName);
+        const mainProjectPath = path20.join(this.workspacePath, mainProjectName);
         const isGitRepo = await this.isGitRepository(this.originalPath);
         if (isGitRepo) {
           await this.createMainProjectWorktree(mainProjectPath);
@@ -48203,7 +48636,7 @@ var init_workspace_manager = __esm({
         let projectName = sanitizePathComponent(description || this.extractRepoName(repository));
         projectName = this.getUniqueName(projectName);
         this.usedNames.add(projectName);
-        const workspacePath = path19.join(this.workspacePath, projectName);
+        const workspacePath = path20.join(this.workspacePath, projectName);
         await fsp2.rm(workspacePath, { recursive: true, force: true });
         try {
           await fsp2.symlink(worktreePath, workspacePath);
@@ -48342,7 +48775,7 @@ var init_workspace_manager = __esm({
        * Extract project name from path
        */
       extractProjectName(dirPath) {
-        return path19.basename(dirPath);
+        return path20.basename(dirPath);
       }
       /**
        * Extract repository name from owner/repo format
@@ -48555,12 +48988,12 @@ var ndjson_sink_exports = {};
 __export(ndjson_sink_exports, {
   NdjsonSink: () => NdjsonSink
 });
-var import_fs6, import_path9, NdjsonSink;
+var import_fs7, import_path10, NdjsonSink;
 var init_ndjson_sink = __esm({
   "src/frontends/ndjson-sink.ts"() {
     "use strict";
-    import_fs6 = __toESM(require("fs"));
-    import_path9 = __toESM(require("path"));
+    import_fs7 = __toESM(require("fs"));
+    import_path10 = __toESM(require("path"));
     NdjsonSink = class {
       name = "ndjson-sink";
       cfg;
@@ -48581,7 +49014,7 @@ var init_ndjson_sink = __esm({
               payload: envelope && envelope.payload || envelope,
               safe: true
             });
-            await import_fs6.default.promises.appendFile(this.filePath, line + "\n");
+            await import_fs7.default.promises.appendFile(this.filePath, line + "\n");
           } catch (err) {
             ctx.logger.error("[ndjson-sink] Failed to write event:", err);
           }
@@ -48592,8 +49025,8 @@ var init_ndjson_sink = __esm({
         this.unsub = void 0;
       }
       resolveFile(p) {
-        if (import_path9.default.isAbsolute(p)) return p;
-        return import_path9.default.join(process.cwd(), p);
+        if (import_path10.default.isAbsolute(p)) return p;
+        return import_path10.default.join(process.cwd(), p);
       }
     };
   }
@@ -50271,16 +50704,16 @@ function extractMermaidDiagrams(text) {
 }
 async function renderMermaidToPng(mermaidCode) {
   const tmpDir = os.tmpdir();
-  const inputFile = path21.join(
+  const inputFile = path22.join(
     tmpDir,
     `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}.mmd`
   );
-  const outputFile = path21.join(
+  const outputFile = path22.join(
     tmpDir,
     `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}.png`
   );
   try {
-    fs19.writeFileSync(inputFile, mermaidCode, "utf-8");
+    fs20.writeFileSync(inputFile, mermaidCode, "utf-8");
     const chromiumPaths = [
       "/usr/bin/chromium",
       "/usr/bin/chromium-browser",
@@ -50289,7 +50722,7 @@ async function renderMermaidToPng(mermaidCode) {
     ];
     let chromiumPath;
     for (const p of chromiumPaths) {
-      if (fs19.existsSync(p)) {
+      if (fs20.existsSync(p)) {
         chromiumPath = p;
         break;
       }
@@ -50341,19 +50774,19 @@ async function renderMermaidToPng(mermaidCode) {
       console.warn(`Mermaid rendering failed: ${result.error}`);
       return null;
     }
-    if (!fs19.existsSync(outputFile)) {
+    if (!fs20.existsSync(outputFile)) {
       console.warn("Mermaid output file not created");
       return null;
     }
-    const pngBuffer = fs19.readFileSync(outputFile);
+    const pngBuffer = fs20.readFileSync(outputFile);
     return pngBuffer;
   } catch (e) {
     console.warn(`Mermaid rendering error: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   } finally {
     try {
-      if (fs19.existsSync(inputFile)) fs19.unlinkSync(inputFile);
-      if (fs19.existsSync(outputFile)) fs19.unlinkSync(outputFile);
+      if (fs20.existsSync(inputFile)) fs20.unlinkSync(inputFile);
+      if (fs20.existsSync(outputFile)) fs20.unlinkSync(outputFile);
     } catch {
     }
   }
@@ -50417,13 +50850,13 @@ function markdownToSlack(text) {
 function formatSlackText(text) {
   return markdownToSlack(text);
 }
-var import_child_process5, fs19, path21, os;
+var import_child_process5, fs20, path22, os;
 var init_markdown = __esm({
   "src/slack/markdown.ts"() {
     "use strict";
     import_child_process5 = require("child_process");
-    fs19 = __toESM(require("fs"));
-    path21 = __toESM(require("path"));
+    fs20 = __toESM(require("fs"));
+    path22 = __toESM(require("path"));
     os = __toESM(require("os"));
   }
 });
@@ -51300,15 +51733,15 @@ function serializeRunState(state) {
     ])
   };
 }
-var path22, fs20, StateMachineExecutionEngine;
+var path23, fs21, StateMachineExecutionEngine;
 var init_state_machine_execution_engine = __esm({
   "src/state-machine-execution-engine.ts"() {
     "use strict";
     init_runner();
     init_logger();
     init_sandbox_manager();
-    path22 = __toESM(require("path"));
-    fs20 = __toESM(require("fs"));
+    path23 = __toESM(require("path"));
+    fs21 = __toESM(require("fs"));
     StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       workingDirectory;
       executionContext;
@@ -51671,9 +52104,9 @@ var init_state_machine_execution_engine = __esm({
                   }
                   const checkId = String(ev?.checkId || "unknown");
                   const threadKey = ev?.threadKey || (channel && threadTs ? `${channel}:${threadTs}` : "session");
-                  const baseDir = process.env.VISOR_SNAPSHOT_DIR || path22.resolve(process.cwd(), ".visor", "snapshots");
-                  fs20.mkdirSync(baseDir, { recursive: true });
-                  const filePath = path22.join(baseDir, `${threadKey}-${checkId}.json`);
+                  const baseDir = process.env.VISOR_SNAPSHOT_DIR || path23.resolve(process.cwd(), ".visor", "snapshots");
+                  fs21.mkdirSync(baseDir, { recursive: true });
+                  const filePath = path23.join(baseDir, `${threadKey}-${checkId}.json`);
                   await this.saveSnapshotToFile(filePath);
                   logger.info(`[Snapshot] Saved run snapshot: ${filePath}`);
                   try {
@@ -51814,7 +52247,7 @@ var init_state_machine_execution_engine = __esm({
        * Does not include secrets. Intended for debugging and future resume support.
        */
       async saveSnapshotToFile(filePath) {
-        const fs21 = await import("fs/promises");
+        const fs22 = await import("fs/promises");
         const ctx = this._lastContext;
         const runner = this._lastRunner;
         if (!ctx || !runner) {
@@ -51834,14 +52267,14 @@ var init_state_machine_execution_engine = __esm({
           journal: entries,
           requestedChecks: ctx.requestedChecks || []
         };
-        await fs21.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+        await fs22.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
       }
       /**
        * Load a snapshot JSON from file and return it. Resume support can build on this.
        */
       async loadSnapshotFromFile(filePath) {
-        const fs21 = await import("fs/promises");
-        const raw = await fs21.readFile(filePath, "utf8");
+        const fs22 = await import("fs/promises");
+        const raw = await fs22.readFile(filePath, "utf8");
         return JSON.parse(raw);
       }
       /**
