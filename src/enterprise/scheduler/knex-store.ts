@@ -11,6 +11,7 @@
  * but with real distributed locking via row-level claims (claimed_by/claimed_at/lock_token).
  */
 import * as fs from 'fs';
+import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../../logger';
 import type { Schedule, ScheduleLimits } from '../../scheduler/schedule-store';
@@ -223,20 +224,30 @@ export class KnexStoreBackend implements ScheduleStoreBackend {
     };
 
     if (ssl.ca) {
-      if (!fs.existsSync(ssl.ca)) throw new Error(`SSL CA certificate not found: ${ssl.ca}`);
-      result.ca = fs.readFileSync(ssl.ca, 'utf8');
+      const caPath = this.validateSslPath(ssl.ca, 'CA certificate');
+      result.ca = fs.readFileSync(caPath, 'utf8');
     }
     if (ssl.cert) {
-      if (!fs.existsSync(ssl.cert))
-        throw new Error(`SSL client certificate not found: ${ssl.cert}`);
-      result.cert = fs.readFileSync(ssl.cert, 'utf8');
+      const certPath = this.validateSslPath(ssl.cert, 'client certificate');
+      result.cert = fs.readFileSync(certPath, 'utf8');
     }
     if (ssl.key) {
-      if (!fs.existsSync(ssl.key)) throw new Error(`SSL client key not found: ${ssl.key}`);
-      result.key = fs.readFileSync(ssl.key, 'utf8');
+      const keyPath = this.validateSslPath(ssl.key, 'client key');
+      result.key = fs.readFileSync(keyPath, 'utf8');
     }
 
     return result;
+  }
+
+  private validateSslPath(filePath: string, label: string): string {
+    const resolved = path.resolve(filePath);
+    if (resolved !== path.normalize(resolved)) {
+      throw new Error(`SSL ${label} path contains invalid sequences: ${filePath}`);
+    }
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`SSL ${label} not found: ${filePath}`);
+    }
+    return resolved;
   }
 
   async shutdown(): Promise<void> {
@@ -383,11 +394,12 @@ export class KnexStoreBackend implements ScheduleStoreBackend {
 
   async findByWorkflow(creatorId: string, workflowName: string): Promise<Schedule[]> {
     const knex = this.getKnex();
-    const pattern = `%${workflowName.toLowerCase()}%`;
+    const escaped = workflowName.toLowerCase().replace(/[%_\\]/g, '\\$&');
+    const pattern = `%${escaped}%`;
     const rows = await knex('schedules')
       .where('creator_id', creatorId)
       .where('status', 'active')
-      .whereRaw('LOWER(workflow) LIKE ?', [pattern]);
+      .whereRaw("LOWER(workflow) LIKE ? ESCAPE '\\'", [pattern]);
     return rows.map((r: ScheduleRow) => fromDbRow(r));
   }
 

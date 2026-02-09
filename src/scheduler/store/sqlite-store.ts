@@ -396,12 +396,13 @@ export class SqliteStoreBackend implements ScheduleStoreBackend {
 
   async findByWorkflow(creatorId: string, workflowName: string): Promise<Schedule[]> {
     const db = this.getDb();
-    const pattern = `%${workflowName.toLowerCase()}%`;
+    const escaped = workflowName.toLowerCase().replace(/[%_\\]/g, '\\$&');
+    const pattern = `%${escaped}%`;
     const rows = db
       .prepare(
         `SELECT * FROM schedules
          WHERE creator_id = ? AND status = 'active'
-         AND LOWER(workflow) LIKE ?`
+         AND LOWER(workflow) LIKE ? ESCAPE '\\'`
       )
       .all(creatorId, pattern) as ScheduleRow[];
     return rows.map(fromDbRow);

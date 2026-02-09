@@ -890,7 +890,12 @@ export class ConfigManager {
         if (hasHost && !hasConnStr) {
           const host = (conn as { host?: string }).host || '';
           const ssl = (conn as { ssl?: unknown }).ssl;
-          const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+          const isLocal =
+            host === 'localhost' ||
+            host === '127.0.0.1' ||
+            host === '::1' ||
+            host === '0.0.0.0' ||
+            host === '[::]';
           if (!isLocal && !ssl) {
             warnings.push({
               field: 'scheduler.storage.connection.ssl',
