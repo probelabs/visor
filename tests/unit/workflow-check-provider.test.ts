@@ -779,5 +779,67 @@ features:
         { id: 'code_help', description: 'code questions' },
       ]);
     });
+
+    it('should reject path traversal attempts', async () => {
+      const workflowWithIntents: WorkflowDefinition = {
+        ...sampleWorkflow,
+        inputs: [
+          ...sampleWorkflow.inputs!,
+          { name: 'intents', schema: { type: 'array' as const }, required: false },
+        ],
+      };
+
+      const config: CheckProviderConfig = {
+        type: 'workflow',
+        workflow: 'test-workflow',
+        basePath: testConfigDir,
+        args: {
+          language: 'typescript',
+          threshold: 80,
+          intents: {
+            // Attempt path traversal attack
+            expression: "loadConfig('../../../etc/passwd')",
+          },
+        },
+      };
+
+      mockRegistry.get.mockReturnValue(workflowWithIntents);
+      mockRegistry.validateInputs.mockReturnValue({ valid: true });
+
+      await expect(provider.execute(samplePRInfo, config)).rejects.toThrow(
+        /escapes base directory/
+      );
+    });
+
+    it('should reject absolute paths outside basePath', async () => {
+      const workflowWithIntents: WorkflowDefinition = {
+        ...sampleWorkflow,
+        inputs: [
+          ...sampleWorkflow.inputs!,
+          { name: 'intents', schema: { type: 'array' as const }, required: false },
+        ],
+      };
+
+      const config: CheckProviderConfig = {
+        type: 'workflow',
+        workflow: 'test-workflow',
+        basePath: testConfigDir,
+        args: {
+          language: 'typescript',
+          threshold: 80,
+          intents: {
+            // Attempt to read file outside basePath with absolute path
+            expression: "loadConfig('/etc/passwd')",
+          },
+        },
+      };
+
+      mockRegistry.get.mockReturnValue(workflowWithIntents);
+      mockRegistry.validateInputs.mockReturnValue({ valid: true });
+
+      await expect(provider.execute(samplePRInfo, config)).rejects.toThrow(
+        /escapes base directory/
+      );
+    });
   });
 });

@@ -337,9 +337,23 @@ export class WorkflowCheckProvider extends CheckProvider {
     // Supports {% readfile "path" %} directives that resolve relative to the config file's directory
     const loadConfig = (filePath: string): unknown => {
       try {
+        // Normalize basePath for security validation
+        const normalizedBasePath = path.normalize(basePath);
+
+        // Resolve path relative to basePath (or use absolute path)
         const resolvedPath = path.isAbsolute(filePath)
-          ? filePath
-          : path.resolve(basePath, filePath);
+          ? path.normalize(filePath)
+          : path.normalize(path.resolve(basePath, filePath));
+
+        // Security: Validate that resolved path stays within basePath
+        // This prevents path traversal attacks (e.g., ../../../etc/passwd)
+        const basePathWithSep = normalizedBasePath.endsWith(path.sep)
+          ? normalizedBasePath
+          : normalizedBasePath + path.sep;
+        if (!resolvedPath.startsWith(basePathWithSep) && resolvedPath !== normalizedBasePath) {
+          throw new Error(`Path '${filePath}' escapes base directory`);
+        }
+
         // Get the directory of the config file for resolving relative paths in {% readfile %}
         const configDir = path.dirname(resolvedPath);
         // Use sync read for sandbox expression context (expressions can't be async)
@@ -349,8 +363,9 @@ export class WorkflowCheckProvider extends CheckProvider {
         const renderedContent = loadConfigLiquid.parseAndRenderSync(rawContent, {
           basePath: configDir,
         });
-        // Parse as YAML (handles JSON too since YAML is a superset of JSON)
-        return yaml.load(renderedContent);
+        // Parse as YAML with JSON_SCHEMA for security (prevents custom type execution)
+        // JSON_SCHEMA is safer than DEFAULT but still parses basic types (numbers, booleans, null)
+        return yaml.load(renderedContent, { schema: yaml.JSON_SCHEMA });
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         logger.error(`[WorkflowProvider] loadConfig failed for '${filePath}': ${msg}`);
