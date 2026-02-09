@@ -50,9 +50,6 @@ interface ScheduleRow {
   failure_count: number;
   last_error: string | null;
   previous_response: string | null;
-  claimed_by: string | null;
-  claimed_at: number | string | null;
-  lock_token: string | null;
 }
 
 function toNum(val: number | string | null | undefined): number | undefined {
@@ -116,9 +113,6 @@ function toInsertRow(schedule: Schedule): Record<string, unknown> {
     failure_count: schedule.failureCount,
     last_error: schedule.lastError ?? null,
     previous_response: schedule.previousResponse ?? null,
-    claimed_by: null,
-    claimed_at: null,
-    lock_token: null,
   };
 }
 
@@ -129,16 +123,14 @@ export class KnexStoreBackend implements ScheduleStoreBackend {
   private knex: Knex | null = null;
   private driver: 'postgresql' | 'mysql' | 'mssql';
   private connection: ServerConnectionConfig;
-  private haConfig?: HAConfig;
 
   constructor(
     driver: 'postgresql' | 'mysql' | 'mssql',
     storageConfig: StorageConfig,
-    haConfig?: HAConfig
+    _haConfig?: HAConfig
   ) {
     this.driver = driver;
     this.connection = (storageConfig.connection || {}) as ServerConnectionConfig;
-    this.haConfig = haConfig;
   }
 
   async initialize(): Promise<void> {
@@ -292,11 +284,20 @@ export class KnexStoreBackend implements ScheduleStoreBackend {
         table.integer('failure_count').notNullable().defaultTo(0);
         table.text('last_error');
         table.text('previous_response');
-        table.string('claimed_by', 255);
-        table.bigInteger('claimed_at');
-        table.string('lock_token', 36);
 
         table.index(['status', 'next_run_at']);
+      });
+    }
+
+    // Create scheduler_locks table for distributed locking
+    const locksExist = await knex.schema.hasTable('scheduler_locks');
+    if (!locksExist) {
+      await knex.schema.createTable('scheduler_locks', table => {
+        table.string('lock_id', 255).primary();
+        table.string('node_id', 255).notNullable();
+        table.string('lock_token', 36).notNullable();
+        table.bigInteger('acquired_at').notNullable();
+        table.bigInteger('expires_at').notNullable();
       });
     }
   }
@@ -352,11 +353,8 @@ export class KnexStoreBackend implements ScheduleStoreBackend {
     const current = fromDbRow(existing as ScheduleRow);
     const updated: Schedule = { ...current, ...patch, id: current.id };
     const row = toInsertRow(updated);
-    // Remove id and lock columns from update
+    // Remove id from update (PK cannot change)
     delete (row as Record<string, unknown>).id;
-    delete (row as Record<string, unknown>).claimed_by;
-    delete (row as Record<string, unknown>).claimed_at;
-    delete (row as Record<string, unknown>).lock_token;
 
     await knex('schedules').where('id', id).update(row);
     return updated;
@@ -492,50 +490,57 @@ export class KnexStoreBackend implements ScheduleStoreBackend {
     }
   }
 
-  // --- HA Distributed Locking (row-level) ---
+  // --- HA Distributed Locking (via scheduler_locks table) ---
 
-  async tryAcquireLock(
-    scheduleId: string,
-    nodeId: string,
-    ttlSeconds: number
-  ): Promise<string | null> {
+  async tryAcquireLock(lockId: string, nodeId: string, ttlSeconds: number): Promise<string | null> {
     const knex = this.getKnex();
     const now = Date.now();
-    const expiresAt = now - ttlSeconds * 1000; // Locks older than this are expired
+    const expiresAt = now + ttlSeconds * 1000;
     const token = uuidv4();
 
-    // Atomic claim: only succeed if unclaimed or claim has expired
-    const updated = await knex('schedules')
-      .where('id', scheduleId)
-      .andWhere(function () {
-        this.whereNull('claimed_by').orWhere('claimed_at', '<', expiresAt);
-      })
+    // Step 1: Try to claim an existing expired lock
+    const updated = await knex('scheduler_locks')
+      .where('lock_id', lockId)
+      .where('expires_at', '<', now)
       .update({
-        claimed_by: nodeId,
-        claimed_at: now,
+        node_id: nodeId,
         lock_token: token,
+        acquired_at: now,
+        expires_at: expiresAt,
       });
 
-    return updated > 0 ? token : null;
+    if (updated > 0) return token;
+
+    // Step 2: Try to INSERT a new lock row
+    try {
+      await knex('scheduler_locks').insert({
+        lock_id: lockId,
+        node_id: nodeId,
+        lock_token: token,
+        acquired_at: now,
+        expires_at: expiresAt,
+      });
+      return token;
+    } catch {
+      // Unique constraint violation — another node holds the lock
+      return null;
+    }
   }
 
-  async releaseLock(scheduleId: string, lockToken: string): Promise<void> {
+  async releaseLock(lockId: string, lockToken: string): Promise<void> {
     const knex = this.getKnex();
-    await knex('schedules').where('id', scheduleId).where('lock_token', lockToken).update({
-      claimed_by: null,
-      claimed_at: null,
-      lock_token: null,
-    });
+    await knex('scheduler_locks').where('lock_id', lockId).where('lock_token', lockToken).del();
   }
 
-  async renewLock(scheduleId: string, lockToken: string, _ttlSeconds: number): Promise<boolean> {
+  async renewLock(lockId: string, lockToken: string, ttlSeconds: number): Promise<boolean> {
     const knex = this.getKnex();
     const now = Date.now();
+    const expiresAt = now + ttlSeconds * 1000;
 
-    const updated = await knex('schedules')
-      .where('id', scheduleId)
+    const updated = await knex('scheduler_locks')
+      .where('lock_id', lockId)
       .where('lock_token', lockToken)
-      .update({ claimed_at: now });
+      .update({ acquired_at: now, expires_at: expiresAt });
 
     return updated > 0;
   }

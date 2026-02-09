@@ -52,9 +52,6 @@ interface ScheduleRow {
   failure_count: number;
   last_error: string | null;
   previous_response: string | null;
-  claimed_by: string | null;
-  claimed_at: number | null;
-  lock_token: string | null;
 }
 
 /**
@@ -82,9 +79,6 @@ function toDbRow(schedule: Schedule): ScheduleRow {
     failure_count: schedule.failureCount,
     last_error: schedule.lastError ?? null,
     previous_response: schedule.previousResponse ?? null,
-    claimed_by: null,
-    claimed_at: null,
-    lock_token: null,
   };
 }
 
@@ -221,6 +215,14 @@ export class SqliteStoreBackend implements ScheduleStoreBackend {
 
       CREATE INDEX IF NOT EXISTS idx_schedules_status_next_run
         ON schedules(status, next_run_at);
+
+      CREATE TABLE IF NOT EXISTS scheduler_locks (
+        lock_id     VARCHAR(255) PRIMARY KEY,
+        node_id     VARCHAR(255) NOT NULL,
+        lock_token  VARCHAR(36)  NOT NULL,
+        acquired_at BIGINT       NOT NULL,
+        expires_at  BIGINT       NOT NULL
+      );
     `);
   }
 
@@ -258,15 +260,13 @@ export class SqliteStoreBackend implements ScheduleStoreBackend {
         schedule_expr, run_at, is_recurring, original_expression,
         workflow, workflow_inputs, output_context,
         status, created_at, last_run_at, next_run_at,
-        run_count, failure_count, last_error, previous_response,
-        claimed_by, claimed_at, lock_token
+        run_count, failure_count, last_error, previous_response
       ) VALUES (
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?,
-        ?, ?, ?, ?,
-        ?, ?, ?
+        ?, ?, ?, ?
       )
     `
     ).run(
@@ -289,10 +289,7 @@ export class SqliteStoreBackend implements ScheduleStoreBackend {
       row.run_count,
       row.failure_count,
       row.last_error,
-      row.previous_response,
-      row.claimed_by,
-      row.claimed_at,
-      row.lock_token
+      row.previous_response
     );
 
     logger.info(
@@ -313,15 +310,13 @@ export class SqliteStoreBackend implements ScheduleStoreBackend {
         schedule_expr, run_at, is_recurring, original_expression,
         workflow, workflow_inputs, output_context,
         status, created_at, last_run_at, next_run_at,
-        run_count, failure_count, last_error, previous_response,
-        claimed_by, claimed_at, lock_token
+        run_count, failure_count, last_error, previous_response
       ) VALUES (
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?,
-        ?, ?, ?, ?,
-        ?, ?, ?
+        ?, ?, ?, ?
       )
     `
     ).run(
@@ -344,10 +339,7 @@ export class SqliteStoreBackend implements ScheduleStoreBackend {
       row.run_count,
       row.failure_count,
       row.last_error,
-      row.previous_response,
-      row.claimed_by,
-      row.claimed_at,
-      row.lock_token
+      row.previous_response
     );
   }
 

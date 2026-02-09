@@ -298,6 +298,30 @@ export class Scheduler {
    * Execute a static cron job
    */
   private async executeStaticCronJob(jobId: string, job: StaticCronJob): Promise<void> {
+    if (this.haConfig?.enabled) {
+      // HA mode: acquire distributed lock to prevent duplicate execution across nodes
+      const ttl = this.haConfig.lock_ttl ?? 60;
+      const backend = this.store.getBackend();
+      const lockId = `__static_cron__:${jobId}`;
+      const lockToken = await backend.tryAcquireLock(lockId, this.nodeId, ttl);
+      if (!lockToken) {
+        logger.debug(`[Scheduler] Static cron job '${jobId}' locked by another node, skipping`);
+        return;
+      }
+      try {
+        await this.doExecuteStaticCronJob(jobId, job);
+      } finally {
+        await backend.releaseLock(lockId, lockToken);
+      }
+    } else {
+      await this.doExecuteStaticCronJob(jobId, job);
+    }
+  }
+
+  /**
+   * Internal: execute a static cron job (after lock is held in HA mode)
+   */
+  private async doExecuteStaticCronJob(jobId: string, job: StaticCronJob): Promise<void> {
     const startTime = Date.now();
     let result: ScheduleExecutionResult;
 

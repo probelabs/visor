@@ -229,4 +229,57 @@ describe('Scheduler HA Locking', () => {
     const token4 = await backend.tryAcquireLock('sched-2', 'node-a', 60);
     expect(token4).toBeNull(); // node-a blocked on sched-2
   });
+
+  it('should lock static cron job IDs (arbitrary string keys)', async () => {
+    const lockId = '__static_cron__:daily-report';
+    const token = await backend.tryAcquireLock(lockId, 'node-a', 60);
+    expect(token).toBeTruthy();
+
+    // Another node cannot acquire the same static cron lock
+    const token2 = await backend.tryAcquireLock(lockId, 'node-b', 60);
+    expect(token2).toBeNull();
+
+    // Release and re-acquire works
+    await backend.releaseLock(lockId, token!);
+    const token3 = await backend.tryAcquireLock(lockId, 'node-b', 60);
+    expect(token3).toBeTruthy();
+  });
+
+  it('two nodes competing for same static cron job — only one executes', async () => {
+    const executionLog: string[] = [];
+    const lockId = '__static_cron__:security-scan';
+
+    const executeAsNode = async (nodeId: string) => {
+      const token = await backend.tryAcquireLock(lockId, nodeId, 60);
+      if (!token) return;
+
+      try {
+        executionLog.push(nodeId);
+      } finally {
+        await backend.releaseLock(lockId, token);
+      }
+    };
+
+    await Promise.all([executeAsNode('node-a'), executeAsNode('node-b')]);
+    expect(executionLog).toHaveLength(1);
+  });
+
+  it('should release static cron lock even if execution throws', async () => {
+    const lockId = '__static_cron__:failing-job';
+    const token = await backend.tryAcquireLock(lockId, 'node-a', 60);
+    expect(token).toBeTruthy();
+
+    // Simulate execution failure with try/finally release
+    try {
+      throw new Error('Job failed');
+    } catch {
+      // Expected
+    } finally {
+      await backend.releaseLock(lockId, token!);
+    }
+
+    // Lock should be released, another node can acquire
+    const token2 = await backend.tryAcquireLock(lockId, 'node-b', 60);
+    expect(token2).toBeTruthy();
+  });
 });
