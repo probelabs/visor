@@ -5,7 +5,6 @@
  * The in-memory Map and JSON file I/O have been replaced by the backend abstraction
  * to support SQLite (OSS) and PostgreSQL/MySQL (Enterprise) storage.
  */
-import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../logger';
 import type {
   ScheduleStoreBackend,
@@ -207,74 +206,7 @@ export class ScheduleStore {
   }
 
   /**
-   * Create a new schedule (synchronous-compatible wrapper)
-   * @deprecated Use createAsync for reliable persistence
-   */
-  create(
-    schedule: Omit<Schedule, 'id' | 'createdAt' | 'runCount' | 'failureCount' | 'status'>
-  ): Schedule {
-    // For backward compatibility, we need a synchronous return.
-    // Validate limits synchronously via in-memory check, then create via backend.
-    // Since SQLite's better-sqlite3 is synchronous under the hood, this works.
-    // For server-based backends, callers should migrate to createAsync.
-    const backend = this.getBackend();
-
-    // Build the schedule object with generated fields
-    const newSchedule: Schedule = {
-      ...schedule,
-      id: uuidv4(),
-      createdAt: Date.now(),
-      runCount: 0,
-      failureCount: 0,
-      status: 'active',
-    };
-
-    // Fire-and-forget the async create (backend will persist)
-    // We use the create method on the backend but need to handle it being async
-    backend.create(schedule).then(
-      created => {
-        // The backend assigned its own ID; we already returned newSchedule with a different ID.
-        // This is a known limitation of the sync API. Callers should use createAsync.
-        logger.debug(`[ScheduleStore] Async create completed for ${created.id}`);
-      },
-      err => {
-        logger.error(
-          `[ScheduleStore] Async create failed: ${err instanceof Error ? err.message : err}`
-        );
-      }
-    );
-
-    logger.info(
-      `[ScheduleStore] Created schedule ${newSchedule.id} for user ${newSchedule.creatorId}: workflow="${newSchedule.workflow}"`
-    );
-
-    return newSchedule;
-  }
-
-  /**
    * Get a schedule by ID
-   */
-  get(id: string): Schedule | undefined {
-    // For backward compatibility, use synchronous get pattern
-    // This works with SQLite (synchronous) but not with server backends
-    let result: Schedule | undefined;
-    const backend = this.getBackend();
-    // Use a polling trick: since SQLite's better-sqlite3 runs sync,
-    // the promise resolves immediately. We capture via .then().
-    // For true async backends, callers must use getAsync.
-    backend.get(id).then(
-      s => {
-        result = s;
-      },
-      () => {}
-    );
-    // For SQLite, result is already set (microtask resolved synchronously in better-sqlite3)
-    // For true async backends, this returns undefined — callers should use getAsync
-    return result;
-  }
-
-  /**
-   * Get a schedule by ID (async)
    */
   async getAsync(id: string): Promise<Schedule | undefined> {
     return this.getBackend().get(id);
@@ -283,68 +215,19 @@ export class ScheduleStore {
   /**
    * Update a schedule
    */
-  update(id: string, patch: Partial<Schedule>): Schedule | undefined {
-    let result: Schedule | undefined;
-    const backend = this.getBackend();
-    backend.update(id, patch).then(
-      s => {
-        result = s;
-      },
-      () => {}
-    );
-    return result;
-  }
-
-  /**
-   * Update a schedule (async)
-   */
   async updateAsync(id: string, patch: Partial<Schedule>): Promise<Schedule | undefined> {
     return this.getBackend().update(id, patch);
   }
 
   /**
-   * Delete a schedule (async, persists immediately)
+   * Delete a schedule
    */
   async deleteAsync(id: string): Promise<boolean> {
     return this.getBackend().delete(id);
   }
 
   /**
-   * Delete a schedule (synchronous-compatible wrapper)
-   * @deprecated Use deleteAsync for reliable persistence
-   */
-  delete(id: string): boolean {
-    let result = false;
-    const backend = this.getBackend();
-    backend.delete(id).then(
-      deleted => {
-        result = deleted;
-      },
-      () => {}
-    );
-    if (result) {
-      logger.info(`[ScheduleStore] Deleted schedule ${id}`);
-    }
-    return result;
-  }
-
-  /**
    * Get all schedules for a specific creator
-   */
-  getByCreator(creatorId: string): Schedule[] {
-    let result: Schedule[] = [];
-    const backend = this.getBackend();
-    backend.getByCreator(creatorId).then(
-      s => {
-        result = s;
-      },
-      () => {}
-    );
-    return result;
-  }
-
-  /**
-   * Get all schedules for a specific creator (async)
    */
   async getByCreatorAsync(creatorId: string): Promise<Schedule[]> {
     return this.getBackend().getByCreator(creatorId);
@@ -352,21 +235,6 @@ export class ScheduleStore {
 
   /**
    * Get all active schedules
-   */
-  getActiveSchedules(): Schedule[] {
-    let result: Schedule[] = [];
-    const backend = this.getBackend();
-    backend.getActiveSchedules().then(
-      s => {
-        result = s;
-      },
-      () => {}
-    );
-    return result;
-  }
-
-  /**
-   * Get all active schedules (async)
    */
   async getActiveSchedulesAsync(): Promise<Schedule[]> {
     return this.getBackend().getActiveSchedules();
@@ -376,21 +244,6 @@ export class ScheduleStore {
    * Get all schedules due for execution
    * @param now Current timestamp in milliseconds
    */
-  getDueSchedules(now: number = Date.now()): Schedule[] {
-    let result: Schedule[] = [];
-    const backend = this.getBackend();
-    backend.getDueSchedules(now).then(
-      s => {
-        result = s;
-      },
-      () => {}
-    );
-    return result;
-  }
-
-  /**
-   * Get all schedules due for execution (async)
-   */
   async getDueSchedulesAsync(now: number = Date.now()): Promise<Schedule[]> {
     return this.getBackend().getDueSchedules(now);
   }
@@ -398,43 +251,12 @@ export class ScheduleStore {
   /**
    * Find schedules by workflow name
    */
-  findByWorkflow(creatorId: string, workflowName: string): Schedule[] {
-    let result: Schedule[] = [];
-    const backend = this.getBackend();
-    backend.findByWorkflow(creatorId, workflowName).then(
-      s => {
-        result = s;
-      },
-      () => {}
-    );
-    return result;
+  async findByWorkflowAsync(creatorId: string, workflowName: string): Promise<Schedule[]> {
+    return this.getBackend().findByWorkflow(creatorId, workflowName);
   }
 
   /**
    * Get schedule count statistics
-   */
-  getStats(): ScheduleStoreStats {
-    let result: ScheduleStoreStats = {
-      total: 0,
-      active: 0,
-      paused: 0,
-      completed: 0,
-      failed: 0,
-      recurring: 0,
-      oneTime: 0,
-    };
-    const backend = this.getBackend();
-    backend.getStats().then(
-      s => {
-        result = s;
-      },
-      () => {}
-    );
-    return result;
-  }
-
-  /**
-   * Get schedule count statistics (async)
    */
   async getStatsAsync(): Promise<ScheduleStoreStats> {
     return this.getBackend().getStats();
@@ -464,22 +286,7 @@ export class ScheduleStore {
   }
 
   /**
-   * Get all schedules (for iteration)
-   */
-  getAll(): Schedule[] {
-    let result: Schedule[] = [];
-    const backend = this.getBackend();
-    backend.getAll().then(
-      s => {
-        result = s;
-      },
-      () => {}
-    );
-    return result;
-  }
-
-  /**
-   * Get all schedules (async)
+   * Get all schedules
    */
   async getAllAsync(): Promise<Schedule[]> {
     return this.getBackend().getAll();
