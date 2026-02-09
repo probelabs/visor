@@ -222,9 +222,19 @@ export class KnexStoreBackend implements ScheduleStoreBackend {
       rejectUnauthorized: ssl.reject_unauthorized !== false,
     };
 
-    if (ssl.ca) result.ca = fs.readFileSync(ssl.ca, 'utf8');
-    if (ssl.cert) result.cert = fs.readFileSync(ssl.cert, 'utf8');
-    if (ssl.key) result.key = fs.readFileSync(ssl.key, 'utf8');
+    if (ssl.ca) {
+      if (!fs.existsSync(ssl.ca)) throw new Error(`SSL CA certificate not found: ${ssl.ca}`);
+      result.ca = fs.readFileSync(ssl.ca, 'utf8');
+    }
+    if (ssl.cert) {
+      if (!fs.existsSync(ssl.cert))
+        throw new Error(`SSL client certificate not found: ${ssl.cert}`);
+      result.cert = fs.readFileSync(ssl.cert, 'utf8');
+    }
+    if (ssl.key) {
+      if (!fs.existsSync(ssl.key)) throw new Error(`SSL client key not found: ${ssl.key}`);
+      result.key = fs.readFileSync(ssl.key, 'utf8');
+    }
 
     return result;
   }
