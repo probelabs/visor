@@ -74,7 +74,7 @@ export class StatusBar {
     const modeIndicator = this.getModeIndicatorStyled();
     const statusSection = this._statusText ? ` | ${this._statusText}` : '';
 
-    const hints = '{gray-fg}Shift+Tab: cycle | Ctrl+C: exit{/}';
+    const hints = '{gray-fg}Shift+drag: select | Ctrl+C: exit{/}';
 
     // Build the status line with tags
     const content = `${tabSection} │ ${modeIndicator}${statusSection}  ${hints}`;

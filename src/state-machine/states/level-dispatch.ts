@@ -788,6 +788,20 @@ async function executeCheckWithForEachItems(
         }
       } catch {}
 
+      // Fallback: expose conversation from executionContext (for CLI --message)
+      // Only if no Slack conversation was set above
+      try {
+        if (
+          !(providerConfig as any).eventContext?.conversation &&
+          (context.executionContext as any)?.conversation
+        ) {
+          (providerConfig as any).eventContext = {
+            ...(providerConfig as any).eventContext,
+            conversation: (context.executionContext as any).conversation,
+          };
+        }
+      } catch {}
+
       // Build dependency results with scope
       const dependencyResults = buildDependencyResultsWithScope(
         checkId,
@@ -888,10 +902,16 @@ async function executeCheckWithForEachItems(
           try {
             const evaluator = new FailureConditionEvaluator();
             const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+            // Get conversation from execution context (TUI/CLI/Slack)
+            const conversation = (context.executionContext as any)?.conversation;
+            logger.info(
+              `[assume] check=${checkId} hasExecCtx=${!!context.executionContext} hasConv=${!!conversation}`
+            );
             for (const ex of exprs) {
               const res = await evaluator.evaluateIfCondition(checkId, ex, {
                 event: context.event || 'manual',
                 previousResults: dependencyResults as any,
+                conversation,
               } as any);
               if (!res) {
                 ok = false;
@@ -2196,6 +2216,20 @@ async function executeSingleCheck(
       }
     } catch {}
 
+    // Fallback: expose conversation from executionContext (for CLI --message)
+    // Only if no Slack conversation was set above
+    try {
+      if (
+        !(providerConfig as any).eventContext?.conversation &&
+        (context.executionContext as any)?.conversation
+      ) {
+        (providerConfig as any).eventContext = {
+          ...(providerConfig as any).eventContext,
+          conversation: (context.executionContext as any).conversation,
+        };
+      }
+    } catch {}
+
     // Build dependency results
     const dependencyResults = buildDependencyResults(checkId, checkConfig, context, state);
 
@@ -2228,10 +2262,18 @@ async function executeSingleCheck(
         try {
           const evaluator = new FailureConditionEvaluator();
           const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+          // Get conversation from execution context (TUI/CLI/Slack)
+          const conversation = (context.executionContext as any)?.conversation;
+          if (process.env.VISOR_DEBUG === 'true') {
+            logger.debug(
+              `[assume] check=${checkId} hasExecCtx=${!!context.executionContext} hasConv=${!!conversation} convText=${conversation?.current?.text?.substring(0, 30) ?? 'N/A'}`
+            );
+          }
           for (const ex of exprs) {
             const res = await evaluator.evaluateIfCondition(checkId, ex, {
               event: context.event || 'manual',
               previousResults: dependencyResults as any,
+              conversation,
             } as any);
             if (!res) {
               ok = false;

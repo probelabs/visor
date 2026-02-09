@@ -25,9 +25,7 @@ export class ChatBox {
       top: 0,
       left: 0,
       width: '100%',
-      height: '100%-3', // Leave room for input bar and status bar
-      label: ' Chat ',
-      border: { type: 'line' },
+      height: '100%-2', // Leave room for input bar and status bar
       scrollable: true,
       alwaysScroll: true,
       mouse: true,
@@ -38,10 +36,6 @@ export class ChatBox {
       scrollbar: {
         ch: ' ',
         style: { bg: 'gray' },
-      },
-      style: {
-        border: { fg: 'blue' },
-        label: { fg: 'white', bold: true },
       },
     });
   }

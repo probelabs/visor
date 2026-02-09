@@ -171,29 +171,39 @@ export class TuiChatRunner {
     // Create a new engine instance for this execution
     const runEngine = new StateMachineExecutionEngine();
 
-    // Set execution context with TUI hooks
-    try {
-      const ctx: any = {
-        tuiChatRunner: this,
-        hooks: {
-          onHumanInput: async (request: any) => {
-            if (!this.chatTui) throw new Error('TUI not available');
-            return this.chatTui.promptUser({
-              prompt: request.prompt,
-              placeholder: request.placeholder,
-              multiline: request.multiline,
-              timeout: request.timeout,
-              defaultValue: request.default,
-              allowEmpty: request.allowEmpty,
-            });
-          },
-          onCheckComplete: () => {
-            // Handled by TuiFrontend
-          },
+    // Set execution context with TUI hooks and conversation context
+    const now = new Date().toISOString();
+    const ctx: any = {
+      tuiChatRunner: this,
+      // Create conversation context so {{ conversation.current.text }} works
+      conversation: {
+        transport: 'tui',
+        thread: { id: `tui-${messageId}` },
+        messages: [{ role: 'user', text: message, timestamp: now }],
+        current: { role: 'user', text: message, timestamp: now },
+        attributes: {
+          source: 'tui',
+          user: process.env.USER || 'user',
         },
-      };
-      (runEngine as any).setExecutionContext?.(ctx);
-    } catch {}
+      },
+      hooks: {
+        onHumanInput: async (request: any) => {
+          if (!this.chatTui) throw new Error('TUI not available');
+          return this.chatTui.promptUser({
+            prompt: request.prompt,
+            placeholder: request.placeholder,
+            multiline: request.multiline,
+            timeout: request.timeout,
+            defaultValue: request.default,
+            allowEmpty: request.allowEmpty,
+          });
+        },
+        onCheckComplete: () => {
+          // Handled by TuiFrontend
+        },
+      },
+    };
+    runEngine.setExecutionContext(ctx);
 
     logger.info(`[TuiChatRunner] Executing workflow for message: ${messageId}`);
 
@@ -212,6 +222,8 @@ export class TuiChatRunner {
             config: cfgForRun,
             webhookContext: { webhookData, eventType: 'manual' },
             debug: this.debug,
+            // Pass conversation directly in options for TUI mode
+            conversation: ctx.conversation,
           } as any);
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);

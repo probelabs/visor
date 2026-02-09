@@ -160,6 +160,20 @@ export interface FailureConditionContext {
     /** AI model used */
     model: string;
   };
+
+  /** Conversation context for TUI/CLI/Slack messages */
+  conversation?: {
+    /** Transport type (tui, cli, slack) */
+    transport?: string;
+    /** Thread information */
+    thread?: { id: string };
+    /** Message history */
+    messages?: Array<{ role: string; text: string; timestamp: string }>;
+    /** Current message being processed */
+    current?: { role: string; text: string; timestamp: string };
+    /** Additional attributes */
+    attributes?: Record<string, unknown>;
+  } | null;
 }
 
 /**

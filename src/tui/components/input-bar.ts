@@ -45,11 +45,7 @@ export class InputBar {
       bottom: 1, // Leave room for status bar
       left: 0,
       width: '100%',
-      height: 3,
-      border: { type: 'line' },
-      style: {
-        border: { fg: 'blue' },
-      },
+      height: 1,
     });
 
     // Prompt indicator
@@ -68,7 +64,7 @@ export class InputBar {
       parent: this.container,
       top: 0,
       left: 2,
-      width: '100%-4',
+      width: '100%-2',
       height: 1,
       content: this._placeholderText,
       style: { fg: 'gray' },
@@ -79,7 +75,7 @@ export class InputBar {
       parent: this.container,
       top: 0,
       left: 2,
-      width: '100%-4',
+      width: '100%-2',
       height: 1,
       mouse: true,
       keys: true,

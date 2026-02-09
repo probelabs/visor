@@ -102,6 +102,7 @@ export class ChatTUI {
 
   private pendingLogs: string[] = [];
   private running = false;
+  private mouseEnabled = true; // Mouse enabled for scrolling, hold Shift to select text
 
   constructor(options: ChatTUIOptions = {}) {
     this.stateManager = options.stateManager ?? new ChatStateManager();
@@ -192,8 +193,6 @@ export class ChatTUI {
       left: 0,
       width: '100%',
       height: '100%-1',
-      label: ' Logs ',
-      border: { type: 'line' },
       scrollable: true,
       alwaysScroll: true,
       mouse: true,
@@ -284,6 +283,11 @@ export class ChatTUI {
       process.exit(0);
     });
 
+    // Toggle mouse mode (m) - allows text selection when disabled
+    this.screen.key(['m'], () => {
+      this.toggleMouseMode();
+    });
+
     // Screen resize
     this.screen.on('resize', () => {
       this.updateLayout();
@@ -336,6 +340,27 @@ export class ChatTUI {
       this.inputBar?.focus();
     }
     this.updateStatusBar();
+  }
+
+  private toggleMouseMode(): void {
+    this.mouseEnabled = !this.mouseEnabled;
+
+    // Toggle mouse tracking at the program level
+    const program = (this.screen as any)?.program;
+    if (program) {
+      if (this.mouseEnabled) {
+        program.enableMouse();
+      } else {
+        program.disableMouse();
+      }
+    }
+
+    // Show status message
+    const status = this.mouseEnabled
+      ? 'Mouse scroll ON (Shift+drag to select text)'
+      : 'Mouse scroll OFF (use PgUp/PgDn to scroll)';
+    this.setStatus(status);
+    this.screen?.render();
   }
 
   setProcessing(processing: boolean): void {

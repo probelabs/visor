@@ -66,8 +66,6 @@ export class TraceViewer {
       left: 0,
       width: '100%',
       height: '100%',
-      label: ' Traces ',
-      border: { type: 'line' },
       scrollable: true,
       alwaysScroll: true,
       mouse: true,

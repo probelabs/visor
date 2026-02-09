@@ -989,6 +989,15 @@ export async function main(): Promise<void> {
       // Also set static property for backward compatibility
       const { HumanInputCheckProvider } = await import('./providers/human-input-check-provider');
       HumanInputCheckProvider.setCLIMessage(options.message);
+      // Create conversation context so {{ conversation.current.text }} works in templates
+      const now = new Date().toISOString();
+      executionContext.conversation = {
+        transport: 'cli',
+        thread: { id: `cli-${Date.now()}` },
+        messages: [{ role: 'user', text: options.message, timestamp: now }],
+        current: { role: 'user', text: options.message, timestamp: now },
+        attributes: { source: 'cli' },
+      };
     }
 
     // Set environment variables early for proper logging in all modules
@@ -1703,7 +1712,20 @@ export async function main(): Promise<void> {
             undefined,
             debugServer || undefined
           );
-          rerunEngine.setExecutionContext(executionContext);
+
+          // Add conversation context for TUI messages
+          const now = new Date().toISOString();
+          const tuiConversation = {
+            transport: 'tui' as const,
+            thread: { id: `tui-${Date.now()}` },
+            messages: [{ role: 'user' as const, text: message, timestamp: now }],
+            current: { role: 'user' as const, text: message, timestamp: now },
+            attributes: { source: 'tui' },
+          };
+          rerunEngine.setExecutionContext({
+            ...executionContext,
+            conversation: tuiConversation,
+          });
 
           // Execute workflow
           const rerunResult = await withActiveSpan(
@@ -1800,23 +1822,32 @@ export async function main(): Promise<void> {
         })()
       : async () => {};
 
-    const executionResult = await withActiveSpan(
-      'visor.run',
-      { 'visor.run.checks_configured': checksToRun.length },
-      async () =>
-        engine.executeGroupedChecks(
-          prInfo,
-          checksToRun,
-          options.timeout,
-          config,
-          options.output,
-          options.debug || false,
-          options.maxParallelism,
-          options.failFast,
-          tagFilter,
-          pauseGate
-        )
-    );
+    // Skip initial automatic run for TUI mode - wait for user to type a message
+    // TUI workflows are typically chat-style and expect user input first
+    let executionResult: import('./types/execution').ExecutionResult;
+    if (chatTui) {
+      logger.info('[TUI] Waiting for user input - type a message to start the workflow');
+      chatTui.addSystemMessage('Type a message to start...');
+      executionResult = { results: {}, statistics: {} as any };
+    } else {
+      executionResult = await withActiveSpan(
+        'visor.run',
+        { 'visor.run.checks_configured': checksToRun.length },
+        async () =>
+          engine.executeGroupedChecks(
+            prInfo,
+            checksToRun,
+            options.timeout,
+            config,
+            options.output,
+            options.debug || false,
+            options.maxParallelism,
+            options.failFast,
+            tagFilter,
+            pauseGate
+          )
+      );
+    }
 
     // Extract results and statistics from the execution result
     const { results: groupedResults, statistics: executionStatistics } = executionResult;

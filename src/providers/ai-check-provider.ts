@@ -1072,6 +1072,9 @@ export class AICheckProvider extends CheckProvider {
 
     // 4. Evaluate ai_mcp_servers_js for dynamic MCP server selection (overrides all static configs)
     const mcpServersJsExpr = (config as any).ai_mcp_servers_js as string | undefined;
+    logger.info(
+      `[AICheckProvider] ai_mcp_servers_js check: hasExpr=${!!mcpServersJsExpr}, hasDeps=${!!_dependencyResults}, depsSize=${_dependencyResults?.size ?? 0}`
+    );
     if (mcpServersJsExpr && _dependencyResults) {
       try {
         const dynamicServers = this.evaluateMcpServersJs(
@@ -1840,6 +1843,12 @@ export class AICheckProvider extends CheckProvider {
     };
 
     try {
+      // Debug: log what's in build-config output
+      const buildConfigOutput = (jsContext.outputs as any)?.['build-config'];
+      logger.info(
+        `[AICheckProvider] ai_mcp_servers_js context: build-config output keys=${buildConfigOutput ? Object.keys(buildConfigOutput).join(',') : 'N/A'}, mcp_servers keys=${buildConfigOutput?.mcp_servers ? Object.keys(buildConfigOutput.mcp_servers).join(',') : 'N/A'}`
+      );
+
       const result = compileAndRun<unknown>(this.sandbox, expression, jsContext, {
         injectLog: true,
         wrapFunction: true,

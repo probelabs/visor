@@ -41,6 +41,12 @@ export class StateMachineExecutionEngine {
   async executeChecks(options: CheckExecutionOptions): Promise<AnalysisResult> {
     const startTime = Date.now();
     const timestamp = new Date().toISOString();
+    // Extract conversation from options if provided (TUI/CLI mode)
+    const optConversation = (options as any)?.conversation;
+    if (optConversation) {
+      const prev: any = this.executionContext || {};
+      this.executionContext = { ...prev, conversation: optConversation };
+    }
 
     try {
       // Initialize memory store if configured
