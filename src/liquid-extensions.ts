@@ -62,11 +62,13 @@ export class ReadFileTag extends Tag {
       return;
     }
 
-    // Security: Resolve path relative to project root to prevent directory traversal
-    const projectRoot = process.cwd();
+    // Security: Resolve path relative to basePath (from context) or project root
+    // basePath can be passed via context globals for loadConfig scenarios
+    const basePath = (ctx.globals as Record<string, unknown>)?.basePath;
+    const projectRoot = typeof basePath === 'string' ? basePath : process.cwd();
     const resolvedPath = path.resolve(projectRoot, filePath.toString());
 
-    // Ensure the resolved path is within the project directory
+    // Ensure the resolved path is within the allowed directory
     if (!resolvedPath.startsWith(projectRoot)) {
       emitter.write('[Error: File path escapes project directory]');
       return;

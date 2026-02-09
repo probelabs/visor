@@ -14,6 +14,8 @@ import { generateHumanId } from '../utils/human-id';
 // eslint-disable-next-line no-restricted-imports -- needed for Liquid type
 import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
+import * as path from 'path';
+import * as yaml from 'js-yaml';
 
 /**
  * Provider that executes workflows as checks
@@ -320,6 +322,42 @@ export class WorkflowCheckProvider extends CheckProvider {
     // Get parent workflow inputs from config (for nested workflow template access)
     const parentInputs = (config as any).workflowInputs || {};
 
+    // Get base path for loadConfig helper - resolve relative paths from workflow's directory
+    const basePath =
+      (config as any).basePath ||
+      (config as any)._parentContext?.originalWorkingDirectory ||
+      (config as any)._parentContext?.workingDirectory ||
+      process.cwd();
+
+    // Create a Liquid engine for loadConfig that supports {% readfile %} with basePath
+    const loadConfigLiquid = createExtendedLiquid();
+
+    // loadConfig helper - synchronously reads, renders Liquid templates, and parses YAML/JSON
+    // Usage in expressions: loadConfig('config/intents.yaml')
+    // Supports {% readfile "path" %} directives that resolve relative to the config file's directory
+    const loadConfig = (filePath: string): unknown => {
+      try {
+        const resolvedPath = path.isAbsolute(filePath)
+          ? filePath
+          : path.resolve(basePath, filePath);
+        // Get the directory of the config file for resolving relative paths in {% readfile %}
+        const configDir = path.dirname(resolvedPath);
+        // Use sync read for sandbox expression context (expressions can't be async)
+        const rawContent = require('fs').readFileSync(resolvedPath, 'utf-8');
+        // Render Liquid templates (e.g., {% readfile "docs/file.md" %}) with basePath context
+        // This allows {% readfile %} to resolve paths relative to the config file's directory
+        const renderedContent = loadConfigLiquid.parseAndRenderSync(rawContent, {
+          basePath: configDir,
+        });
+        // Parse as YAML (handles JSON too since YAML is a superset of JSON)
+        return yaml.load(renderedContent);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        logger.error(`[WorkflowProvider] loadConfig failed for '${filePath}': ${msg}`);
+        throw new Error(`loadConfig('${filePath}') failed: ${msg}`);
+      }
+    };
+
     const templateContext = {
       pr: prInfo,
       outputs: outputsMap,
@@ -329,6 +367,8 @@ export class WorkflowCheckProvider extends CheckProvider {
       outputs_history,
       // Include parent workflow inputs for templates like {{ inputs.question }}
       inputs: parentInputs,
+      // Helper to load external YAML/JSON config files
+      loadConfig,
     };
 
     // Apply user-provided inputs (args)
