@@ -11,7 +11,7 @@ import { getNextRunTime } from './schedule-parser';
 import { logger } from '../logger';
 import type { VisorConfig, StaticCronJob } from '../types/config';
 import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
-import type { StorageConfig, HAConfig } from './store/types';
+import type { StorageConfig, HAConfig, ScheduleStoreStats } from './store/types';
 
 /**
  * Context enricher interface for frontend-specific functionality
@@ -427,7 +427,7 @@ export class Scheduler {
    * Restore schedules from persistent storage
    */
   private async restoreSchedules(): Promise<void> {
-    const activeSchedules = this.store.getActiveSchedules();
+    const activeSchedules = await this.store.getActiveSchedulesAsync();
     logger.info(`[Scheduler] Restoring ${activeSchedules.length} active schedules`);
 
     for (const schedule of activeSchedules) {
@@ -470,7 +470,10 @@ export class Scheduler {
         existingJob.stop();
         this.cronJobs.delete(schedule.id);
       }
-      this.store.update(schedule.id, { status: 'failed', lastError: 'Invalid cron expression' });
+      await this.store.updateAsync(schedule.id, {
+        status: 'failed',
+        lastError: 'Invalid cron expression',
+      });
       return;
     }
 
@@ -497,7 +500,7 @@ export class Scheduler {
     // Update next run time
     try {
       const nextRun = getNextRunTime(schedule.schedule, schedule.timezone);
-      this.store.update(schedule.id, { nextRunAt: nextRun.getTime() });
+      await this.store.updateAsync(schedule.id, { nextRunAt: nextRun.getTime() });
     } catch (error) {
       logger.warn(
         `[Scheduler] Could not compute next run time for ${schedule.id}: ${
@@ -549,7 +552,7 @@ export class Scheduler {
    * Check for and execute due schedules
    */
   private async checkDueSchedules(): Promise<void> {
-    const dueSchedules = this.store.getDueSchedules();
+    const dueSchedules = await this.store.getDueSchedulesAsync();
 
     for (const schedule of dueSchedules) {
       // Skip if already scheduled
@@ -601,7 +604,7 @@ export class Scheduler {
 
       // Update schedule state
       const now = Date.now();
-      this.store.update(schedule.id, {
+      await this.store.updateAsync(schedule.id, {
         lastRunAt: now,
         runCount: schedule.runCount + 1,
         failureCount: 0, // Reset on success
@@ -610,14 +613,14 @@ export class Scheduler {
 
       // For one-time schedules, mark as completed
       if (!schedule.isRecurring) {
-        this.store.update(schedule.id, { status: 'completed' });
-        this.store.delete(schedule.id); // Clean up
+        await this.store.updateAsync(schedule.id, { status: 'completed' });
+        await this.store.deleteAsync(schedule.id); // Clean up
         logger.info(`[Scheduler] One-time schedule ${schedule.id} completed and removed`);
       } else {
         // Update next run time for recurring schedules
         try {
           const nextRun = getNextRunTime(schedule.schedule, schedule.timezone);
-          this.store.update(schedule.id, { nextRunAt: nextRun.getTime() });
+          await this.store.updateAsync(schedule.id, { nextRunAt: nextRun.getTime() });
         } catch {
           // Best effort
         }
@@ -887,7 +890,7 @@ Please provide an updated response based on the reminder above. You may referenc
 
       // Save captured response for recurring reminders (previousResponse feature)
       if (schedule.isRecurring && responseRef.captured) {
-        this.store.update(schedule.id, { previousResponse: responseRef.captured });
+        await this.store.updateAsync(schedule.id, { previousResponse: responseRef.captured });
         logger.info(
           `[Scheduler] Saved previousResponse for recurring schedule ${schedule.id} (${responseRef.captured.length} chars)`
         );
@@ -918,14 +921,14 @@ Please provide an updated response based on the reminder above. You may referenc
     const newFailureCount = schedule.failureCount + 1;
 
     // Update failure count
-    this.store.update(schedule.id, {
+    await this.store.updateAsync(schedule.id, {
       failureCount: newFailureCount,
       lastError: errorMsg,
     });
 
     // Auto-pause after 3 consecutive failures
     if (newFailureCount >= 3) {
-      this.store.update(schedule.id, { status: 'failed' });
+      await this.store.updateAsync(schedule.id, { status: 'failed' });
 
       // Stop the cron job
       const job = this.cronJobs.get(schedule.id);
@@ -974,17 +977,17 @@ Please provide an updated response based on the reminder above. You may referenc
   /**
    * Get scheduler stats
    */
-  getStats(): {
+  async getStats(): Promise<{
     running: boolean;
     activeCronJobs: number;
     pendingOneTimeSchedules: number;
-    storeStats: ReturnType<ScheduleStore['getStats']>;
-  } {
+    storeStats: ScheduleStoreStats;
+  }> {
     return {
       running: this.running,
       activeCronJobs: this.cronJobs.size,
       pendingOneTimeSchedules: this.oneTimeTimeouts.size,
-      storeStats: this.store.getStats(),
+      storeStats: await this.store.getStatsAsync(),
     };
   }
 }

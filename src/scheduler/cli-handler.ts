@@ -206,7 +206,7 @@ async function handleStart(
     console.log(`Timezone: ${schedulerConfig?.default_timezone || 'UTC'}`);
 
     // Print stats
-    const stats = scheduler.getStats();
+    const stats = await scheduler.getStats();
     console.log(`Active schedules: ${stats.storeStats.active}`);
     console.log(`Recurring: ${stats.storeStats.recurring}, One-time: ${stats.storeStats.oneTime}`);
 
