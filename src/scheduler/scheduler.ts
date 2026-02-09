@@ -308,10 +308,14 @@ export class Scheduler {
         logger.debug(`[Scheduler] Static cron job '${jobId}' locked by another node, skipping`);
         return;
       }
+      // Register in heldLocks so the heartbeat timer renews this lock
+      // during long-running jobs (prevents TTL expiration & duplicate execution)
+      this.heldLocks.set(lockId, lockToken);
       try {
         await this.doExecuteStaticCronJob(jobId, job);
       } finally {
         await backend.releaseLock(lockId, lockToken);
+        this.heldLocks.delete(lockId);
       }
     } else {
       await this.doExecuteStaticCronJob(jobId, job);

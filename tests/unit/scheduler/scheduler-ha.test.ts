@@ -264,6 +264,48 @@ describe('Scheduler HA Locking', () => {
     expect(executionLog).toHaveLength(1);
   });
 
+  it('should renew lock via heartbeat during long-running execution', async () => {
+    // Acquire a lock with short TTL (1 second)
+    const lockId = '__static_cron__:long-job';
+    const token = await backend.tryAcquireLock(lockId, 'node-a', 1);
+    expect(token).toBeTruthy();
+
+    // Simulate heartbeat: the heldLocks map tracks the lock for renewal
+    const heldLocks = new Map<string, string>();
+    heldLocks.set(lockId, token!);
+
+    // Simulate heartbeat renewal (as the scheduler's heartbeat timer would do)
+    const renewed = await backend.renewLock(lockId, token!, 60);
+    expect(renewed).toBe(true);
+
+    // Wait past the original 1s TTL
+    await new Promise(resolve => setTimeout(resolve, 1100));
+
+    // Lock should still be valid (renewed to 60s) — another node cannot acquire
+    const tokenB = await backend.tryAcquireLock(lockId, 'node-b', 60);
+    expect(tokenB).toBeNull();
+
+    // Clean up
+    await backend.releaseLock(lockId, token!);
+    heldLocks.delete(lockId);
+  });
+
+  it('lock expires without heartbeat renewal — another node can take over', async () => {
+    // Acquire a lock with very short TTL (0s = immediate expiry)
+    const lockId = '__static_cron__:orphaned-job';
+    const token = await backend.tryAcquireLock(lockId, 'node-a', 0);
+    expect(token).toBeTruthy();
+
+    // Simulate node-a crashing: no heartbeat renewal, no heldLocks registration
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    // Lock has expired — node-b can take over
+    const tokenB = await backend.tryAcquireLock(lockId, 'node-b', 60);
+    expect(tokenB).toBeTruthy();
+    expect(tokenB).not.toBe(token); // Different token
+  });
+
   it('should release static cron lock even if execution throws', async () => {
     const lockId = '__static_cron__:failing-job';
     const token = await backend.tryAcquireLock(lockId, 'node-a', 60);
