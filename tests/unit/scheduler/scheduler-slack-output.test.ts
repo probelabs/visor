@@ -39,6 +39,69 @@ jest.mock('fs/promises', () => ({
   unlink: jest.fn().mockResolvedValue(undefined),
 }));
 
+// Mock the store factory to use an in-memory backend instead of SQLite
+const inMemorySchedules = new Map<string, any>();
+jest.mock('../../../src/scheduler/store/index', () => ({
+  createStoreBackend: jest.fn().mockImplementation(() => {
+    return {
+      initialize: jest.fn().mockResolvedValue(undefined),
+      shutdown: jest.fn().mockResolvedValue(undefined),
+      flush: jest.fn().mockResolvedValue(undefined),
+      create: jest.fn().mockImplementation(async (input: any) => {
+        const schedule = {
+          ...input,
+          id: `mock-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+          createdAt: Date.now(),
+          runCount: 0,
+          failureCount: 0,
+          status: 'active',
+        };
+        inMemorySchedules.set(schedule.id, schedule);
+        return schedule;
+      }),
+      get: jest.fn().mockImplementation(async (id: string) => inMemorySchedules.get(id)),
+      update: jest.fn().mockImplementation(async (id: string, patch: any) => {
+        const existing = inMemorySchedules.get(id);
+        if (!existing) return undefined;
+        const updated = { ...existing, ...patch, id: existing.id };
+        inMemorySchedules.set(id, updated);
+        return updated;
+      }),
+      delete: jest.fn().mockImplementation(async (id: string) => inMemorySchedules.delete(id)),
+      getByCreator: jest
+        .fn()
+        .mockImplementation(async (creatorId: string) =>
+          [...inMemorySchedules.values()].filter((s: any) => s.creatorId === creatorId)
+        ),
+      getActiveSchedules: jest
+        .fn()
+        .mockImplementation(async () =>
+          [...inMemorySchedules.values()].filter((s: any) => s.status === 'active')
+        ),
+      getDueSchedules: jest.fn().mockResolvedValue([]),
+      findByWorkflow: jest.fn().mockResolvedValue([]),
+      getAll: jest.fn().mockImplementation(async () => [...inMemorySchedules.values()]),
+      getStats: jest.fn().mockResolvedValue({
+        total: 0,
+        active: 0,
+        paused: 0,
+        completed: 0,
+        failed: 0,
+        recurring: 0,
+        oneTime: 0,
+      }),
+      validateLimits: jest.fn().mockResolvedValue(undefined),
+      tryAcquireLock: jest.fn().mockResolvedValue('mock-token'),
+      releaseLock: jest.fn().mockResolvedValue(undefined),
+      renewLock: jest.fn().mockResolvedValue(true),
+    };
+  }),
+}));
+
+jest.mock('../../../src/scheduler/store/json-migrator', () => ({
+  migrateJsonToBackend: jest.fn().mockResolvedValue(0),
+}));
+
 // Mock logger
 jest.mock('../../../src/logger', () => ({
   logger: {
@@ -67,6 +130,9 @@ describe('Scheduler Slack Output', () => {
     chatUpdate.mockClear();
     mockExecuteChecks.mockClear();
     process.env.SLACK_BOT_TOKEN = 'xoxb-test-token';
+
+    // Clear in-memory store data
+    inMemorySchedules.clear();
 
     // Reset schedule store singleton
     ScheduleStore.resetInstance();
@@ -101,7 +167,7 @@ describe('Scheduler Slack Output', () => {
     await store.initialize();
 
     // Create a simple reminder schedule
-    const schedule = store.create({
+    const schedule = await store.createAsync({
       creatorId: 'U123',
       creatorContext: 'slack:U123',
       timezone: 'UTC',
@@ -145,7 +211,7 @@ describe('Scheduler Slack Output', () => {
     const store = scheduler.getStore();
     await store.initialize();
 
-    const schedule = store.create({
+    const schedule = await store.createAsync({
       creatorId: 'U123',
       creatorContext: 'slack:U123',
       timezone: 'UTC',
@@ -188,7 +254,7 @@ describe('Scheduler Slack Output', () => {
       await store.initialize();
 
       // Create a RECURRING reminder
-      const schedule = store.create({
+      const schedule = await store.createAsync({
         creatorId: 'U123',
         creatorContext: 'slack:U123',
         timezone: 'UTC',
@@ -211,7 +277,7 @@ describe('Scheduler Slack Output', () => {
       expect(mockExecuteChecks).toHaveBeenCalled();
 
       // The schedule should still exist (it's recurring)
-      const updatedSchedule = store.get(schedule.id);
+      const updatedSchedule = await store.getAsync(schedule.id);
       expect(updatedSchedule).toBeDefined();
       expect(updatedSchedule?.status).toBe('active');
 
@@ -233,7 +299,7 @@ describe('Scheduler Slack Output', () => {
       await store.initialize();
 
       // Create a recurring reminder with existing previousResponse
-      const schedule = store.create({
+      const schedule = await store.createAsync({
         creatorId: 'U123',
         creatorContext: 'slack:U123',
         timezone: 'UTC',
@@ -250,12 +316,12 @@ describe('Scheduler Slack Output', () => {
       });
 
       // Manually set previousResponse (simulating a prior run)
-      store.update(schedule.id, {
+      await store.updateAsync(schedule.id, {
         previousResponse: 'Previous status: 5 tasks completed, 3 pending',
       });
 
       // Re-fetch the schedule to get the updated previousResponse
-      const updatedSchedule = store.get(schedule.id)!;
+      const updatedSchedule = (await store.getAsync(schedule.id))!;
 
       // Execute the schedule with the updated version
       await (scheduler as any).executeSchedule(updatedSchedule);
@@ -289,7 +355,7 @@ describe('Scheduler Slack Output', () => {
       await store.initialize();
 
       // Create a ONE-TIME reminder
-      const schedule = store.create({
+      const schedule = await store.createAsync({
         creatorId: 'U123',
         creatorContext: 'slack:U123',
         timezone: 'UTC',
@@ -313,7 +379,7 @@ describe('Scheduler Slack Output', () => {
       expect(mockExecuteChecks).toHaveBeenCalled();
 
       // One-time schedules are deleted after execution
-      const deletedSchedule = store.get(schedule.id);
+      const deletedSchedule = await store.getAsync(schedule.id);
       expect(deletedSchedule).toBeUndefined();
     });
   });

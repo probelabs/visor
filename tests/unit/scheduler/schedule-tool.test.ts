@@ -16,10 +16,14 @@ jest.mock('../../../src/scheduler/schedule-store', () => {
     isInitialized: jest.fn().mockReturnValue(true),
     initialize: jest.fn().mockResolvedValue(undefined),
     create: jest.fn(),
+    createAsync: jest.fn(),
     get: jest.fn(),
     getByCreator: jest.fn().mockReturnValue([]),
+    getByCreatorAsync: jest.fn().mockResolvedValue([]),
     update: jest.fn(),
+    updateAsync: jest.fn(),
     delete: jest.fn(),
+    deleteAsync: jest.fn().mockResolvedValue(true),
   };
 
   return {
@@ -51,12 +55,17 @@ describe('Schedule Tool Permissions', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockStore = (ScheduleStore.getInstance as jest.Mock)();
-    mockStore.create.mockImplementation((data: any) => ({
-      id: 'test-schedule-id',
-      ...data,
-      status: 'active',
-      createdAt: Date.now(),
-    }));
+    mockStore.createAsync.mockImplementation((data: any) =>
+      Promise.resolve({
+        id: 'test-schedule-id',
+        ...data,
+        status: 'active',
+        createdAt: Date.now(),
+        runCount: 0,
+        failureCount: 0,
+      })
+    );
+    mockStore.getByCreatorAsync.mockResolvedValue([]);
   });
 
   describe('Personal schedule permissions', () => {
@@ -79,7 +88,7 @@ describe('Schedule Tool Permissions', () => {
 
       const result = await handleScheduleAction(args, context);
       expect(result.success).toBe(true);
-      expect(mockStore.create).toHaveBeenCalled();
+      expect(mockStore.createAsync).toHaveBeenCalled();
     });
 
     it('should deny personal schedule when allow_personal is false', async () => {
@@ -102,7 +111,7 @@ describe('Schedule Tool Permissions', () => {
       const result = await handleScheduleAction(args, context);
       expect(result.success).toBe(false);
       expect(result.error).toContain('Personal schedules are not allowed');
-      expect(mockStore.create).not.toHaveBeenCalled();
+      expect(mockStore.createAsync).not.toHaveBeenCalled();
     });
 
     it('should allow personal schedule when permissions not specified', async () => {
@@ -122,7 +131,7 @@ describe('Schedule Tool Permissions', () => {
 
       const result = await handleScheduleAction(args, context);
       expect(result.success).toBe(true);
-      expect(mockStore.create).toHaveBeenCalled();
+      expect(mockStore.createAsync).toHaveBeenCalled();
     });
   });
 
@@ -572,17 +581,22 @@ describe('Schedule Tool Actions', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockStore = (ScheduleStore.getInstance as jest.Mock)();
-    mockStore.create.mockImplementation((data: any) => ({
-      id: 'test-schedule-id',
-      ...data,
-      status: 'active',
-      createdAt: Date.now(),
-    }));
+    mockStore.createAsync.mockImplementation((data: any) =>
+      Promise.resolve({
+        id: 'test-schedule-id',
+        ...data,
+        status: 'active',
+        createdAt: Date.now(),
+        runCount: 0,
+        failureCount: 0,
+      })
+    );
+    mockStore.getByCreatorAsync.mockResolvedValue([]);
   });
 
   describe('list action', () => {
     it('should list user schedules', async () => {
-      mockStore.getByCreator.mockReturnValue([
+      mockStore.getByCreatorAsync.mockResolvedValue([
         {
           id: 'sched-1',
           workflow: 'daily-report',
@@ -606,11 +620,11 @@ describe('Schedule Tool Actions', () => {
 
       expect(result.success).toBe(true);
       expect(result.schedules).toHaveLength(2);
-      expect(mockStore.getByCreator).toHaveBeenCalledWith('user123');
+      expect(mockStore.getByCreatorAsync).toHaveBeenCalledWith('user123');
     });
 
     it('should return empty message when no schedules', async () => {
-      mockStore.getByCreator.mockReturnValue([]);
+      mockStore.getByCreatorAsync.mockResolvedValue([]);
 
       const result = await handleScheduleAction(
         { action: 'list' },
@@ -625,7 +639,7 @@ describe('Schedule Tool Actions', () => {
   describe('cancel action', () => {
     it('should cancel owned schedule', async () => {
       // Now we search in user's own schedules first via getByCreator
-      mockStore.getByCreator.mockReturnValue([
+      mockStore.getByCreatorAsync.mockResolvedValue([
         {
           id: 'sched-1',
           creatorId: 'user123',
@@ -639,12 +653,12 @@ describe('Schedule Tool Actions', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(mockStore.delete).toHaveBeenCalledWith('sched-1');
+      expect(mockStore.deleteAsync).toHaveBeenCalledWith('sched-1');
     });
 
     it('should reject canceling other user schedule', async () => {
       // Other user's schedule won't be in this user's getByCreator results
-      mockStore.getByCreator.mockReturnValue([]);
+      mockStore.getByCreatorAsync.mockResolvedValue([]);
 
       const result = await handleScheduleAction(
         { action: 'cancel', schedule_id: 'sched-1' },
@@ -653,12 +667,14 @@ describe('Schedule Tool Actions', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('Could not find schedule');
-      expect(mockStore.delete).not.toHaveBeenCalled();
+      expect(mockStore.deleteAsync).not.toHaveBeenCalled();
     });
 
     it('should handle partial ID match', async () => {
       mockStore.get.mockReturnValue(undefined);
-      mockStore.getByCreator.mockReturnValue([{ id: 'abcd1234-full-id', creatorId: 'user123' }]);
+      mockStore.getByCreatorAsync.mockResolvedValue([
+        { id: 'abcd1234-full-id', creatorId: 'user123' },
+      ]);
 
       const result = await handleScheduleAction(
         { action: 'cancel', schedule_id: 'abcd1234' },
@@ -672,7 +688,7 @@ describe('Schedule Tool Actions', () => {
   describe('pause/resume actions', () => {
     it('should pause schedule', async () => {
       // Now we search in user's own schedules first via getByCreator
-      mockStore.getByCreator.mockReturnValue([
+      mockStore.getByCreatorAsync.mockResolvedValue([
         {
           id: 'sched-1',
           creatorId: 'user123',
@@ -680,7 +696,7 @@ describe('Schedule Tool Actions', () => {
           status: 'active',
         },
       ]);
-      mockStore.update.mockReturnValue({
+      mockStore.updateAsync.mockResolvedValue({
         id: 'sched-1',
         creatorId: 'user123',
         workflow: 'daily-report',
@@ -693,12 +709,12 @@ describe('Schedule Tool Actions', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(mockStore.update).toHaveBeenCalledWith('sched-1', { status: 'paused' });
+      expect(mockStore.updateAsync).toHaveBeenCalledWith('sched-1', { status: 'paused' });
     });
 
     it('should resume schedule', async () => {
       // Now we search in user's own schedules first via getByCreator
-      mockStore.getByCreator.mockReturnValue([
+      mockStore.getByCreatorAsync.mockResolvedValue([
         {
           id: 'sched-1',
           creatorId: 'user123',
@@ -706,7 +722,7 @@ describe('Schedule Tool Actions', () => {
           status: 'paused',
         },
       ]);
-      mockStore.update.mockReturnValue({
+      mockStore.updateAsync.mockResolvedValue({
         id: 'sched-1',
         creatorId: 'user123',
         workflow: 'daily-report',
@@ -719,7 +735,7 @@ describe('Schedule Tool Actions', () => {
       );
 
       expect(result.success).toBe(true);
-      expect(mockStore.update).toHaveBeenCalledWith('sched-1', { status: 'active' });
+      expect(mockStore.updateAsync).toHaveBeenCalledWith('sched-1', { status: 'active' });
     });
   });
 
@@ -810,7 +826,7 @@ describe('Schedule Tool Actions', () => {
     beforeEach(() => {
       const mockStore =
         require('../../../src/scheduler/schedule-store').ScheduleStore.getInstance();
-      mockStore.getByCreator.mockReset();
+      mockStore.getByCreatorAsync.mockReset();
     });
 
     it('should filter out personal DM schedules when listing from a channel', async () => {
@@ -819,7 +835,7 @@ describe('Schedule Tool Actions', () => {
 
       // Mock schedules: one channel schedule, one personal DM schedule
       // Use longer IDs since display truncates to 8 chars
-      mockStore.getByCreator.mockReturnValue([
+      mockStore.getByCreatorAsync.mockResolvedValue([
         {
           id: 'chan1234-channel-schedule',
           creatorId: 'user123',
@@ -857,7 +873,7 @@ describe('Schedule Tool Actions', () => {
         require('../../../src/scheduler/schedule-store').ScheduleStore.getInstance();
 
       // Mock schedules: one channel schedule, one personal DM schedule
-      mockStore.getByCreator.mockReturnValue([
+      mockStore.getByCreatorAsync.mockResolvedValue([
         {
           id: 'chan1234-channel-schedule',
           creatorId: 'user123',
@@ -894,7 +910,7 @@ describe('Schedule Tool Actions', () => {
       const mockStore =
         require('../../../src/scheduler/schedule-store').ScheduleStore.getInstance();
 
-      mockStore.getByCreator.mockReturnValue([
+      mockStore.getByCreatorAsync.mockResolvedValue([
         {
           id: 'chan1234-channel-schedule',
           creatorId: 'user123',

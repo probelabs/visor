@@ -13,6 +13,8 @@ Output destinations (Slack, GitHub, webhooks) are handled by **output adapters**
 
 ## Configuration
 
+> **Storage & Cloud Databases**: For detailed database configuration (PostgreSQL, MySQL, MSSQL, SSL/TLS, connection strings, cloud provider examples), see [Scheduler Storage](scheduler-storage.md).
+
 Add scheduler settings to your `.visor.yaml`:
 
 ```yaml
@@ -392,11 +394,19 @@ This feature enables continuity for status updates, progress tracking, and any r
 src/
 ├── scheduler/                    # Generic scheduler module
 │   ├── index.ts                  # Public exports
-│   ├── schedule-store.ts         # JSON persistence for schedules
+│   ├── schedule-store.ts         # Schedule persistence facade
 │   ├── schedule-parser.ts        # Natural language parsing utilities
 │   ├── scheduler.ts              # Generic scheduler daemon
 │   ├── schedule-tool.ts          # AI tool for schedule management
-│   └── cli-handler.ts            # CLI command handlers
+│   ├── cli-handler.ts            # CLI command handlers
+│   └── store/                    # Storage backends
+│       ├── index.ts              # Backend factory
+│       ├── types.ts              # Backend interface & config types
+│       └── sqlite-store.ts       # SQLite backend (OSS)
+│
+├── enterprise/
+│   └── scheduler/
+│       └── knex-store.ts         # PostgreSQL/MySQL/MSSQL backend (Enterprise)
 │
 └── slack/
     └── slack-output-adapter.ts   # Posts results to Slack

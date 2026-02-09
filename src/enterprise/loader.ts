@@ -6,6 +6,7 @@
 
 import type { PolicyEngine, PolicyConfig } from '../policy/types';
 import { DefaultPolicyEngine } from '../policy/default-engine';
+import type { ScheduleStoreBackend, StorageConfig, HAConfig } from '../scheduler/store/types';
 
 /**
  * Load the enterprise policy engine if licensed, otherwise return the default no-op engine.
@@ -47,4 +48,40 @@ export async function loadEnterprisePolicyEngine(config: PolicyConfig): Promise<
     }
     return new DefaultPolicyEngine();
   }
+}
+
+/**
+ * Load the enterprise schedule store backend if licensed.
+ *
+ * @param driver Database driver ('postgresql', 'mysql', or 'mssql')
+ * @param storageConfig Storage configuration with connection details
+ * @param haConfig Optional HA configuration
+ * @throws Error if enterprise license is not available or missing 'scheduler-sql' feature
+ */
+export async function loadEnterpriseStoreBackend(
+  driver: 'postgresql' | 'mysql' | 'mssql',
+  storageConfig: StorageConfig,
+  haConfig?: HAConfig
+): Promise<ScheduleStoreBackend> {
+  const { LicenseValidator } = await import('./license/validator');
+  const validator = new LicenseValidator();
+  const license = await validator.loadAndValidate();
+
+  if (!license || !validator.hasFeature('scheduler-sql')) {
+    throw new Error(
+      `The ${driver} schedule storage driver requires a Visor Enterprise license ` +
+        `with the 'scheduler-sql' feature. Please upgrade or use driver: 'sqlite' (default).`
+    );
+  }
+
+  if (validator.isInGracePeriod()) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[visor:enterprise] License has expired but is within the 72-hour grace period. ' +
+        'Please renew your license.'
+    );
+  }
+
+  const { KnexStoreBackend } = await import('./scheduler/knex-store');
+  return new KnexStoreBackend(driver, storageConfig, haConfig);
 }

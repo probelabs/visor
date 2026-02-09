@@ -11,6 +11,7 @@ import { getNextRunTime } from './schedule-parser';
 import { logger } from '../logger';
 import type { VisorConfig, StaticCronJob } from '../types/config';
 import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
+import type { StorageConfig, HAConfig } from './store/types';
 
 /**
  * Context enricher interface for frontend-specific functionality
@@ -79,6 +80,10 @@ export interface SchedulerConfig {
   limits?: ScheduleLimits;
   /** Default timezone for schedules (default: UTC) */
   defaultTimezone?: string;
+  /** SQL storage configuration */
+  storage?: StorageConfig;
+  /** High-availability configuration */
+  ha?: HAConfig;
 }
 
 /**
@@ -98,14 +103,24 @@ export class Scheduler {
   private executionContext: Record<string, unknown> = {};
   private contextEnricher?: ScheduleContextEnricher;
 
+  // HA fields
+  private haConfig?: HAConfig;
+  private nodeId: string;
+  private heartbeatInterval: NodeJS.Timeout | null = null;
+  private heldLocks: Map<string, string> = new Map(); // scheduleId → lockToken
+
   constructor(visorConfig: VisorConfig, config?: SchedulerConfig) {
     this.visorConfig = visorConfig;
     this.checkIntervalMs = config?.checkIntervalMs ?? 60000;
     this.defaultTimezone = config?.defaultTimezone ?? 'UTC';
+    this.haConfig = config?.ha;
+    this.nodeId = config?.ha?.node_id || `${require('os').hostname()}-${process.pid}`;
 
-    // Initialize store
+    // Initialize store with SQL backend config
     const storeConfig: ScheduleStoreConfig = {
       path: config?.storagePath,
+      storage: config?.storage,
+      ha: config?.ha,
     };
     this.store = ScheduleStore.getInstance(storeConfig, config?.limits);
   }
@@ -176,6 +191,11 @@ export class Scheduler {
         );
       });
     }, this.checkIntervalMs);
+
+    // Start heartbeat for HA lock renewal
+    if (this.haConfig?.enabled) {
+      this.startHeartbeat();
+    }
 
     this.running = true;
     logger.info('[Scheduler] Started');
@@ -330,6 +350,18 @@ export class Scheduler {
       return;
     }
 
+    // Stop heartbeat
+    this.stopHeartbeat();
+
+    // Release all held locks
+    if (this.heldLocks.size > 0) {
+      const backend = this.store.getBackend();
+      for (const [scheduleId, lockToken] of this.heldLocks.entries()) {
+        await backend.releaseLock(scheduleId, lockToken).catch(() => {});
+      }
+      this.heldLocks.clear();
+    }
+
     // Stop the check interval
     if (this.checkInterval) {
       clearInterval(this.checkInterval);
@@ -355,6 +387,40 @@ export class Scheduler {
 
     this.running = false;
     logger.info('[Scheduler] Stopped');
+  }
+
+  /**
+   * Start the heartbeat timer for renewing HA locks
+   */
+  private startHeartbeat(): void {
+    if (this.heartbeatInterval) return;
+
+    const intervalMs = (this.haConfig?.heartbeat_interval ?? 15) * 1000;
+
+    this.heartbeatInterval = setInterval(async () => {
+      const backend = this.store.getBackend();
+      const ttl = this.haConfig?.lock_ttl ?? 60;
+
+      for (const [scheduleId, lockToken] of this.heldLocks.entries()) {
+        const renewed = await backend.renewLock(scheduleId, lockToken, ttl);
+        if (!renewed) {
+          logger.warn(`[Scheduler] Failed to renew lock for schedule ${scheduleId}, lock lost`);
+          this.heldLocks.delete(scheduleId);
+        }
+      }
+    }, intervalMs);
+
+    logger.debug(`[Scheduler] Heartbeat started (interval: ${intervalMs}ms)`);
+  }
+
+  /**
+   * Stop the heartbeat timer
+   */
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
   }
 
   /**
@@ -491,7 +557,25 @@ export class Scheduler {
         continue;
       }
 
-      await this.executeSchedule(schedule);
+      if (this.haConfig?.enabled) {
+        // HA mode: acquire lock before executing
+        const ttl = this.haConfig.lock_ttl ?? 60;
+        const backend = this.store.getBackend();
+        const lockToken = await backend.tryAcquireLock(schedule.id, this.nodeId, ttl);
+        if (!lockToken) {
+          logger.debug(`[Scheduler] Schedule ${schedule.id} locked by another node, skipping`);
+          continue;
+        }
+        this.heldLocks.set(schedule.id, lockToken);
+        try {
+          await this.executeSchedule(schedule);
+        } finally {
+          await backend.releaseLock(schedule.id, lockToken);
+          this.heldLocks.delete(schedule.id);
+        }
+      } else {
+        await this.executeSchedule(schedule);
+      }
     }
   }
 
