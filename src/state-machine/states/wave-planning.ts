@@ -153,6 +153,20 @@ export async function handleWavePlanning(
         }
       } catch {}
 
+      // Store args (if any) for passing to the target check
+      try {
+        const args = request.args as Record<string, unknown> | undefined;
+        if (args && Object.keys(args).length > 0) {
+          if (!state.pendingRunArgs) state.pendingRunArgs = new Map();
+          // Merge with existing args if any (later events override earlier)
+          const existingArgs = state.pendingRunArgs.get(target) || {};
+          state.pendingRunArgs.set(target, { ...existingArgs, ...args });
+          if (context.debug) {
+            logger.info(`[WavePlanning] Storing args for ${target}: ${JSON.stringify(args)}`);
+          }
+        }
+      } catch {}
+
       // Store event override if specified
       if (gotoEvent) {
         eventOverrides.set(target, gotoEvent);

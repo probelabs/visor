@@ -629,6 +629,7 @@ export class McpCheckProvider extends CheckProvider {
           args: config.command_args as string[] | undefined,
           env: config.env,
           cwd: config.workingDirectory,
+          stderr: 'pipe', // Prevent child stderr from corrupting TUI
         }),
       config,
       methodArgs,

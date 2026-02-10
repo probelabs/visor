@@ -61,14 +61,25 @@ export class SlackOutputAdapter implements ScheduleOutputAdapter {
       }
 
       // Post message
-      await this.client.chat.postMessage({
+      const postResult = await this.client.chat.postMessage({
         channel: targetChannel,
         text: message,
         thread_ts: outputContext.threadId,
       });
 
+      if (!postResult?.ok) {
+        logger.warn(
+          `[SlackOutputAdapter] Failed to post result for schedule ${schedule.id} to ${targetChannel} thread=${
+            outputContext.threadId || '-'
+          } error=${postResult?.error || 'unknown_error'}`
+        );
+        return;
+      }
+
       logger.debug(
-        `[SlackOutputAdapter] Posted result for schedule ${schedule.id} to ${targetChannel}`
+        `[SlackOutputAdapter] Posted result for schedule ${schedule.id} to ${targetChannel} ts=${
+          postResult.ts || '-'
+        }`
       );
     } catch (error) {
       logger.error(

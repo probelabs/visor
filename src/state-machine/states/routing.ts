@@ -13,12 +13,87 @@
 
 import type { EngineContext, RunState, EngineState, EngineEvent } from '../../types/engine';
 import type { ReviewSummary, ReviewIssue } from '../../reviewer';
-import type { CheckConfig, OnFailConfig, TransitionRule } from '../../types/config';
+import type {
+  CheckConfig,
+  OnFailConfig,
+  TransitionRule,
+  OnSuccessRunItem,
+  OnInitStepInvocation,
+  OnInitWorkflowInvocation,
+} from '../../types/config';
 import { logger } from '../../logger';
 import { addEvent } from '../../telemetry/trace-helpers';
 import { FailureConditionEvaluator } from '../../failure-condition-evaluator';
 import { createSecureSandbox, compileAndRun } from '../../utils/sandbox';
 import { MemoryStore } from '../../memory-store';
+import { createExtendedLiquid } from '../../liquid-extensions';
+
+/**
+ * Render Liquid template expressions in 'with' arguments for on_success.run.
+ * This is called during routing, where we have access to the step's output.
+ */
+async function renderRouteArgs(
+  args: Record<string, unknown> | undefined,
+  output: unknown,
+  dependencyResults: Record<string, unknown>,
+  context: EngineContext
+): Promise<Record<string, unknown> | undefined> {
+  if (!args || Object.keys(args).length === 0) {
+    return args;
+  }
+
+  const liquid = createExtendedLiquid();
+  const renderedArgs: Record<string, unknown> = {};
+
+  // Build template context with output (current step) and outputs (all dependencies)
+  const templateContext = {
+    output: output, // Output of the step that triggered routing
+    outputs: dependencyResults, // All dependency outputs
+    env: process.env,
+    inputs: (context.executionContext as any)?.workflowInputs || {},
+  };
+
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === 'string' && value.includes('{{')) {
+      try {
+        renderedArgs[key] = await liquid.parseAndRender(value, templateContext);
+      } catch (error) {
+        logger.warn(`[Routing] Failed to render template for arg ${key}: ${error}`);
+        renderedArgs[key] = value;
+      }
+    } else {
+      renderedArgs[key] = value;
+    }
+  }
+
+  return renderedArgs;
+}
+
+/**
+ * Helper to extract target name and args from an OnSuccessRunItem.
+ * OnSuccessRunItem can be:
+ * - string: plain step name
+ * - OnInitStepInvocation: { step: string, with?: Record<string, unknown> }
+ * - OnInitWorkflowInvocation: { workflow: string, with?: Record<string, unknown> }
+ */
+function parseRunItem(item: OnSuccessRunItem): {
+  target: string;
+  args?: Record<string, unknown>;
+} {
+  if (typeof item === 'string') {
+    return { target: item };
+  }
+  if ('step' in item) {
+    const stepItem = item as OnInitStepInvocation;
+    return { target: stepItem.step, args: stepItem.with };
+  }
+  if ('workflow' in item) {
+    const workflowItem = item as OnInitWorkflowInvocation;
+    return { target: workflowItem.workflow, args: workflowItem.with };
+  }
+  // Fallback - shouldn't happen with proper typing
+  return { target: String(item) };
+}
 
 /**
  * Check if any configured check depends (directly or via OR dependency) on the
@@ -401,7 +476,10 @@ async function processOnFinish(
       state
     );
 
-    for (const targetCheck of dynamicTargets) {
+    for (const runItem of dynamicTargets) {
+      // Parse the run item to extract target and optional args
+      const { target: targetCheck, args: runArgs } = parseRunItem(runItem);
+
       // Check loop budget before scheduling
       if (checkLoopBudget(context, state, 'on_finish', 'run')) {
         const errorIssue: ReviewIssue = {
@@ -417,7 +495,9 @@ async function processOnFinish(
       }
 
       if (context.debug) {
-        logger.info(`[Routing] on_finish.run_js: scheduling ${targetCheck}`);
+        logger.info(
+          `[Routing] on_finish.run_js: scheduling ${targetCheck}${runArgs ? ', args=' + JSON.stringify(runArgs) : ''}`
+        );
       }
 
       // Increment loop count
@@ -436,6 +516,7 @@ async function processOnFinish(
         target: targetCheck,
         scope,
         origin: 'run_js',
+        args: runArgs,
       });
       queuedForward = true;
     }
@@ -794,7 +875,33 @@ async function processOnSuccess(
       (result && (result as any).forEachItems) || undefined;
     const hasForEachItems = Array.isArray(resForEachItems) && resForEachItems.length > 0;
 
-    for (const targetCheck of onSuccess.run) {
+    // Get the step's output for template rendering
+    const stepOutput = (result as any)?.output;
+
+    // Build dependency results from journal for template context
+    const depResults: Record<string, unknown> = {};
+    try {
+      const snapshotId = context.journal.beginSnapshot();
+      const allEntries = context.journal.readVisible(context.sessionId, snapshotId, context.event);
+      for (const entry of allEntries) {
+        if (entry.checkId && entry.result) {
+          const r = entry.result as ReviewSummary & { output?: unknown };
+          depResults[entry.checkId] = r.output !== undefined ? r.output : r;
+        }
+      }
+    } catch (e) {
+      logger.warn(`[Routing] Failed to build dependency results for template rendering: ${e}`);
+    }
+
+    for (const runItem of onSuccess.run) {
+      // Parse the run item to extract target and optional args
+      const { target: targetCheck, args: rawArgs } = parseRunItem(runItem);
+
+      // Render Liquid templates in args if present
+      const runArgs = rawArgs
+        ? await renderRouteArgs(rawArgs, stepOutput, depResults, context)
+        : undefined;
+
       // Check loop budget before scheduling
       if (checkLoopBudget(context, state, 'on_success', 'run')) {
         // Add error issue to result
@@ -816,7 +923,7 @@ async function processOnSuccess(
 
       if (context.debug) {
         logger.info(
-          `[Routing] on_success.run: scheduling ${targetCheck} with fanout=${fanoutMode}, hasForEachItems=${hasForEachItems}`
+          `[Routing] on_success.run: scheduling ${targetCheck} with fanout=${fanoutMode}, hasForEachItems=${hasForEachItems}${runArgs ? ', args=' + JSON.stringify(runArgs) : ''}`
         );
       }
 
@@ -844,6 +951,7 @@ async function processOnSuccess(
             target: targetCheck,
             scope: itemScope,
             origin: 'run',
+            args: runArgs,
           });
         }
       } else {
@@ -864,6 +972,7 @@ async function processOnSuccess(
           target: targetCheck,
           scope,
           origin: 'run',
+          args: runArgs,
         });
       }
     }
@@ -880,7 +989,10 @@ async function processOnSuccess(
       state
     );
 
-    for (const targetCheck of dynamicTargets) {
+    for (const runItem of dynamicTargets) {
+      // Parse the run item to extract target and optional args
+      const { target: targetCheck, args: runArgs } = parseRunItem(runItem);
+
       // Check loop budget before scheduling
       if (checkLoopBudget(context, state, 'on_success', 'run')) {
         const errorIssue: ReviewIssue = {
@@ -896,7 +1008,9 @@ async function processOnSuccess(
       }
 
       if (context.debug) {
-        logger.info(`[Routing] on_success.run_js: scheduling ${targetCheck}`);
+        logger.info(
+          `[Routing] on_success.run_js: scheduling ${targetCheck}${runArgs ? ', args=' + JSON.stringify(runArgs) : ''}`
+        );
       }
 
       // Increment loop count
@@ -915,6 +1029,7 @@ async function processOnSuccess(
         target: targetCheck,
         scope,
         origin: 'run_js',
+        args: runArgs,
       });
     }
   }
@@ -1146,7 +1261,10 @@ async function processOnFail(
       state
     );
 
-    for (const targetCheck of dynamicTargets) {
+    for (const runItem of dynamicTargets) {
+      // Parse the run item to extract target and optional args
+      const { target: targetCheck, args: runArgs } = parseRunItem(runItem);
+
       // Check loop budget before scheduling
       if (checkLoopBudget(context, state, 'on_fail', 'run')) {
         const errorIssue: ReviewIssue = {
@@ -1162,7 +1280,9 @@ async function processOnFail(
       }
 
       if (context.debug) {
-        logger.info(`[Routing] on_fail.run_js: scheduling ${targetCheck}`);
+        logger.info(
+          `[Routing] on_fail.run_js: scheduling ${targetCheck}${runArgs ? ', args=' + JSON.stringify(runArgs) : ''}`
+        );
       }
 
       // Increment loop count
@@ -1182,6 +1302,7 @@ async function processOnFail(
         scope,
         origin: 'run_js',
         sourceCheck: checkId, // The failed check that triggered on_fail.run_js
+        args: runArgs,
       });
     }
   }
@@ -1360,6 +1481,19 @@ async function processOnFail(
 /**
  * Evaluate run_js expression to get dynamic check targets
  */
+/**
+ * Validate that an item is a valid OnSuccessRunItem (string or object with step/workflow)
+ */
+function isValidRunItem(item: unknown): item is OnSuccessRunItem {
+  if (typeof item === 'string' && item) return true;
+  if (typeof item === 'object' && item !== null) {
+    const obj = item as Record<string, unknown>;
+    if (typeof obj.step === 'string' && obj.step) return true;
+    if (typeof obj.workflow === 'string' && obj.workflow) return true;
+  }
+  return false;
+}
+
 async function evaluateRunJs(
   runJs: string,
   checkId: string,
@@ -1367,7 +1501,7 @@ async function evaluateRunJs(
   result: ReviewSummary,
   context: EngineContext,
   _state: RunState
-): Promise<string[]> {
+): Promise<OnSuccessRunItem[]> {
   try {
     const sandbox = createSecureSandbox();
     const historyLimit = getHistoryLimit();
@@ -1469,17 +1603,19 @@ async function evaluateRunJs(
         ${runJs}
       };
       const __res = __fn();
-      return Array.isArray(__res) ? __res.filter(x => typeof x === 'string' && x) : [];
+      // Return as-is; validation happens after sandbox execution
+      return Array.isArray(__res) ? __res : [];
     `;
 
     try {
-      const evalResult = compileAndRun<string[]>(
+      const evalResult = compileAndRun<unknown[]>(
         sandbox,
         code,
         { scope: scopeObj },
         { injectLog: false, wrapFunction: false }
       );
-      return Array.isArray(evalResult) ? evalResult.filter(Boolean) : [];
+      // Filter to valid run items (strings or objects with step/workflow)
+      return Array.isArray(evalResult) ? evalResult.filter(isValidRunItem) : [];
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       logger.error(`[Routing] Error in run_js sandbox evaluation: ${msg}`);

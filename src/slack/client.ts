@@ -59,31 +59,78 @@ export class SlackClient {
       text: string;
       thread_ts?: string;
     }) => {
-      const resp: any = await this.api('chat.postMessage', { channel, text, thread_ts });
-      if (!resp || resp.ok !== true) {
-        const err = (resp && resp.error) || 'unknown_error';
-        console.warn(`Slack chat.postMessage failed (non-fatal): ${err}`);
+      try {
+        const resp: any = await this.api('chat.postMessage', { channel, text, thread_ts });
+        if (!resp || resp.ok !== true) {
+          const err = (resp && resp.error) || 'unknown_error';
+          const warnings = Array.isArray(resp?.response_metadata?.warnings)
+            ? resp.response_metadata.warnings.join(',')
+            : '';
+          console.warn(
+            `Slack chat.postMessage failed (non-fatal): error=${err} channel=${channel} thread_ts=${
+              thread_ts || '-'
+            } text_len=${text.length}${warnings ? ` warnings=${warnings}` : ''}`
+          );
+          return {
+            ok: false as const,
+            ts: undefined,
+            message: undefined,
+            data: resp,
+            error: err,
+          };
+        }
+        // Normalize common fields for tests/frontend
         return {
+          ok: true as const,
+          ts: resp.ts || (resp.message && resp.message.ts) || undefined,
+          message: resp.message,
+          data: resp,
+          error: undefined,
+        };
+      } catch (e) {
+        console.warn(
+          `Slack chat.postMessage threw (non-fatal): channel=${channel} thread_ts=${thread_ts || '-'} text_len=${
+            text.length
+          } error=${e instanceof Error ? e.message : String(e)}`
+        );
+        return {
+          ok: false as const,
           ts: undefined,
           message: undefined,
-          data: resp,
+          data: undefined,
+          error: e instanceof Error ? e.message : String(e),
         };
       }
-      // Normalize common fields for tests/frontend
-      return {
-        ts: resp.ts || (resp.message && resp.message.ts) || undefined,
-        message: resp.message,
-        data: resp,
-      };
     },
     update: async ({ channel, ts, text }: { channel: string; ts: string; text: string }) => {
-      const resp: any = await this.api('chat.update', { channel, ts, text });
-      if (!resp || resp.ok !== true) {
-        const err = (resp && resp.error) || 'unknown_error';
-        console.warn(`Slack chat.update failed (non-fatal): ${err}`);
-        return { ok: false as const, ts };
+      try {
+        const resp: any = await this.api('chat.update', { channel, ts, text });
+        if (!resp || resp.ok !== true) {
+          const err = (resp && resp.error) || 'unknown_error';
+          const warnings = Array.isArray(resp?.response_metadata?.warnings)
+            ? resp.response_metadata.warnings.join(',')
+            : '';
+          console.warn(
+            `Slack chat.update failed (non-fatal): error=${err} channel=${channel} ts=${ts} text_len=${
+              text.length
+            }${warnings ? ` warnings=${warnings}` : ''}`
+          );
+          return { ok: false as const, ts, error: err, data: resp };
+        }
+        return { ok: true as const, ts: resp.ts || ts, error: undefined, data: resp };
+      } catch (e) {
+        console.warn(
+          `Slack chat.update threw (non-fatal): channel=${channel} ts=${ts} text_len=${text.length} error=${
+            e instanceof Error ? e.message : String(e)
+          }`
+        );
+        return {
+          ok: false as const,
+          ts,
+          error: e instanceof Error ? e.message : String(e),
+          data: undefined,
+        };
       }
-      return { ok: true as const, ts: resp.ts || ts };
     },
   };
 

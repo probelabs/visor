@@ -34,6 +34,47 @@ import { FailureConditionEvaluator } from '../../failure-condition-evaluator';
 import { resolveWorkflowInputs } from '../context/workflow-inputs';
 import { executeWithSandboxRouting } from '../dispatch/sandbox-routing';
 import { applyPolicyGate } from '../dispatch/policy-gate';
+import { createExtendedLiquid } from '../../liquid-extensions';
+
+/**
+ * Render Liquid template expressions in 'with' arguments.
+ * This is used to process args from on_success.run with directives.
+ */
+async function renderTemplateArgs(
+  args: Record<string, unknown> | undefined,
+  dependencyResults: Record<string, unknown>,
+  context: EngineContext
+): Promise<Record<string, unknown> | undefined> {
+  if (!args || Object.keys(args).length === 0) {
+    return args;
+  }
+
+  const liquid = createExtendedLiquid();
+  const renderedArgs: Record<string, unknown> = {};
+
+  // Build template context with outputs
+  const templateContext = {
+    outputs: dependencyResults,
+    output: dependencyResults, // Alias for convenience
+    env: process.env,
+    inputs: (context.executionContext as any)?.workflowInputs || {},
+  };
+
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === 'string' && value.includes('{{')) {
+      try {
+        renderedArgs[key] = await liquid.parseAndRender(value, templateContext);
+      } catch (error) {
+        logger.warn(`[LevelDispatch] Failed to render template for arg ${key}: ${error}`);
+        renderedArgs[key] = value;
+      }
+    } else {
+      renderedArgs[key] = value;
+    }
+  }
+
+  return renderedArgs;
+}
 
 /**
  * Map check name to focus for AI provider
@@ -479,9 +520,10 @@ async function executeCheckGroup(
         for (const sc of scopedRuns) {
           await runOnce(sc);
         }
-        // Clear consumed scopes
+        // Clear consumed scopes and args
         try {
           state.pendingRunScopes?.delete(checkId);
+          state.pendingRunArgs?.delete(checkId);
         } catch {}
       } else {
         await runOnce();
@@ -886,12 +928,26 @@ async function executeCheckWithForEachItems(
         commits: [],
       };
 
-      // Build execution context
+      // Build execution context with optional args from on_success.run with directives
+      // Render any Liquid templates in pending args using the dependency outputs
+      const rawPendingArgs = state.pendingRunArgs?.get(checkId);
+      const depResultsObj: Record<string, unknown> = {};
+      for (const [k, v] of dependencyResults.entries()) {
+        const summary = v as ReviewSummary & { output?: unknown };
+        depResultsObj[k] = summary.output !== undefined ? summary.output : summary;
+      }
+      const renderedArgs = rawPendingArgs
+        ? await renderTemplateArgs(rawPendingArgs, depResultsObj, context)
+        : undefined;
       const executionContext = {
         ...context.executionContext,
         _engineMode: context.mode,
         _parentContext: context,
         _parentState: state,
+        // Inject args from on_success.run with directives (merged with existing args)
+        args: renderedArgs
+          ? { ...((context.executionContext as any)?.args || {}), ...renderedArgs }
+          : (context.executionContext as any)?.args,
       };
 
       // Evaluate assume contract for this iteration (design-by-contract)
@@ -902,11 +958,10 @@ async function executeCheckWithForEachItems(
           try {
             const evaluator = new FailureConditionEvaluator();
             const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
-            // Get conversation from execution context (TUI/CLI/Slack)
-            const conversation = (context.executionContext as any)?.conversation;
-            logger.info(
-              `[assume] check=${checkId} hasExecCtx=${!!context.executionContext} hasConv=${!!conversation}`
-            );
+            // Get conversation from execution context (TUI/CLI) or provider event context (Slack)
+            const conversation =
+              (context.executionContext as any)?.conversation ||
+              (providerConfig as any)?.eventContext?.conversation;
             for (const ex of exprs) {
               const res = await evaluator.evaluateIfCondition(checkId, ex, {
                 event: context.event || 'manual',
@@ -2245,6 +2300,17 @@ async function executeSingleCheck(
     };
 
     // Build execution context with engine mode and parent context (M3: nested workflows)
+    // Also inject args from on_success.run with directives if present
+    // Render any Liquid templates in pending args using the dependency outputs
+    const rawPendingArgs = state.pendingRunArgs?.get(checkId);
+    const depResultsObj: Record<string, unknown> = {};
+    for (const [k, v] of dependencyResults.entries()) {
+      const summary = v as ReviewSummary & { output?: unknown };
+      depResultsObj[k] = summary.output !== undefined ? summary.output : summary;
+    }
+    const renderedArgs = rawPendingArgs
+      ? await renderTemplateArgs(rawPendingArgs, depResultsObj, context)
+      : undefined;
     const executionContext = {
       ...context.executionContext,
       _engineMode: context.mode,
@@ -2252,6 +2318,10 @@ async function executeSingleCheck(
       _parentState: state,
       // Make checks metadata available to providers that want it
       checksMeta,
+      // Inject args from on_success.run with directives (merged with existing args)
+      args: renderedArgs
+        ? { ...((context.executionContext as any)?.args || {}), ...renderedArgs }
+        : (context.executionContext as any)?.args,
     };
 
     // Evaluate assume contract (design-by-contract) before executing
@@ -2262,13 +2332,10 @@ async function executeSingleCheck(
         try {
           const evaluator = new FailureConditionEvaluator();
           const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
-          // Get conversation from execution context (TUI/CLI/Slack)
-          const conversation = (context.executionContext as any)?.conversation;
-          if (process.env.VISOR_DEBUG === 'true') {
-            logger.debug(
-              `[assume] check=${checkId} hasExecCtx=${!!context.executionContext} hasConv=${!!conversation} convText=${conversation?.current?.text?.substring(0, 30) ?? 'N/A'}`
-            );
-          }
+          // Get conversation from execution context (TUI/CLI) or provider event context (Slack)
+          const conversation =
+            (context.executionContext as any)?.conversation ||
+            (providerConfig as any)?.eventContext?.conversation;
           for (const ex of exprs) {
             const res = await evaluator.evaluateIfCondition(checkId, ex, {
               event: context.event || 'manual',

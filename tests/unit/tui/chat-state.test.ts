@@ -115,7 +115,7 @@ describe('ChatStateManager', () => {
     it('should format message for display', () => {
       const msg = manager.addMessage('user', 'Test message');
       const formatted = manager.formatMessageForDisplay(msg);
-      expect(formatted).toContain('You:');
+      expect(formatted).toContain('> You');
       expect(formatted).toContain('Test message');
     });
 
@@ -123,8 +123,8 @@ describe('ChatStateManager', () => {
       manager.addMessage('user', 'Hello');
       manager.addMessage('assistant', 'Hi there');
       const formatted = manager.formatHistoryForDisplay();
-      expect(formatted).toContain('You:');
-      expect(formatted).toContain('Assistant:');
+      expect(formatted).toContain('> You');
+      expect(formatted).toContain('Assistant');
     });
 
     it('should show placeholder when history is empty', () => {

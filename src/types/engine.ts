@@ -58,6 +58,8 @@ export type EngineEvent =
       origin?: 'run' | 'goto' | 'run_js' | 'goto_js';
       /** The source check that triggered this forward-run (for on_fail.run, this is the failed check) */
       sourceCheck?: string;
+      /** Arguments to pass to the target check (from on_success.run with 'with' directive) */
+      args?: Record<string, unknown>;
     }
   | { type: 'WaveRetry'; reason: 'on_fail' | 'on_finish' | 'external' }
   | { type: 'StateTransition'; from: EngineState; to: EngineState }
@@ -161,6 +163,8 @@ export interface RunState {
   currentLevelChecks: Set<string>;
   // Optional per-check scopes for the next wave (from ForwardRunRequested events)
   pendingRunScopes?: Map<string, ScopePath[]>;
+  // Optional per-check args for the next wave (from ForwardRunRequested events with 'with' directive)
+  pendingRunArgs?: Map<string, Record<string, unknown>>;
   // Parent context for nested workflows
   parentScope?: ScopePath;
   parentContext?: EngineContext;

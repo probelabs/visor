@@ -143,13 +143,34 @@ export class ChatStateManager {
       second: '2-digit',
     });
 
-    const roleLabel = message.role === 'user' ? 'You' : 'Assistant';
-    return `${roleLabel}: [${time}]\n${message.content}`;
+    const content = this.escapeTags(message.content);
+
+    if (message.role === 'user') {
+      const header = `{black-bg}{bold} > You {/bold}[${time}]{/black-bg}`;
+      const body = content
+        .split('\n')
+        .map((l: string) => `{black-bg} ${l} {/black-bg}`)
+        .join('\n');
+      return `${header}\n${body}`;
+    }
+
+    if (message.role === 'assistant') {
+      const header = `{bold}{green-fg}●{/green-fg} Assistant{/bold} {gray-fg}[${time}]{/gray-fg}`;
+      return `${header}\n${content}`;
+    }
+
+    // System/Visor messages: gray and subdued
+    const header = `{gray-fg}⊘ Visor [${time}]`;
+    return `${header}\n${content}{/gray-fg}`;
+  }
+
+  private escapeTags(text: string): string {
+    return text.replace(/\{/g, '\\{');
   }
 
   formatHistoryForDisplay(): string {
     if (this._history.length === 0) {
-      return 'No messages yet. Type a message to start...';
+      return '{gray-fg}No messages yet. Type a message to start...{/gray-fg}';
     }
 
     const separator = '\n\n';

@@ -268,7 +268,16 @@ export class SlackFrontend implements Frontend {
     const ev: any = payload?.event;
     const channel = String(ev?.channel || '');
     const threadTs = String(ev?.thread_ts || ev?.ts || ev?.event_ts || '');
-    if (!channel || !threadTs) return;
+    if (!channel || !threadTs) {
+      try {
+        ctx.logger.warn(
+          `[slack-frontend] skip posting error notice: missing channel/thread (channel=${
+            channel || '-'
+          } thread=${threadTs || '-'})`
+        );
+      } catch {}
+      return;
+    }
 
     let text = `❌ ${title}`;
     if (checkId) text += `\nCheck: ${checkId}`;
@@ -282,7 +291,21 @@ export class SlackFrontend implements Frontend {
     }
 
     const formattedText = formatSlackText(text);
-    await slack.chat.postMessage({ channel, text: formattedText, thread_ts: threadTs });
+    const postResult = await slack.chat.postMessage({
+      channel,
+      text: formattedText,
+      thread_ts: threadTs,
+    });
+    if (!postResult?.ok) {
+      try {
+        ctx.logger.warn(
+          `[slack-frontend] failed to post error notice to ${channel} thread=${threadTs} check=${
+            checkId || 'run'
+          } error=${postResult?.error || 'unknown_error'}`
+        );
+      } catch {}
+      return;
+    }
     try {
       ctx.logger.info(
         `[slack-frontend] posted error notice to ${channel} thread=${threadTs} check=${checkId || 'run'}`
@@ -448,7 +471,14 @@ export class SlackFrontend implements Frontend {
       const ev: any = payload?.event;
       const channel = String(ev?.channel || '');
       const threadTs = String(ev?.thread_ts || ev?.ts || ev?.event_ts || '');
-      if (!channel || !threadTs) return;
+      if (!channel || !threadTs) {
+        ctx.logger.warn(
+          `[slack-frontend] skip posting AI reply for ${checkId}: missing channel/thread (channel=${
+            channel || '-'
+          } thread=${threadTs || '-'})`
+        );
+        return;
+      }
 
       // Prefer output.text; fall back to content ONLY for string/simple schemas.
       const out: any = (result as any)?.output;
@@ -476,7 +506,12 @@ export class SlackFrontend implements Frontend {
           text = String(out);
         }
       }
-      if (!text) return;
+      if (!text) {
+        ctx.logger.info(
+          `[slack-frontend] skip posting AI reply for ${checkId}: no renderable text in check output`
+        );
+        return;
+      }
 
       // Extract and render mermaid diagrams before posting
       const diagrams = extractMermaidDiagrams(text);
@@ -549,9 +584,23 @@ export class SlackFrontend implements Frontend {
       }
 
       const formattedText = formatSlackText(decoratedText);
-      await slack.chat.postMessage({ channel, text: formattedText, thread_ts: threadTs });
+      const postResult = await slack.chat.postMessage({
+        channel,
+        text: formattedText,
+        thread_ts: threadTs,
+      });
+      if (!postResult?.ok) {
+        ctx.logger.warn(
+          `[slack-frontend] failed to post AI reply for ${checkId} to ${channel} thread=${threadTs} error=${
+            postResult?.error || 'unknown_error'
+          }`
+        );
+        return;
+      }
       ctx.logger.info(
-        `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs}`
+        `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs} ts=${
+          postResult.ts || '-'
+        }`
       );
 
       // Capture response for scheduled reminders (allows storing previousResponse)

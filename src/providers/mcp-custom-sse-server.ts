@@ -567,12 +567,16 @@ export class CustomToolsSSEServer implements CustomMCPServer {
           );
         }
 
-        await this.handleMCPMessage(connection!, message);
-
-        // Acknowledge the POST request
+        // Send 202 response BEFORE handling the message. Tool execution
+        // (e.g. engineer workflow running claude -p) can take many minutes.
+        // If we await handleMCPMessage first, undici's headersTimeout (300s
+        // default) kills the POST fetch on the client side with "fetch failed".
         this.handleCORS(res);
         res.writeHead(202, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'accepted' }));
+
+        // Handle the MCP message asynchronously (tool results sent via SSE)
+        await this.handleMCPMessage(connection!, message);
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
         if (this.debug) {
@@ -582,8 +586,11 @@ export class CustomToolsSSEServer implements CustomMCPServer {
         }
         this.sendErrorResponse(connection!, null, -32700, 'Parse error', { error: errorMsg });
 
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Parse error', details: errorMsg }));
+        // Only send error response if headers haven't been sent yet
+        if (!res.headersSent) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Parse error', details: errorMsg }));
+        }
       }
     });
   }
