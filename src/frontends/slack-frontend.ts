@@ -50,6 +50,7 @@ export class SlackFrontend implements Frontend {
   private ackName: string = 'eyes';
   private doneName: string = 'thumbsup';
   private errorNotified: boolean = false;
+  private cachedTraceInfo: { traceId: string; spanId: string } | null = null;
 
   constructor(config?: SlackFrontendConfig) {
     this.cfg = config || {};
@@ -57,6 +58,19 @@ export class SlackFrontend implements Frontend {
 
   start(ctx: FrontendContext): void {
     const bus = ctx.eventBus;
+
+    // Capture trace info now while the OTel span may still be active.
+    // EventBus handlers run in a different async context where the span is lost.
+    if (!this.cachedTraceInfo) {
+      this.cachedTraceInfo = this.getTraceInfo();
+    }
+    // Also check ctx.run.traceId which is injected by the execution engine
+    if (!this.cachedTraceInfo) {
+      const runTraceId = (ctx as any)?.run?.traceId;
+      if (typeof runTraceId === 'string' && runTraceId) {
+        this.cachedTraceInfo = { traceId: runTraceId, spanId: '' };
+      }
+    }
 
     // Info-level boot log
     try {
@@ -284,7 +298,7 @@ export class SlackFrontend implements Frontend {
     if (message) text += `\n${message}`;
 
     if (this.isTelemetryEnabled(ctx)) {
-      const traceInfo = this.getTraceInfo();
+      const traceInfo = this.getTraceInfo() || this.cachedTraceInfo;
       if (traceInfo?.traceId) {
         text += `\n\n\`trace_id: ${traceInfo.traceId}\``;
       }
@@ -392,6 +406,10 @@ export class SlackFrontend implements Frontend {
     } catch {}
     this.acked = true;
     this.ackRef = ref;
+    // Capture trace info while span is active (event handlers lose OTel context)
+    if (!this.cachedTraceInfo) {
+      this.cachedTraceInfo = this.getTraceInfo();
+    }
   }
 
   private async finalizeReactions(ctx: FrontendContext): Promise<void> {
@@ -448,7 +466,10 @@ export class SlackFrontend implements Frontend {
       const providerType = (checkCfg.type as string) || '';
       const isAi = providerType === 'ai';
       const isLogChat = providerType === 'log' && checkCfg.group === 'chat';
-      if (!isAi && !isLogChat) return;
+      const isWorkflow = providerType === 'workflow';
+
+      // Allow ai, log-chat, and workflow types; skip everything else
+      if (!isAi && !isLogChat && !isWorkflow) return;
 
       // Skip internal steps - they're intermediate processing and shouldn't post to Slack
       if (checkCfg.criticality === 'internal') return;
@@ -576,7 +597,7 @@ export class SlackFrontend implements Frontend {
         telemetryCfg === true ||
         (telemetryCfg && typeof telemetryCfg === 'object' && telemetryCfg.enabled === true);
       if (telemetryEnabled) {
-        const traceInfo = this.getTraceInfo();
+        const traceInfo = this.getTraceInfo() || this.cachedTraceInfo;
         if (traceInfo?.traceId) {
           const suffix = `\`trace_id: ${traceInfo.traceId}\``;
           decoratedText = `${decoratedText}\n\n${suffix}`;

@@ -441,6 +441,14 @@ export class StateMachineExecutionEngine {
           } catch {}
         } catch {}
 
+        // Capture trace info while the OTel span is active (before async event handlers lose context)
+        let runTraceId: string | undefined;
+        try {
+          const { trace: lazyTrace, context: lazyCtx } = await import('./telemetry/lazy-otel');
+          const activeSpan = lazyTrace.getSpan(lazyCtx.active());
+          runTraceId = activeSpan?.spanContext()?.traceId;
+        } catch {}
+
         await frontendsHost.startAll(() => ({
           eventBus: bus,
           logger,
@@ -451,6 +459,7 @@ export class StateMachineExecutionEngine {
             repo: repoObj,
             pr: prNum,
             headSha,
+            traceId: runTraceId,
             event: (context as any).event || (prInfo as any)?.eventType,
             actor:
               (prInfo as any)?.eventContext?.sender?.login ||
@@ -1282,6 +1291,14 @@ export async function resumeFromSnapshot(
         } catch {}
       } catch {}
 
+      // Capture trace info while the OTel span is active
+      let resumeTraceId: string | undefined;
+      try {
+        const { trace: lazyTrace, context: lazyCtx } = await import('./telemetry/lazy-otel');
+        const activeSpan = lazyTrace.getSpan(lazyCtx.active());
+        resumeTraceId = activeSpan?.spanContext()?.traceId;
+      } catch {}
+
       await frontendsHost.startAll(() => ({
         eventBus: bus,
         logger,
@@ -1292,6 +1309,7 @@ export async function resumeFromSnapshot(
           repo: repoObj,
           pr: prNum,
           headSha,
+          traceId: resumeTraceId,
           event: (context as any).event || (prInfo as any)?.eventType,
           actor:
             (prInfo as any)?.eventContext?.sender?.login ||
