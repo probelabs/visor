@@ -77,8 +77,14 @@ export class FlowStage {
 
     // Hook execution context for prompts and mocks, preserving existing context and octokit
     const prevCtx: any = (this.engine as any).executionContext || {};
+    // Support injecting execution_context from stage config (e.g., conversation for CLI --message simulation)
+    const stageExecCtx =
+      typeof stage.execution_context === 'object' && stage.execution_context
+        ? stage.execution_context
+        : {};
     this.engine.setExecutionContext({
       ...prevCtx,
+      ...stageExecCtx,
       hooks: {
         onPromptCaptured: (info: { step: string; provider: string; prompt: string }) => {
           const k = info.step;

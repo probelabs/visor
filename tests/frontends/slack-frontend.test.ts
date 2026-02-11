@@ -94,6 +94,42 @@ describe('SlackFrontend (event-bus)', () => {
     expect(slack.chat.postMessage).not.toHaveBeenCalled();
   });
 
+  test('posts reply for workflow checks with output.text', async () => {
+    const bus = new EventBus();
+    const slack = makeFakeSlack();
+    const fe = new SlackFrontend({ defaultChannel: 'C1', debounceMs: 0 });
+    const map = new Map<string, unknown>();
+    map.set('/bots/slack/support', {
+      event: { type: 'app_mention', channel: 'C1', ts: '777.1', text: 'hello' },
+    });
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: {
+        slack: { endpoint: '/bots/slack/support' },
+        checks: {
+          chat: { type: 'workflow', workflow: 'assistant' },
+        },
+      },
+      run: { runId: 'r4' },
+      webhookContext: { webhookData: map },
+    } as any);
+    (fe as any).getSlack = () => slack;
+
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'chat',
+      scope: [],
+      result: { issues: [], output: { text: 'AI response here', intent: 'chat' } },
+    });
+
+    expect(slack.chat.postMessage).toHaveBeenCalledTimes(1);
+    const [req] = slack.chat.postMessage.mock.calls[0];
+    expect(req.channel).toBe('C1');
+    expect(req.thread_ts).toBe('777.1');
+    expect(req.text).toBe('AI response here');
+  });
+
   test('posts error notice for execution failures on completed checks', async () => {
     const bus = new EventBus();
     const slack = makeFakeSlack();

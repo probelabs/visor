@@ -50,6 +50,7 @@ export class SlackFrontend implements Frontend {
   private ackName: string = 'eyes';
   private doneName: string = 'thumbsup';
   private errorNotified: boolean = false;
+  private cachedTraceInfo: { traceId: string; spanId: string } | null = null;
 
   constructor(config?: SlackFrontendConfig) {
     this.cfg = config || {};
@@ -57,6 +58,19 @@ export class SlackFrontend implements Frontend {
 
   start(ctx: FrontendContext): void {
     const bus = ctx.eventBus;
+
+    // Capture trace info now while the OTel span may still be active.
+    // EventBus handlers run in a different async context where the span is lost.
+    if (!this.cachedTraceInfo) {
+      this.cachedTraceInfo = this.getTraceInfo();
+    }
+    // Also check ctx.run.traceId which is injected by the execution engine
+    if (!this.cachedTraceInfo) {
+      const runTraceId = (ctx as any)?.run?.traceId;
+      if (typeof runTraceId === 'string' && runTraceId) {
+        this.cachedTraceInfo = { traceId: runTraceId, spanId: '' };
+      }
+    }
 
     // Info-level boot log
     try {
@@ -268,21 +282,44 @@ export class SlackFrontend implements Frontend {
     const ev: any = payload?.event;
     const channel = String(ev?.channel || '');
     const threadTs = String(ev?.thread_ts || ev?.ts || ev?.event_ts || '');
-    if (!channel || !threadTs) return;
+    if (!channel || !threadTs) {
+      try {
+        ctx.logger.warn(
+          `[slack-frontend] skip posting error notice: missing channel/thread (channel=${
+            channel || '-'
+          } thread=${threadTs || '-'})`
+        );
+      } catch {}
+      return;
+    }
 
     let text = `❌ ${title}`;
     if (checkId) text += `\nCheck: ${checkId}`;
     if (message) text += `\n${message}`;
 
     if (this.isTelemetryEnabled(ctx)) {
-      const traceInfo = this.getTraceInfo();
+      const traceInfo = this.getTraceInfo() || this.cachedTraceInfo;
       if (traceInfo?.traceId) {
         text += `\n\n\`trace_id: ${traceInfo.traceId}\``;
       }
     }
 
     const formattedText = formatSlackText(text);
-    await slack.chat.postMessage({ channel, text: formattedText, thread_ts: threadTs });
+    const postResult = await slack.chat.postMessage({
+      channel,
+      text: formattedText,
+      thread_ts: threadTs,
+    });
+    if (!postResult?.ok) {
+      try {
+        ctx.logger.warn(
+          `[slack-frontend] failed to post error notice to ${channel} thread=${threadTs} check=${
+            checkId || 'run'
+          } error=${postResult?.error || 'unknown_error'}`
+        );
+      } catch {}
+      return;
+    }
     try {
       ctx.logger.info(
         `[slack-frontend] posted error notice to ${channel} thread=${threadTs} check=${checkId || 'run'}`
@@ -369,6 +406,10 @@ export class SlackFrontend implements Frontend {
     } catch {}
     this.acked = true;
     this.ackRef = ref;
+    // Capture trace info while span is active (event handlers lose OTel context)
+    if (!this.cachedTraceInfo) {
+      this.cachedTraceInfo = this.getTraceInfo();
+    }
   }
 
   private async finalizeReactions(ctx: FrontendContext): Promise<void> {
@@ -425,7 +466,10 @@ export class SlackFrontend implements Frontend {
       const providerType = (checkCfg.type as string) || '';
       const isAi = providerType === 'ai';
       const isLogChat = providerType === 'log' && checkCfg.group === 'chat';
-      if (!isAi && !isLogChat) return;
+      const isWorkflow = providerType === 'workflow';
+
+      // Allow ai, log-chat, and workflow types; skip everything else
+      if (!isAi && !isLogChat && !isWorkflow) return;
 
       // Skip internal steps - they're intermediate processing and shouldn't post to Slack
       if (checkCfg.criticality === 'internal') return;
@@ -448,7 +492,14 @@ export class SlackFrontend implements Frontend {
       const ev: any = payload?.event;
       const channel = String(ev?.channel || '');
       const threadTs = String(ev?.thread_ts || ev?.ts || ev?.event_ts || '');
-      if (!channel || !threadTs) return;
+      if (!channel || !threadTs) {
+        ctx.logger.warn(
+          `[slack-frontend] skip posting AI reply for ${checkId}: missing channel/thread (channel=${
+            channel || '-'
+          } thread=${threadTs || '-'})`
+        );
+        return;
+      }
 
       // Prefer output.text; fall back to content ONLY for string/simple schemas.
       const out: any = (result as any)?.output;
@@ -476,7 +527,12 @@ export class SlackFrontend implements Frontend {
           text = String(out);
         }
       }
-      if (!text) return;
+      if (!text) {
+        ctx.logger.info(
+          `[slack-frontend] skip posting AI reply for ${checkId}: no renderable text in check output`
+        );
+        return;
+      }
 
       // Extract and render mermaid diagrams before posting
       const diagrams = extractMermaidDiagrams(text);
@@ -541,7 +597,7 @@ export class SlackFrontend implements Frontend {
         telemetryCfg === true ||
         (telemetryCfg && typeof telemetryCfg === 'object' && telemetryCfg.enabled === true);
       if (telemetryEnabled) {
-        const traceInfo = this.getTraceInfo();
+        const traceInfo = this.getTraceInfo() || this.cachedTraceInfo;
         if (traceInfo?.traceId) {
           const suffix = `\`trace_id: ${traceInfo.traceId}\``;
           decoratedText = `${decoratedText}\n\n${suffix}`;
@@ -549,9 +605,23 @@ export class SlackFrontend implements Frontend {
       }
 
       const formattedText = formatSlackText(decoratedText);
-      await slack.chat.postMessage({ channel, text: formattedText, thread_ts: threadTs });
+      const postResult = await slack.chat.postMessage({
+        channel,
+        text: formattedText,
+        thread_ts: threadTs,
+      });
+      if (!postResult?.ok) {
+        ctx.logger.warn(
+          `[slack-frontend] failed to post AI reply for ${checkId} to ${channel} thread=${threadTs} error=${
+            postResult?.error || 'unknown_error'
+          }`
+        );
+        return;
+      }
       ctx.logger.info(
-        `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs}`
+        `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs} ts=${
+          postResult.ts || '-'
+        }`
       );
 
       // Capture response for scheduled reminders (allows storing previousResponse)

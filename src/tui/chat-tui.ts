@@ -84,8 +84,6 @@ export class ChatTUI {
   private chatBox?: ChatBox;
   private inputBar?: InputBar;
   private statusBar?: StatusBar;
-  private logsStatusBar?: StatusBar;
-  private tracesStatusBar?: StatusBar;
   private logsBox?: Log;
   private traceViewer?: TraceViewer;
   private activeTab: 'chat' | 'logs' | 'traces' = 'chat';
@@ -102,6 +100,7 @@ export class ChatTUI {
 
   private pendingLogs: string[] = [];
   private running = false;
+  private mouseEnabled = true; // Mouse enabled for scrolling, hold Shift to select text
 
   constructor(options: ChatTUIOptions = {}) {
     this.stateManager = options.stateManager ?? new ChatStateManager();
@@ -164,7 +163,7 @@ export class ChatTUI {
       parent: this.mainPane,
     });
 
-    // Create input bar
+    // Create input bar (with resize callback to adjust chat box height)
     this.inputBar = new InputBar({
       parent: this.mainPane,
       onSubmit: (value: string) => this.handleInputSubmit(value),
@@ -178,11 +177,11 @@ export class ChatTUI {
           process.exit(0);
         }
       },
-    });
-
-    // Create status bar
-    this.statusBar = new StatusBar({
-      parent: this.mainPane,
+      onResize: (height: number) => {
+        // Adjust chat box height: screen height - inputBar height - status bar (1)
+        this.chatBox?.setHeight(`100%-${height + 1}`);
+        this.screen?.render();
+      },
     });
 
     // Create logs box (leave room for status bar at bottom)
@@ -192,8 +191,6 @@ export class ChatTUI {
       left: 0,
       width: '100%',
       height: '100%-1',
-      label: ' Logs ',
-      border: { type: 'line' },
       scrollable: true,
       alwaysScroll: true,
       mouse: true,
@@ -204,20 +201,15 @@ export class ChatTUI {
       },
     });
 
-    // Create status bar for logs pane
-    this.logsStatusBar = new StatusBar({
-      parent: this.logsPane,
-    });
-
     // Create trace viewer (leave room for status bar at bottom)
     this.traceViewer = new TraceViewer({
       parent: this.tracesPane!,
       traceFilePath: this.traceFilePath,
     });
 
-    // Create status bar for traces pane
-    this.tracesStatusBar = new StatusBar({
-      parent: this.tracesPane,
+    // Create single screen-level status bar (visible across all panes)
+    this.statusBar = new StatusBar({
+      parent: this.screen,
     });
 
     // Start watching the trace file if path is provided
@@ -253,11 +245,8 @@ export class ChatTUI {
   private setupKeyBindings(): void {
     if (!this.screen) return;
 
-    // Tab switching (Shift+Tab to cycle, number keys for direct access)
+    // Tab switching (Shift+Tab to cycle)
     this.screen.key(['S-tab'], () => this.toggleTab());
-    this.screen.key(['1'], () => this.setActiveTab('chat'));
-    this.screen.key(['2'], () => this.setActiveTab('logs'));
-    this.screen.key(['3'], () => this.setActiveTab('traces'));
 
     // Trace viewer controls (only active when on traces tab)
     this.screen.key(['e'], () => {
@@ -284,22 +273,39 @@ export class ChatTUI {
       process.exit(0);
     });
 
+    // Toggle mouse mode (m) - allows text selection when disabled
+    this.screen.key(['m'], () => {
+      this.toggleMouseMode();
+    });
+
     // Screen resize
     this.screen.on('resize', () => {
       this.updateLayout();
       this.updateStatusBar();
       this.screen?.render();
     });
+
+    // Re-focus input on any click within the main pane
+    this.mainPane?.on('click', () => {
+      if (this.activeTab === 'chat' && this.inputBar && !this.running) {
+        this.inputBar.focus();
+      }
+    });
   }
 
   stop(): void {
-    if (this.consoleRestore) {
-      this.consoleRestore();
-      this.consoleRestore = undefined;
-    }
     if (this.processExitHandler) {
       process.removeListener('exit', this.processExitHandler);
       this.processExitHandler = undefined;
+    }
+    // Clean up chat box progress timer
+    if (this.chatBox) {
+      this.chatBox.hideProgress();
+    }
+    // Clean up status bar
+    if (this.statusBar) {
+      this.statusBar.destroy();
+      this.statusBar = undefined;
     }
     // Clean up trace viewer to stop file watching
     if (this.traceViewer) {
@@ -316,13 +322,36 @@ export class ChatTUI {
       try {
         this.screen.destroy();
       } catch {
-        // Blessed may throw during cleanup — ensure program cleanup still runs
         try {
           program?.destroy();
         } catch {}
       }
       this.screen = undefined;
     }
+
+    // Restore console AFTER screen.destroy() so blessed's cleanup
+    // writes (which go through our patched program._owrite → original
+    // stdout) still work during destroy.
+    if (this.consoleRestore) {
+      this.consoleRestore();
+      this.consoleRestore = undefined;
+    }
+
+    // Write reset sequences directly to fd — at this point stdout.write
+    // is restored to the original, so this is safe and guaranteed to
+    // reach the terminal regardless of any remaining blessed state.
+    const reset =
+      '\x1b[?1000l' + // Disable normal mouse tracking
+      '\x1b[?1002l' + // Disable button-event mouse tracking
+      '\x1b[?1003l' + // Disable any-event mouse tracking
+      '\x1b[?1006l' + // Disable SGR extended mouse mode
+      '\x1b[?1049l' + // Exit alternate screen buffer
+      '\x1b[?25h' + // Show cursor
+      '\x1b[0m' + // Reset SGR attributes
+      '\x1bc'; // Full terminal reset (RIS)
+    try {
+      process.stdout.write(reset);
+    } catch {}
   }
 
   setRunning(running: boolean): void {
@@ -330,12 +359,35 @@ export class ChatTUI {
     if (running) {
       this.statusBar?.setMode('processing');
       this.inputBar?.disable();
+      this.chatBox?.showProgress();
     } else {
       this.statusBar?.setMode('ready');
+      this.chatBox?.hideProgress();
       this.inputBar?.enable();
       this.inputBar?.focus();
     }
     this.updateStatusBar();
+  }
+
+  private toggleMouseMode(): void {
+    this.mouseEnabled = !this.mouseEnabled;
+
+    // Toggle mouse tracking at the program level
+    const program = (this.screen as any)?.program;
+    if (program) {
+      if (this.mouseEnabled) {
+        program.enableMouse();
+      } else {
+        program.disableMouse();
+      }
+    }
+
+    // Show status message
+    const status = this.mouseEnabled
+      ? 'Mouse scroll ON (Shift+drag to select text)'
+      : 'Mouse scroll OFF (use PgUp/PgDn to scroll)';
+    this.setStatus(status);
+    this.screen?.render();
   }
 
   setProcessing(processing: boolean): void {
@@ -343,12 +395,15 @@ export class ChatTUI {
     if (processing) {
       this.statusBar?.setMode('processing');
       this.inputBar?.disable();
+      this.chatBox?.showProgress();
     } else if (this.stateManager.isWaiting) {
       this.statusBar?.setMode('waiting');
+      this.chatBox?.hideProgress();
       this.inputBar?.enable();
       this.inputBar?.focus();
     } else {
       this.statusBar?.setMode('ready');
+      this.chatBox?.hideProgress();
       this.inputBar?.enable();
       this.inputBar?.focus();
     }
@@ -417,6 +472,13 @@ export class ChatTUI {
       this.pendingLogs.push(...lines);
       return;
     }
+    // Buffer logs when not viewing the logs tab to avoid blessed's
+    // Log.log() triggering screen.render() on every line, which
+    // corrupts the chat pane under heavy output.
+    if (this.activeTab !== 'logs') {
+      this.pendingLogs.push(...lines.filter(l => l.length > 0));
+      return;
+    }
     for (const item of lines) {
       if (item.length === 0) continue;
       this.logsBox.log(item);
@@ -441,6 +503,67 @@ export class ChatTUI {
     console.warn = (...args: unknown[]) => toLog(...args);
     console.info = (...args: unknown[]) => toLog(...args);
 
+    // Intercept raw stdout/stderr writes (MCP libs, debug modules, etc.)
+    // Blessed owns stdout for rendering — any foreign write corrupts the screen.
+    const origStdoutWrite = process.stdout.write.bind(process.stdout);
+    const origStderrWrite = process.stderr.write.bind(process.stderr);
+
+    // Blessed renders via program._owrite → this.output.write(text) where
+    // output === process.stdout. We re-route blessed to call the saved
+    // original directly, then replace process.stdout.write with our
+    // interceptor so every other caller gets captured.
+    const program = (this.screen as any)?.program;
+    if (program) {
+      program._owrite = program.write = function (text: string) {
+        if (!program.output?.writable) return;
+        return origStdoutWrite(text);
+      };
+    }
+
+    const makeInterceptor = (
+      _origWrite: typeof process.stdout.write
+    ): typeof process.stdout.write => {
+      return function (this: any, chunk: any, encodingOrCb?: any, cb?: any): boolean {
+        // Redirect to the logs buffer
+        const text =
+          typeof chunk === 'string'
+            ? chunk
+            : chunk.toString(typeof encodingOrCb === 'string' ? encodingOrCb : 'utf8');
+        if (text.trim()) {
+          toLog(text);
+        }
+        const callback = typeof encodingOrCb === 'function' ? encodingOrCb : cb;
+        if (callback) callback();
+        return true;
+      } as typeof process.stdout.write;
+    };
+
+    process.stdout.write = makeInterceptor(origStdoutWrite);
+    process.stderr.write = makeInterceptor(origStderrWrite);
+
+    // Patch MCP SDK's StdioClientTransport to never inherit stderr.
+    // Child processes with stdio:'inherit' write directly to fd 1/2,
+    // bypassing our Node.js write() interceptors and corrupting blessed.
+    let origStdioStart: ((...args: any[]) => any) | undefined;
+    try {
+      const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
+      if (StdioClientTransport?.prototype?.start) {
+        origStdioStart = StdioClientTransport.prototype.start;
+        // Patch: force stderr to 'pipe' before start() spawns the child
+        StdioClientTransport.prototype.start = function (...args: any[]) {
+          if (this._serverParams && !this._serverParams.stderr) {
+            this._serverParams.stderr = 'pipe';
+            // Must also set up the PassThrough stream (normally done in constructor)
+            if (!this._stderrStream) {
+              const { PassThrough } = require('stream');
+              this._stderrStream = new PassThrough();
+            }
+          }
+          return origStdioStart!.apply(this, args);
+        };
+      }
+    } catch {}
+
     let restored = false;
     this.consoleRestore = () => {
       if (restored) return;
@@ -449,6 +572,15 @@ export class ChatTUI {
       console.error = original.error;
       console.warn = original.warn;
       console.info = original.info;
+      process.stdout.write = origStdoutWrite;
+      process.stderr.write = origStderrWrite;
+      // Restore original StdioClientTransport.start
+      if (origStdioStart) {
+        try {
+          const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
+          StdioClientTransport.prototype.start = origStdioStart;
+        } catch {}
+      }
       if (this.consoleExitHandler) {
         process.removeListener('exit', this.consoleExitHandler);
         this.consoleExitHandler = undefined;
@@ -596,8 +728,13 @@ export class ChatTUI {
     // Call the submit handler
     this.onMessageSubmit?.(value);
 
-    // Note: Don't refocus here - the caller (promptUser or workflow) will manage focus
-    // This prevents conflicts that cause input duplication
+    // Re-focus input on next tick — must not call readInput() from within
+    // blessed's _done/submit event chain to avoid re-entrancy issues
+    if (!this.running && this.activeTab === 'chat') {
+      process.nextTick(() => {
+        this.inputBar?.focus();
+      });
+    }
   }
 
   private handleInputEscape(): void {
@@ -614,10 +751,8 @@ export class ChatTUI {
   private setActiveTab(tab: 'chat' | 'logs' | 'traces'): void {
     this.activeTab = tab;
 
-    // Update all status bars to show the current tab
+    // Update the status bar to show the current view name
     this.statusBar?.setActiveTab(tab);
-    this.logsStatusBar?.setActiveTab(tab);
-    this.tracesStatusBar?.setActiveTab(tab);
 
     if (this.mainPane && this.logsPane && this.tracesPane) {
       // Hide all panes first
@@ -631,6 +766,7 @@ export class ChatTUI {
         this.inputBar?.focus();
       } else if (tab === 'logs') {
         this.logsPane.show();
+        this._flushPendingLogs();
         this.logsBox?.focus();
       } else {
         this.tracesPane.show();
@@ -641,6 +777,14 @@ export class ChatTUI {
     // Force full screen redraw to clear artifacts
     this.screen?.realloc();
     this.screen?.render();
+  }
+
+  private _flushPendingLogs(): void {
+    if (!this.logsBox || this.pendingLogs.length === 0) return;
+    for (const line of this.pendingLogs) {
+      this.logsBox.log(line);
+    }
+    this.pendingLogs = [];
   }
 
   private updateLayout(): void {

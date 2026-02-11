@@ -99,15 +99,8 @@ export class TuiFrontend implements Frontend {
       const checkCfg: any = cfg.checks?.[checkId];
       if (!checkCfg) return;
 
-      const providerType = (checkCfg.type as string) || '';
-      const isAi = providerType === 'ai';
-      const isLogChat = providerType === 'log' && checkCfg.group === 'chat';
-
       // Skip internal steps
       if (checkCfg.criticality === 'internal') return;
-
-      // Only display AI and log chat checks
-      if (!isAi && !isLogChat) return;
 
       // Extract text from result
       let text: string | undefined;
@@ -121,23 +114,18 @@ export class TuiFrontend implements Frontend {
           text = extracted.trim();
         } else if (typeof out.text === 'string' && out.text.trim()) {
           text = out.text.trim();
+        } else if (typeof out === 'string' && out.trim()) {
+          text = out.trim();
         }
       }
 
-      // Fall back to content for AI checks with simple schemas
-      if (!text && isAi && typeof result?.content === 'string' && result.content.trim()) {
-        const schema = checkCfg.schema;
-        const isSimpleSchema =
-          typeof schema === 'string'
-            ? ['plain', 'text', 'markdown', 'code-review'].includes(schema)
-            : schema === undefined || schema === null;
-        if (isSimpleSchema) {
-          text = result.content.trim();
-        }
+      // Fall back to content
+      if (!text && typeof result?.content === 'string' && result.content.trim()) {
+        text = result.content.trim();
       }
 
-      // Fall back to logOutput for log chat checks
-      if (!text && isLogChat) {
+      // Fall back to logOutput for log checks
+      if (!text) {
         const logResult = result as any;
         if (typeof logResult?.logOutput === 'string' && logResult.logOutput.trim()) {
           text = logResult.logOutput.trim();

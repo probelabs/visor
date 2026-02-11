@@ -139,6 +139,14 @@ export class FailureConditionEvaluator {
       workflowInputs?: Record<string, unknown>;
       /** Current step's output for guarantee evaluation */
       output?: unknown;
+      /** Conversation context for TUI/CLI/Slack messages */
+      conversation?: {
+        transport?: string;
+        thread?: { id: string };
+        messages?: Array<{ role: string; text: string; timestamp: string }>;
+        current?: { role: string; text: string; timestamp: string };
+        attributes?: Record<string, unknown>;
+      };
     }
   ): Promise<boolean> {
     // Build context for if evaluation
@@ -203,6 +211,9 @@ export class FailureConditionEvaluator {
         branch: contextData?.branch || 'unknown',
         event: contextData?.event || 'manual',
       },
+
+      // Conversation context (for TUI/CLI/Slack)
+      conversation: contextData?.conversation,
     };
 
     try {
@@ -527,6 +538,7 @@ export class FailureConditionEvaluator {
       const outputs = context.outputs || {};
       const inputs = context.inputs || {};
       const debugData = context.debug || null;
+      const conversation = context.conversation || null;
 
       // Get memory store and create accessor for fail_if expressions
       const memoryStore = MemoryStore.getInstance();
@@ -564,6 +576,8 @@ export class FailureConditionEvaluator {
         event,
         env,
         inputs,
+        // Conversation context (TUI/CLI/Slack)
+        conversation,
         // Helper functions
         contains,
         startsWith,

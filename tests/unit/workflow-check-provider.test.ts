@@ -505,4 +505,341 @@ describe('WorkflowCheckProvider', () => {
       expect(requirements).toEqual([]);
     });
   });
+
+  describe('loadConfig helper', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const testConfigDir = path.join(process.cwd(), 'test-configs');
+
+    beforeAll(() => {
+      // Create test config directory
+      if (!fs.existsSync(testConfigDir)) {
+        fs.mkdirSync(testConfigDir, { recursive: true });
+      }
+
+      // Create test YAML config file
+      fs.writeFileSync(
+        path.join(testConfigDir, 'intents.yaml'),
+        `- id: chat
+  description: general Q&A
+- id: code_help
+  description: code questions
+`
+      );
+
+      // Create test JSON config file
+      fs.writeFileSync(
+        path.join(testConfigDir, 'tags.json'),
+        JSON.stringify([
+          { id: 'jira', description: 'needs Jira access' },
+          { id: 'codebase', description: 'needs code exploration' },
+        ])
+      );
+
+      // Create nested config file
+      fs.writeFileSync(
+        path.join(testConfigDir, 'nested-config.yaml'),
+        `server:
+  host: localhost
+  port: 8080
+features:
+  - name: auth
+    enabled: true
+  - name: logging
+    enabled: false
+`
+      );
+    });
+
+    afterAll(() => {
+      // Clean up test config files
+      fs.rmSync(testConfigDir, { recursive: true, force: true });
+    });
+
+    it('should load YAML config file via expression', async () => {
+      const workflowWithIntents: WorkflowDefinition = {
+        ...sampleWorkflow,
+        inputs: [
+          ...sampleWorkflow.inputs!,
+          { name: 'intents', schema: { type: 'array' as const }, required: false },
+        ],
+      };
+
+      const config: CheckProviderConfig = {
+        type: 'workflow',
+        workflow: 'test-workflow',
+        basePath: process.cwd(),
+        args: {
+          language: 'typescript',
+          threshold: 80,
+          intents: {
+            expression: "loadConfig('test-configs/intents.yaml')",
+          },
+        },
+      };
+
+      mockRegistry.get.mockReturnValue(workflowWithIntents);
+      mockRegistry.validateInputs.mockReturnValue({ valid: true });
+      mockExecutor.execute.mockResolvedValue({
+        success: true,
+        output: {},
+        status: 'completed',
+      });
+
+      await provider.execute(samplePRInfo, config);
+
+      const executorCall = mockExecutor.execute.mock.calls[0];
+      expect(executorCall[1].inputs.intents).toEqual([
+        { id: 'chat', description: 'general Q&A' },
+        { id: 'code_help', description: 'code questions' },
+      ]);
+    });
+
+    it('should load JSON config file via expression', async () => {
+      const workflowWithTags: WorkflowDefinition = {
+        ...sampleWorkflow,
+        inputs: [
+          ...sampleWorkflow.inputs!,
+          { name: 'tags', schema: { type: 'array' as const }, required: false },
+        ],
+      };
+
+      const config: CheckProviderConfig = {
+        type: 'workflow',
+        workflow: 'test-workflow',
+        basePath: process.cwd(),
+        args: {
+          language: 'typescript',
+          threshold: 80,
+          tags: {
+            expression: "loadConfig('test-configs/tags.json')",
+          },
+        },
+      };
+
+      mockRegistry.get.mockReturnValue(workflowWithTags);
+      mockRegistry.validateInputs.mockReturnValue({ valid: true });
+      mockExecutor.execute.mockResolvedValue({
+        success: true,
+        output: {},
+        status: 'completed',
+      });
+
+      await provider.execute(samplePRInfo, config);
+
+      const executorCall = mockExecutor.execute.mock.calls[0];
+      expect(executorCall[1].inputs.tags).toEqual([
+        { id: 'jira', description: 'needs Jira access' },
+        { id: 'codebase', description: 'needs code exploration' },
+      ]);
+    });
+
+    it('should load nested YAML config and access properties', async () => {
+      const workflowWithConfig: WorkflowDefinition = {
+        ...sampleWorkflow,
+        inputs: [
+          ...sampleWorkflow.inputs!,
+          { name: 'serverPort', schema: { type: 'number' as const }, required: false },
+          { name: 'features', schema: { type: 'array' as const }, required: false },
+        ],
+      };
+
+      const config: CheckProviderConfig = {
+        type: 'workflow',
+        workflow: 'test-workflow',
+        basePath: process.cwd(),
+        args: {
+          language: 'typescript',
+          threshold: 80,
+          serverPort: {
+            expression: "loadConfig('test-configs/nested-config.yaml').server.port",
+          },
+          features: {
+            expression: "loadConfig('test-configs/nested-config.yaml').features",
+          },
+        },
+      };
+
+      mockRegistry.get.mockReturnValue(workflowWithConfig);
+      mockRegistry.validateInputs.mockReturnValue({ valid: true });
+      mockExecutor.execute.mockResolvedValue({
+        success: true,
+        output: {},
+        status: 'completed',
+      });
+
+      await provider.execute(samplePRInfo, config);
+
+      const executorCall = mockExecutor.execute.mock.calls[0];
+      expect(executorCall[1].inputs.serverPort).toBe(8080);
+      expect(executorCall[1].inputs.features).toEqual([
+        { name: 'auth', enabled: true },
+        { name: 'logging', enabled: false },
+      ]);
+    });
+
+    it('should throw error for non-existent config file', async () => {
+      const config: CheckProviderConfig = {
+        type: 'workflow',
+        workflow: 'test-workflow',
+        basePath: process.cwd(),
+        args: {
+          language: 'typescript',
+          threshold: 80,
+          intents: {
+            expression: "loadConfig('non-existent-file.yaml')",
+          },
+        },
+      };
+
+      mockRegistry.get.mockReturnValue(sampleWorkflow);
+      mockRegistry.validateInputs.mockReturnValue({ valid: true });
+
+      await expect(provider.execute(samplePRInfo, config)).rejects.toThrow(
+        "loadConfig('non-existent-file.yaml') failed"
+      );
+    });
+
+    it('should resolve relative paths from basePath', async () => {
+      const workflowWithIntents: WorkflowDefinition = {
+        ...sampleWorkflow,
+        inputs: [
+          ...sampleWorkflow.inputs!,
+          { name: 'intents', schema: { type: 'array' as const }, required: false },
+        ],
+      };
+
+      // Use test-configs as basePath
+      const config: CheckProviderConfig = {
+        type: 'workflow',
+        workflow: 'test-workflow',
+        basePath: testConfigDir,
+        args: {
+          language: 'typescript',
+          threshold: 80,
+          intents: {
+            expression: "loadConfig('intents.yaml')",
+          },
+        },
+      };
+
+      mockRegistry.get.mockReturnValue(workflowWithIntents);
+      mockRegistry.validateInputs.mockReturnValue({ valid: true });
+      mockExecutor.execute.mockResolvedValue({
+        success: true,
+        output: {},
+        status: 'completed',
+      });
+
+      await provider.execute(samplePRInfo, config);
+
+      const executorCall = mockExecutor.execute.mock.calls[0];
+      expect(executorCall[1].inputs.intents).toEqual([
+        { id: 'chat', description: 'general Q&A' },
+        { id: 'code_help', description: 'code questions' },
+      ]);
+    });
+
+    it('should handle absolute paths', async () => {
+      const workflowWithIntents: WorkflowDefinition = {
+        ...sampleWorkflow,
+        inputs: [
+          ...sampleWorkflow.inputs!,
+          { name: 'intents', schema: { type: 'array' as const }, required: false },
+        ],
+      };
+
+      const absolutePath = path.join(testConfigDir, 'intents.yaml');
+
+      const config: CheckProviderConfig = {
+        type: 'workflow',
+        workflow: 'test-workflow',
+        args: {
+          language: 'typescript',
+          threshold: 80,
+          intents: {
+            expression: `loadConfig('${absolutePath}')`,
+          },
+        },
+      };
+
+      mockRegistry.get.mockReturnValue(workflowWithIntents);
+      mockRegistry.validateInputs.mockReturnValue({ valid: true });
+      mockExecutor.execute.mockResolvedValue({
+        success: true,
+        output: {},
+        status: 'completed',
+      });
+
+      await provider.execute(samplePRInfo, config);
+
+      const executorCall = mockExecutor.execute.mock.calls[0];
+      expect(executorCall[1].inputs.intents).toEqual([
+        { id: 'chat', description: 'general Q&A' },
+        { id: 'code_help', description: 'code questions' },
+      ]);
+    });
+
+    it('should reject path traversal attempts', async () => {
+      const workflowWithIntents: WorkflowDefinition = {
+        ...sampleWorkflow,
+        inputs: [
+          ...sampleWorkflow.inputs!,
+          { name: 'intents', schema: { type: 'array' as const }, required: false },
+        ],
+      };
+
+      const config: CheckProviderConfig = {
+        type: 'workflow',
+        workflow: 'test-workflow',
+        basePath: testConfigDir,
+        args: {
+          language: 'typescript',
+          threshold: 80,
+          intents: {
+            // Attempt path traversal attack
+            expression: "loadConfig('../../../etc/passwd')",
+          },
+        },
+      };
+
+      mockRegistry.get.mockReturnValue(workflowWithIntents);
+      mockRegistry.validateInputs.mockReturnValue({ valid: true });
+
+      await expect(provider.execute(samplePRInfo, config)).rejects.toThrow(
+        /escapes base directory/
+      );
+    });
+
+    it('should reject absolute paths outside basePath', async () => {
+      const workflowWithIntents: WorkflowDefinition = {
+        ...sampleWorkflow,
+        inputs: [
+          ...sampleWorkflow.inputs!,
+          { name: 'intents', schema: { type: 'array' as const }, required: false },
+        ],
+      };
+
+      const config: CheckProviderConfig = {
+        type: 'workflow',
+        workflow: 'test-workflow',
+        basePath: testConfigDir,
+        args: {
+          language: 'typescript',
+          threshold: 80,
+          intents: {
+            // Attempt to read file outside basePath with absolute path
+            expression: "loadConfig('/etc/passwd')",
+          },
+        },
+      };
+
+      mockRegistry.get.mockReturnValue(workflowWithIntents);
+      mockRegistry.validateInputs.mockReturnValue({ valid: true });
+
+      await expect(provider.execute(samplePRInfo, config)).rejects.toThrow(
+        /escapes base directory/
+      );
+    });
+  });
 });

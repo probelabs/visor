@@ -203,6 +203,12 @@ const schema: any = {
             oneOf: [{ type: 'string' }, { type: 'array' }, { type: 'object' }],
           },
         },
+        execution_context: {
+          type: 'object',
+          description:
+            'Execution context to inject (e.g., conversation for CLI --message simulation)',
+          additionalProperties: true,
+        },
         expect: { $ref: '#/$defs/expectBlock' },
       },
       required: ['event'],

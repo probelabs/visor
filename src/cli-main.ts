@@ -989,6 +989,15 @@ export async function main(): Promise<void> {
       // Also set static property for backward compatibility
       const { HumanInputCheckProvider } = await import('./providers/human-input-check-provider');
       HumanInputCheckProvider.setCLIMessage(options.message);
+      // Create conversation context so {{ conversation.current.text }} works in templates
+      const now = new Date().toISOString();
+      executionContext.conversation = {
+        transport: 'cli',
+        thread: { id: `cli-${Date.now()}` },
+        messages: [{ role: 'user', text: options.message, timestamp: now }],
+        current: { role: 'user', text: options.message, timestamp: now },
+        attributes: { source: 'cli' },
+      };
     }
 
     // Set environment variables early for proper logging in all modules
@@ -1109,35 +1118,8 @@ export async function main(): Promise<void> {
             chatTui.setStatus('Running');
           }
         };
-        // Hook to update TUI chat content when checks complete
-        executionContext.hooks.onCheckComplete = info => {
-          if (!chatTui) return;
-          const { checkConfig, result } = info;
-          // Skip internal checks
-          if (checkConfig?.criticality === 'internal') return;
-
-          // Show AI checks and all log checks in TUI
-          const isAi = checkConfig?.type === 'ai';
-          const isLog = checkConfig?.type === 'log';
-          if (!isAi && !isLog) return;
-
-          // Extract text from result
-          let text: string | undefined;
-          const out = result?.output as any;
-          if (out && typeof out.text === 'string' && out.text.trim().length > 0) {
-            text = out.text.trim();
-          } else if (typeof result?.content === 'string' && result.content.trim().length > 0) {
-            text = result.content.trim();
-          }
-          if (!text) return;
-
-          // Add to chat as assistant/system message
-          if (isLog) {
-            chatTui.addSystemMessage(text);
-          } else {
-            chatTui.addAssistantMessage(text, info.checkId);
-          }
-        };
+        // Check results are displayed by TuiFrontend via the EventBus
+        // (CheckCompleted event), so no onCheckComplete hook is needed here.
         chatTui.setAbortHandler(() => {
           void (async () => {
             try {
@@ -1627,8 +1609,10 @@ export async function main(): Promise<void> {
 
     logger.info(`📂 Repository: ${repositoryInfo.base} branch`);
     logger.info(`📁 Files changed: ${repositoryInfo.files?.length || 0}`);
-    logger.step(`Executing ${checksToRun.length} check(s)`);
-    logger.verbose(`Checks: ${checksToRun.join(', ')}`);
+    if (!chatTui) {
+      logger.step(`Executing ${checksToRun.length} check(s)`);
+      logger.verbose(`Checks: ${checksToRun.join(', ')}`);
+    }
 
     // Create StateMachineExecutionEngine for running checks
     const engine = new StateMachineExecutionEngine(undefined, undefined, debugServer || undefined);
@@ -1694,7 +1678,6 @@ export async function main(): Promise<void> {
       runTuiWorkflow = async (message: string) => {
         // Set running state
         tuiRef.setRunning(true);
-        tuiRef.addUserMessage(message);
 
         try {
           // Create a fresh engine for this execution
@@ -1703,7 +1686,20 @@ export async function main(): Promise<void> {
             undefined,
             debugServer || undefined
           );
-          rerunEngine.setExecutionContext(executionContext);
+
+          // Add conversation context for TUI messages
+          const now = new Date().toISOString();
+          const tuiConversation = {
+            transport: 'tui' as const,
+            thread: { id: `tui-${Date.now()}` },
+            messages: [{ role: 'user' as const, text: message, timestamp: now }],
+            current: { role: 'user' as const, text: message, timestamp: now },
+            attributes: { source: 'tui' },
+          };
+          rerunEngine.setExecutionContext({
+            ...executionContext,
+            conversation: tuiConversation,
+          });
 
           // Execute workflow
           const rerunResult = await withActiveSpan(
@@ -1762,7 +1758,7 @@ export async function main(): Promise<void> {
                 }
 
                 if (lastOutput) {
-                  tuiRef.addSystemMessage(lastOutput);
+                  tuiRef.addAssistantMessage(lastOutput, lastCheckName);
                 }
               }
             }
@@ -1800,23 +1796,50 @@ export async function main(): Promise<void> {
         })()
       : async () => {};
 
-    const executionResult = await withActiveSpan(
-      'visor.run',
-      { 'visor.run.checks_configured': checksToRun.length },
-      async () =>
-        engine.executeGroupedChecks(
-          prInfo,
-          checksToRun,
-          options.timeout,
-          config,
-          options.output,
-          options.debug || false,
-          options.maxParallelism,
-          options.failFast,
-          tagFilter,
-          pauseGate
-        )
-    );
+    // Skip initial automatic run for TUI mode - wait for user to type a message
+    // TUI workflows are typically chat-style and expect user input first
+    let executionResult: import('./types/execution').ExecutionResult;
+    if (chatTui) {
+      logger.info('[TUI] Waiting for user input - type a message to start the workflow');
+      chatTui.setRunning(false);
+
+      // Wait for user interaction (blocks until user presses 'q')
+      try {
+        await chatTui.waitForExit();
+      } catch {}
+      // Cleanup
+      try {
+        logger.setSink(undefined);
+      } catch {}
+      try {
+        if (tuiConsoleRestore) tuiConsoleRestore();
+      } catch {}
+      try {
+        await flushNdjson();
+      } catch {}
+      try {
+        await shutdownTelemetry();
+      } catch {}
+      process.exit(0);
+    } else {
+      executionResult = await withActiveSpan(
+        'visor.run',
+        { 'visor.run.checks_configured': checksToRun.length },
+        async () =>
+          engine.executeGroupedChecks(
+            prInfo,
+            checksToRun,
+            options.timeout,
+            config,
+            options.output,
+            options.debug || false,
+            options.maxParallelism,
+            options.failFast,
+            tagFilter,
+            pauseGate
+          )
+      );
+    }
 
     // Extract results and statistics from the execution result
     const { results: groupedResults, statistics: executionStatistics } = executionResult;
@@ -1928,56 +1951,6 @@ export async function main(): Promise<void> {
       }
     }
 
-    if (chatTui) {
-      // In chat mode, show any errors and the last check's output
-      const allResults = Object.values(groupedResultsToUse).flat();
-
-      // First, display any errors from failed checks
-      for (const result of allResults) {
-        const r = result as any;
-        if (r?.issues && Array.isArray(r.issues)) {
-          for (const issue of r.issues) {
-            if (issue.severity === 'error' || issue.severity === 'critical') {
-              const errorMsg = `Error: ${issue.message || 'Unknown error'}`;
-              chatTui.addSystemMessage(errorMsg);
-            }
-          }
-        }
-      }
-
-      // Then show the last check's output if available
-      // Skip log checks since they're already shown by onCheckComplete hook
-      if (allResults.length > 0) {
-        const lastResult = allResults[allResults.length - 1] as any;
-        const lastCheckName = lastResult?.checkName;
-        const lastCheckConfig = lastCheckName ? config.checks?.[lastCheckName] : undefined;
-        const isLogCheck = lastCheckConfig?.type === 'log';
-
-        // Only show result if it's not a log check (those are already shown in real-time)
-        if (!isLogCheck) {
-          let lastOutput: string | undefined;
-
-          // Try to extract meaningful output from the last result
-          if (lastResult?.output?.text) {
-            lastOutput = String(lastResult.output.text).trim();
-          } else if (lastResult?.content) {
-            lastOutput = String(lastResult.content).trim();
-          } else if (lastResult?.output && typeof lastResult.output === 'string') {
-            lastOutput = lastResult.output.trim();
-          }
-
-          if (lastOutput) {
-            chatTui.addSystemMessage(lastOutput);
-          }
-        }
-      }
-
-      chatTui.addSystemMessage(
-        'Workflow completed. Type a new message to run again, or press q to exit.'
-      );
-      chatTui.setRunning(false);
-    }
-
     // Emit or save output
     if (options.outputFile) {
       try {
@@ -1991,7 +1964,7 @@ export async function main(): Promise<void> {
         );
         process.exit(1);
       }
-    } else if (!debugServer && !chatTui) {
+    } else if (!debugServer) {
       // Only print to console if debug server is not active
       console.log(output);
     }
@@ -2098,22 +2071,6 @@ export async function main(): Promise<void> {
     try {
       await shutdownTelemetry();
     } catch {}
-    if (chatTui) {
-      // Keep TUI running indefinitely for persistent chat mode
-      // User can press 'q' to exit or Ctrl+C to abort
-      // setRunning(false) was already called at workflow completion to re-enable input
-      try {
-        // Wait indefinitely for user to exit (no timeout)
-        await chatTui.waitForExit();
-      } catch {}
-      // User explicitly exited, now clean up
-      try {
-        logger.setSink(undefined);
-      } catch {}
-      try {
-        if (tuiConsoleRestore) tuiConsoleRestore();
-      } catch {}
-    }
     process.exit(exitCode);
   } catch (error) {
     // Import error classes dynamically to avoid circular dependencies

@@ -46,6 +46,8 @@ export interface ExecutionContext {
   reuseSession?: boolean;
   /** CLI message value (from --message argument) */
   cliMessage?: string;
+  /** Conversation context - unified access to user message across transports (CLI, Slack, etc.) */
+  conversation?: import('../types/bot').ConversationContext;
   /**
    * Stage-local baseline of output history lengths per check name.
    * When present, providers should expose an `outputs_history_stage` object in

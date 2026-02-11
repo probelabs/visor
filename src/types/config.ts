@@ -160,6 +160,20 @@ export interface FailureConditionContext {
     /** AI model used */
     model: string;
   };
+
+  /** Conversation context for TUI/CLI/Slack messages */
+  conversation?: {
+    /** Transport type (tui, cli, slack) */
+    transport?: string;
+    /** Thread information */
+    thread?: { id: string };
+    /** Message history */
+    messages?: Array<{ role: string; text: string; timestamp: string }>;
+    /** Current message being processed */
+    current?: { role: string; text: string; timestamp: string };
+    /** Additional attributes */
+    attributes?: Record<string, unknown>;
+  } | null;
 }
 
 /**
@@ -789,11 +803,19 @@ export interface OnFailConfig {
 }
 
 /**
+ * Success routing run item - can be step name, step with args, or workflow with args
+ */
+export type OnSuccessRunItem =
+  | string // Plain step name (backward compatible)
+  | OnInitStepInvocation // Step with arguments
+  | OnInitWorkflowInvocation; // Workflow with arguments
+
+/**
  * Success routing configuration per check
  */
 export interface OnSuccessConfig {
-  /** Post-success steps to run */
-  run?: string[];
+  /** Post-success steps to run - can be step names or rich invocations with arguments */
+  run?: OnSuccessRunItem[];
   /** Optional jump back to ancestor step (by id) */
   goto?: string;
   /** Simulate a different event when performing goto (e.g., 'pr_updated') */
@@ -1186,6 +1208,19 @@ export interface WorkflowOutput {
   value?: string;
   /** Value using JavaScript expression (alternative to value) */
   value_js?: string;
+}
+
+/**
+ * Intent definition for assistant workflows
+ * Intent ID = handler name (convention over configuration)
+ */
+export interface IntentDefinition {
+  /** Intent ID - also serves as the handler name */
+  id: string;
+  /** Human-readable description of what this intent handles */
+  description: string;
+  /** Optional external workflow to delegate to (if not using built-in or step handler) */
+  workflow?: string;
 }
 
 export interface SandboxDefaults {
