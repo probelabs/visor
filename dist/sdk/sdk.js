@@ -657,11 +657,11 @@ function getTracer() {
 }
 async function withActiveSpan(name, attrs, fn) {
   const tracer = getTracer();
-  return await new Promise((resolve10, reject) => {
+  return await new Promise((resolve11, reject) => {
     const callback = async (span) => {
       try {
         const res = await fn(span);
-        resolve10(res);
+        resolve11(res);
       } catch (err) {
         try {
           if (err instanceof Error) span.recordException(err);
@@ -721,19 +721,19 @@ function __getOrCreateNdjsonPath() {
   try {
     if (process.env.VISOR_TELEMETRY_SINK && process.env.VISOR_TELEMETRY_SINK !== "file")
       return null;
-    const path24 = require("path");
+    const path25 = require("path");
     const fs22 = require("fs");
     if (process.env.VISOR_FALLBACK_TRACE_FILE) {
       __ndjsonPath = process.env.VISOR_FALLBACK_TRACE_FILE;
-      const dir = path24.dirname(__ndjsonPath);
+      const dir = path25.dirname(__ndjsonPath);
       if (!fs22.existsSync(dir)) fs22.mkdirSync(dir, { recursive: true });
       return __ndjsonPath;
     }
-    const outDir = process.env.VISOR_TRACE_DIR || path24.join(process.cwd(), "output", "traces");
+    const outDir = process.env.VISOR_TRACE_DIR || path25.join(process.cwd(), "output", "traces");
     if (!fs22.existsSync(outDir)) fs22.mkdirSync(outDir, { recursive: true });
     if (!__ndjsonPath) {
       const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      __ndjsonPath = path24.join(outDir, `${ts}.ndjson`);
+      __ndjsonPath = path25.join(outDir, `${ts}.ndjson`);
     }
     return __ndjsonPath;
   } catch {
@@ -1407,6 +1407,18 @@ async function handleWavePlanning(context2, state, transition) {
           const key = (s) => JSON.stringify(s);
           if (!arr.some((s) => key(s) === key(scope))) arr.push(scope);
           state.pendingRunScopes.set(target, arr);
+        }
+      } catch {
+      }
+      try {
+        const args = request.args;
+        if (args && Object.keys(args).length > 0) {
+          if (!state.pendingRunArgs) state.pendingRunArgs = /* @__PURE__ */ new Map();
+          const existingArgs = state.pendingRunArgs.get(target) || {};
+          state.pendingRunArgs.set(target, { ...existingArgs, ...args });
+          if (context2.debug) {
+            logger.info(`[WavePlanning] Storing args for ${target}: ${JSON.stringify(args)}`);
+          }
         }
       } catch {
       }
@@ -2783,7 +2795,9 @@ var init_failure_condition_evaluator = __esm({
             hasChanges: (contextData?.filesChanged?.length || 0) > 0,
             branch: contextData?.branch || "unknown",
             event: contextData?.event || "manual"
-          }
+          },
+          // Conversation context (for TUI/CLI/Slack)
+          conversation: contextData?.conversation
         };
         try {
           const res = this.evaluateExpression(expression, context2);
@@ -2925,7 +2939,7 @@ var init_failure_condition_evaluator = __esm({
        */
       evaluateExpression(condition, context2) {
         try {
-          const normalize3 = (expr) => {
+          const normalize4 = (expr) => {
             const trimmed = expr.trim();
             if (!/[\n;]/.test(trimmed)) return trimmed;
             const parts = trimmed.split(/[\n;]+/).map((s) => s.trim()).filter((s) => s.length > 0 && !s.startsWith("//"));
@@ -3017,6 +3031,7 @@ var init_failure_condition_evaluator = __esm({
           const outputs = context2.outputs || {};
           const inputs = context2.inputs || {};
           const debugData = context2.debug || null;
+          const conversation = context2.conversation || null;
           const memoryStore = MemoryStore.getInstance();
           const memoryAccessor = {
             get: (key, ns) => memoryStore.get(key, ns),
@@ -3050,6 +3065,8 @@ var init_failure_condition_evaluator = __esm({
             event,
             env,
             inputs,
+            // Conversation context (TUI/CLI/Slack)
+            conversation,
             // Helper functions
             contains,
             startsWith,
@@ -3080,7 +3097,7 @@ var init_failure_condition_evaluator = __esm({
           try {
             exec2 = this.sandbox.compile(`return (${raw});`);
           } catch {
-            const normalizedExpr = normalize3(condition);
+            const normalizedExpr = normalize4(condition);
             exec2 = this.sandbox.compile(`return (${normalizedExpr});`);
           }
           const result = exec2(scope).run();
@@ -3326,6 +3343,416 @@ var init_failure_condition_evaluator = __esm({
   }
 });
 
+// src/liquid-extensions.ts
+var liquid_extensions_exports = {};
+__export(liquid_extensions_exports, {
+  ReadFileTag: () => ReadFileTag,
+  configureLiquidWithExtensions: () => configureLiquidWithExtensions,
+  createExtendedLiquid: () => createExtendedLiquid,
+  sanitizeLabel: () => sanitizeLabel,
+  sanitizeLabelList: () => sanitizeLabelList,
+  withPermissionsContext: () => withPermissionsContext
+});
+function sanitizeLabel(value) {
+  if (value == null) return "";
+  const s = String(value);
+  return s.replace(/[^A-Za-z0-9:\/\- ]/g, "").replace(/\/{2,}/g, "/").trim();
+}
+function sanitizeLabelList(labels) {
+  if (!Array.isArray(labels)) return [];
+  return labels.map((v) => sanitizeLabel(v)).filter((s) => s.length > 0);
+}
+async function withPermissionsContext(ctx, fn) {
+  return await permissionsALS.run(ctx, fn);
+}
+function configureLiquidWithExtensions(liquid) {
+  liquid.registerTag("readfile", ReadFileTag);
+  liquid.registerFilter("parse_json", (value) => {
+    if (typeof value !== "string") {
+      return value;
+    }
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  });
+  liquid.registerFilter("to_json", (value) => {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "[Error: Unable to serialize to JSON]";
+    }
+  });
+  liquid.registerFilter("base64", (value) => {
+    if (value == null) return "";
+    const str = String(value);
+    return Buffer.from(str).toString("base64");
+  });
+  liquid.registerFilter("base64_decode", (value) => {
+    if (value == null) return "";
+    const str = String(value);
+    try {
+      return Buffer.from(str, "base64").toString("utf-8");
+    } catch {
+      return "[Error: Invalid base64 string]";
+    }
+  });
+  liquid.registerFilter("safe_label", (value) => sanitizeLabel(value));
+  liquid.registerFilter("safe_label_list", (value) => sanitizeLabelList(value));
+  liquid.registerFilter("unescape_newlines", (value) => {
+    if (value == null) return "";
+    const s = String(value);
+    return s.replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\t/g, "	");
+  });
+  liquid.registerFilter("json_escape", (value) => {
+    if (value == null) return "";
+    const s = String(value);
+    const jsonStr = JSON.stringify(s);
+    return jsonStr.slice(1, -1);
+  });
+  liquid.registerFilter("shell_escape", (value) => {
+    if (value == null) return "''";
+    const s = String(value);
+    return "'" + s.replace(/'/g, "'\\''") + "'";
+  });
+  liquid.registerFilter("escape_shell", (value) => {
+    if (value == null) return "''";
+    const s = String(value);
+    return "'" + s.replace(/'/g, "'\\''") + "'";
+  });
+  liquid.registerFilter("shell_escape_double", (value) => {
+    if (value == null) return '""';
+    const s = String(value);
+    const escaped = s.replace(/\\/g, "\\\\").replace(/\$/g, "\\$").replace(/`/g, "\\`").replace(/"/g, '\\"').replace(/!/g, "\\!");
+    return '"' + escaped + '"';
+  });
+  const isLocal = detectLocalMode();
+  const resolveAssoc = (val) => {
+    if (typeof val === "string" && val.length > 0) return val;
+    const store = permissionsALS.getStore();
+    return store?.authorAssociation;
+  };
+  liquid.registerFilter("has_min_permission", (authorAssociation, level) => {
+    return hasMinPermission(resolveAssoc(authorAssociation), level, isLocal);
+  });
+  liquid.registerFilter("is_owner", (authorAssociation) => {
+    return isOwner(resolveAssoc(authorAssociation), isLocal);
+  });
+  liquid.registerFilter("is_member", (authorAssociation) => {
+    return isMember(resolveAssoc(authorAssociation), isLocal);
+  });
+  liquid.registerFilter("is_collaborator", (authorAssociation) => {
+    return isCollaborator(resolveAssoc(authorAssociation), isLocal);
+  });
+  liquid.registerFilter("is_contributor", (authorAssociation) => {
+    return isContributor(resolveAssoc(authorAssociation), isLocal);
+  });
+  liquid.registerFilter("is_first_timer", (authorAssociation) => {
+    return isFirstTimer(resolveAssoc(authorAssociation), isLocal);
+  });
+  const memoryStore = MemoryStore.getInstance();
+  liquid.registerFilter("memory_get", (key, namespace) => {
+    if (typeof key !== "string") {
+      return void 0;
+    }
+    return memoryStore.get(key, namespace);
+  });
+  liquid.registerFilter("memory_has", (key, namespace) => {
+    if (typeof key !== "string") {
+      return false;
+    }
+    const has = memoryStore.has(key, namespace);
+    try {
+      if (process.env.VISOR_DEBUG === "true" && key === "fact_validation_issues") {
+        console.error(
+          `[liquid] memory_has('${key}', ns='${namespace || memoryStore.getDefaultNamespace()}') => ${String(
+            has
+          )}`
+        );
+      }
+    } catch {
+    }
+    return has;
+  });
+  liquid.registerFilter("memory_list", (namespace) => {
+    return memoryStore.list(namespace);
+  });
+  liquid.registerFilter("get", (obj, pathExpr) => {
+    if (obj == null) return void 0;
+    const path25 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
+    if (!path25) return obj;
+    const parts = path25.split(".");
+    let cur = obj;
+    for (const p of parts) {
+      if (cur == null) return void 0;
+      cur = cur[p];
+    }
+    return cur;
+  });
+  liquid.registerFilter("not_empty", (v) => {
+    if (Array.isArray(v)) return v.length > 0;
+    if (typeof v === "string") return v.length > 0;
+    if (v && typeof v === "object") return Object.keys(v).length > 0;
+    return false;
+  });
+  liquid.registerFilter("coalesce", (first, ...rest) => {
+    const all = [first, ...rest];
+    for (const v of all) {
+      if (Array.isArray(v) && v.length > 0) return v;
+      if (typeof v === "string" && v.length > 0) return v;
+      if (v && typeof v === "object" && Object.keys(v).length > 0) return v;
+    }
+    return Array.isArray(first) ? [] : first ?? void 0;
+  });
+  liquid.registerFilter("where_exp", (items, varName, expr) => {
+    const arr = Array.isArray(items) ? items : [];
+    const name = typeof varName === "string" && varName.trim() ? varName.trim() : "i";
+    const body = String(expr || "");
+    try {
+      const sandbox = createSecureSandbox();
+      const out = [];
+      for (let idx = 0; idx < arr.length; idx++) {
+        const item = arr[idx];
+        let ok = false;
+        try {
+          const scope = { [name]: item, idx, arr };
+          ok = !!compileAndRun(sandbox, body, scope, {
+            injectLog: false,
+            wrapFunction: true
+          });
+        } catch {
+          ok = false;
+        }
+        if (ok) out.push(item);
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  });
+  liquid.registerFilter(
+    "chat_history",
+    function(value, ...args) {
+      try {
+        const impl = this;
+        const ctx = impl?.context;
+        const allArgs = Array.isArray(args) ? args : [];
+        if (allArgs.length === 0) {
+          return [];
+        }
+        const positional = [];
+        const options = {};
+        for (const arg of allArgs) {
+          if (Array.isArray(arg) && arg.length === 2 && typeof arg[0] === "string" && arg[0].length > 0) {
+            options[arg[0]] = arg[1];
+          } else {
+            positional.push(arg);
+          }
+        }
+        const stepArgs = positional;
+        const steps = stepArgs.map((s) => String(s ?? "").trim()).filter((s) => s.length > 0);
+        if (steps.length === 0) return [];
+        const outputsHistoryVar = ctx?.get(["outputs_history"]) || {};
+        const outputsVar = ctx?.get(["outputs"]) || {};
+        const outputsHistory = outputsHistoryVar && Object.keys(outputsHistoryVar).length > 0 ? outputsHistoryVar : outputsVar?.history || {};
+        const checksMeta = ctx?.get(["checks_meta"]) || ctx?.get(["event"])?.payload?.__checksMeta || void 0;
+        const directionRaw = typeof options.direction === "string" ? options.direction.toLowerCase() : "";
+        const direction = directionRaw === "desc" ? "desc" : "asc";
+        const limit = typeof options.limit === "number" && options.limit > 0 ? Math.floor(options.limit) : void 0;
+        const textCfg = options.text && typeof options.text === "object" ? options.text : {};
+        const defaultField = typeof textCfg.default_field === "string" && textCfg.default_field.trim() ? textCfg.default_field.trim() : "text";
+        const byStepText = {};
+        if (textCfg.by_step && typeof textCfg.by_step === "object") {
+          for (const [k, v] of Object.entries(textCfg.by_step)) {
+            if (typeof v === "string" && v.trim()) {
+              byStepText[k] = v.trim();
+            }
+          }
+        }
+        const rolesCfg = options.roles && typeof options.roles === "object" ? options.roles : {};
+        const byTypeRole = {};
+        if (rolesCfg.by_type && typeof rolesCfg.by_type === "object") {
+          for (const [k, v] of Object.entries(rolesCfg.by_type)) {
+            if (typeof v === "string" && v.trim()) {
+              byTypeRole[k] = v.trim();
+            }
+          }
+        }
+        const byStepRole = {};
+        if (rolesCfg.by_step && typeof rolesCfg.by_step === "object") {
+          for (const [k, v] of Object.entries(rolesCfg.by_step)) {
+            if (typeof v === "string" && v.trim()) {
+              byStepRole[k] = v.trim();
+            }
+          }
+        }
+        if (typeof options.role_map === "string" && options.role_map.trim().length > 0) {
+          const parts = String(options.role_map).split(",").map((p) => p.trim()).filter(Boolean);
+          for (const part of parts) {
+            const eqIdx = part.indexOf("=");
+            if (eqIdx > 0) {
+              const k = part.slice(0, eqIdx).trim();
+              const v = part.slice(eqIdx + 1).trim();
+              if (k && v) {
+                byStepRole[k] = v;
+              }
+            }
+          }
+        }
+        const defaultRole = typeof rolesCfg.default === "string" && rolesCfg.default.trim() ? rolesCfg.default.trim() : void 0;
+        const getNested = (obj, path25) => {
+          if (!obj || !path25) return void 0;
+          const parts = path25.split(".");
+          let cur = obj;
+          for (const p of parts) {
+            if (cur == null) return void 0;
+            cur = cur[p];
+          }
+          return cur;
+        };
+        const normalizeText = (step, raw) => {
+          try {
+            const overrideField = byStepText[step];
+            if (overrideField) {
+              const val = getNested(raw, overrideField);
+              if (val !== void 0 && val !== null) {
+                const s = String(val);
+                if (s.trim().length > 0) return s;
+              }
+            }
+            if (raw && typeof raw === "object") {
+              if (typeof raw.text === "string" && raw.text.trim().length > 0) {
+                return raw.text;
+              }
+              if (typeof raw.content === "string" && raw.content.trim().length > 0) {
+                return raw.content;
+              }
+              const dfVal = raw[defaultField];
+              if (dfVal !== void 0 && dfVal !== null) {
+                const s = String(dfVal);
+                if (s.trim().length > 0) return s;
+              }
+            }
+            if (typeof raw === "string") return raw;
+            if (raw == null) return "";
+            try {
+              return JSON.stringify(raw);
+            } catch {
+              return String(raw);
+            }
+          } catch {
+            if (typeof raw === "string") return raw;
+            return "";
+          }
+        };
+        const normalizeRole = (step) => {
+          try {
+            if (byStepRole[step]) return byStepRole[step];
+            const meta = checksMeta ? checksMeta[step] : void 0;
+            const type = meta?.type;
+            if (type && byTypeRole[type]) return byTypeRole[type];
+            if (type === "human-input") return "user";
+            if (type === "ai") return "assistant";
+            if (defaultRole) return defaultRole;
+            if (type) {
+              if (type === "human-input") return "user";
+              if (type === "ai") return "assistant";
+            }
+          } catch {
+          }
+          return "assistant";
+        };
+        const messages = [];
+        const tsBase = Date.now();
+        let counter = 0;
+        for (const step of steps) {
+          const arr = outputsHistory?.[step];
+          if (!Array.isArray(arr)) continue;
+          for (const raw of arr) {
+            let ts;
+            if (raw && typeof raw === "object" && typeof raw.ts === "number") {
+              ts = raw.ts;
+            }
+            if (!Number.isFinite(ts)) {
+              ts = tsBase + counter++;
+            }
+            const text = normalizeText(step, raw);
+            const role = normalizeRole(step);
+            messages.push({ step, role, text, ts, raw });
+          }
+        }
+        messages.sort((a, b) => a.ts - b.ts);
+        if (direction === "desc") {
+          messages.reverse();
+        }
+        if (limit && limit > 0 && messages.length > limit) {
+          if (direction === "asc") {
+            return messages.slice(messages.length - limit);
+          }
+          return messages.slice(0, limit);
+        }
+        return messages;
+      } catch {
+        return [];
+      }
+    }
+  );
+}
+function createExtendedLiquid(options = {}) {
+  const liquid = new import_liquidjs.Liquid({
+    cache: false,
+    strictFilters: false,
+    strictVariables: false,
+    ...options
+  });
+  configureLiquidWithExtensions(liquid);
+  return liquid;
+}
+var import_liquidjs, import_async_hooks, import_promises2, import_path2, ReadFileTag, permissionsALS;
+var init_liquid_extensions = __esm({
+  "src/liquid-extensions.ts"() {
+    "use strict";
+    import_liquidjs = require("liquidjs");
+    import_async_hooks = require("async_hooks");
+    import_promises2 = __toESM(require("fs/promises"));
+    import_path2 = __toESM(require("path"));
+    init_author_permissions();
+    init_memory_store();
+    init_sandbox();
+    ReadFileTag = class extends import_liquidjs.Tag {
+      filepath;
+      constructor(token, remainTokens, liquid) {
+        super(token, remainTokens, liquid);
+        this.filepath = new import_liquidjs.Value(token.args, liquid);
+      }
+      *render(ctx, emitter) {
+        const filePath = yield this.filepath.value(ctx, false);
+        if (!filePath || typeof filePath !== "string") {
+          emitter.write("[Error: Invalid file path]");
+          return;
+        }
+        const basePath = ctx.globals?.basePath;
+        const projectRoot = typeof basePath === "string" ? basePath : process.cwd();
+        const normalizedRoot = import_path2.default.normalize(projectRoot + import_path2.default.sep);
+        const resolvedPath = import_path2.default.normalize(import_path2.default.resolve(projectRoot, filePath.toString()));
+        if (!resolvedPath.startsWith(normalizedRoot) && resolvedPath !== import_path2.default.normalize(projectRoot)) {
+          emitter.write("[Error: File path escapes project directory]");
+          return;
+        }
+        try {
+          const content = yield import_promises2.default.readFile(resolvedPath, "utf-8");
+          emitter.write(content);
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : error?.code || "Unknown error";
+          emitter.write(`[Error reading file: ${errorMessage}]`);
+        }
+      }
+    };
+    permissionsALS = new import_async_hooks.AsyncLocalStorage();
+  }
+});
+
 // src/snapshot-store.ts
 var snapshot_store_exports = {};
 __export(snapshot_store_exports, {
@@ -3433,6 +3860,48 @@ __export(routing_exports, {
   evaluateTransitions: () => evaluateTransitions,
   handleRouting: () => handleRouting
 });
+async function renderRouteArgs(args, output, dependencyResults, context2) {
+  if (!args || Object.keys(args).length === 0) {
+    return args;
+  }
+  const liquid = createExtendedLiquid();
+  const renderedArgs = {};
+  const templateContext = {
+    output,
+    // Output of the step that triggered routing
+    outputs: dependencyResults,
+    // All dependency outputs
+    env: process.env,
+    inputs: context2.executionContext?.workflowInputs || {}
+  };
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === "string" && value.includes("{{")) {
+      try {
+        renderedArgs[key] = await liquid.parseAndRender(value, templateContext);
+      } catch (error) {
+        logger.warn(`[Routing] Failed to render template for arg ${key}: ${error}`);
+        renderedArgs[key] = value;
+      }
+    } else {
+      renderedArgs[key] = value;
+    }
+  }
+  return renderedArgs;
+}
+function parseRunItem(item) {
+  if (typeof item === "string") {
+    return { target: item };
+  }
+  if ("step" in item) {
+    const stepItem = item;
+    return { target: stepItem.step, args: stepItem.with };
+  }
+  if ("workflow" in item) {
+    const workflowItem = item;
+    return { target: workflowItem.workflow, args: workflowItem.with };
+  }
+  return { target: String(item) };
+}
 function hasMapFanoutDependents(context2, checkId) {
   const checks = context2.config.checks || {};
   const reduceProviders = /* @__PURE__ */ new Set(["log", "memory", "script", "workflow", "noop"]);
@@ -3672,7 +4141,8 @@ async function processOnFinish(checkId, scope, result, checkConfig, context2, st
       context2,
       state
     );
-    for (const targetCheck of dynamicTargets) {
+    for (const runItem of dynamicTargets) {
+      const { target: targetCheck, args: runArgs } = parseRunItem(runItem);
       if (checkLoopBudget(context2, state, "on_finish", "run")) {
         const errorIssue = {
           file: "system",
@@ -3686,7 +4156,9 @@ async function processOnFinish(checkId, scope, result, checkConfig, context2, st
         return;
       }
       if (context2.debug) {
-        logger.info(`[Routing] on_finish.run_js: scheduling ${targetCheck}`);
+        logger.info(
+          `[Routing] on_finish.run_js: scheduling ${targetCheck}${runArgs ? ", args=" + JSON.stringify(runArgs) : ""}`
+        );
       }
       state.routingLoopCount++;
       recordRoutingEvent({
@@ -3701,7 +4173,8 @@ async function processOnFinish(checkId, scope, result, checkConfig, context2, st
         type: "ForwardRunRequested",
         target: targetCheck,
         scope,
-        origin: "run_js"
+        origin: "run_js",
+        args: runArgs
       });
       queuedForward = true;
     }
@@ -3949,7 +4422,23 @@ async function processOnSuccess(checkId, scope, result, checkConfig, context2, s
   if (onSuccess.run && onSuccess.run.length > 0) {
     const resForEachItems = result && result.forEachItems || void 0;
     const hasForEachItems = Array.isArray(resForEachItems) && resForEachItems.length > 0;
-    for (const targetCheck of onSuccess.run) {
+    const stepOutput = result?.output;
+    const depResults = {};
+    try {
+      const snapshotId = context2.journal.beginSnapshot();
+      const allEntries = context2.journal.readVisible(context2.sessionId, snapshotId, context2.event);
+      for (const entry of allEntries) {
+        if (entry.checkId && entry.result) {
+          const r = entry.result;
+          depResults[entry.checkId] = r.output !== void 0 ? r.output : r;
+        }
+      }
+    } catch (e) {
+      logger.warn(`[Routing] Failed to build dependency results for template rendering: ${e}`);
+    }
+    for (const runItem of onSuccess.run) {
+      const { target: targetCheck, args: rawArgs } = parseRunItem(runItem);
+      const runArgs = rawArgs ? await renderRouteArgs(rawArgs, stepOutput, depResults, context2) : void 0;
       if (checkLoopBudget(context2, state, "on_success", "run")) {
         const errorIssue = {
           file: "system",
@@ -3966,7 +4455,7 @@ async function processOnSuccess(checkId, scope, result, checkConfig, context2, s
       const fanoutMode = targetConfig?.fanout || "reduce";
       if (context2.debug) {
         logger.info(
-          `[Routing] on_success.run: scheduling ${targetCheck} with fanout=${fanoutMode}, hasForEachItems=${hasForEachItems}`
+          `[Routing] on_success.run: scheduling ${targetCheck} with fanout=${fanoutMode}, hasForEachItems=${hasForEachItems}${runArgs ? ", args=" + JSON.stringify(runArgs) : ""}`
         );
       }
       if (fanoutMode === "map" && hasForEachItems) {
@@ -3987,7 +4476,8 @@ async function processOnSuccess(checkId, scope, result, checkConfig, context2, s
             type: "ForwardRunRequested",
             target: targetCheck,
             scope: itemScope,
-            origin: "run"
+            origin: "run",
+            args: runArgs
           });
         }
       } else {
@@ -4004,7 +4494,8 @@ async function processOnSuccess(checkId, scope, result, checkConfig, context2, s
           type: "ForwardRunRequested",
           target: targetCheck,
           scope,
-          origin: "run"
+          origin: "run",
+          args: runArgs
         });
       }
     }
@@ -4018,7 +4509,8 @@ async function processOnSuccess(checkId, scope, result, checkConfig, context2, s
       context2,
       state
     );
-    for (const targetCheck of dynamicTargets) {
+    for (const runItem of dynamicTargets) {
+      const { target: targetCheck, args: runArgs } = parseRunItem(runItem);
       if (checkLoopBudget(context2, state, "on_success", "run")) {
         const errorIssue = {
           file: "system",
@@ -4032,7 +4524,9 @@ async function processOnSuccess(checkId, scope, result, checkConfig, context2, s
         return;
       }
       if (context2.debug) {
-        logger.info(`[Routing] on_success.run_js: scheduling ${targetCheck}`);
+        logger.info(
+          `[Routing] on_success.run_js: scheduling ${targetCheck}${runArgs ? ", args=" + JSON.stringify(runArgs) : ""}`
+        );
       }
       state.routingLoopCount++;
       recordRoutingEvent({
@@ -4047,7 +4541,8 @@ async function processOnSuccess(checkId, scope, result, checkConfig, context2, s
         type: "ForwardRunRequested",
         target: targetCheck,
         scope,
-        origin: "run_js"
+        origin: "run_js",
+        args: runArgs
       });
     }
   }
@@ -4228,7 +4723,8 @@ async function processOnFail(checkId, scope, result, checkConfig, context2, stat
       context2,
       state
     );
-    for (const targetCheck of dynamicTargets) {
+    for (const runItem of dynamicTargets) {
+      const { target: targetCheck, args: runArgs } = parseRunItem(runItem);
       if (checkLoopBudget(context2, state, "on_fail", "run")) {
         const errorIssue = {
           file: "system",
@@ -4242,7 +4738,9 @@ async function processOnFail(checkId, scope, result, checkConfig, context2, stat
         return;
       }
       if (context2.debug) {
-        logger.info(`[Routing] on_fail.run_js: scheduling ${targetCheck}`);
+        logger.info(
+          `[Routing] on_fail.run_js: scheduling ${targetCheck}${runArgs ? ", args=" + JSON.stringify(runArgs) : ""}`
+        );
       }
       state.routingLoopCount++;
       recordRoutingEvent({
@@ -4258,8 +4756,9 @@ async function processOnFail(checkId, scope, result, checkConfig, context2, stat
         target: targetCheck,
         scope,
         origin: "run_js",
-        sourceCheck: checkId
+        sourceCheck: checkId,
         // The failed check that triggered on_fail.run_js
+        args: runArgs
       });
     }
   }
@@ -4403,6 +4902,15 @@ async function processOnFail(checkId, scope, result, checkConfig, context2, stat
     state.flags.forwardRunRequested = true;
   }
 }
+function isValidRunItem(item) {
+  if (typeof item === "string" && item) return true;
+  if (typeof item === "object" && item !== null) {
+    const obj = item;
+    if (typeof obj.step === "string" && obj.step) return true;
+    if (typeof obj.workflow === "string" && obj.workflow) return true;
+  }
+  return false;
+}
 async function evaluateRunJs(runJs, checkId, checkConfig, result, context2, _state) {
   try {
     const sandbox = createSecureSandbox();
@@ -4481,7 +4989,8 @@ async function evaluateRunJs(runJs, checkId, checkConfig, result, context2, _sta
         ${runJs}
       };
       const __res = __fn();
-      return Array.isArray(__res) ? __res.filter(x => typeof x === 'string' && x) : [];
+      // Return as-is; validation happens after sandbox execution
+      return Array.isArray(__res) ? __res : [];
     `;
     try {
       const evalResult = compileAndRun(
@@ -4490,7 +4999,7 @@ async function evaluateRunJs(runJs, checkId, checkConfig, result, context2, _sta
         { scope: scopeObj },
         { injectLog: false, wrapFunction: false }
       );
-      return Array.isArray(evalResult) ? evalResult.filter(Boolean) : [];
+      return Array.isArray(evalResult) ? evalResult.filter(isValidRunItem) : [];
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       logger.error(`[Routing] Error in run_js sandbox evaluation: ${msg}`);
@@ -4707,6 +5216,7 @@ var init_routing = __esm({
     init_failure_condition_evaluator();
     init_sandbox();
     init_memory_store();
+    init_liquid_extensions();
     DEFAULT_MAX_LOOPS = 10;
   }
 });
@@ -4941,16 +5451,16 @@ function emitMermaidFromMarkdown(checkName, markdown, origin) {
         addEvent("diagram.block", { check: checkName, origin, code });
         addDiagramBlock(origin);
         if (process.env.VISOR_TRACE_REPORT === "true") {
-          const outDir = process.env.VISOR_TRACE_DIR || path3.join(process.cwd(), "output", "traces");
+          const outDir = process.env.VISOR_TRACE_DIR || path4.join(process.cwd(), "output", "traces");
           try {
-            if (!fs3.existsSync(outDir)) fs3.mkdirSync(outDir, { recursive: true });
+            if (!fs4.existsSync(outDir)) fs4.mkdirSync(outDir, { recursive: true });
             const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-            const jsonPath = path3.join(outDir, `${ts}.trace.json`);
-            const htmlPath = path3.join(outDir, `${ts}.report.html`);
+            const jsonPath = path4.join(outDir, `${ts}.trace.json`);
+            const htmlPath = path4.join(outDir, `${ts}.report.html`);
             let data = { spans: [] };
-            if (fs3.existsSync(jsonPath)) {
+            if (fs4.existsSync(jsonPath)) {
               try {
-                data = JSON.parse(fs3.readFileSync(jsonPath, "utf8"));
+                data = JSON.parse(fs4.readFileSync(jsonPath, "utf8"));
               } catch {
                 data = { spans: [] };
               }
@@ -4958,9 +5468,9 @@ function emitMermaidFromMarkdown(checkName, markdown, origin) {
             data.spans.push({
               events: [{ name: "diagram.block", attrs: { check: checkName, origin, code } }]
             });
-            fs3.writeFileSync(jsonPath, JSON.stringify(data, null, 2), "utf8");
-            if (!fs3.existsSync(htmlPath)) {
-              fs3.writeFileSync(
+            fs4.writeFileSync(jsonPath, JSON.stringify(data, null, 2), "utf8");
+            if (!fs4.existsSync(htmlPath)) {
+              fs4.writeFileSync(
                 htmlPath,
                 '<!doctype html><html><head><meta charset="utf-8"/><title>Visor Trace Report</title></head><body><h2>Visor Trace Report</h2></body></html>',
                 "utf8"
@@ -4976,14 +5486,14 @@ function emitMermaidFromMarkdown(checkName, markdown, origin) {
   }
   return count;
 }
-var fs3, path3, MERMAID_RE;
+var fs4, path4, MERMAID_RE;
 var init_mermaid_telemetry = __esm({
   "src/utils/mermaid-telemetry.ts"() {
     "use strict";
     init_trace_helpers();
     init_metrics();
-    fs3 = __toESM(require("fs"));
-    path3 = __toESM(require("path"));
+    fs4 = __toESM(require("fs"));
+    path4 = __toESM(require("path"));
     MERMAID_RE = /```mermaid\s*\n([\s\S]*?)\n```/gi;
   }
 });
@@ -5204,12 +5714,12 @@ function serializePRInfo(prInfo) {
     eventContext: prInfo.eventContext
   };
 }
-var import_fs2, import_path2, import_crypto, CheckRunner;
+var import_fs2, import_path3, import_crypto, CheckRunner;
 var init_check_runner = __esm({
   "src/sandbox/check-runner.ts"() {
     "use strict";
     import_fs2 = require("fs");
-    import_path2 = require("path");
+    import_path3 = require("path");
     import_crypto = require("crypto");
     init_env_filter();
     init_logger();
@@ -5254,7 +5764,7 @@ var init_check_runner = __esm({
             let hostTracePath;
             if (!sandboxConfig.read_only) {
               const traceFileName = `.visor-trace-${(0, import_crypto.randomUUID)().slice(0, 8)}.ndjson`;
-              hostTracePath = (0, import_path2.join)(sandboxManager.getRepoPath(), traceFileName);
+              hostTracePath = (0, import_path3.join)(sandboxManager.getRepoPath(), traceFileName);
               const containerTracePath = `${workdir}/${traceFileName}`;
               try {
                 (0, import_fs2.writeFileSync)(hostTracePath, "", "utf8");
@@ -5616,420 +6126,12 @@ var init_dependency_gating = __esm({
   }
 });
 
-// src/liquid-extensions.ts
-var liquid_extensions_exports = {};
-__export(liquid_extensions_exports, {
-  ReadFileTag: () => ReadFileTag,
-  configureLiquidWithExtensions: () => configureLiquidWithExtensions,
-  createExtendedLiquid: () => createExtendedLiquid,
-  sanitizeLabel: () => sanitizeLabel,
-  sanitizeLabelList: () => sanitizeLabelList,
-  withPermissionsContext: () => withPermissionsContext
-});
-function sanitizeLabel(value) {
-  if (value == null) return "";
-  const s = String(value);
-  return s.replace(/[^A-Za-z0-9:\/\- ]/g, "").replace(/\/{2,}/g, "/").trim();
-}
-function sanitizeLabelList(labels) {
-  if (!Array.isArray(labels)) return [];
-  return labels.map((v) => sanitizeLabel(v)).filter((s) => s.length > 0);
-}
-async function withPermissionsContext(ctx, fn) {
-  return await permissionsALS.run(ctx, fn);
-}
-function configureLiquidWithExtensions(liquid) {
-  liquid.registerTag("readfile", ReadFileTag);
-  liquid.registerFilter("parse_json", (value) => {
-    if (typeof value !== "string") {
-      return value;
-    }
-    try {
-      return JSON.parse(value);
-    } catch {
-      return value;
-    }
-  });
-  liquid.registerFilter("to_json", (value) => {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return "[Error: Unable to serialize to JSON]";
-    }
-  });
-  liquid.registerFilter("base64", (value) => {
-    if (value == null) return "";
-    const str = String(value);
-    return Buffer.from(str).toString("base64");
-  });
-  liquid.registerFilter("base64_decode", (value) => {
-    if (value == null) return "";
-    const str = String(value);
-    try {
-      return Buffer.from(str, "base64").toString("utf-8");
-    } catch {
-      return "[Error: Invalid base64 string]";
-    }
-  });
-  liquid.registerFilter("safe_label", (value) => sanitizeLabel(value));
-  liquid.registerFilter("safe_label_list", (value) => sanitizeLabelList(value));
-  liquid.registerFilter("unescape_newlines", (value) => {
-    if (value == null) return "";
-    const s = String(value);
-    return s.replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\t/g, "	");
-  });
-  liquid.registerFilter("json_escape", (value) => {
-    if (value == null) return "";
-    const s = String(value);
-    const jsonStr = JSON.stringify(s);
-    return jsonStr.slice(1, -1);
-  });
-  liquid.registerFilter("shell_escape", (value) => {
-    if (value == null) return "''";
-    const s = String(value);
-    return "'" + s.replace(/'/g, "'\\''") + "'";
-  });
-  liquid.registerFilter("escape_shell", (value) => {
-    if (value == null) return "''";
-    const s = String(value);
-    return "'" + s.replace(/'/g, "'\\''") + "'";
-  });
-  liquid.registerFilter("shell_escape_double", (value) => {
-    if (value == null) return '""';
-    const s = String(value);
-    const escaped = s.replace(/\\/g, "\\\\").replace(/\$/g, "\\$").replace(/`/g, "\\`").replace(/"/g, '\\"').replace(/!/g, "\\!");
-    return '"' + escaped + '"';
-  });
-  const isLocal = detectLocalMode();
-  const resolveAssoc = (val) => {
-    if (typeof val === "string" && val.length > 0) return val;
-    const store = permissionsALS.getStore();
-    return store?.authorAssociation;
-  };
-  liquid.registerFilter("has_min_permission", (authorAssociation, level) => {
-    return hasMinPermission(resolveAssoc(authorAssociation), level, isLocal);
-  });
-  liquid.registerFilter("is_owner", (authorAssociation) => {
-    return isOwner(resolveAssoc(authorAssociation), isLocal);
-  });
-  liquid.registerFilter("is_member", (authorAssociation) => {
-    return isMember(resolveAssoc(authorAssociation), isLocal);
-  });
-  liquid.registerFilter("is_collaborator", (authorAssociation) => {
-    return isCollaborator(resolveAssoc(authorAssociation), isLocal);
-  });
-  liquid.registerFilter("is_contributor", (authorAssociation) => {
-    return isContributor(resolveAssoc(authorAssociation), isLocal);
-  });
-  liquid.registerFilter("is_first_timer", (authorAssociation) => {
-    return isFirstTimer(resolveAssoc(authorAssociation), isLocal);
-  });
-  const memoryStore = MemoryStore.getInstance();
-  liquid.registerFilter("memory_get", (key, namespace) => {
-    if (typeof key !== "string") {
-      return void 0;
-    }
-    return memoryStore.get(key, namespace);
-  });
-  liquid.registerFilter("memory_has", (key, namespace) => {
-    if (typeof key !== "string") {
-      return false;
-    }
-    const has = memoryStore.has(key, namespace);
-    try {
-      if (process.env.VISOR_DEBUG === "true" && key === "fact_validation_issues") {
-        console.error(
-          `[liquid] memory_has('${key}', ns='${namespace || memoryStore.getDefaultNamespace()}') => ${String(
-            has
-          )}`
-        );
-      }
-    } catch {
-    }
-    return has;
-  });
-  liquid.registerFilter("memory_list", (namespace) => {
-    return memoryStore.list(namespace);
-  });
-  liquid.registerFilter("get", (obj, pathExpr) => {
-    if (obj == null) return void 0;
-    const path24 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
-    if (!path24) return obj;
-    const parts = path24.split(".");
-    let cur = obj;
-    for (const p of parts) {
-      if (cur == null) return void 0;
-      cur = cur[p];
-    }
-    return cur;
-  });
-  liquid.registerFilter("not_empty", (v) => {
-    if (Array.isArray(v)) return v.length > 0;
-    if (typeof v === "string") return v.length > 0;
-    if (v && typeof v === "object") return Object.keys(v).length > 0;
-    return false;
-  });
-  liquid.registerFilter("coalesce", (first, ...rest) => {
-    const all = [first, ...rest];
-    for (const v of all) {
-      if (Array.isArray(v) && v.length > 0) return v;
-      if (typeof v === "string" && v.length > 0) return v;
-      if (v && typeof v === "object" && Object.keys(v).length > 0) return v;
-    }
-    return Array.isArray(first) ? [] : first ?? void 0;
-  });
-  liquid.registerFilter("where_exp", (items, varName, expr) => {
-    const arr = Array.isArray(items) ? items : [];
-    const name = typeof varName === "string" && varName.trim() ? varName.trim() : "i";
-    const body = String(expr || "");
-    try {
-      const sandbox = createSecureSandbox();
-      const out = [];
-      for (let idx = 0; idx < arr.length; idx++) {
-        const item = arr[idx];
-        let ok = false;
-        try {
-          const scope = { [name]: item, idx, arr };
-          ok = !!compileAndRun(sandbox, body, scope, {
-            injectLog: false,
-            wrapFunction: true
-          });
-        } catch {
-          ok = false;
-        }
-        if (ok) out.push(item);
-      }
-      return out;
-    } catch {
-      return [];
-    }
-  });
-  liquid.registerFilter(
-    "chat_history",
-    function(value, ...args) {
-      try {
-        const impl = this;
-        const ctx = impl?.context;
-        const allArgs = Array.isArray(args) ? args : [];
-        if (allArgs.length === 0) {
-          return [];
-        }
-        const positional = [];
-        const options = {};
-        for (const arg of allArgs) {
-          if (Array.isArray(arg) && arg.length === 2 && typeof arg[0] === "string" && arg[0].length > 0) {
-            options[arg[0]] = arg[1];
-          } else {
-            positional.push(arg);
-          }
-        }
-        const stepArgs = positional;
-        const steps = stepArgs.map((s) => String(s ?? "").trim()).filter((s) => s.length > 0);
-        if (steps.length === 0) return [];
-        const outputsHistoryVar = ctx?.get(["outputs_history"]) || {};
-        const outputsVar = ctx?.get(["outputs"]) || {};
-        const outputsHistory = outputsHistoryVar && Object.keys(outputsHistoryVar).length > 0 ? outputsHistoryVar : outputsVar?.history || {};
-        const checksMeta = ctx?.get(["checks_meta"]) || ctx?.get(["event"])?.payload?.__checksMeta || void 0;
-        const directionRaw = typeof options.direction === "string" ? options.direction.toLowerCase() : "";
-        const direction = directionRaw === "desc" ? "desc" : "asc";
-        const limit = typeof options.limit === "number" && options.limit > 0 ? Math.floor(options.limit) : void 0;
-        const textCfg = options.text && typeof options.text === "object" ? options.text : {};
-        const defaultField = typeof textCfg.default_field === "string" && textCfg.default_field.trim() ? textCfg.default_field.trim() : "text";
-        const byStepText = {};
-        if (textCfg.by_step && typeof textCfg.by_step === "object") {
-          for (const [k, v] of Object.entries(textCfg.by_step)) {
-            if (typeof v === "string" && v.trim()) {
-              byStepText[k] = v.trim();
-            }
-          }
-        }
-        const rolesCfg = options.roles && typeof options.roles === "object" ? options.roles : {};
-        const byTypeRole = {};
-        if (rolesCfg.by_type && typeof rolesCfg.by_type === "object") {
-          for (const [k, v] of Object.entries(rolesCfg.by_type)) {
-            if (typeof v === "string" && v.trim()) {
-              byTypeRole[k] = v.trim();
-            }
-          }
-        }
-        const byStepRole = {};
-        if (rolesCfg.by_step && typeof rolesCfg.by_step === "object") {
-          for (const [k, v] of Object.entries(rolesCfg.by_step)) {
-            if (typeof v === "string" && v.trim()) {
-              byStepRole[k] = v.trim();
-            }
-          }
-        }
-        if (typeof options.role_map === "string" && options.role_map.trim().length > 0) {
-          const parts = String(options.role_map).split(",").map((p) => p.trim()).filter(Boolean);
-          for (const part of parts) {
-            const eqIdx = part.indexOf("=");
-            if (eqIdx > 0) {
-              const k = part.slice(0, eqIdx).trim();
-              const v = part.slice(eqIdx + 1).trim();
-              if (k && v) {
-                byStepRole[k] = v;
-              }
-            }
-          }
-        }
-        const defaultRole = typeof rolesCfg.default === "string" && rolesCfg.default.trim() ? rolesCfg.default.trim() : void 0;
-        const getNested = (obj, path24) => {
-          if (!obj || !path24) return void 0;
-          const parts = path24.split(".");
-          let cur = obj;
-          for (const p of parts) {
-            if (cur == null) return void 0;
-            cur = cur[p];
-          }
-          return cur;
-        };
-        const normalizeText = (step, raw) => {
-          try {
-            const overrideField = byStepText[step];
-            if (overrideField) {
-              const val = getNested(raw, overrideField);
-              if (val !== void 0 && val !== null) {
-                const s = String(val);
-                if (s.trim().length > 0) return s;
-              }
-            }
-            if (raw && typeof raw === "object") {
-              if (typeof raw.text === "string" && raw.text.trim().length > 0) {
-                return raw.text;
-              }
-              if (typeof raw.content === "string" && raw.content.trim().length > 0) {
-                return raw.content;
-              }
-              const dfVal = raw[defaultField];
-              if (dfVal !== void 0 && dfVal !== null) {
-                const s = String(dfVal);
-                if (s.trim().length > 0) return s;
-              }
-            }
-            if (typeof raw === "string") return raw;
-            if (raw == null) return "";
-            try {
-              return JSON.stringify(raw);
-            } catch {
-              return String(raw);
-            }
-          } catch {
-            if (typeof raw === "string") return raw;
-            return "";
-          }
-        };
-        const normalizeRole = (step) => {
-          try {
-            if (byStepRole[step]) return byStepRole[step];
-            const meta = checksMeta ? checksMeta[step] : void 0;
-            const type = meta?.type;
-            if (type && byTypeRole[type]) return byTypeRole[type];
-            if (type === "human-input") return "user";
-            if (type === "ai") return "assistant";
-            if (defaultRole) return defaultRole;
-            if (type) {
-              if (type === "human-input") return "user";
-              if (type === "ai") return "assistant";
-            }
-          } catch {
-          }
-          return "assistant";
-        };
-        const messages = [];
-        const tsBase = Date.now();
-        let counter = 0;
-        for (const step of steps) {
-          const arr = outputsHistory?.[step];
-          if (!Array.isArray(arr)) continue;
-          for (const raw of arr) {
-            let ts;
-            if (raw && typeof raw === "object" && typeof raw.ts === "number") {
-              ts = raw.ts;
-            }
-            if (!Number.isFinite(ts)) {
-              ts = tsBase + counter++;
-            }
-            const text = normalizeText(step, raw);
-            const role = normalizeRole(step);
-            messages.push({ step, role, text, ts, raw });
-          }
-        }
-        messages.sort((a, b) => a.ts - b.ts);
-        if (direction === "desc") {
-          messages.reverse();
-        }
-        if (limit && limit > 0 && messages.length > limit) {
-          if (direction === "asc") {
-            return messages.slice(messages.length - limit);
-          }
-          return messages.slice(0, limit);
-        }
-        return messages;
-      } catch {
-        return [];
-      }
-    }
-  );
-}
-function createExtendedLiquid(options = {}) {
-  const liquid = new import_liquidjs.Liquid({
-    cache: false,
-    strictFilters: false,
-    strictVariables: false,
-    ...options
-  });
-  configureLiquidWithExtensions(liquid);
-  return liquid;
-}
-var import_liquidjs, import_async_hooks, import_promises2, import_path3, ReadFileTag, permissionsALS;
-var init_liquid_extensions = __esm({
-  "src/liquid-extensions.ts"() {
-    "use strict";
-    import_liquidjs = require("liquidjs");
-    import_async_hooks = require("async_hooks");
-    import_promises2 = __toESM(require("fs/promises"));
-    import_path3 = __toESM(require("path"));
-    init_author_permissions();
-    init_memory_store();
-    init_sandbox();
-    ReadFileTag = class extends import_liquidjs.Tag {
-      filepath;
-      constructor(token, remainTokens, liquid) {
-        super(token, remainTokens, liquid);
-        this.filepath = new import_liquidjs.Value(token.args, liquid);
-      }
-      *render(ctx, emitter) {
-        const filePath = yield this.filepath.value(ctx, false);
-        if (!filePath || typeof filePath !== "string") {
-          emitter.write("[Error: Invalid file path]");
-          return;
-        }
-        const projectRoot = process.cwd();
-        const resolvedPath = import_path3.default.resolve(projectRoot, filePath.toString());
-        if (!resolvedPath.startsWith(projectRoot)) {
-          emitter.write("[Error: File path escapes project directory]");
-          return;
-        }
-        try {
-          const content = yield import_promises2.default.readFile(resolvedPath, "utf-8");
-          emitter.write(content);
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : error?.code || "Unknown error";
-          emitter.write(`[Error reading file: ${errorMessage}]`);
-        }
-      }
-    };
-    permissionsALS = new import_async_hooks.AsyncLocalStorage();
-  }
-});
-
 // src/state-machine/dispatch/template-renderer.ts
 async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
     const fs22 = await import("fs/promises");
-    const path24 = await import("path");
+    const path25 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
@@ -6037,19 +6139,19 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
       templateContent = String(checkConfig.template.content);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path24.resolve(process.cwd(), file);
+      const resolved = path25.resolve(process.cwd(), file);
       templateContent = await fs22.readFile(resolved, "utf-8");
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path24.join(__dirname, "output", sanitized, "template.liquid"),
+          path25.join(__dirname, "output", sanitized, "template.liquid"),
           // bundled: dist/output/
-          path24.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path25.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // source: output/
-          path24.join(process.cwd(), "output", sanitized, "template.liquid"),
+          path25.join(process.cwd(), "output", sanitized, "template.liquid"),
           // fallback: cwd/output/
-          path24.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          path25.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
           // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
@@ -7536,7 +7638,7 @@ ${schemaString}`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
               const fs22 = require("fs");
-              const path24 = require("path");
+              const path25 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const provider = this.config.provider || "auto";
               const model = this.config.model || "default";
@@ -7650,16 +7752,16 @@ ${"=".repeat(60)}
 `;
               readableVersion += `${"=".repeat(60)}
 `;
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path24.join(process.cwd(), "debug-artifacts");
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path25.join(process.cwd(), "debug-artifacts");
               if (!fs22.existsSync(debugArtifactsDir)) {
                 fs22.mkdirSync(debugArtifactsDir, { recursive: true });
               }
-              const debugFile = path24.join(
+              const debugFile = path25.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.json`
               );
               fs22.writeFileSync(debugFile, debugJson, "utf-8");
-              const readableFile = path24.join(
+              const readableFile = path25.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -7697,7 +7799,7 @@ ${"=".repeat(60)}
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
               const fs22 = require("fs");
-              const path24 = require("path");
+              const path25 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny2 = agent;
               let fullHistory = [];
@@ -7708,8 +7810,8 @@ ${"=".repeat(60)}
               } else if (agentAny2._messages) {
                 fullHistory = agentAny2._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path24.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path24.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path25.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path25.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -7758,10 +7860,10 @@ ${"=".repeat(60)}
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
               const fs22 = require("fs");
-              const path24 = require("path");
+              const path25 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path24.join(process.cwd(), "debug-artifacts");
-              const responseFile = path24.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path25.join(process.cwd(), "debug-artifacts");
+              const responseFile = path25.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -8008,7 +8110,7 @@ ${schemaString}`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
               const fs22 = require("fs");
-              const path24 = require("path");
+              const path25 = require("path");
               const os2 = require("os");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const debugData = {
@@ -8082,13 +8184,13 @@ ${"=".repeat(60)}
               readableVersion += `${"=".repeat(60)}
 `;
               const tempDir = os2.tmpdir();
-              const promptFile = path24.join(tempDir, `visor-prompt-${timestamp}.txt`);
+              const promptFile = path25.join(tempDir, `visor-prompt-${timestamp}.txt`);
               fs22.writeFileSync(promptFile, prompt, "utf-8");
               log(`
 \u{1F4BE} Prompt saved to: ${promptFile}`);
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path24.join(process.cwd(), "debug-artifacts");
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path25.join(process.cwd(), "debug-artifacts");
               try {
-                const base = path24.join(
+                const base = path25.join(
                   debugArtifactsDir,
                   `prompt-${_checkName || "unknown"}-${timestamp}`
                 );
@@ -8139,7 +8241,7 @@ $ ${cliCommand}
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
               const fs22 = require("fs");
-              const path24 = require("path");
+              const path25 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny = agent;
               let fullHistory = [];
@@ -8150,8 +8252,8 @@ $ ${cliCommand}
               } else if (agentAny._messages) {
                 fullHistory = agentAny._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path24.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path24.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path25.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path25.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -8200,10 +8302,10 @@ ${"=".repeat(60)}
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
               const fs22 = require("fs");
-              const path24 = require("path");
+              const path25 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path24.join(process.cwd(), "debug-artifacts");
-              const responseFile = path24.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path25.join(process.cwd(), "debug-artifacts");
+              const responseFile = path25.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -8295,7 +8397,7 @@ ${"=".repeat(60)}
        */
       async loadSchemaContent(schema) {
         const fs22 = require("fs").promises;
-        const path24 = require("path");
+        const path25 = require("path");
         if (typeof schema === "object" && schema !== null) {
           log("\u{1F4CB} Using inline schema object from configuration");
           return JSON.stringify(schema);
@@ -8308,12 +8410,12 @@ ${"=".repeat(60)}
           }
         } catch {
         }
-        if ((schema.startsWith("./") || schema.includes(".json")) && !path24.isAbsolute(schema)) {
+        if ((schema.startsWith("./") || schema.includes(".json")) && !path25.isAbsolute(schema)) {
           if (schema.includes("..") || schema.includes("\0")) {
             throw new Error("Invalid schema path: path traversal not allowed");
           }
           try {
-            const schemaPath = path24.resolve(process.cwd(), schema);
+            const schemaPath = path25.resolve(process.cwd(), schema);
             log(`\u{1F4CB} Loading custom schema from file: ${schemaPath}`);
             const schemaContent = await fs22.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
@@ -8329,11 +8431,11 @@ ${"=".repeat(60)}
         }
         const candidatePaths = [
           // GitHub Action bundle location
-          path24.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
+          path25.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
           // Historical fallback when src/output was inadvertently bundled as output1/
-          path24.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
+          path25.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
           // Local dev (repo root)
-          path24.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
+          path25.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
         ];
         for (const schemaPath of candidatePaths) {
           try {
@@ -8342,9 +8444,9 @@ ${"=".repeat(60)}
           } catch {
           }
         }
-        const distPath = path24.join(__dirname, "output", sanitizedSchemaName, "schema.json");
-        const distAltPath = path24.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
-        const cwdPath = path24.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
+        const distPath = path25.join(__dirname, "output", sanitizedSchemaName, "schema.json");
+        const distAltPath = path25.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
+        const cwdPath = path25.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
         throw new Error(
           `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath}, ${distAltPath}, and ${cwdPath}. Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
         );
@@ -8535,7 +8637,7 @@ ${"=".repeat(60)}
        * Generate mock response for testing
        */
       async generateMockResponse(_prompt, _checkName, _schema) {
-        await new Promise((resolve10) => setTimeout(resolve10, 500));
+        await new Promise((resolve11) => setTimeout(resolve11, 500));
         const name = (_checkName || "").toLowerCase();
         if (name.includes("extract-facts")) {
           const arr = Array.from({ length: 6 }, (_, i) => ({
@@ -8896,7 +8998,7 @@ var init_command_executor = __esm({
        * Execute command with stdin input
        */
       executeWithStdin(command, options) {
-        return new Promise((resolve10, reject) => {
+        return new Promise((resolve11, reject) => {
           const childProcess = (0, import_child_process.exec)(
             command,
             {
@@ -8908,7 +9010,7 @@ var init_command_executor = __esm({
               if (error && error.killed && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM")) {
                 reject(new Error(`Command timed out after ${options.timeout || 3e4}ms`));
               } else {
-                resolve10({
+                resolve11({
                   stdout: stdout || "",
                   stderr: stderr || "",
                   exitCode: error ? error.code || 1 : 0
@@ -14564,7 +14666,7 @@ var workflow_check_provider_exports = {};
 __export(workflow_check_provider_exports, {
   WorkflowCheckProvider: () => WorkflowCheckProvider
 });
-var WorkflowCheckProvider;
+var path11, yaml4, WorkflowCheckProvider;
 var init_workflow_check_provider = __esm({
   "src/providers/workflow-check-provider.ts"() {
     "use strict";
@@ -14575,6 +14677,8 @@ var init_workflow_check_provider = __esm({
     init_sandbox();
     init_human_id();
     init_liquid_extensions();
+    path11 = __toESM(require("path"));
+    yaml4 = __toESM(require("js-yaml"));
     WorkflowCheckProvider = class extends CheckProvider {
       registry;
       executor;
@@ -14778,6 +14882,28 @@ var init_workflow_check_provider = __esm({
           }
         }
         const parentInputs = config.workflowInputs || {};
+        const basePath = config.basePath || config._parentContext?.originalWorkingDirectory || config._parentContext?.workingDirectory || process.cwd();
+        const loadConfigLiquid = createExtendedLiquid();
+        const loadConfig2 = (filePath) => {
+          try {
+            const normalizedBasePath = path11.normalize(basePath);
+            const resolvedPath = path11.isAbsolute(filePath) ? path11.normalize(filePath) : path11.normalize(path11.resolve(basePath, filePath));
+            const basePathWithSep = normalizedBasePath.endsWith(path11.sep) ? normalizedBasePath : normalizedBasePath + path11.sep;
+            if (!resolvedPath.startsWith(basePathWithSep) && resolvedPath !== normalizedBasePath) {
+              throw new Error(`Path '${filePath}' escapes base directory`);
+            }
+            const configDir = path11.dirname(resolvedPath);
+            const rawContent = require("fs").readFileSync(resolvedPath, "utf-8");
+            const renderedContent = loadConfigLiquid.parseAndRenderSync(rawContent, {
+              basePath: configDir
+            });
+            return yaml4.load(renderedContent, { schema: yaml4.JSON_SCHEMA });
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            logger.error(`[WorkflowProvider] loadConfig failed for '${filePath}': ${msg}`);
+            throw new Error(`loadConfig('${filePath}') failed: ${msg}`);
+          }
+        };
         const templateContext = {
           pr: prInfo,
           outputs: outputsMap,
@@ -14786,7 +14912,9 @@ var init_workflow_check_provider = __esm({
           conversation,
           outputs_history,
           // Include parent workflow inputs for templates like {{ inputs.question }}
-          inputs: parentInputs
+          inputs: parentInputs,
+          // Helper to load external YAML/JSON config files
+          loadConfig: loadConfig2
         };
         const userInputs = config.args || config.workflow_inputs;
         if (userInputs) {
@@ -15156,17 +15284,17 @@ var init_workflow_check_provider = __esm({
        * so it can be executed by the state machine as a nested workflow.
        */
       async loadWorkflowFromConfigPath(sourcePath, baseDir) {
-        const path24 = require("path");
+        const path25 = require("path");
         const fs22 = require("fs");
-        const yaml4 = require("js-yaml");
-        const resolved = path24.isAbsolute(sourcePath) ? sourcePath : path24.resolve(baseDir, sourcePath);
+        const yaml5 = require("js-yaml");
+        const resolved = path25.isAbsolute(sourcePath) ? sourcePath : path25.resolve(baseDir, sourcePath);
         if (!fs22.existsSync(resolved)) {
           throw new Error(`Workflow config not found at: ${resolved}`);
         }
         const rawContent = fs22.readFileSync(resolved, "utf8");
-        const rawData = yaml4.load(rawContent);
+        const rawData = yaml5.load(rawContent);
         if (rawData.imports && Array.isArray(rawData.imports)) {
-          const configDir = path24.dirname(resolved);
+          const configDir = path25.dirname(resolved);
           for (const source of rawData.imports) {
             const results = await this.registry.import(source, {
               basePath: configDir,
@@ -15196,8 +15324,8 @@ ${errors}`);
         if (!steps || Object.keys(steps).length === 0) {
           throw new Error(`Config '${resolved}' does not contain any steps to execute as a workflow`);
         }
-        const id = path24.basename(resolved).replace(/\.(ya?ml)$/i, "");
-        const name = loaded.name || `Workflow from ${path24.basename(resolved)}`;
+        const id = path25.basename(resolved).replace(/\.(ya?ml)$/i, "");
+        const name = loaded.name || `Workflow from ${path25.basename(resolved)}`;
         const workflowDef = {
           id,
           name,
@@ -17065,7 +17193,7 @@ var init_mcp_custom_sse_server = __esm({
        * Returns the actual bound port number
        */
       async start() {
-        return new Promise((resolve10, reject) => {
+        return new Promise((resolve11, reject) => {
           try {
             this.server = import_http.default.createServer((req, res) => {
               this.handleRequest(req, res).catch((error) => {
@@ -17099,7 +17227,7 @@ var init_mcp_custom_sse_server = __esm({
                 );
               }
               this.startKeepalive();
-              resolve10(this.port);
+              resolve11(this.port);
             });
           } catch (error) {
             reject(error);
@@ -17162,7 +17290,7 @@ var init_mcp_custom_sse_server = __esm({
             logger.debug(
               `[CustomToolsSSEServer:${this.sessionId}] Grace period before stop: ${waitMs}ms (activeToolCalls=${this.activeToolCalls})`
             );
-            await new Promise((resolve10) => setTimeout(resolve10, waitMs));
+            await new Promise((resolve11) => setTimeout(resolve11, waitMs));
           }
         }
         if (this.activeToolCalls > 0) {
@@ -17171,7 +17299,7 @@ var init_mcp_custom_sse_server = __esm({
             `[CustomToolsSSEServer:${this.sessionId}] Waiting for ${this.activeToolCalls} active tool call(s) before stop`
           );
           while (this.activeToolCalls > 0 && Date.now() - startedAt < effectiveDrainTimeoutMs) {
-            await new Promise((resolve10) => setTimeout(resolve10, 250));
+            await new Promise((resolve11) => setTimeout(resolve11, 250));
           }
           if (this.activeToolCalls > 0) {
             logger.warn(
@@ -17196,21 +17324,21 @@ var init_mcp_custom_sse_server = __esm({
         }
         this.connections.clear();
         if (this.server) {
-          await new Promise((resolve10, reject) => {
+          await new Promise((resolve11, reject) => {
             const timeout = setTimeout(() => {
               if (this.debug) {
                 logger.debug(
                   `[CustomToolsSSEServer:${this.sessionId}] Force closing server after timeout`
                 );
               }
-              this.server?.close(() => resolve10());
+              this.server?.close(() => resolve11());
             }, 5e3);
             this.server.close((error) => {
               clearTimeout(timeout);
               if (error) {
                 reject(error);
               } else {
-                resolve10();
+                resolve11();
               }
             });
           });
@@ -17384,10 +17512,10 @@ var init_mcp_custom_sse_server = __esm({
                 `[CustomToolsSSEServer:${this.sessionId}] Received message: ${JSON.stringify(message)}`
               );
             }
-            await this.handleMCPMessage(connection, message);
             this.handleCORS(res);
             res.writeHead(202, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ status: "accepted" }));
+            await this.handleMCPMessage(connection, message);
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : "Unknown error";
             if (this.debug) {
@@ -17396,8 +17524,10 @@ var init_mcp_custom_sse_server = __esm({
               );
             }
             this.sendErrorResponse(connection, null, -32700, "Parse error", { error: errorMsg });
-            res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Parse error", details: errorMsg }));
+            if (!res.headersSent) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "Parse error", details: errorMsg }));
+            }
           }
         });
       }
@@ -17622,7 +17752,7 @@ var init_mcp_custom_sse_server = __esm({
               logger.warn(
                 `[CustomToolsSSEServer:${this.sessionId}] Tool ${toolName} failed (attempt ${attempt + 1}/${retryCount + 1}): ${errorMsg}. Retrying in ${delay}ms`
               );
-              await new Promise((resolve10) => setTimeout(resolve10, delay));
+              await new Promise((resolve11) => setTimeout(resolve11, delay));
               attempt++;
             }
           }
@@ -18480,6 +18610,9 @@ ${preview}`);
           Object.assign(mcpServers, config.ai.mcpServers);
         }
         const mcpServersJsExpr = config.ai_mcp_servers_js;
+        logger.info(
+          `[AICheckProvider] ai_mcp_servers_js check: hasExpr=${!!mcpServersJsExpr}, hasDeps=${!!_dependencyResults}, depsSize=${_dependencyResults?.size ?? 0}`
+        );
         if (mcpServersJsExpr && _dependencyResults) {
           try {
             const dynamicServers = this.evaluateMcpServersJs(
@@ -19058,6 +19191,10 @@ ${processedPrompt}` : processedPrompt;
           memory: config.__memoryAccessor || {}
         };
         try {
+          const buildConfigOutput = jsContext.outputs?.["build-config"];
+          logger.info(
+            `[AICheckProvider] ai_mcp_servers_js context: build-config output keys=${buildConfigOutput ? Object.keys(buildConfigOutput).join(",") : "N/A"}, mcp_servers keys=${buildConfigOutput?.mcp_servers ? Object.keys(buildConfigOutput.mcp_servers).join(",") : "N/A"}`
+          );
           const result = compileAndRun(this.sandbox, expression, jsContext, {
             injectLog: true,
             wrapFunction: true,
@@ -19688,7 +19825,7 @@ var init_template_context = __esm({
 });
 
 // src/providers/http-client-provider.ts
-var fs13, path14, HttpClientProvider;
+var fs13, path15, HttpClientProvider;
 var init_http_client_provider = __esm({
   "src/providers/http-client-provider.ts"() {
     "use strict";
@@ -19699,7 +19836,7 @@ var init_http_client_provider = __esm({
     init_template_context();
     init_logger();
     fs13 = __toESM(require("fs"));
-    path14 = __toESM(require("path"));
+    path15 = __toESM(require("path"));
     HttpClientProvider = class extends CheckProvider {
       liquid;
       sandbox;
@@ -19794,8 +19931,8 @@ var init_http_client_provider = __esm({
             const parentContext = context2?._parentContext;
             const workingDirectory = parentContext?.workingDirectory;
             const workspaceEnabled = parentContext?.workspace?.isEnabled?.();
-            if (workspaceEnabled && workingDirectory && !path14.isAbsolute(resolvedOutputFile)) {
-              resolvedOutputFile = path14.join(workingDirectory, resolvedOutputFile);
+            if (workspaceEnabled && workingDirectory && !path15.isAbsolute(resolvedOutputFile)) {
+              resolvedOutputFile = path15.join(workingDirectory, resolvedOutputFile);
               logger.debug(
                 `[http_client] Resolved relative output_file to workspace: ${resolvedOutputFile}`
               );
@@ -20012,7 +20149,7 @@ var init_http_client_provider = __esm({
               ]
             };
           }
-          const parentDir = path14.dirname(outputFile);
+          const parentDir = path15.dirname(outputFile);
           if (parentDir && !fs13.existsSync(parentDir)) {
             fs13.mkdirSync(parentDir, { recursive: true });
           }
@@ -23564,14 +23701,14 @@ var require_util = __commonJS({
         }
         const port = url.port != null ? url.port : url.protocol === "https:" ? 443 : 80;
         let origin = url.origin != null ? url.origin : `${url.protocol}//${url.hostname}:${port}`;
-        let path24 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
+        let path25 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
         if (origin.endsWith("/")) {
           origin = origin.substring(0, origin.length - 1);
         }
-        if (path24 && !path24.startsWith("/")) {
-          path24 = `/${path24}`;
+        if (path25 && !path25.startsWith("/")) {
+          path25 = `/${path25}`;
         }
-        url = new URL(origin + path24);
+        url = new URL(origin + path25);
       }
       return url;
     }
@@ -25185,20 +25322,20 @@ var require_parseParams = __commonJS({
 var require_basename = __commonJS({
   "node_modules/@fastify/busboy/lib/utils/basename.js"(exports2, module2) {
     "use strict";
-    module2.exports = function basename4(path24) {
-      if (typeof path24 !== "string") {
+    module2.exports = function basename4(path25) {
+      if (typeof path25 !== "string") {
         return "";
       }
-      for (var i = path24.length - 1; i >= 0; --i) {
-        switch (path24.charCodeAt(i)) {
+      for (var i = path25.length - 1; i >= 0; --i) {
+        switch (path25.charCodeAt(i)) {
           case 47:
           // '/'
           case 92:
-            path24 = path24.slice(i + 1);
-            return path24 === ".." || path24 === "." ? "" : path24;
+            path25 = path25.slice(i + 1);
+            return path25 === ".." || path25 === "." ? "" : path25;
         }
       }
-      return path24 === ".." || path24 === "." ? "" : path24;
+      return path25 === ".." || path25 === "." ? "" : path25;
     };
   }
 });
@@ -26591,8 +26728,8 @@ var require_util2 = __commonJS({
     function createDeferredPromise() {
       let res;
       let rej;
-      const promise = new Promise((resolve10, reject) => {
-        res = resolve10;
+      const promise = new Promise((resolve11, reject) => {
+        res = resolve11;
         rej = reject;
       });
       return { promise, resolve: res, reject: rej };
@@ -28097,8 +28234,8 @@ Content-Type: ${value.type || "application/octet-stream"}\r
                 });
               }
             });
-            const busboyResolve = new Promise((resolve10, reject) => {
-              busboy.on("finish", resolve10);
+            const busboyResolve = new Promise((resolve11, reject) => {
+              busboy.on("finish", resolve11);
               busboy.on("error", (err) => reject(new TypeError(err)));
             });
             if (this.body !== null) for await (const chunk of consumeBody(this[kState].body)) busboy.write(chunk);
@@ -28229,7 +28366,7 @@ var require_request = __commonJS({
     }
     var Request = class _Request {
       constructor(origin, {
-        path: path24,
+        path: path25,
         method,
         body,
         headers,
@@ -28243,11 +28380,11 @@ var require_request = __commonJS({
         throwOnError,
         expectContinue
       }, handler) {
-        if (typeof path24 !== "string") {
+        if (typeof path25 !== "string") {
           throw new InvalidArgumentError("path must be a string");
-        } else if (path24[0] !== "/" && !(path24.startsWith("http://") || path24.startsWith("https://")) && method !== "CONNECT") {
+        } else if (path25[0] !== "/" && !(path25.startsWith("http://") || path25.startsWith("https://")) && method !== "CONNECT") {
           throw new InvalidArgumentError("path must be an absolute URL or start with a slash");
-        } else if (invalidPathRegex.exec(path24) !== null) {
+        } else if (invalidPathRegex.exec(path25) !== null) {
           throw new InvalidArgumentError("invalid request path");
         }
         if (typeof method !== "string") {
@@ -28310,7 +28447,7 @@ var require_request = __commonJS({
         this.completed = false;
         this.aborted = false;
         this.upgrade = upgrade || null;
-        this.path = query ? util.buildURL(path24, query) : path24;
+        this.path = query ? util.buildURL(path25, query) : path25;
         this.origin = origin;
         this.idempotent = idempotent == null ? method === "HEAD" || method === "GET" : idempotent;
         this.blocking = blocking == null ? false : blocking;
@@ -28632,9 +28769,9 @@ var require_dispatcher_base = __commonJS({
       }
       close(callback) {
         if (callback === void 0) {
-          return new Promise((resolve10, reject) => {
+          return new Promise((resolve11, reject) => {
             this.close((err, data) => {
-              return err ? reject(err) : resolve10(data);
+              return err ? reject(err) : resolve11(data);
             });
           });
         }
@@ -28672,12 +28809,12 @@ var require_dispatcher_base = __commonJS({
           err = null;
         }
         if (callback === void 0) {
-          return new Promise((resolve10, reject) => {
+          return new Promise((resolve11, reject) => {
             this.destroy(err, (err2, data) => {
               return err2 ? (
                 /* istanbul ignore next: should never error */
                 reject(err2)
-              ) : resolve10(data);
+              ) : resolve11(data);
             });
           });
         }
@@ -29318,9 +29455,9 @@ var require_RedirectHandler = __commonJS({
           return this.handler.onHeaders(statusCode, headers, resume, statusText);
         }
         const { origin, pathname, search } = util.parseURL(new URL(this.location, this.opts.origin && new URL(this.opts.path, this.opts.origin)));
-        const path24 = search ? `${pathname}${search}` : pathname;
+        const path25 = search ? `${pathname}${search}` : pathname;
         this.opts.headers = cleanRequestHeaders(this.opts.headers, statusCode === 303, this.opts.origin !== origin);
-        this.opts.path = path24;
+        this.opts.path = path25;
         this.opts.origin = origin;
         this.opts.maxRedirections = 0;
         this.opts.query = null;
@@ -29739,16 +29876,16 @@ var require_client = __commonJS({
         return this[kNeedDrain] < 2;
       }
       async [kClose]() {
-        return new Promise((resolve10) => {
+        return new Promise((resolve11) => {
           if (!this[kSize]) {
-            resolve10(null);
+            resolve11(null);
           } else {
-            this[kClosedResolve] = resolve10;
+            this[kClosedResolve] = resolve11;
           }
         });
       }
       async [kDestroy](err) {
-        return new Promise((resolve10) => {
+        return new Promise((resolve11) => {
           const requests = this[kQueue].splice(this[kPendingIdx]);
           for (let i = 0; i < requests.length; i++) {
             const request = requests[i];
@@ -29759,7 +29896,7 @@ var require_client = __commonJS({
               this[kClosedResolve]();
               this[kClosedResolve] = null;
             }
-            resolve10();
+            resolve11();
           };
           if (this[kHTTP2Session] != null) {
             util.destroy(this[kHTTP2Session], err);
@@ -30339,7 +30476,7 @@ var require_client = __commonJS({
         });
       }
       try {
-        const socket = await new Promise((resolve10, reject) => {
+        const socket = await new Promise((resolve11, reject) => {
           client[kConnector]({
             host,
             hostname,
@@ -30351,7 +30488,7 @@ var require_client = __commonJS({
             if (err) {
               reject(err);
             } else {
-              resolve10(socket2);
+              resolve11(socket2);
             }
           });
         });
@@ -30562,7 +30699,7 @@ var require_client = __commonJS({
         writeH2(client, client[kHTTP2Session], request);
         return;
       }
-      const { body, method, path: path24, host, upgrade, headers, blocking, reset } = request;
+      const { body, method, path: path25, host, upgrade, headers, blocking, reset } = request;
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
         body.read(0);
@@ -30612,7 +30749,7 @@ var require_client = __commonJS({
       if (blocking) {
         socket[kBlocking] = true;
       }
-      let header = `${method} ${path24} HTTP/1.1\r
+      let header = `${method} ${path25} HTTP/1.1\r
 `;
       if (typeof host === "string") {
         header += `host: ${host}\r
@@ -30675,7 +30812,7 @@ upgrade: ${upgrade}\r
       return true;
     }
     function writeH2(client, session, request) {
-      const { body, method, path: path24, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
+      const { body, method, path: path25, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
       let headers;
       if (typeof reqHeaders === "string") headers = Request[kHTTP2CopyHeaders](reqHeaders.trim());
       else headers = reqHeaders;
@@ -30718,7 +30855,7 @@ upgrade: ${upgrade}\r
         });
         return true;
       }
-      headers[HTTP2_HEADER_PATH] = path24;
+      headers[HTTP2_HEADER_PATH] = path25;
       headers[HTTP2_HEADER_SCHEME] = "https";
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
@@ -30975,12 +31112,12 @@ upgrade: ${upgrade}\r
           cb();
         }
       }
-      const waitForDrain = () => new Promise((resolve10, reject) => {
+      const waitForDrain = () => new Promise((resolve11, reject) => {
         assert(callback === null);
         if (socket[kError]) {
           reject(socket[kError]);
         } else {
-          callback = resolve10;
+          callback = resolve11;
         }
       });
       if (client[kHTTPConnVersion] === "h2") {
@@ -31326,8 +31463,8 @@ var require_pool_base = __commonJS({
         if (this[kQueue].isEmpty()) {
           return Promise.all(this[kClients].map((c) => c.close()));
         } else {
-          return new Promise((resolve10) => {
-            this[kClosedResolve] = resolve10;
+          return new Promise((resolve11) => {
+            this[kClosedResolve] = resolve11;
           });
         }
       }
@@ -31905,7 +32042,7 @@ var require_readable = __commonJS({
         if (this.closed) {
           return Promise.resolve(null);
         }
-        return new Promise((resolve10, reject) => {
+        return new Promise((resolve11, reject) => {
           const signalListenerCleanup = signal ? util.addAbortListener(signal, () => {
             this.destroy();
           }) : noop;
@@ -31914,7 +32051,7 @@ var require_readable = __commonJS({
             if (signal && signal.aborted) {
               reject(signal.reason || Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
             } else {
-              resolve10(null);
+              resolve11(null);
             }
           }).on("error", noop).on("data", function(chunk) {
             limit -= chunk.length;
@@ -31936,11 +32073,11 @@ var require_readable = __commonJS({
         throw new TypeError("unusable");
       }
       assert(!stream[kConsume]);
-      return new Promise((resolve10, reject) => {
+      return new Promise((resolve11, reject) => {
         stream[kConsume] = {
           type,
           stream,
-          resolve: resolve10,
+          resolve: resolve11,
           reject,
           length: 0,
           body: []
@@ -31975,12 +32112,12 @@ var require_readable = __commonJS({
       }
     }
     function consumeEnd(consume2) {
-      const { type, body, resolve: resolve10, stream, length } = consume2;
+      const { type, body, resolve: resolve11, stream, length } = consume2;
       try {
         if (type === "text") {
-          resolve10(toUSVString(Buffer.concat(body)));
+          resolve11(toUSVString(Buffer.concat(body)));
         } else if (type === "json") {
-          resolve10(JSON.parse(Buffer.concat(body)));
+          resolve11(JSON.parse(Buffer.concat(body)));
         } else if (type === "arrayBuffer") {
           const dst = new Uint8Array(length);
           let pos = 0;
@@ -31988,12 +32125,12 @@ var require_readable = __commonJS({
             dst.set(buf, pos);
             pos += buf.byteLength;
           }
-          resolve10(dst.buffer);
+          resolve11(dst.buffer);
         } else if (type === "blob") {
           if (!Blob2) {
             Blob2 = require("buffer").Blob;
           }
-          resolve10(new Blob2(body, { type: stream[kContentType] }));
+          resolve11(new Blob2(body, { type: stream[kContentType] }));
         }
         consumeFinish(consume2);
       } catch (err) {
@@ -32250,9 +32387,9 @@ var require_api_request = __commonJS({
     };
     function request(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve10, reject) => {
+        return new Promise((resolve11, reject) => {
           request.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve10(data);
+            return err ? reject(err) : resolve11(data);
           });
         });
       }
@@ -32425,9 +32562,9 @@ var require_api_stream = __commonJS({
     };
     function stream(opts, factory, callback) {
       if (callback === void 0) {
-        return new Promise((resolve10, reject) => {
+        return new Promise((resolve11, reject) => {
           stream.call(this, opts, factory, (err, data) => {
-            return err ? reject(err) : resolve10(data);
+            return err ? reject(err) : resolve11(data);
           });
         });
       }
@@ -32708,9 +32845,9 @@ var require_api_upgrade = __commonJS({
     };
     function upgrade(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve10, reject) => {
+        return new Promise((resolve11, reject) => {
           upgrade.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve10(data);
+            return err ? reject(err) : resolve11(data);
           });
         });
       }
@@ -32799,9 +32936,9 @@ var require_api_connect = __commonJS({
     };
     function connect(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve10, reject) => {
+        return new Promise((resolve11, reject) => {
           connect.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve10(data);
+            return err ? reject(err) : resolve11(data);
           });
         });
       }
@@ -32961,20 +33098,20 @@ var require_mock_utils = __commonJS({
       }
       return true;
     }
-    function safeUrl(path24) {
-      if (typeof path24 !== "string") {
-        return path24;
+    function safeUrl(path25) {
+      if (typeof path25 !== "string") {
+        return path25;
       }
-      const pathSegments = path24.split("?");
+      const pathSegments = path25.split("?");
       if (pathSegments.length !== 2) {
-        return path24;
+        return path25;
       }
       const qp = new URLSearchParams(pathSegments.pop());
       qp.sort();
       return [...pathSegments, qp.toString()].join("?");
     }
-    function matchKey(mockDispatch2, { path: path24, method, body, headers }) {
-      const pathMatch = matchValue(mockDispatch2.path, path24);
+    function matchKey(mockDispatch2, { path: path25, method, body, headers }) {
+      const pathMatch = matchValue(mockDispatch2.path, path25);
       const methodMatch = matchValue(mockDispatch2.method, method);
       const bodyMatch = typeof mockDispatch2.body !== "undefined" ? matchValue(mockDispatch2.body, body) : true;
       const headersMatch = matchHeaders(mockDispatch2, headers);
@@ -32992,7 +33129,7 @@ var require_mock_utils = __commonJS({
     function getMockDispatch(mockDispatches, key) {
       const basePath = key.query ? buildURL(key.path, key.query) : key.path;
       const resolvedPath = typeof basePath === "string" ? safeUrl(basePath) : basePath;
-      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path24 }) => matchValue(safeUrl(path24), resolvedPath));
+      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path25 }) => matchValue(safeUrl(path25), resolvedPath));
       if (matchedMockDispatches.length === 0) {
         throw new MockNotMatchedError(`Mock dispatch not matched for path '${resolvedPath}'`);
       }
@@ -33029,9 +33166,9 @@ var require_mock_utils = __commonJS({
       }
     }
     function buildKey(opts) {
-      const { path: path24, method, body, headers, query } = opts;
+      const { path: path25, method, body, headers, query } = opts;
       return {
-        path: path24,
+        path: path25,
         method,
         body,
         headers,
@@ -33480,10 +33617,10 @@ var require_pending_interceptors_formatter = __commonJS({
       }
       format(pendingInterceptors) {
         const withPrettyHeaders = pendingInterceptors.map(
-          ({ method, path: path24, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
+          ({ method, path: path25, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
             Method: method,
             Origin: origin,
-            Path: path24,
+            Path: path25,
             "Status code": statusCode,
             Persistent: persist ? "\u2705" : "\u274C",
             Invocations: timesInvoked,
@@ -36424,7 +36561,7 @@ var require_fetch = __commonJS({
       async function dispatch({ body }) {
         const url = requestCurrentURL(request);
         const agent = fetchParams.controller.dispatcher;
-        return new Promise((resolve10, reject) => agent.dispatch(
+        return new Promise((resolve11, reject) => agent.dispatch(
           {
             path: url.pathname + url.search,
             origin: url.origin,
@@ -36500,7 +36637,7 @@ var require_fetch = __commonJS({
                   }
                 }
               }
-              resolve10({
+              resolve11({
                 status,
                 statusText,
                 headersList: headers[kHeadersList],
@@ -36543,7 +36680,7 @@ var require_fetch = __commonJS({
                 const val = headersList[n + 1].toString("latin1");
                 headers[kHeadersList].append(key, val);
               }
-              resolve10({
+              resolve11({
                 status,
                 statusText: STATUS_CODES[status],
                 headersList: headers[kHeadersList],
@@ -38104,8 +38241,8 @@ var require_util6 = __commonJS({
         }
       }
     }
-    function validateCookiePath(path24) {
-      for (const char of path24) {
+    function validateCookiePath(path25) {
+      for (const char of path25) {
         const code = char.charCodeAt(0);
         if (code < 33 || char === ";") {
           throw new Error("Invalid cookie path");
@@ -39785,11 +39922,11 @@ var require_undici = __commonJS({
           if (typeof opts.path !== "string") {
             throw new InvalidArgumentError("invalid opts.path");
           }
-          let path24 = opts.path;
+          let path25 = opts.path;
           if (!opts.path.startsWith("/")) {
-            path24 = `/${path24}`;
+            path25 = `/${path25}`;
           }
-          url = new URL(util.parseOrigin(url).origin + path24);
+          url = new URL(util.parseOrigin(url).origin + path25);
         } else {
           if (!opts) {
             opts = typeof url === "object" ? url : {};
@@ -40316,7 +40453,7 @@ var init_mcp_check_provider = __esm({
             logger.warn(
               `MCP ${transportName} failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${error instanceof Error ? error.message : String(error)}`
             );
-            await new Promise((resolve10) => setTimeout(resolve10, delay));
+            await new Promise((resolve11) => setTimeout(resolve11, delay));
             attempt += 1;
           } finally {
             try {
@@ -40336,7 +40473,9 @@ var init_mcp_check_provider = __esm({
             command: config.command,
             args: config.command_args,
             env: config.env,
-            cwd: config.workingDirectory
+            cwd: config.workingDirectory,
+            stderr: "pipe"
+            // Prevent child stderr from corrupting TUI
           }),
           config,
           methodArgs,
@@ -40583,7 +40722,7 @@ async function acquirePromptLock() {
     activePrompt = true;
     return;
   }
-  await new Promise((resolve10) => waiters.push(resolve10));
+  await new Promise((resolve11) => waiters.push(resolve11));
   activePrompt = true;
 }
 function releasePromptLock() {
@@ -40593,7 +40732,7 @@ function releasePromptLock() {
 }
 async function interactivePrompt(options) {
   await acquirePromptLock();
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     const dbg = process.env.VISOR_DEBUG === "true";
     try {
       if (dbg) {
@@ -40680,12 +40819,12 @@ async function interactivePrompt(options) {
     };
     const finish = (value) => {
       cleanup();
-      resolve10(value);
+      resolve11(value);
     };
     if (options.timeout && options.timeout > 0) {
       timeoutId = setTimeout(() => {
         cleanup();
-        if (defaultValue !== void 0) return resolve10(defaultValue);
+        if (defaultValue !== void 0) return resolve11(defaultValue);
         return reject(new Error("Input timeout"));
       }, options.timeout);
     }
@@ -40817,7 +40956,7 @@ async function interactivePrompt(options) {
   });
 }
 async function simplePrompt(prompt) {
-  return new Promise((resolve10) => {
+  return new Promise((resolve11) => {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout
@@ -40833,7 +40972,7 @@ async function simplePrompt(prompt) {
     rl.question(`${prompt}
 > `, (answer) => {
       rl.close();
-      resolve10(answer.trim());
+      resolve11(answer.trim());
     });
   });
 }
@@ -41001,7 +41140,7 @@ function isStdinAvailable() {
   return !process.stdin.isTTY;
 }
 async function readStdin(timeout, maxSize = 1024 * 1024) {
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     let data = "";
     let timeoutId;
     if (timeout) {
@@ -41028,7 +41167,7 @@ async function readStdin(timeout, maxSize = 1024 * 1024) {
     };
     const onEnd = () => {
       cleanup();
-      resolve10(data.trim());
+      resolve11(data.trim());
     };
     const onError = (err) => {
       cleanup();
@@ -41058,7 +41197,7 @@ var init_stdin_reader = __esm({
 });
 
 // src/providers/human-input-check-provider.ts
-var fs15, path16, HumanInputCheckProvider;
+var fs15, path17, HumanInputCheckProvider;
 var init_human_input_check_provider = __esm({
   "src/providers/human-input-check-provider.ts"() {
     "use strict";
@@ -41068,7 +41207,7 @@ var init_human_input_check_provider = __esm({
     init_liquid_extensions();
     init_stdin_reader();
     fs15 = __toESM(require("fs"));
-    path16 = __toESM(require("path"));
+    path17 = __toESM(require("path"));
     HumanInputCheckProvider = class _HumanInputCheckProvider extends CheckProvider {
       liquid;
       /**
@@ -41242,10 +41381,10 @@ var init_human_input_check_provider = __esm({
        */
       async tryReadFile(filePath) {
         try {
-          const absolutePath = path16.isAbsolute(filePath) ? filePath : path16.resolve(process.cwd(), filePath);
-          const normalizedPath = path16.normalize(absolutePath);
+          const absolutePath = path17.isAbsolute(filePath) ? filePath : path17.resolve(process.cwd(), filePath);
+          const normalizedPath = path17.normalize(absolutePath);
           const cwd = process.cwd();
-          if (!normalizedPath.startsWith(cwd + path16.sep) && normalizedPath !== cwd) {
+          if (!normalizedPath.startsWith(cwd + path17.sep) && normalizedPath !== cwd) {
             return null;
           }
           try {
@@ -41696,13 +41835,13 @@ var init_script_check_provider = __esm({
 });
 
 // src/utils/worktree-manager.ts
-var fs16, fsp, path17, crypto, WorktreeManager, worktreeManager;
+var fs16, fsp, path18, crypto, WorktreeManager, worktreeManager;
 var init_worktree_manager = __esm({
   "src/utils/worktree-manager.ts"() {
     "use strict";
     fs16 = __toESM(require("fs"));
     fsp = __toESM(require("fs/promises"));
-    path17 = __toESM(require("path"));
+    path18 = __toESM(require("path"));
     crypto = __toESM(require("crypto"));
     init_command_executor();
     init_logger();
@@ -41718,7 +41857,7 @@ var init_worktree_manager = __esm({
         } catch {
           cwd = "/tmp";
         }
-        const defaultBasePath = process.env.VISOR_WORKTREE_PATH || path17.join(cwd, ".visor", "worktrees");
+        const defaultBasePath = process.env.VISOR_WORKTREE_PATH || path18.join(cwd, ".visor", "worktrees");
         this.config = {
           enabled: true,
           base_path: defaultBasePath,
@@ -41765,10 +41904,10 @@ var init_worktree_manager = __esm({
         }
       }
       getReposDir() {
-        return path17.join(this.config.base_path, "repos");
+        return path18.join(this.config.base_path, "repos");
       }
       getWorktreesDir() {
-        return path17.join(this.config.base_path, "worktrees");
+        return path18.join(this.config.base_path, "worktrees");
       }
       /**
        * Generate a deterministic worktree ID based on repository and ref.
@@ -41786,7 +41925,7 @@ var init_worktree_manager = __esm({
       async getOrCreateBareRepo(repository, repoUrl, token, fetchDepth, cloneTimeoutMs) {
         const reposDir = this.getReposDir();
         const repoName = repository.replace(/\//g, "-");
-        const bareRepoPath = path17.join(reposDir, `${repoName}.git`);
+        const bareRepoPath = path18.join(reposDir, `${repoName}.git`);
         if (fs16.existsSync(bareRepoPath)) {
           logger.debug(`Bare repository already exists: ${bareRepoPath}`);
           const verifyResult = await this.verifyBareRepoRemote(bareRepoPath, repoUrl);
@@ -41906,7 +42045,7 @@ var init_worktree_manager = __esm({
           options.cloneTimeoutMs
         );
         const worktreeId = this.generateWorktreeId(repository, ref);
-        let worktreePath = options.workingDirectory || path17.join(this.getWorktreesDir(), worktreeId);
+        let worktreePath = options.workingDirectory || path18.join(this.getWorktreesDir(), worktreeId);
         if (options.workingDirectory) {
           worktreePath = this.validatePath(options.workingDirectory);
         }
@@ -42163,14 +42302,14 @@ var init_worktree_manager = __esm({
        * Save worktree metadata
        */
       async saveMetadata(worktreePath, metadata) {
-        const metadataPath = path17.join(worktreePath, ".visor-metadata.json");
+        const metadataPath = path18.join(worktreePath, ".visor-metadata.json");
         fs16.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
       }
       /**
        * Load worktree metadata
        */
       async loadMetadata(worktreePath) {
-        const metadataPath = path17.join(worktreePath, ".visor-metadata.json");
+        const metadataPath = path18.join(worktreePath, ".visor-metadata.json");
         if (!fs16.existsSync(metadataPath)) {
           return null;
         }
@@ -42194,7 +42333,7 @@ var init_worktree_manager = __esm({
         const worktrees = [];
         for (const entry of entries) {
           if (!entry.isDirectory()) continue;
-          const worktreePath = path17.join(worktreesDir, entry.name);
+          const worktreePath = path18.join(worktreesDir, entry.name);
           const metadata = await this.loadMetadata(worktreePath);
           if (metadata) {
             worktrees.push({
@@ -42326,8 +42465,8 @@ var init_worktree_manager = __esm({
        * Validate path to prevent directory traversal
        */
       validatePath(userPath) {
-        const resolvedPath = path17.resolve(userPath);
-        if (!path17.isAbsolute(resolvedPath)) {
+        const resolvedPath = path18.resolve(userPath);
+        if (!path18.isAbsolute(resolvedPath)) {
           throw new Error("Path must be absolute");
         }
         const sensitivePatterns = [
@@ -44354,18 +44493,18 @@ __export(renderer_schema_exports, {
 async function loadRendererSchema(name) {
   try {
     const fs22 = await import("fs/promises");
-    const path24 = await import("path");
+    const path25 = await import("path");
     const sanitized = String(name).replace(/[^a-zA-Z0-9-]/g, "");
     if (!sanitized) return void 0;
     const candidates = [
       // When bundled with ncc, __dirname is dist/ and output/ is at dist/output/
-      path24.join(__dirname, "output", sanitized, "schema.json"),
+      path25.join(__dirname, "output", sanitized, "schema.json"),
       // When running from source, __dirname is src/state-machine/dispatch/ and output/ is at output/
-      path24.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
+      path25.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
       // When running from a checkout with output/ folder copied to CWD
-      path24.join(process.cwd(), "output", sanitized, "schema.json"),
+      path25.join(process.cwd(), "output", sanitized, "schema.json"),
       // Fallback: cwd/dist/output/
-      path24.join(process.cwd(), "dist", "output", sanitized, "schema.json")
+      path25.join(process.cwd(), "dist", "output", sanitized, "schema.json")
     ];
     for (const p of candidates) {
       try {
@@ -44390,6 +44529,33 @@ var init_renderer_schema = __esm({
 });
 
 // src/state-machine/states/level-dispatch.ts
+async function renderTemplateArgs(args, dependencyResults, context2) {
+  if (!args || Object.keys(args).length === 0) {
+    return args;
+  }
+  const liquid = createExtendedLiquid();
+  const renderedArgs = {};
+  const templateContext = {
+    outputs: dependencyResults,
+    output: dependencyResults,
+    // Alias for convenience
+    env: process.env,
+    inputs: context2.executionContext?.workflowInputs || {}
+  };
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === "string" && value.includes("{{")) {
+      try {
+        renderedArgs[key] = await liquid.parseAndRender(value, templateContext);
+      } catch (error) {
+        logger.warn(`[LevelDispatch] Failed to render template for arg ${key}: ${error}`);
+        renderedArgs[key] = value;
+      }
+    } else {
+      renderedArgs[key] = value;
+    }
+  }
+  return renderedArgs;
+}
 function mapCheckNameToFocus2(checkName) {
   const focusMap = {
     security: "security",
@@ -44681,6 +44847,7 @@ async function executeCheckGroup(checks, context2, state, maxParallelism, emitEv
         }
         try {
           state.pendingRunScopes?.delete(checkId);
+          state.pendingRunArgs?.delete(checkId);
         } catch {
         }
       } else {
@@ -44908,6 +45075,15 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
         }
       } catch {
       }
+      try {
+        if (!providerConfig.eventContext?.conversation && context2.executionContext?.conversation) {
+          providerConfig.eventContext = {
+            ...providerConfig.eventContext,
+            conversation: context2.executionContext.conversation
+          };
+        }
+      } catch {
+      }
       const dependencyResults = buildDependencyResultsWithScope2(
         checkId,
         checkConfig,
@@ -44976,11 +45152,20 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
         files: [],
         commits: []
       };
+      const rawPendingArgs = state.pendingRunArgs?.get(checkId);
+      const depResultsObj = {};
+      for (const [k, v] of dependencyResults.entries()) {
+        const summary = v;
+        depResultsObj[k] = summary.output !== void 0 ? summary.output : summary;
+      }
+      const renderedArgs = rawPendingArgs ? await renderTemplateArgs(rawPendingArgs, depResultsObj, context2) : void 0;
       const executionContext = {
         ...context2.executionContext,
         _engineMode: context2.mode,
         _parentContext: context2,
-        _parentState: state
+        _parentState: state,
+        // Inject args from on_success.run with directives (merged with existing args)
+        args: renderedArgs ? { ...context2.executionContext?.args || {}, ...renderedArgs } : context2.executionContext?.args
       };
       {
         const assumeExpr = checkConfig?.assume;
@@ -44989,10 +45174,12 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
           try {
             const evaluator = new FailureConditionEvaluator();
             const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+            const conversation = context2.executionContext?.conversation || providerConfig?.eventContext?.conversation;
             for (const ex of exprs) {
               const res = await evaluator.evaluateIfCondition(checkId, ex, {
                 event: context2.event || "manual",
-                previousResults: dependencyResults
+                previousResults: dependencyResults,
+                conversation
               });
               if (!res) {
                 ok = false;
@@ -46011,6 +46198,15 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
       }
     } catch {
     }
+    try {
+      if (!providerConfig.eventContext?.conversation && context2.executionContext?.conversation) {
+        providerConfig.eventContext = {
+          ...providerConfig.eventContext,
+          conversation: context2.executionContext.conversation
+        };
+      }
+    } catch {
+    }
     const dependencyResults = buildDependencyResults(checkId, checkConfig2, context2, state);
     const prInfo = context2.prInfo || {
       number: 1,
@@ -46021,13 +46217,22 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
       files: [],
       commits: []
     };
+    const rawPendingArgs = state.pendingRunArgs?.get(checkId);
+    const depResultsObj = {};
+    for (const [k, v] of dependencyResults.entries()) {
+      const summary = v;
+      depResultsObj[k] = summary.output !== void 0 ? summary.output : summary;
+    }
+    const renderedArgs = rawPendingArgs ? await renderTemplateArgs(rawPendingArgs, depResultsObj, context2) : void 0;
     const executionContext = {
       ...context2.executionContext,
       _engineMode: context2.mode,
       _parentContext: context2,
       _parentState: state,
       // Make checks metadata available to providers that want it
-      checksMeta
+      checksMeta,
+      // Inject args from on_success.run with directives (merged with existing args)
+      args: renderedArgs ? { ...context2.executionContext?.args || {}, ...renderedArgs } : context2.executionContext?.args
     };
     {
       const assumeExpr = checkConfig2?.assume;
@@ -46036,10 +46241,12 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
         try {
           const evaluator = new FailureConditionEvaluator();
           const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+          const conversation = context2.executionContext?.conversation || providerConfig?.eventContext?.conversation;
           for (const ex of exprs) {
             const res = await evaluator.evaluateIfCondition(checkId, ex, {
               event: context2.event || "manual",
-              previousResults: dependencyResults
+              previousResults: dependencyResults,
+              conversation
             });
             if (!res) {
               ok = false;
@@ -46721,7 +46928,7 @@ async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
     const fs22 = await import("fs/promises");
-    const path24 = await import("path");
+    const path25 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
@@ -46730,22 +46937,22 @@ async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
       logger.debug(`[LevelDispatch] Using inline template for ${checkId}`);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path24.resolve(process.cwd(), file);
+      const resolved = path25.resolve(process.cwd(), file);
       templateContent = await fs22.readFile(resolved, "utf-8");
       logger.debug(`[LevelDispatch] Using template file for ${checkId}: ${resolved}`);
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path24.join(__dirname, "output", sanitized, "template.liquid"),
+          path25.join(__dirname, "output", sanitized, "template.liquid"),
           // bundled: dist/output/
-          path24.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path25.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // source (from state-machine/states)
-          path24.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
+          path25.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
           // source (alternate)
-          path24.join(process.cwd(), "output", sanitized, "template.liquid"),
+          path25.join(process.cwd(), "output", sanitized, "template.liquid"),
           // fallback: cwd/output/
-          path24.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          path25.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
           // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
@@ -46818,6 +47025,7 @@ var init_level_dispatch = __esm({
     init_workflow_inputs();
     init_sandbox_routing();
     init_policy_gate();
+    init_liquid_extensions();
   }
 });
 
@@ -47987,13 +48195,13 @@ var init_sandbox_manager = __esm({
 });
 
 // src/utils/file-exclusion.ts
-var import_ignore, fs17, path18, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
+var import_ignore, fs17, path19, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
 var init_file_exclusion = __esm({
   "src/utils/file-exclusion.ts"() {
     "use strict";
     import_ignore = __toESM(require("ignore"));
     fs17 = __toESM(require("fs"));
-    path18 = __toESM(require("path"));
+    path19 = __toESM(require("path"));
     DEFAULT_EXCLUSION_PATTERNS = [
       "dist/",
       "build/",
@@ -48012,7 +48220,7 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to include (optional, defaults to common build artifacts)
        */
       constructor(workingDirectory = process.cwd(), additionalPatterns = DEFAULT_EXCLUSION_PATTERNS) {
-        const normalizedPath = path18.resolve(workingDirectory);
+        const normalizedPath = path19.resolve(workingDirectory);
         if (normalizedPath.includes("\0")) {
           throw new Error("Invalid workingDirectory: contains null bytes");
         }
@@ -48024,11 +48232,11 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to add to gitignore rules
        */
       loadGitignore(additionalPatterns) {
-        const gitignorePath = path18.resolve(this.workingDirectory, ".gitignore");
-        const resolvedWorkingDir = path18.resolve(this.workingDirectory);
+        const gitignorePath = path19.resolve(this.workingDirectory, ".gitignore");
+        const resolvedWorkingDir = path19.resolve(this.workingDirectory);
         try {
-          const relativePath = path18.relative(resolvedWorkingDir, gitignorePath);
-          if (relativePath.startsWith("..") || path18.isAbsolute(relativePath)) {
+          const relativePath = path19.relative(resolvedWorkingDir, gitignorePath);
+          if (relativePath.startsWith("..") || path19.isAbsolute(relativePath)) {
             throw new Error("Invalid gitignore path: path traversal detected");
           }
           if (relativePath !== ".gitignore") {
@@ -48071,12 +48279,12 @@ var git_repository_analyzer_exports = {};
 __export(git_repository_analyzer_exports, {
   GitRepositoryAnalyzer: () => GitRepositoryAnalyzer
 });
-var import_simple_git2, path19, fs18, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
+var import_simple_git2, path20, fs18, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
 var init_git_repository_analyzer = __esm({
   "src/git-repository-analyzer.ts"() {
     "use strict";
     import_simple_git2 = require("simple-git");
-    path19 = __toESM(require("path"));
+    path20 = __toESM(require("path"));
     fs18 = __toESM(require("fs"));
     init_file_exclusion();
     MAX_PATCH_SIZE = 50 * 1024;
@@ -48266,7 +48474,7 @@ ${file.patch}`).join("\n\n");
               console.error(`\u23ED\uFE0F  Skipping excluded file: ${file}`);
               continue;
             }
-            const filePath = path19.join(this.cwd, file);
+            const filePath = path20.join(this.cwd, file);
             const fileChange = await this.analyzeFileChange(file, status2, filePath, includeContext);
             changes.push(fileChange);
           }
@@ -48461,12 +48669,12 @@ function shellEscape(str) {
 function sanitizePathComponent(name) {
   return name.replace(/\.\./g, "").replace(/[\/\\]/g, "-").replace(/^\.+/, "").trim() || "unnamed";
 }
-var fsp2, path20, WorkspaceManager;
+var fsp2, path21, WorkspaceManager;
 var init_workspace_manager = __esm({
   "src/utils/workspace-manager.ts"() {
     "use strict";
     fsp2 = __toESM(require("fs/promises"));
-    path20 = __toESM(require("path"));
+    path21 = __toESM(require("path"));
     init_command_executor();
     init_logger();
     WorkspaceManager = class _WorkspaceManager {
@@ -48500,7 +48708,7 @@ var init_workspace_manager = __esm({
         };
         this.basePath = this.config.basePath;
         const workspaceDirName = sanitizePathComponent(this.config.name || this.sessionId);
-        this.workspacePath = path20.join(this.basePath, workspaceDirName);
+        this.workspacePath = path21.join(this.basePath, workspaceDirName);
       }
       /**
        * Get or create a WorkspaceManager instance for a session
@@ -48547,8 +48755,8 @@ var init_workspace_manager = __esm({
         );
         if (this.cleanupRequested && this.activeOperations === 0) {
           logger.debug(`[Workspace] All references released, proceeding with deferred cleanup`);
-          for (const resolve10 of this.cleanupResolvers) {
-            resolve10();
+          for (const resolve11 of this.cleanupResolvers) {
+            resolve11();
           }
           this.cleanupResolvers = [];
         }
@@ -48595,7 +48803,7 @@ var init_workspace_manager = __esm({
           configuredMainProjectName || this.extractProjectName(this.originalPath)
         );
         this.usedNames.add(mainProjectName);
-        const mainProjectPath = path20.join(this.workspacePath, mainProjectName);
+        const mainProjectPath = path21.join(this.workspacePath, mainProjectName);
         const isGitRepo = await this.isGitRepository(this.originalPath);
         if (isGitRepo) {
           await this.createMainProjectWorktree(mainProjectPath);
@@ -48636,7 +48844,7 @@ var init_workspace_manager = __esm({
         let projectName = sanitizePathComponent(description || this.extractRepoName(repository));
         projectName = this.getUniqueName(projectName);
         this.usedNames.add(projectName);
-        const workspacePath = path20.join(this.workspacePath, projectName);
+        const workspacePath = path21.join(this.workspacePath, projectName);
         await fsp2.rm(workspacePath, { recursive: true, force: true });
         try {
           await fsp2.symlink(worktreePath, workspacePath);
@@ -48673,19 +48881,19 @@ var init_workspace_manager = __esm({
           );
           this.cleanupRequested = true;
           await Promise.race([
-            new Promise((resolve10) => {
+            new Promise((resolve11) => {
               if (this.activeOperations === 0) {
-                resolve10();
+                resolve11();
               } else {
-                this.cleanupResolvers.push(resolve10);
+                this.cleanupResolvers.push(resolve11);
               }
             }),
-            new Promise((resolve10) => {
+            new Promise((resolve11) => {
               setTimeout(() => {
                 logger.warn(
                   `[Workspace] Cleanup timeout after ${timeout}ms, proceeding anyway (${this.activeOperations} operations still active)`
                 );
-                resolve10();
+                resolve11();
               }, timeout);
             })
           ]);
@@ -48775,7 +48983,7 @@ var init_workspace_manager = __esm({
        * Extract project name from path
        */
       extractProjectName(dirPath) {
-        return path20.basename(dirPath);
+        return path21.basename(dirPath);
       }
       /**
        * Extract repository name from owner/repo format
@@ -49849,8 +50057,8 @@ ${content}
        * Sleep utility
        */
       sleep(ms) {
-        return new Promise((resolve10) => {
-          const t = setTimeout(resolve10, ms);
+        return new Promise((resolve11) => {
+          const t = setTimeout(resolve11, ms);
           if (typeof t.unref === "function") {
             try {
               t.unref();
@@ -50124,8 +50332,8 @@ ${end}`);
       async updateGroupedComment(ctx, comments, group, changedIds) {
         const existingLock = this.updateLocks.get(group);
         let resolveLock;
-        const ourLock = new Promise((resolve10) => {
-          resolveLock = resolve10;
+        const ourLock = new Promise((resolve11) => {
+          resolveLock = resolve11;
         });
         this.updateLocks.set(group, ourLock);
         try {
@@ -50437,7 +50645,7 @@ ${blocks}
        * Sleep utility for enforcing delays
        */
       sleep(ms) {
-        return new Promise((resolve10) => setTimeout(resolve10, ms));
+        return new Promise((resolve11) => setTimeout(resolve11, ms));
       }
     };
   }
@@ -50490,30 +50698,65 @@ var init_client = __esm({
           text,
           thread_ts
         }) => {
-          const resp = await this.api("chat.postMessage", { channel, text, thread_ts });
-          if (!resp || resp.ok !== true) {
-            const err = resp && resp.error || "unknown_error";
-            console.warn(`Slack chat.postMessage failed (non-fatal): ${err}`);
+          try {
+            const resp = await this.api("chat.postMessage", { channel, text, thread_ts });
+            if (!resp || resp.ok !== true) {
+              const err = resp && resp.error || "unknown_error";
+              const warnings = Array.isArray(resp?.response_metadata?.warnings) ? resp.response_metadata.warnings.join(",") : "";
+              console.warn(
+                `Slack chat.postMessage failed (non-fatal): error=${err} channel=${channel} thread_ts=${thread_ts || "-"} text_len=${text.length}${warnings ? ` warnings=${warnings}` : ""}`
+              );
+              return {
+                ok: false,
+                ts: void 0,
+                message: void 0,
+                data: resp,
+                error: err
+              };
+            }
             return {
+              ok: true,
+              ts: resp.ts || resp.message && resp.message.ts || void 0,
+              message: resp.message,
+              data: resp,
+              error: void 0
+            };
+          } catch (e) {
+            console.warn(
+              `Slack chat.postMessage threw (non-fatal): channel=${channel} thread_ts=${thread_ts || "-"} text_len=${text.length} error=${e instanceof Error ? e.message : String(e)}`
+            );
+            return {
+              ok: false,
               ts: void 0,
               message: void 0,
-              data: resp
+              data: void 0,
+              error: e instanceof Error ? e.message : String(e)
             };
           }
-          return {
-            ts: resp.ts || resp.message && resp.message.ts || void 0,
-            message: resp.message,
-            data: resp
-          };
         },
         update: async ({ channel, ts, text }) => {
-          const resp = await this.api("chat.update", { channel, ts, text });
-          if (!resp || resp.ok !== true) {
-            const err = resp && resp.error || "unknown_error";
-            console.warn(`Slack chat.update failed (non-fatal): ${err}`);
-            return { ok: false, ts };
+          try {
+            const resp = await this.api("chat.update", { channel, ts, text });
+            if (!resp || resp.ok !== true) {
+              const err = resp && resp.error || "unknown_error";
+              const warnings = Array.isArray(resp?.response_metadata?.warnings) ? resp.response_metadata.warnings.join(",") : "";
+              console.warn(
+                `Slack chat.update failed (non-fatal): error=${err} channel=${channel} ts=${ts} text_len=${text.length}${warnings ? ` warnings=${warnings}` : ""}`
+              );
+              return { ok: false, ts, error: err, data: resp };
+            }
+            return { ok: true, ts: resp.ts || ts, error: void 0, data: resp };
+          } catch (e) {
+            console.warn(
+              `Slack chat.update threw (non-fatal): channel=${channel} ts=${ts} text_len=${text.length} error=${e instanceof Error ? e.message : String(e)}`
+            );
+            return {
+              ok: false,
+              ts,
+              error: e instanceof Error ? e.message : String(e),
+              data: void 0
+            };
           }
-          return { ok: true, ts: resp.ts || ts };
         }
       };
       async getBotUserId() {
@@ -50704,11 +50947,11 @@ function extractMermaidDiagrams(text) {
 }
 async function renderMermaidToPng(mermaidCode) {
   const tmpDir = os.tmpdir();
-  const inputFile = path22.join(
+  const inputFile = path23.join(
     tmpDir,
     `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}.mmd`
   );
-  const outputFile = path22.join(
+  const outputFile = path23.join(
     tmpDir,
     `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}.png`
   );
@@ -50731,7 +50974,7 @@ async function renderMermaidToPng(mermaidCode) {
     if (chromiumPath) {
       env.PUPPETEER_EXECUTABLE_PATH = chromiumPath;
     }
-    const result = await new Promise((resolve10) => {
+    const result = await new Promise((resolve11) => {
       const proc = (0, import_child_process5.spawn)(
         "npx",
         [
@@ -50761,13 +51004,13 @@ async function renderMermaidToPng(mermaidCode) {
       });
       proc.on("close", (code) => {
         if (code === 0) {
-          resolve10({ success: true });
+          resolve11({ success: true });
         } else {
-          resolve10({ success: false, error: stderr || `Exit code ${code}` });
+          resolve11({ success: false, error: stderr || `Exit code ${code}` });
         }
       });
       proc.on("error", (err) => {
-        resolve10({ success: false, error: err.message });
+        resolve11({ success: false, error: err.message });
       });
     });
     if (!result.success) {
@@ -50850,13 +51093,13 @@ function markdownToSlack(text) {
 function formatSlackText(text) {
   return markdownToSlack(text);
 }
-var import_child_process5, fs20, path22, os;
+var import_child_process5, fs20, path23, os;
 var init_markdown = __esm({
   "src/slack/markdown.ts"() {
     "use strict";
     import_child_process5 = require("child_process");
     fs20 = __toESM(require("fs"));
-    path22 = __toESM(require("path"));
+    path23 = __toESM(require("path"));
     os = __toESM(require("os"));
   }
 });
@@ -50883,11 +51126,21 @@ var init_slack_frontend = __esm({
       ackName = "eyes";
       doneName = "thumbsup";
       errorNotified = false;
+      cachedTraceInfo = null;
       constructor(config) {
         this.cfg = config || {};
       }
       start(ctx) {
         const bus = ctx.eventBus;
+        if (!this.cachedTraceInfo) {
+          this.cachedTraceInfo = this.getTraceInfo();
+        }
+        if (!this.cachedTraceInfo) {
+          const runTraceId = ctx?.run?.traceId;
+          if (typeof runTraceId === "string" && runTraceId) {
+            this.cachedTraceInfo = { traceId: runTraceId, spanId: "" };
+          }
+        }
         try {
           const hasClient = !!(ctx.slack || ctx.slackClient || this.cfg?.botToken || process.env.SLACK_BOT_TOKEN);
           ctx.logger.info(`[slack-frontend] started; hasClient=${hasClient} defaultChannel=unset`);
@@ -51070,14 +51323,22 @@ var init_slack_frontend = __esm({
         const ev = payload?.event;
         const channel = String(ev?.channel || "");
         const threadTs = String(ev?.thread_ts || ev?.ts || ev?.event_ts || "");
-        if (!channel || !threadTs) return;
+        if (!channel || !threadTs) {
+          try {
+            ctx.logger.warn(
+              `[slack-frontend] skip posting error notice: missing channel/thread (channel=${channel || "-"} thread=${threadTs || "-"})`
+            );
+          } catch {
+          }
+          return;
+        }
         let text = `\u274C ${title}`;
         if (checkId) text += `
 Check: ${checkId}`;
         if (message) text += `
 ${message}`;
         if (this.isTelemetryEnabled(ctx)) {
-          const traceInfo = this.getTraceInfo();
+          const traceInfo = this.getTraceInfo() || this.cachedTraceInfo;
           if (traceInfo?.traceId) {
             text += `
 
@@ -51085,7 +51346,20 @@ ${message}`;
           }
         }
         const formattedText = formatSlackText(text);
-        await slack.chat.postMessage({ channel, text: formattedText, thread_ts: threadTs });
+        const postResult = await slack.chat.postMessage({
+          channel,
+          text: formattedText,
+          thread_ts: threadTs
+        });
+        if (!postResult?.ok) {
+          try {
+            ctx.logger.warn(
+              `[slack-frontend] failed to post error notice to ${channel} thread=${threadTs} check=${checkId || "run"} error=${postResult?.error || "unknown_error"}`
+            );
+          } catch {
+          }
+          return;
+        }
         try {
           ctx.logger.info(
             `[slack-frontend] posted error notice to ${channel} thread=${threadTs} check=${checkId || "run"}`
@@ -51153,6 +51427,9 @@ ${message}`;
         }
         this.acked = true;
         this.ackRef = ref;
+        if (!this.cachedTraceInfo) {
+          this.cachedTraceInfo = this.getTraceInfo();
+        }
       }
       async finalizeReactions(ctx) {
         if (!this.acked || !this.ackRef) return;
@@ -51199,7 +51476,8 @@ ${message}`;
           const providerType = checkCfg.type || "";
           const isAi = providerType === "ai";
           const isLogChat = providerType === "log" && checkCfg.group === "chat";
-          if (!isAi && !isLogChat) return;
+          const isWorkflow = providerType === "workflow";
+          if (!isAi && !isLogChat && !isWorkflow) return;
           if (checkCfg.criticality === "internal") return;
           if (isAi) {
             const schema = checkCfg.schema;
@@ -51214,7 +51492,12 @@ ${message}`;
           const ev = payload?.event;
           const channel = String(ev?.channel || "");
           const threadTs = String(ev?.thread_ts || ev?.ts || ev?.event_ts || "");
-          if (!channel || !threadTs) return;
+          if (!channel || !threadTs) {
+            ctx.logger.warn(
+              `[slack-frontend] skip posting AI reply for ${checkId}: missing channel/thread (channel=${channel || "-"} thread=${threadTs || "-"})`
+            );
+            return;
+          }
           const out = result?.output;
           let text;
           if (out && typeof out.text === "string" && out.text.trim().length > 0) {
@@ -51235,7 +51518,12 @@ ${message}`;
               text = String(out);
             }
           }
-          if (!text) return;
+          if (!text) {
+            ctx.logger.info(
+              `[slack-frontend] skip posting AI reply for ${checkId}: no renderable text in check output`
+            );
+            return;
+          }
           const diagrams = extractMermaidDiagrams(text);
           let processedText = text;
           if (diagrams.length > 0) {
@@ -51291,7 +51579,7 @@ ${message}`;
           let decoratedText = processedText;
           const telemetryEnabled = telemetryCfg === true || telemetryCfg && typeof telemetryCfg === "object" && telemetryCfg.enabled === true;
           if (telemetryEnabled) {
-            const traceInfo = this.getTraceInfo();
+            const traceInfo = this.getTraceInfo() || this.cachedTraceInfo;
             if (traceInfo?.traceId) {
               const suffix = `\`trace_id: ${traceInfo.traceId}\``;
               decoratedText = `${decoratedText}
@@ -51300,9 +51588,19 @@ ${suffix}`;
             }
           }
           const formattedText = formatSlackText(decoratedText);
-          await slack.chat.postMessage({ channel, text: formattedText, thread_ts: threadTs });
+          const postResult = await slack.chat.postMessage({
+            channel,
+            text: formattedText,
+            thread_ts: threadTs
+          });
+          if (!postResult?.ok) {
+            ctx.logger.warn(
+              `[slack-frontend] failed to post AI reply for ${checkId} to ${channel} thread=${threadTs} error=${postResult?.error || "unknown_error"}`
+            );
+            return;
+          }
           ctx.logger.info(
-            `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs}`
+            `[slack-frontend] posted AI reply for ${checkId} to ${channel} thread=${threadTs} ts=${postResult.ts || "-"}`
           );
           const responseCapture = ctx.responseCapture;
           if (responseCapture && typeof responseCapture === "function") {
@@ -51436,13 +51734,28 @@ var init_chat_state = __esm({
           minute: "2-digit",
           second: "2-digit"
         });
-        const roleLabel = message.role === "user" ? "You" : "Assistant";
-        return `${roleLabel}: [${time}]
-${message.content}`;
+        const content = this.escapeTags(message.content);
+        if (message.role === "user") {
+          const header2 = `{black-bg}{bold} > You {/bold}[${time}]{/black-bg}`;
+          const body = content.split("\n").map((l) => `{black-bg} ${l} {/black-bg}`).join("\n");
+          return `${header2}
+${body}`;
+        }
+        if (message.role === "assistant") {
+          const header2 = `{bold}{green-fg}\u25CF{/green-fg} Assistant{/bold} {gray-fg}[${time}]{/gray-fg}`;
+          return `${header2}
+${content}`;
+        }
+        const header = `{gray-fg}\u2298 Visor [${time}]`;
+        return `${header}
+${content}{/gray-fg}`;
+      }
+      escapeTags(text) {
+        return text.replace(/\{/g, "\\{");
       }
       formatHistoryForDisplay() {
         if (this._history.length === 0) {
-          return "No messages yet. Type a message to start...";
+          return "{gray-fg}No messages yet. Type a message to start...{/gray-fg}";
         }
         const separator = "\n\n";
         return this._history.map((msg) => this.formatMessageForDisplay(msg)).join(separator);
@@ -51525,11 +51838,7 @@ var init_tui_frontend = __esm({
           const cfg = ctx.config || {};
           const checkCfg = cfg.checks?.[checkId];
           if (!checkCfg) return;
-          const providerType = checkCfg.type || "";
-          const isAi = providerType === "ai";
-          const isLogChat = providerType === "log" && checkCfg.group === "chat";
           if (checkCfg.criticality === "internal") return;
-          if (!isAi && !isLogChat) return;
           let text;
           const out = result?.output;
           if (out) {
@@ -51538,16 +51847,14 @@ var init_tui_frontend = __esm({
               text = extracted.trim();
             } else if (typeof out.text === "string" && out.text.trim()) {
               text = out.text.trim();
+            } else if (typeof out === "string" && out.trim()) {
+              text = out.trim();
             }
           }
-          if (!text && isAi && typeof result?.content === "string" && result.content.trim()) {
-            const schema = checkCfg.schema;
-            const isSimpleSchema = typeof schema === "string" ? ["plain", "text", "markdown", "code-review"].includes(schema) : schema === void 0 || schema === null;
-            if (isSimpleSchema) {
-              text = result.content.trim();
-            }
+          if (!text && typeof result?.content === "string" && result.content.trim()) {
+            text = result.content.trim();
           }
-          if (!text && isLogChat) {
+          if (!text) {
             const logResult = result;
             if (typeof logResult?.logOutput === "string" && logResult.logOutput.trim()) {
               text = logResult.logOutput.trim();
@@ -51733,14 +52040,14 @@ function serializeRunState(state) {
     ])
   };
 }
-var path23, fs21, StateMachineExecutionEngine;
+var path24, fs21, StateMachineExecutionEngine;
 var init_state_machine_execution_engine = __esm({
   "src/state-machine-execution-engine.ts"() {
     "use strict";
     init_runner();
     init_logger();
     init_sandbox_manager();
-    path23 = __toESM(require("path"));
+    path24 = __toESM(require("path"));
     fs21 = __toESM(require("fs"));
     StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       workingDirectory;
@@ -51760,6 +52067,11 @@ var init_state_machine_execution_engine = __esm({
       async executeChecks(options) {
         const startTime = Date.now();
         const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+        const optConversation = options?.conversation;
+        if (optConversation) {
+          const prev = this.executionContext || {};
+          this.executionContext = { ...prev, conversation: optConversation };
+        }
         try {
           if (options.config?.memory) {
             const { MemoryStore: MemoryStore2 } = await Promise.resolve().then(() => (init_memory_store(), memory_store_exports));
@@ -52061,6 +52373,13 @@ var init_state_machine_execution_engine = __esm({
               }
             } catch {
             }
+            let runTraceId;
+            try {
+              const { trace: lazyTrace, context: lazyCtx } = await Promise.resolve().then(() => (init_lazy_otel(), lazy_otel_exports));
+              const activeSpan = lazyTrace.getSpan(lazyCtx.active());
+              runTraceId = activeSpan?.spanContext()?.traceId;
+            } catch {
+            }
             await frontendsHost.startAll(() => ({
               eventBus: bus,
               logger,
@@ -52071,6 +52390,7 @@ var init_state_machine_execution_engine = __esm({
                 repo: repoObj,
                 pr: prNum,
                 headSha,
+                traceId: runTraceId,
                 event: context2.event || prInfo?.eventType,
                 actor: prInfo?.eventContext?.sender?.login || (typeof process.env.GITHUB_ACTOR === "string" ? process.env.GITHUB_ACTOR : void 0)
               },
@@ -52104,9 +52424,9 @@ var init_state_machine_execution_engine = __esm({
                   }
                   const checkId = String(ev?.checkId || "unknown");
                   const threadKey = ev?.threadKey || (channel && threadTs ? `${channel}:${threadTs}` : "session");
-                  const baseDir = process.env.VISOR_SNAPSHOT_DIR || path23.resolve(process.cwd(), ".visor", "snapshots");
+                  const baseDir = process.env.VISOR_SNAPSHOT_DIR || path24.resolve(process.cwd(), ".visor", "snapshots");
                   fs21.mkdirSync(baseDir, { recursive: true });
-                  const filePath = path23.join(baseDir, `${threadKey}-${checkId}.json`);
+                  const filePath = path24.join(baseDir, `${threadKey}-${checkId}.json`);
                   await this.saveSnapshotToFile(filePath);
                   logger.info(`[Snapshot] Saved run snapshot: ${filePath}`);
                   try {

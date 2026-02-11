@@ -766,11 +766,15 @@ interface OnFailConfig {
     transitions?: TransitionRule[];
 }
 /**
+ * Success routing run item - can be step name, step with args, or workflow with args
+ */
+type OnSuccessRunItem = string | OnInitStepInvocation | OnInitWorkflowInvocation;
+/**
  * Success routing configuration per check
  */
 interface OnSuccessConfig {
-    /** Post-success steps to run */
-    run?: string[];
+    /** Post-success steps to run - can be step names or rich invocations with arguments */
+    run?: OnSuccessRunItem[];
     /** Optional jump back to ancestor step (by id) */
     goto?: string;
     /** Simulate a different event when performing goto (e.g., 'pr_updated') */
@@ -1498,6 +1502,27 @@ declare class EventBus {
     emit(event: AnyEvent | EventEnvelope): Promise<void>;
 }
 
+/** Bot transport types (trimmed for Slack v1) */
+type BotTransportType = 'slack' | string;
+interface NormalizedMessage {
+    role: 'user' | 'bot';
+    text: string;
+    timestamp: string;
+    origin?: string;
+    /** Optional user identifier (e.g., Slack user id, GitHub login) */
+    user?: string;
+}
+interface ConversationContext {
+    transport: BotTransportType;
+    thread: {
+        id: string;
+        url?: string;
+    };
+    messages: NormalizedMessage[];
+    current: NormalizedMessage;
+    attributes: Record<string, string>;
+}
+
 /**
  * Execution context passed to check providers
  */
@@ -1507,6 +1532,8 @@ interface ExecutionContext {
     reuseSession?: boolean;
     /** CLI message value (from --message argument) */
     cliMessage?: string;
+    /** Conversation context - unified access to user message across transports (CLI, Slack, etc.) */
+    conversation?: ConversationContext;
     /**
      * Stage-local baseline of output history lengths per check name.
      * When present, providers should expose an `outputs_history_stage` object in
