@@ -919,12 +919,22 @@ export class CustomToolsSSEServer implements CustomMCPServer {
         `[CustomToolsSSEServer:${this.sessionId}] Tool execution failed: ${toolName} - ${errorMsg}`
       );
 
+      // Default to internal error
+      let errorCode = -32603;
+      let errorMessage = 'Internal error';
+
+      // Check for specific, user-facing errors like input validation
+      if (errorMsg.startsWith('Invalid workflow inputs:')) {
+        errorCode = -32602; // JSON-RPC standard for Invalid Parameters
+        errorMessage = 'Invalid tool parameters';
+      }
+
       return {
         jsonrpc: '2.0',
         id,
         error: {
-          code: -32603,
-          message: 'Internal error',
+          code: errorCode,
+          message: errorMessage,
           data: {
             tool: toolName,
             error: errorMsg,
