@@ -722,15 +722,15 @@ function __getOrCreateNdjsonPath() {
     if (process.env.VISOR_TELEMETRY_SINK && process.env.VISOR_TELEMETRY_SINK !== "file")
       return null;
     const path25 = require("path");
-    const fs22 = require("fs");
+    const fs21 = require("fs");
     if (process.env.VISOR_FALLBACK_TRACE_FILE) {
       __ndjsonPath = process.env.VISOR_FALLBACK_TRACE_FILE;
       const dir = path25.dirname(__ndjsonPath);
-      if (!fs22.existsSync(dir)) fs22.mkdirSync(dir, { recursive: true });
+      if (!fs21.existsSync(dir)) fs21.mkdirSync(dir, { recursive: true });
       return __ndjsonPath;
     }
     const outDir = process.env.VISOR_TRACE_DIR || path25.join(process.cwd(), "output", "traces");
-    if (!fs22.existsSync(outDir)) fs22.mkdirSync(outDir, { recursive: true });
+    if (!fs21.existsSync(outDir)) fs21.mkdirSync(outDir, { recursive: true });
     if (!__ndjsonPath) {
       const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
       __ndjsonPath = path25.join(outDir, `${ts}.ndjson`);
@@ -742,11 +742,11 @@ function __getOrCreateNdjsonPath() {
 }
 function _appendRunMarker() {
   try {
-    const fs22 = require("fs");
+    const fs21 = require("fs");
     const p = __getOrCreateNdjsonPath();
     if (!p) return;
     const line = { name: "visor.run", attributes: { started: true } };
-    fs22.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
+    fs21.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
   } catch {
   }
 }
@@ -3709,25 +3709,45 @@ function createExtendedLiquid(options = {}) {
   configureLiquidWithExtensions(liquid);
   return liquid;
 }
-var import_liquidjs, import_async_hooks, import_promises2, import_path2, ReadFileTag, permissionsALS;
+var import_liquidjs, import_async_hooks, import_path2, ReadFileTag, permissionsALS;
 var init_liquid_extensions = __esm({
   "src/liquid-extensions.ts"() {
     "use strict";
     import_liquidjs = require("liquidjs");
     import_async_hooks = require("async_hooks");
-    import_promises2 = __toESM(require("fs/promises"));
     import_path2 = __toESM(require("path"));
     init_author_permissions();
     init_memory_store();
     init_sandbox();
     ReadFileTag = class extends import_liquidjs.Tag {
       filepath;
+      indentValue = null;
       constructor(token, remainTokens, liquid) {
         super(token, remainTokens, liquid);
-        this.filepath = new import_liquidjs.Value(token.args, liquid);
+        const argsStr = token.args.trim();
+        const indentMatch = argsStr.match(/^(.+?)\s+indent:\s*(\d+)\s*$/);
+        if (indentMatch) {
+          this.filepath = new import_liquidjs.Value(indentMatch[1].trim(), liquid);
+          this.indentValue = new import_liquidjs.Value(indentMatch[2], liquid);
+        } else {
+          this.filepath = new import_liquidjs.Value(argsStr, liquid);
+        }
       }
       *render(ctx, emitter) {
         const filePath = yield this.filepath.value(ctx, false);
+        let indent = 0;
+        if (this.indentValue) {
+          const indentAmount = yield this.indentValue.value(ctx, false);
+          indent = typeof indentAmount === "number" ? indentAmount : parseInt(String(indentAmount), 10) || 0;
+        } else {
+          const output = emitter.buffer || "";
+          const lastNewline = output.lastIndexOf("\n");
+          if (lastNewline >= 0) {
+            const lineStart = output.substring(lastNewline + 1);
+            const match = lineStart.match(/^(\s*)/);
+            indent = match ? match[1].length : 0;
+          }
+        }
         if (!filePath || typeof filePath !== "string") {
           emitter.write("[Error: Invalid file path]");
           return;
@@ -3741,7 +3761,12 @@ var init_liquid_extensions = __esm({
           return;
         }
         try {
-          const content = yield import_promises2.default.readFile(resolvedPath, "utf-8");
+          let content = require("fs").readFileSync(resolvedPath, "utf-8");
+          if (indent > 0) {
+            const indentStr = " ".repeat(indent);
+            const lines = content.split("\n");
+            content = lines.map((line, i) => i === 0 ? line : indentStr + line).join("\n");
+          }
           emitter.write(content);
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : error?.code || "Unknown error";
@@ -5453,14 +5478,14 @@ function emitMermaidFromMarkdown(checkName, markdown, origin) {
         if (process.env.VISOR_TRACE_REPORT === "true") {
           const outDir = process.env.VISOR_TRACE_DIR || path4.join(process.cwd(), "output", "traces");
           try {
-            if (!fs4.existsSync(outDir)) fs4.mkdirSync(outDir, { recursive: true });
+            if (!fs3.existsSync(outDir)) fs3.mkdirSync(outDir, { recursive: true });
             const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
             const jsonPath = path4.join(outDir, `${ts}.trace.json`);
             const htmlPath = path4.join(outDir, `${ts}.report.html`);
             let data = { spans: [] };
-            if (fs4.existsSync(jsonPath)) {
+            if (fs3.existsSync(jsonPath)) {
               try {
-                data = JSON.parse(fs4.readFileSync(jsonPath, "utf8"));
+                data = JSON.parse(fs3.readFileSync(jsonPath, "utf8"));
               } catch {
                 data = { spans: [] };
               }
@@ -5468,9 +5493,9 @@ function emitMermaidFromMarkdown(checkName, markdown, origin) {
             data.spans.push({
               events: [{ name: "diagram.block", attrs: { check: checkName, origin, code } }]
             });
-            fs4.writeFileSync(jsonPath, JSON.stringify(data, null, 2), "utf8");
-            if (!fs4.existsSync(htmlPath)) {
-              fs4.writeFileSync(
+            fs3.writeFileSync(jsonPath, JSON.stringify(data, null, 2), "utf8");
+            if (!fs3.existsSync(htmlPath)) {
+              fs3.writeFileSync(
                 htmlPath,
                 '<!doctype html><html><head><meta charset="utf-8"/><title>Visor Trace Report</title></head><body><h2>Visor Trace Report</h2></body></html>',
                 "utf8"
@@ -5486,13 +5511,13 @@ function emitMermaidFromMarkdown(checkName, markdown, origin) {
   }
   return count;
 }
-var fs4, path4, MERMAID_RE;
+var fs3, path4, MERMAID_RE;
 var init_mermaid_telemetry = __esm({
   "src/utils/mermaid-telemetry.ts"() {
     "use strict";
     init_trace_helpers();
     init_metrics();
-    fs4 = __toESM(require("fs"));
+    fs3 = __toESM(require("fs"));
     path4 = __toESM(require("path"));
     MERMAID_RE = /```mermaid\s*\n([\s\S]*?)\n```/gi;
   }
@@ -6130,7 +6155,7 @@ var init_dependency_gating = __esm({
 async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs22 = await import("fs/promises");
+    const fs21 = await import("fs/promises");
     const path25 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
@@ -6140,7 +6165,7 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
       const resolved = path25.resolve(process.cwd(), file);
-      templateContent = await fs22.readFile(resolved, "utf-8");
+      templateContent = await fs21.readFile(resolved, "utf-8");
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
@@ -6156,7 +6181,7 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs22.readFile(p, "utf-8");
+            templateContent = await fs21.readFile(p, "utf-8");
             if (templateContent) break;
           } catch {
           }
@@ -6312,8 +6337,8 @@ async function initializeTracer(sessionId, checkName) {
       const sanitizedCheckName = checkName ? path5.basename(checkName) : "check";
       const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
       const traceDir = process.env.GITHUB_WORKSPACE ? path5.join(process.env.GITHUB_WORKSPACE, "debug-artifacts") : path5.join(process.cwd(), "debug-artifacts");
-      if (!fs5.existsSync(traceDir)) {
-        fs5.mkdirSync(traceDir, { recursive: true });
+      if (!fs4.existsSync(traceDir)) {
+        fs4.mkdirSync(traceDir, { recursive: true });
       }
       const traceFilePath = path5.join(traceDir, `trace-${sanitizedCheckName}-${timestamp}.jsonl`);
       const resolvedTracePath = path5.resolve(traceFilePath);
@@ -6358,12 +6383,12 @@ async function initializeTracer(sessionId, checkName) {
     return null;
   }
 }
-var path5, fs5;
+var path5, fs4;
 var init_tracer_init = __esm({
   "src/utils/tracer-init.ts"() {
     "use strict";
     path5 = __toESM(require("path"));
-    fs5 = __toESM(require("fs"));
+    fs4 = __toESM(require("fs"));
   }
 });
 
@@ -6561,7 +6586,7 @@ async function processDiffWithOutline(diffContent) {
   }
   try {
     const originalProbePath = process.env.PROBE_PATH;
-    const fs22 = require("fs");
+    const fs21 = require("fs");
     const possiblePaths = [
       // Relative to current working directory (most common in production)
       path6.join(process.cwd(), "node_modules/@probelabs/probe/bin/probe-binary"),
@@ -6572,7 +6597,7 @@ async function processDiffWithOutline(diffContent) {
     ];
     let probeBinaryPath;
     for (const candidatePath of possiblePaths) {
-      if (fs22.existsSync(candidatePath)) {
+      if (fs21.existsSync(candidatePath)) {
         probeBinaryPath = candidatePath;
         break;
       }
@@ -7637,7 +7662,7 @@ ${schemaString}`);
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs22 = require("fs");
+              const fs21 = require("fs");
               const path25 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const provider = this.config.provider || "auto";
@@ -7753,19 +7778,19 @@ ${"=".repeat(60)}
               readableVersion += `${"=".repeat(60)}
 `;
               const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path25.join(process.cwd(), "debug-artifacts");
-              if (!fs22.existsSync(debugArtifactsDir)) {
-                fs22.mkdirSync(debugArtifactsDir, { recursive: true });
+              if (!fs21.existsSync(debugArtifactsDir)) {
+                fs21.mkdirSync(debugArtifactsDir, { recursive: true });
               }
               const debugFile = path25.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.json`
               );
-              fs22.writeFileSync(debugFile, debugJson, "utf-8");
+              fs21.writeFileSync(debugFile, debugJson, "utf-8");
               const readableFile = path25.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.txt`
               );
-              fs22.writeFileSync(readableFile, readableVersion, "utf-8");
+              fs21.writeFileSync(readableFile, readableVersion, "utf-8");
               log(`
 \u{1F4BE} Full debug info saved to:`);
               log(`   JSON: ${debugFile}`);
@@ -7798,7 +7823,7 @@ ${"=".repeat(60)}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs22 = require("fs");
+              const fs21 = require("fs");
               const path25 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny2 = agent;
@@ -7823,7 +7848,7 @@ ${"=".repeat(60)}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs22.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs21.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -7850,7 +7875,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs22.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs21.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -7859,7 +7884,7 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs22 = require("fs");
+              const fs21 = require("fs");
               const path25 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path25.join(process.cwd(), "debug-artifacts");
@@ -7896,7 +7921,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs22.writeFileSync(responseFile, responseContent, "utf-8");
+              fs21.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -7912,9 +7937,9 @@ ${"=".repeat(60)}
                 await agentAny._telemetryConfig.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${agentAny._traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs22 = require("fs");
-                  if (fs22.existsSync(agentAny._traceFilePath)) {
-                    const stats = fs22.statSync(agentAny._traceFilePath);
+                  const fs21 = require("fs");
+                  if (fs21.existsSync(agentAny._traceFilePath)) {
+                    const stats = fs21.statSync(agentAny._traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::${agentAny._traceFilePath} (${stats.size} bytes)`
                     );
@@ -8109,7 +8134,7 @@ ${schemaString}`);
           const model = this.config.model || "default";
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs22 = require("fs");
+              const fs21 = require("fs");
               const path25 = require("path");
               const os2 = require("os");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
@@ -8185,7 +8210,7 @@ ${"=".repeat(60)}
 `;
               const tempDir = os2.tmpdir();
               const promptFile = path25.join(tempDir, `visor-prompt-${timestamp}.txt`);
-              fs22.writeFileSync(promptFile, prompt, "utf-8");
+              fs21.writeFileSync(promptFile, prompt, "utf-8");
               log(`
 \u{1F4BE} Prompt saved to: ${promptFile}`);
               const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path25.join(process.cwd(), "debug-artifacts");
@@ -8194,8 +8219,8 @@ ${"=".repeat(60)}
                   debugArtifactsDir,
                   `prompt-${_checkName || "unknown"}-${timestamp}`
                 );
-                fs22.writeFileSync(base + ".json", debugJson, "utf-8");
-                fs22.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
+                fs21.writeFileSync(base + ".json", debugJson, "utf-8");
+                fs21.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
                 log(`
 \u{1F4BE} Full debug info saved to directory: ${debugArtifactsDir}`);
               } catch {
@@ -8240,7 +8265,7 @@ $ ${cliCommand}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs22 = require("fs");
+              const fs21 = require("fs");
               const path25 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny = agent;
@@ -8265,7 +8290,7 @@ $ ${cliCommand}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs22.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs21.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -8292,7 +8317,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs22.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs21.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -8301,7 +8326,7 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs22 = require("fs");
+              const fs21 = require("fs");
               const path25 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path25.join(process.cwd(), "debug-artifacts");
@@ -8338,7 +8363,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs22.writeFileSync(responseFile, responseContent, "utf-8");
+              fs21.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -8356,9 +8381,9 @@ ${"=".repeat(60)}
                 await telemetry.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs22 = require("fs");
-                  if (fs22.existsSync(traceFilePath)) {
-                    const stats = fs22.statSync(traceFilePath);
+                  const fs21 = require("fs");
+                  if (fs21.existsSync(traceFilePath)) {
+                    const stats = fs21.statSync(traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::OpenTelemetry trace file size: ${stats.size} bytes`
                     );
@@ -8396,7 +8421,7 @@ ${"=".repeat(60)}
        * Load schema content from schema files or inline definitions
        */
       async loadSchemaContent(schema) {
-        const fs22 = require("fs").promises;
+        const fs21 = require("fs").promises;
         const path25 = require("path");
         if (typeof schema === "object" && schema !== null) {
           log("\u{1F4CB} Using inline schema object from configuration");
@@ -8417,7 +8442,7 @@ ${"=".repeat(60)}
           try {
             const schemaPath = path25.resolve(process.cwd(), schema);
             log(`\u{1F4CB} Loading custom schema from file: ${schemaPath}`);
-            const schemaContent = await fs22.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs21.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch (error) {
             throw new Error(
@@ -8439,7 +8464,7 @@ ${"=".repeat(60)}
         ];
         for (const schemaPath of candidatePaths) {
           try {
-            const schemaContent = await fs22.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs21.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch {
           }
@@ -8846,11 +8871,11 @@ var issue_filter_exports = {};
 __export(issue_filter_exports, {
   IssueFilter: () => IssueFilter
 });
-var fs6, path7, IssueFilter;
+var fs5, path7, IssueFilter;
 var init_issue_filter = __esm({
   "src/issue-filter.ts"() {
     "use strict";
-    fs6 = __toESM(require("fs"));
+    fs5 = __toESM(require("fs"));
     path7 = __toESM(require("path"));
     IssueFilter = class {
       fileCache = /* @__PURE__ */ new Map();
@@ -8920,16 +8945,16 @@ var init_issue_filter = __esm({
         }
         try {
           const resolvedPath = path7.isAbsolute(filePath) ? filePath : path7.join(workingDir, filePath);
-          if (!fs6.existsSync(resolvedPath)) {
-            if (fs6.existsSync(filePath)) {
-              const content2 = fs6.readFileSync(filePath, "utf8");
+          if (!fs5.existsSync(resolvedPath)) {
+            if (fs5.existsSync(filePath)) {
+              const content2 = fs5.readFileSync(filePath, "utf8");
               const lines2 = content2.split("\n");
               this.fileCache.set(filePath, lines2);
               return lines2;
             }
             return null;
           }
-          const content = fs6.readFileSync(resolvedPath, "utf8");
+          const content = fs5.readFileSync(resolvedPath, "utf8");
           const lines = content.split("\n");
           this.fileCache.set(filePath, lines);
           return lines;
@@ -10369,11 +10394,11 @@ var init_config_merger = __esm({
 });
 
 // src/utils/config-loader.ts
-var fs8, path9, yaml2, ConfigLoader;
+var fs7, path9, yaml2, ConfigLoader;
 var init_config_loader = __esm({
   "src/utils/config-loader.ts"() {
     "use strict";
-    fs8 = __toESM(require("fs"));
+    fs7 = __toESM(require("fs"));
     path9 = __toESM(require("path"));
     yaml2 = __toESM(require("js-yaml"));
     ConfigLoader = class {
@@ -10468,7 +10493,7 @@ var init_config_loader = __esm({
         const resolvedPath = path9.resolve(basePath, filePath);
         this.validateLocalPath(resolvedPath);
         try {
-          const content = fs8.readFileSync(resolvedPath, "utf8");
+          const content = fs7.readFileSync(resolvedPath, "utf8");
           const config = yaml2.load(content);
           if (!config || typeof config !== "object") {
             throw new Error(`Invalid YAML in configuration file: ${resolvedPath}`);
@@ -10573,14 +10598,14 @@ var init_config_loader = __esm({
         ].filter((p) => p);
         let defaultConfigPath;
         for (const possiblePath of possiblePaths) {
-          if (fs8.existsSync(possiblePath)) {
+          if (fs7.existsSync(possiblePath)) {
             defaultConfigPath = possiblePath;
             break;
           }
         }
         if (defaultConfigPath) {
           console.error(`\u{1F4E6} Loading bundled default configuration from ${defaultConfigPath}`);
-          const content = fs8.readFileSync(defaultConfigPath, "utf8");
+          const content = fs7.readFileSync(defaultConfigPath, "utf8");
           let config = yaml2.load(content);
           if (!config || typeof config !== "object") {
             throw new Error("Invalid default configuration");
@@ -10701,9 +10726,9 @@ var init_config_loader = __esm({
         const root = path9.parse(currentDir).root;
         while (currentDir !== root) {
           const packageJsonPath = path9.join(currentDir, "package.json");
-          if (fs8.existsSync(packageJsonPath)) {
+          if (fs7.existsSync(packageJsonPath)) {
             try {
-              const packageJson = JSON.parse(fs8.readFileSync(packageJsonPath, "utf8"));
+              const packageJson = JSON.parse(fs7.readFileSync(packageJsonPath, "utf8"));
               if (packageJson.name === "@probelabs/visor") {
                 return currentDir;
               }
@@ -13126,12 +13151,12 @@ __export(config_exports, {
   ConfigManager: () => ConfigManager,
   VALID_EVENT_TRIGGERS: () => VALID_EVENT_TRIGGERS
 });
-var yaml3, fs9, path10, import_simple_git, import_ajv3, import_ajv_formats2, VALID_EVENT_TRIGGERS, ConfigManager, __ajvValidate, __ajvErrors;
+var yaml3, fs8, path10, import_simple_git, import_ajv3, import_ajv_formats2, VALID_EVENT_TRIGGERS, ConfigManager, __ajvValidate, __ajvErrors;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
     yaml3 = __toESM(require("js-yaml"));
-    fs9 = __toESM(require("fs"));
+    fs8 = __toESM(require("fs"));
     path10 = __toESM(require("path"));
     init_logger();
     import_simple_git = __toESM(require("simple-git"));
@@ -13180,7 +13205,7 @@ var init_config = __esm({
         try {
           let configContent;
           try {
-            configContent = fs9.readFileSync(resolvedPath, "utf8");
+            configContent = fs8.readFileSync(resolvedPath, "utf8");
           } catch (readErr) {
             if (readErr && (readErr.code === "ENOENT" || readErr.code === "ENOTDIR")) {
               throw new Error(`Configuration file not found: ${resolvedPath}`);
@@ -13306,7 +13331,7 @@ var init_config = __esm({
           );
           for (const p of candidates) {
             try {
-              const st = fs9.statSync(p);
+              const st = fs8.statSync(p);
               if (!st.isFile()) continue;
               const isLegacy = path10.basename(p).startsWith(".");
               if (isLegacy) {
@@ -13390,7 +13415,7 @@ var init_config = __esm({
           }
           let bundledConfigPath;
           for (const possiblePath of possiblePaths) {
-            if (fs9.existsSync(possiblePath)) {
+            if (fs8.existsSync(possiblePath)) {
               bundledConfigPath = possiblePath;
               break;
             }
@@ -13398,7 +13423,7 @@ var init_config = __esm({
           if (bundledConfigPath) {
             console.error(`\u{1F4E6} Loading bundled default configuration from ${bundledConfigPath}`);
             const readAndParse = (p) => {
-              const raw = fs9.readFileSync(p, "utf8");
+              const raw = fs8.readFileSync(p, "utf8");
               const obj = yaml3.load(raw);
               if (!obj || typeof obj !== "object") return {};
               if (obj.include && !obj.extends) {
@@ -13446,9 +13471,9 @@ var init_config = __esm({
         let currentDir = __dirname;
         while (currentDir !== path10.dirname(currentDir)) {
           const packageJsonPath = path10.join(currentDir, "package.json");
-          if (fs9.existsSync(packageJsonPath)) {
+          if (fs8.existsSync(packageJsonPath)) {
             try {
-              const packageJson = JSON.parse(fs9.readFileSync(packageJsonPath, "utf8"));
+              const packageJson = JSON.parse(fs8.readFileSync(packageJsonPath, "utf8"));
               if (packageJson.name === "@probelabs/visor") {
                 return currentDir;
               }
@@ -14212,7 +14237,7 @@ ${errors}`);
         if (policy.engine === "local" && policy.rules) {
           const rulesPath = Array.isArray(policy.rules) ? policy.rules : [policy.rules];
           for (const rp of rulesPath) {
-            if (typeof rp === "string" && !fs9.existsSync(path10.resolve(rp))) {
+            if (typeof rp === "string" && !fs8.existsSync(path10.resolve(rp))) {
               warnings.push({
                 field: "policy.rules",
                 message: `Policy rules path does not exist: ${rp}. It will be resolved at runtime.`,
@@ -14262,7 +14287,7 @@ ${errors}`);
             });
           }
         }
-        if (policy.data && typeof policy.data === "string" && !fs9.existsSync(path10.resolve(policy.data))) {
+        if (policy.data && typeof policy.data === "string" && !fs8.existsSync(path10.resolve(policy.data))) {
           warnings.push({
             field: "policy.data",
             message: `Policy data file does not exist: ${policy.data}. It will be resolved at runtime.`,
@@ -15285,13 +15310,13 @@ var init_workflow_check_provider = __esm({
        */
       async loadWorkflowFromConfigPath(sourcePath, baseDir) {
         const path25 = require("path");
-        const fs22 = require("fs");
+        const fs21 = require("fs");
         const yaml5 = require("js-yaml");
         const resolved = path25.isAbsolute(sourcePath) ? sourcePath : path25.resolve(baseDir, sourcePath);
-        if (!fs22.existsSync(resolved)) {
+        if (!fs21.existsSync(resolved)) {
           throw new Error(`Workflow config not found at: ${resolved}`);
         }
-        const rawContent = fs22.readFileSync(resolved, "utf8");
+        const rawContent = fs21.readFileSync(resolved, "utf8");
         const rawData = yaml5.load(rawContent);
         if (rawData.imports && Array.isArray(rawData.imports)) {
           const configDir = path25.dirname(resolved);
@@ -15971,7 +15996,7 @@ async function migrateJsonToBackend(jsonPath, backend) {
   const resolvedPath = import_path5.default.resolve(process.cwd(), jsonPath);
   let content;
   try {
-    content = await import_promises3.default.readFile(resolvedPath, "utf-8");
+    content = await import_promises2.default.readFile(resolvedPath, "utf-8");
   } catch (err) {
     if (err.code === "ENOENT") {
       return 0;
@@ -16018,7 +16043,7 @@ async function migrateJsonToBackend(jsonPath, backend) {
 async function renameToMigrated(resolvedPath) {
   const migratedPath = `${resolvedPath}.migrated`;
   try {
-    await import_promises3.default.rename(resolvedPath, migratedPath);
+    await import_promises2.default.rename(resolvedPath, migratedPath);
     logger.info(`[JsonMigrator] Backed up ${resolvedPath} \u2192 ${migratedPath}`);
   } catch (err) {
     logger.warn(
@@ -16026,11 +16051,11 @@ async function renameToMigrated(resolvedPath) {
     );
   }
 }
-var import_promises3, import_path5;
+var import_promises2, import_path5;
 var init_json_migrator = __esm({
   "src/scheduler/store/json-migrator.ts"() {
     "use strict";
-    import_promises3 = __toESM(require("fs/promises"));
+    import_promises2 = __toESM(require("fs/promises"));
     import_path5 = __toESM(require("path"));
     init_logger();
   }
@@ -16439,7 +16464,7 @@ function formatScheduleList(schedules) {
   if (schedules.length === 0) {
     return `You don't have any active schedules.
 
-To create one: "schedule daily-report every Monday at 9am"`;
+To create one: "remind me every Monday at 9am to check PRs" or "schedule %daily-report every Monday at 9am"`;
   }
   const lines = schedules.map((s, i) => `${i + 1}. ${formatSchedule(s)}`);
   return `**Your active schedules:**
@@ -16715,6 +16740,12 @@ function getScheduleToolDefinition() {
 
 YOU (the AI) must extract and structure all scheduling parameters. Do NOT pass natural language time expressions - convert them to cron or ISO timestamps.
 
+CRITICAL WORKFLOW RULE:
+- To schedule a WORKFLOW, the user MUST use a '%' prefix (e.g., "schedule %my-workflow daily").
+- If the '%' prefix is present, extract the word following it as the 'workflow' parameter (without the '%').
+- If the '%' prefix is NOT present, the request is a simple text reminder. The ENTIRE user request (excluding the schedule expression) MUST be placed in the 'reminder_text' parameter.
+- DO NOT guess or infer a workflow name from a user's request without the '%' prefix.
+
 ACTIONS:
 - create: Schedule a new reminder or workflow
 - list: Show user's active schedules
@@ -16722,7 +16753,9 @@ ACTIONS:
 - pause/resume: Temporarily disable/enable a schedule
 
 FOR CREATE ACTION - Extract these from user's request:
-1. WHAT: Either reminder_text (message to send) OR workflow (workflow ID to run)
+1. WHAT:
+   - If user says "schedule %some-workflow ...", populate 'workflow' with "some-workflow".
+   - Otherwise, populate 'reminder_text' with the user's full request text.
 2. WHERE: Use the CURRENT channel from context
    - target_id: The channel ID from context (C... for channels, D... for DMs)
    - target_type: "channel" for public/private channels, "dm" for direct messages
@@ -16757,10 +16790,21 @@ User in DM: "remind me to check builds every day at 9am"
     "original_expression": "every day at 9am"
   }
 
-User in #security channel: "run security-scan every Monday at 10am"
+User in #security channel: "schedule %security-scan every Monday at 10am"
 \u2192 {
     "action": "create",
     "workflow": "security-scan",
+    "is_recurring": true,
+    "cron": "0 10 * * 1",
+    "target_type": "channel",
+    "target_id": "<channel ID from context, e.g., C05ABC123>",
+    "original_expression": "every Monday at 10am"
+  }
+
+User in #security channel: "run security-scan every Monday at 10am" (NO % prefix!)
+\u2192 {
+    "action": "create",
+    "reminder_text": "run security-scan every Monday at 10am",
     "is_recurring": true,
     "cron": "0 10 * * 1",
     "target_type": "channel",
@@ -16811,7 +16855,7 @@ User: "cancel schedule abc123"
         },
         workflow: {
           type: "string",
-          description: "For create: workflow/check ID to run (use instead of reminder_text for workflow execution)"
+          description: 'For create: workflow ID to run. ONLY populate this if the user used the % prefix (e.g., "%my-workflow"). Extract the name without the % symbol. If no % prefix, use reminder_text instead.'
         },
         workflow_inputs: {
           type: "object",
@@ -17831,7 +17875,7 @@ var init_mcp_custom_sse_server = __esm({
 });
 
 // src/providers/ai-check-provider.ts
-var import_promises4, import_path6, AICheckProvider;
+var import_promises3, import_path6, AICheckProvider;
 var init_ai_check_provider = __esm({
   "src/providers/ai-check-provider.ts"() {
     "use strict";
@@ -17840,7 +17884,7 @@ var init_ai_check_provider = __esm({
     init_env_resolver();
     init_issue_filter();
     init_liquid_extensions();
-    import_promises4 = __toESM(require("fs/promises"));
+    import_promises3 = __toESM(require("fs/promises"));
     import_path6 = __toESM(require("path"));
     init_lazy_otel();
     init_state_capture();
@@ -18020,9 +18064,9 @@ var init_ai_check_provider = __esm({
           } else {
             resolvedPath = import_path6.default.resolve(process.cwd(), str);
           }
-          const fs22 = require("fs").promises;
+          const fs21 = require("fs").promises;
           try {
-            const stat = await fs22.stat(resolvedPath);
+            const stat = await fs21.stat(resolvedPath);
             return stat.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
@@ -18055,7 +18099,7 @@ var init_ai_check_provider = __esm({
           throw new Error("Invalid prompt file path: path traversal detected");
         }
         try {
-          const promptContent = await import_promises4.default.readFile(resolvedPath, "utf-8");
+          const promptContent = await import_promises3.default.readFile(resolvedPath, "utf-8");
           return promptContent;
         } catch (error) {
           throw new Error(
@@ -18791,13 +18835,13 @@ ${preview}`);
                   `[AICheckProvider] Started custom tools SSE server '${customToolsServerName}' on port ${port} for ${customTools.size} tools`
                 );
               }
+              const workflowToolTimeout = config.ai?.timeout || 18e5;
               mcpServers[customToolsServerName] = {
                 command: "",
                 args: [],
                 url: `http://localhost:${port}/sse`,
                 transport: "sse",
-                timeout: 6e5
-                // 10 minutes for workflow tools
+                timeout: workflowToolTimeout
               };
             }
           } catch (error) {
@@ -19825,7 +19869,7 @@ var init_template_context = __esm({
 });
 
 // src/providers/http-client-provider.ts
-var fs13, path15, HttpClientProvider;
+var fs12, path15, HttpClientProvider;
 var init_http_client_provider = __esm({
   "src/providers/http-client-provider.ts"() {
     "use strict";
@@ -19835,7 +19879,7 @@ var init_http_client_provider = __esm({
     init_sandbox();
     init_template_context();
     init_logger();
-    fs13 = __toESM(require("fs"));
+    fs12 = __toESM(require("fs"));
     path15 = __toESM(require("path"));
     HttpClientProvider = class extends CheckProvider {
       liquid;
@@ -19937,8 +19981,8 @@ var init_http_client_provider = __esm({
                 `[http_client] Resolved relative output_file to workspace: ${resolvedOutputFile}`
               );
             }
-            if (skipIfExists && fs13.existsSync(resolvedOutputFile)) {
-              const stats = fs13.statSync(resolvedOutputFile);
+            if (skipIfExists && fs12.existsSync(resolvedOutputFile)) {
+              const stats = fs12.statSync(resolvedOutputFile);
               logger.verbose(`[http_client] File cached: ${resolvedOutputFile} (${stats.size} bytes)`);
               return {
                 issues: [],
@@ -20150,12 +20194,12 @@ var init_http_client_provider = __esm({
             };
           }
           const parentDir = path15.dirname(outputFile);
-          if (parentDir && !fs13.existsSync(parentDir)) {
-            fs13.mkdirSync(parentDir, { recursive: true });
+          if (parentDir && !fs12.existsSync(parentDir)) {
+            fs12.mkdirSync(parentDir, { recursive: true });
           }
           const arrayBuffer = await response.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
-          fs13.writeFileSync(outputFile, buffer);
+          fs12.writeFileSync(outputFile, buffer);
           const contentType = response.headers.get("content-type") || "application/octet-stream";
           logger.verbose(`[http_client] Downloaded: ${outputFile} (${buffer.length} bytes)`);
           return {
@@ -20914,7 +20958,7 @@ var init_claude_code_types = __esm({
 function isClaudeCodeConstructor(value) {
   return typeof value === "function";
 }
-var import_promises5, import_path7, ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError, ClaudeCodeCheckProvider;
+var import_promises4, import_path7, ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError, ClaudeCodeCheckProvider;
 var init_claude_code_check_provider = __esm({
   "src/providers/claude-code-check-provider.ts"() {
     "use strict";
@@ -20922,7 +20966,7 @@ var init_claude_code_check_provider = __esm({
     init_env_resolver();
     init_issue_filter();
     init_liquid_extensions();
-    import_promises5 = __toESM(require("fs/promises"));
+    import_promises4 = __toESM(require("fs/promises"));
     import_path7 = __toESM(require("path"));
     init_claude_code_types();
     ClaudeCodeSDKNotInstalledError = class extends Error {
@@ -21087,7 +21131,7 @@ var init_claude_code_check_provider = __esm({
             resolvedPath = import_path7.default.resolve(process.cwd(), str);
           }
           try {
-            const stat = await import_promises5.default.stat(resolvedPath);
+            const stat = await import_promises4.default.stat(resolvedPath);
             return stat.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
@@ -21120,7 +21164,7 @@ var init_claude_code_check_provider = __esm({
           throw new Error("Invalid prompt file path: path traversal detected");
         }
         try {
-          const promptContent = await import_promises5.default.readFile(resolvedPath, "utf-8");
+          const promptContent = await import_promises4.default.readFile(resolvedPath, "utf-8");
           return promptContent;
         } catch (error) {
           throw new Error(
@@ -41197,7 +41241,7 @@ var init_stdin_reader = __esm({
 });
 
 // src/providers/human-input-check-provider.ts
-var fs15, path17, HumanInputCheckProvider;
+var fs14, path17, HumanInputCheckProvider;
 var init_human_input_check_provider = __esm({
   "src/providers/human-input-check-provider.ts"() {
     "use strict";
@@ -41206,7 +41250,7 @@ var init_human_input_check_provider = __esm({
     init_prompt_state();
     init_liquid_extensions();
     init_stdin_reader();
-    fs15 = __toESM(require("fs"));
+    fs14 = __toESM(require("fs"));
     path17 = __toESM(require("path"));
     HumanInputCheckProvider = class _HumanInputCheckProvider extends CheckProvider {
       liquid;
@@ -41388,12 +41432,12 @@ var init_human_input_check_provider = __esm({
             return null;
           }
           try {
-            await fs15.promises.access(normalizedPath, fs15.constants.R_OK);
-            const stats = await fs15.promises.stat(normalizedPath);
+            await fs14.promises.access(normalizedPath, fs14.constants.R_OK);
+            const stats = await fs14.promises.stat(normalizedPath);
             if (!stats.isFile()) {
               return null;
             }
-            const content = await fs15.promises.readFile(normalizedPath, "utf-8");
+            const content = await fs14.promises.readFile(normalizedPath, "utf-8");
             return content.trim();
           } catch {
             return null;
@@ -41835,11 +41879,11 @@ var init_script_check_provider = __esm({
 });
 
 // src/utils/worktree-manager.ts
-var fs16, fsp, path18, crypto, WorktreeManager, worktreeManager;
+var fs15, fsp, path18, crypto, WorktreeManager, worktreeManager;
 var init_worktree_manager = __esm({
   "src/utils/worktree-manager.ts"() {
     "use strict";
-    fs16 = __toESM(require("fs"));
+    fs15 = __toESM(require("fs"));
     fsp = __toESM(require("fs/promises"));
     path18 = __toESM(require("path"));
     crypto = __toESM(require("crypto"));
@@ -41894,12 +41938,12 @@ var init_worktree_manager = __esm({
         }
         const reposDir = this.getReposDir();
         const worktreesDir = this.getWorktreesDir();
-        if (!fs16.existsSync(reposDir)) {
-          fs16.mkdirSync(reposDir, { recursive: true });
+        if (!fs15.existsSync(reposDir)) {
+          fs15.mkdirSync(reposDir, { recursive: true });
           logger.debug(`Created repos directory: ${reposDir}`);
         }
-        if (!fs16.existsSync(worktreesDir)) {
-          fs16.mkdirSync(worktreesDir, { recursive: true });
+        if (!fs15.existsSync(worktreesDir)) {
+          fs15.mkdirSync(worktreesDir, { recursive: true });
           logger.debug(`Created worktrees directory: ${worktreesDir}`);
         }
       }
@@ -41926,7 +41970,7 @@ var init_worktree_manager = __esm({
         const reposDir = this.getReposDir();
         const repoName = repository.replace(/\//g, "-");
         const bareRepoPath = path18.join(reposDir, `${repoName}.git`);
-        if (fs16.existsSync(bareRepoPath)) {
+        if (fs15.existsSync(bareRepoPath)) {
           logger.debug(`Bare repository already exists: ${bareRepoPath}`);
           const verifyResult = await this.verifyBareRepoRemote(bareRepoPath, repoUrl);
           if (verifyResult === "timeout") {
@@ -42049,7 +42093,7 @@ var init_worktree_manager = __esm({
         if (options.workingDirectory) {
           worktreePath = this.validatePath(options.workingDirectory);
         }
-        if (fs16.existsSync(worktreePath)) {
+        if (fs15.existsSync(worktreePath)) {
           logger.debug(`Worktree already exists: ${worktreePath}`);
           const metadata2 = await this.loadMetadata(worktreePath);
           if (metadata2) {
@@ -42290,9 +42334,9 @@ var init_worktree_manager = __esm({
         const result = await this.executeGitCommand(removeCmd, { timeout: 3e4 });
         if (result.exitCode !== 0) {
           logger.warn(`Failed to remove worktree via git: ${result.stderr}`);
-          if (fs16.existsSync(worktree_path)) {
+          if (fs15.existsSync(worktree_path)) {
             logger.debug(`Manually removing worktree directory`);
-            fs16.rmSync(worktree_path, { recursive: true, force: true });
+            fs15.rmSync(worktree_path, { recursive: true, force: true });
           }
         }
         this.activeWorktrees.delete(worktreeId);
@@ -42303,18 +42347,18 @@ var init_worktree_manager = __esm({
        */
       async saveMetadata(worktreePath, metadata) {
         const metadataPath = path18.join(worktreePath, ".visor-metadata.json");
-        fs16.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
+        fs15.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
       }
       /**
        * Load worktree metadata
        */
       async loadMetadata(worktreePath) {
         const metadataPath = path18.join(worktreePath, ".visor-metadata.json");
-        if (!fs16.existsSync(metadataPath)) {
+        if (!fs15.existsSync(metadataPath)) {
           return null;
         }
         try {
-          const content = fs16.readFileSync(metadataPath, "utf8");
+          const content = fs15.readFileSync(metadataPath, "utf8");
           return JSON.parse(content);
         } catch (error) {
           logger.warn(`Failed to load metadata: ${error}`);
@@ -42326,10 +42370,10 @@ var init_worktree_manager = __esm({
        */
       async listWorktrees() {
         const worktreesDir = this.getWorktreesDir();
-        if (!fs16.existsSync(worktreesDir)) {
+        if (!fs15.existsSync(worktreesDir)) {
           return [];
         }
-        const entries = fs16.readdirSync(worktreesDir, { withFileTypes: true });
+        const entries = fs15.readdirSync(worktreesDir, { withFileTypes: true });
         const worktrees = [];
         for (const entry of entries) {
           if (!entry.isDirectory()) continue;
@@ -44492,7 +44536,7 @@ __export(renderer_schema_exports, {
 });
 async function loadRendererSchema(name) {
   try {
-    const fs22 = await import("fs/promises");
+    const fs21 = await import("fs/promises");
     const path25 = await import("path");
     const sanitized = String(name).replace(/[^a-zA-Z0-9-]/g, "");
     if (!sanitized) return void 0;
@@ -44508,7 +44552,7 @@ async function loadRendererSchema(name) {
     ];
     for (const p of candidates) {
       try {
-        const raw = await fs22.readFile(p, "utf-8");
+        const raw = await fs21.readFile(p, "utf-8");
         return JSON.parse(raw);
       } catch {
       }
@@ -46927,7 +46971,7 @@ function updateStats2(results, state, isForEachIteration = false) {
 async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs22 = await import("fs/promises");
+    const fs21 = await import("fs/promises");
     const path25 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
@@ -46938,7 +46982,7 @@ async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
       const resolved = path25.resolve(process.cwd(), file);
-      templateContent = await fs22.readFile(resolved, "utf-8");
+      templateContent = await fs21.readFile(resolved, "utf-8");
       logger.debug(`[LevelDispatch] Using template file for ${checkId}: ${resolved}`);
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
@@ -46957,7 +47001,7 @@ async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs22.readFile(p, "utf-8");
+            templateContent = await fs21.readFile(p, "utf-8");
             if (templateContent) {
               logger.debug(`[LevelDispatch] Using schema template for ${checkId}: ${p}`);
               break;
@@ -48195,12 +48239,12 @@ var init_sandbox_manager = __esm({
 });
 
 // src/utils/file-exclusion.ts
-var import_ignore, fs17, path19, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
+var import_ignore, fs16, path19, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
 var init_file_exclusion = __esm({
   "src/utils/file-exclusion.ts"() {
     "use strict";
     import_ignore = __toESM(require("ignore"));
-    fs17 = __toESM(require("fs"));
+    fs16 = __toESM(require("fs"));
     path19 = __toESM(require("path"));
     DEFAULT_EXCLUSION_PATTERNS = [
       "dist/",
@@ -48246,8 +48290,8 @@ var init_file_exclusion = __esm({
           if (additionalPatterns && additionalPatterns.length > 0) {
             this.gitignore.add(additionalPatterns);
           }
-          if (fs17.existsSync(gitignorePath)) {
-            const rawContent = fs17.readFileSync(gitignorePath, "utf8");
+          if (fs16.existsSync(gitignorePath)) {
+            const rawContent = fs16.readFileSync(gitignorePath, "utf8");
             const gitignoreContent = rawContent.replace(/[\r\n]+/g, "\n").replace(/[\x00-\x09\x0B-\x1F\x7F]/g, "").split("\n").filter((line) => line.length < 1e3).join("\n").trim();
             this.gitignore.add(gitignoreContent);
             if (process.env.VISOR_DEBUG === "true") {
@@ -48279,13 +48323,13 @@ var git_repository_analyzer_exports = {};
 __export(git_repository_analyzer_exports, {
   GitRepositoryAnalyzer: () => GitRepositoryAnalyzer
 });
-var import_simple_git2, path20, fs18, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
+var import_simple_git2, path20, fs17, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
 var init_git_repository_analyzer = __esm({
   "src/git-repository-analyzer.ts"() {
     "use strict";
     import_simple_git2 = require("simple-git");
     path20 = __toESM(require("path"));
-    fs18 = __toESM(require("fs"));
+    fs17 = __toESM(require("fs"));
     init_file_exclusion();
     MAX_PATCH_SIZE = 50 * 1024;
     GitRepositoryAnalyzer = class {
@@ -48550,7 +48594,7 @@ ${file.patch}`).join("\n\n");
         let content;
         let truncated = false;
         try {
-          if (includeContext && status !== "added" && fs18.existsSync(filePath)) {
+          if (includeContext && status !== "added" && fs17.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const result = this.truncatePatch(diff, filename);
@@ -48560,7 +48604,7 @@ ${file.patch}`).join("\n\n");
               additions = lines.filter((line) => line.startsWith("+")).length;
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
-          } else if (status !== "added" && fs18.existsSync(filePath)) {
+          } else if (status !== "added" && fs17.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const lines = diff.split("\n");
@@ -48568,17 +48612,17 @@ ${file.patch}`).join("\n\n");
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
           }
-          if (status === "added" && fs18.existsSync(filePath)) {
+          if (status === "added" && fs17.existsSync(filePath)) {
             try {
-              const stats = fs18.statSync(filePath);
+              const stats = fs17.statSync(filePath);
               if (stats.isFile() && stats.size < 1024 * 1024) {
                 if (includeContext) {
-                  content = fs18.readFileSync(filePath, "utf8");
+                  content = fs17.readFileSync(filePath, "utf8");
                   const result = this.truncatePatch(content, filename);
                   patch = result.patch;
                   truncated = result.truncated;
                 }
-                const fileContent = includeContext ? content : fs18.readFileSync(filePath, "utf8");
+                const fileContent = includeContext ? content : fs17.readFileSync(filePath, "utf8");
                 additions = fileContent.split("\n").length;
               }
             } catch {
@@ -50956,7 +51000,7 @@ async function renderMermaidToPng(mermaidCode) {
     `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}.png`
   );
   try {
-    fs20.writeFileSync(inputFile, mermaidCode, "utf-8");
+    fs19.writeFileSync(inputFile, mermaidCode, "utf-8");
     const chromiumPaths = [
       "/usr/bin/chromium",
       "/usr/bin/chromium-browser",
@@ -50965,7 +51009,7 @@ async function renderMermaidToPng(mermaidCode) {
     ];
     let chromiumPath;
     for (const p of chromiumPaths) {
-      if (fs20.existsSync(p)) {
+      if (fs19.existsSync(p)) {
         chromiumPath = p;
         break;
       }
@@ -51017,19 +51061,19 @@ async function renderMermaidToPng(mermaidCode) {
       console.warn(`Mermaid rendering failed: ${result.error}`);
       return null;
     }
-    if (!fs20.existsSync(outputFile)) {
+    if (!fs19.existsSync(outputFile)) {
       console.warn("Mermaid output file not created");
       return null;
     }
-    const pngBuffer = fs20.readFileSync(outputFile);
+    const pngBuffer = fs19.readFileSync(outputFile);
     return pngBuffer;
   } catch (e) {
     console.warn(`Mermaid rendering error: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   } finally {
     try {
-      if (fs20.existsSync(inputFile)) fs20.unlinkSync(inputFile);
-      if (fs20.existsSync(outputFile)) fs20.unlinkSync(outputFile);
+      if (fs19.existsSync(inputFile)) fs19.unlinkSync(inputFile);
+      if (fs19.existsSync(outputFile)) fs19.unlinkSync(outputFile);
     } catch {
     }
   }
@@ -51093,12 +51137,12 @@ function markdownToSlack(text) {
 function formatSlackText(text) {
   return markdownToSlack(text);
 }
-var import_child_process5, fs20, path23, os;
+var import_child_process5, fs19, path23, os;
 var init_markdown = __esm({
   "src/slack/markdown.ts"() {
     "use strict";
     import_child_process5 = require("child_process");
-    fs20 = __toESM(require("fs"));
+    fs19 = __toESM(require("fs"));
     path23 = __toESM(require("path"));
     os = __toESM(require("os"));
   }
@@ -52040,7 +52084,7 @@ function serializeRunState(state) {
     ])
   };
 }
-var path24, fs21, StateMachineExecutionEngine;
+var path24, fs20, StateMachineExecutionEngine;
 var init_state_machine_execution_engine = __esm({
   "src/state-machine-execution-engine.ts"() {
     "use strict";
@@ -52048,7 +52092,7 @@ var init_state_machine_execution_engine = __esm({
     init_logger();
     init_sandbox_manager();
     path24 = __toESM(require("path"));
-    fs21 = __toESM(require("fs"));
+    fs20 = __toESM(require("fs"));
     StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       workingDirectory;
       executionContext;
@@ -52425,7 +52469,7 @@ var init_state_machine_execution_engine = __esm({
                   const checkId = String(ev?.checkId || "unknown");
                   const threadKey = ev?.threadKey || (channel && threadTs ? `${channel}:${threadTs}` : "session");
                   const baseDir = process.env.VISOR_SNAPSHOT_DIR || path24.resolve(process.cwd(), ".visor", "snapshots");
-                  fs21.mkdirSync(baseDir, { recursive: true });
+                  fs20.mkdirSync(baseDir, { recursive: true });
                   const filePath = path24.join(baseDir, `${threadKey}-${checkId}.json`);
                   await this.saveSnapshotToFile(filePath);
                   logger.info(`[Snapshot] Saved run snapshot: ${filePath}`);
@@ -52567,7 +52611,7 @@ var init_state_machine_execution_engine = __esm({
        * Does not include secrets. Intended for debugging and future resume support.
        */
       async saveSnapshotToFile(filePath) {
-        const fs22 = await import("fs/promises");
+        const fs21 = await import("fs/promises");
         const ctx = this._lastContext;
         const runner = this._lastRunner;
         if (!ctx || !runner) {
@@ -52587,14 +52631,14 @@ var init_state_machine_execution_engine = __esm({
           journal: entries,
           requestedChecks: ctx.requestedChecks || []
         };
-        await fs22.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+        await fs21.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
       }
       /**
        * Load a snapshot JSON from file and return it. Resume support can build on this.
        */
       async loadSnapshotFromFile(filePath) {
-        const fs22 = await import("fs/promises");
-        const raw = await fs22.readFile(filePath, "utf8");
+        const fs21 = await import("fs/promises");
+        const raw = await fs21.readFile(filePath, "utf8");
         return JSON.parse(raw);
       }
       /**
