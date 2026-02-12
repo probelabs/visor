@@ -1,7 +1,6 @@
 // eslint-disable-next-line no-restricted-imports -- this is the extensions file that wraps liquidjs
 import { Liquid, TagToken, Context, TopLevelToken, Tag, Value, Emitter } from 'liquidjs';
 import { AsyncLocalStorage } from 'async_hooks';
-import fs from 'fs/promises';
 import path from 'path';
 import {
   hasMinPermission,
@@ -78,9 +77,10 @@ export class ReadFileTag extends Tag {
       return;
     }
 
-    // Read the file content
+    // Read the file content synchronously to support both parseAndRender and parseAndRenderSync
+    // Using readFileSync ensures compatibility with sync rendering (e.g., loadConfig in expressions)
     try {
-      const content = yield fs.readFile(resolvedPath, 'utf-8');
+      const content = require('fs').readFileSync(resolvedPath, 'utf-8');
       emitter.write(content);
     } catch (error) {
       // Handle file read errors gracefully
