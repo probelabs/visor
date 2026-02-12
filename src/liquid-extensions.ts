@@ -77,7 +77,8 @@ export class ReadFileTag extends Tag {
     let indent = 0;
     if (this.indentValue) {
       const indentAmount = yield this.indentValue.value(ctx, false);
-      indent = typeof indentAmount === 'number' ? indentAmount : parseInt(String(indentAmount), 10) || 0;
+      indent =
+        typeof indentAmount === 'number' ? indentAmount : parseInt(String(indentAmount), 10) || 0;
     } else {
       // Auto-detect indentation by looking at current output position
       // Find the column position by counting characters since the last newline
