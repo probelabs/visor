@@ -276,7 +276,8 @@ No file included
 
         // Create content with lines starting at column 0 - this would break YAML
         // if not properly indented
-        const breakingContent = 'First line\nSecond line starts at column 0\n- List item\n  nested: value';
+        const breakingContent =
+          'First line\nSecond line starts at column 0\n- List item\n  nested: value';
         await fs.writeFile(path.join(tempDir, 'breaking.txt'), breakingContent);
 
         await withTempDir(tempDir, async () => {
@@ -304,7 +305,8 @@ No file included
         const liquid = createExtendedLiquid();
         const yaml = require('js-yaml');
 
-        const nestedContent = 'Documentation content\n\nWith multiple paragraphs.\n\nAnd more text.';
+        const nestedContent =
+          'Documentation content\n\nWith multiple paragraphs.\n\nAnd more text.';
         await fs.writeFile(path.join(tempDir, 'nested.md'), nestedContent);
 
         await withTempDir(tempDir, async () => {
@@ -386,7 +388,8 @@ No file included
         const yaml = require('js-yaml');
 
         // Simulate a skills.yaml with readfile
-        const skillKnowledge = '## Skill Documentation\n\nUse this skill when...\n\n- Point 1\n- Point 2';
+        const skillKnowledge =
+          '## Skill Documentation\n\nUse this skill when...\n\n- Point 1\n- Point 2';
         await fs.writeFile(path.join(tempDir, 'skill-docs.md'), skillKnowledge);
 
         await withTempDir(tempDir, async () => {
