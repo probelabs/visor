@@ -43,10 +43,12 @@ export function sanitizeLabelList(labels: unknown): string[] {
  * Custom ReadFile tag for Liquid templates
  * Usage: {% readfile "path/to/file.txt" %}
  * or with variable: {% readfile filename %}
- * With indentation: {% readfile "path/to/file.txt" indent: 4 %}
  *
- * The indent parameter adds leading spaces to each line (after the first),
- * which is useful when including files inside YAML literal blocks.
+ * AUTOMATIC INDENTATION: The tag automatically detects its position in the output
+ * and indents subsequent lines to match. This makes it safe to use inside YAML
+ * literal blocks (|) without manual indent parameters.
+ *
+ * Manual override: {% readfile "path/to/file.txt" indent: 4 %}
  */
 export class ReadFileTag extends Tag {
   private filepath: Value;
@@ -70,8 +72,25 @@ export class ReadFileTag extends Tag {
 
   *render(ctx: Context, emitter: Emitter): Generator<unknown, void, unknown> {
     const filePath = yield this.filepath.value(ctx, false);
-    const indentAmount = this.indentValue ? yield this.indentValue.value(ctx, false) : 0;
-    const indent = typeof indentAmount === 'number' ? indentAmount : parseInt(String(indentAmount), 10) || 0;
+
+    // Determine indentation: manual override or auto-detect from output buffer
+    let indent = 0;
+    if (this.indentValue) {
+      const indentAmount = yield this.indentValue.value(ctx, false);
+      indent = typeof indentAmount === 'number' ? indentAmount : parseInt(String(indentAmount), 10) || 0;
+    } else {
+      // Auto-detect indentation by looking at current output position
+      // Find the column position by counting characters since the last newline
+      const output = (emitter as any).buffer || '';
+      const lastNewline = output.lastIndexOf('\n');
+      if (lastNewline >= 0) {
+        // Count characters (spaces/tabs) from last newline to current position
+        const lineStart = output.substring(lastNewline + 1);
+        // Count leading whitespace that will be our indent
+        const match = lineStart.match(/^(\s*)/);
+        indent = match ? match[1].length : 0;
+      }
+    }
 
     // Validate the path
     if (!filePath || typeof filePath !== 'string') {
@@ -100,7 +119,7 @@ export class ReadFileTag extends Tag {
     try {
       let content = require('fs').readFileSync(resolvedPath, 'utf-8');
 
-      // Apply indentation if specified (indent all lines after the first)
+      // Apply indentation to all lines after the first
       // This is needed for YAML literal blocks where continuation lines must be indented
       if (indent > 0) {
         const indentStr = ' '.repeat(indent);

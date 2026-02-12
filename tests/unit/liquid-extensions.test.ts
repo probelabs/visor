@@ -236,6 +236,186 @@ No file included
         await fs.chmod(testFile, 0o644);
       }
     });
+
+    describe('auto-indent for YAML literal blocks', () => {
+      it('should auto-indent multiline content to match template position', async () => {
+        const liquid = createExtendedLiquid();
+        const yaml = require('js-yaml');
+
+        // Create a multiline file that would break YAML without proper indentation
+        const multilineContent = '## Title\n\nThis is line 2.\nThis is line 3.';
+        await fs.writeFile(path.join(tempDir, 'multiline.md'), multilineContent);
+
+        await withTempDir(tempDir, async () => {
+          // Template with readfile inside a YAML literal block
+          // The readfile tag is at column 4 (after 4 spaces)
+          const template = `skills:
+  - id: test
+    knowledge: |
+      {% readfile "multiline.md" %}
+`;
+
+          const result = liquid.parseAndRenderSync(template);
+
+          // Verify YAML parses successfully
+          let parsed;
+          expect(() => {
+            parsed = yaml.load(result);
+          }).not.toThrow();
+
+          // Verify the content is correct (YAML strips the indentation)
+          expect(parsed.skills[0].knowledge).toContain('## Title');
+          expect(parsed.skills[0].knowledge).toContain('This is line 2.');
+          expect(parsed.skills[0].knowledge).toContain('This is line 3.');
+        });
+      });
+
+      it('should handle content that would break YAML without auto-indent', async () => {
+        const liquid = createExtendedLiquid();
+        const yaml = require('js-yaml');
+
+        // Create content with lines starting at column 0 - this would break YAML
+        // if not properly indented
+        const breakingContent = 'First line\nSecond line starts at column 0\n- List item\n  nested: value';
+        await fs.writeFile(path.join(tempDir, 'breaking.txt'), breakingContent);
+
+        await withTempDir(tempDir, async () => {
+          const template = `config:
+  data: |
+    {% readfile "breaking.txt" %}
+`;
+
+          const result = liquid.parseAndRenderSync(template);
+
+          // This should NOT throw - the auto-indent should make it valid YAML
+          let parsed;
+          expect(() => {
+            parsed = yaml.load(result);
+          }).not.toThrow();
+
+          // Verify content is preserved
+          expect(parsed.config.data).toContain('First line');
+          expect(parsed.config.data).toContain('Second line starts at column 0');
+          expect(parsed.config.data).toContain('- List item');
+        });
+      });
+
+      it('should work with nested YAML structures', async () => {
+        const liquid = createExtendedLiquid();
+        const yaml = require('js-yaml');
+
+        const nestedContent = 'Documentation content\n\nWith multiple paragraphs.\n\nAnd more text.';
+        await fs.writeFile(path.join(tempDir, 'nested.md'), nestedContent);
+
+        await withTempDir(tempDir, async () => {
+          const template = `root:
+  level1:
+    level2:
+      level3:
+        content: |
+          {% readfile "nested.md" %}
+`;
+
+          const result = liquid.parseAndRenderSync(template);
+
+          let parsed;
+          expect(() => {
+            parsed = yaml.load(result);
+          }).not.toThrow();
+
+          expect(parsed.root.level1.level2.level3.content).toContain('Documentation content');
+          expect(parsed.root.level1.level2.level3.content).toContain('multiple paragraphs');
+        });
+      });
+
+      it('should handle empty lines in content correctly', async () => {
+        const liquid = createExtendedLiquid();
+        const yaml = require('js-yaml');
+
+        // Content with multiple empty lines
+        const contentWithEmptyLines = 'Start\n\n\n\nMiddle\n\nEnd';
+        await fs.writeFile(path.join(tempDir, 'empty-lines.txt'), contentWithEmptyLines);
+
+        await withTempDir(tempDir, async () => {
+          const template = `test:
+  value: |
+    {% readfile "empty-lines.txt" %}
+`;
+
+          const result = liquid.parseAndRenderSync(template);
+
+          let parsed;
+          expect(() => {
+            parsed = yaml.load(result);
+          }).not.toThrow();
+
+          expect(parsed.test.value).toContain('Start');
+          expect(parsed.test.value).toContain('Middle');
+          expect(parsed.test.value).toContain('End');
+        });
+      });
+
+      it('should allow manual indent override', async () => {
+        const liquid = createExtendedLiquid();
+        const yaml = require('js-yaml');
+
+        const content = 'Line 1\nLine 2\nLine 3';
+        await fs.writeFile(path.join(tempDir, 'manual.txt'), content);
+
+        await withTempDir(tempDir, async () => {
+          // Use manual indent: 8 override
+          const template = `test:
+  value: |
+        {% readfile "manual.txt" indent: 8 %}
+`;
+
+          const result = liquid.parseAndRenderSync(template);
+
+          let parsed;
+          expect(() => {
+            parsed = yaml.load(result);
+          }).not.toThrow();
+
+          expect(parsed.test.value).toContain('Line 1');
+          expect(parsed.test.value).toContain('Line 2');
+        });
+      });
+
+      it('should work with parseAndRenderSync (loadConfig scenario)', async () => {
+        const liquid = createExtendedLiquid();
+        const yaml = require('js-yaml');
+
+        // Simulate a skills.yaml with readfile
+        const skillKnowledge = '## Skill Documentation\n\nUse this skill when...\n\n- Point 1\n- Point 2';
+        await fs.writeFile(path.join(tempDir, 'skill-docs.md'), skillKnowledge);
+
+        await withTempDir(tempDir, async () => {
+          const template = `# Skills Configuration
+- id: my-skill
+  description: A test skill
+  knowledge: |
+    {% readfile "skill-docs.md" %}
+
+- id: another-skill
+  description: Another skill
+`;
+
+          // Use parseAndRenderSync like loadConfig does
+          const result = liquid.parseAndRenderSync(template, { basePath: tempDir });
+
+          let parsed;
+          expect(() => {
+            parsed = yaml.load(result);
+          }).not.toThrow();
+
+          expect(Array.isArray(parsed)).toBe(true);
+          expect(parsed[0].id).toBe('my-skill');
+          expect(parsed[0].knowledge).toContain('## Skill Documentation');
+          expect(parsed[0].knowledge).toContain('- Point 1');
+          expect(parsed[1].id).toBe('another-skill');
+        });
+      });
+    });
   });
 
   describe('createExtendedLiquid', () => {
