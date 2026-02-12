@@ -1094,6 +1094,46 @@ export class AICheckProvider extends CheckProvider {
       }
     }
 
+    // 4b. Evaluate ai_bash_config_js for dynamic bash configuration (merges with static bashConfig)
+    const bashConfigJsExpr = (config as any).ai_bash_config_js as string | undefined;
+    if (bashConfigJsExpr && _dependencyResults) {
+      try {
+        const dynamicBashConfig = this.evaluateBashConfigJs(
+          bashConfigJsExpr,
+          prInfo,
+          _dependencyResults,
+          config
+        );
+        const hasAllow = dynamicBashConfig.allow && dynamicBashConfig.allow.length > 0;
+        const hasDeny = dynamicBashConfig.deny && dynamicBashConfig.deny.length > 0;
+        if (hasAllow || hasDeny) {
+          // Merge dynamic bash config with static bashConfig (dynamic takes precedence)
+          const existingBashConfig = aiConfig.bashConfig || {};
+          const mergedAllow = [
+            ...(existingBashConfig.allow || []),
+            ...(dynamicBashConfig.allow || []),
+          ];
+          const mergedDeny = [
+            ...(existingBashConfig.deny || []),
+            ...(dynamicBashConfig.deny || []),
+          ];
+          aiConfig.bashConfig = {
+            ...existingBashConfig,
+            ...(mergedAllow.length > 0 ? { allow: mergedAllow } : {}),
+            ...(mergedDeny.length > 0 ? { deny: mergedDeny } : {}),
+          };
+          logger.info(
+            `[AICheckProvider] ai_bash_config_js merged: allow=${mergedAllow.length}, deny=${mergedDeny.length}`
+          );
+        }
+      } catch (error) {
+        logger.error(
+          `[AICheckProvider] Failed to evaluate ai_bash_config_js: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+        // Continue without dynamic bash config
+      }
+    }
+
     // 5. Resolve environment variable placeholders in MCP server env configs
     // Supports ${VAR} and ${{ env.VAR }} syntax
     for (const serverConfig of Object.values(mcpServers)) {
@@ -1899,6 +1939,104 @@ export class AICheckProvider extends CheckProvider {
     } catch (error) {
       logger.error(
         `[AICheckProvider] Failed to evaluate ai_mcp_servers_js: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+      return {};
+    }
+  }
+
+  /**
+   * Evaluate ai_bash_config_js expression to dynamically compute bash configuration.
+   * Returns a BashConfig object with optional allow and deny arrays.
+   */
+  private evaluateBashConfigJs(
+    expression: string,
+    prInfo: PRInfo,
+    dependencyResults: Map<string, ReviewSummary>,
+    config: CheckProviderConfig
+  ): import('../types/config').BashConfig {
+    if (!this.sandbox) {
+      this.sandbox = createSecureSandbox();
+    }
+
+    // Build outputs object from dependency results (same pattern as evaluateMcpServersJs)
+    const outputs: Record<string, unknown> = {};
+    for (const [checkId, result] of dependencyResults.entries()) {
+      const summary = result as ReviewSummary & { output?: unknown };
+      outputs[checkId] = summary.output !== undefined ? summary.output : summary;
+    }
+
+    // Build context for the expression
+    const jsContext: Record<string, unknown> = {
+      outputs,
+      inputs: (config as any).inputs || {},
+      pr: {
+        number: prInfo.number,
+        title: prInfo.title,
+        description: prInfo.body,
+        author: prInfo.author,
+        branch: prInfo.head,
+        base: prInfo.base,
+        authorAssociation: prInfo.authorAssociation,
+      },
+      files:
+        prInfo.files?.map(f => ({
+          filename: f.filename,
+          status: f.status,
+          additions: f.additions,
+          deletions: f.deletions,
+          changes: f.changes,
+        })) || [],
+      env: this.buildSafeEnv(),
+      memory: (config as any).__memoryAccessor || {},
+    };
+
+    try {
+      const result = compileAndRun<unknown>(this.sandbox, expression, jsContext, {
+        injectLog: true,
+        wrapFunction: true,
+        logPrefix: '[ai_bash_config_js]',
+      });
+
+      // Validate result is an object (not array, not null)
+      if (typeof result !== 'object' || result === null || Array.isArray(result)) {
+        logger.warn(
+          `[AICheckProvider] ai_bash_config_js must return an object, got ${Array.isArray(result) ? 'array' : typeof result}`
+        );
+        return {};
+      }
+
+      const cfg = result as Record<string, unknown>;
+      const bashConfig: import('../types/config').BashConfig = {};
+
+      // Validate and copy allow array
+      if (cfg.allow !== undefined) {
+        if (Array.isArray(cfg.allow)) {
+          bashConfig.allow = cfg.allow.filter((item: unknown) => typeof item === 'string');
+        } else {
+          logger.warn(
+            `[AICheckProvider] ai_bash_config_js: 'allow' must be an array, got ${typeof cfg.allow}`
+          );
+        }
+      }
+
+      // Validate and copy deny array
+      if (cfg.deny !== undefined) {
+        if (Array.isArray(cfg.deny)) {
+          bashConfig.deny = cfg.deny.filter((item: unknown) => typeof item === 'string');
+        } else {
+          logger.warn(
+            `[AICheckProvider] ai_bash_config_js: 'deny' must be an array, got ${typeof cfg.deny}`
+          );
+        }
+      }
+
+      logger.debug(
+        `[AICheckProvider] ai_bash_config_js evaluated: allow=${bashConfig.allow?.length ?? 0}, deny=${bashConfig.deny?.length ?? 0}`
+      );
+      return bashConfig;
+    } catch (error) {
+      logger.error(
+        `[AICheckProvider] Failed to evaluate ai_bash_config_js: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
       return {};
     }
