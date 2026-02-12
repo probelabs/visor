@@ -308,7 +308,7 @@ function formatScheduleList(schedules: Schedule[]): string {
   if (schedules.length === 0) {
     return `You don't have any active schedules.
 
-To create one: "schedule daily-report every Monday at 9am"`;
+To create one: "remind me every Monday at 9am to check PRs" or "schedule %daily-report every Monday at 9am"`;
   }
 
   const lines = schedules.map((s, i) => `${i + 1}. ${formatSchedule(s)}`);
@@ -708,6 +708,12 @@ export function getScheduleToolDefinition(): CustomToolDefinition {
 
 YOU (the AI) must extract and structure all scheduling parameters. Do NOT pass natural language time expressions - convert them to cron or ISO timestamps.
 
+CRITICAL WORKFLOW RULE:
+- To schedule a WORKFLOW, the user MUST use a '%' prefix (e.g., "schedule %my-workflow daily").
+- If the '%' prefix is present, extract the word following it as the 'workflow' parameter (without the '%').
+- If the '%' prefix is NOT present, the request is a simple text reminder. The ENTIRE user request (excluding the schedule expression) MUST be placed in the 'reminder_text' parameter.
+- DO NOT guess or infer a workflow name from a user's request without the '%' prefix.
+
 ACTIONS:
 - create: Schedule a new reminder or workflow
 - list: Show user's active schedules
@@ -715,7 +721,9 @@ ACTIONS:
 - pause/resume: Temporarily disable/enable a schedule
 
 FOR CREATE ACTION - Extract these from user's request:
-1. WHAT: Either reminder_text (message to send) OR workflow (workflow ID to run)
+1. WHAT:
+   - If user says "schedule %some-workflow ...", populate 'workflow' with "some-workflow".
+   - Otherwise, populate 'reminder_text' with the user's full request text.
 2. WHERE: Use the CURRENT channel from context
    - target_id: The channel ID from context (C... for channels, D... for DMs)
    - target_type: "channel" for public/private channels, "dm" for direct messages
@@ -750,10 +758,21 @@ User in DM: "remind me to check builds every day at 9am"
     "original_expression": "every day at 9am"
   }
 
-User in #security channel: "run security-scan every Monday at 10am"
+User in #security channel: "schedule %security-scan every Monday at 10am"
 → {
     "action": "create",
     "workflow": "security-scan",
+    "is_recurring": true,
+    "cron": "0 10 * * 1",
+    "target_type": "channel",
+    "target_id": "<channel ID from context, e.g., C05ABC123>",
+    "original_expression": "every Monday at 10am"
+  }
+
+User in #security channel: "run security-scan every Monday at 10am" (NO % prefix!)
+→ {
+    "action": "create",
+    "reminder_text": "run security-scan every Monday at 10am",
     "is_recurring": true,
     "cron": "0 10 * * 1",
     "target_type": "channel",
@@ -805,7 +824,7 @@ User: "cancel schedule abc123"
         workflow: {
           type: 'string',
           description:
-            'For create: workflow/check ID to run (use instead of reminder_text for workflow execution)',
+            'For create: workflow ID to run. ONLY populate this if the user used the % prefix (e.g., "%my-workflow"). Extract the name without the % symbol. If no % prefix, use reminder_text instead.',
         },
         workflow_inputs: {
           type: 'object',
