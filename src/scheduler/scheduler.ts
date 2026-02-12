@@ -11,6 +11,7 @@ import { getNextRunTime } from './schedule-parser';
 import { logger } from '../logger';
 import type { VisorConfig, StaticCronJob } from '../types/config';
 import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
+import type { StorageConfig, HAConfig, ScheduleStoreStats } from './store/types';
 
 /**
  * Context enricher interface for frontend-specific functionality
@@ -79,6 +80,10 @@ export interface SchedulerConfig {
   limits?: ScheduleLimits;
   /** Default timezone for schedules (default: UTC) */
   defaultTimezone?: string;
+  /** SQL storage configuration */
+  storage?: StorageConfig;
+  /** High-availability configuration */
+  ha?: HAConfig;
 }
 
 /**
@@ -98,14 +103,24 @@ export class Scheduler {
   private executionContext: Record<string, unknown> = {};
   private contextEnricher?: ScheduleContextEnricher;
 
+  // HA fields
+  private haConfig?: HAConfig;
+  private nodeId: string;
+  private heartbeatInterval: NodeJS.Timeout | null = null;
+  private heldLocks: Map<string, string> = new Map(); // scheduleId → lockToken
+
   constructor(visorConfig: VisorConfig, config?: SchedulerConfig) {
     this.visorConfig = visorConfig;
     this.checkIntervalMs = config?.checkIntervalMs ?? 60000;
     this.defaultTimezone = config?.defaultTimezone ?? 'UTC';
+    this.haConfig = config?.ha;
+    this.nodeId = config?.ha?.node_id || `${require('os').hostname()}-${process.pid}`;
 
-    // Initialize store
+    // Initialize store with SQL backend config
     const storeConfig: ScheduleStoreConfig = {
       path: config?.storagePath,
+      storage: config?.storage,
+      ha: config?.ha,
     };
     this.store = ScheduleStore.getInstance(storeConfig, config?.limits);
   }
@@ -161,10 +176,22 @@ export class Scheduler {
     await this.store.initialize();
 
     // Load static cron jobs from config (always executed, no permissions check)
-    await this.loadStaticCronJobs();
+    try {
+      await this.loadStaticCronJobs();
+    } catch (err) {
+      logger.error(
+        `[Scheduler] Failed to load static cron jobs: ${err instanceof Error ? err.message : err}`
+      );
+    }
 
     // Restore dynamic schedules from storage
-    await this.restoreSchedules();
+    try {
+      await this.restoreSchedules();
+    } catch (err) {
+      logger.error(
+        `[Scheduler] Failed to restore schedules: ${err instanceof Error ? err.message : err}`
+      );
+    }
 
     // Start periodic check for due schedules
     this.checkInterval = setInterval(() => {
@@ -176,6 +203,11 @@ export class Scheduler {
         );
       });
     }, this.checkIntervalMs);
+
+    // Start heartbeat for HA lock renewal
+    if (this.haConfig?.enabled) {
+      this.startHeartbeat();
+    }
 
     this.running = true;
     logger.info('[Scheduler] Started');
@@ -266,6 +298,34 @@ export class Scheduler {
    * Execute a static cron job
    */
   private async executeStaticCronJob(jobId: string, job: StaticCronJob): Promise<void> {
+    if (this.haConfig?.enabled) {
+      // HA mode: acquire distributed lock to prevent duplicate execution across nodes
+      const ttl = this.haConfig.lock_ttl ?? 60;
+      const backend = this.store.getBackend();
+      const lockId = `__static_cron__:${jobId}`;
+      const lockToken = await backend.tryAcquireLock(lockId, this.nodeId, ttl);
+      if (!lockToken) {
+        logger.debug(`[Scheduler] Static cron job '${jobId}' locked by another node, skipping`);
+        return;
+      }
+      // Register in heldLocks so the heartbeat timer renews this lock
+      // during long-running jobs (prevents TTL expiration & duplicate execution)
+      this.heldLocks.set(lockId, lockToken);
+      try {
+        await this.doExecuteStaticCronJob(jobId, job);
+      } finally {
+        await backend.releaseLock(lockId, lockToken);
+        this.heldLocks.delete(lockId);
+      }
+    } else {
+      await this.doExecuteStaticCronJob(jobId, job);
+    }
+  }
+
+  /**
+   * Internal: execute a static cron job (after lock is held in HA mode)
+   */
+  private async doExecuteStaticCronJob(jobId: string, job: StaticCronJob): Promise<void> {
     const startTime = Date.now();
     let result: ScheduleExecutionResult;
 
@@ -330,6 +390,18 @@ export class Scheduler {
       return;
     }
 
+    // Stop heartbeat
+    this.stopHeartbeat();
+
+    // Release all held locks
+    if (this.heldLocks.size > 0) {
+      const backend = this.store.getBackend();
+      for (const [scheduleId, lockToken] of this.heldLocks.entries()) {
+        await backend.releaseLock(scheduleId, lockToken).catch(() => {});
+      }
+      this.heldLocks.clear();
+    }
+
     // Stop the check interval
     if (this.checkInterval) {
       clearInterval(this.checkInterval);
@@ -358,10 +430,44 @@ export class Scheduler {
   }
 
   /**
+   * Start the heartbeat timer for renewing HA locks
+   */
+  private startHeartbeat(): void {
+    if (this.heartbeatInterval) return;
+
+    const intervalMs = (this.haConfig?.heartbeat_interval ?? 15) * 1000;
+
+    this.heartbeatInterval = setInterval(async () => {
+      const backend = this.store.getBackend();
+      const ttl = this.haConfig?.lock_ttl ?? 60;
+
+      for (const [scheduleId, lockToken] of this.heldLocks.entries()) {
+        const renewed = await backend.renewLock(scheduleId, lockToken, ttl);
+        if (!renewed) {
+          logger.warn(`[Scheduler] Failed to renew lock for schedule ${scheduleId}, lock lost`);
+          this.heldLocks.delete(scheduleId);
+        }
+      }
+    }, intervalMs);
+
+    logger.debug(`[Scheduler] Heartbeat started (interval: ${intervalMs}ms)`);
+  }
+
+  /**
+   * Stop the heartbeat timer
+   */
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+  }
+
+  /**
    * Restore schedules from persistent storage
    */
   private async restoreSchedules(): Promise<void> {
-    const activeSchedules = this.store.getActiveSchedules();
+    const activeSchedules = await this.store.getActiveSchedulesAsync();
     logger.info(`[Scheduler] Restoring ${activeSchedules.length} active schedules`);
 
     for (const schedule of activeSchedules) {
@@ -404,7 +510,10 @@ export class Scheduler {
         existingJob.stop();
         this.cronJobs.delete(schedule.id);
       }
-      this.store.update(schedule.id, { status: 'failed', lastError: 'Invalid cron expression' });
+      await this.store.updateAsync(schedule.id, {
+        status: 'failed',
+        lastError: 'Invalid cron expression',
+      });
       return;
     }
 
@@ -431,7 +540,7 @@ export class Scheduler {
     // Update next run time
     try {
       const nextRun = getNextRunTime(schedule.schedule, schedule.timezone);
-      this.store.update(schedule.id, { nextRunAt: nextRun.getTime() });
+      await this.store.updateAsync(schedule.id, { nextRunAt: nextRun.getTime() });
     } catch (error) {
       logger.warn(
         `[Scheduler] Could not compute next run time for ${schedule.id}: ${
@@ -483,7 +592,7 @@ export class Scheduler {
    * Check for and execute due schedules
    */
   private async checkDueSchedules(): Promise<void> {
-    const dueSchedules = this.store.getDueSchedules();
+    const dueSchedules = await this.store.getDueSchedulesAsync();
 
     for (const schedule of dueSchedules) {
       // Skip if already scheduled
@@ -491,7 +600,25 @@ export class Scheduler {
         continue;
       }
 
-      await this.executeSchedule(schedule);
+      if (this.haConfig?.enabled) {
+        // HA mode: acquire lock before executing
+        const ttl = this.haConfig.lock_ttl ?? 60;
+        const backend = this.store.getBackend();
+        const lockToken = await backend.tryAcquireLock(schedule.id, this.nodeId, ttl);
+        if (!lockToken) {
+          logger.debug(`[Scheduler] Schedule ${schedule.id} locked by another node, skipping`);
+          continue;
+        }
+        this.heldLocks.set(schedule.id, lockToken);
+        try {
+          await this.executeSchedule(schedule);
+        } finally {
+          await backend.releaseLock(schedule.id, lockToken);
+          this.heldLocks.delete(schedule.id);
+        }
+      } else {
+        await this.executeSchedule(schedule);
+      }
     }
   }
 
@@ -517,7 +644,7 @@ export class Scheduler {
 
       // Update schedule state
       const now = Date.now();
-      this.store.update(schedule.id, {
+      await this.store.updateAsync(schedule.id, {
         lastRunAt: now,
         runCount: schedule.runCount + 1,
         failureCount: 0, // Reset on success
@@ -526,16 +653,23 @@ export class Scheduler {
 
       // For one-time schedules, mark as completed
       if (!schedule.isRecurring) {
-        this.store.update(schedule.id, { status: 'completed' });
-        this.store.delete(schedule.id); // Clean up
+        await this.store.updateAsync(schedule.id, { status: 'completed' });
+        await this.store.deleteAsync(schedule.id); // Clean up
         logger.info(`[Scheduler] One-time schedule ${schedule.id} completed and removed`);
       } else {
         // Update next run time for recurring schedules
         try {
           const nextRun = getNextRunTime(schedule.schedule, schedule.timezone);
-          this.store.update(schedule.id, { nextRunAt: nextRun.getTime() });
-        } catch {
-          // Best effort
+          await this.store.updateAsync(schedule.id, { nextRunAt: nextRun.getTime() });
+        } catch (err) {
+          // If we can't compute next run, pause the schedule to prevent duplicate execution
+          logger.warn(
+            `[Scheduler] Failed to compute next run time for ${schedule.id}, pausing schedule: ${err instanceof Error ? err.message : err}`
+          );
+          await this.store.updateAsync(schedule.id, {
+            status: 'paused',
+            lastError: `Failed to compute next run time: ${err instanceof Error ? err.message : err}`,
+          });
         }
       }
     } catch (error) {
@@ -803,7 +937,7 @@ Please provide an updated response based on the reminder above. You may referenc
 
       // Save captured response for recurring reminders (previousResponse feature)
       if (schedule.isRecurring && responseRef.captured) {
-        this.store.update(schedule.id, { previousResponse: responseRef.captured });
+        await this.store.updateAsync(schedule.id, { previousResponse: responseRef.captured });
         logger.info(
           `[Scheduler] Saved previousResponse for recurring schedule ${schedule.id} (${responseRef.captured.length} chars)`
         );
@@ -834,14 +968,14 @@ Please provide an updated response based on the reminder above. You may referenc
     const newFailureCount = schedule.failureCount + 1;
 
     // Update failure count
-    this.store.update(schedule.id, {
+    await this.store.updateAsync(schedule.id, {
       failureCount: newFailureCount,
       lastError: errorMsg,
     });
 
     // Auto-pause after 3 consecutive failures
     if (newFailureCount >= 3) {
-      this.store.update(schedule.id, { status: 'failed' });
+      await this.store.updateAsync(schedule.id, { status: 'failed' });
 
       // Stop the cron job
       const job = this.cronJobs.get(schedule.id);
@@ -890,17 +1024,17 @@ Please provide an updated response based on the reminder above. You may referenc
   /**
    * Get scheduler stats
    */
-  getStats(): {
+  async getStats(): Promise<{
     running: boolean;
     activeCronJobs: number;
     pendingOneTimeSchedules: number;
-    storeStats: ReturnType<ScheduleStore['getStats']>;
-  } {
+    storeStats: ScheduleStoreStats;
+  }> {
     return {
       running: this.running,
       activeCronJobs: this.cronJobs.size,
       pendingOneTimeSchedules: this.oneTimeTimeouts.size,
-      storeStats: this.store.getStats(),
+      storeStats: await this.store.getStatsAsync(),
     };
   }
 }

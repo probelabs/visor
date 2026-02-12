@@ -766,11 +766,15 @@ interface OnFailConfig {
     transitions?: TransitionRule[];
 }
 /**
+ * Success routing run item - can be step name, step with args, or workflow with args
+ */
+type OnSuccessRunItem = string | OnInitStepInvocation | OnInitWorkflowInvocation;
+/**
  * Success routing configuration per check
  */
 interface OnSuccessConfig {
-    /** Post-success steps to run */
-    run?: string[];
+    /** Post-success steps to run - can be step names or rich invocations with arguments */
+    run?: OnSuccessRunItem[];
     /** Optional jump back to ancestor step (by id) */
     goto?: string;
     /** Simulate a different event when performing goto (e.g., 'pr_updated') */
@@ -1183,6 +1187,60 @@ interface SchedulerPermissionsConfig {
     denied_workflows?: string[];
 }
 /**
+ * SSL/TLS configuration for scheduler database connections
+ */
+interface SchedulerSslConfig {
+    /** Enable SSL (default: true when SslConfig object is provided) */
+    enabled?: boolean;
+    /** Reject unauthorized certificates (default: true) */
+    reject_unauthorized?: boolean;
+    /** Path to CA certificate PEM file */
+    ca?: string;
+    /** Path to client certificate PEM file */
+    cert?: string;
+    /** Path to client key PEM file */
+    key?: string;
+}
+/**
+ * Scheduler storage connection configuration
+ */
+interface SchedulerStorageConnectionConfig {
+    /** SQLite database file path (default: '.visor/schedules.db') */
+    filename?: string;
+    /** Database host (PostgreSQL/MySQL/MSSQL) */
+    host?: string;
+    /** Database port (PostgreSQL/MySQL/MSSQL) */
+    port?: number;
+    /** Database name (PostgreSQL/MySQL/MSSQL) */
+    database?: string;
+    /** Database user (PostgreSQL/MySQL/MSSQL) */
+    user?: string;
+    /** Database password (PostgreSQL/MySQL/MSSQL) */
+    password?: string;
+    /** SSL/TLS configuration (PostgreSQL/MySQL/MSSQL) */
+    ssl?: boolean | SchedulerSslConfig;
+    /** Connection string URL (e.g., postgresql://user:pass@host/db) */
+    connection_string?: string;
+    /** Connection pool configuration */
+    pool?: {
+        min?: number;
+        max?: number;
+    };
+}
+/**
+ * Scheduler high-availability configuration
+ */
+interface SchedulerHAConfig {
+    /** Enable distributed locking for multi-node deployments (default: false) */
+    enabled?: boolean;
+    /** Unique node identifier (default: hostname-pid) */
+    node_id?: string;
+    /** Lock time-to-live in seconds (default: 60) */
+    lock_ttl?: number;
+    /** Heartbeat interval for lock renewal in seconds (default: 15) */
+    heartbeat_interval?: number;
+}
+/**
  * Scheduler configuration for workflow scheduling
  */
 interface SchedulerConfig {
@@ -1190,9 +1248,15 @@ interface SchedulerConfig {
     enabled?: boolean;
     /** Storage configuration */
     storage?: {
-        /** Path to schedules JSON file (default: .visor/schedules.json) */
+        /** Path to schedules JSON file (legacy, triggers auto-migration) */
         path?: string;
+        /** Database driver (default: 'sqlite') */
+        driver?: 'sqlite' | 'postgresql' | 'mysql' | 'mssql';
+        /** Database connection configuration */
+        connection?: SchedulerStorageConnectionConfig;
     };
+    /** High-availability configuration for multi-node deployments */
+    ha?: SchedulerHAConfig;
     /** Limits for dynamic schedules */
     limits?: SchedulerLimitsConfig;
     /** Default timezone (IANA format, e.g., "America/New_York") */
@@ -1438,6 +1502,27 @@ declare class EventBus {
     emit(event: AnyEvent | EventEnvelope): Promise<void>;
 }
 
+/** Bot transport types (trimmed for Slack v1) */
+type BotTransportType = 'slack' | string;
+interface NormalizedMessage {
+    role: 'user' | 'bot';
+    text: string;
+    timestamp: string;
+    origin?: string;
+    /** Optional user identifier (e.g., Slack user id, GitHub login) */
+    user?: string;
+}
+interface ConversationContext {
+    transport: BotTransportType;
+    thread: {
+        id: string;
+        url?: string;
+    };
+    messages: NormalizedMessage[];
+    current: NormalizedMessage;
+    attributes: Record<string, string>;
+}
+
 /**
  * Execution context passed to check providers
  */
@@ -1447,6 +1532,8 @@ interface ExecutionContext {
     reuseSession?: boolean;
     /** CLI message value (from --message argument) */
     cliMessage?: string;
+    /** Conversation context - unified access to user message across transports (CLI, Slack, etc.) */
+    conversation?: ConversationContext;
     /**
      * Stage-local baseline of output history lengths per check name.
      * When present, providers should expose an `outputs_history_stage` object in

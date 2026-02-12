@@ -836,6 +836,76 @@ export class ConfigManager {
       }
     }
 
+    // Validate scheduler configuration
+    if (
+      config.scheduler?.ha?.enabled &&
+      (!config.scheduler.storage?.driver || config.scheduler.storage.driver === 'sqlite')
+    ) {
+      warnings.push({
+        field: 'scheduler.ha',
+        message:
+          'HA mode is enabled but storage driver is SQLite (single-node only). ' +
+          'Distributed locking will use in-memory locks which do not coordinate across nodes. ' +
+          'Use driver: "postgresql", "mysql", or "mssql" for true multi-node HA.',
+      });
+    }
+
+    // Validate server database connection config
+    const schedulerDriver = config.scheduler?.storage?.driver;
+    if (schedulerDriver && schedulerDriver !== 'sqlite') {
+      const conn = config.scheduler?.storage?.connection;
+      if (!conn) {
+        errors.push({
+          field: 'scheduler.storage.connection',
+          message: `The '${schedulerDriver}' driver requires a connection configuration.`,
+        });
+      } else {
+        const hasConnStr = !!(conn as { connection_string?: string }).connection_string;
+        const hasHost = !!(conn as { host?: string }).host;
+        const hasDb = !!(conn as { database?: string }).database;
+
+        if (!hasConnStr && !hasHost) {
+          errors.push({
+            field: 'scheduler.storage.connection',
+            message: `The '${schedulerDriver}' driver requires either 'connection_string' or 'host' (with 'database') to be specified.`,
+          });
+        }
+
+        if (!hasConnStr && hasHost && !hasDb) {
+          errors.push({
+            field: 'scheduler.storage.connection.database',
+            message: `The '${schedulerDriver}' driver requires 'database' when using host-based connection.`,
+          });
+        }
+
+        if (hasConnStr && hasHost) {
+          warnings.push({
+            field: 'scheduler.storage.connection',
+            message:
+              'Both connection_string and host are set. connection_string takes precedence; host/port/database/user/password will be ignored.',
+          });
+        }
+
+        // SSL warning for remote hosts
+        if (hasHost && !hasConnStr) {
+          const host = (conn as { host?: string }).host || '';
+          const ssl = (conn as { ssl?: unknown }).ssl;
+          const isLocal =
+            host === 'localhost' ||
+            host === '127.0.0.1' ||
+            host === '::1' ||
+            host === '0.0.0.0' ||
+            host === '[::]';
+          if (!isLocal && !ssl) {
+            warnings.push({
+              field: 'scheduler.storage.connection.ssl',
+              message: `SSL is not enabled for remote host '${host}'. Consider enabling SSL for secure database connections.`,
+            });
+          }
+        }
+      }
+    }
+
     // Validate global MCP servers if present
     if (config.ai_mcp_servers) {
       this.validateMcpServersObject(config.ai_mcp_servers, 'ai_mcp_servers', errors, warnings);

@@ -167,7 +167,7 @@ async function handleStart(
     process.exit(1);
   }
 
-  // Create scheduler with mapped limits
+  // Create scheduler with mapped limits and storage config
   const scheduler = new Scheduler(config, {
     storagePath: schedulerConfig?.storage?.path,
     limits: schedulerConfig?.limits
@@ -178,6 +178,20 @@ async function handleStart(
         }
       : undefined,
     defaultTimezone: schedulerConfig?.default_timezone,
+    storage: schedulerConfig?.storage?.driver
+      ? {
+          driver: schedulerConfig.storage.driver,
+          connection: schedulerConfig.storage.connection,
+        }
+      : undefined,
+    ha: schedulerConfig?.ha
+      ? {
+          enabled: schedulerConfig.ha.enabled ?? false,
+          node_id: schedulerConfig.ha.node_id,
+          lock_ttl: schedulerConfig.ha.lock_ttl,
+          heartbeat_interval: schedulerConfig.ha.heartbeat_interval,
+        }
+      : undefined,
   });
 
   // Create and set execution engine
@@ -192,7 +206,7 @@ async function handleStart(
     console.log(`Timezone: ${schedulerConfig?.default_timezone || 'UTC'}`);
 
     // Print stats
-    const stats = scheduler.getStats();
+    const stats = await scheduler.getStats();
     console.log(`Active schedules: ${stats.storeStats.active}`);
     console.log(`Recurring: ${stats.storeStats.recurring}, One-time: ${stats.storeStats.oneTime}`);
 
@@ -227,7 +241,8 @@ async function handleList(flags: Record<string, string | boolean>): Promise<void
 
   await store.initialize();
 
-  const schedules = store.getAll().filter(s => s.status !== 'completed');
+  const allSchedules = await store.getAllAsync();
+  const schedules = allSchedules.filter(s => s.status !== 'completed');
 
   if (schedules.length === 0) {
     console.log('No active schedules found.');
@@ -314,7 +329,7 @@ async function handleCreate(
     await store.initialize();
 
     // Create the schedule
-    const schedule = store.create({
+    const schedule = await store.createAsync({
       creatorId: process.env.USER || 'cli-user',
       creatorContext: 'cli',
       timezone,
@@ -402,9 +417,9 @@ async function handleCancel(
   await store.initialize();
 
   // Find schedule by ID or partial ID
-  let schedule = store.get(scheduleId);
+  let schedule = await store.getAsync(scheduleId);
   if (!schedule) {
-    const all = store.getAll();
+    const all = await store.getAllAsync();
     schedule = all.find(s => s.id.startsWith(scheduleId));
   }
 
@@ -419,7 +434,7 @@ async function handleCancel(
     process.exit(1);
   }
 
-  store.delete(schedule.id);
+  await store.deleteAsync(schedule.id);
 
   console.log('Schedule cancelled successfully!');
   console.log();
@@ -447,9 +462,9 @@ async function handlePause(
   await store.initialize();
 
   // Find schedule by ID or partial ID
-  let schedule = store.get(scheduleId);
+  let schedule = await store.getAsync(scheduleId);
   if (!schedule) {
-    const all = store.getAll();
+    const all = await store.getAllAsync();
     schedule = all.find(s => s.id.startsWith(scheduleId));
   }
 
@@ -463,7 +478,7 @@ async function handlePause(
     process.exit(1);
   }
 
-  store.update(schedule.id, { status: 'paused' });
+  await store.updateAsync(schedule.id, { status: 'paused' });
 
   console.log('Schedule paused successfully!');
   console.log();
@@ -491,9 +506,9 @@ async function handleResume(
   await store.initialize();
 
   // Find schedule by ID or partial ID
-  let schedule = store.get(scheduleId);
+  let schedule = await store.getAsync(scheduleId);
   if (!schedule) {
-    const all = store.getAll();
+    const all = await store.getAllAsync();
     schedule = all.find(s => s.id.startsWith(scheduleId));
   }
 
@@ -507,7 +522,7 @@ async function handleResume(
     process.exit(1);
   }
 
-  store.update(schedule.id, { status: 'active' });
+  await store.updateAsync(schedule.id, { status: 'active' });
 
   console.log('Schedule resumed successfully!');
   console.log();

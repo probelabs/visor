@@ -1,15 +1,19 @@
 /**
  * Generic persistent storage for scheduled workflows
- * Uses JSON file storage with atomic writes
  *
- * This is a frontend-agnostic scheduler that can be used with any output destination.
- * When a schedule fires, it runs a visor workflow/check and output destinations
- * (Slack, GitHub, webhooks) become workflow responsibilities.
+ * Delegates all persistence to a ScheduleStoreBackend (default: SQLite).
+ * The in-memory Map and JSON file I/O have been replaced by the backend abstraction
+ * to support SQLite (OSS) and PostgreSQL/MySQL (Enterprise) storage.
  */
-import fs from 'fs/promises';
-import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../logger';
+import type {
+  ScheduleStoreBackend,
+  StorageConfig,
+  HAConfig,
+  ScheduleStoreStats,
+} from './store/types';
+import { createStoreBackend } from './store/index';
+import { migrateJsonToBackend } from './store/json-migrator';
 
 /**
  * Output context for schedule execution results
@@ -67,12 +71,16 @@ export interface Schedule {
  * Configuration for the schedule store
  */
 export interface ScheduleStoreConfig {
-  /** Path to the JSON file for persistence */
+  /** Path to the JSON file for persistence (legacy, triggers auto-migration) */
   path?: string;
-  /** Auto-save after changes (default: true) */
+  /** Auto-save after changes (default: true) — ignored for SQL backends */
   autoSave?: boolean;
-  /** Debounce save operations in ms (default: 1000) */
+  /** Debounce save operations in ms (default: 1000) — ignored for SQL backends */
   saveDebounceMs?: number;
+  /** SQL storage configuration */
+  storage?: StorageConfig;
+  /** High-availability configuration */
+  ha?: HAConfig;
 }
 
 /**
@@ -85,32 +93,30 @@ export interface ScheduleLimits {
 }
 
 /**
- * Storage class for scheduled workflows with JSON file persistence
+ * Storage class for scheduled workflows with pluggable backend persistence
  */
 export class ScheduleStore {
   private static instance: ScheduleStore | undefined;
-  private schedules: Map<string, Schedule> = new Map();
-  private filePath: string;
-  private autoSave: boolean;
-  private saveDebounceMs: number;
+  private backend: ScheduleStoreBackend | null = null;
   private initialized = false;
-  private saveTimeout: NodeJS.Timeout | null = null;
   private limits: ScheduleLimits;
+  private config: ScheduleStoreConfig;
+  private externalBackend: ScheduleStoreBackend | null = null;
 
-  // Concurrency protection
-  private saveLock: Promise<void> = Promise.resolve();
-  private pendingSave = false;
-  private dirtyCount = 0; // Track unsaved changes
-
-  private constructor(config?: ScheduleStoreConfig, limits?: ScheduleLimits) {
-    this.filePath = config?.path || '.visor/schedules.json';
-    this.autoSave = config?.autoSave !== false;
-    this.saveDebounceMs = config?.saveDebounceMs ?? 1000;
+  private constructor(
+    config?: ScheduleStoreConfig,
+    limits?: ScheduleLimits,
+    backend?: ScheduleStoreBackend
+  ) {
+    this.config = config || {};
     this.limits = {
       maxPerUser: limits?.maxPerUser ?? 25,
       maxRecurringPerUser: limits?.maxRecurringPerUser ?? 10,
       maxGlobal: limits?.maxGlobal ?? 1000,
     };
+    if (backend) {
+      this.externalBackend = backend;
+    }
   }
 
   /**
@@ -124,7 +130,6 @@ export class ScheduleStore {
     if (!ScheduleStore.instance) {
       ScheduleStore.instance = new ScheduleStore(config, limits);
     } else if (config || limits) {
-      // Warn if trying to reconfigure an existing instance
       logger.warn(
         '[ScheduleStore] getInstance() called with config/limits but instance already exists. ' +
           'Parameters ignored. Use createIsolated() for testing or resetInstance() first.'
@@ -136,8 +141,12 @@ export class ScheduleStore {
   /**
    * Create a new isolated instance (for testing)
    */
-  static createIsolated(config?: ScheduleStoreConfig, limits?: ScheduleLimits): ScheduleStore {
-    return new ScheduleStore(config, limits);
+  static createIsolated(
+    config?: ScheduleStoreConfig,
+    limits?: ScheduleLimits,
+    backend?: ScheduleStoreBackend
+  ): ScheduleStore {
+    return new ScheduleStore(config, limits, backend);
   }
 
   /**
@@ -145,345 +154,121 @@ export class ScheduleStore {
    */
   static resetInstance(): void {
     if (ScheduleStore.instance) {
-      ScheduleStore.instance.schedules.clear();
-      if (ScheduleStore.instance.saveTimeout) {
-        clearTimeout(ScheduleStore.instance.saveTimeout);
+      // Best-effort shutdown
+      if (ScheduleStore.instance.backend) {
+        ScheduleStore.instance.backend.shutdown().catch(() => {});
       }
     }
     ScheduleStore.instance = undefined;
   }
 
   /**
-   * Initialize the store - load from file if it exists
+   * Initialize the store - creates backend and runs migrations
    */
   async initialize(): Promise<void> {
     if (this.initialized) {
       return;
     }
 
+    // Create backend (or use the externally provided one)
+    if (this.externalBackend) {
+      this.backend = this.externalBackend;
+    } else {
+      this.backend = await createStoreBackend(this.config.storage, this.config.ha);
+    }
+
+    await this.backend.initialize();
+
+    // Auto-migrate from JSON if a legacy path is configured or default JSON file exists
+    const jsonPath = this.config.path || '.visor/schedules.json';
     try {
-      const resolvedPath = path.resolve(process.cwd(), this.filePath);
-      const content = await fs.readFile(resolvedPath, 'utf-8');
-      const data = JSON.parse(content) as { schedules?: Schedule[] };
-
-      const scheduleList = data.schedules || [];
-
-      if (Array.isArray(scheduleList)) {
-        for (const schedule of scheduleList) {
-          this.schedules.set(schedule.id, schedule);
-        }
-        logger.info(
-          `[ScheduleStore] Loaded ${this.schedules.size} schedules from ${this.filePath}`
-        );
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        logger.warn(
-          `[ScheduleStore] Failed to load schedules: ${error instanceof Error ? error.message : 'Unknown error'}`
-        );
-      } else {
-        logger.debug(`[ScheduleStore] No existing schedules file at ${this.filePath}`);
-      }
+      await migrateJsonToBackend(jsonPath, this.backend);
+    } catch (err) {
+      logger.warn(
+        `[ScheduleStore] JSON migration failed (non-fatal): ${
+          err instanceof Error ? err.message : err
+        }`
+      );
     }
 
     this.initialized = true;
   }
 
   /**
-   * Save schedules to file with atomic write and concurrency protection
-   */
-  async save(): Promise<void> {
-    // Use lock to prevent concurrent saves
-    const previousLock = this.saveLock;
-    let releaseLock: () => void;
-    this.saveLock = new Promise<void>(resolve => {
-      releaseLock = resolve;
-    });
-
-    try {
-      // Wait for any previous save to complete
-      await previousLock;
-
-      const resolvedPath = path.resolve(process.cwd(), this.filePath);
-      const dir = path.dirname(resolvedPath);
-
-      // Ensure directory exists
-      await fs.mkdir(dir, { recursive: true });
-
-      // Capture current dirty count before saving
-      const savedDirtyCount = this.dirtyCount;
-
-      // Prepare data
-      const data = {
-        version: '2.0', // New version for schedule format
-        savedAt: new Date().toISOString(),
-        schedules: Array.from(this.schedules.values()),
-      };
-
-      // Atomic write: write to temp file, then rename
-      const tempPath = `${resolvedPath}.tmp.${Date.now()}`;
-      await fs.writeFile(tempPath, JSON.stringify(data, null, 2), 'utf-8');
-      await fs.rename(tempPath, resolvedPath);
-
-      // Reset dirty count (only subtract what we saved, in case new changes came in)
-      this.dirtyCount = Math.max(0, this.dirtyCount - savedDirtyCount);
-      this.pendingSave = false;
-
-      logger.debug(`[ScheduleStore] Saved ${this.schedules.size} schedules to ${this.filePath}`);
-    } finally {
-      releaseLock!();
-    }
-  }
-
-  /**
-   * Schedule a debounced save operation with dirty tracking
-   */
-  private scheduleSave(): void {
-    if (!this.autoSave) return;
-
-    this.dirtyCount++;
-    this.pendingSave = true;
-
-    if (this.saveTimeout) {
-      clearTimeout(this.saveTimeout);
-    }
-
-    this.saveTimeout = setTimeout(() => {
-      this.save().catch(error => {
-        logger.error(
-          `[ScheduleStore] Auto-save failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-        );
-      });
-    }, this.saveDebounceMs);
-  }
-
-  /**
-   * Immediately save if there are pending changes (for critical operations)
-   */
-  private async saveImmediate(): Promise<void> {
-    if (!this.autoSave) return;
-
-    // Cancel any pending debounced save
-    if (this.saveTimeout) {
-      clearTimeout(this.saveTimeout);
-      this.saveTimeout = null;
-    }
-
-    // Save immediately
-    await this.save();
-  }
-
-  /**
-   * Create a new schedule (saves immediately to prevent data loss)
+   * Create a new schedule (async, persists immediately)
    */
   async createAsync(
     schedule: Omit<Schedule, 'id' | 'createdAt' | 'runCount' | 'failureCount' | 'status'>
   ): Promise<Schedule> {
-    // Validate limits
-    this.validateLimits(schedule.creatorId, schedule.isRecurring);
-
-    const newSchedule: Schedule = {
-      ...schedule,
-      id: uuidv4(),
-      createdAt: Date.now(),
-      runCount: 0,
-      failureCount: 0,
-      status: 'active',
-    };
-
-    this.schedules.set(newSchedule.id, newSchedule);
-
-    // Critical operation: save immediately to prevent data loss
-    await this.saveImmediate();
-
-    logger.info(
-      `[ScheduleStore] Created schedule ${newSchedule.id} for user ${newSchedule.creatorId}: workflow="${newSchedule.workflow}"`
-    );
-
-    return newSchedule;
-  }
-
-  /**
-   * Create a new schedule (synchronous, uses debounced save)
-   * @deprecated Use createAsync for reliable persistence
-   */
-  create(
-    schedule: Omit<Schedule, 'id' | 'createdAt' | 'runCount' | 'failureCount' | 'status'>
-  ): Schedule {
-    // Validate limits
-    this.validateLimits(schedule.creatorId, schedule.isRecurring);
-
-    const newSchedule: Schedule = {
-      ...schedule,
-      id: uuidv4(),
-      createdAt: Date.now(),
-      runCount: 0,
-      failureCount: 0,
-      status: 'active',
-    };
-
-    this.schedules.set(newSchedule.id, newSchedule);
-    this.scheduleSave();
-
-    logger.info(
-      `[ScheduleStore] Created schedule ${newSchedule.id} for user ${newSchedule.creatorId}: workflow="${newSchedule.workflow}"`
-    );
-
-    return newSchedule;
-  }
-
-  /**
-   * Validate schedule limits before creation
-   */
-  private validateLimits(creatorId: string, isRecurring: boolean): void {
-    // Global limit
-    if (this.limits.maxGlobal && this.schedules.size >= this.limits.maxGlobal) {
-      throw new Error(`Global schedule limit reached (${this.limits.maxGlobal})`);
-    }
-
-    // Per-user limit
-    const userSchedules = this.getByCreator(creatorId);
-    if (this.limits.maxPerUser && userSchedules.length >= this.limits.maxPerUser) {
-      throw new Error(
-        `You have reached the maximum number of schedules (${this.limits.maxPerUser})`
-      );
-    }
-
-    // Per-user recurring limit
-    if (isRecurring && this.limits.maxRecurringPerUser) {
-      const recurringCount = userSchedules.filter(s => s.isRecurring).length;
-      if (recurringCount >= this.limits.maxRecurringPerUser) {
-        throw new Error(
-          `You have reached the maximum number of recurring schedules (${this.limits.maxRecurringPerUser})`
-        );
-      }
-    }
+    const backend = this.getBackend();
+    await backend.validateLimits(schedule.creatorId, schedule.isRecurring, this.limits);
+    return backend.create(schedule);
   }
 
   /**
    * Get a schedule by ID
    */
-  get(id: string): Schedule | undefined {
-    return this.schedules.get(id);
+  async getAsync(id: string): Promise<Schedule | undefined> {
+    return this.getBackend().get(id);
   }
 
   /**
    * Update a schedule
    */
-  update(id: string, patch: Partial<Schedule>): Schedule | undefined {
-    const schedule = this.schedules.get(id);
-    if (!schedule) {
-      return undefined;
-    }
-
-    const updated = { ...schedule, ...patch, id: schedule.id }; // Ensure ID cannot be changed
-    this.schedules.set(id, updated);
-    this.scheduleSave();
-
-    return updated;
+  async updateAsync(id: string, patch: Partial<Schedule>): Promise<Schedule | undefined> {
+    return this.getBackend().update(id, patch);
   }
 
   /**
-   * Delete a schedule (saves immediately to prevent data loss)
+   * Delete a schedule
    */
   async deleteAsync(id: string): Promise<boolean> {
-    const deleted = this.schedules.delete(id);
-    if (deleted) {
-      // Critical operation: save immediately to prevent data loss
-      await this.saveImmediate();
-      logger.info(`[ScheduleStore] Deleted schedule ${id}`);
-    }
-    return deleted;
-  }
-
-  /**
-   * Delete a schedule (synchronous, uses debounced save)
-   * @deprecated Use deleteAsync for reliable persistence
-   */
-  delete(id: string): boolean {
-    const deleted = this.schedules.delete(id);
-    if (deleted) {
-      this.scheduleSave();
-      logger.info(`[ScheduleStore] Deleted schedule ${id}`);
-    }
-    return deleted;
+    return this.getBackend().delete(id);
   }
 
   /**
    * Get all schedules for a specific creator
    */
-  getByCreator(creatorId: string): Schedule[] {
-    return Array.from(this.schedules.values()).filter(s => s.creatorId === creatorId);
+  async getByCreatorAsync(creatorId: string): Promise<Schedule[]> {
+    return this.getBackend().getByCreator(creatorId);
   }
 
   /**
    * Get all active schedules
    */
-  getActiveSchedules(): Schedule[] {
-    return Array.from(this.schedules.values()).filter(s => s.status === 'active');
+  async getActiveSchedulesAsync(): Promise<Schedule[]> {
+    return this.getBackend().getActiveSchedules();
   }
 
   /**
    * Get all schedules due for execution
    * @param now Current timestamp in milliseconds
    */
-  getDueSchedules(now: number = Date.now()): Schedule[] {
-    return this.getActiveSchedules().filter(s => {
-      // For one-time schedules, check if runAt is in the past
-      if (!s.isRecurring && s.runAt) {
-        return s.runAt <= now;
-      }
-      // For recurring schedules, check nextRunAt
-      if (s.isRecurring && s.nextRunAt) {
-        return s.nextRunAt <= now;
-      }
-      return false;
-    });
+  async getDueSchedulesAsync(now: number = Date.now()): Promise<Schedule[]> {
+    return this.getBackend().getDueSchedules(now);
   }
 
   /**
    * Find schedules by workflow name
    */
-  findByWorkflow(creatorId: string, workflowName: string): Schedule[] {
-    const lowerWorkflow = workflowName.toLowerCase();
-    return this.getByCreator(creatorId).filter(
-      s => s.status === 'active' && s.workflow?.toLowerCase().includes(lowerWorkflow)
-    );
+  async findByWorkflowAsync(creatorId: string, workflowName: string): Promise<Schedule[]> {
+    return this.getBackend().findByWorkflow(creatorId, workflowName);
   }
 
   /**
    * Get schedule count statistics
    */
-  getStats(): {
-    total: number;
-    active: number;
-    paused: number;
-    completed: number;
-    failed: number;
-    recurring: number;
-    oneTime: number;
-  } {
-    const all = Array.from(this.schedules.values());
-    return {
-      total: all.length,
-      active: all.filter(s => s.status === 'active').length,
-      paused: all.filter(s => s.status === 'paused').length,
-      completed: all.filter(s => s.status === 'completed').length,
-      failed: all.filter(s => s.status === 'failed').length,
-      recurring: all.filter(s => s.isRecurring).length,
-      oneTime: all.filter(s => !s.isRecurring).length,
-    };
+  async getStatsAsync(): Promise<ScheduleStoreStats> {
+    return this.getBackend().getStats();
   }
 
   /**
    * Force immediate save (useful for shutdown)
    */
   async flush(): Promise<void> {
-    if (this.saveTimeout) {
-      clearTimeout(this.saveTimeout);
-      this.saveTimeout = null;
+    if (this.backend) {
+      await this.backend.flush();
     }
-    await this.save();
   }
 
   /**
@@ -497,13 +282,34 @@ export class ScheduleStore {
    * Check if there are unsaved changes
    */
   hasPendingChanges(): boolean {
-    return this.pendingSave || this.dirtyCount > 0;
+    return false; // SQL backends persist immediately
   }
 
   /**
-   * Get all schedules (for iteration)
+   * Get all schedules
    */
-  getAll(): Schedule[] {
-    return Array.from(this.schedules.values());
+  async getAllAsync(): Promise<Schedule[]> {
+    return this.getBackend().getAll();
+  }
+
+  /**
+   * Get the underlying backend (for HA lock operations)
+   */
+  getBackend(): ScheduleStoreBackend {
+    if (!this.backend) {
+      throw new Error('[ScheduleStore] Not initialized. Call initialize() first.');
+    }
+    return this.backend;
+  }
+
+  /**
+   * Shut down the backend cleanly
+   */
+  async shutdown(): Promise<void> {
+    if (this.backend) {
+      await this.backend.shutdown();
+      this.backend = null;
+    }
+    this.initialized = false;
   }
 }
