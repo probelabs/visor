@@ -43,17 +43,35 @@ export function sanitizeLabelList(labels: unknown): string[] {
  * Custom ReadFile tag for Liquid templates
  * Usage: {% readfile "path/to/file.txt" %}
  * or with variable: {% readfile filename %}
+ * With indentation: {% readfile "path/to/file.txt" indent: 4 %}
+ *
+ * The indent parameter adds leading spaces to each line (after the first),
+ * which is useful when including files inside YAML literal blocks.
  */
 export class ReadFileTag extends Tag {
   private filepath: Value;
+  private indentValue: Value | null = null;
 
   constructor(token: TagToken, remainTokens: TopLevelToken[], liquid: Liquid) {
     super(token, remainTokens, liquid);
-    this.filepath = new Value(token.args, liquid);
+    // Parse args: could be just filepath or filepath with indent: N
+    // Format: "path/to/file" or "path/to/file" indent: 4
+    const argsStr = token.args.trim();
+
+    // Check if there's an indent parameter
+    const indentMatch = argsStr.match(/^(.+?)\s+indent:\s*(\d+)\s*$/);
+    if (indentMatch) {
+      this.filepath = new Value(indentMatch[1].trim(), liquid);
+      this.indentValue = new Value(indentMatch[2], liquid);
+    } else {
+      this.filepath = new Value(argsStr, liquid);
+    }
   }
 
   *render(ctx: Context, emitter: Emitter): Generator<unknown, void, unknown> {
     const filePath = yield this.filepath.value(ctx, false);
+    const indentAmount = this.indentValue ? yield this.indentValue.value(ctx, false) : 0;
+    const indent = typeof indentAmount === 'number' ? indentAmount : parseInt(String(indentAmount), 10) || 0;
 
     // Validate the path
     if (!filePath || typeof filePath !== 'string') {
@@ -80,7 +98,18 @@ export class ReadFileTag extends Tag {
     // Read the file content synchronously to support both parseAndRender and parseAndRenderSync
     // Using readFileSync ensures compatibility with sync rendering (e.g., loadConfig in expressions)
     try {
-      const content = require('fs').readFileSync(resolvedPath, 'utf-8');
+      let content = require('fs').readFileSync(resolvedPath, 'utf-8');
+
+      // Apply indentation if specified (indent all lines after the first)
+      // This is needed for YAML literal blocks where continuation lines must be indented
+      if (indent > 0) {
+        const indentStr = ' '.repeat(indent);
+        const lines = content.split('\n');
+        content = lines
+          .map((line: string, i: number) => (i === 0 ? line : indentStr + line))
+          .join('\n');
+      }
+
       emitter.write(content);
     } catch (error) {
       // Handle file read errors gracefully
