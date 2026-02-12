@@ -1318,13 +1318,15 @@ export class AICheckProvider extends CheckProvider {
           }
 
           // Update the server config to use the ephemeral SSE endpoint
-          // Use 10-minute timeout for workflow tools since they can run complex operations
+          // Use ai.timeout from config if set, otherwise default to 30 minutes for workflow tools
+          // (code checkouts + AI exploration can legitimately take 15-20 minutes)
+          const workflowToolTimeout = (config.ai as any)?.timeout || 1800000;
           mcpServers[customToolsServerName] = {
             command: '',
             args: [],
             url: `http://localhost:${port}/sse`,
             transport: 'sse',
-            timeout: 600000, // 10 minutes for workflow tools
+            timeout: workflowToolTimeout,
           } as any;
         }
       } catch (error) {

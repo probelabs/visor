@@ -1,7 +1,6 @@
 // eslint-disable-next-line no-restricted-imports -- this is the extensions file that wraps liquidjs
 import { Liquid, TagToken, Context, TopLevelToken, Tag, Value, Emitter } from 'liquidjs';
 import { AsyncLocalStorage } from 'async_hooks';
-import fs from 'fs/promises';
 import path from 'path';
 import {
   hasMinPermission,
@@ -44,17 +43,54 @@ export function sanitizeLabelList(labels: unknown): string[] {
  * Custom ReadFile tag for Liquid templates
  * Usage: {% readfile "path/to/file.txt" %}
  * or with variable: {% readfile filename %}
+ *
+ * AUTOMATIC INDENTATION: The tag automatically detects its position in the output
+ * and indents subsequent lines to match. This makes it safe to use inside YAML
+ * literal blocks (|) without manual indent parameters.
+ *
+ * Manual override: {% readfile "path/to/file.txt" indent: 4 %}
  */
 export class ReadFileTag extends Tag {
   private filepath: Value;
+  private indentValue: Value | null = null;
 
   constructor(token: TagToken, remainTokens: TopLevelToken[], liquid: Liquid) {
     super(token, remainTokens, liquid);
-    this.filepath = new Value(token.args, liquid);
+    // Parse args: could be just filepath or filepath with indent: N
+    // Format: "path/to/file" or "path/to/file" indent: 4
+    const argsStr = token.args.trim();
+
+    // Check if there's an indent parameter
+    const indentMatch = argsStr.match(/^(.+?)\s+indent:\s*(\d+)\s*$/);
+    if (indentMatch) {
+      this.filepath = new Value(indentMatch[1].trim(), liquid);
+      this.indentValue = new Value(indentMatch[2], liquid);
+    } else {
+      this.filepath = new Value(argsStr, liquid);
+    }
   }
 
   *render(ctx: Context, emitter: Emitter): Generator<unknown, void, unknown> {
     const filePath = yield this.filepath.value(ctx, false);
+
+    // Determine indentation: manual override or auto-detect from output buffer
+    let indent = 0;
+    if (this.indentValue) {
+      const indentAmount = yield this.indentValue.value(ctx, false);
+      indent = typeof indentAmount === 'number' ? indentAmount : parseInt(String(indentAmount), 10) || 0;
+    } else {
+      // Auto-detect indentation by looking at current output position
+      // Find the column position by counting characters since the last newline
+      const output = (emitter as any).buffer || '';
+      const lastNewline = output.lastIndexOf('\n');
+      if (lastNewline >= 0) {
+        // Count characters (spaces/tabs) from last newline to current position
+        const lineStart = output.substring(lastNewline + 1);
+        // Count leading whitespace that will be our indent
+        const match = lineStart.match(/^(\s*)/);
+        indent = match ? match[1].length : 0;
+      }
+    }
 
     // Validate the path
     if (!filePath || typeof filePath !== 'string') {
@@ -78,9 +114,21 @@ export class ReadFileTag extends Tag {
       return;
     }
 
-    // Read the file content
+    // Read the file content synchronously to support both parseAndRender and parseAndRenderSync
+    // Using readFileSync ensures compatibility with sync rendering (e.g., loadConfig in expressions)
     try {
-      const content = yield fs.readFile(resolvedPath, 'utf-8');
+      let content = require('fs').readFileSync(resolvedPath, 'utf-8');
+
+      // Apply indentation to all lines after the first
+      // This is needed for YAML literal blocks where continuation lines must be indented
+      if (indent > 0) {
+        const indentStr = ' '.repeat(indent);
+        const lines = content.split('\n');
+        content = lines
+          .map((line: string, i: number) => (i === 0 ? line : indentStr + line))
+          .join('\n');
+      }
+
       emitter.write(content);
     } catch (error) {
       // Handle file read errors gracefully
