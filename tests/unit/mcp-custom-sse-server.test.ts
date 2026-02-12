@@ -1,4 +1,5 @@
 import { CustomToolsSSEServer } from '../../src/providers/mcp-custom-sse-server';
+import { CustomToolExecutor } from '../../src/providers/custom-tool-executor';
 import { CustomToolDefinition } from '../../src/types/config';
 import http from 'http';
 
@@ -207,8 +208,7 @@ describe('CustomToolsSSEServer', () => {
 
       expect(response.error).toBeDefined();
       expect(response.error.code).toBe(-32603);
-      expect(response.error.message).toBe('Internal error');
-      expect(response.error.data.tool).toBe('non-existent-tool');
+      expect(response.error.message).toMatch(/^Internal error during tool execution: /);
     });
 
     it('should validate tool input against schema', async () => {
@@ -228,7 +228,9 @@ describe('CustomToolsSSEServer', () => {
 
       expect(response.error).toBeDefined();
       expect(response.error.code).toBe(-32603);
-      expect(response.error.data.error).toContain('validation failed');
+      expect(response.error.message).toMatch(
+        /^Internal error during tool execution: .*validation failed/
+      );
     });
 
     it('should handle tool execution timeout', async () => {
@@ -263,7 +265,37 @@ describe('CustomToolsSSEServer', () => {
 
       expect(response.error).toBeDefined();
       expect(response.error.code).toBe(-32603);
+      expect(response.error.message).toMatch(/^Internal error during tool execution: /);
     }, 15000); // Increase test timeout to 15s
+
+    it('should return validation error code for invalid workflow inputs', async () => {
+      server = new CustomToolsSSEServer(testTools, testSessionId, false);
+      const port = await server.start();
+
+      // Mock the executor to throw a workflow validation error
+      const executor = (server as any).toolExecutor as CustomToolExecutor;
+      jest
+        .spyOn(executor, 'execute')
+        .mockRejectedValueOnce(
+          new Error('Invalid workflow inputs: repo: is required, branch: must be a string')
+        );
+
+      const response = await sendMCPRequest(port, {
+        jsonrpc: '2.0',
+        id: 20,
+        method: 'tools/call',
+        params: {
+          name: 'echo-tool',
+          arguments: { message: 'test' },
+        },
+      });
+
+      expect(response.error).toBeDefined();
+      expect(response.error.code).toBe(-32602);
+      expect(response.error.message).toBe(
+        'Invalid tool parameters: Invalid workflow inputs: repo: is required, branch: must be a string'
+      );
+    });
   });
 
   describe('MCP Protocol - Initialize', () => {
