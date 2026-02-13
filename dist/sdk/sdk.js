@@ -15070,6 +15070,31 @@ var init_workflow_check_provider = __esm({
             `[WorkflowProvider]   NO WORKSPACE from parent - nested checkouts won't be added to workspace!`
           );
         }
+        const stepPrefix = config.checkName || workflow.id;
+        const parentExecCtx = parentContext?.executionContext;
+        let childExecCtx = parentExecCtx;
+        if (parentExecCtx?.hooks) {
+          const parentHooks = parentExecCtx.hooks;
+          childExecCtx = {
+            ...parentExecCtx,
+            hooks: {
+              ...parentHooks,
+              // Wrap onPromptCaptured: emit with prefixed step name so parent sees "route-intent.classify"
+              onPromptCaptured: parentHooks.onPromptCaptured ? (info) => {
+                parentHooks.onPromptCaptured({
+                  ...info,
+                  step: `${stepPrefix}.${info.step}`
+                });
+              } : void 0,
+              // Wrap mockForStep: try prefixed name first, fall back to unprefixed for backward compat
+              mockForStep: parentHooks.mockForStep ? (step) => {
+                const prefixed = parentHooks.mockForStep(`${stepPrefix}.${step}`);
+                if (prefixed !== void 0) return prefixed;
+                return parentHooks.mockForStep(step);
+              } : void 0
+            }
+          };
+        }
         const childContext = {
           mode: "state-machine",
           config: workflowConfig,
@@ -15091,9 +15116,9 @@ var init_workflow_check_provider = __esm({
           debug: parentContext?.debug || false,
           maxParallelism: parentContext?.maxParallelism,
           failFast: parentContext?.failFast,
-          // Propagate execution hooks (mocks, octokit, etc.) into the child so
-          // nested steps can be mocked/observed by the YAML test runner.
-          executionContext: parentContext?.executionContext,
+          // Propagate wrapped execution hooks (mocks, octokit, etc.) into the child so
+          // nested steps can be mocked/observed by the YAML test runner with dotted prefixes.
+          executionContext: childExecCtx,
           // Ensure all workflow steps are considered requested to avoid tag/event filtering surprises
           requestedChecks: Object.keys(checksMetadata)
         };
@@ -15107,6 +15132,26 @@ var init_workflow_check_provider = __esm({
           `[WorkflowProvider] Executing nested workflow '${workflow.id}' at depth ${currentDepth + 1}`
         );
         const result = await runner.run();
+        if (parentContext?.journal && parentContext?.sessionId) {
+          const parentJournal = parentContext.journal;
+          const childSnapshot = childJournal.beginSnapshot();
+          const childSessionId = childContext.sessionId;
+          const childEntries = childJournal.readVisible(childSessionId, childSnapshot, void 0);
+          for (const entry of childEntries) {
+            parentJournal.commitEntry({
+              sessionId: parentContext.sessionId,
+              scope: entry.scope,
+              checkId: `${stepPrefix}.${entry.checkId}`,
+              result: entry.result,
+              event: entry.event
+            });
+          }
+          if (childEntries.length > 0) {
+            logger.debug(
+              `[WorkflowProvider] Propagated ${childEntries.length} child journal entries to parent with prefix '${stepPrefix}.'`
+            );
+          }
+        }
         const bubbledEvents = childContext._bubbledEvents || [];
         if (bubbledEvents.length > 0 && parentContext) {
           if (parentContext.debug) {
@@ -47200,6 +47245,9 @@ var init_runner = __esm({
             if (this.state.currentState === "Error") {
               break;
             }
+          }
+          if (this.state.currentState === "Completed" && !this.context._parentContext && !process.env.VISOR_TEST_MODE) {
+            logger.info("All workflows finished \u2014 waiting for events");
           }
           return this.buildExecutionResult();
         } catch (error) {
