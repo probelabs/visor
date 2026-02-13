@@ -179,6 +179,7 @@ export async function runSuites(
     only?: string;
     bail?: boolean;
     noMocks?: boolean;
+    noMocksFor?: string[];
     maxParallelSuites?: number;
     maxParallel?: number;
     promptMaxChars?: number;
@@ -247,6 +248,7 @@ export async function runSuites(
         only: options.only,
         bail: options.bail,
         noMocks: options.noMocks,
+        noMocksFor: options.noMocksFor,
         maxParallel: options.maxParallel,
         promptMaxChars: options.promptMaxChars,
       });
@@ -308,7 +310,8 @@ export class VisorTestRunner {
     ghRec?: { error_code?: number; timeout_ms?: number },
     defaultIncludeTags?: string[] | undefined,
     defaultExcludeTags?: string[] | undefined,
-    noMocks?: boolean
+    noMocks?: boolean,
+    noMocksFor?: string[]
   ): {
     name: string;
     strict: boolean;
@@ -393,6 +396,15 @@ export class VisorTestRunner {
         ? ((_case as any).mocks as Record<string, unknown>)
         : {};
     const mockMgr = new MockManager(mocks);
+    // Pre-compute which steps should be unmocked based on provider type
+    const noMockSteps = new Set<string>();
+    if (noMocksFor && noMocksFor.length > 0) {
+      const noMockTypes = new Set(noMocksFor);
+      for (const [checkName, chk] of Object.entries((cfg.checks || {}) as Record<string, any>)) {
+        const t = chk.type || 'ai';
+        if (noMockTypes.has(t)) noMockSteps.add(checkName);
+      }
+    }
     const parseTags = (v: unknown): string[] | undefined => {
       if (!v) return undefined;
       if (Array.isArray(v))
@@ -427,7 +439,12 @@ export class VisorTestRunner {
           prompts[k].push(p);
         },
         // In noMocks mode, always return undefined to let real providers execute
-        mockForStep: (step: string) => (noMocks ? undefined : mockMgr.get(step)),
+        // In noMocksFor mode, skip mocks for steps matching excluded provider types
+        mockForStep: (step: string) => {
+          if (noMocks) return undefined;
+          if (noMockSteps.size > 0 && noMockSteps.has(step)) return undefined;
+          return mockMgr.get(step);
+        },
         // Ensure human-input never blocks tests: prefer case mock, then default value
         onHumanInput: async (req: { checkId: string; default?: string }) => {
           if (noMocks) return (req.default ?? '').toString();
@@ -730,6 +747,7 @@ export class VisorTestRunner {
       only?: string;
       bail?: boolean;
       noMocks?: boolean;
+      noMocksFor?: string[];
       maxParallel?: number;
       promptMaxChars?: number;
     }
@@ -878,6 +896,7 @@ export class VisorTestRunner {
     // Header: show suite path for clarity
     let __suiteRel = testsPath;
     const noMocksMode = options.noMocks || false;
+    const noMocksForTypes = options.noMocksFor;
     try {
       __suiteRel = path.relative(this.cwd, testsPath) || testsPath;
       console.log(`Suite: ${__suiteRel}`);
@@ -886,6 +905,14 @@ export class VisorTestRunner {
           this.color('🔴 NO-MOCKS MODE: Running with real providers (no mock injection)', '33')
         );
         console.log(this.gray('   Step outputs will be captured and printed as suggested mocks\n'));
+      } else if (noMocksForTypes && noMocksForTypes.length > 0) {
+        console.log(
+          this.color(
+            `🟡 PARTIAL-MOCK MODE: Real providers for: ${noMocksForTypes.join(', ')}`,
+            '33'
+          )
+        );
+        console.log(this.gray('   Other provider types will still use mocks\n'));
       }
     } catch {}
     const runOne = async (_case: any): Promise<{ name: string; failed: number }> => {
@@ -954,7 +981,8 @@ export class VisorTestRunner {
         ghRec,
         defaultIncludeTags,
         defaultExcludeTags,
-        noMocksMode
+        noMocksMode,
+        noMocksForTypes
       );
       try {
         this.printSelectedChecks(setup.checksToRun);
@@ -969,8 +997,19 @@ export class VisorTestRunner {
         const exec = await this.executeTestCase(setup, cfgLocal);
         const res = exec.res;
 
-        // In no-mocks mode, print executed steps and captured outputs as suggested mocks
-        if (noMocksMode && Object.keys(exec.outHistory).length > 0) {
+        // In no-mocks or partial-mock mode, print executed steps and captured outputs
+        const showRealOutputs = noMocksMode || (noMocksForTypes && noMocksForTypes.length > 0);
+        if (showRealOutputs && Object.keys(exec.outHistory).length > 0) {
+          // Filter to only unmocked steps in partial mode
+          const unmockedStepFilter = noMocksMode
+            ? undefined
+            : (step: string) => {
+                // Check if this step's provider type is in the noMocksFor list
+                const chk = (cfgLocal.checks || {})[step];
+                if (!chk) return false;
+                const t = chk.type || 'ai';
+                return noMocksForTypes!.includes(t);
+              };
           // Print executed steps (including nested dotted-path steps from sub-workflows)
           const allStepNames = Object.keys(exec.outHistory).sort();
           console.log(this.color('\n📌 Executed steps:', '36'));
@@ -981,10 +1020,15 @@ export class VisorTestRunner {
             const label = depth > 0 ? this.gray(`${indent}↳ ${stepName}`) : `  ${stepName}`;
             console.log(`${label}  ${this.gray(`(${count}x)`)}`);
           }
-          console.log(this.color('\n📋 Suggested mocks (copy to your test case):', '36'));
+          const unmockedLabel = unmockedStepFilter
+            ? `Suggested mocks for unmocked ${noMocksForTypes!.join('/')} steps:`
+            : 'Suggested mocks (copy to your test case):';
+          console.log(this.color(`\n📋 ${unmockedLabel}`, '36'));
           console.log(this.gray('mocks:'));
           for (const [stepName, outputs] of Object.entries(exec.outHistory)) {
             if (!Array.isArray(outputs) || outputs.length === 0) continue;
+            // In partial mode, only show outputs for unmocked provider types
+            if (unmockedStepFilter && !unmockedStepFilter(stepName)) continue;
             // Use the last output for the step
             const lastOutput = outputs[outputs.length - 1];
             // Format as YAML with proper indentation

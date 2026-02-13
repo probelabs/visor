@@ -457,3 +457,97 @@ describe('nested workflow assertions - hook wrapping logic', () => {
     expect(result).toEqual({ intent: 'specific' });
   });
 });
+
+describe('partial mocking - noMocksFor provider type filtering', () => {
+  /**
+   * Simulates the mockForStep logic from setupTestCase with noMocksFor support.
+   * Steps whose provider type is in the exclusion list return undefined (run for real).
+   */
+  function buildMockForStep(
+    mocks: Record<string, unknown>,
+    cfg: Record<string, { type?: string }>,
+    noMocksFor?: string[]
+  ): (step: string) => unknown {
+    const { MockManager } = require('../../src/test-runner/core/mocks');
+    const mockMgr = new MockManager(mocks);
+    const noMockSteps = new Set<string>();
+    if (noMocksFor && noMocksFor.length > 0) {
+      const noMockTypes = new Set(noMocksFor);
+      for (const [name, chk] of Object.entries(cfg)) {
+        const t = chk.type || 'ai';
+        if (noMockTypes.has(t)) noMockSteps.add(name);
+      }
+    }
+    return (step: string) => {
+      if (noMockSteps.has(step)) return undefined;
+      return mockMgr.get(step);
+    };
+  }
+
+  it('should return mock when step type is not in noMocksFor list', () => {
+    const mockForStep = buildMockForStep(
+      { classify: { intent: 'chat' }, 'fetch-data': { result: 'cached' } },
+      { classify: { type: 'ai' }, 'fetch-data': { type: 'http_client' } },
+      ['http_client']
+    );
+    // AI step should still be mocked
+    expect(mockForStep('classify')).toEqual({ intent: 'chat' });
+  });
+
+  it('should return undefined for steps whose type is in noMocksFor list', () => {
+    const mockForStep = buildMockForStep(
+      { classify: { intent: 'chat' }, 'fetch-data': { result: 'cached' } },
+      { classify: { type: 'ai' }, 'fetch-data': { type: 'http_client' } },
+      ['http_client']
+    );
+    // http_client step should be unmocked (return undefined)
+    expect(mockForStep('fetch-data')).toBeUndefined();
+  });
+
+  it('should mock all steps when noMocksFor is empty', () => {
+    const mockForStep = buildMockForStep(
+      { classify: { intent: 'chat' }, 'fetch-data': { result: 'cached' } },
+      { classify: { type: 'ai' }, 'fetch-data': { type: 'http_client' } },
+      []
+    );
+    expect(mockForStep('classify')).toEqual({ intent: 'chat' });
+    expect(mockForStep('fetch-data')).toEqual({ result: 'cached' });
+  });
+
+  it('should mock all steps when noMocksFor is undefined', () => {
+    const mockForStep = buildMockForStep(
+      { classify: { intent: 'chat' }, 'fetch-data': { result: 'cached' } },
+      { classify: { type: 'ai' }, 'fetch-data': { type: 'http_client' } },
+      undefined
+    );
+    expect(mockForStep('classify')).toEqual({ intent: 'chat' });
+    expect(mockForStep('fetch-data')).toEqual({ result: 'cached' });
+  });
+
+  it('should support multiple provider types in noMocksFor', () => {
+    const mockForStep = buildMockForStep(
+      { classify: { intent: 'chat' }, 'fetch-data': { result: 'cached' }, 'run-cmd': 'output' },
+      {
+        classify: { type: 'ai' },
+        'fetch-data': { type: 'http_client' },
+        'run-cmd': { type: 'command' },
+      },
+      ['http_client', 'command']
+    );
+    // AI step stays mocked
+    expect(mockForStep('classify')).toEqual({ intent: 'chat' });
+    // http_client and command steps are unmocked
+    expect(mockForStep('fetch-data')).toBeUndefined();
+    expect(mockForStep('run-cmd')).toBeUndefined();
+  });
+
+  it('should treat default type as ai when type is not specified', () => {
+    const mockForStep = buildMockForStep(
+      { classify: { intent: 'chat' } },
+      { classify: {} }, // no type field → defaults to 'ai'
+      ['ai']
+    );
+    // Should unmock since default type is 'ai'
+    expect(mockForStep('classify')).toBeUndefined();
+  });
+});
