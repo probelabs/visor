@@ -94,9 +94,13 @@ export function getVisorRunAttributes(): Record<string, string> {
   } catch {
     attrs['visor.version'] = 'dev';
   }
-  const commit = process.env.VISOR_COMMIT_SHORT || process.env.VISOR_COMMIT || '';
-  if (commit) {
-    attrs['visor.commit'] = commit;
+  const commitShort = process.env.VISOR_COMMIT_SHORT || '';
+  const commitFull = process.env.VISOR_COMMIT_SHA || process.env.VISOR_COMMIT || '';
+  if (commitShort) {
+    attrs['visor.commit'] = commitShort;
+  }
+  if (commitFull) {
+    attrs['visor.commit.sha'] = commitFull;
   }
   return attrs;
 }
