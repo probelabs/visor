@@ -969,8 +969,18 @@ export class VisorTestRunner {
         const exec = await this.executeTestCase(setup, cfgLocal);
         const res = exec.res;
 
-        // In no-mocks mode, print captured outputs as suggested mocks
+        // In no-mocks mode, print executed steps and captured outputs as suggested mocks
         if (noMocksMode && Object.keys(exec.outHistory).length > 0) {
+          // Print executed steps (including nested dotted-path steps from sub-workflows)
+          const allStepNames = Object.keys(exec.outHistory).sort();
+          console.log(this.color('\n📌 Executed steps:', '36'));
+          for (const stepName of allStepNames) {
+            const count = (exec.outHistory[stepName] || []).length;
+            const depth = stepName.split('.').length - 1;
+            const indent = '  '.repeat(depth + 1);
+            const label = depth > 0 ? this.gray(`${indent}↳ ${stepName}`) : `  ${stepName}`;
+            console.log(`${label}  ${this.gray(`(${count}x)`)}`);
+          }
           console.log(this.color('\n📋 Suggested mocks (copy to your test case):', '36'));
           console.log(this.gray('mocks:'));
           for (const [stepName, outputs] of Object.entries(exec.outHistory)) {
@@ -1047,7 +1057,7 @@ export class VisorTestRunner {
               : {};
           this.warnUnmockedProviders(res.statistics, cfgLocal, mocksUsed);
         } catch {}
-        this.printCoverage(_case.name, res.statistics, setup.expect);
+        this.printCoverage(_case.name, res.statistics, setup.expect, exec.outHistory);
         if (caseFailures.length === 0) {
           console.log(
             `${(this as any).tagPass ? (this as any).tagPass() : '✅ PASS'} ${__suiteRel} › ${_case.name}`
@@ -1472,12 +1482,24 @@ export class VisorTestRunner {
   private printCoverage(
     label: string,
     stats: import('../types/execution').ExecutionStatistics,
-    expect: ExpectBlock
+    expect: ExpectBlock,
+    outputHistory?: Record<string, unknown[]>
   ): void {
     const executed: Record<string, number> = {};
     for (const s of stats.checks) {
       const skipped = (s as any).skipped === true || !!(s as any).skipReason;
       if (!skipped && (s.totalRuns || 0) > 0) executed[s.checkName] = s.totalRuns || 0;
+    }
+    // Include nested step counts from outputHistory (dotted-path steps from sub-workflows)
+    if (outputHistory) {
+      for (const key of Object.keys(outputHistory)) {
+        if (key.includes('.') && !(key in executed)) {
+          const hist = outputHistory[key];
+          if (Array.isArray(hist) && hist.length > 0) {
+            executed[key] = hist.length;
+          }
+        }
+      }
     }
     const expCalls = (expect.calls || []).filter(c => c.step);
     const expectedSteps = new Map<

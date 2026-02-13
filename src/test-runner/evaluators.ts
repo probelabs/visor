@@ -401,6 +401,19 @@ export function evaluateCase(
   const errors: string[] = [];
   const executed = buildExecutedMap(stats);
 
+  // Augment executed map with nested step counts from outputHistory.
+  // Dotted step names (e.g. "route-intent.classify") come from child journal
+  // entries propagated by WorkflowCheckProvider and appear in outputHistory
+  // but not in top-level execution stats.
+  for (const key of Object.keys(outputHistory)) {
+    if (key.includes('.') && !(key in executed)) {
+      const hist = outputHistory[key];
+      if (Array.isArray(hist) && hist.length > 0) {
+        executed[key] = hist.length;
+      }
+    }
+  }
+
   if (strict) {
     const expectedSteps = new Set(
       (expect.calls || []).filter(c => c.step).map(c => String(c.step))
