@@ -27,6 +27,13 @@ export async function handleCompleted(context: EngineContext, state: RunState): 
     }
   }
 
+  // Log idle message for top-level workflows (not sub-workflows or test runs)
+  const isSubWorkflow = !!(context as any)._parentContext;
+  const isTestMode = process.env.VISOR_TEST_MODE === 'true';
+  if (!isSubWorkflow && !isTestMode) {
+    logger.info('All workflows finished — waiting for events');
+  }
+
   // Flush telemetry
   // M4: Will add structured event streaming to debug visualizer
 
