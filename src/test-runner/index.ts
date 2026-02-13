@@ -1579,13 +1579,22 @@ export class VisorTestRunner {
    * Compute a flat list of human-readable diffs between a mock value and a real output.
    * Walks objects recursively; reports added/removed/changed keys.
    */
-  private diffObjects(mock: unknown, real: unknown, prefix: string): string[] {
+  private diffObjects(mock: unknown, real: unknown, prefix: string, depth = 0): string[] {
+    const safeStr = (v: unknown): string => {
+      try {
+        return JSON.stringify(v) ?? 'undefined';
+      } catch {
+        return '[unserializable]';
+      }
+    };
     const diffs: string[] = [];
+    if (depth > 20) {
+      diffs.push(`${prefix || '(root)'}: (max depth exceeded)`);
+      return diffs;
+    }
     if (mock === real) return diffs;
     if (mock === null || mock === undefined || real === null || real === undefined) {
-      const m = JSON.stringify(mock) ?? 'undefined';
-      const r = JSON.stringify(real) ?? 'undefined';
-      diffs.push(`${prefix || '(root)'}: ${m} → ${r}`);
+      diffs.push(`${prefix || '(root)'}: ${safeStr(mock)} → ${safeStr(real)}`);
       return diffs;
     }
     if (typeof mock !== typeof real) {
@@ -1600,11 +1609,11 @@ export class VisorTestRunner {
       for (let i = 0; i < maxLen; i++) {
         const p = prefix ? `${prefix}[${i}]` : `[${i}]`;
         if (i >= mock.length) {
-          diffs.push(`${p}: (added) ${JSON.stringify(real[i])}`);
+          diffs.push(`${p}: (added) ${safeStr(real[i])}`);
         } else if (i >= real.length) {
-          diffs.push(`${p}: (removed) ${JSON.stringify(mock[i])}`);
+          diffs.push(`${p}: (removed) ${safeStr(mock[i])}`);
         } else {
-          diffs.push(...this.diffObjects(mock[i], real[i], p));
+          diffs.push(...this.diffObjects(mock[i], real[i], p, depth + 1));
         }
       }
       return diffs;
@@ -1616,21 +1625,21 @@ export class VisorTestRunner {
       for (const key of allKeys) {
         const p = prefix ? `${prefix}.${key}` : key;
         if (!(key in mockObj)) {
-          const val = JSON.stringify(realObj[key]);
-          diffs.push(`${p}: (added) ${val && val.length > 80 ? val.slice(0, 80) + '…' : val}`);
+          const val = safeStr(realObj[key]);
+          diffs.push(`${p}: (added) ${val.length > 80 ? val.slice(0, 80) + '…' : val}`);
         } else if (!(key in realObj)) {
           diffs.push(`${p}: (removed from output)`);
         } else {
-          diffs.push(...this.diffObjects(mockObj[key], realObj[key], p));
+          diffs.push(...this.diffObjects(mockObj[key], realObj[key], p, depth + 1));
         }
       }
       return diffs;
     }
     // Primitive comparison
     if (mock !== real) {
-      const m = JSON.stringify(mock);
-      const r = JSON.stringify(real);
-      diffs.push(`${prefix || '(root)'}: ${m} → ${r && r.length > 80 ? r.slice(0, 80) + '…' : r}`);
+      const m = safeStr(mock);
+      const r = safeStr(real);
+      diffs.push(`${prefix || '(root)'}: ${m} → ${r.length > 80 ? r.slice(0, 80) + '…' : r}`);
     }
     return diffs;
   }
