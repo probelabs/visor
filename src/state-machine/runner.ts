@@ -103,6 +103,15 @@ export class StateMachineRunner {
         }
       }
 
+      // Log idle message for top-level workflows that completed successfully
+      if (
+        this.state.currentState === 'Completed' &&
+        !(this.context as any)._parentContext &&
+        !process.env.VISOR_TEST_MODE
+      ) {
+        logger.info('All workflows finished — waiting for events');
+      }
+
       // Return final results
       return this.buildExecutionResult();
     } catch (error) {
