@@ -411,6 +411,7 @@ async function handleTestCommand(argv: string[]): Promise<void> {
       '--max-suites',
       '--prompt-max-chars',
       '--progress',
+      '--no-mocks-for',
     ]);
     let i = 0;
     while (i < rest.length) {
@@ -434,6 +435,13 @@ async function handleTestCommand(argv: string[]): Promise<void> {
   const only = getArg('--only');
   const bail = hasFlag('--bail');
   const noMocks = hasFlag('--no-mocks');
+  const noMocksForRaw = getArg('--no-mocks-for');
+  const noMocksFor = noMocksForRaw
+    ? noMocksForRaw
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+    : undefined;
   const listOnly = hasFlag('--list');
   const validateOnly = hasFlag('--validate');
   const progress = (getArg('--progress') as 'compact' | 'detailed' | undefined) || 'compact';
@@ -501,6 +509,7 @@ async function handleTestCommand(argv: string[]): Promise<void> {
         only,
         bail,
         noMocks,
+        noMocksFor,
         maxParallelSuites: maxParallelSuites || Math.max(1, require('os').cpus()?.length || 2),
         maxParallel,
         promptMaxChars,
@@ -618,6 +627,7 @@ async function handleTestCommand(argv: string[]): Promise<void> {
         only,
         bail,
         noMocks,
+        noMocksFor,
         maxParallel,
         promptMaxChars,
         engineMode: 'state-machine',

@@ -29,6 +29,7 @@ const schema: any = {
     slack: { type: 'object' },
     frontends: { type: 'array' },
     workspace: { type: 'object' },
+    scheduler: { type: 'object' },
     // Workflow definition fields (for workflow files with co-located tests)
     id: { type: 'string' },
     name: { type: 'string' },

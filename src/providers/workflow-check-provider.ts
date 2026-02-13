@@ -569,6 +569,38 @@ export class WorkflowCheckProvider extends CheckProvider {
       );
     }
 
+    // Wrap execution hooks so nested steps are captured/mocked with dotted prefix
+    // e.g. step "classify" inside parent step "route-intent" → "route-intent.classify"
+    const stepPrefix = config.checkName || workflow.id;
+    const parentExecCtx = (parentContext as any)?.executionContext;
+    let childExecCtx = parentExecCtx;
+    if (parentExecCtx?.hooks) {
+      const parentHooks = parentExecCtx.hooks;
+      childExecCtx = {
+        ...parentExecCtx,
+        hooks: {
+          ...parentHooks,
+          // Wrap onPromptCaptured: emit with prefixed step name so parent sees "route-intent.classify"
+          onPromptCaptured: parentHooks.onPromptCaptured
+            ? (info: { step: string; provider: string; prompt: string }) => {
+                parentHooks.onPromptCaptured({
+                  ...info,
+                  step: `${stepPrefix}.${info.step}`,
+                });
+              }
+            : undefined,
+          // Wrap mockForStep: try prefixed name first, fall back to unprefixed for backward compat
+          mockForStep: parentHooks.mockForStep
+            ? (step: string) => {
+                const prefixed = parentHooks.mockForStep(`${stepPrefix}.${step}`);
+                if (prefixed !== undefined) return prefixed;
+                return parentHooks.mockForStep(step);
+              }
+            : undefined,
+        },
+      };
+    }
+
     const childContext = {
       mode: 'state-machine' as const,
       config: workflowConfig,
@@ -591,9 +623,9 @@ export class WorkflowCheckProvider extends CheckProvider {
       debug: parentContext?.debug || false,
       maxParallelism: parentContext?.maxParallelism,
       failFast: parentContext?.failFast,
-      // Propagate execution hooks (mocks, octokit, etc.) into the child so
-      // nested steps can be mocked/observed by the YAML test runner.
-      executionContext: (parentContext as any)?.executionContext,
+      // Propagate wrapped execution hooks (mocks, octokit, etc.) into the child so
+      // nested steps can be mocked/observed by the YAML test runner with dotted prefixes.
+      executionContext: childExecCtx,
       // Ensure all workflow steps are considered requested to avoid tag/event filtering surprises
       requestedChecks: Object.keys(checksMetadata),
     };
@@ -615,6 +647,29 @@ export class WorkflowCheckProvider extends CheckProvider {
       `[WorkflowProvider] Executing nested workflow '${workflow.id}' at depth ${currentDepth + 1}`
     );
     const result = await runner.run();
+
+    // Propagate child journal entries to parent journal with prefixed checkIds
+    // so nested step outputs are visible via dotted-path addressing (e.g. "route-intent.classify")
+    if (parentContext?.journal && parentContext?.sessionId) {
+      const parentJournal = parentContext.journal as InstanceType<typeof ExecutionJournal>;
+      const childSnapshot = childJournal.beginSnapshot();
+      const childSessionId = childContext.sessionId;
+      const childEntries = childJournal.readVisible(childSessionId, childSnapshot, undefined);
+      for (const entry of childEntries) {
+        parentJournal.commitEntry({
+          sessionId: parentContext.sessionId,
+          scope: entry.scope,
+          checkId: `${stepPrefix}.${entry.checkId}`,
+          result: entry.result,
+          event: entry.event,
+        });
+      }
+      if (childEntries.length > 0) {
+        logger.debug(
+          `[WorkflowProvider] Propagated ${childEntries.length} child journal entries to parent with prefix '${stepPrefix}.'`
+        );
+      }
+    }
 
     // M3: Check for bubbled events and propagate them to parent
     const bubbledEvents = (childContext as any)._bubbledEvents || [];

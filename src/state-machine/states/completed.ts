@@ -27,6 +27,10 @@ export async function handleCompleted(context: EngineContext, state: RunState): 
     }
   }
 
+  // Note: This handler is currently unreachable because the main event loop
+  // in runner.ts exits before executing terminal states. The idle log message
+  // is emitted from runner.ts after the loop exits instead.
+
   // Flush telemetry
   // M4: Will add structured event streaming to debug visualizer
 

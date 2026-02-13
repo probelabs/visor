@@ -179,6 +179,7 @@ export async function runSuites(
     only?: string;
     bail?: boolean;
     noMocks?: boolean;
+    noMocksFor?: string[];
     maxParallelSuites?: number;
     maxParallel?: number;
     promptMaxChars?: number;
@@ -247,6 +248,7 @@ export async function runSuites(
         only: options.only,
         bail: options.bail,
         noMocks: options.noMocks,
+        noMocksFor: options.noMocksFor,
         maxParallel: options.maxParallel,
         promptMaxChars: options.promptMaxChars,
       });
@@ -308,7 +310,8 @@ export class VisorTestRunner {
     ghRec?: { error_code?: number; timeout_ms?: number },
     defaultIncludeTags?: string[] | undefined,
     defaultExcludeTags?: string[] | undefined,
-    noMocks?: boolean
+    noMocks?: boolean,
+    noMocksFor?: string[]
   ): {
     name: string;
     strict: boolean;
@@ -393,6 +396,15 @@ export class VisorTestRunner {
         ? ((_case as any).mocks as Record<string, unknown>)
         : {};
     const mockMgr = new MockManager(mocks);
+    // Pre-compute which steps should be unmocked based on provider type
+    const noMockSteps = new Set<string>();
+    if (noMocksFor && noMocksFor.length > 0) {
+      const noMockTypes = new Set(noMocksFor);
+      for (const [checkName, chk] of Object.entries((cfg.checks || {}) as Record<string, any>)) {
+        const t = chk.type || 'ai';
+        if (noMockTypes.has(t)) noMockSteps.add(checkName);
+      }
+    }
     const parseTags = (v: unknown): string[] | undefined => {
       if (!v) return undefined;
       if (Array.isArray(v))
@@ -427,7 +439,12 @@ export class VisorTestRunner {
           prompts[k].push(p);
         },
         // In noMocks mode, always return undefined to let real providers execute
-        mockForStep: (step: string) => (noMocks ? undefined : mockMgr.get(step)),
+        // In noMocksFor mode, skip mocks for steps matching excluded provider types
+        mockForStep: (step: string) => {
+          if (noMocks) return undefined;
+          if (noMockSteps.size > 0 && noMockSteps.has(step)) return undefined;
+          return mockMgr.get(step);
+        },
         // Ensure human-input never blocks tests: prefer case mock, then default value
         onHumanInput: async (req: { checkId: string; default?: string }) => {
           if (noMocks) return (req.default ?? '').toString();
@@ -730,6 +747,7 @@ export class VisorTestRunner {
       only?: string;
       bail?: boolean;
       noMocks?: boolean;
+      noMocksFor?: string[];
       maxParallel?: number;
       promptMaxChars?: number;
     }
@@ -878,6 +896,7 @@ export class VisorTestRunner {
     // Header: show suite path for clarity
     let __suiteRel = testsPath;
     const noMocksMode = options.noMocks || false;
+    const noMocksForTypes = options.noMocksFor;
     try {
       __suiteRel = path.relative(this.cwd, testsPath) || testsPath;
       console.log(`Suite: ${__suiteRel}`);
@@ -886,6 +905,14 @@ export class VisorTestRunner {
           this.color('🔴 NO-MOCKS MODE: Running with real providers (no mock injection)', '33')
         );
         console.log(this.gray('   Step outputs will be captured and printed as suggested mocks\n'));
+      } else if (noMocksForTypes && noMocksForTypes.length > 0) {
+        console.log(
+          this.color(
+            `🟡 PARTIAL-MOCK MODE: Real providers for: ${noMocksForTypes.join(', ')}`,
+            '33'
+          )
+        );
+        console.log(this.gray('   Other provider types will still use mocks\n'));
       }
     } catch {}
     const runOne = async (_case: any): Promise<{ name: string; failed: number }> => {
@@ -954,7 +981,8 @@ export class VisorTestRunner {
         ghRec,
         defaultIncludeTags,
         defaultExcludeTags,
-        noMocksMode
+        noMocksMode,
+        noMocksForTypes
       );
       try {
         this.printSelectedChecks(setup.checksToRun);
@@ -969,12 +997,38 @@ export class VisorTestRunner {
         const exec = await this.executeTestCase(setup, cfgLocal);
         const res = exec.res;
 
-        // In no-mocks mode, print captured outputs as suggested mocks
-        if (noMocksMode && Object.keys(exec.outHistory).length > 0) {
-          console.log(this.color('\n📋 Suggested mocks (copy to your test case):', '36'));
+        // In no-mocks or partial-mock mode, print executed steps and captured outputs
+        const showRealOutputs = noMocksMode || (noMocksForTypes && noMocksForTypes.length > 0);
+        if (showRealOutputs && Object.keys(exec.outHistory).length > 0) {
+          // Filter to only unmocked steps in partial mode
+          const unmockedStepFilter = noMocksMode
+            ? undefined
+            : (step: string) => {
+                // Check if this step's provider type is in the noMocksFor list
+                const chk = (cfgLocal.checks || {})[step];
+                if (!chk) return false;
+                const t = chk.type || 'ai';
+                return noMocksForTypes!.includes(t);
+              };
+          // Print executed steps (including nested dotted-path steps from sub-workflows)
+          const allStepNames = Object.keys(exec.outHistory).sort();
+          console.log(this.color('\n📌 Executed steps:', '36'));
+          for (const stepName of allStepNames) {
+            const count = (exec.outHistory[stepName] || []).length;
+            const depth = stepName.split('.').length - 1;
+            const indent = '  '.repeat(depth + 1);
+            const label = depth > 0 ? this.gray(`${indent}↳ ${stepName}`) : `  ${stepName}`;
+            console.log(`${label}  ${this.gray(`(${count}x)`)}`);
+          }
+          const unmockedLabel = unmockedStepFilter
+            ? `Suggested mocks for unmocked ${noMocksForTypes!.join('/')} steps:`
+            : 'Suggested mocks (copy to your test case):';
+          console.log(this.color(`\n📋 ${unmockedLabel}`, '36'));
           console.log(this.gray('mocks:'));
           for (const [stepName, outputs] of Object.entries(exec.outHistory)) {
             if (!Array.isArray(outputs) || outputs.length === 0) continue;
+            // In partial mode, only show outputs for unmocked provider types
+            if (unmockedStepFilter && !unmockedStepFilter(stepName)) continue;
             // Use the last output for the step
             const lastOutput = outputs[outputs.length - 1];
             // Format as YAML with proper indentation
@@ -990,6 +1044,58 @@ export class VisorTestRunner {
             console.log(indented);
           }
           console.log('');
+
+          // Show diff between existing mocks and real outputs to highlight API drift
+          const existingMocks =
+            typeof (_case as any).mocks === 'object' && (_case as any).mocks
+              ? ((_case as any).mocks as Record<string, unknown>)
+              : {};
+          if (Object.keys(existingMocks).length > 0) {
+            const driftEntries: Array<{
+              step: string;
+              kind: 'changed' | 'added' | 'removed';
+              detail: string;
+            }> = [];
+            for (const [stepName, outputs] of Object.entries(exec.outHistory)) {
+              if (!Array.isArray(outputs) || outputs.length === 0) continue;
+              const realOutput = outputs[outputs.length - 1];
+              const mockValue = existingMocks[stepName];
+              if (mockValue === undefined) {
+                // New step not in existing mocks
+                driftEntries.push({ step: stepName, kind: 'added', detail: 'new step (no mock)' });
+              } else {
+                // Compare mock vs real output
+                const diffs = this.diffObjects(mockValue, realOutput, '');
+                if (diffs.length > 0) {
+                  for (const d of diffs) {
+                    driftEntries.push({ step: stepName, kind: 'changed', detail: d });
+                  }
+                }
+              }
+            }
+            // Check for mocked steps that didn't execute
+            for (const mockStep of Object.keys(existingMocks)) {
+              if (!exec.outHistory[mockStep] || (exec.outHistory[mockStep] as any[]).length === 0) {
+                driftEntries.push({
+                  step: mockStep,
+                  kind: 'removed',
+                  detail: 'mock exists but step did not execute',
+                });
+              }
+            }
+            if (driftEntries.length > 0) {
+              console.log(this.color('🔄 API drift (mock vs real output):', '33'));
+              for (const d of driftEntries) {
+                const icon = d.kind === 'added' ? '+' : d.kind === 'removed' ? '-' : '~';
+                const colorCode = d.kind === 'added' ? '32' : d.kind === 'removed' ? '31' : '33';
+                console.log(this.color(`  ${icon} ${d.step}: ${d.detail}`, colorCode));
+              }
+              console.log('');
+            } else {
+              console.log(this.color('✅ No API drift detected (mocks match real outputs)', '32'));
+              console.log('');
+            }
+          }
         }
 
         if (process.env.VISOR_DEBUG === 'true') {
@@ -1047,7 +1153,7 @@ export class VisorTestRunner {
               : {};
           this.warnUnmockedProviders(res.statistics, cfgLocal, mocksUsed);
         } catch {}
-        this.printCoverage(_case.name, res.statistics, setup.expect);
+        this.printCoverage(_case.name, res.statistics, setup.expect, exec.outHistory);
         if (caseFailures.length === 0) {
           console.log(
             `${(this as any).tagPass ? (this as any).tagPass() : '✅ PASS'} ${__suiteRel} › ${_case.name}`
@@ -1469,15 +1575,96 @@ export class VisorTestRunner {
     }
     return res;
   }
+  /**
+   * Compute a flat list of human-readable diffs between a mock value and a real output.
+   * Walks objects recursively; reports added/removed/changed keys.
+   */
+  private diffObjects(mock: unknown, real: unknown, prefix: string, depth = 0): string[] {
+    const safeStr = (v: unknown): string => {
+      try {
+        return JSON.stringify(v) ?? 'undefined';
+      } catch {
+        return '[unserializable]';
+      }
+    };
+    const diffs: string[] = [];
+    if (depth > 20) {
+      diffs.push(`${prefix || '(root)'}: (max depth exceeded)`);
+      return diffs;
+    }
+    if (mock === real) return diffs;
+    if (mock === null || mock === undefined || real === null || real === undefined) {
+      diffs.push(`${prefix || '(root)'}: ${safeStr(mock)} → ${safeStr(real)}`);
+      return diffs;
+    }
+    if (typeof mock !== typeof real) {
+      diffs.push(`${prefix || '(root)'}: type ${typeof mock} → ${typeof real}`);
+      return diffs;
+    }
+    if (Array.isArray(mock) && Array.isArray(real)) {
+      if (mock.length !== real.length) {
+        diffs.push(`${prefix || '(root)'}: array length ${mock.length} → ${real.length}`);
+      }
+      const maxLen = Math.max(mock.length, real.length);
+      for (let i = 0; i < maxLen; i++) {
+        const p = prefix ? `${prefix}[${i}]` : `[${i}]`;
+        if (i >= mock.length) {
+          diffs.push(`${p}: (added) ${safeStr(real[i])}`);
+        } else if (i >= real.length) {
+          diffs.push(`${p}: (removed) ${safeStr(mock[i])}`);
+        } else {
+          diffs.push(...this.diffObjects(mock[i], real[i], p, depth + 1));
+        }
+      }
+      return diffs;
+    }
+    if (typeof mock === 'object' && typeof real === 'object') {
+      const mockObj = mock as Record<string, unknown>;
+      const realObj = real as Record<string, unknown>;
+      const allKeys = new Set([...Object.keys(mockObj), ...Object.keys(realObj)]);
+      for (const key of allKeys) {
+        const p = prefix ? `${prefix}.${key}` : key;
+        if (!(key in mockObj)) {
+          const val = safeStr(realObj[key]);
+          diffs.push(`${p}: (added) ${val.length > 80 ? val.slice(0, 80) + '…' : val}`);
+        } else if (!(key in realObj)) {
+          diffs.push(`${p}: (removed from output)`);
+        } else {
+          diffs.push(...this.diffObjects(mockObj[key], realObj[key], p, depth + 1));
+        }
+      }
+      return diffs;
+    }
+    // Primitive comparison
+    if (mock !== real) {
+      const m = safeStr(mock);
+      const r = safeStr(real);
+      diffs.push(`${prefix || '(root)'}: ${m} → ${r.length > 80 ? r.slice(0, 80) + '…' : r}`);
+    }
+    return diffs;
+  }
+
   private printCoverage(
     label: string,
     stats: import('../types/execution').ExecutionStatistics,
-    expect: ExpectBlock
+    expect: ExpectBlock,
+    outputHistory?: Record<string, unknown[]>
   ): void {
     const executed: Record<string, number> = {};
     for (const s of stats.checks) {
       const skipped = (s as any).skipped === true || !!(s as any).skipReason;
       if (!skipped && (s.totalRuns || 0) > 0) executed[s.checkName] = s.totalRuns || 0;
+    }
+    // Include nested step counts from outputHistory (dotted-path steps from sub-workflows)
+    if (outputHistory) {
+      for (const key of Object.keys(outputHistory)) {
+        if (key.includes('.') && !(key in executed)) {
+          const hist = outputHistory[key];
+          if (Array.isArray(hist) && hist.length > 0) {
+            executed[key] = hist.length;
+          }
+        }
+      }
     }
     const expCalls = (expect.calls || []).filter(c => c.step);
     const expectedSteps = new Map<
