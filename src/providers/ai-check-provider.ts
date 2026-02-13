@@ -1367,11 +1367,15 @@ export class AICheckProvider extends CheckProvider {
       args: (sessionInfo as any)?.args || {},
     };
 
-    // Capture input context in active OTEL span
+    // Capture input context in active OTEL span and attach trace ID to prInfo for AI context
     try {
       const span = trace.getSpan(otContext.active());
       if (span) {
         captureCheckInputContext(span, templateContext);
+        const spanTraceId = span.spanContext()?.traceId;
+        if (spanTraceId) {
+          (prInfo as any).otelTraceId = spanTraceId;
+        }
       }
     } catch {
       // Ignore telemetry errors

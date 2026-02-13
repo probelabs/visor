@@ -692,6 +692,9 @@ export class AIReviewService {
     const prContext = skipPRContext ? '' : await this.formatPRContext(prInfo, isCodeReviewSchema);
     const slackContextXml =
       skipSlackContext === true ? '' : this.formatSlackContextFromPRInfo(prInfo);
+    const traceIdXml = (prInfo as any).otelTraceId
+      ? `\n    <trace_id>${this.escapeXml(String((prInfo as any).otelTraceId))}</trace_id>`
+      : '';
     const isIssue = (prInfo as PRInfo & { isIssue?: boolean }).isIssue === true;
 
     if (isIssue) {
@@ -709,7 +712,7 @@ ${customInstructions}
   </instructions>
 
   <context>
-    ${getCurrentDateXml()}
+    ${getCurrentDateXml()}${traceIdXml}
 ${prContext}${slackContextXml}
   </context>
 
@@ -761,7 +764,7 @@ ${customInstructions}
   </instructions>
 
   <context>
-    ${getCurrentDateXml()}
+    ${getCurrentDateXml()}${traceIdXml}
 ${prContext}${slackContextXml}
   </context>
 
@@ -793,7 +796,7 @@ ${customInstructions}
 </instructions>
 
 <context>
-  ${getCurrentDateXml()}
+  ${getCurrentDateXml()}${traceIdXml}
 ${prContext}${slackContextXml}
 </context>`;
   }

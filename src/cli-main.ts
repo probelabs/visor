@@ -17,7 +17,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { initTelemetry, shutdownTelemetry } from './telemetry/opentelemetry';
 import { flushNdjson } from './telemetry/fallback-ndjson';
-import { withActiveSpan } from './telemetry/trace-helpers';
+import { withActiveSpan, getVisorRunAttributes } from './telemetry/trace-helpers';
 import { DebugVisualizerServer } from './debug-visualizer/ws-server';
 import open from 'open';
 
@@ -1714,7 +1714,11 @@ export async function main(): Promise<void> {
           // Execute workflow
           const rerunResult = await withActiveSpan(
             'visor.run',
-            { 'visor.run.checks_configured': checksToRun.length, 'visor.run.source': 'tui-rerun' },
+            {
+              ...getVisorRunAttributes(),
+              'visor.run.checks_configured': checksToRun.length,
+              'visor.run.source': 'tui-rerun',
+            },
             async () =>
               rerunEngine.executeGroupedChecks(
                 prInfo,
@@ -1834,7 +1838,7 @@ export async function main(): Promise<void> {
     } else {
       executionResult = await withActiveSpan(
         'visor.run',
-        { 'visor.run.checks_configured': checksToRun.length },
+        { ...getVisorRunAttributes(), 'visor.run.checks_configured': checksToRun.length },
         async () =>
           engine.executeGroupedChecks(
             prInfo,
