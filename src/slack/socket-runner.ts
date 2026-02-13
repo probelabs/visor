@@ -7,7 +7,7 @@ import { SlackAdapter } from './adapter';
 import { CachePrewarmer } from './cache-prewarmer';
 import { RateLimiter, type RateLimitConfig } from './rate-limiter';
 import type { SlackBotConfig } from '../types/bot';
-import { withActiveSpan } from '../telemetry/trace-helpers';
+import { withActiveSpan, getVisorRunAttributes } from '../telemetry/trace-helpers';
 import { Scheduler } from '../scheduler/scheduler';
 import { createSlackOutputAdapter } from './slack-output-adapter';
 
@@ -527,6 +527,7 @@ export class SlackSocketRunner {
         await withActiveSpan(
           'visor.run',
           {
+            ...getVisorRunAttributes(),
             'visor.run.source': 'slack',
             'slack.event.type': String(type || ''),
             'slack.channel_id': channelId,

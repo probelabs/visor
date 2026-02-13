@@ -82,6 +82,25 @@ export function setSpanError(err: unknown): void {
   }
 }
 
+/**
+ * Return standard visor.* resource attributes for the root `visor.run` span.
+ * Reads version from package.json / env and git commit short SHA from env.
+ */
+export function getVisorRunAttributes(): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  try {
+    attrs['visor.version'] =
+      process.env.VISOR_VERSION || (require('../../package.json')?.version ?? 'dev');
+  } catch {
+    attrs['visor.version'] = 'dev';
+  }
+  const commit = process.env.VISOR_COMMIT_SHORT || process.env.VISOR_COMMIT || '';
+  if (commit) {
+    attrs['visor.commit'] = commit;
+  }
+  return attrs;
+}
+
 // Internal helper for tests: write a minimal run marker to NDJSON when using file sink
 let __ndjsonPath: string | null = null;
 export function __getOrCreateNdjsonPath(): string | null {
