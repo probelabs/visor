@@ -1000,6 +1000,58 @@ export class VisorTestRunner {
             console.log(indented);
           }
           console.log('');
+
+          // Show diff between existing mocks and real outputs to highlight API drift
+          const existingMocks =
+            typeof (_case as any).mocks === 'object' && (_case as any).mocks
+              ? ((_case as any).mocks as Record<string, unknown>)
+              : {};
+          if (Object.keys(existingMocks).length > 0) {
+            const driftEntries: Array<{
+              step: string;
+              kind: 'changed' | 'added' | 'removed';
+              detail: string;
+            }> = [];
+            for (const [stepName, outputs] of Object.entries(exec.outHistory)) {
+              if (!Array.isArray(outputs) || outputs.length === 0) continue;
+              const realOutput = outputs[outputs.length - 1];
+              const mockValue = existingMocks[stepName];
+              if (mockValue === undefined) {
+                // New step not in existing mocks
+                driftEntries.push({ step: stepName, kind: 'added', detail: 'new step (no mock)' });
+              } else {
+                // Compare mock vs real output
+                const diffs = this.diffObjects(mockValue, realOutput, '');
+                if (diffs.length > 0) {
+                  for (const d of diffs) {
+                    driftEntries.push({ step: stepName, kind: 'changed', detail: d });
+                  }
+                }
+              }
+            }
+            // Check for mocked steps that didn't execute
+            for (const mockStep of Object.keys(existingMocks)) {
+              if (!exec.outHistory[mockStep] || (exec.outHistory[mockStep] as any[]).length === 0) {
+                driftEntries.push({
+                  step: mockStep,
+                  kind: 'removed',
+                  detail: 'mock exists but step did not execute',
+                });
+              }
+            }
+            if (driftEntries.length > 0) {
+              console.log(this.color('🔄 API drift (mock vs real output):', '33'));
+              for (const d of driftEntries) {
+                const icon = d.kind === 'added' ? '+' : d.kind === 'removed' ? '-' : '~';
+                const colorCode = d.kind === 'added' ? '32' : d.kind === 'removed' ? '31' : '33';
+                console.log(this.color(`  ${icon} ${d.step}: ${d.detail}`, colorCode));
+              }
+              console.log('');
+            } else {
+              console.log(this.color('✅ No API drift detected (mocks match real outputs)', '32'));
+              console.log('');
+            }
+          }
         }
 
         if (process.env.VISOR_DEBUG === 'true') {
@@ -1479,6 +1531,66 @@ export class VisorTestRunner {
     }
     return res;
   }
+  /**
+   * Compute a flat list of human-readable diffs between a mock value and a real output.
+   * Walks objects recursively; reports added/removed/changed keys.
+   */
+  private diffObjects(mock: unknown, real: unknown, prefix: string): string[] {
+    const diffs: string[] = [];
+    if (mock === real) return diffs;
+    if (mock === null || mock === undefined || real === null || real === undefined) {
+      const m = JSON.stringify(mock) ?? 'undefined';
+      const r = JSON.stringify(real) ?? 'undefined';
+      diffs.push(`${prefix || '(root)'}: ${m} → ${r}`);
+      return diffs;
+    }
+    if (typeof mock !== typeof real) {
+      diffs.push(`${prefix || '(root)'}: type ${typeof mock} → ${typeof real}`);
+      return diffs;
+    }
+    if (Array.isArray(mock) && Array.isArray(real)) {
+      if (mock.length !== real.length) {
+        diffs.push(`${prefix || '(root)'}: array length ${mock.length} → ${real.length}`);
+      }
+      const maxLen = Math.max(mock.length, real.length);
+      for (let i = 0; i < maxLen; i++) {
+        const p = prefix ? `${prefix}[${i}]` : `[${i}]`;
+        if (i >= mock.length) {
+          diffs.push(`${p}: (added) ${JSON.stringify(real[i])}`);
+        } else if (i >= real.length) {
+          diffs.push(`${p}: (removed) ${JSON.stringify(mock[i])}`);
+        } else {
+          diffs.push(...this.diffObjects(mock[i], real[i], p));
+        }
+      }
+      return diffs;
+    }
+    if (typeof mock === 'object' && typeof real === 'object') {
+      const mockObj = mock as Record<string, unknown>;
+      const realObj = real as Record<string, unknown>;
+      const allKeys = new Set([...Object.keys(mockObj), ...Object.keys(realObj)]);
+      for (const key of allKeys) {
+        const p = prefix ? `${prefix}.${key}` : key;
+        if (!(key in mockObj)) {
+          const val = JSON.stringify(realObj[key]);
+          diffs.push(`${p}: (added) ${val && val.length > 80 ? val.slice(0, 80) + '…' : val}`);
+        } else if (!(key in realObj)) {
+          diffs.push(`${p}: (removed from output)`);
+        } else {
+          diffs.push(...this.diffObjects(mockObj[key], realObj[key], p));
+        }
+      }
+      return diffs;
+    }
+    // Primitive comparison
+    if (mock !== real) {
+      const m = JSON.stringify(mock);
+      const r = JSON.stringify(real);
+      diffs.push(`${prefix || '(root)'}: ${m} → ${r && r.length > 80 ? r.slice(0, 80) + '…' : r}`);
+    }
+    return diffs;
+  }
+
   private printCoverage(
     label: string,
     stats: import('../types/execution').ExecutionStatistics,
