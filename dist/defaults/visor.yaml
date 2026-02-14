@@ -8,8 +8,8 @@ include: "./code-review.yaml"
 # Global AI provider settings - users should configure their preferred provider
 # For CI testing, use --provider mock CLI flag instead
 
-# Run up to 4 steps in parallel for faster execution
-max_parallelism: 4
+# Run checks sequentially to ensure session reuse works correctly
+max_parallelism: 1
 
 # Global fail condition - fail if critical or error severity issues are found
 fail_if: "output.issues && output.issues.some(i => i.severity === 'critical' || i.severity === 'error')"

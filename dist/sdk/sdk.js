@@ -748,13 +748,13 @@ var require_package = __commonJS({
         "@octokit/auth-app": "^8.1.0",
         "@octokit/core": "^7.0.3",
         "@octokit/rest": "^22.0.0",
-        "@probelabs/probe": "^0.6.0-rc229",
+        "@probelabs/probe": "^0.6.0-rc230",
         "@types/commander": "^2.12.0",
         "@types/uuid": "^10.0.0",
         ajv: "^8.17.1",
         "ajv-formats": "^3.0.1",
-        blessed: "^0.1.81",
         "better-sqlite3": "^11.0.0",
+        blessed: "^0.1.81",
         "cli-table3": "^0.6.5",
         commander: "^14.0.0",
         dotenv: "^17.2.3",
@@ -11466,6 +11466,10 @@ var init_config_schema = __esm({
               type: "string",
               description: "JavaScript expression to dynamically compute custom tools for this AI check. Expression has access to: outputs, inputs, pr, files, env, memory Must return an array of tool names (strings) or WorkflowToolReference objects ({ workflow: string, args?: Record<string, unknown> })\n\nExample: ``` const tools = []; if (outputs['route-intent'].intent === 'engineer') {   tools.push({ workflow: 'engineer', args: { projects: ['tyk'] } }); } return tools; ```"
             },
+            ai_bash_config_js: {
+              type: "string",
+              description: "JavaScript expression to dynamically compute bash configuration for this AI check. Expression has access to: outputs, inputs, pr, files, env, memory. Must return a BashConfig object with optional allow/deny string arrays.\n\nExample: ``` return outputs['build-config']?.bash_config ?? {}; ```"
+            },
             claude_code: {
               $ref: "#/definitions/ClaudeCodeConfig",
               description: "Claude Code configuration (for claude-code type checks)"
@@ -19115,6 +19119,37 @@ ${preview}`);
           aiConfig.mcpServers = mcpServers;
         } else if (config.ai?.disableTools) {
         }
+        const bashConfigJsExpr = config.ai_bash_config_js;
+        if (bashConfigJsExpr && _dependencyResults) {
+          try {
+            const dynamicBashConfig = this.evaluateBashConfigJs(
+              bashConfigJsExpr,
+              prInfo,
+              _dependencyResults,
+              config
+            );
+            if (!aiConfig.bashConfig) aiConfig.bashConfig = {};
+            if (dynamicBashConfig.allow?.length) {
+              aiConfig.bashConfig.allow = [
+                ...aiConfig.bashConfig.allow || [],
+                ...dynamicBashConfig.allow
+              ];
+            }
+            if (dynamicBashConfig.deny?.length) {
+              aiConfig.bashConfig.deny = [
+                ...aiConfig.bashConfig.deny || [],
+                ...dynamicBashConfig.deny
+              ];
+            }
+            if (dynamicBashConfig.allow?.length || dynamicBashConfig.deny?.length) {
+              aiConfig.allowBash = true;
+            }
+          } catch (error) {
+            logger.error(
+              `[AICheckProvider] Failed to evaluate ai_bash_config_js: ${error instanceof Error ? error.message : "Unknown error"}`
+            );
+          }
+        }
         const templateContext = {
           pr: {
             number: prInfo.number,
@@ -19545,6 +19580,80 @@ ${processedPrompt}` : processedPrompt;
         }
       }
       /**
+       * Evaluate ai_bash_config_js expression to dynamically compute bash configuration.
+       * Returns a partial BashConfig object with optional allow/deny arrays.
+       */
+      evaluateBashConfigJs(expression, prInfo, dependencyResults, config) {
+        if (!this.sandbox) {
+          this.sandbox = createSecureSandbox();
+        }
+        const outputs = {};
+        for (const [checkId, result] of dependencyResults.entries()) {
+          const summary = result;
+          outputs[checkId] = summary.output !== void 0 ? summary.output : summary;
+        }
+        const jsContext = {
+          outputs,
+          inputs: config.inputs || {},
+          pr: {
+            number: prInfo.number,
+            title: prInfo.title,
+            description: prInfo.body,
+            author: prInfo.author,
+            branch: prInfo.head,
+            base: prInfo.base,
+            authorAssociation: prInfo.authorAssociation
+          },
+          files: prInfo.files?.map((f) => ({
+            filename: f.filename,
+            status: f.status,
+            additions: f.additions,
+            deletions: f.deletions,
+            changes: f.changes
+          })) || [],
+          env: this.buildSafeEnv(),
+          memory: config.__memoryAccessor || {}
+        };
+        try {
+          const result = compileAndRun(this.sandbox, expression, jsContext, {
+            injectLog: true,
+            wrapFunction: true,
+            logPrefix: "[ai_bash_config_js]"
+          });
+          if (typeof result !== "object" || result === null || Array.isArray(result)) {
+            logger.warn(
+              `[AICheckProvider] ai_bash_config_js must return an object, got ${Array.isArray(result) ? "array" : typeof result}`
+            );
+            return {};
+          }
+          const cfg = result;
+          const validConfig = {};
+          if (cfg.allow !== void 0) {
+            if (Array.isArray(cfg.allow) && cfg.allow.every((item) => typeof item === "string")) {
+              validConfig.allow = cfg.allow;
+            } else {
+              logger.warn(`[AICheckProvider] ai_bash_config_js: 'allow' must be a string array`);
+            }
+          }
+          if (cfg.deny !== void 0) {
+            if (Array.isArray(cfg.deny) && cfg.deny.every((item) => typeof item === "string")) {
+              validConfig.deny = cfg.deny;
+            } else {
+              logger.warn(`[AICheckProvider] ai_bash_config_js: 'deny' must be a string array`);
+            }
+          }
+          logger.debug(
+            `[AICheckProvider] ai_bash_config_js evaluated: allow=${validConfig.allow?.length ?? 0}, deny=${validConfig.deny?.length ?? 0}`
+          );
+          return validConfig;
+        } catch (error) {
+          logger.error(
+            `[AICheckProvider] Failed to evaluate ai_bash_config_js: ${error instanceof Error ? error.message : "Unknown error"}`
+          );
+          return {};
+        }
+      }
+      /**
        * Build a safe subset of environment variables for sandbox access.
        * Excludes sensitive keys like API keys, secrets, tokens.
        */
@@ -19640,6 +19749,7 @@ ${processedPrompt}` : processedPrompt;
           "ai_mcp_servers_js",
           "ai_custom_tools",
           "ai_custom_tools_js",
+          "ai_bash_config_js",
           "env"
         ];
       }
