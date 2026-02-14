@@ -88,6 +88,10 @@ export class CLI {
         '--workspace-project-name <name>',
         'Main project folder name inside workspace (overrides VISOR_WORKSPACE_PROJECT)'
       )
+      .option(
+        '--watch',
+        'Watch config file for changes and reload automatically (requires --config)'
+      )
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
 
@@ -178,6 +182,10 @@ export class CLI {
           '--workspace-project-name <name>',
           'Main project folder name inside workspace (overrides VISOR_WORKSPACE_PROJECT)'
         )
+        .option(
+          '--watch',
+          'Watch config file for changes and reload automatically (requires --config)'
+        )
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
         .addHelpText('after', this.getExamplesText())
@@ -254,6 +262,7 @@ export class CLI {
         workspaceHere: Boolean(options.workspaceHere),
         workspaceName: options.workspaceName,
         workspaceProjectName: options.workspaceProjectName,
+        watch: Boolean(options.watch),
       };
     } catch (error: unknown) {
       // Handle commander.js exit overrides for help/version ONLY

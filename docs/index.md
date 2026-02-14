@@ -118,6 +118,7 @@ The test framework allows you to write integration tests for your Visor workflow
 | [Slack Integration](./slack-integration.md) | Bidirectional Slack integration via Socket Mode |
 | [Scheduler](./scheduler.md) | Schedule workflows and reminders to run at specified times |
 | [Deployment](./DEPLOYMENT.md) | Cloudflare Pages deployment for landing page |
+| [Production Deployment](./production-deployment.md) | Docker, Kubernetes, and multi-instance deployment guide |
 
 ---
 
@@ -141,7 +142,11 @@ The test framework allows you to write integration tests for your Visor workflow
 
 | Document | Description |
 |----------|-------------|
-| [Enterprise Policy Engine (OPA)](./enterprise-policy.md) | Comprehensive guide to the OPA-based policy engine: installation, licensing, Rego policies, configuration, and troubleshooting |
+| [Licensing](./licensing.md) | Obtaining, installing, managing, and troubleshooting EE licenses |
+| [Enterprise Policy Engine (OPA)](./enterprise-policy.md) | OPA-based policy engine: installation, Rego policies, configuration, and troubleshooting |
+| [Scheduler Storage](./scheduler-storage.md) | PostgreSQL, MySQL, and MSSQL backends for scheduler with cloud examples |
+| [Database Operations](./database-operations.md) | Backup, replication, failover, PgBouncer, and migration from SQLite |
+| [Capacity Planning](./capacity-planning.md) | Sizing guide, cost estimates, scaling guidelines, and load testing |
 
 ---
 

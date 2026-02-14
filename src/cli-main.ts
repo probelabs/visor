@@ -937,6 +937,12 @@ export async function main(): Promise<void> {
       await handlePolicyCheckCommand(filteredArgv);
       return;
     }
+    // Check for config subcommand
+    if (filteredArgv.length > 2 && filteredArgv[2] === 'config') {
+      const { handleConfigCommand } = await import('./config/cli-handler');
+      await handleConfigCommand(filteredArgv.slice(3));
+      return;
+    }
     // Check for code-review subcommands: run the built-in code-review suite
     // Aliases: code-review | review
     if (filteredArgv.length > 2 && ['code-review', 'review'].includes(filteredArgv[2])) {
@@ -1250,6 +1256,19 @@ export async function main(): Promise<void> {
         .catch(() => configManager.getDefaultConfig());
     }
 
+    // Save a startup config snapshot (best-effort, never blocks execution)
+    try {
+      const { ConfigSnapshotStore, createSnapshotFromConfig } = await import(
+        './config/config-snapshot-store'
+      );
+      const store = new ConfigSnapshotStore();
+      await store.initialize();
+      await store.save(createSnapshotFromConfig(config, 'startup', options.configPath || null));
+      await store.shutdown();
+    } catch (err: unknown) {
+      logger.debug(`Startup snapshot failed: ${err}`);
+    }
+
     // Socket Mode runner: visor --slack [--config file]
     if ((options as any).slack === true) {
       const { SlackSocketRunner } = await import('./slack/socket-runner');
@@ -1294,6 +1313,44 @@ export async function main(): Promise<void> {
       });
       await runner.start();
       console.log('✅ Slack Socket Mode is running. Press Ctrl+C to exit.');
+
+      // Start config file watcher if --watch is enabled
+      if ((options as any).watch) {
+        if (!options.configPath) {
+          console.error('❌ --watch requires --config <path>');
+          process.exit(1);
+        }
+        try {
+          const { ConfigSnapshotStore } = await import('./config/config-snapshot-store');
+          const { ConfigReloader } = await import('./config/config-reloader');
+          const { ConfigWatcher } = await import('./config/config-watcher');
+          const watchStore = new ConfigSnapshotStore();
+          await watchStore.initialize();
+          const reloader = new ConfigReloader({
+            configPath: options.configPath,
+            configManager,
+            snapshotStore: watchStore,
+            onSwap: newConfig => {
+              config = newConfig;
+              logger.info('[Watch] Config updated');
+            },
+          });
+          const watcher = new ConfigWatcher(options.configPath, reloader);
+          watcher.start();
+          logger.info('Config watching enabled');
+
+          // Clean up watcher resources on process shutdown
+          const cleanup = () => {
+            watcher.stop();
+            watchStore.shutdown().catch(() => {});
+          };
+          process.on('SIGINT', cleanup);
+          process.on('SIGTERM', cleanup);
+        } catch (watchErr: unknown) {
+          logger.warn(`Config watch setup failed (Slack mode continues without it): ${watchErr}`);
+        }
+      }
+
       process.stdin.resume();
       return;
     }

@@ -78,6 +78,28 @@ visor build <path/to/agent.yaml> [options]
 visor build agents/my-agent.yaml --message "Add error handling"
 ```
 
+#### `visor config`
+
+Manage configuration snapshots. Visor automatically snapshots resolved configuration at startup and on each reload, keeping the most recent 3 snapshots in `.visor/config.db`.
+
+```bash
+visor config <command> [options]
+```
+
+**Subcommands:**
+- `snapshots` - List all configuration snapshots
+- `show <id>` - Print the full YAML of a snapshot
+- `diff <id_a> <id_b>` - Show unified diff between two snapshots
+- `restore <id> --output <path>` - Write snapshot YAML to a file
+
+**Examples:**
+```bash
+visor config snapshots                         # List saved snapshots
+visor config show 1                            # Print full YAML of snapshot 1
+visor config diff 1 2                          # Unified diff between snapshots
+visor config restore 1 --output restored.yaml  # Restore snapshot to file
+```
+
 #### `visor mcp-server`
 
 Start Visor as an MCP (Model Context Protocol) server.
@@ -142,6 +164,9 @@ See [Tag Filtering](tag-filtering.md) for detailed tag filtering documentation.
 - `--workspace-name <name>` - Workspace directory name
 - `--workspace-project-name <name>` - Main project folder name inside workspace
 
+#### Config Reloading
+- `--watch` - Watch config file for changes and reload automatically (requires `--config`). Also reloads on `SIGUSR2` signal (non-Windows). Intended for long-running modes like `--slack`.
+
 #### Other Options
 - `--slack` - Enable Slack Socket Mode runner
 - `--mode <mode>` - Run mode: `cli` (default) or `github-actions`
@@ -180,6 +205,16 @@ visor --tui
 
 # Debug visualizer
 visor --debug-server --debug-port 3456
+
+# Slack mode with live config reloading
+visor --slack --config .visor.yaml --watch
+
+# Reload config at runtime via signal (non-Windows)
+kill -USR2 <visor-pid>
+
+# List config snapshots and diff changes
+visor config snapshots
+visor config diff 1 2
 ```
 
 ---
