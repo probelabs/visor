@@ -182,6 +182,36 @@ steps:
       debug: true
 ```
 
+### Method 3: Using `ai_custom_tools_js` (Dynamic)
+
+For multi-step workflows, use `ai_custom_tools_js` to dynamically select tools based on dependency outputs:
+
+```yaml
+checks:
+  route:
+    type: script
+    content: |
+      return { intent: 'engineer', tools: ['code-explorer'] };
+
+  assistant:
+    type: ai
+    depends_on: [route]
+    prompt: "Help the user with their request"
+    ai_custom_tools_js: |
+      // Dynamically select tools based on routing
+      const tools = outputs['route']?.tools ?? [];
+      if (outputs['route'].intent === 'engineer') {
+        tools.push({ workflow: 'engineer', args: { projects: ['my-repo'] } });
+      }
+      return tools;
+    ai:
+      provider: anthropic
+```
+
+The expression has access to `outputs`, `inputs`, `pr`, `files`, `env`, and `memory`. It must return an array of tool names (strings) or workflow tool references (`{ workflow, args }`). Dynamic tools are merged with static `ai_custom_tools` (duplicates by name are skipped).
+
+Similarly, `ai_mcp_servers_js` dynamically computes MCP servers, and `ai_bash_config_js` dynamically computes bash command permissions. See [AI Configuration](./ai-configuration.md) for full documentation of all `_js` fields.
+
 ### Combining with External MCP Servers
 
 You can combine custom tools with external MCP servers:

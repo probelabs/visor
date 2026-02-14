@@ -120,6 +120,23 @@ steps:
     on: ["pr_opened"]
     tags: ["filesystem", "structure"]
 
+  # Example 7: Dynamic - Bash config from dependency output (ai_bash_config_js)
+  dynamic-bash-from-skills:
+    type: ai
+    depends_on: [build-config]
+    prompt: "Help the user with their request using available commands"
+    ai:
+      provider: anthropic
+      allowBash: true
+      bashConfig:
+        allow: ['gh:*']  # Static baseline commands
+    ai_bash_config_js: |
+      // Dynamically extend bash config from build-config output
+      // Active skills declare their allowed/disallowed commands
+      return outputs['build-config']?.bash_config ?? {};
+    on: ["manual"]
+    tags: ["dynamic", "skills"]
+
 output:
   pr_comment:
     enabled: true
