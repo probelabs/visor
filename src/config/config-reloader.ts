@@ -45,7 +45,16 @@ export class ConfigReloader {
       logger.info(`[ConfigReloader] Reloading config from ${this.configPath}`);
       const newConfig = await this.configManager.loadConfig(this.configPath);
 
-      await this.snapshotStore.save(createSnapshotFromConfig(newConfig, 'reload', this.configPath));
+      // Snapshot is best-effort — a save failure must not block the config swap
+      try {
+        await this.snapshotStore.save(
+          createSnapshotFromConfig(newConfig, 'reload', this.configPath)
+        );
+      } catch (snapErr: unknown) {
+        logger.warn(
+          `[ConfigReloader] Snapshot save failed (config will still be applied): ${snapErr}`
+        );
+      }
 
       this.onSwap(newConfig);
       logger.info('[ConfigReloader] Config reloaded successfully');

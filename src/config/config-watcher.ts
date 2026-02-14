@@ -4,6 +4,9 @@
  * Uses fs.watch (no external deps) with debouncing to handle editor quirks
  * (multiple write events per save). SIGUSR2 is guarded for non-Windows only.
  * The watcher uses persistent: false so it doesn't keep the process alive.
+ *
+ * All reload calls are wrapped in error handling so that failures never
+ * propagate as unhandled promise rejections or crash the process.
  */
 import fs from 'fs';
 import { logger } from '../logger';
@@ -26,6 +29,9 @@ export class ConfigWatcher {
   }
 
   start(): void {
+    // Remove any previous listeners in case start() is called after stop()
+    this.stop();
+
     // Watch the config file
     try {
       this.watcher = fs.watch(this.configPath, { persistent: false }, _eventType => {
@@ -44,7 +50,7 @@ export class ConfigWatcher {
     if (process.platform !== 'win32') {
       this.signalHandler = () => {
         logger.info('[ConfigWatcher] Received SIGUSR2, triggering config reload');
-        this.reloader.reload();
+        this.safeReload();
       };
       process.on('SIGUSR2', this.signalHandler);
     }
@@ -63,8 +69,10 @@ export class ConfigWatcher {
       this.debounceTimer = null;
     }
 
-    if (this.signalHandler && process.platform !== 'win32') {
-      process.removeListener('SIGUSR2', this.signalHandler);
+    if (this.signalHandler) {
+      if (process.platform !== 'win32') {
+        process.removeListener('SIGUSR2', this.signalHandler);
+      }
       this.signalHandler = null;
     }
 
@@ -78,7 +86,17 @@ export class ConfigWatcher {
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
       logger.info('[ConfigWatcher] File change detected, reloading config');
-      this.reloader.reload();
+      this.safeReload();
     }, this.debounceMs);
+  }
+
+  /**
+   * Fire-and-forget reload with full error handling.
+   * Ensures unhandled promise rejections never escape.
+   */
+  private safeReload(): void {
+    this.reloader.reload().catch(err => {
+      logger.error(`[ConfigWatcher] Unhandled reload error: ${err}`);
+    });
   }
 }

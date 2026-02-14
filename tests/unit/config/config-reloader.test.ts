@@ -79,7 +79,7 @@ describe('ConfigReloader', () => {
     expect(onError.mock.calls[0][0].message).toBe('Parse error');
   });
 
-  test('reload fails on snapshot save error: calls onError, returns false', async () => {
+  test('snapshot save failure does not block config swap', async () => {
     mockStore.save.mockRejectedValue(new Error('DB write failed'));
 
     const reloader = new ConfigReloader({
@@ -92,9 +92,10 @@ describe('ConfigReloader', () => {
 
     const result = await reloader.reload();
 
-    expect(result).toBe(false);
-    expect(onSwap).not.toHaveBeenCalled();
-    expect(onError).toHaveBeenCalled();
+    // Snapshot failure is best-effort — config should still be swapped
+    expect(result).toBe(true);
+    expect(onSwap).toHaveBeenCalledWith(fakeConfig);
+    expect(onError).not.toHaveBeenCalled();
   });
 
   test('reload without onError handler does not throw', async () => {

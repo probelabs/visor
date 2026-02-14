@@ -84,4 +84,26 @@ describe('ConfigWatcher', () => {
     watcher.start();
     watcher.stop();
   });
+
+  test('handles reload rejection without crashing', async () => {
+    mockReloader.reload.mockRejectedValue(new Error('boom'));
+    const watcher = new ConfigWatcher(configPath, mockReloader, 50);
+    watcher.start();
+
+    // Trigger file change
+    fs.writeFileSync(configPath, 'version: "2.0"\n', 'utf8');
+
+    // Wait for debounce — should not throw unhandled rejection
+    await new Promise(resolve => setTimeout(resolve, 150));
+
+    expect(mockReloader.reload).toHaveBeenCalled();
+    watcher.stop();
+  });
+
+  test('start after stop cleans up previous listeners', () => {
+    const watcher = new ConfigWatcher(configPath, mockReloader);
+    watcher.start();
+    watcher.start(); // Should stop previous watcher first, then start fresh
+    watcher.stop();
+  });
 });

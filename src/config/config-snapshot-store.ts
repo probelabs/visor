@@ -42,7 +42,10 @@ export class ConfigSnapshotStore {
     const dir = path.dirname(resolvedPath);
     fs.mkdirSync(dir, { recursive: true });
 
-    // Load better-sqlite3 via createRequire (ncc-safe)
+    // Load better-sqlite3 via createRequire (ncc-safe).
+    // In ncc bundles, native addons are externalized and resolved at runtime.
+    // We handle both MODULE_NOT_FOUND (missing install) and native binding
+    // load failures (platform/arch mismatch, missing .node file).
     const { createRequire } = require('module') as typeof import('module');
     const runtimeRequire = createRequire(__filename);
     let Database: new (filename: string) => BetterSqliteDatabase;
@@ -50,10 +53,19 @@ export class ConfigSnapshotStore {
       Database = runtimeRequire('better-sqlite3');
     } catch (err: unknown) {
       const code = (err as { code?: string })?.code;
+      const msg = err instanceof Error ? err.message : String(err);
       if (code === 'MODULE_NOT_FOUND' || code === 'ERR_MODULE_NOT_FOUND') {
         throw new Error(
           'better-sqlite3 is required for config snapshots. ' +
             'Install it with: npm install better-sqlite3'
+        );
+      }
+      // Native addon binding failures (e.g. .node file missing after ncc bundle)
+      if (msg.includes('.node') || msg.includes('ERR_DLOPEN_FAILED') || code === 'ERR_DLOPEN_FAILED') {
+        throw new Error(
+          `better-sqlite3 native addon failed to load: ${msg}. ` +
+            'Ensure better-sqlite3 is rebuilt for the target platform: ' +
+            'npm rebuild better-sqlite3'
         );
       }
       throw err;
