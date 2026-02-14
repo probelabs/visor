@@ -786,4 +786,213 @@ describe('AICheckProvider', () => {
       consoleSpy.mockRestore();
     });
   });
+
+  describe('evaluateBashConfigJs', () => {
+    const getEvaluator = (p: AICheckProvider) => (p as any).evaluateBashConfigJs.bind(p);
+
+    it('should return empty object when expression returns non-object', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator('"not an object"', mockPRInfo, new Map(), {
+        type: 'ai',
+        prompt: 'test',
+      });
+      expect(result).toEqual({});
+    });
+
+    it('should return empty object when expression returns array', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator('["git:*"]', mockPRInfo, new Map(), {
+        type: 'ai',
+        prompt: 'test',
+      });
+      expect(result).toEqual({});
+    });
+
+    it('should return empty object when expression returns null', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator('null', mockPRInfo, new Map(), {
+        type: 'ai',
+        prompt: 'test',
+      });
+      expect(result).toEqual({});
+    });
+
+    it('should return allow array from expression', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator('({ allow: ["git:log:*", "npm:test"] })', mockPRInfo, new Map(), {
+        type: 'ai',
+        prompt: 'test',
+      });
+      expect(result).toEqual({ allow: ['git:log:*', 'npm:test'] });
+    });
+
+    it('should return deny array from expression', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator(
+        '({ deny: ["git:push:--force", "rm:-rf"] })',
+        mockPRInfo,
+        new Map(),
+        { type: 'ai', prompt: 'test' }
+      );
+      expect(result).toEqual({ deny: ['git:push:--force', 'rm:-rf'] });
+    });
+
+    it('should return both allow and deny arrays', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator(
+        '({ allow: ["git:*", "npm:*"], deny: ["git:push:--force"] })',
+        mockPRInfo,
+        new Map(),
+        { type: 'ai', prompt: 'test' }
+      );
+      expect(result).toEqual({
+        allow: ['git:*', 'npm:*'],
+        deny: ['git:push:--force'],
+      });
+    });
+
+    it('should ignore allow if not a string array', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator(
+        '({ allow: [1, 2, 3], deny: ["valid:cmd"] })',
+        mockPRInfo,
+        new Map(),
+        { type: 'ai', prompt: 'test' }
+      );
+      expect(result).toEqual({ deny: ['valid:cmd'] });
+      expect(result.allow).toBeUndefined();
+    });
+
+    it('should ignore deny if not a string array', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator(
+        '({ allow: ["valid:cmd"], deny: "not-an-array" })',
+        mockPRInfo,
+        new Map(),
+        { type: 'ai', prompt: 'test' }
+      );
+      expect(result).toEqual({ allow: ['valid:cmd'] });
+      expect(result.deny).toBeUndefined();
+    });
+
+    it('should access outputs from dependency results', () => {
+      const evaluator = getEvaluator(provider);
+      const depResults = new Map<string, any>([
+        ['build-config', { output: { bash_config: { allow: ['git:status:*'], deny: ['rm:*'] } } }],
+      ]);
+
+      const result = evaluator(
+        "return outputs['build-config']?.bash_config ?? {};",
+        mockPRInfo,
+        depResults,
+        { type: 'ai', prompt: 'test' }
+      );
+      expect(result).toEqual({ allow: ['git:status:*'], deny: ['rm:*'] });
+    });
+
+    it('should access pr context in expression', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator(
+        `
+        const config = { allow: [] };
+        if (pr.branch.startsWith('feature')) {
+          config.allow.push('git:*');
+        }
+        return config;
+        `,
+        mockPRInfo,
+        new Map(),
+        { type: 'ai', prompt: 'test' }
+      );
+      expect(result).toEqual({ allow: ['git:*'] });
+    });
+
+    it('should access inputs from config', () => {
+      const evaluator = getEvaluator(provider);
+      const config = {
+        type: 'ai',
+        prompt: 'test',
+        inputs: { enable_docker: true },
+      };
+
+      const result = evaluator(
+        `
+        const cfg = { allow: ['git:*'] };
+        if (inputs.enable_docker) {
+          cfg.allow.push('docker:*');
+        }
+        return cfg;
+        `,
+        mockPRInfo,
+        new Map(),
+        config
+      );
+      expect(result).toEqual({ allow: ['git:*', 'docker:*'] });
+    });
+
+    it('should access files context in expression', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator(
+        `
+        const cfg = { allow: [] };
+        if (files.some(f => f.filename.endsWith('.ts'))) {
+          cfg.allow.push('npm:test');
+        }
+        return cfg;
+        `,
+        mockPRInfo,
+        new Map(),
+        { type: 'ai', prompt: 'test' }
+      );
+      expect(result).toEqual({ allow: ['npm:test'] });
+    });
+
+    it('should return empty object on syntax error', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator('this is not valid javascript {{}}', mockPRInfo, new Map(), {
+        type: 'ai',
+        prompt: 'test',
+      });
+      expect(result).toEqual({});
+    });
+
+    it('should return empty object on runtime error', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator('throw new Error("runtime error")', mockPRInfo, new Map(), {
+        type: 'ai',
+        prompt: 'test',
+      });
+      expect(result).toEqual({});
+    });
+
+    it('should return empty object for empty allow/deny', () => {
+      const evaluator = getEvaluator(provider);
+      const result = evaluator('({ allow: [], deny: [] })', mockPRInfo, new Map(), {
+        type: 'ai',
+        prompt: 'test',
+      });
+      expect(result).toEqual({ allow: [], deny: [] });
+    });
+
+    it('should support log() helper for debugging', () => {
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+      const evaluator = getEvaluator(provider);
+
+      evaluator(
+        `
+        log("Debug: computing bash config");
+        return { allow: ["git:*"] };
+        `,
+        mockPRInfo,
+        new Map(),
+        { type: 'ai', prompt: 'test' }
+      );
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '[ai_bash_config_js]',
+        'Debug: computing bash config'
+      );
+      consoleSpy.mockRestore();
+    });
+  });
 });

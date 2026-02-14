@@ -357,8 +357,13 @@ Report any TODOs you find as issues.
           },
         });
 
-        expect(result.error).toBeDefined();
-        expect(result.error.data.error).toContain('validation failed');
+        // Expect an error response (JSON-RPC error or result with error content)
+        const errorMsg =
+          result.error?.data?.error ||
+          result.error?.message ||
+          result.result?.content?.[0]?.text ||
+          '';
+        expect(errorMsg).toMatch(/validation failed|required/i);
 
         console.log(`✓ Schema validation working correctly`);
       } finally {

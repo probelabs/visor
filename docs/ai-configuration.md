@@ -551,6 +551,44 @@ steps:
 
 **Security Note:** Bash command execution respects existing security boundaries and permissions. Commands run with the same privileges as the Visor process. Always review and test bash configurations before deploying to production environments.
 
+#### Dynamic Bash Configuration (`ai_bash_config_js`)
+
+Use `ai_bash_config_js` to dynamically compute bash command permissions at runtime based on dependency outputs. This mirrors the `ai_mcp_servers_js` pattern and is useful for skill-based systems where different active skills need different bash command access.
+
+```yaml
+checks:
+  build-config:
+    type: script
+    content: |
+      // Collect allowed commands from active skills
+      return {
+        bash_config: {
+          allow: ['git:log:*', 'git:diff:*'],
+          deny: ['git:push:--force']
+        }
+      };
+
+  generate-response:
+    type: ai
+    depends_on: [build-config]
+    prompt: "Help the user with their request"
+    ai:
+      allowBash: true
+      bashConfig:
+        allow: ['gh:*']  # Static baseline
+    ai_bash_config_js: |
+      return outputs['build-config']?.bash_config ?? {};
+```
+
+The expression has access to the same context as other `_js` fields: `outputs`, `inputs`, `pr`, `files`, `env`, `memory`. It must return an object with optional `allow` and `deny` string arrays.
+
+**Merge behavior:** Dynamic arrays are appended to static `bashConfig` arrays. This means:
+- Static `bashConfig` sets the baseline permissions
+- `ai_bash_config_js` extends with additional patterns from active skills
+- The AI agent's internal precedence (deny > allow) handles conflicts
+
+If `ai_bash_config_js` returns allow or deny patterns, `allowBash` is automatically set to `true`.
+
 #### Retry Configuration (`retry`)
 
 Configure automatic retries for AI provider calls when transient errors occur:
@@ -644,3 +682,104 @@ If no key is configured, Visor falls back to fast, heuristic checks (simple patt
 
 ### MCP (Tools) Support
 See [mcp.md](./mcp.md) for adding MCP servers (Probe, Jira, Filesystem, etc.).
+
+### Dynamic JavaScript Expressions (`_js` fields)
+
+Several configuration fields support dynamic JavaScript expressions that are evaluated at runtime. These are useful in multi-step workflows where earlier steps produce configuration that later steps consume.
+
+All `_js` expression fields share the same execution context:
+- **`outputs`** — results from dependency steps (via `depends_on`)
+- **`inputs`** — workflow inputs
+- **`pr`** — PR metadata (`number`, `title`, `author`, `branch`, `base`)
+- **`files`** — changed files (`filename`, `status`, `additions`, `deletions`)
+- **`env`** — safe subset of environment variables (secrets are excluded)
+- **`memory`** — memory accessor (if configured)
+
+Expressions are wrapped in a function body — use `return` to return the result. The `log()` function is available for debugging.
+
+#### `ai_mcp_servers_js`
+
+Dynamically compute which MCP servers to connect to. Must return an object mapping server names to server configurations.
+
+```yaml
+checks:
+  build-config:
+    type: script
+    content: |
+      return {
+        mcp_servers: {
+          jira: { command: 'uvx', args: ['mcp-atlassian'] },
+          github: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-github'] }
+        }
+      };
+
+  assistant:
+    type: ai
+    depends_on: [build-config]
+    prompt: "Help the user"
+    ai_mcp_servers_js: |
+      return outputs['build-config']?.mcp_servers ?? {};
+```
+
+Each server config can be:
+- **Stdio MCP server**: `{ command, args, env }`
+- **SSE/HTTP MCP server**: `{ url, transport }`
+- **Workflow tool**: `{ workflow, inputs }`
+- **Built-in tool**: `{ tool: 'schedule' }`
+
+Dynamic servers are merged with any static `ai_mcp_servers` configuration.
+
+#### `ai_custom_tools_js`
+
+Dynamically compute which custom tools to expose. Must return an array of tool names (strings) or workflow tool references.
+
+```yaml
+checks:
+  route:
+    type: script
+    content: |
+      return { intent: 'engineer' };
+
+  assistant:
+    type: ai
+    depends_on: [route]
+    prompt: "Help the user"
+    ai_custom_tools_js: |
+      const tools = [];
+      if (outputs['route'].intent === 'engineer') {
+        tools.push({ workflow: 'engineer', args: { projects: ['my-repo'] } });
+      }
+      return tools;
+```
+
+Dynamic tools are merged with any static `ai_custom_tools` configuration (duplicates by name are skipped).
+
+#### `ai_bash_config_js`
+
+Dynamically compute bash command permissions. Must return an object with optional `allow` and `deny` string arrays.
+
+```yaml
+checks:
+  build-config:
+    type: script
+    content: |
+      return {
+        bash_config: {
+          allow: ['git:log:*', 'npm:test'],
+          deny: ['git:push:--force']
+        }
+      };
+
+  assistant:
+    type: ai
+    depends_on: [build-config]
+    prompt: "Help the user"
+    ai:
+      allowBash: true
+      bashConfig:
+        allow: ['gh:*']  # Static baseline
+    ai_bash_config_js: |
+      return outputs['build-config']?.bash_config ?? {};
+```
+
+Dynamic arrays are appended to static `bashConfig`. If dynamic config provides any allow/deny patterns, `allowBash` is automatically enabled.
