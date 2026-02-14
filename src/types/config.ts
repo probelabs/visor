@@ -546,6 +546,17 @@ export interface CheckConfig {
    * ```
    */
   ai_custom_tools_js?: string;
+  /**
+   * JavaScript expression to dynamically compute bash configuration for this AI check.
+   * Expression has access to: outputs, inputs, pr, files, env, memory
+   * Must return a BashConfig object with allow/deny arrays.
+   *
+   * Example:
+   * ```
+   * return outputs['build-config']?.bash_config ?? {};
+   * ```
+   */
+  ai_bash_config_js?: string;
   /** Claude Code configuration (for claude-code type checks) */
   claude_code?: ClaudeCodeConfig;
   /** Environment variables for this check */

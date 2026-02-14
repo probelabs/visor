@@ -1346,6 +1346,41 @@ export class AICheckProvider extends CheckProvider {
       // silently skip MCP when tools disabled
     }
 
+    // Evaluate ai_bash_config_js for dynamic bash command permissions
+    const bashConfigJsExpr = (config as any).ai_bash_config_js as string | undefined;
+    if (bashConfigJsExpr && _dependencyResults) {
+      try {
+        const dynamicBashConfig = this.evaluateBashConfigJs(
+          bashConfigJsExpr,
+          prInfo,
+          _dependencyResults,
+          config
+        );
+        // Merge: dynamic arrays extend static ones
+        if (!aiConfig.bashConfig) aiConfig.bashConfig = {};
+        if (dynamicBashConfig.allow?.length) {
+          aiConfig.bashConfig.allow = [
+            ...(aiConfig.bashConfig.allow || []),
+            ...dynamicBashConfig.allow,
+          ];
+        }
+        if (dynamicBashConfig.deny?.length) {
+          aiConfig.bashConfig.deny = [
+            ...(aiConfig.bashConfig.deny || []),
+            ...dynamicBashConfig.deny,
+          ];
+        }
+        // Also enable bash if dynamic config provides commands
+        if (dynamicBashConfig.allow?.length || dynamicBashConfig.deny?.length) {
+          aiConfig.allowBash = true;
+        }
+      } catch (error) {
+        logger.error(
+          `[AICheckProvider] Failed to evaluate ai_bash_config_js: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+      }
+    }
+
     // Build template context for state capture
     const templateContext = {
       pr: {
@@ -1909,6 +1944,104 @@ export class AICheckProvider extends CheckProvider {
   }
 
   /**
+   * Evaluate ai_bash_config_js expression to dynamically compute bash configuration.
+   * Returns a partial BashConfig object with optional allow/deny arrays.
+   */
+  private evaluateBashConfigJs(
+    expression: string,
+    prInfo: PRInfo,
+    dependencyResults: Map<string, ReviewSummary>,
+    config: CheckProviderConfig
+  ): Partial<import('../types/config').BashConfig> {
+    if (!this.sandbox) {
+      this.sandbox = createSecureSandbox();
+    }
+
+    // Build outputs object from dependency results (same pattern as template rendering)
+    const outputs: Record<string, unknown> = {};
+    for (const [checkId, result] of dependencyResults.entries()) {
+      const summary = result as ReviewSummary & { output?: unknown };
+      outputs[checkId] = summary.output !== undefined ? summary.output : summary;
+    }
+
+    // Build context for the expression
+    const jsContext: Record<string, unknown> = {
+      outputs,
+      inputs: (config as any).inputs || {},
+      pr: {
+        number: prInfo.number,
+        title: prInfo.title,
+        description: prInfo.body,
+        author: prInfo.author,
+        branch: prInfo.head,
+        base: prInfo.base,
+        authorAssociation: prInfo.authorAssociation,
+      },
+      files:
+        prInfo.files?.map(f => ({
+          filename: f.filename,
+          status: f.status,
+          additions: f.additions,
+          deletions: f.deletions,
+          changes: f.changes,
+        })) || [],
+      env: this.buildSafeEnv(),
+      memory: (config as any).__memoryAccessor || {},
+    };
+
+    try {
+      const result = compileAndRun<unknown>(this.sandbox, expression, jsContext, {
+        injectLog: true,
+        wrapFunction: true,
+        logPrefix: '[ai_bash_config_js]',
+      });
+
+      // Validate result is an object (not array, not null)
+      if (typeof result !== 'object' || result === null || Array.isArray(result)) {
+        logger.warn(
+          `[AICheckProvider] ai_bash_config_js must return an object, got ${Array.isArray(result) ? 'array' : typeof result}`
+        );
+        return {};
+      }
+
+      const cfg = result as Record<string, unknown>;
+
+      // Validate allow/deny are string arrays if present
+      const validConfig: Partial<import('../types/config').BashConfig> = {};
+      if (cfg.allow !== undefined) {
+        if (
+          Array.isArray(cfg.allow) &&
+          cfg.allow.every((item: unknown) => typeof item === 'string')
+        ) {
+          validConfig.allow = cfg.allow as string[];
+        } else {
+          logger.warn(`[AICheckProvider] ai_bash_config_js: 'allow' must be a string array`);
+        }
+      }
+      if (cfg.deny !== undefined) {
+        if (
+          Array.isArray(cfg.deny) &&
+          cfg.deny.every((item: unknown) => typeof item === 'string')
+        ) {
+          validConfig.deny = cfg.deny as string[];
+        } else {
+          logger.warn(`[AICheckProvider] ai_bash_config_js: 'deny' must be a string array`);
+        }
+      }
+
+      logger.debug(
+        `[AICheckProvider] ai_bash_config_js evaluated: allow=${validConfig.allow?.length ?? 0}, deny=${validConfig.deny?.length ?? 0}`
+      );
+      return validConfig;
+    } catch (error) {
+      logger.error(
+        `[AICheckProvider] Failed to evaluate ai_bash_config_js: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+      return {};
+    }
+  }
+
+  /**
    * Build a safe subset of environment variables for sandbox access.
    * Excludes sensitive keys like API keys, secrets, tokens.
    */
@@ -2026,6 +2159,7 @@ export class AICheckProvider extends CheckProvider {
       'ai_mcp_servers_js',
       'ai_custom_tools',
       'ai_custom_tools_js',
+      'ai_bash_config_js',
       'env',
     ];
   }
