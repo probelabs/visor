@@ -28,6 +28,8 @@ Visor is an AI-powered code review tool for GitHub Pull Requests that can run as
 - `./dist/cli-main.js --help` - Show CLI help after building
 - `./dist/cli-main.js --check all` - Run all checks
 - `./dist/cli-main.js --check security --output json` - Security check with JSON output
+- `./dist/cli-main.js config snapshots` - List config snapshots
+- `./dist/cli-main.js --slack --config .visor.yaml --watch` - Slack mode with live config reload
 
 ### Deployment
 - `npm run deploy:site` - Deploy site to Cloudflare Pages

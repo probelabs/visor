@@ -118,6 +118,13 @@ visor --check security --output json --output-file visor-results.json
 # Visual debugger with web UI
 visor --debug-server --debug-port 3456
 
+# Config snapshots — list, diff, or restore saved configurations
+visor config snapshots
+visor config diff 1 2
+
+# Live config reload in long-running modes (e.g. Slack)
+visor --slack --config .visor.yaml --watch
+
 # Discover options
 visor --help
 ```

@@ -73,6 +73,8 @@ export interface CliOptions {
   workspaceName?: string;
   /** Set main project folder name inside workspace (overrides VISOR_WORKSPACE_PROJECT) */
   workspaceProjectName?: string;
+  /** Watch config file for changes and reload automatically */
+  watch?: boolean;
 }
 
 /**
