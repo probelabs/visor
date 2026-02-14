@@ -1,17 +1,16 @@
-# Merged
 # Dependencies
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Temp files
 .tmp*
 .*out
 .*json
 
 # Build outputs
 dist/
-# Do not keep legacy ncc bundle
 bundled/
 *.tsbuildinfo
 
@@ -42,7 +41,7 @@ pids
 *.seed
 *.pid.lock
 
-# Coverage directory used by tools like istanbul
+# Coverage
 coverage/
 *.lcov
 
@@ -50,105 +49,33 @@ coverage/
 .vow-challenge
 .vow-consent
 .vow-cooldown
+
+# Traces and debug artifacts
 traces/
 debug-artifacts/
-
-# Test files and traces
-test-*.js
-test-*.json
 cli-traces/
 debug-trace.js
-.claude/settings.local.json
-
-# MockGithub and temp test repos/fixtures (never commit)
-repo/
-tests/fixtures/temp/
-
-# Workshop artifacts
-workshop/build/
-!workshop/Visor-Workshop.pdf
-dist/traces/*.ndjson
-dist/traces/
-
-# From main
-# Dependencies
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Build outputs
-dist/
-# Do not keep legacy ncc bundle
-bundled/
-*.tsbuildinfo
-
-# Environment variables
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-logs
-*.log
-
-# Runtime data
-pids
-*.pid
-*.seed
-*.pid.lock
-
-# Coverage directory used by tools like istanbul
-coverage/
-*.lcov
-
-# Vow - AI accountability files
-.vow-challenge
-.vow-consent
-.vow-cooldown
-traces/
-debug-artifacts/
-
-# Test files and traces
-test-*.js
-test-*.json
-cli-traces/
-debug-trace.js
-.claude/settings.local.json
-
-# MockGithub and temp test repos/fixtures (never commit)
-repo/
-tests/fixtures/temp/
-
-# Workshop artifacts
-workshop/build/
-!workshop/Visor-Workshop.pdf
-
-# Local NDJSON traces written by CLI tests or manual runs
-output/**/*.ndjson
-
-# NDJSON logs (global ignore)
 *.ndjson
-dist/output/**/*.ndjson
+
+# Test files
+test-*.js
+test-*.json
+.claude/settings.local.json
+
+# MockGithub and temp test repos/fixtures
+repo/
+tests/fixtures/temp/
+
+# Workshop artifacts
+workshop/build/
+!workshop/Visor-Workshop.pdf
 
 # Enterprise license keys
 visor-private.pem
 visor-public.pem
 .visor-license
 
-# Local schema temp and scratch
+# Local scratch
 scripts/.schema-tmp/
 tmp/
 .visor-agent-files.json

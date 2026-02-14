@@ -1,6 +1,0 @@
-version: "1.0"
-project: test
-checks:
-  test:
-    type: claude-code
-    prompt: "Just say hello"
