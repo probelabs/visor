@@ -478,6 +478,11 @@ export const configSchema = {
           description:
             "JavaScript expression to dynamically compute custom tools for this AI check. Expression has access to: outputs, inputs, pr, files, env, memory Must return an array of tool names (strings) or WorkflowToolReference objects ({ workflow: string, args?: Record<string, unknown> })\n\nExample: ``` const tools = []; if (outputs['route-intent'].intent === 'engineer') {   tools.push({ workflow: 'engineer', args: { projects: ['tyk'] } }); } return tools; ```",
         },
+        ai_bash_config_js: {
+          type: 'string',
+          description:
+            "JavaScript expression to dynamically compute bash configuration for this AI check. Expression has access to: outputs, inputs, pr, files, env, memory. Must return a BashConfig object with optional allow/deny string arrays.\n\nExample: ``` return outputs['build-config']?.bash_config ?? {}; ```",
+        },
         claude_code: {
           $ref: '#/definitions/ClaudeCodeConfig',
           description: 'Claude Code configuration (for claude-code type checks)',
