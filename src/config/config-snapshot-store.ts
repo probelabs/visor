@@ -61,7 +61,11 @@ export class ConfigSnapshotStore {
         );
       }
       // Native addon binding failures (e.g. .node file missing after ncc bundle)
-      if (msg.includes('.node') || msg.includes('ERR_DLOPEN_FAILED') || code === 'ERR_DLOPEN_FAILED') {
+      if (
+        msg.includes('.node') ||
+        msg.includes('ERR_DLOPEN_FAILED') ||
+        code === 'ERR_DLOPEN_FAILED'
+      ) {
         throw new Error(
           `better-sqlite3 native addon failed to load: ${msg}. ` +
             'Ensure better-sqlite3 is rebuilt for the target platform: ' +
