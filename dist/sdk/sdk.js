@@ -748,7 +748,7 @@ var require_package = __commonJS({
         "@octokit/auth-app": "^8.1.0",
         "@octokit/core": "^7.0.3",
         "@octokit/rest": "^22.0.0",
-        "@probelabs/probe": "^0.6.0-rc230",
+        "@probelabs/probe": "^0.6.0-rc232",
         "@types/commander": "^2.12.0",
         "@types/uuid": "^10.0.0",
         ajv: "^8.17.1",

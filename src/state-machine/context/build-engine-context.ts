@@ -8,6 +8,20 @@ import { logger } from '../../logger';
 import type { VisorConfig as VCfg, CheckConfig as CfgCheck } from '../../types/config';
 import { WorkspaceManager } from '../../utils/workspace-manager';
 
+// Lazy-resolve DelegationManager from @probelabs/probe.
+// The class may not be exported in older published versions, so we
+// fall back gracefully to avoid breaking the build.
+let _DelegationManager: (new (opts?: any) => any) | null = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const probe = require('@probelabs/probe');
+  if (probe && typeof probe.DelegationManager === 'function') {
+    _DelegationManager = probe.DelegationManager;
+  }
+} catch {
+  // Not available — max_ai_concurrency will be silently ignored
+}
+
 /**
  * Apply minimal criticality defaults in-place.
  * This is a no-behavior-change scaffold: we only default missing
@@ -99,6 +113,18 @@ export function buildEngineContextForRun(
   const journal = new ExecutionJournal();
   const memory = MemoryStore.getInstance(clonedConfig.memory);
 
+  // Create shared AI concurrency limiter if configured
+  let sharedConcurrencyLimiter: any = undefined;
+  if (clonedConfig.max_ai_concurrency && _DelegationManager) {
+    sharedConcurrencyLimiter = new _DelegationManager({
+      maxConcurrent: clonedConfig.max_ai_concurrency,
+      maxPerSession: 999, // No per-session limit needed for global AI gating
+    });
+    logger.debug(
+      `[EngineContext] Created shared AI concurrency limiter (max: ${clonedConfig.max_ai_concurrency})`
+    );
+  }
+
   return {
     mode: 'state-machine',
     config: clonedConfig,
@@ -111,6 +137,7 @@ export function buildEngineContextForRun(
     event: prInfo.eventType,
     debug,
     maxParallelism,
+    sharedConcurrencyLimiter,
     failFast,
     requestedChecks: requestedChecks && requestedChecks.length > 0 ? requestedChecks : undefined,
     // Store prInfo for later access (e.g., in getOutputHistorySnapshot)

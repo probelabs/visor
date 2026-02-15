@@ -218,6 +218,8 @@ export interface AIReviewConfig {
   allowedFolders?: string[];
   // Completion prompt for post-completion validation/review (runs after attempt_completion)
   completionPrompt?: string;
+  /** Shared concurrency limiter for global AI call gating */
+  concurrencyLimiter?: any;
 }
 
 export interface AIDebugInfo {
@@ -1875,6 +1877,11 @@ ${'='.repeat(60)}
       // Pass completion prompt for post-completion validation/review
       if (this.config.completionPrompt !== undefined) {
         (options as any).completionPrompt = this.config.completionPrompt;
+      }
+
+      // Pass shared concurrency limiter for global AI call gating
+      if (this.config.concurrencyLimiter) {
+        (options as any).concurrencyLimiter = this.config.concurrencyLimiter;
       }
 
       // Propagate workspace / allowed folders to ProbeAgent so that tools
