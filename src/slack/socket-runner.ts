@@ -71,6 +71,11 @@ export class SlackSocketRunner {
     this.cfg = cfg;
   }
 
+  /** Hot-swap the config used for future requests (does not affect in-flight ones). */
+  updateConfig(cfg: VisorConfig): void {
+    this.cfg = cfg;
+  }
+
   /**
    * Lazily initialize the SlackClient if not already set.
    * Called by both start() and handleMessage() to ensure the client is available.

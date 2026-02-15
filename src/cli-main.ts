@@ -1332,6 +1332,7 @@ export async function main(): Promise<void> {
             snapshotStore: watchStore,
             onSwap: newConfig => {
               config = newConfig;
+              runner.updateConfig(newConfig);
               logger.info('[Watch] Config updated');
             },
           });
@@ -1339,13 +1340,17 @@ export async function main(): Promise<void> {
           watcher.start();
           logger.info('Config watching enabled');
 
-          // Clean up watcher resources on process shutdown
-          const cleanup = () => {
+          // Clean up watcher resources on process shutdown, then re-raise
+          // the signal so the default handler (or other listeners) can terminate.
+          const onSignal = (sig: NodeJS.Signals) => {
             watcher.stop();
             watchStore.shutdown().catch(() => {});
+            process.removeListener('SIGINT', onSignal);
+            process.removeListener('SIGTERM', onSignal);
+            process.kill(process.pid, sig);
           };
-          process.on('SIGINT', cleanup);
-          process.on('SIGTERM', cleanup);
+          process.on('SIGINT', onSignal);
+          process.on('SIGTERM', onSignal);
         } catch (watchErr: unknown) {
           logger.warn(`Config watch setup failed (Slack mode continues without it): ${watchErr}`);
         }
