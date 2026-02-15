@@ -8290,6 +8290,9 @@ ${"=".repeat(60)}
           if (this.config.completionPrompt !== void 0) {
             options.completionPrompt = this.config.completionPrompt;
           }
+          if (this.config.concurrencyLimiter) {
+            options.concurrencyLimiter = this.config.concurrencyLimiter;
+          }
           try {
             const cfgAny = this.config;
             const allowedFolders = cfgAny.allowedFolders;
@@ -18869,6 +18872,10 @@ ${preview}`);
         if (config.ai_max_iterations !== void 0 && aiConfig.maxIterations === void 0) {
           aiConfig.maxIterations = config.ai_max_iterations;
         }
+        const sharedLimiter = sessionInfo?._parentContext?.sharedConcurrencyLimiter;
+        if (sharedLimiter) {
+          aiConfig.concurrencyLimiter = sharedLimiter;
+        }
         const policyEngine = sessionInfo?._parentContext?.policyEngine;
         if (policyEngine) {
           try {
@@ -22097,19 +22104,7 @@ var init_command_check_provider = __esm({
             }
           }
           const timeoutMs = config.timeout || 6e4;
-          const normalizeNodeEval = (cmd) => {
-            const re = /^(?<prefix>\s*(?:\/usr\/bin\/env\s+)?node(?:\.exe)?\s+(?:-e|--eval)\s+)(['"])([\s\S]*?)\2(?<suffix>\s|$)/;
-            const m = cmd.match(re);
-            if (!m || !m.groups) return cmd;
-            const prefix = m.groups.prefix;
-            const quote = m[2];
-            const code = m[3];
-            const suffix = m.groups.suffix || "";
-            if (!code.includes("\n")) return cmd;
-            const escaped = code.replace(/\n/g, "\\n");
-            return cmd.replace(re, `${prefix}${quote}${escaped}${quote}${suffix}`);
-          };
-          const safeCommand = normalizeNodeEval(renderedCommand);
+          const safeCommand = renderedCommand;
           const parentContext = context2?._parentContext;
           const workingDirectory = parentContext?.workingDirectory;
           const workspaceEnabled = parentContext?.workspace?.isEnabled?.();
@@ -49504,6 +49499,17 @@ function buildEngineContextForRun(workingDirectory, config, prInfo, debug, maxPa
   }
   const journal = new ExecutionJournal();
   const memory = MemoryStore.getInstance(clonedConfig.memory);
+  let sharedConcurrencyLimiter = void 0;
+  if (clonedConfig.max_ai_concurrency && _DelegationManager) {
+    sharedConcurrencyLimiter = new _DelegationManager({
+      maxConcurrent: clonedConfig.max_ai_concurrency,
+      maxPerSession: 999
+      // No per-session limit needed for global AI gating
+    });
+    logger.debug(
+      `[EngineContext] Created shared AI concurrency limiter (max: ${clonedConfig.max_ai_concurrency})`
+    );
+  }
   return {
     mode: "state-machine",
     config: clonedConfig,
@@ -49516,6 +49522,7 @@ function buildEngineContextForRun(workingDirectory, config, prInfo, debug, maxPa
     event: prInfo.eventType,
     debug,
     maxParallelism,
+    sharedConcurrencyLimiter,
     failFast,
     requestedChecks: requestedChecks && requestedChecks.length > 0 ? requestedChecks : void 0,
     // Store prInfo for later access (e.g., in getOutputHistorySnapshot)
@@ -49562,6 +49569,7 @@ async function initializeWorkspace(context2) {
     return context2;
   }
 }
+var _DelegationManager;
 var init_build_engine_context = __esm({
   "src/state-machine/context/build-engine-context.ts"() {
     "use strict";
@@ -49570,6 +49578,14 @@ var init_build_engine_context = __esm({
     init_human_id();
     init_logger();
     init_workspace_manager();
+    _DelegationManager = null;
+    try {
+      const probe = require("@probelabs/probe");
+      if (probe && typeof probe.DelegationManager === "function") {
+        _DelegationManager = probe.DelegationManager;
+      }
+    } catch {
+    }
   }
 });
 
