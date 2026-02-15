@@ -1418,6 +1418,10 @@ export interface VisorConfig {
   ai_mcp_servers?: Record<string, McpServerConfig>;
   /** Maximum number of checks to run in parallel (default: 3) */
   max_parallelism?: number;
+  /** Maximum total concurrent AI API calls across all checks (default: unlimited).
+   *  When set, creates a shared concurrency limiter that gates every LLM request
+   *  across all ProbeAgent instances in this run. */
+  max_ai_concurrency?: number;
   /** Stop execution when any check fails (default: false) */
   fail_fast?: boolean;
   /** Simple global fail condition - fails if expression evaluates to true */

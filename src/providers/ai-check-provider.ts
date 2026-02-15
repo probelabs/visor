@@ -1005,6 +1005,12 @@ export class AICheckProvider extends CheckProvider {
       aiConfig.maxIterations = config.ai_max_iterations as number;
     }
 
+    // Pass shared concurrency limiter for global AI call gating
+    const sharedLimiter = (sessionInfo as any)?._parentContext?.sharedConcurrencyLimiter;
+    if (sharedLimiter) {
+      aiConfig.concurrencyLimiter = sharedLimiter;
+    }
+
     // Policy engine: capability enforcement
     const policyEngine = (sessionInfo as any)?._parentContext?.policyEngine;
     if (policyEngine) {

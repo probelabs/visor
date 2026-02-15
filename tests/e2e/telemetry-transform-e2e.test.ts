@@ -49,8 +49,8 @@ describe('Telemetry E2E — complex transform + forEach, JSON file output', () =
         // Another forEach chain created purely by transform
         'emit-files': {
           type: 'command',
-          exec: `node -e "console.log('file1.js\nfile2.js')"`,
-          transform: `{{ output | split: "\n" | json }}`,
+          exec: `node -e "console.log('file1.js\\nfile2.js')"`,
+          transform: `{{ output | split: "\\n" | json }}`,
           forEach: true,
           group: 'files',
         },
