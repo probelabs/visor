@@ -124,6 +124,8 @@ export interface EngineContext {
   event?: EventTrigger;
   debug?: boolean;
   maxParallelism?: number;
+  /** Shared concurrency limiter for global AI call gating across all ProbeAgent instances */
+  sharedConcurrencyLimiter?: any;
   failFast?: boolean;
   /** Explicit list of checks requested (if provided), used to filter which checks to execute */
   requestedChecks?: string[];
