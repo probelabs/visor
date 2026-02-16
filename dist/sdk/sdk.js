@@ -731,7 +731,7 @@ var require_package = __commonJS({
       ],
       author: "Probe Labs",
       license: "MIT",
-      description: "AI-powered code review tool for GitHub Pull Requests - CLI and GitHub Action",
+      description: "AI workflow engine for code review, assistants, and automation \u2014 orchestrate checks, MCP tools, and AI providers with YAML-driven pipelines",
       repository: {
         type: "git",
         url: "git+https://github.com/probelabs/visor.git"
