@@ -363,6 +363,8 @@ interface AIProviderConfig {
     completion_prompt?: string;
     /** Enable the schedule tool for scheduling workflow executions (requires scheduler configuration) */
     enable_scheduler?: boolean;
+    /** Enable the execute_plan DSL orchestration tool (replaces analyze_all when enabled) */
+    enableExecutePlan?: boolean;
 }
 /**
  * Unified MCP server/tool entry - type detected by which properties are present

@@ -8264,6 +8264,9 @@ ${"=".repeat(60)}
           if (this.config.enableTasks !== void 0) {
             options.enableTasks = this.config.enableTasks;
           }
+          if (this.config.enableExecutePlan !== void 0) {
+            options.enableExecutePlan = this.config.enableExecutePlan;
+          }
           if (this.config.retry) {
             options.retry = this.config.retry;
           }
@@ -18744,6 +18747,9 @@ ${preview}`);
           if (aiAny2.enableTasks !== void 0) {
             aiConfig.enableTasks = aiAny2.enableTasks;
           }
+          if (aiAny2.enableExecutePlan !== void 0) {
+            aiConfig.enableExecutePlan = aiAny2.enableExecutePlan;
+          }
           if (aiAny2.allowEdit !== void 0) {
             aiConfig.allowEdit = aiAny2.allowEdit;
           }
@@ -19736,6 +19742,7 @@ ${processedPrompt}` : processedPrompt;
           "ai.mcpServers",
           "ai.enableDelegate",
           "ai.enableTasks",
+          "ai.enableExecutePlan",
           // legacy persona/prompt keys supported in config
           "ai_persona",
           "ai_prompt_type",
