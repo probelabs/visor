@@ -1,5 +1,5 @@
-name: 'Visor AI Code Review'
-description: 'AI-powered code review tool that analyzes PRs for security, performance, style, and architecture issues. Works out-of-the-box without configuration.'
+name: 'Visor'
+description: 'AI workflow engine for code review, assistants, and automation. Orchestrate checks, MCP tools, and AI providers with YAML-driven pipelines.'
 author: 'Visor Team'
 branding:
   icon: 'eye'

@@ -1,36 +1,96 @@
 <div align="center">
   <img src="site/visor.png" alt="Visor Logo" width="500" />
-  
-  # Visor — Open‑source SDLC automation & code review orchestration
-  
+
+  # Visor — AI workflow engine for code review, assistants & automation
+
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.0%2B-blue)](https://www.typescriptlang.org/)
   [![Node](https://img.shields.io/badge/Node.js-18%2B-green)](https://nodejs.org/)
   [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-  
-  Config‑driven checks and automations with native GitHub checks/annotations.
-  PR reviews, issue assistants, release notes, scheduled audits, and webhooks.
-  AI‑assisted when you want it, fully predictable when you don’t.
+
+  Orchestrate checks, MCP tools, and AI providers with YAML-driven pipelines.
+  Runs as GitHub Action, CLI, Slack bot, or HTTP API.
 </div>
 
 ---
 
-Visor ships with a ready-to-run configuration at `defaults/.visor.yaml`, so you immediately get:
-- A staged review pipeline (`overview → security → performance → quality → style`).
-- Native GitHub integration: check runs, annotations, and PR comments out of the box.
-- Built‑in code assistant: trigger via PR/issue comments (e.g., `/visor how it works?`).
-- A manual release-notes generator for tagged release workflows.
-- No magic: everything is config‑driven in `.visor.yaml`; prompts/context are visible and templatable.
-- Built for scale: composable checks, tag-based profiles, and flexible `extends` for shared policies.
+Visor is an open-source workflow engine that lets you define multi-step AI pipelines in YAML. Wire up shell commands, AI providers, MCP tools, HTTP calls, and custom scripts into dependency-aware DAGs — then run them from your terminal, CI, Slack, or an HTTP endpoint.
 
-## 🚀 90-second Quick Start
+**What you get out of the box:**
 
-### Add the Action
+- **YAML-driven pipelines** — define checks, transforms, routing, and AI prompts in a single config file.
+- **4 runtime modes** — CLI, GitHub Action, Slack bot, HTTP server — same config, any surface.
+- **12+ provider types** — `ai`, `command`, `script`, `mcp`, `http`, `claude-code`, `github`, `memory`, `workflow`, and more.
+- **AI orchestration** — multi-provider (Gemini, Claude, OpenAI, Bedrock), session reuse, MCP tool calling, retry & fallback.
+- **Execution engine** — dependency DAGs, parallel waves, forEach fan-out, conditional routing, failure auto-remediation.
+- **Built-in testing** — YAML-native integration tests with fixtures, mocks, and assertions.
+
+## Table of Contents
+
+- [Quick Start](#-quick-start)
+- [Runtime Modes](#-runtime-modes)
+- [PR Comment Commands](#-pr-comment-commands)
+- [Core Concepts](#-core-concepts)
+- [Provider Types](#-provider-types)
+- [Orchestration](#-orchestration)
+- [AI & MCP](#-ai--mcp)
+- [GitHub Provider](#-github-provider)
+- [Templating & Transforms](#-templating--transforms)
+- [Suppressing Warnings](#-suppressing-warnings)
+- [Testing Framework](#-testing-framework)
+- [SDK](#-sdk-programmatic-usage)
+- [Configuration](#-configuration)
+- [Observability](#-observability)
+- [Security](#-security)
+- [Enterprise Policy Engine](#-enterprise-policy-engine-ee)
+- [Further Reading](#-further-reading)
+- [Contributing](#-contributing)
+- [License](#-license)
+
+**Requirements:** Node.js 18+ (CI runs Node 20).
+
+## 🚀 Quick Start
+
+### Install & Run
+
+```bash
+# One-off
+npx -y @probelabs/visor@latest --check all --output table
+
+# As a dev dependency
+npm i -D @probelabs/visor
+npx visor --check all --output json
+```
+
+### Minimal Config (`.visor.yaml`)
+
+```yaml
+version: "1.0"
+steps:
+  security:
+    type: ai
+    prompt: "Identify security issues in changed files"
+    tags: ["fast", "security"]
+
+  run-tests:
+    type: command
+    exec: npm test
+    depends_on: [security]
+
+  notify:
+    type: http
+    method: POST
+    url: https://hooks.slack.com/...
+    body: '{ "text": "Tests {{ outputs[''run-tests''].status }}" }'
+    depends_on: [run-tests]
+```
+
+### As a GitHub Action
 
 ```yaml
 # .github/workflows/visor.yml
 name: Visor
 on:
-  pull_request: { types: [opened, synchronize] }  # For fork PRs, see docs/GITHUB_CHECKS.md
+  pull_request: { types: [opened, synchronize] }
   issues: { types: [opened] }
   issue_comment: { types: [created] }
 permissions:
@@ -45,281 +105,540 @@ jobs:
       - uses: actions/checkout@v4
       - uses: probelabs/visor@v1
         env:
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }} # or ANTHROPIC/OPENAI
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
 ```
 
-### Open a PR
-- Visor posts a PR summary, creates GitHub Check runs, and annotates lines.
-- **Note**: For external contributor PRs from forks, check runs may not be available due to GitHub security restrictions. Visor will gracefully fall back to PR comments. See [Fork PR Support](docs/GITHUB_CHECKS.md#fork-pr-support) for how to enable check runs for forks.
+> **Tip:** Pin releases for stability with `@v1`. For bleeding-edge, use `@nightly`.
 
-### Optional: Add `.visor.yaml`
+## 🖥️ Runtime Modes
 
-```yaml
-version: "1.0"
-steps:  # or 'checks' (legacy, both work identically)
-  security:
-    type: ai
-    schema: code-review
-    prompt: "Identify security issues in changed files"
-    tags: ["fast", "security"]
-```
+Visor runs the same YAML config across four surfaces:
 
-Tip: Pin releases for stability, e.g. `uses: probelabs/visor@v1`.
-For latest changes, use `uses: probelabs/visor@nightly`. The `@main` ref is maintained for compatibility but may change frequently and is not recommended for production.
+| Mode | How to run | Best for |
+|------|-----------|----------|
+| **CLI** | `visor --check all --output table` | Local dev, CI pipelines |
+| **GitHub Action** | `uses: probelabs/visor@v1` | PR reviews, issue triage, annotations |
+| **Slack bot** | `visor --slack --config .visor.yaml` | Team assistants, ChatOps |
+| **HTTP server** | `http_server: { enabled: true, port: 8080 }` | Webhooks, API integrations |
 
-## Requirements
-
-- Node.js 18+ (CI runs Node 20)
-- When used as a GitHub Action: appropriate permissions/secrets (see [Security Defaults](#-security-defaults))
-
-## Installation
-
-- One‑off run
-  ```bash
-  npx -y @probelabs/visor@latest --check all --output table
-  ```
-- Project dev dependency
-  ```bash
-  npm i -D @probelabs/visor
-  npx visor --check all --output json
-  ```
-
-## 📋 CLI Usage
-
-Short cheatsheet for common tasks:
+Additional modes:
+- **TUI** — interactive chat-style terminal UI: `visor --tui`
+- **SDK** — programmatic Node.js API: `import { runChecks } from '@probelabs/visor/sdk'`
+- **Scheduler** — cron-based execution with database-backed persistence
 
 ```bash
-# Validate configuration before running checks
-visor validate                    # Search for .visor.yaml in current directory
-visor validate --config .visor.yaml  # Validate specific config file
-
-# Run all checks with a table output
+# CLI examples
 visor --check all --output table
-
-# Interactive TUI mode (chat-style interface for human-input workflows)
-visor --tui --config ./my-workflow.yaml
-
-# Filter by tags (e.g., fast/local) and increase parallelism
 visor --tags fast,local --max-parallelism 5
-
-# Analyze full PR diff vs base branch (like GitHub Actions does)
-# Auto-enabled for code-review schemas, or force with --analyze-branch-diff
-visor --analyze-branch-diff       # Analyzes diff vs main/master branch
-visor --check security --analyze-branch-diff  # Specific checks on branch diff
-
-# Simulate GitHub events for event-based check filtering
-visor --event pr_updated          # Run checks triggered by PR updates (auto for code-review)
-visor --event issue_opened        # Run checks triggered by new issues
-visor --event all                 # Run all checks regardless of event filters (default)
-
-# Emit machine‑readable results and save to a file
-visor --check security --output json --output-file visor-results.json
-
-# Visual debugger with web UI
-visor --debug-server --debug-port 3456
-
-# Config snapshots — list, diff, or restore saved configurations
-visor config snapshots
-visor config diff 1 2
-
-# Live config reload in long-running modes (e.g. Slack)
-visor --slack --config .visor.yaml --watch
-
-# Discover options
-visor --help
+visor --analyze-branch-diff                   # PR-style diff analysis
+visor --event pr_updated                      # Simulate GitHub events
+visor --tui --config ./workflow.yaml          # Interactive TUI
+visor --debug-server --debug-port 3456        # Live web debugger
+visor config snapshots                        # Config version history
+visor validate                                # Validate config
+visor test --progress compact                 # Run integration tests
 ```
 
-See full CLI options: [docs/commands.md](docs/commands.md)
+**Run modes:** Default is CLI mode everywhere. For GitHub-specific behavior (comments, checks, annotations), run with `--mode github-actions` or set `mode: github-actions` in the Action. Force CLI mode inside Actions with `VISOR_MODE=cli`.
 
-Additional guides:
-
-- debugging and local development (TUI, debug server): [docs/debugging.md](docs/debugging.md)
-- fail conditions: [docs/fail-if.md](docs/fail-if.md)
-- forEach behavior and dependent propagation (including outputs_raw and history precedence): [docs/foreach-dependency-propagation.md](docs/foreach-dependency-propagation.md)
-- Failure routing and `on_finish` (with outputs_raw in routing JS): [docs/failure-routing.md](docs/failure-routing.md)
-- timeouts and provider units: [docs/timeouts.md](docs/timeouts.md)
-- execution limits (run caps for safety): [docs/limits.md](docs/limits.md)
-- output formatting limits and truncation controls: [docs/output-formatting.md](docs/output-formatting.md)
-- live execution visualizer and control API: [docs/debug-visualizer.md](docs/debug-visualizer.md)
-- scheduler for cron jobs and dynamic schedules: [docs/scheduler.md](docs/scheduler.md)
-
-## 🧪 Integration Tests
-
-Write and run integration tests for your Visor config in YAML. No network, built‑in GitHub fixtures, strict by default, and great CLI output.
-
-- Getting started: [docs/testing/getting-started.md](docs/testing/getting-started.md)
-- DSL reference: [docs/testing/dsl-reference.md](docs/testing/dsl-reference.md)
-- Flows: [docs/testing/flows.md](docs/testing/flows.md)
-- Fixtures & mocks: [docs/testing/fixtures-and-mocks.md](docs/testing/fixtures-and-mocks.md)
-- Assertions: [docs/testing/assertions.md](docs/testing/assertions.md)
-- Cookbook: [docs/testing/cookbook.md](docs/testing/cookbook.md)
-- CLI & reporters: [docs/testing/cli.md](docs/testing/cli.md)
-- CI integration: [docs/testing/ci.md](docs/testing/ci.md)
-- Troubleshooting: [docs/testing/troubleshooting.md](docs/testing/troubleshooting.md)
-
-Note: examples use descriptive step names (e.g., `extract-facts`, `validate-fact`) to illustrate patterns. These are not built‑ins; the test runner works with whatever steps you define in `.visor.yaml`.
-
-## 🧩 Core Concepts (1 minute)
-
-- Check – unit of work (`security`, `performance`).
-- Schema – JSON shape checks return (e.g., `code-review`).
-- Template – renders results (tables/markdown).
-- Group – which comment a check is posted into.
-- Provider – how a check runs (`ai`, `mcp`, `http`, `http_client`, `command`, `log`, `github`, `claude-code`).
-- Dependencies – `depends_on` controls order; independents run in parallel.
-- Tags – label checks (`fast`, `local`, `comprehensive`) and filter with `--tags`.
-- Events – PRs, issues, `/review` comments, webhooks, or cron schedules.
-
-## Beyond Code Review
-
-Visor is a general SDLC automation framework:
-- PR Reviews – security/perf/style findings with native annotations
-- Issue Assistant – `/visor …` for code Q&A and triage
-- Release Notes – manual or tagged release workflows
-- Scheduled Audits – cron‑driven checks against main
-- Webhooks & HTTP – receive events, call APIs, and post results
-- Policy‑as‑Code – schemas + templates for predictable, auditable outputs
-
-## Table of Contents
-
- - [90‑second Quick Start](#-90-second-quick-start)
- - [Requirements](#requirements)
- - [Installation](#installation)
- - [CLI Usage](#-cli-usage)
- - [Core Concepts (1 minute)](#-core-concepts-1-minute)
- - [Beyond Code Review](#beyond-code-review)
- - [Features](#-features)
- - [When to pick Visor](#when-to-pick-visor)
- - [Developer Experience Playbook](#-developer-experience-playbook)
- - [Tag-Based Check Filtering](#-tag-based-check-filtering)
- - [PR Comment Commands](#-pr-comment-commands)
- - [Enterprise Policy Engine (EE)](#-enterprise-policy-engine-ee)
- - [Suppressing Warnings](#-suppressing-warnings)
- - [Troubleshooting](#-troubleshooting)
- - [Security Defaults](#-security-defaults)
- - [Performance & Cost Controls](#-performance--cost-controls)
- - [Observability](#-observability)
- - [AI Configuration](#-ai-configuration)
- - [Step Dependencies & Intelligent Execution](#-step-dependencies--intelligent-execution)
- - [Failure Routing (Auto-fix Loops)](#-failure-routing-auto-fix-loops)
- - [Claude Code Provider](#-claude-code-provider)
- - [GitHub Provider](#-github-provider)
- - [AI Session Reuse](#-ai-session-reuse)
- - [Schema-Template System](#-schema-template-system)
- - [Enhanced Prompts](#-enhanced-prompts)
- - [SDK (Programmatic Usage)](#-sdk-programmatic-usage)
- - [Debugging](#-debugging)
- - [Advanced Configuration](#-advanced-configuration)
- - [HTTP Integration & Scheduling](#-http-integration--scheduling)
- - [Pluggable Architecture](#-pluggable-architecture)
- - [GitHub Action Reference](#-github-action-reference)
- - [Output Formats](#-output-formats)
- - [Contributing](#-contributing)
- - [Further Reading](#-further-reading)
- - [License](#-license)
-
-## ✨ Features
-
-- Native GitHub reviews: Check runs, inline annotations, and status reporting wired into PRs.
-- Config‑first: One `.visor.yaml` defines checks, prompts, schemas, and templates — no hidden logic.
-- Structured outputs: JSON Schema validation drives deterministic rendering, annotations, and SARIF.
-- Orchestrated pipelines: Dependencies, parallelism, and tag‑based profiles; run in Actions or any CI.
-- Multi‑provider AI: Google Gemini, Anthropic Claude, OpenAI, AWS Bedrock — plus MCP tools, standalone MCP provider, and Claude Code SDK.
-- Author permissions: Built-in functions to customize workflows based on contributor trust level (owner, member, collaborator, etc).
-- Assistants & commands: `/review` to rerun checks, `/visor …` for Q&A, predictable comment groups.
-- HTTP & schedules: Receive webhooks, call external APIs, and run cron‑scheduled audits and reports.
-- Extensible providers: `ai`, `mcp`, `http`, `http_client`, `log`, `command`, `github`, `claude-code`, `human-input`, `memory` — or add your own.
-- Security by default: GitHub App support, scoped tokens, remote‑extends allowlist, opt‑in network usage.
-- Observability & control: JSON/SARIF outputs, fail‑fast and timeouts, parallelism and cost control.
-
-## When to pick Visor
-
-- You want native GitHub checks/annotations and config‑driven behavior
-- You need structured outputs (schemas) and predictable templates
-- You care about dependency‑aware execution and tag‑based profiles
-- You want PR reviews + assistants + scheduled audits from one tool
-- You prefer open‑source with no hidden rules
-
-## 🧭 Developer Experience Playbook
-
-Start with the defaults, iterate locally, and commit a shared `.visor.yaml` for your team.
-
-Example:
-```bash
-npx -y @probelabs/visor@latest --check all --debug
-```
-
-Learn more: [docs/dev-playbook.md](docs/dev-playbook.md)
-
-## 🏷️ Tag-Based Check Filtering
-
-Run subsets of checks (e.g., `local`, `fast`, `security`) and select them per environment with `--tags`/`--exclude-tags`.
-
-Example:
-```yaml
-steps:
-  security-quick:
-    type: ai
-    prompt: "Quick security scan"
-    tags: ["local", "fast", "security"]
-```
-
-CLI:
-```bash
-visor --tags local,fast
-```
-
-Learn more: [docs/tag-filtering.md](docs/tag-filtering.md)
+See [docs/commands.md](docs/commands.md) for the full CLI reference.
 
 ## 💬 PR Comment Commands
 
-Trigger reviews and assistant actions via comments on PRs/issues.
+Trigger reviews and assistant actions via comments on PRs or issues:
 
-Examples:
 ```
-/review
-/review --check security
-/visor how does caching work?
+/review                        # Re-run all checks
+/review --check security       # Re-run specific check
+/visor how does caching work?  # Ask the built-in assistant
 ```
 
 Learn more: [docs/commands.md](docs/commands.md)
 
-## 🔐 Author Permissions
+## 🧩 Core Concepts
 
-Customize workflows based on PR author's permission level using built-in functions in JavaScript expressions:
+| Concept | What it is |
+|---------|-----------|
+| **Step** (or Check) | Unit of work — a shell command, AI call, HTTP request, script, etc. |
+| **Provider** | How a step runs: `ai`, `command`, `script`, `mcp`, `http`, `claude-code`, `github`, `memory`, `workflow`, … |
+| **depends_on** | Execution order — independents run in parallel, dependents wait. |
+| **forEach** | Fan-out — transform output into an array, run dependents per item. |
+| **Routing** | `on_fail`, `on_success`, `goto`, `retry` — conditional flow with loop safety. |
+| **Transform** | Reshape output with Liquid templates or JavaScript before passing downstream. |
+| **Schema** | JSON Schema that validates step output (e.g., `code-review`). |
+| **Template** | Renders validated output into Markdown/table for PR comments. |
+| **Group** | Which PR comment a step posts into. |
+| **Tags** | Label steps and filter with `--tags fast,local`. |
+| **Events** | Trigger steps on PRs, issues, comments, webhooks, or cron schedules. |
+
+## 🔌 Provider Types
+
+| Provider | Description | Example use |
+|----------|------------|------------|
+| `ai` | Multi-provider AI (Gemini, Claude, OpenAI, Bedrock) | Code review, analysis, generation |
+| `command` | Shell commands with Liquid templating | Run tests, build, lint |
+| `script` | JavaScript in a secure sandbox | Transform data, custom logic |
+| `mcp` | MCP tool execution (stdio/SSE/HTTP) | External tool integration |
+| `claude-code` | Claude Code SDK with MCP tools | Deep code analysis, refactoring |
+| `http` | HTTP output/webhook sender | Notify Slack, trigger CI |
+| `http_input` | Webhook receiver | Accept external events |
+| `http_client` | HTTP API client | Call external APIs |
+| `github` | GitHub operations (labels, comments, checks) | Label PRs, post reviews |
+| `memory` | Key-value store (get/set/append/increment) | State across steps |
+| `workflow` | Reusable sub-workflows from files/URLs | Compose pipelines |
+| `human-input` | Interactive prompts (TUI/Slack) | Approvals, user input |
+| `log` / `logger` | Structured logging | Debug, audit trail |
+| `noop` | No-op placeholder | Orchestration nodes |
+| `git-checkout` | Git operations (clone, checkout, worktree) | Multi-repo workflows |
+
+See [docs/pluggable.md](docs/pluggable.md) for building custom providers.
+
+## ⚙️ Orchestration
+
+### Dependencies & Parallel Execution
+
+Steps without dependencies run in parallel waves. `depends_on` enforces ordering:
 
 ```yaml
 steps:
-  # Run security scan only for external contributors
+  fetch-data:
+    type: command
+    exec: curl -s https://api.example.com/data
+
+  analyze:
+    type: ai
+    prompt: "Analyze: {{ outputs['fetch-data'] }}"
+    depends_on: [fetch-data]
+
+  report:
+    type: command
+    exec: 'echo "Done: {{ outputs[''analyze''] | truncate: 100 }}"'
+    depends_on: [analyze]
+```
+
+### forEach Fan-Out
+
+Transform output into an array, run dependents once per item:
+
+```yaml
+steps:
+  list-services:
+    type: command
+    exec: 'echo ''["auth","payments","notifications"]'''
+    forEach: true
+
+  check-service:
+    type: command
+    exec: 'curl -s https://{{ outputs["list-services"] }}/health'
+    depends_on: [list-services]
+```
+
+Use `outputs_raw` in downstream steps to access the aggregated array of all forEach results:
+
+```yaml
+  summarize:
+    type: script
+    depends_on: [list-services]
+    content: |
+      const arr = outputs_raw['list-services'] || [];
+      return { total: arr.length };
+```
+
+Learn more: [docs/foreach-dependency-propagation.md](docs/foreach-dependency-propagation.md)
+
+### Failure Routing & Auto-Remediation
+
+Steps can retry, run remediation, or jump to other steps on failure:
+
+```yaml
+version: "2.0"
+routing:
+  max_loops: 5
+steps:
+  build:
+    type: command
+    exec: make build
+    on_fail:
+      retry: { max: 2, backoff: { mode: exponential, delay_ms: 500 } }
+      goto: setup            # Jump back on exhausted retries
+
+  deploy:
+    type: command
+    exec: make deploy
+    depends_on: [build]
+    on_success:
+      run: [notify]          # Run extra steps on success
+    on_fail:
+      goto_js: |
+        return attempt <= 2 ? 'build' : null;  # Dynamic routing
+```
+
+Learn more: [docs/failure-routing.md](docs/failure-routing.md)
+
+### Conditional Execution & Author Permissions
+
+```yaml
+steps:
   security-scan:
     type: command
-    exec: npm run security:full
-    if: "!hasMinPermission('MEMBER')"
+    exec: npm audit
+    if: "!hasMinPermission('MEMBER')"    # Only for external contributors
 
-  # Auto-approve PRs from collaborators
   auto-approve:
-    type: command
-    exec: gh pr review --approve
+    type: github
+    op: labels.add
+    values: ["approved"]
     if: "hasMinPermission('COLLABORATOR') && totalIssues === 0"
 
-  # Block sensitive file changes from non-members
   protect-secrets:
     type: command
     exec: echo "Checking permissions..."
     fail_if: "!isMember() && files.some(f => f.filename.startsWith('secrets/'))"
 ```
 
-**Available functions:**
-- `hasMinPermission(level)` - Check if author has >= permission level
-- `isOwner()`, `isMember()`, `isCollaborator()`, `isContributor()`, `isFirstTimer()` - Boolean checks
+Available permission functions: `hasMinPermission(level)`, `isOwner()`, `isMember()`, `isCollaborator()`, `isContributor()`, `isFirstTimer()`.
 
 Learn more: [docs/author-permissions.md](docs/author-permissions.md)
 
+## 🤖 AI & MCP
+
+### Multi-Provider AI
+
+```yaml
+steps:
+  review:
+    type: ai
+    prompt: "Review this code for security issues"
+    ai:
+      provider: anthropic          # or: google, openai, bedrock
+      model: claude-sonnet-4-20250514
+      fallback:
+        strategy: any              # Try other providers on failure
+```
+
+Supported providers: **Google Gemini**, **Anthropic Claude**, **OpenAI GPT**, **AWS Bedrock**.
+
+Set one key via environment: `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or AWS credentials.
+
+### MCP Tool Integration
+
+Give AI steps access to MCP tools, or call MCP tools directly:
+
+```yaml
+# AI step with MCP tools
+steps:
+  analyze:
+    type: ai
+    prompt: "Use the search tool to find security patterns"
+    ai:
+      mcp_servers:
+        - name: code-search
+          command: npx
+          args: ["-y", "@probe/search"]
+
+# Direct MCP tool execution
+  search:
+    type: mcp
+    transport: stdio
+    command: npx
+    args: ["-y", "@probe/search"]
+    method: search
+    arguments:
+      query: "{{ outputs['setup'].pattern }}"
+```
+
+### AI Session Reuse
+
+Chain AI conversations across steps:
+
+```yaml
+steps:
+  security:
+    type: ai
+    prompt: "Find security issues"
+
+  remediation:
+    type: ai
+    prompt: "Suggest fixes for the issues you found"
+    depends_on: [security]
+    reuse_ai_session: true          # Carries conversation history
+    session_mode: append            # Or: clone (default)
+```
+
+### Claude Code Provider
+
+Full Claude Code SDK integration with MCP tools and subagents:
+
+```yaml
+steps:
+  deep-review:
+    type: claude-code
+    prompt: "Analyze code complexity and suggest refactoring"
+    max_turns: 10
+    mcp_servers:
+      - name: filesystem
+        command: npx
+        args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+```
+
+Learn more: [docs/claude-code.md](docs/claude-code.md) · [docs/mcp-provider.md](docs/mcp-provider.md) · [docs/advanced-ai.md](docs/advanced-ai.md)
+
+## 🧰 GitHub Provider
+
+Native GitHub operations (labels, comments, checks) without shelling out to `gh`:
+
+```yaml
+steps:
+  apply-labels:
+    type: github
+    op: labels.add
+    values:
+      - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
+    value_js: |
+      return values.filter(v => typeof v === 'string' && v.trim().length > 0);
+```
+
+Learn more: [docs/github-ops.md](docs/github-ops.md)
+
+## 🧬 Templating & Transforms
+
+### Liquid Templates
+
+Steps can use Liquid templates in prompts, exec commands, HTTP bodies, and more:
+
+```yaml
+steps:
+  greet:
+    type: command
+    exec: 'echo "Files changed: {{ files | size }}, branch: {{ branch }}"'
+
+  post-results:
+    type: http
+    url: https://api.example.com/results
+    body: |
+      { "issues": {{ outputs["review"] | json }},
+        "pr": {{ pr.number }} }
+```
+
+Available context: `outputs`, `outputs_raw`, `inputs`, `pr`, `files`, `env`, `memory`, `branch`, `event`, `conversation`.
+
+### JavaScript Transforms
+
+Transform step output before passing to dependents:
+
+```yaml
+steps:
+  fetch:
+    type: command
+    exec: 'node -e "console.log(JSON.stringify({items:[1,2,3]}))"'
+    transform_js: |
+      return output.items.filter(i => i > 1);
+```
+
+### Dynamic Routing with JavaScript
+
+```yaml
+steps:
+  check:
+    type: command
+    exec: npm test
+    on_fail:
+      goto_js: |
+        if (attempt > 3) return null;   // Give up
+        return 'fix-and-retry';         // Jump to remediation
+```
+
+Prompts can live in external files with full Liquid variable access:
+
+```yaml
+steps:
+  overview:
+    type: ai
+    schema: code-review
+    prompt: ./prompts/overview.liquid
+```
+
+Learn more: [docs/liquid-templates.md](docs/liquid-templates.md) · [docs/schema-templates.md](docs/schema-templates.md)
+
+## 🔇 Suppressing Warnings
+
+Suppress a specific issue by adding a nearby `visor-disable` comment:
+
+```js
+const testPassword = "demo123"; // visor-disable
+```
+
+Learn more: [docs/suppressions.md](docs/suppressions.md)
+
+## 🧪 Testing Framework
+
+Write and run integration tests for your Visor config in YAML:
+
+```yaml
+# .visor.tests.yaml
+tests:
+  - name: "Security check finds issues"
+    config: .visor.yaml
+    steps:
+      security:
+        mock_output: '{"issues": [{"severity": "high"}]}'
+    assertions:
+      - step: security
+        called: { exactly: 1 }
+      - step: security
+        output_contains: "high"
+```
+
+```bash
+visor test --progress compact          # Run tests
+visor test --list                      # List test cases
+visor test --only "Security*"          # Filter tests
+visor test --bail                      # Stop on first failure
+```
+
+Docs: [Getting started](docs/testing/getting-started.md) · [DSL reference](docs/testing/dsl-reference.md) · [Fixtures & mocks](docs/testing/fixtures-and-mocks.md) · [Assertions](docs/testing/assertions.md) · [Cookbook](docs/testing/cookbook.md)
+
+## 📦 SDK (Programmatic Usage)
+
+Run Visor programmatically from Node.js:
+
+```ts
+import { loadConfig, runChecks } from '@probelabs/visor/sdk';
+
+const config = await loadConfig('.visor.yaml');
+const result = await runChecks({
+  config,
+  checks: Object.keys(config.checks || {}),
+  output: { format: 'json' },
+});
+console.log('Issues:', result.reviewSummary.issues?.length ?? 0);
+```
+
+Learn more: [docs/sdk.md](docs/sdk.md)
+
+## 🔧 Configuration
+
+### Config Loading Order
+1. CLI `--config` flag
+2. `.visor.yaml` in project root
+3. Built-in defaults
+
+### Extending Configs
+
+```yaml
+extends:
+  - default
+  - ./team-standards.yaml
+  - https://raw.githubusercontent.com/org/policies/main/base.yaml
+```
+
+### Dynamic Config Reloading
+
+Long-running modes (Slack, HTTP) support live config reload:
+
+```bash
+visor --slack --config .visor.yaml --watch    # Auto-reload on file change
+visor config snapshots                        # List config versions
+visor config diff 1 2                         # Diff two snapshots
+```
+
+### Key Config Options
+
+```yaml
+version: "1.0"
+max_parallelism: 3            # Concurrent steps
+max_ai_concurrency: 3         # Concurrent AI API calls
+routing:
+  max_loops: 10               # Loop safety limit
+
+http_server:
+  enabled: true
+  port: 8080
+  auth: { bearer_token: "${WEBHOOK_SECRET}" }
+
+telemetry:
+  enabled: true
+  sink: otlp                  # or: file, console
+
+steps:
+  # ... your pipeline
+```
+
+Learn more: [docs/configuration.md](docs/configuration.md)
+
+## 👀 Observability
+
+### Output Formats
+
+```bash
+visor --output table                          # Terminal-friendly (default)
+visor --output json --output-file results.json
+visor --output sarif --output-file results.sarif
+visor --output markdown
+```
+
+### OpenTelemetry Tracing
+
+```yaml
+telemetry:
+  enabled: true
+  sink: otlp
+```
+
+```bash
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces visor --check all
+```
+
+Span hierarchy: `visor.run` → `engine.state.*` → `visor.check.*` → `visor.foreach.item`
+
+### Debug Tools
+
+```bash
+visor --debug                                 # Verbose logging
+visor --debug-server --debug-port 3456        # Live web visualizer
+```
+
+**Quick debugging tips:**
+
+Use `log()` in JavaScript expressions (`if`, `fail_if`, `transform_js`):
+```yaml
+if: |
+  log("Outputs:", outputs);
+  outputs["fetch-data"]?.status === "ready"
+```
+
+Use the `json` filter in Liquid to inspect objects:
+```yaml
+type: logger
+message: "Outputs: {{ outputs | json }}"
+```
+
+**TUI mode** (`visor --tui`): Press `Tab` to switch between Chat and Logs tabs, `q` to exit.
+
+Learn more: [docs/observability.md](docs/observability.md) · [docs/debugging.md](docs/debugging.md) · [docs/debug-visualizer.md](docs/debug-visualizer.md)
+
+## 🔐 Security
+
+- **GitHub App support** for scoped, auditable access
+- **Remote extends allowlist** to control external config sources
+- **MCP method filtering** — allow/deny lists with wildcards
+- **Bash allow/deny patterns** for AI-driven command execution
+- **Docker & process sandboxes** for isolated step execution
+- **Author permissions** — `hasMinPermission()`, `isMember()`, etc. for role-based logic
+- **Environment filtering** — control which env vars steps can access
+
+```bash
+visor --no-remote-extends
+visor --allowed-remote-patterns "https://raw.githubusercontent.com/myorg/"
+```
+
+Learn more: [docs/security.md](docs/security.md) · [docs/author-permissions.md](docs/author-permissions.md)
+
 ## 🏢 Enterprise Policy Engine (EE)
 
-> **Enterprise Edition feature.** Requires a Visor EE license. Contact **hello@probelabs.com**.
+> **Enterprise Edition.** Requires a Visor EE license. Contact **hello@probelabs.com**.
 
-Add OPA-based role-based access control to gate checks, MCP tools, and AI capabilities using [Rego](https://www.openpolicyagent.org/docs/latest/policy-language/) policies.
+OPA-based policy enforcement for gating checks, MCP tools, and AI capabilities:
 
 ```yaml
 policy:
@@ -327,461 +646,35 @@ policy:
   rules: ./policies/
   fallback: deny
   roles:
-    admin:
-      author_association: [OWNER]
-    developer:
-      author_association: [MEMBER, COLLABORATOR]
+    admin: { author_association: [OWNER] }
+    developer: { author_association: [MEMBER, COLLABORATOR] }
 ```
 
-Checks denied by policy are skipped with reason `policy_denied`. Without a valid license, the engine silently disables and all checks run normally.
+Learn more: [docs/enterprise-policy.md](docs/enterprise-policy.md)
 
-Learn more: [docs/enterprise-policy.md](docs/enterprise-policy.md) | [examples/enterprise-policy/](examples/enterprise-policy/)
+## 📚 Further Reading
 
-## 🔇 Suppressing Warnings
+**Guides:**
+[CLI commands](docs/commands.md) · [Configuration](docs/configuration.md) · [AI config](docs/ai-configuration.md) · [Dependencies](docs/dependencies.md) · [forEach propagation](docs/foreach-dependency-propagation.md) · [Failure routing](docs/failure-routing.md) · [Liquid templates](docs/liquid-templates.md) · [Schema-template system](docs/schema-templates.md) · [Fail conditions](docs/fail-if.md) · [Timeouts](docs/timeouts.md) · [Execution limits](docs/limits.md) · [Output formats](docs/output-formats.md) · [Output formatting](docs/output-formatting.md) · [HTTP integration](docs/http.md) · [Scheduler](docs/scheduler.md)
 
-Suppress a specific issue by adding a nearby `visor-disable` comment.
+**Providers:**
+[Command](docs/command-provider.md) · [Script](docs/script.md) · [MCP](docs/mcp-provider.md) · [MCP tools for AI](docs/mcp.md) · [Claude Code](docs/claude-code.md) · [GitHub ops](docs/github-ops.md) · [Custom providers](docs/pluggable.md)
 
-Example (JS):
-```js
-const testPassword = "demo123"; // visor-disable
-```
+**Operations:**
+[GitHub Action reference](docs/action-reference.md) · [Security](docs/security.md) · [Performance](docs/performance.md) · [Observability](docs/observability.md) · [Debugging](docs/debugging.md) · [Debug visualizer](docs/debug-visualizer.md) · [Troubleshooting](docs/troubleshooting.md) · [Suppressions](docs/suppressions.md) · [GitHub checks](docs/GITHUB_CHECKS.md)
 
-Learn more: [docs/suppressions.md](docs/suppressions.md)
+**Architecture:**
+[Failure conditions schema](docs/failure-conditions-schema.md) · [Failure conditions implementation](docs/failure-conditions-implementation.md)
 
-## 🛠️ Troubleshooting
+**Testing:**
+[Getting started](docs/testing/getting-started.md) · [DSL reference](docs/testing/dsl-reference.md) · [Flows](docs/testing/flows.md) · [Fixtures & mocks](docs/testing/fixtures-and-mocks.md) · [Assertions](docs/testing/assertions.md) · [Cookbook](docs/testing/cookbook.md) · [CLI & reporters](docs/testing/cli.md) · [CI integration](docs/testing/ci.md) · [Troubleshooting](docs/testing/troubleshooting.md)
 
-If comments/annotations don’t appear, verify workflow permissions and run with `--debug`.
-
-Example:
-```bash
-node dist/index.js --cli --check all --debug
-```
-
-Run modes
-
-- Default is CLI mode everywhere (no auto-detection).
-- For GitHub-specific behavior (comments, checks), run with `--mode github-actions` or set `with: mode: github-actions` when using the GitHub Action.
-
-Examples:
-
-```bash
-# Local/CI CLI
-npx -y @probelabs/visor@latest --config .visor.yaml --check all --output json
-
-# GitHub Actions behavior from any shell/CI
-npx -y @probelabs/visor@latest --mode github-actions --config .visor.yaml --check all
-```
-
-GitHub Action usage:
-
-```yaml
-- uses: probelabs/visor@vX
-  with:
-    mode: github-actions
-    checks: all
-    output-format: json
-```
-
-To force CLI mode inside a GitHub Action step, you can still use:
-
-```yaml
-env:
-  VISOR_MODE: cli
-```
-
-Learn more: [docs/troubleshooting.md](docs/troubleshooting.md)
-
-## 🔐 Security Defaults
-
-Prefer a GitHub App for production, and restrict remote extends unless explicitly allowed.
-
-Examples:
-```bash
-visor --no-remote-extends
-visor --allowed-remote-patterns "https://raw.githubusercontent.com/myorg/"
-```
-
-Learn more: [docs/security.md](docs/security.md)
-
-## ⚡ Performance & Cost Controls
-
-Use tags for fast lanes and raise parallelism cautiously.
-
-Example:
-```bash
-visor --tags local,fast --max-parallelism 5
-```
-
-Learn more: [docs/performance.md](docs/performance.md)
-
-## 👀 Observability
-
-Use JSON for pipelines or SARIF for code scanning. To avoid any chance of logs mixing with the result stream, prefer the built‑in `--output-file`.
-
-Examples:
-```bash
-visor --check security --output json --output-file visor-results.json
-visor --check security --output sarif --output-file visor-results.sarif
-```
-
-Learn more: [docs/observability.md](docs/observability.md)
-
-## 🤖 AI Configuration
-
-Set one provider key (Google/Anthropic/OpenAI/AWS Bedrock) via env.
-
-Example (Action):
-```yaml
-- uses: probelabs/visor@v1
-  env:
-    GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-    # Or for AWS Bedrock:
-    # AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-    # AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    # AWS_REGION: us-east-1
-```
-
-Learn more: [docs/ai-configuration.md](docs/ai-configuration.md)
-
-## 📊 Step Dependencies & Intelligent Execution
-
-Define `depends_on` to enforce order; independent checks run in parallel.
-
-Example:
-```yaml
-steps:
-  security:   { type: ai }
-  performance:{ type: ai, depends_on: [security] }
-```
-
-Learn more: [docs/dependencies.md](docs/dependencies.md). See also: [forEach dependency propagation](docs/foreach-dependency-propagation.md)
-
-Quick example (outputs_raw):
-
-```yaml
-version: "2.0"
-checks:
-  list:
-    type: command
-    exec: echo '["a","b","c"]'
-    forEach: true
-
-  summarize:
-    type: script
-    depends_on: [list]
-    content: |
-      const arr = outputs_raw['list'] || [];
-      return { total: arr.length };
-
-  branch-by-size:
-    type: script
-    depends_on: [list]
-    content: 'return true'
-    on_success:
-      goto_js: |
-        return (outputs_raw['list'] || []).length >= 3 ? 'after' : null;
-
-  after:
-    type: log
-    message: bulk mode reached
-```
-
-## 🔄 Failure Routing (Auto-fix Loops)
-
-Automatically remediate failures and re‑run steps using config‑driven routing:
-
-- Per‑step `on_fail` and `on_success` actions:
-  - `retry` with fixed/exponential backoff (+ deterministic jitter)
-  - `run`: remediation steps (single or list)
-  - `goto`: jump back to an ancestor step and continue forward
-  - `goto_js` / `run_js`: dynamic routing with safe, synchronous JS
-- Loop safety:
-  - Global `routing.max_loops` per scope to prevent livelock
-  - Per‑step attempt counters; forEach items have isolated counters
-
-Example (retry + goto on failure):
-```yaml
-version: "2.0"
-routing:
-  max_loops: 5
-steps:
-  setup: { type: command, exec: "echo setup" }
-  build:
-    type: command
-    depends_on: [setup]
-    exec: |
-      test -f .ok || (echo first try fails >&2; touch .ok; exit 1)
-      echo ok
-    on_fail:
-      goto: setup
-      retry: { max: 1, backoff: { mode: exponential, delay_ms: 400 } }
-```
-
-Example (on_success jump‑back once):
-```yaml
-steps:
-  unit: { type: command, exec: "echo unit" }
-  build:
-    type: command
-    depends_on: [unit]
-    exec: "echo build"
-    on_success:
-      run: [notify]
-      goto_js: |
-        // Jump back only on first success
-        return attempt === 1 ? 'unit' : null;
-  notify: { type: command, exec: "echo notify" }
-```
-
-Learn more: [docs/failure-routing.md](docs/failure-routing.md)
-
-## 🤖 Claude Code Provider
-
-Use the Claude Code SDK as a provider for deeper analysis.
-
-Example:
-```yaml
-steps:
-  claude-review:
-    type: claude-code
-    prompt: "Analyze code complexity"
-```
-
-Learn more: [docs/claude-code.md](docs/claude-code.md)
-
-## 🔄 AI Session Reuse
-
-Reuse conversation context between dependent AI checks for smarter follow‑ups.
-
-**Two modes available:**
-- **`clone` (default)**: Independent copy of history for parallel follow-ups
-- **`append`**: Shared conversation thread for sequential multi-turn dialogue
-
-Example:
-```yaml
-steps:
-  security: { type: ai }
-  remediation:
-    type: ai
-    depends_on: [security]
-    reuse_ai_session: true  # Clones history by default
-  verify:
-    type: ai
-    depends_on: [remediation]
-    reuse_ai_session: true
-    session_mode: append    # Shares history for full conversation
-```
-
-You can also reuse the **same check’s** session when it loops back to itself, using:
-
-- `reuse_ai_session: "self"` with `session_mode: append`
-
-See the standalone example at `examples/session-reuse-self.yaml` and the detailed guide in [docs/advanced-ai.md](docs/advanced-ai.md).
-
-Learn more: [docs/advanced-ai.md](docs/advanced-ai.md)
-
-## 📋 Schema-Template System
-
-Schemas validate outputs; templates render GitHub‑friendly comments.
-
-Example:
-```yaml
-steps:
-  security:
-    type: ai
-    schema: code-review
-    prompt: "Return JSON matching code-review schema"
-```
-
-Learn more: [docs/schema-templates.md](docs/schema-templates.md)
-
-## 🎯 Enhanced Prompts
-
-Write prompts inline or in files; Liquid variables provide PR context.
-
-Example:
-```yaml
-steps:
-  overview:
-    type: ai
-    prompt: ./prompts/overview.liquid
-```
-
-Learn more: [docs/liquid-templates.md](docs/liquid-templates.md)
-
-## 📦 SDK (Programmatic Usage)
-
-Run Visor programmatically from Node.js without shelling out. The SDK is a thin façade over the existing engine.
-
-**Install:**
-```bash
-npm i -D @probelabs/visor
-```
-
-**ESM Example:**
-```ts
-import { loadConfig, runChecks } from '@probelabs/visor/sdk';
-
-const config = await loadConfig();
-const result = await runChecks({
-  config,
-  checks: Object.keys(config.checks || {}),
-  output: { format: 'json' },
-});
-console.log('Total issues:', result.reviewSummary.issues?.length ?? 0);
-```
-
-**CommonJS Example:**
-```js
-const { loadConfig, runChecks } = require('@probelabs/visor/sdk');
-(async () => {
-  const config = await loadConfig();
-  const result = await runChecks({
-    config,
-    checks: Object.keys(config.checks || {}),
-    output: { format: 'json' }
-  });
-  console.log('Total issues:', result.reviewSummary.issues?.length ?? 0);
-})();
-```
-
-**Key Functions:**
-- `loadConfig(configPath?: string)` — Load Visor config
-- `resolveChecks(checkIds, config)` — Expand check IDs with dependencies
-- `runChecks(options)` — Run checks programmatically
-
-Learn more: [docs/sdk.md](docs/sdk.md)
-
-## 🔍 Debugging
-
-Comprehensive debugging tools help troubleshoot configurations and data flows:
-
-### Running Locally
-
-```bash
-# Basic CLI run
-visor --config .visor.yaml --check all
-
-# TUI mode - interactive chat interface for human-input workflows
-visor --tui --config ./examples/calculator-config.yaml
-
-# Debug server - web UI for stepping through execution
-visor --debug-server --debug-port 3456
-
-# Combine options for full visibility
-visor --tui --config .visor.yaml --debug
-```
-
-**TUI Mode Features:**
-- Chat-style interface with persistent input bar
-- Press `Tab` to switch between Chat and Logs tabs
-- Re-run workflows by typing new messages after completion
-- Press `q` to exit when done
-
-### Quick Debugging Tips
-
-**Use `log()` in JavaScript expressions:**
-```yaml
-steps:
-  conditional-check:
-    if: |
-      log("Outputs:", outputs);
-      outputs["fetch-data"]?.status === "ready"
-    transform_js: |
-      // `output` is auto‑parsed JSON when possible; no JSON.parse needed
-      log("Raw data:", output);
-      output
-```
-
-**Use `json` filter in Liquid templates:**
-```yaml
-steps:
-  debug-check:
-    type: logger
-    message: |
-      Outputs: {{ outputs | json }}
-      PR: {{ pr | json }}
-```
-
-**Enable debug mode:**
-```bash
-visor --check all --debug
-```
-
-Learn more: [docs/debugging.md](docs/debugging.md)
-
-## 🔧 Advanced Configuration
-
-Extend shared configs and override per‑repo settings.
-
-Example:
-```yaml
-extends:
-  - default
-  - ./team-standards.yaml
-```
-
-Learn more: [docs/configuration.md](docs/configuration.md)
-
-## 🌐 HTTP Integration & Scheduling
-
-Receive webhooks, call APIs, and schedule checks.
-
-Examples:
-```yaml
-http_server: { enabled: true, port: 8080 }
-steps:
-  nightly: { type: ai, schedule: "0 2 * * *" }
-```
-
-Learn more: [docs/http.md](docs/http.md)
-
-## 🔧 Pluggable Architecture
-
-Mix providers (`ai`, `mcp`, `http`, `http_client`, `log`, `command`, `script`, `github`, `claude-code`) or add your own.
-
-- **Command Provider**: Execute shell commands with templating and security - [docs/command-provider.md](docs/command-provider.md)
-- **Script Provider**: Run JavaScript in a secure sandbox - [docs/script.md](docs/script.md)
-- **MCP Provider**: Call MCP tools directly via stdio, SSE, or HTTP transports - [docs/mcp-provider.md](docs/mcp-provider.md)
-- **MCP Tools for AI**: Enhance AI providers with MCP context - [docs/mcp.md](docs/mcp.md)
-- **Custom Providers**: Build your own providers - [docs/pluggable.md](docs/pluggable.md)
-
-## 🎯 GitHub Action Reference
-
-Common inputs include `max-parallelism`, `fail-fast`, and `config-path`.
-
-Example:
-```yaml
-- uses: probelabs/visor@v1
-  with:
-    max-parallelism: 5
-```
-
-Learn more: [docs/action-reference.md](docs/action-reference.md)
-
-## 📊 Output Formats
-
-Emit `table`, `json`, `markdown`, or `sarif`.
-
-Example:
-```bash
-visor --check security --output json
-```
-
-Learn more: [docs/output-formats.md](docs/output-formats.md)
+**Recipes & examples:**
+[Recipes](docs/recipes.md) · [Dev playbook](docs/dev-playbook.md) · [Tag filtering](docs/tag-filtering.md) · [Author permissions](docs/author-permissions.md) · [Session reuse](docs/advanced-ai.md)
 
 ## 🤝 Contributing
 
 Learn more: [CONTRIBUTING.md](CONTRIBUTING.md)
-
-## 📚 Further Reading
-
-- Failure conditions schema: [docs/failure-conditions-schema.md](docs/failure-conditions-schema.md)
-- Failure conditions implementation notes: [docs/failure-conditions-implementation.md](docs/failure-conditions-implementation.md)
-- Recipes and practical examples: [docs/recipes.md](docs/recipes.md)
-- ForEach outputs and precedence (outputs vs outputs_raw vs history): [docs/foreach-dependency-propagation.md](docs/foreach-dependency-propagation.md)
-- Failure routing and on_finish aggregation (with outputs_raw in routing): [docs/failure-routing.md](docs/failure-routing.md)
-- Example config using outputs_raw: examples/outputs-raw-basic.yaml
 
 ## 📄 License
 
@@ -792,32 +685,3 @@ MIT License — see [LICENSE](LICENSE)
 <div align="center">
   Made with ❤️ by <a href="https://probelabs.com">Probe Labs</a>
 </div>
-## 🧰 GitHub Provider
-
-Use the native GitHub provider for safe labels and comments without invoking the `gh` CLI.
-
-Example — apply overview‑derived labels to a PR:
-
-```yaml
-steps:
-  apply-overview-labels:
-    type: github
-    op: labels.add
-    values:
-      - "{{ outputs.overview.tags.label | default: '' | safe_label }}"
-      - "{{ outputs.overview.tags['review-effort'] | default: '' | prepend: 'review/effort:' | safe_label }}"
-    value_js: |
-      return values.filter(v => typeof v === 'string' && v.trim().length > 0);
-```
-
-See docs: docs/github-ops.md
-## Integration Tests
-
-Visor ships a YAML‑native integration test runner so you can describe user flows, mocks, and assertions alongside your config.
-
-- Start here: docs/testing/getting-started.md
-- CLI details: docs/testing/cli.md
-- Fixtures and mocks: docs/testing/fixtures-and-mocks.md
-- Assertions reference: docs/testing/assertions.md
-
-Example suite: defaults/.visor.tests.yaml
