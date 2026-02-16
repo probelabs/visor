@@ -191,6 +191,8 @@ export interface AIReviewConfig {
   enableDelegate?: boolean;
   // Enable task management for tracking multi-goal requests
   enableTasks?: boolean;
+  // Enable the execute_plan DSL orchestration tool
+  enableExecutePlan?: boolean;
   // ProbeAgent persona/prompt family (e.g., 'engineer', 'code-review', 'architect')
   promptType?: string;
   // System prompt to prepend (baseline/preamble). Replaces legacy customPrompt
@@ -1837,6 +1839,11 @@ ${'='.repeat(60)}
       // Enable task management if configured
       if (this.config.enableTasks !== undefined) {
         (options as any).enableTasks = this.config.enableTasks;
+      }
+
+      // Enable execute_plan DSL orchestration if configured
+      if (this.config.enableExecutePlan !== undefined) {
+        (options as any).enableExecutePlan = this.config.enableExecutePlan;
       }
 
       // Pass retry configuration to ProbeAgent
