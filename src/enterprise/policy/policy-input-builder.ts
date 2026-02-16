@@ -31,6 +31,7 @@ export interface OpaInput {
     allowBash?: boolean;
     allowedTools?: string[];
     enableDelegate?: boolean;
+    enableExecutePlan?: boolean;
     sandbox?: string;
   };
   actor: {
@@ -231,6 +232,7 @@ export class PolicyInputBuilder {
       allowBash?: boolean;
       allowedTools?: string[];
       enableDelegate?: boolean;
+      enableExecutePlan?: boolean;
       sandbox?: string;
     }
   ): OpaInput {

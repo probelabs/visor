@@ -244,6 +244,43 @@ describe('AICheckProvider', () => {
       });
     });
 
+    it('should pass enableExecutePlan flag to service', async () => {
+      const mockReview = {
+        overallScore: 90,
+        totalIssues: 0,
+        criticalIssues: 0,
+        comments: [],
+      };
+
+      const mockService = {
+        executeReview: jest.fn().mockResolvedValue(mockReview),
+      };
+
+      let capturedConfig: any;
+      (AIReviewService as any).AIReviewService = jest.fn().mockImplementation(config => {
+        capturedConfig = config;
+        return mockService;
+      });
+
+      const config: CheckProviderConfig = {
+        type: 'ai',
+        prompt: 'deep analysis',
+        ai: {
+          provider: 'anthropic',
+          model: 'claude-3-opus',
+          enableExecutePlan: true,
+        },
+      };
+
+      await provider.execute(mockPRInfo, config);
+
+      expect(capturedConfig).toMatchObject({
+        provider: 'anthropic',
+        model: 'claude-3-opus',
+        enableExecutePlan: true,
+      });
+    });
+
     it('should pass allowedTools and disableTools flags to service', async () => {
       const mockReview = {
         overallScore: 90,
@@ -594,6 +631,7 @@ describe('AICheckProvider', () => {
       expect(keys).toContain('ai.provider');
       expect(keys).toContain('ai.model');
       expect(keys).toContain('ai.enableDelegate');
+      expect(keys).toContain('ai.enableExecutePlan');
       expect(keys).toContain('ai.allowEdit');
       expect(keys).toContain('ai.allowedTools');
       expect(keys).toContain('ai.disableTools');

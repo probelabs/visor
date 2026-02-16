@@ -833,6 +833,9 @@ export class AICheckProvider extends CheckProvider {
       if (aiAny.enableTasks !== undefined) {
         aiConfig.enableTasks = aiAny.enableTasks as boolean;
       }
+      if (aiAny.enableExecutePlan !== undefined) {
+        aiConfig.enableExecutePlan = aiAny.enableExecutePlan as boolean;
+      }
       if (aiAny.allowEdit !== undefined) {
         aiConfig.allowEdit = aiAny.allowEdit as boolean;
       }
@@ -2145,6 +2148,7 @@ export class AICheckProvider extends CheckProvider {
       'ai.mcpServers',
       'ai.enableDelegate',
       'ai.enableTasks',
+      'ai.enableExecutePlan',
       // legacy persona/prompt keys supported in config
       'ai_persona',
       'ai_prompt_type',
