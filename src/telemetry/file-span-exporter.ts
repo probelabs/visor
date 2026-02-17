@@ -93,7 +93,7 @@ function serializeSpan(s: ReadableSpan) {
   return {
     traceId: s.spanContext().traceId,
     spanId: s.spanContext().spanId,
-    parentSpanId: s.parentSpanId,
+    parentSpanId: (s as any).parentSpanContext?.spanId || (s as any).parentSpanId,
     name: s.name,
     startTime: s.startTime,
     endTime: s.endTime,

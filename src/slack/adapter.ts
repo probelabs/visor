@@ -1,7 +1,12 @@
 import { SlackClient } from './client';
 import { ThreadCache } from './thread-cache';
 import { logger } from '../logger';
-import { ConversationContext, NormalizedMessage, SlackBotConfig } from '../types/bot';
+import {
+  ConversationContext,
+  NormalizedMessage,
+  SlackBotConfig,
+  SlackFileAttachment,
+} from '../types/bot';
 
 interface SlackMessage {
   ts: string;
@@ -9,6 +14,7 @@ interface SlackMessage {
   text?: string;
   bot_id?: string;
   thread_ts?: string;
+  files?: any[];
 }
 
 export class SlackAdapter {
@@ -38,7 +44,7 @@ export class SlackAdapter {
   async fetchConversation(
     channel: string,
     threadTs: string,
-    currentMessage: { ts: string; user: string; text: string; timestamp: number }
+    currentMessage: { ts: string; user: string; text: string; timestamp: number; files?: any[] }
   ): Promise<ConversationContext> {
     const threadId = `${channel}:${threadTs}`;
     const cached = this.cache.get(threadId);
@@ -52,6 +58,7 @@ export class SlackAdapter {
       ts: currentMessage.ts,
       user: currentMessage.user,
       text: currentMessage.text,
+      files: currentMessage.files,
     });
     return this.buildConversationContext(
       channel,
@@ -83,13 +90,28 @@ export class SlackAdapter {
   normalizeSlackMessage(msg: SlackMessage): NormalizedMessage {
     const isBot = msg.bot_id !== undefined || (msg.user && msg.user === this.botUserId);
     const origin = isBot ? 'visor' : undefined;
-    return {
+    const normalized: NormalizedMessage = {
       role: isBot ? 'bot' : 'user',
       text: msg.text || '',
       timestamp: msg.ts,
       origin,
       user: msg.user ? String(msg.user) : undefined,
     };
+    // Preserve file attachment metadata
+    if (Array.isArray(msg.files) && msg.files.length > 0) {
+      normalized.files = msg.files.map(
+        (f: any): SlackFileAttachment => ({
+          id: String(f.id || ''),
+          name: f.name,
+          mimetype: f.mimetype,
+          filetype: f.filetype,
+          url_private: f.url_private,
+          permalink: f.permalink,
+          size: f.size,
+        })
+      );
+    }
+    return normalized;
   }
 
   private buildConversationContext(

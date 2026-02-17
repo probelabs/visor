@@ -309,8 +309,13 @@ export class SlackSocketRunner {
       await this.ensureClient();
     } catch {}
 
-    // Ignore edited/changed events to prevent loops
-    if (subtype && subtype !== 'thread_broadcast' && subtype !== 'bot_message') {
+    // Ignore edited/changed events to prevent loops (allow file_share — users can share attachments)
+    if (
+      subtype &&
+      subtype !== 'thread_broadcast' &&
+      subtype !== 'bot_message' &&
+      subtype !== 'file_share'
+    ) {
       if (process.env.VISOR_DEBUG === 'true') {
         logger.debug(`[SlackSocket] Dropping subtype=${subtype}`);
       }
@@ -433,6 +438,7 @@ export class SlackSocketRunner {
           user,
           text: cleanedText || String(ev.text || ''),
           timestamp: Date.now(),
+          files: Array.isArray(ev.files) ? ev.files : undefined,
         });
         payloadForContext = { ...env.payload, slack_conversation: conversation };
       }

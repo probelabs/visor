@@ -31,6 +31,7 @@ export class InputBar {
   private placeholder: Box;
   private parent: Box;
   private _disabled = false;
+  private _paused = false; // true when input should be completely inactive (non-chat tabs)
   private _placeholderText = 'Type a message...';
   private _hasFocus = false;
   private _lastActivation = 0;
@@ -176,12 +177,12 @@ export class InputBar {
 
     // Handle cancel — emitted by blessed's _done when the readInput session
     // ends via blur (window lost focus) or Escape. Re-activate so the user
-    // can keep typing when they return.
+    // can keep typing when they return — but NOT when paused (non-chat tab).
     this.input.on('cancel', () => {
       this._hasFocus = false;
-      if (!this._disabled) {
+      if (!this._disabled && !this._paused) {
         process.nextTick(() => {
-          if (!this._disabled && !this._hasFocus) {
+          if (!this._disabled && !this._paused && !this._hasFocus) {
             this._activateInput();
           }
         });
@@ -267,7 +268,7 @@ export class InputBar {
   }
 
   private _activateInput(): void {
-    if (this._disabled || this._hasFocus) return;
+    if (this._disabled || this._paused || this._hasFocus) return;
 
     // Debounce: prevent multiple activations within 20ms
     const now = Date.now();
@@ -324,6 +325,29 @@ export class InputBar {
       } catch {}
       this._hasFocus = false;
     }
+  }
+
+  /**
+   * Pause the input bar completely (for non-chat tabs).
+   * Prevents auto-reactivation, hides cursor, and releases focus.
+   */
+  pause(): void {
+    this._paused = true;
+    this.blur();
+    // Hide the terminal cursor that showCursor() made visible
+    const program = this.parent.screen?.program;
+    if (program) {
+      program.hideCursor();
+    }
+  }
+
+  /**
+   * Resume the input bar (returning to chat tab).
+   * Re-enables auto-reactivation and re-acquires focus.
+   */
+  resume(): void {
+    this._paused = false;
+    this._activateInput();
   }
 
   clear(): void {

@@ -1201,7 +1201,7 @@ ${this.escapeXml(processedFallbackDiff)}
       <user>${this.escapeXml(String((m as any).user || ''))}</user>
       <text>${this.escapeXml(String(m.text || ''))}</text>
       <timestamp>${this.escapeXml(String(m.timestamp || ''))}</timestamp>
-      <origin>${this.escapeXml(String(m.origin || ''))}</origin>
+      <origin>${this.escapeXml(String(m.origin || ''))}</origin>${this.formatFilesXml((m as any).files)}
     </message>`;
         }
         xml += `
@@ -1215,7 +1215,7 @@ ${this.escapeXml(processedFallbackDiff)}
     <user>${this.escapeXml(String((current as any).user || ''))}</user>
     <text>${this.escapeXml(String(current.text || ''))}</text>
     <timestamp>${this.escapeXml(String(current.timestamp || ''))}</timestamp>
-    <origin>${this.escapeXml(String(current.origin || ''))}</origin>
+    <origin>${this.escapeXml(String(current.origin || ''))}</origin>${this.formatFilesXml((current as any).files)}
   </current>
 </slack_context>`;
 
@@ -1223,6 +1223,26 @@ ${this.escapeXml(processedFallbackDiff)}
     } catch {
       return '';
     }
+  }
+
+  /** Render file attachment metadata as XML fragment for a message. */
+  private formatFilesXml(files: any[] | undefined): string {
+    if (!Array.isArray(files) || files.length === 0) return '';
+    let xml = `
+      <files>`;
+    for (const f of files) {
+      xml += `
+        <file>
+          <name>${this.escapeXml(String(f.name || ''))}</name>
+          <mimetype>${this.escapeXml(String(f.mimetype || ''))}</mimetype>
+          <filetype>${this.escapeXml(String(f.filetype || ''))}</filetype>
+          <url>${this.escapeXml(String(f.url_private || f.permalink || ''))}</url>
+          <size>${f.size || 0}</size>
+        </file>`;
+    }
+    xml += `
+      </files>`;
+    return xml;
   }
 
   /**
@@ -2416,7 +2436,7 @@ ${'='.repeat(60)}
 
     try {
       // Handle different schema types differently
-      let reviewData: AIResponseFormat;
+      let reviewData: AIResponseFormat = undefined as unknown as AIResponseFormat;
 
       // Handle plain schema or no schema - no JSON parsing, treat as assistant-style text output
       if (_schema === 'plain' || !_schema) {
@@ -2461,30 +2481,66 @@ ${'='.repeat(60)}
           const errMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
           log(`🔍 Direct JSON parsing failed: ${errMsg}`);
 
-          // If the response indicates refusal, return it as plain text output
-          if (
-            response.toLowerCase().includes('i cannot') ||
-            response.toLowerCase().includes('unable to')
-          ) {
-            console.error('🚫 AI refused to analyze - returning refusal as output');
+          // Recovery: When the AI returns valid JSON but the ProbeAgent output buffer
+          // appends trailing content, the error is "...after JSON at position N".
+          // The first N chars are valid JSON — try parsing just that portion.
+          // Trailing content (output buffer) is appended to the text field so it
+          // is not lost (it often contains the actual data from output() calls).
+          let recovered = false;
+          const trailingMatch = errMsg.match(/after JSON at position (\d+)/);
+          if (trailingMatch) {
+            const pos = parseInt(trailingMatch[1], 10);
+            try {
+              reviewData = JSON.parse(sanitizedResponse.substring(0, pos));
+              // Preserve trailing content (e.g., DSL output buffer from ProbeAgent)
+              // by appending it to the text field if present
+              const trailing = sanitizedResponse.substring(pos).trim();
+              if (
+                trailing &&
+                reviewData &&
+                typeof reviewData === 'object' &&
+                typeof (reviewData as any).text === 'string'
+              ) {
+                (reviewData as any).text = (reviewData as any).text + '\n\n' + trailing;
+                log(
+                  `✅ Recovered JSON and appended ${trailing.length} chars of trailing content to text field`
+                );
+              } else {
+                log(`✅ Recovered JSON by trimming trailing content at position ${pos}`);
+              }
+              if (debugInfo) debugInfo.jsonParseSuccess = true;
+              recovered = true;
+            } catch {
+              // Recovery failed, fall through to plain text handling
+            }
+          }
+
+          if (!recovered) {
+            // If the response indicates refusal, return it as plain text output
+            if (
+              response.toLowerCase().includes('i cannot') ||
+              response.toLowerCase().includes('unable to')
+            ) {
+              console.error('🚫 AI refused to analyze - returning refusal as output');
+              const trimmed = response.trim();
+              return {
+                issues: [],
+                output: trimmed ? { text: trimmed } : {},
+                debug: debugInfo,
+              };
+            }
+
+            // Not valid JSON - treat entire response as text output
+            // This allows Probe (or other AI providers) to handle JSON validation
+            // and avoids false positives from bracket-matching (e.g., mermaid diagrams)
+            log('🔧 Treating response as plain text (no JSON extraction)');
             const trimmed = response.trim();
             return {
               issues: [],
-              output: trimmed ? { text: trimmed } : {},
+              output: { text: trimmed },
               debug: debugInfo,
             };
           }
-
-          // Not valid JSON - treat entire response as text output
-          // This allows Probe (or other AI providers) to handle JSON validation
-          // and avoids false positives from bracket-matching (e.g., mermaid diagrams)
-          log('🔧 Treating response as plain text (no JSON extraction)');
-          const trimmed = response.trim();
-          return {
-            issues: [],
-            output: { text: trimmed },
-            debug: debugInfo,
-          };
         }
       }
 

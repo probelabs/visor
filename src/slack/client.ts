@@ -215,7 +215,14 @@ export class SlackClient {
     thread_ts: string,
     limit: number = 40
   ): Promise<
-    Array<{ ts: string; user?: string; text?: string; bot_id?: string; thread_ts?: string }>
+    Array<{
+      ts: string;
+      user?: string;
+      text?: string;
+      bot_id?: string;
+      thread_ts?: string;
+      files?: any[];
+    }>
   > {
     try {
       // Use query-string GET semantics similar to Slack WebClient to avoid
@@ -245,6 +252,7 @@ export class SlackClient {
         text: m.text,
         bot_id: m.bot_id,
         thread_ts: m.thread_ts,
+        files: Array.isArray(m.files) ? m.files : undefined,
       }));
     } catch (e) {
       console.warn(
@@ -277,10 +285,10 @@ export class SlackClient {
       initial_comment?: string;
     }): Promise<{ ok: boolean; file?: { id: string; permalink?: string } }> => {
       try {
-        // Step 1: Get upload URL
-        const getUrlResp: any = await this.api('files.getUploadURLExternal', {
+        // Step 1: Get upload URL (uses form-urlencoded — this endpoint rejects JSON bodies)
+        const getUrlResp: any = await this.apiForm('files.getUploadURLExternal', {
           filename,
-          length: content.length,
+          length: String(content.length),
         });
         if (!getUrlResp || getUrlResp.ok !== true || !getUrlResp.upload_url) {
           console.warn(
@@ -346,6 +354,20 @@ export class SlackClient {
         Authorization: `Bearer ${this.token}`,
       },
       body: JSON.stringify(body),
+    });
+    return (await res.json()) as unknown;
+  }
+
+  /** Send a Slack API request as application/x-www-form-urlencoded (required by some file methods). */
+  private async apiForm(method: string, params: Record<string, string>): Promise<unknown> {
+    const body = new URLSearchParams(params);
+    const res = await fetch(`https://slack.com/api/${method}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: `Bearer ${this.token}`,
+      },
+      body: body.toString(),
     });
     return (await res.json()) as unknown;
   }

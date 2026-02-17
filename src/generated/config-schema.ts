@@ -111,6 +111,11 @@ export const configSchema = {
           type: 'number',
           description: 'Maximum number of checks to run in parallel (default: 3)',
         },
+        max_ai_concurrency: {
+          type: 'number',
+          description:
+            'Maximum total concurrent AI API calls across all checks (default: unlimited). When set, creates a shared concurrency limiter that gates every LLM request across all ProbeAgent instances in this run.',
+        },
         fail_fast: {
           type: 'boolean',
           description: 'Stop execution when any check fails (default: false)',
@@ -157,6 +162,19 @@ export const configSchema = {
           $ref: '#/definitions/WorkspaceConfig',
           description: 'Workspace isolation configuration for sandboxed execution',
         },
+        sandbox: {
+          type: 'string',
+          description:
+            'Workspace-level default sandbox name (all checks use this unless overridden)',
+        },
+        sandboxes: {
+          $ref: '#/definitions/Record%3Cstring%2CSandboxConfig%3E',
+          description: 'Named sandbox environment definitions',
+        },
+        sandbox_defaults: {
+          $ref: '#/definitions/SandboxDefaults',
+          description: 'Workspace-level sandbox defaults (env allowlist, etc.)',
+        },
         slack: {
           $ref: '#/definitions/SlackConfig',
           description: 'Slack configuration',
@@ -167,7 +185,7 @@ export const configSchema = {
         },
         policy: {
           $ref: '#/definitions/PolicyConfig',
-          description: 'Enterprise policy engine configuration (EE feature)',
+          description: 'Enterprise policy engine configuration',
         },
       },
       required: ['version'],
@@ -481,7 +499,7 @@ export const configSchema = {
         ai_bash_config_js: {
           type: 'string',
           description:
-            "JavaScript expression to dynamically compute bash configuration for this AI check. Expression has access to: outputs, inputs, pr, files, env, memory. Must return a BashConfig object with optional allow/deny string arrays.\n\nExample: ``` return outputs['build-config']?.bash_config ?? {}; ```",
+            "JavaScript expression to dynamically compute bash configuration for this AI check. Expression has access to: outputs, inputs, pr, files, env, memory Must return a BashConfig object with allow/deny arrays.\n\nExample: ``` return outputs['build-config']?.bash_config ?? {}; ```",
         },
         claude_code: {
           $ref: '#/definitions/ClaudeCodeConfig',
@@ -768,7 +786,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -785,7 +803,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -854,6 +872,10 @@ export const configSchema = {
         persist_worktree: {
           type: 'boolean',
           description: 'Keep worktree after workflow completion (default: false)',
+        },
+        sandbox: {
+          type: 'string',
+          description: 'Sandbox name to use for this check (overrides workspace-level default)',
         },
         policy: {
           $ref: '#/definitions/StepPolicyOverride',
@@ -1005,6 +1027,16 @@ export const configSchema = {
           type: 'string',
           description:
             'Completion prompt for post-completion validation/review (runs after attempt_completion)',
+        },
+        enable_scheduler: {
+          type: 'boolean',
+          description:
+            'Enable the schedule tool for scheduling workflow executions (requires scheduler configuration)',
+        },
+        enableExecutePlan: {
+          type: 'boolean',
+          description:
+            'Enable the execute_plan DSL orchestration tool (replaces analyze_all when enabled)',
         },
       },
       additionalProperties: false,
@@ -1472,7 +1504,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1487,14 +1519,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407>>':
+    'Record<string,Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407>': {
+    'Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381>': {
       type: 'object',
       additionalProperties: false,
     },
@@ -1610,9 +1642,10 @@ export const configSchema = {
         run: {
           type: 'array',
           items: {
-            type: 'string',
+            $ref: '#/definitions/OnSuccessRunItem',
           },
-          description: 'Post-success steps to run',
+          description:
+            'Post-success steps to run - can be step names or rich invocations with arguments',
         },
         goto: {
           type: 'string',
@@ -1643,6 +1676,21 @@ export const configSchema = {
       patternProperties: {
         '^x-': {},
       },
+    },
+    OnSuccessRunItem: {
+      anyOf: [
+        {
+          type: 'string',
+        },
+        {
+          $ref: '#/definitions/OnInitStepInvocation',
+        },
+        {
+          $ref: '#/definitions/OnInitWorkflowInvocation',
+        },
+      ],
+      description:
+        'Success routing run item - can be step name, step with args, or workflow with args',
     },
     OnFinishConfig: {
       type: 'object',
@@ -1681,6 +1729,40 @@ export const configSchema = {
       additionalProperties: false,
       description:
         'Finish routing configuration for forEach checks Runs once after ALL iterations of forEach and ALL dependent checks complete',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    StepPolicyOverride: {
+      type: 'object',
+      properties: {
+        require: {
+          anyOf: [
+            {
+              type: 'string',
+            },
+            {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+            },
+          ],
+          description: 'Required role(s) - any of these roles suffices',
+        },
+        deny: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Explicit deny for roles',
+        },
+        rule: {
+          type: 'string',
+          description: 'Custom OPA rule path for this step',
+        },
+      },
+      additionalProperties: false,
       patternProperties: {
         '^x-': {},
       },
@@ -2095,6 +2177,142 @@ export const configSchema = {
         '^x-': {},
       },
     },
+    'Record<string,SandboxConfig>': {
+      type: 'object',
+      additionalProperties: {
+        $ref: '#/definitions/SandboxConfig',
+      },
+    },
+    SandboxConfig: {
+      type: 'object',
+      properties: {
+        image: {
+          type: 'string',
+          description: 'Docker image to use (e.g., "node:20-alpine")',
+        },
+        dockerfile: {
+          type: 'string',
+          description: 'Path to Dockerfile (relative to config file or absolute)',
+        },
+        dockerfile_inline: {
+          type: 'string',
+          description: 'Inline Dockerfile content',
+        },
+        compose: {
+          type: 'string',
+          description: 'Path to docker-compose file',
+        },
+        service: {
+          type: 'string',
+          description: 'Service name within the compose file',
+        },
+        workdir: {
+          type: 'string',
+          description: 'Working directory inside container (default: /workspace)',
+        },
+        env_passthrough: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Glob patterns for host env vars to forward into sandbox',
+        },
+        network: {
+          type: 'boolean',
+          description: 'Enable/disable network access (default: true)',
+        },
+        read_only: {
+          type: 'boolean',
+          description: 'Mount repo as read-only (default: false)',
+        },
+        resources: {
+          $ref: '#/definitions/SandboxResourceConfig',
+          description: 'Resource limits',
+        },
+        visor_path: {
+          type: 'string',
+          description: 'Where visor is mounted inside container (default: /opt/visor)',
+        },
+        cache: {
+          $ref: '#/definitions/SandboxCacheConfig',
+          description: 'Cache volume configuration',
+        },
+      },
+      additionalProperties: false,
+      description: 'Configuration for a single sandbox environment',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SandboxResourceConfig: {
+      type: 'object',
+      properties: {
+        memory: {
+          type: 'string',
+          description: 'Memory limit (e.g., "512m", "2g")',
+        },
+        cpu: {
+          type: 'number',
+          description: 'CPU limit (e.g., 1.0, 0.5)',
+        },
+      },
+      additionalProperties: false,
+      description: 'Resource limits for sandbox containers',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SandboxCacheConfig: {
+      type: 'object',
+      properties: {
+        prefix: {
+          type: 'string',
+          description: 'Liquid template for cache scope prefix (default: git branch)',
+        },
+        fallback_prefix: {
+          type: 'string',
+          description: 'Fallback prefix when current prefix has no cache',
+        },
+        paths: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Paths inside the container to cache',
+        },
+        ttl: {
+          type: 'string',
+          description: 'Time-to-live for cache volumes (e.g., "7d", "24h")',
+        },
+        max_scopes: {
+          type: 'number',
+          description: 'Maximum number of cache scopes to keep',
+        },
+      },
+      required: ['paths'],
+      additionalProperties: false,
+      description: 'Cache configuration for sandbox volumes',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SandboxDefaults: {
+      type: 'object',
+      properties: {
+        env_passthrough: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description:
+            'Base env var patterns for all sandboxes (replaces hardcoded defaults when set)',
+        },
+      },
+      additionalProperties: false,
+      patternProperties: {
+        '^x-': {},
+      },
+    },
     SlackConfig: {
       type: 'object',
       properties: {
@@ -2154,7 +2372,16 @@ export const configSchema = {
           properties: {
             path: {
               type: 'string',
-              description: 'Path to schedules JSON file (default: .visor/schedules.json)',
+              description: 'Path to schedules JSON file (legacy, triggers auto-migration)',
+            },
+            driver: {
+              type: 'string',
+              enum: ['sqlite', 'postgresql', 'mysql', 'mssql'],
+              description: "Database driver (default: 'sqlite')",
+            },
+            connection: {
+              $ref: '#/definitions/SchedulerStorageConnectionConfig',
+              description: 'Database connection configuration',
             },
           },
           additionalProperties: false,
@@ -2162,6 +2389,10 @@ export const configSchema = {
           patternProperties: {
             '^x-': {},
           },
+        },
+        ha: {
+          $ref: '#/definitions/SchedulerHAConfig',
+          description: 'High-availability configuration for multi-node deployments',
         },
         limits: {
           $ref: '#/definitions/SchedulerLimitsConfig',
@@ -2190,46 +2421,123 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    PolicyConfig: {
+    SchedulerStorageConnectionConfig: {
       type: 'object',
       properties: {
-        engine: {
+        filename: {
           type: 'string',
-          enum: ['local', 'remote', 'disabled'],
-          description:
-            "Policy engine mode: 'local' (WASM), 'remote' (HTTP OPA server), or 'disabled'",
+          description: "SQLite database file path (default: '.visor/schedules.db')",
         },
-        rules: {
-          anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
-          description: 'Path to .rego files or .wasm bundle (local mode)',
-        },
-        data: {
+        host: {
           type: 'string',
-          description: 'Path to a JSON file to load as OPA data document (local mode)',
+          description: 'Database host (PostgreSQL/MySQL/MSSQL)',
         },
-        url: {
-          type: 'string',
-          description: 'OPA server URL (remote mode)',
-        },
-        fallback: {
-          type: 'string',
-          enum: ['allow', 'deny', 'warn'],
-          description:
-            "Default decision when policy evaluation fails (default: 'deny'). Use 'warn' for audit mode: violations are logged but not enforced.",
-        },
-        timeout: {
+        port: {
           type: 'number',
-          description: 'Evaluation timeout in milliseconds (default: 5000)',
+          description: 'Database port (PostgreSQL/MySQL/MSSQL)',
         },
-        roles: {
+        database: {
+          type: 'string',
+          description: 'Database name (PostgreSQL/MySQL/MSSQL)',
+        },
+        user: {
+          type: 'string',
+          description: 'Database user (PostgreSQL/MySQL/MSSQL)',
+        },
+        password: {
+          type: 'string',
+          description: 'Database password (PostgreSQL/MySQL/MSSQL)',
+        },
+        ssl: {
+          anyOf: [
+            {
+              type: 'boolean',
+            },
+            {
+              $ref: '#/definitions/SchedulerSslConfig',
+            },
+          ],
+          description: 'SSL/TLS configuration (PostgreSQL/MySQL/MSSQL)',
+        },
+        connection_string: {
+          type: 'string',
+          description: 'Connection string URL (e.g., postgresql://user:pass@host/db)',
+        },
+        pool: {
           type: 'object',
-          additionalProperties: {
-            $ref: '#/definitions/PolicyRoleConfig',
+          properties: {
+            min: {
+              type: 'number',
+            },
+            max: {
+              type: 'number',
+            },
           },
-          description: 'Role definitions: map role names to conditions',
+          additionalProperties: false,
+          description: 'Connection pool configuration',
+          patternProperties: {
+            '^x-': {},
+          },
         },
       },
       additionalProperties: false,
+      description: 'Scheduler storage connection configuration',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SchedulerSslConfig: {
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'boolean',
+          description: 'Enable SSL (default: true when SslConfig object is provided)',
+        },
+        reject_unauthorized: {
+          type: 'boolean',
+          description: 'Reject unauthorized certificates (default: true)',
+        },
+        ca: {
+          type: 'string',
+          description: 'Path to CA certificate PEM file',
+        },
+        cert: {
+          type: 'string',
+          description: 'Path to client certificate PEM file',
+        },
+        key: {
+          type: 'string',
+          description: 'Path to client key PEM file',
+        },
+      },
+      additionalProperties: false,
+      description: 'SSL/TLS configuration for scheduler database connections',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SchedulerHAConfig: {
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'boolean',
+          description: 'Enable distributed locking for multi-node deployments (default: false)',
+        },
+        node_id: {
+          type: 'string',
+          description: 'Unique node identifier (default: hostname-pid)',
+        },
+        lock_ttl: {
+          type: 'number',
+          description: 'Lock time-to-live in seconds (default: 60)',
+        },
+        heartbeat_interval: {
+          type: 'number',
+          description: 'Heartbeat interval for lock renewal in seconds (default: 15)',
+        },
+      },
+      additionalProperties: false,
+      description: 'Scheduler high-availability configuration',
       patternProperties: {
         '^x-': {},
       },
@@ -2288,45 +2596,6 @@ export const configSchema = {
       },
       additionalProperties: false,
       description: 'Scheduler permissions for dynamic schedule creation',
-      patternProperties: {
-        '^x-': {},
-      },
-    },
-    PolicyRoleConfig: {
-      type: 'object',
-      properties: {
-        author_association: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'GitHub author associations that map to this role',
-        },
-        teams: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'GitHub team slugs',
-        },
-        users: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Explicit GitHub usernames',
-        },
-        slack_users: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Slack user IDs (e.g., U0123ABC)',
-        },
-        emails: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Email addresses for identity matching',
-        },
-        slack_channels: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Slack channel IDs — role only applies when triggered from these channels',
-        },
-      },
-      additionalProperties: false,
       patternProperties: {
         '^x-': {},
       },
@@ -2397,21 +2666,106 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    StepPolicyOverride: {
+    PolicyConfig: {
       type: 'object',
       properties: {
-        require: {
-          anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
-          description: 'Required role(s) — any of these roles suffices',
-        },
-        deny: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Explicit deny for roles',
-        },
-        rule: {
+        engine: {
           type: 'string',
-          description: 'Custom OPA rule path for this step',
+          enum: ['local', 'remote', 'disabled'],
+          description: 'Policy engine mode',
+        },
+        rules: {
+          anyOf: [
+            {
+              type: 'string',
+            },
+            {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+            },
+          ],
+          description: 'Path to .rego files or .wasm bundle (local mode)',
+        },
+        data: {
+          type: 'string',
+          description: 'Path to a JSON file to load as OPA data document',
+        },
+        url: {
+          type: 'string',
+          description: 'OPA server URL (remote mode)',
+        },
+        fallback: {
+          type: 'string',
+          enum: ['allow', 'deny', 'warn'],
+          description: 'Default decision when policy evaluation fails',
+        },
+        timeout: {
+          type: 'number',
+          description: 'Evaluation timeout in ms (default: 5000)',
+        },
+        roles: {
+          $ref: '#/definitions/Record%3Cstring%2CPolicyRoleConfig%3E',
+          description: 'Role definitions: map role names to conditions',
+        },
+      },
+      required: ['engine'],
+      additionalProperties: false,
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    'Record<string,PolicyRoleConfig>': {
+      type: 'object',
+      additionalProperties: {
+        $ref: '#/definitions/PolicyRoleConfig',
+      },
+    },
+    PolicyRoleConfig: {
+      type: 'object',
+      properties: {
+        author_association: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'GitHub author associations that map to this role',
+        },
+        teams: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'GitHub team slugs (requires GitHub API)',
+        },
+        users: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Explicit GitHub usernames',
+        },
+        slack_users: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Slack user IDs (e.g., ["U0123ABC"])',
+        },
+        emails: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Email addresses for identity matching (e.g., ["alice@co.com"])',
+        },
+        slack_channels: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Slack channel IDs — role only applies when triggered from these channels',
         },
       },
       additionalProperties: false,

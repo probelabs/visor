@@ -3277,7 +3277,15 @@ async function renderTemplateContent(
 
     // Determine template source: explicit template (content/file) or built-in by schema
     const schemaRaw = checkConfig.schema || 'plain';
-    const schema = typeof schemaRaw === 'string' ? schemaRaw : 'code-review';
+    // For output template lookup: only named renderer strings (e.g. 'code-review', 'markdown')
+    // are valid. Liquid-templated strings are dynamic JSON schemas, not renderer names.
+    // Object schemas also default to 'code-review' renderer.
+    const schema =
+      typeof schemaRaw === 'string' && !schemaRaw.includes('{{') && !schemaRaw.includes('{%')
+        ? schemaRaw
+        : typeof schemaRaw === 'object'
+          ? 'code-review'
+          : 'plain';
 
     let templateContent: string | undefined;
 

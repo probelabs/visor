@@ -5,6 +5,7 @@
 // Import types from reviewer
 import type { ReviewIssue } from '../reviewer';
 import type { PolicyConfig, StepPolicyOverride } from '../policy/types';
+import type { SandboxConfig } from '../sandbox/types';
 
 // Export Issue type for backward compatibility
 export type Issue = ReviewIssue;
@@ -1448,7 +1449,7 @@ export interface VisorConfig {
   /** Workspace-level default sandbox name (all checks use this unless overridden) */
   sandbox?: string;
   /** Named sandbox environment definitions */
-  sandboxes?: Record<string, import('../sandbox/types').SandboxConfig>;
+  sandboxes?: Record<string, SandboxConfig>;
   /** Workspace-level sandbox defaults (env allowlist, etc.) */
   sandbox_defaults?: SandboxDefaults;
   /** Slack configuration */

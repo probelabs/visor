@@ -45,6 +45,10 @@ export interface WorkflowToolContext {
 export interface WorkflowToolReference {
   workflow: string;
   args?: Record<string, unknown>;
+  /** Optional name override. When set, the tool is registered under this name
+   *  instead of workflow.id. Used when ai_mcp_servers_js maps a server entry
+   *  name (e.g. "code-explorer") to a workflow with a different id. */
+  name?: string;
 }
 
 /**
@@ -122,7 +126,8 @@ export function workflowInputsToJsonSchema(
  */
 export function createWorkflowToolDefinition(
   workflow: WorkflowDefinition,
-  argsOverrides?: Record<string, unknown>
+  argsOverrides?: Record<string, unknown>,
+  nameOverride?: string
 ): WorkflowToolDefinition {
   const baseSchema = workflowInputsToJsonSchema(workflow.inputs);
 
@@ -153,7 +158,7 @@ export function createWorkflowToolDefinition(
   }
 
   return {
-    name: workflow.id,
+    name: nameOverride || workflow.id,
     description: workflow.description || `Execute the ${workflow.name} workflow`,
     inputSchema,
     // Workflow tools don't have an exec command - they're executed specially
@@ -276,7 +281,7 @@ export function resolveWorkflowToolFromItem(
       logger.warn(`[WorkflowToolExecutor] Workflow '${item.workflow}' not found in registry`);
       return undefined;
     }
-    return createWorkflowToolDefinition(workflow, item.args);
+    return createWorkflowToolDefinition(workflow, item.args, item.name);
   }
 
   return undefined;

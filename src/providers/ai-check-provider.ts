@@ -1028,14 +1028,10 @@ export class AICheckProvider extends CheckProvider {
           if (decision.capabilities.allowEdit === false) aiConfig.allowEdit = false;
           if (decision.capabilities.allowBash === false) aiConfig.allowBash = false;
           if (decision.capabilities.allowedTools) {
-            if (aiConfig.allowedTools) {
-              // Intersect: policy can only restrict, not expand
-              aiConfig.allowedTools = aiConfig.allowedTools.filter((t: string) =>
-                decision.capabilities!.allowedTools!.includes(t)
-              );
-            } else {
-              aiConfig.allowedTools = decision.capabilities.allowedTools;
-            }
+            aiConfig.allowedTools = AICheckProvider.intersectAllowedTools(
+              aiConfig.allowedTools,
+              decision.capabilities.allowedTools
+            );
           }
         }
       } catch (err) {
@@ -1193,10 +1189,12 @@ export class AICheckProvider extends CheckProvider {
       const cfg = serverConfig as unknown as Record<string, unknown>;
 
       if (cfg.workflow && typeof cfg.workflow === 'string') {
-        // Workflow tool entry
+        // Workflow tool entry — use serverName as the tool name override so that
+        // allowedTools (which uses server entry names) matches the registered tool.
         workflowEntriesFromMcp.push({
           workflow: cfg.workflow as string,
           args: cfg.inputs as Record<string, unknown> | undefined,
+          name: serverName,
         });
         mcpEntriesToRemove.push(serverName);
         logger.debug(
@@ -2225,6 +2223,23 @@ export class AICheckProvider extends CheckProvider {
     }
 
     return tools;
+  }
+
+  /**
+   * Intersect config-level allowedTools with policy-level allowedTools.
+   * When the config list contains glob patterns ("*", "!" exclusions),
+   * it is passed through unchanged — ProbeAgent resolves those patterns.
+   * Literal tool name lists are intersected normally.
+   */
+  static intersectAllowedTools(configTools: string[] | undefined, policyTools: string[]): string[] {
+    if (!configTools) {
+      return policyTools;
+    }
+    const hasGlobs = configTools.some((t: string) => t === '*' || t.startsWith('!'));
+    if (hasGlobs) {
+      return configTools;
+    }
+    return configTools.filter((t: string) => policyTools.includes(t));
   }
 
   getSupportedConfigKeys(): string[] {
