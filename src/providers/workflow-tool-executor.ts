@@ -45,6 +45,10 @@ export interface WorkflowToolContext {
 export interface WorkflowToolReference {
   workflow: string;
   args?: Record<string, unknown>;
+  /** Optional name override. When set, the tool is registered under this name
+   *  instead of workflow.id. Used when ai_mcp_servers_js maps a server entry
+   *  name (e.g. "code-explorer") to a workflow with a different id. */
+  name?: string;
 }
 
 /**
@@ -122,7 +126,8 @@ export function workflowInputsToJsonSchema(
  */
 export function createWorkflowToolDefinition(
   workflow: WorkflowDefinition,
-  argsOverrides?: Record<string, unknown>
+  argsOverrides?: Record<string, unknown>,
+  nameOverride?: string
 ): WorkflowToolDefinition {
   const baseSchema = workflowInputsToJsonSchema(workflow.inputs);
 
@@ -153,7 +158,7 @@ export function createWorkflowToolDefinition(
   }
 
   return {
-    name: workflow.id,
+    name: nameOverride || workflow.id,
     description: workflow.description || `Execute the ${workflow.name} workflow`,
     inputSchema,
     // Workflow tools don't have an exec command - they're executed specially
@@ -238,6 +243,20 @@ export async function executeWorkflowAsTool(
   logger.debug(`[WorkflowToolExecutor] Workflow '${workflowId}' output preview: ${outputPreview}`);
 
   if (output !== undefined) {
+    // If the workflow output carries _rawOutput (from DSL execute_plan output()),
+    // extract it and wrap in <<<RAW_OUTPUT>>> delimiters so the calling ProbeAgent
+    // can extract it via extractRawOutputBlocks before the LLM sees the tool result.
+    // This ensures raw data passes through the full chain without any LLM touching it.
+    if (output && typeof output === 'object' && typeof (output as any)._rawOutput === 'string') {
+      const rawOutput = (output as any)._rawOutput;
+      const cleanOutput = { ...output };
+      delete (cleanOutput as any)._rawOutput;
+      const jsonStr = JSON.stringify(cleanOutput, null, 2);
+      logger.debug(
+        `[WorkflowToolExecutor] Wrapping _rawOutput (${rawOutput.length} chars) in RAW_OUTPUT delimiters for '${workflowId}'`
+      );
+      return jsonStr + '\n<<<RAW_OUTPUT>>>\n' + rawOutput + '\n<<<END_RAW_OUTPUT>>>';
+    }
     return output;
   }
 
@@ -276,7 +295,7 @@ export function resolveWorkflowToolFromItem(
       logger.warn(`[WorkflowToolExecutor] Workflow '${item.workflow}' not found in registry`);
       return undefined;
     }
-    return createWorkflowToolDefinition(workflow, item.args);
+    return createWorkflowToolDefinition(workflow, item.args, item.name);
   }
 
   return undefined;

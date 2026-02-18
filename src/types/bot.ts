@@ -2,6 +2,17 @@
 
 export type BotTransportType = 'slack' | string;
 
+/** Slack file attachment metadata */
+export interface SlackFileAttachment {
+  id: string;
+  name?: string;
+  mimetype?: string;
+  filetype?: string;
+  url_private?: string;
+  permalink?: string;
+  size?: number;
+}
+
 export interface NormalizedMessage {
   role: 'user' | 'bot';
   text: string;
@@ -9,6 +20,8 @@ export interface NormalizedMessage {
   origin?: string;
   /** Optional user identifier (e.g., Slack user id, GitHub login) */
   user?: string;
+  /** File attachments from Slack messages */
+  files?: SlackFileAttachment[];
 }
 
 export interface ConversationContext {

@@ -866,6 +866,27 @@ export class WorkflowCheckProvider extends CheckProvider {
       );
     }
 
+    // Propagate _rawOutput from any step — this carries DSL output() content
+    // that must bypass all LLM processing and reach the end user directly.
+    if (!(outputs as any)._rawOutput) {
+      const rawParts: string[] = [];
+      for (const stepOutput of Object.values(outputsMap)) {
+        if (
+          stepOutput &&
+          typeof stepOutput === 'object' &&
+          typeof (stepOutput as any)._rawOutput === 'string'
+        ) {
+          rawParts.push((stepOutput as any)._rawOutput);
+        }
+      }
+      if (rawParts.length > 0) {
+        (outputs as any)._rawOutput = rawParts.join('\n\n');
+        logger.debug(
+          `[WorkflowProvider] Propagated _rawOutput from steps (${rawParts.length} blocks, ${(outputs as any)._rawOutput.length} chars)`
+        );
+      }
+    }
+
     return outputs;
   }
 

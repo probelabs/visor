@@ -269,6 +269,95 @@ export function markdownToSlack(text: string): string {
   return out;
 }
 
+/**
+ * Represents an extracted file section delimited by --- filename.ext ---
+ */
+export interface FileSection {
+  /** Full match including delimiter(s) and content */
+  fullMatch: string;
+  /** Extracted filename (e.g., "report.csv") */
+  filename: string;
+  /** Content after the opening delimiter (trimmed) */
+  content: string;
+  /** Start index in the original text */
+  startIndex: number;
+  /** End index in the original text */
+  endIndex: number;
+}
+
+/**
+ * Extract all file sections delimited by --- filename.ext --- from text.
+ *
+ * A section starts at a `--- filename.ext ---` line. It ends at:
+ *   1. A closing delimiter with the same filename (optional, backward-compatible)
+ *   2. The next `--- other.ext ---` delimiter (starts a new section)
+ *   3. End of text
+ */
+export function extractFileSections(text: string): FileSection[] {
+  const sections: FileSection[] = [];
+
+  // Find all --- filename.ext --- delimiter lines
+  const delimRegex = /^--- ([\w][\w.\-]*\.\w+) ---$/gm;
+  const delimiters: { filename: string; start: number; end: number }[] = [];
+  let m;
+  while ((m = delimRegex.exec(text)) !== null) {
+    delimiters.push({
+      filename: m[1],
+      start: m.index,
+      end: m.index + m[0].length,
+    });
+  }
+
+  if (delimiters.length === 0) return sections;
+
+  for (let i = 0; i < delimiters.length; i++) {
+    const open = delimiters[i];
+
+    // Content starts after the newline following the opening delimiter
+    const contentStart =
+      open.end < text.length && text[open.end] === '\n' ? open.end + 1 : open.end;
+
+    // Section extends to the next delimiter or end of text
+    const sectionEnd = i + 1 < delimiters.length ? delimiters[i + 1].start : text.length;
+    const content = text.substring(contentStart, sectionEnd).trim();
+    if (content.length > 0) {
+      sections.push({
+        fullMatch: text.substring(open.start, sectionEnd),
+        filename: open.filename,
+        content,
+        startIndex: open.start,
+        endIndex: sectionEnd,
+      });
+    }
+  }
+
+  return sections;
+}
+
+/**
+ * Replace file sections in text with placeholder messages.
+ * Uses back-to-front replacement to preserve indices (same as replaceMermaidBlocks).
+ */
+export function replaceFileSections(
+  text: string,
+  sections: FileSection[],
+  replacement: string | ((index: number) => string) = idx =>
+    `_(See file: ${sections[idx].filename} above)_`
+): string {
+  if (sections.length === 0) return text;
+
+  const sorted = [...sections].sort((a, b) => b.startIndex - a.startIndex);
+
+  let result = text;
+  sorted.forEach((section, sortedIndex) => {
+    const originalIndex = sections.length - 1 - sortedIndex;
+    const rep = typeof replacement === 'function' ? replacement(originalIndex) : replacement;
+    result = result.slice(0, section.startIndex) + rep + result.slice(section.endIndex);
+  });
+
+  return result;
+}
+
 export function formatSlackText(text: string): string {
   return markdownToSlack(text);
 }

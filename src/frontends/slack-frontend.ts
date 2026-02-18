@@ -26,6 +26,8 @@ import {
   extractMermaidDiagrams,
   renderMermaidToPng,
   replaceMermaidBlocks,
+  extractFileSections,
+  replaceFileSections,
 } from '../slack/markdown';
 import { context as otContext, trace } from '../telemetry/lazy-otel';
 
@@ -527,6 +529,11 @@ export class SlackFrontend implements Frontend {
           text = String(out);
         }
       }
+      // Append raw output from DSL execute_plan (bypasses LLM rewriting chain)
+      if (out && typeof out._rawOutput === 'string' && out._rawOutput.trim().length > 0) {
+        text = (text || '') + '\n\n' + out._rawOutput.trim();
+      }
+
       if (!text) {
         ctx.logger.info(
           `[slack-frontend] skip posting AI reply for ${checkId}: no renderable text in check output`
@@ -590,6 +597,47 @@ export class SlackFrontend implements Frontend {
             uploadedCount.includes(idx) ? '_(See diagram above)_' : '_(Diagram rendering failed)_'
           );
         }
+      }
+
+      // Normalize literal \n escape sequences from DSL output buffer before extraction.
+      // AI-generated DSL code often writes "\\n" producing literal backslash-n instead of
+      // actual newlines, which prevents the --- delimiter --- from matching on its own line.
+      processedText = processedText.replace(/\\n/g, '\n');
+
+      // Extract and upload file sections (--- filename.ext --- delimiters)
+      const fileSections = extractFileSections(processedText);
+      if (fileSections.length > 0) {
+        const uploadedFileIndices: number[] = [];
+        for (let i = 0; i < fileSections.length; i++) {
+          const section = fileSections[i];
+          try {
+            const buffer = Buffer.from(section.content, 'utf-8');
+            const uploadResult = await slack.files.uploadV2({
+              content: buffer,
+              filename: section.filename,
+              channel,
+              thread_ts: threadTs,
+              title: section.filename,
+            });
+            if (uploadResult.ok) {
+              uploadedFileIndices.push(i);
+              ctx.logger.info(`[slack-frontend] uploaded file ${section.filename} to ${channel}`);
+            } else {
+              ctx.logger.warn(`[slack-frontend] upload failed for file ${section.filename}`);
+            }
+          } catch (e) {
+            ctx.logger.warn(
+              `[slack-frontend] failed to upload file ${section.filename}: ${
+                e instanceof Error ? e.message : String(e)
+              }`
+            );
+          }
+        }
+        processedText = replaceFileSections(processedText, fileSections, idx =>
+          uploadedFileIndices.includes(idx)
+            ? `_(See file: ${fileSections[idx].filename} above)_`
+            : `_(File upload failed: ${fileSections[idx].filename})_`
+        );
       }
 
       let decoratedText = processedText;

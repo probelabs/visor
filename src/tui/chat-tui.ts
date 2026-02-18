@@ -101,6 +101,8 @@ export class ChatTUI {
   private pendingLogs: string[] = [];
   private running = false;
   private mouseEnabled = true; // Mouse enabled for scrolling, hold Shift to select text
+  private _renderScheduled = false;
+  private static readonly MAX_PENDING_LOGS = 5000;
 
   constructor(options: ChatTUIOptions = {}) {
     this.stateManager = options.stateManager ?? new ChatStateManager();
@@ -111,6 +113,19 @@ export class ChatTUI {
 
   getStateManager(): ChatStateManager {
     return this.stateManager;
+  }
+
+  /**
+   * Coalesce all render requests into at most one per 50ms to prevent
+   * the TUI from freezing under heavy output (AI streaming, MCP calls, etc.).
+   */
+  private _scheduleRender(): void {
+    if (this._renderScheduled || !this.screen) return;
+    this._renderScheduled = true;
+    setTimeout(() => {
+      this._renderScheduled = false;
+      this.screen?.render();
+    }, 50);
   }
 
   setTraceFile(path: string): void {
@@ -180,7 +195,7 @@ export class ChatTUI {
       onResize: (height: number) => {
         // Adjust chat box height: screen height - inputBar height - status bar (1)
         this.chatBox?.setHeight(`100%-${height + 1}`);
-        this.screen?.render();
+        this._scheduleRender();
       },
     });
 
@@ -282,7 +297,7 @@ export class ChatTUI {
     this.screen.on('resize', () => {
       this.updateLayout();
       this.updateStatusBar();
-      this.screen?.render();
+      this._scheduleRender();
     });
 
     // Re-focus input on any click within the main pane
@@ -387,7 +402,7 @@ export class ChatTUI {
       ? 'Mouse scroll ON (Shift+drag to select text)'
       : 'Mouse scroll OFF (use PgUp/PgDn to scroll)';
     this.setStatus(status);
-    this.screen?.render();
+    this._scheduleRender();
   }
 
   setProcessing(processing: boolean): void {
@@ -407,7 +422,7 @@ export class ChatTUI {
       this.inputBar?.enable();
       this.inputBar?.focus();
     }
-    this.screen?.render();
+    this._scheduleRender();
   }
 
   setWaiting(waiting: boolean, prompt?: string): void {
@@ -425,13 +440,13 @@ export class ChatTUI {
       this.statusBar?.setMode('ready');
       this.inputBar?.setPlaceholder('Type a message...');
     }
-    this.screen?.render();
+    this._scheduleRender();
   }
 
   setStatus(text: string): void {
     this.stateManager.setStatus(text);
     this.statusBar?.setStatus(text);
-    this.screen?.render();
+    this._scheduleRender();
   }
 
   setAbortHandler(handler?: () => void): void {
@@ -441,28 +456,28 @@ export class ChatTUI {
   addUserMessage(content: string): ChatMessage {
     const message = this.stateManager.addMessage('user', content);
     this.chatBox?.appendMessage(message);
-    this.screen?.render();
+    this._scheduleRender();
     return message;
   }
 
   addAssistantMessage(content: string, checkId?: string): ChatMessage {
     const message = this.stateManager.addMessage('assistant', content, checkId);
     this.chatBox?.appendMessage(message);
-    this.screen?.render();
+    this._scheduleRender();
     return message;
   }
 
   addSystemMessage(content: string): ChatMessage {
     const message = this.stateManager.addMessage('system', content);
     this.chatBox?.appendMessage(message);
-    this.screen?.render();
+    this._scheduleRender();
     return message;
   }
 
   refreshChat(): void {
     const content = this.stateManager.formatHistoryForDisplay();
     this.chatBox?.setContent(content);
-    this.screen?.render();
+    this._scheduleRender();
   }
 
   appendLog(line: string): void {
@@ -470,6 +485,9 @@ export class ChatTUI {
     const lines = splitLines(stripAnsi(line));
     if (!this.logsBox) {
       this.pendingLogs.push(...lines);
+      if (this.pendingLogs.length > ChatTUI.MAX_PENDING_LOGS) {
+        this.pendingLogs = this.pendingLogs.slice(-ChatTUI.MAX_PENDING_LOGS);
+      }
       return;
     }
     // Buffer logs when not viewing the logs tab to avoid blessed's
@@ -477,13 +495,16 @@ export class ChatTUI {
     // corrupts the chat pane under heavy output.
     if (this.activeTab !== 'logs') {
       this.pendingLogs.push(...lines.filter(l => l.length > 0));
+      if (this.pendingLogs.length > ChatTUI.MAX_PENDING_LOGS) {
+        this.pendingLogs = this.pendingLogs.slice(-ChatTUI.MAX_PENDING_LOGS);
+      }
       return;
     }
     for (const item of lines) {
       if (item.length === 0) continue;
       this.logsBox.log(item);
     }
-    this.screen?.render();
+    this._scheduleRender();
   }
 
   captureConsole(): () => void {
@@ -713,7 +734,7 @@ export class ChatTUI {
         }
       }
 
-      this.screen?.render();
+      this._scheduleRender();
     });
   }
 
@@ -760,15 +781,18 @@ export class ChatTUI {
       this.logsPane.hide();
       this.tracesPane.hide();
 
-      // Show the active pane
+      // Show the active pane and manage input bar focus
       if (tab === 'chat') {
         this.mainPane.show();
-        this.inputBar?.focus();
+        this.inputBar?.resume();
       } else if (tab === 'logs') {
+        this.inputBar?.pause();
         this.logsPane.show();
         this._flushPendingLogs();
         this.logsBox?.focus();
+        this.screen?.program?.hideCursor();
       } else {
+        this.inputBar?.pause();
         this.tracesPane.show();
         this.traceViewer?.focus();
       }
@@ -781,10 +805,19 @@ export class ChatTUI {
 
   private _flushPendingLogs(): void {
     if (!this.logsBox || this.pendingLogs.length === 0) return;
+    // Use pushLine instead of log() to avoid N separate screen.render() callbacks.
+    // Then do a single scroll + render at the end.
     for (const line of this.pendingLogs) {
-      this.logsBox.log(line);
+      this.logsBox.pushLine(line);
     }
     this.pendingLogs = [];
+    // Trim old lines to prevent blessed widget from growing without bound
+    const maxLines = 10000;
+    while ((this.logsBox as any).getLines().length > maxLines) {
+      (this.logsBox as any).shiftLine(0);
+    }
+    (this.logsBox as any).setScrollPerc(100);
+    this._scheduleRender();
   }
 
   private updateLayout(): void {
@@ -802,6 +835,6 @@ export class ChatTUI {
 
     this.statusBar.setMode(mode);
     this.statusBar.setStatus(this.stateManager.statusText);
-    this.screen?.render();
+    this._scheduleRender();
   }
 }

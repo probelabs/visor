@@ -1028,14 +1028,10 @@ export class AICheckProvider extends CheckProvider {
           if (decision.capabilities.allowEdit === false) aiConfig.allowEdit = false;
           if (decision.capabilities.allowBash === false) aiConfig.allowBash = false;
           if (decision.capabilities.allowedTools) {
-            if (aiConfig.allowedTools) {
-              // Intersect: policy can only restrict, not expand
-              aiConfig.allowedTools = aiConfig.allowedTools.filter((t: string) =>
-                decision.capabilities!.allowedTools!.includes(t)
-              );
-            } else {
-              aiConfig.allowedTools = decision.capabilities.allowedTools;
-            }
+            aiConfig.allowedTools = AICheckProvider.intersectAllowedTools(
+              aiConfig.allowedTools,
+              decision.capabilities.allowedTools
+            );
           }
         }
       } catch (err) {
@@ -1193,10 +1189,12 @@ export class AICheckProvider extends CheckProvider {
       const cfg = serverConfig as unknown as Record<string, unknown>;
 
       if (cfg.workflow && typeof cfg.workflow === 'string') {
-        // Workflow tool entry
+        // Workflow tool entry — use serverName as the tool name override so that
+        // allowedTools (which uses server entry names) matches the registered tool.
         workflowEntriesFromMcp.push({
           workflow: cfg.workflow as string,
           args: cfg.inputs as Record<string, unknown> | undefined,
+          name: serverName,
         });
         mcpEntriesToRemove.push(serverName);
         logger.debug(
@@ -1386,6 +1384,29 @@ export class AICheckProvider extends CheckProvider {
       } catch (error) {
         logger.error(
           `[AICheckProvider] Failed to evaluate ai_bash_config_js: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+      }
+    }
+
+    // Evaluate ai_allowed_tools_js for dynamic tool filtering
+    const allowedToolsJsExpr = (config as any).ai_allowed_tools_js as string | undefined;
+    if (allowedToolsJsExpr && _dependencyResults) {
+      try {
+        const dynamicAllowedTools = this.evaluateAllowedToolsJs(
+          allowedToolsJsExpr,
+          prInfo,
+          _dependencyResults,
+          config
+        );
+        if (dynamicAllowedTools !== null) {
+          aiConfig.allowedTools = dynamicAllowedTools;
+          this.logDebug(
+            `[AI Provider] ai_allowed_tools_js evaluated to: ${JSON.stringify(dynamicAllowedTools)}`
+          );
+        }
+      } catch (error) {
+        logger.error(
+          `[AICheckProvider] Failed to evaluate ai_allowed_tools_js: ${error instanceof Error ? error.message : 'Unknown error'}`
         );
       }
     }
@@ -2051,6 +2072,77 @@ export class AICheckProvider extends CheckProvider {
   }
 
   /**
+   * Evaluate ai_allowed_tools_js expression to dynamically compute allowed tools list.
+   * Returns a string array of tool names, or null if the expression returns a non-array.
+   */
+  private evaluateAllowedToolsJs(
+    expression: string,
+    prInfo: PRInfo,
+    dependencyResults: Map<string, ReviewSummary>,
+    config: CheckProviderConfig
+  ): string[] | null {
+    if (!this.sandbox) {
+      this.sandbox = createSecureSandbox();
+    }
+
+    const outputs: Record<string, unknown> = {};
+    for (const [checkId, result] of dependencyResults.entries()) {
+      const summary = result as ReviewSummary & { output?: unknown };
+      outputs[checkId] = summary.output !== undefined ? summary.output : summary;
+    }
+
+    const jsContext: Record<string, unknown> = {
+      outputs,
+      inputs: (config as any).inputs || {},
+      pr: {
+        number: prInfo.number,
+        title: prInfo.title,
+        description: prInfo.body,
+        author: prInfo.author,
+        branch: prInfo.head,
+        base: prInfo.base,
+        authorAssociation: prInfo.authorAssociation,
+      },
+      files:
+        prInfo.files?.map(f => ({
+          filename: f.filename,
+          status: f.status,
+          additions: f.additions,
+          deletions: f.deletions,
+          changes: f.changes,
+        })) || [],
+      env: this.buildSafeEnv(),
+      memory: (config as any).__memoryAccessor || {},
+    };
+
+    try {
+      const result = compileAndRun<unknown>(this.sandbox, expression, jsContext, {
+        injectLog: true,
+        wrapFunction: true,
+        logPrefix: '[ai_allowed_tools_js]',
+      });
+
+      if (!Array.isArray(result)) {
+        logger.warn(
+          `[AICheckProvider] ai_allowed_tools_js must return an array, got ${typeof result}`
+        );
+        return null;
+      }
+
+      const tools = result.filter((item: unknown) => typeof item === 'string') as string[];
+      logger.debug(
+        `[AICheckProvider] ai_allowed_tools_js evaluated to ${tools.length} tools: ${tools.join(', ')}`
+      );
+      return tools;
+    } catch (error) {
+      logger.error(
+        `[AICheckProvider] Failed to evaluate ai_allowed_tools_js: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+      return null;
+    }
+  }
+
+  /**
    * Build a safe subset of environment variables for sandbox access.
    * Excludes sensitive keys like API keys, secrets, tokens.
    */
@@ -2133,6 +2225,23 @@ export class AICheckProvider extends CheckProvider {
     return tools;
   }
 
+  /**
+   * Intersect config-level allowedTools with policy-level allowedTools.
+   * When the config list contains glob patterns ("*", "!" exclusions),
+   * it is passed through unchanged — ProbeAgent resolves those patterns.
+   * Literal tool name lists are intersected normally.
+   */
+  static intersectAllowedTools(configTools: string[] | undefined, policyTools: string[]): string[] {
+    if (!configTools) {
+      return policyTools;
+    }
+    const hasGlobs = configTools.some((t: string) => t === '*' || t.startsWith('!'));
+    if (hasGlobs) {
+      return configTools;
+    }
+    return configTools.filter((t: string) => policyTools.includes(t));
+  }
+
   getSupportedConfigKeys(): string[] {
     return [
       'type',
@@ -2170,6 +2279,7 @@ export class AICheckProvider extends CheckProvider {
       'ai_custom_tools',
       'ai_custom_tools_js',
       'ai_bash_config_js',
+      'ai_allowed_tools_js',
       'env',
     ];
   }
