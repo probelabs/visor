@@ -63,6 +63,45 @@ interface ReviewSummary {
     sessionId?: string;
 }
 
+interface PolicyConfig {
+    /** Policy engine mode */
+    engine: 'local' | 'remote' | 'disabled';
+    /** Path to .rego files or .wasm bundle (local mode) */
+    rules?: string | string[];
+    /** Path to a JSON file to load as OPA data document */
+    data?: string;
+    /** OPA server URL (remote mode) */
+    url?: string;
+    /** Default decision when policy evaluation fails */
+    fallback?: 'allow' | 'deny' | 'warn';
+    /** Evaluation timeout in ms (default: 5000) */
+    timeout?: number;
+    /** Role definitions: map role names to conditions */
+    roles?: Record<string, PolicyRoleConfig>;
+}
+interface PolicyRoleConfig {
+    /** GitHub author associations that map to this role */
+    author_association?: string[];
+    /** GitHub team slugs (requires GitHub API) */
+    teams?: string[];
+    /** Explicit GitHub usernames */
+    users?: string[];
+    /** Slack user IDs (e.g., ["U0123ABC"]) */
+    slack_users?: string[];
+    /** Email addresses for identity matching (e.g., ["alice@co.com"]) */
+    emails?: string[];
+    /** Slack channel IDs — role only applies when triggered from these channels */
+    slack_channels?: string[];
+}
+interface StepPolicyOverride {
+    /** Required role(s) - any of these roles suffices */
+    require?: string | string[];
+    /** Explicit deny for roles */
+    deny?: string[];
+    /** Custom OPA rule path for this step */
+    rule?: string;
+}
+
 /**
  * Types for Docker-based sandbox execution environments
  */
@@ -121,44 +160,9 @@ interface SandboxConfig {
     cache?: SandboxCacheConfig;
 }
 
-interface PolicyConfig {
-    /** Policy engine mode */
-    engine: 'local' | 'remote' | 'disabled';
-    /** Path to .rego files or .wasm bundle (local mode) */
-    rules?: string | string[];
-    /** Path to a JSON file to load as OPA data document */
-    data?: string;
-    /** OPA server URL (remote mode) */
-    url?: string;
-    /** Default decision when policy evaluation fails */
-    fallback?: 'allow' | 'deny' | 'warn';
-    /** Evaluation timeout in ms (default: 5000) */
-    timeout?: number;
-    /** Role definitions: map role names to conditions */
-    roles?: Record<string, PolicyRoleConfig>;
-}
-interface PolicyRoleConfig {
-    /** GitHub author associations that map to this role */
-    author_association?: string[];
-    /** GitHub team slugs (requires GitHub API) */
-    teams?: string[];
-    /** Explicit GitHub usernames */
-    users?: string[];
-    /** Slack user IDs (e.g., ["U0123ABC"]) */
-    slack_users?: string[];
-    /** Email addresses for identity matching (e.g., ["alice@co.com"]) */
-    emails?: string[];
-    /** Slack channel IDs — role only applies when triggered from these channels */
-    slack_channels?: string[];
-}
-interface StepPolicyOverride {
-    /** Required role(s) - any of these roles suffices */
-    require?: string | string[];
-    /** Explicit deny for roles */
-    deny?: string[];
-    /** Custom OPA rule path for this step */
-    rule?: string;
-}
+/**
+ * Types for Visor configuration system
+ */
 
 /**
  * Failure condition severity levels
@@ -1521,6 +1525,16 @@ declare class EventBus {
 
 /** Bot transport types (trimmed for Slack v1) */
 type BotTransportType = 'slack' | string;
+/** Slack file attachment metadata */
+interface SlackFileAttachment {
+    id: string;
+    name?: string;
+    mimetype?: string;
+    filetype?: string;
+    url_private?: string;
+    permalink?: string;
+    size?: number;
+}
 interface NormalizedMessage {
     role: 'user' | 'bot';
     text: string;
@@ -1528,6 +1542,8 @@ interface NormalizedMessage {
     origin?: string;
     /** Optional user identifier (e.g., Slack user id, GitHub login) */
     user?: string;
+    /** File attachments from Slack messages */
+    files?: SlackFileAttachment[];
 }
 interface ConversationContext {
     transport: BotTransportType;

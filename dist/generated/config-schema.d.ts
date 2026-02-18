@@ -100,6 +100,10 @@ export declare const configSchema: {
                     readonly type: "number";
                     readonly description: "Maximum number of checks to run in parallel (default: 3)";
                 };
+                readonly max_ai_concurrency: {
+                    readonly type: "number";
+                    readonly description: "Maximum total concurrent AI API calls across all checks (default: unlimited). When set, creates a shared concurrency limiter that gates every LLM request across all ProbeAgent instances in this run.";
+                };
                 readonly fail_fast: {
                     readonly type: "boolean";
                     readonly description: "Stop execution when any check fails (default: false)";
@@ -146,6 +150,18 @@ export declare const configSchema: {
                     readonly $ref: "#/definitions/WorkspaceConfig";
                     readonly description: "Workspace isolation configuration for sandboxed execution";
                 };
+                readonly sandbox: {
+                    readonly type: "string";
+                    readonly description: "Workspace-level default sandbox name (all checks use this unless overridden)";
+                };
+                readonly sandboxes: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2CSandboxConfig%3E";
+                    readonly description: "Named sandbox environment definitions";
+                };
+                readonly sandbox_defaults: {
+                    readonly $ref: "#/definitions/SandboxDefaults";
+                    readonly description: "Workspace-level sandbox defaults (env allowlist, etc.)";
+                };
                 readonly slack: {
                     readonly $ref: "#/definitions/SlackConfig";
                     readonly description: "Slack configuration";
@@ -156,7 +172,7 @@ export declare const configSchema: {
                 };
                 readonly policy: {
                     readonly $ref: "#/definitions/PolicyConfig";
-                    readonly description: "Enterprise policy engine configuration (EE feature)";
+                    readonly description: "Enterprise policy engine configuration";
                 };
             };
             readonly required: readonly ["version"];
@@ -459,7 +475,7 @@ export declare const configSchema: {
                 };
                 readonly ai_bash_config_js: {
                     readonly type: "string";
-                    readonly description: "JavaScript expression to dynamically compute bash configuration for this AI check. Expression has access to: outputs, inputs, pr, files, env, memory. Must return a BashConfig object with optional allow/deny string arrays.\n\nExample: ``` return outputs['build-config']?.bash_config ?? {}; ```";
+                    readonly description: "JavaScript expression to dynamically compute bash configuration for this AI check. Expression has access to: outputs, inputs, pr, files, env, memory Must return a BashConfig object with allow/deny arrays.\n\nExample: ``` return outputs['build-config']?.bash_config ?? {}; ```";
                 };
                 readonly claude_code: {
                     readonly $ref: "#/definitions/ClaudeCodeConfig";
@@ -710,7 +726,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -726,7 +742,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -792,6 +808,10 @@ export declare const configSchema: {
                 readonly persist_worktree: {
                     readonly type: "boolean";
                     readonly description: "Keep worktree after workflow completion (default: false)";
+                };
+                readonly sandbox: {
+                    readonly type: "string";
+                    readonly description: "Sandbox name to use for this check (overrides workspace-level default)";
                 };
                 readonly policy: {
                     readonly $ref: "#/definitions/StepPolicyOverride";
@@ -912,6 +932,14 @@ export declare const configSchema: {
                 readonly completion_prompt: {
                     readonly type: "string";
                     readonly description: "Completion prompt for post-completion validation/review (runs after attempt_completion)";
+                };
+                readonly enable_scheduler: {
+                    readonly type: "boolean";
+                    readonly description: "Enable the schedule tool for scheduling workflow executions (requires scheduler configuration)";
+                };
+                readonly enableExecutePlan: {
+                    readonly type: "boolean";
+                    readonly description: "Enable the execute_plan DSL orchestration tool (replaces analyze_all when enabled)";
                 };
             };
             readonly additionalProperties: false;
@@ -1366,7 +1394,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1381,13 +1409,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407>': {
+        readonly 'Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };
@@ -1501,9 +1529,9 @@ export declare const configSchema: {
                 readonly run: {
                     readonly type: "array";
                     readonly items: {
-                        readonly type: "string";
+                        readonly $ref: "#/definitions/OnSuccessRunItem";
                     };
-                    readonly description: "Post-success steps to run";
+                    readonly description: "Post-success steps to run - can be step names or rich invocations with arguments";
                 };
                 readonly goto: {
                     readonly type: "string";
@@ -1534,6 +1562,16 @@ export declare const configSchema: {
             readonly patternProperties: {
                 readonly '^x-': {};
             };
+        };
+        readonly OnSuccessRunItem: {
+            readonly anyOf: readonly [{
+                readonly type: "string";
+            }, {
+                readonly $ref: "#/definitions/OnInitStepInvocation";
+            }, {
+                readonly $ref: "#/definitions/OnInitWorkflowInvocation";
+            }];
+            readonly description: "Success routing run item - can be step name, step with args, or workflow with args";
         };
         readonly OnFinishConfig: {
             readonly type: "object";
@@ -1571,6 +1609,37 @@ export declare const configSchema: {
             };
             readonly additionalProperties: false;
             readonly description: "Finish routing configuration for forEach checks Runs once after ALL iterations of forEach and ALL dependent checks complete";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly StepPolicyOverride: {
+            readonly type: "object";
+            readonly properties: {
+                readonly require: {
+                    readonly anyOf: readonly [{
+                        readonly type: "string";
+                    }, {
+                        readonly type: "array";
+                        readonly items: {
+                            readonly type: "string";
+                        };
+                    }];
+                    readonly description: "Required role(s) - any of these roles suffices";
+                };
+                readonly deny: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Explicit deny for roles";
+                };
+                readonly rule: {
+                    readonly type: "string";
+                    readonly description: "Custom OPA rule path for this step";
+                };
+            };
+            readonly additionalProperties: false;
             readonly patternProperties: {
                 readonly '^x-': {};
             };
@@ -1975,6 +2044,141 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
+        readonly 'Record<string,SandboxConfig>': {
+            readonly type: "object";
+            readonly additionalProperties: {
+                readonly $ref: "#/definitions/SandboxConfig";
+            };
+        };
+        readonly SandboxConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly image: {
+                    readonly type: "string";
+                    readonly description: "Docker image to use (e.g., \"node:20-alpine\")";
+                };
+                readonly dockerfile: {
+                    readonly type: "string";
+                    readonly description: "Path to Dockerfile (relative to config file or absolute)";
+                };
+                readonly dockerfile_inline: {
+                    readonly type: "string";
+                    readonly description: "Inline Dockerfile content";
+                };
+                readonly compose: {
+                    readonly type: "string";
+                    readonly description: "Path to docker-compose file";
+                };
+                readonly service: {
+                    readonly type: "string";
+                    readonly description: "Service name within the compose file";
+                };
+                readonly workdir: {
+                    readonly type: "string";
+                    readonly description: "Working directory inside container (default: /workspace)";
+                };
+                readonly env_passthrough: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Glob patterns for host env vars to forward into sandbox";
+                };
+                readonly network: {
+                    readonly type: "boolean";
+                    readonly description: "Enable/disable network access (default: true)";
+                };
+                readonly read_only: {
+                    readonly type: "boolean";
+                    readonly description: "Mount repo as read-only (default: false)";
+                };
+                readonly resources: {
+                    readonly $ref: "#/definitions/SandboxResourceConfig";
+                    readonly description: "Resource limits";
+                };
+                readonly visor_path: {
+                    readonly type: "string";
+                    readonly description: "Where visor is mounted inside container (default: /opt/visor)";
+                };
+                readonly cache: {
+                    readonly $ref: "#/definitions/SandboxCacheConfig";
+                    readonly description: "Cache volume configuration";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Configuration for a single sandbox environment";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly SandboxResourceConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly memory: {
+                    readonly type: "string";
+                    readonly description: "Memory limit (e.g., \"512m\", \"2g\")";
+                };
+                readonly cpu: {
+                    readonly type: "number";
+                    readonly description: "CPU limit (e.g., 1.0, 0.5)";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Resource limits for sandbox containers";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly SandboxCacheConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly prefix: {
+                    readonly type: "string";
+                    readonly description: "Liquid template for cache scope prefix (default: git branch)";
+                };
+                readonly fallback_prefix: {
+                    readonly type: "string";
+                    readonly description: "Fallback prefix when current prefix has no cache";
+                };
+                readonly paths: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Paths inside the container to cache";
+                };
+                readonly ttl: {
+                    readonly type: "string";
+                    readonly description: "Time-to-live for cache volumes (e.g., \"7d\", \"24h\")";
+                };
+                readonly max_scopes: {
+                    readonly type: "number";
+                    readonly description: "Maximum number of cache scopes to keep";
+                };
+            };
+            readonly required: readonly ["paths"];
+            readonly additionalProperties: false;
+            readonly description: "Cache configuration for sandbox volumes";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly SandboxDefaults: {
+            readonly type: "object";
+            readonly properties: {
+                readonly env_passthrough: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Base env var patterns for all sandboxes (replaces hardcoded defaults when set)";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
         readonly SlackConfig: {
             readonly type: "object";
             readonly properties: {
@@ -2034,7 +2238,16 @@ export declare const configSchema: {
                     readonly properties: {
                         readonly path: {
                             readonly type: "string";
-                            readonly description: "Path to schedules JSON file (default: .visor/schedules.json)";
+                            readonly description: "Path to schedules JSON file (legacy, triggers auto-migration)";
+                        };
+                        readonly driver: {
+                            readonly type: "string";
+                            readonly enum: readonly ["sqlite", "postgresql", "mysql", "mssql"];
+                            readonly description: "Database driver (default: 'sqlite')";
+                        };
+                        readonly connection: {
+                            readonly $ref: "#/definitions/SchedulerStorageConnectionConfig";
+                            readonly description: "Database connection configuration";
                         };
                     };
                     readonly additionalProperties: false;
@@ -2042,6 +2255,10 @@ export declare const configSchema: {
                     readonly patternProperties: {
                         readonly '^x-': {};
                     };
+                };
+                readonly ha: {
+                    readonly $ref: "#/definitions/SchedulerHAConfig";
+                    readonly description: "High-availability configuration for multi-node deployments";
                 };
                 readonly limits: {
                     readonly $ref: "#/definitions/SchedulerLimitsConfig";
@@ -2070,51 +2287,120 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly PolicyConfig: {
+        readonly SchedulerStorageConnectionConfig: {
             readonly type: "object";
             readonly properties: {
-                readonly engine: {
+                readonly filename: {
                     readonly type: "string";
-                    readonly enum: readonly ["local", "remote", "disabled"];
-                    readonly description: "Policy engine mode: 'local' (WASM), 'remote' (HTTP OPA server), or 'disabled'";
+                    readonly description: "SQLite database file path (default: '.visor/schedules.db')";
                 };
-                readonly rules: {
-                    readonly anyOf: readonly [{
-                        readonly type: "string";
-                    }, {
-                        readonly type: "array";
-                        readonly items: {
-                            readonly type: "string";
-                        };
-                    }];
-                    readonly description: "Path to .rego files or .wasm bundle (local mode)";
-                };
-                readonly data: {
+                readonly host: {
                     readonly type: "string";
-                    readonly description: "Path to a JSON file to load as OPA data document (local mode)";
+                    readonly description: "Database host (PostgreSQL/MySQL/MSSQL)";
                 };
-                readonly url: {
-                    readonly type: "string";
-                    readonly description: "OPA server URL (remote mode)";
-                };
-                readonly fallback: {
-                    readonly type: "string";
-                    readonly enum: readonly ["allow", "deny", "warn"];
-                    readonly description: "Default decision when policy evaluation fails (default: 'deny'). Use 'warn' for audit mode: violations are logged but not enforced.";
-                };
-                readonly timeout: {
+                readonly port: {
                     readonly type: "number";
-                    readonly description: "Evaluation timeout in milliseconds (default: 5000)";
+                    readonly description: "Database port (PostgreSQL/MySQL/MSSQL)";
                 };
-                readonly roles: {
+                readonly database: {
+                    readonly type: "string";
+                    readonly description: "Database name (PostgreSQL/MySQL/MSSQL)";
+                };
+                readonly user: {
+                    readonly type: "string";
+                    readonly description: "Database user (PostgreSQL/MySQL/MSSQL)";
+                };
+                readonly password: {
+                    readonly type: "string";
+                    readonly description: "Database password (PostgreSQL/MySQL/MSSQL)";
+                };
+                readonly ssl: {
+                    readonly anyOf: readonly [{
+                        readonly type: "boolean";
+                    }, {
+                        readonly $ref: "#/definitions/SchedulerSslConfig";
+                    }];
+                    readonly description: "SSL/TLS configuration (PostgreSQL/MySQL/MSSQL)";
+                };
+                readonly connection_string: {
+                    readonly type: "string";
+                    readonly description: "Connection string URL (e.g., postgresql://user:pass@host/db)";
+                };
+                readonly pool: {
                     readonly type: "object";
-                    readonly additionalProperties: {
-                        readonly $ref: "#/definitions/PolicyRoleConfig";
+                    readonly properties: {
+                        readonly min: {
+                            readonly type: "number";
+                        };
+                        readonly max: {
+                            readonly type: "number";
+                        };
                     };
-                    readonly description: "Role definitions: map role names to conditions";
+                    readonly additionalProperties: false;
+                    readonly description: "Connection pool configuration";
+                    readonly patternProperties: {
+                        readonly '^x-': {};
+                    };
                 };
             };
             readonly additionalProperties: false;
+            readonly description: "Scheduler storage connection configuration";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly SchedulerSslConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly enabled: {
+                    readonly type: "boolean";
+                    readonly description: "Enable SSL (default: true when SslConfig object is provided)";
+                };
+                readonly reject_unauthorized: {
+                    readonly type: "boolean";
+                    readonly description: "Reject unauthorized certificates (default: true)";
+                };
+                readonly ca: {
+                    readonly type: "string";
+                    readonly description: "Path to CA certificate PEM file";
+                };
+                readonly cert: {
+                    readonly type: "string";
+                    readonly description: "Path to client certificate PEM file";
+                };
+                readonly key: {
+                    readonly type: "string";
+                    readonly description: "Path to client key PEM file";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "SSL/TLS configuration for scheduler database connections";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly SchedulerHAConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly enabled: {
+                    readonly type: "boolean";
+                    readonly description: "Enable distributed locking for multi-node deployments (default: false)";
+                };
+                readonly node_id: {
+                    readonly type: "string";
+                    readonly description: "Unique node identifier (default: hostname-pid)";
+                };
+                readonly lock_ttl: {
+                    readonly type: "number";
+                    readonly description: "Lock time-to-live in seconds (default: 60)";
+                };
+                readonly heartbeat_interval: {
+                    readonly type: "number";
+                    readonly description: "Heartbeat interval for lock renewal in seconds (default: 15)";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Scheduler high-availability configuration";
             readonly patternProperties: {
                 readonly '^x-': {};
             };
@@ -2173,57 +2459,6 @@ export declare const configSchema: {
             };
             readonly additionalProperties: false;
             readonly description: "Scheduler permissions for dynamic schedule creation";
-            readonly patternProperties: {
-                readonly '^x-': {};
-            };
-        };
-        readonly PolicyRoleConfig: {
-            readonly type: "object";
-            readonly properties: {
-                readonly author_association: {
-                    readonly type: "array";
-                    readonly items: {
-                        readonly type: "string";
-                    };
-                    readonly description: "GitHub author associations that map to this role";
-                };
-                readonly teams: {
-                    readonly type: "array";
-                    readonly items: {
-                        readonly type: "string";
-                    };
-                    readonly description: "GitHub team slugs";
-                };
-                readonly users: {
-                    readonly type: "array";
-                    readonly items: {
-                        readonly type: "string";
-                    };
-                    readonly description: "Explicit GitHub usernames";
-                };
-                readonly slack_users: {
-                    readonly type: "array";
-                    readonly items: {
-                        readonly type: "string";
-                    };
-                    readonly description: "Slack user IDs (e.g., U0123ABC)";
-                };
-                readonly emails: {
-                    readonly type: "array";
-                    readonly items: {
-                        readonly type: "string";
-                    };
-                    readonly description: "Email addresses for identity matching";
-                };
-                readonly slack_channels: {
-                    readonly type: "array";
-                    readonly items: {
-                        readonly type: "string";
-                    };
-                    readonly description: "Slack channel IDs — role only applies when triggered from these channels";
-                };
-            };
-            readonly additionalProperties: false;
             readonly patternProperties: {
                 readonly '^x-': {};
             };
@@ -2293,10 +2528,15 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly StepPolicyOverride: {
+        readonly PolicyConfig: {
             readonly type: "object";
             readonly properties: {
-                readonly require: {
+                readonly engine: {
+                    readonly type: "string";
+                    readonly enum: readonly ["local", "remote", "disabled"];
+                    readonly description: "Policy engine mode";
+                };
+                readonly rules: {
                     readonly anyOf: readonly [{
                         readonly type: "string";
                     }, {
@@ -2305,18 +2545,86 @@ export declare const configSchema: {
                             readonly type: "string";
                         };
                     }];
-                    readonly description: "Required role(s) — any of these roles suffices";
+                    readonly description: "Path to .rego files or .wasm bundle (local mode)";
                 };
-                readonly deny: {
+                readonly data: {
+                    readonly type: "string";
+                    readonly description: "Path to a JSON file to load as OPA data document";
+                };
+                readonly url: {
+                    readonly type: "string";
+                    readonly description: "OPA server URL (remote mode)";
+                };
+                readonly fallback: {
+                    readonly type: "string";
+                    readonly enum: readonly ["allow", "deny", "warn"];
+                    readonly description: "Default decision when policy evaluation fails";
+                };
+                readonly timeout: {
+                    readonly type: "number";
+                    readonly description: "Evaluation timeout in ms (default: 5000)";
+                };
+                readonly roles: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPolicyRoleConfig%3E";
+                    readonly description: "Role definitions: map role names to conditions";
+                };
+            };
+            readonly required: readonly ["engine"];
+            readonly additionalProperties: false;
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly 'Record<string,PolicyRoleConfig>': {
+            readonly type: "object";
+            readonly additionalProperties: {
+                readonly $ref: "#/definitions/PolicyRoleConfig";
+            };
+        };
+        readonly PolicyRoleConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly author_association: {
                     readonly type: "array";
                     readonly items: {
                         readonly type: "string";
                     };
-                    readonly description: "Explicit deny for roles";
+                    readonly description: "GitHub author associations that map to this role";
                 };
-                readonly rule: {
-                    readonly type: "string";
-                    readonly description: "Custom OPA rule path for this step";
+                readonly teams: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "GitHub team slugs (requires GitHub API)";
+                };
+                readonly users: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Explicit GitHub usernames";
+                };
+                readonly slack_users: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Slack user IDs (e.g., [\"U0123ABC\"])";
+                };
+                readonly emails: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Email addresses for identity matching (e.g., [\"alice@co.com\"])";
+                };
+                readonly slack_channels: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Slack channel IDs — role only applies when triggered from these channels";
                 };
             };
             readonly additionalProperties: false;

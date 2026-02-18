@@ -748,7 +748,7 @@ var require_package = __commonJS({
         "@octokit/auth-app": "^8.1.0",
         "@octokit/core": "^7.0.3",
         "@octokit/rest": "^22.0.0",
-        "@probelabs/probe": "^0.6.0-rc233",
+        "@probelabs/probe": "^0.6.0-rc245",
         "@types/commander": "^2.12.0",
         "@types/uuid": "^10.0.0",
         ajv: "^8.17.1",
@@ -7739,7 +7739,7 @@ ${this.escapeXml(processedFallbackDiff)}
       <user>${this.escapeXml(String(m.user || ""))}</user>
       <text>${this.escapeXml(String(m.text || ""))}</text>
       <timestamp>${this.escapeXml(String(m.timestamp || ""))}</timestamp>
-      <origin>${this.escapeXml(String(m.origin || ""))}</origin>
+      <origin>${this.escapeXml(String(m.origin || ""))}</origin>${this.formatFilesXml(m.files)}
     </message>`;
             }
             xml += `
@@ -7751,13 +7751,32 @@ ${this.escapeXml(processedFallbackDiff)}
     <user>${this.escapeXml(String(current.user || ""))}</user>
     <text>${this.escapeXml(String(current.text || ""))}</text>
     <timestamp>${this.escapeXml(String(current.timestamp || ""))}</timestamp>
-    <origin>${this.escapeXml(String(current.origin || ""))}</origin>
+    <origin>${this.escapeXml(String(current.origin || ""))}</origin>${this.formatFilesXml(current.files)}
   </current>
 </slack_context>`;
           return xml;
         } catch {
           return "";
         }
+      }
+      /** Render file attachment metadata as XML fragment for a message. */
+      formatFilesXml(files) {
+        if (!Array.isArray(files) || files.length === 0) return "";
+        let xml = `
+      <files>`;
+        for (const f of files) {
+          xml += `
+        <file>
+          <name>${this.escapeXml(String(f.name || ""))}</name>
+          <mimetype>${this.escapeXml(String(f.mimetype || ""))}</mimetype>
+          <filetype>${this.escapeXml(String(f.filetype || ""))}</filetype>
+          <url>${this.escapeXml(String(f.url_private || f.permalink || ""))}</url>
+          <size>${f.size || 0}</size>
+        </file>`;
+        }
+        xml += `
+      </files>`;
+        return xml;
       }
       /**
        * Build a normalized ConversationContext for GitHub (PR/issue + comments)
@@ -8714,7 +8733,22 @@ ${"=".repeat(60)}
           log("\u{1F4CB} Full response preview:", response);
         }
         try {
-          let reviewData;
+          let reviewData = void 0;
+          const RAW_OUTPUT_RE = /\n<<<RAW_OUTPUT>>>\n([\s\S]*?)\n<<<END_RAW_OUTPUT>>>/g;
+          const rawOutputBlocks = [];
+          let responseForParsing = response;
+          {
+            let rawMatch;
+            while ((rawMatch = RAW_OUTPUT_RE.exec(response)) !== null) {
+              rawOutputBlocks.push(rawMatch[1]);
+            }
+            if (rawOutputBlocks.length > 0) {
+              responseForParsing = response.replace(RAW_OUTPUT_RE, "");
+              log(
+                `\u{1F4E6} Extracted ${rawOutputBlocks.length} RAW_OUTPUT blocks (${rawOutputBlocks.reduce((s, b) => s + b.length, 0)} chars) from response`
+              );
+            }
+          }
           if (_schema === "plain" || !_schema) {
             log(
               `\u{1F4CB} ${_schema === "plain" ? "Plain" : "No"} schema detected - treating raw response as text output`
@@ -8731,7 +8765,7 @@ ${"=".repeat(60)}
           }
           {
             log("\u{1F50D} Extracting JSON from AI response...");
-            const sanitizedResponse = response.replace(/^\uFEFF/, "").replace(/[\u200B-\u200D\uFEFF\u00A0]/g, "").replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").trim();
+            const sanitizedResponse = responseForParsing.replace(/^\uFEFF/, "").replace(/[\u200B-\u200D\uFEFF\u00A0]/g, "").replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").trim();
             try {
               reviewData = JSON.parse(sanitizedResponse);
               log("\u2705 Successfully parsed direct JSON response");
@@ -8739,22 +8773,48 @@ ${"=".repeat(60)}
             } catch (parseErr) {
               const errMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
               log(`\u{1F50D} Direct JSON parsing failed: ${errMsg}`);
-              if (response.toLowerCase().includes("i cannot") || response.toLowerCase().includes("unable to")) {
-                console.error("\u{1F6AB} AI refused to analyze - returning refusal as output");
-                const trimmed2 = response.trim();
+              let recovered = false;
+              const trailingMatch = errMsg.match(/after JSON at position (\d+)/);
+              if (trailingMatch) {
+                const pos = parseInt(trailingMatch[1], 10);
+                try {
+                  reviewData = JSON.parse(sanitizedResponse.substring(0, pos));
+                  const trailing = sanitizedResponse.substring(pos).trim();
+                  if (trailing && reviewData && typeof reviewData === "object" && typeof reviewData.text === "string") {
+                    reviewData.text = reviewData.text + "\n\n" + trailing;
+                    log(
+                      `\u2705 Recovered JSON and appended ${trailing.length} chars of trailing content to text field`
+                    );
+                  } else {
+                    log(`\u2705 Recovered JSON by trimming trailing content at position ${pos}`);
+                  }
+                  if (debugInfo) debugInfo.jsonParseSuccess = true;
+                  recovered = true;
+                } catch {
+                }
+              }
+              if (!recovered) {
+                if (response.toLowerCase().includes("i cannot") || response.toLowerCase().includes("unable to")) {
+                  console.error("\u{1F6AB} AI refused to analyze - returning refusal as output");
+                  const trimmed2 = responseForParsing.trim();
+                  const out = trimmed2 ? { text: trimmed2 } : {};
+                  if (rawOutputBlocks.length > 0) out._rawOutput = rawOutputBlocks.join("\n\n");
+                  return {
+                    issues: [],
+                    output: out,
+                    debug: debugInfo
+                  };
+                }
+                log("\u{1F527} Treating response as plain text (no JSON extraction)");
+                const trimmed = responseForParsing.trim();
+                const fallbackOut = { text: trimmed };
+                if (rawOutputBlocks.length > 0) fallbackOut._rawOutput = rawOutputBlocks.join("\n\n");
                 return {
                   issues: [],
-                  output: trimmed2 ? { text: trimmed2 } : {},
+                  output: fallbackOut,
                   debug: debugInfo
                 };
               }
-              log("\u{1F527} Treating response as plain text (no JSON extraction)");
-              const trimmed = response.trim();
-              return {
-                issues: [],
-                output: { text: trimmed },
-                debug: debugInfo
-              };
             }
           }
           const looksLikeTextOutput = reviewData && typeof reviewData === "object" && typeof reviewData.text === "string" && String(reviewData.text).trim().length > 0;
@@ -8801,6 +8861,9 @@ ${"=".repeat(60)}
               if (fallbackText) {
                 out.text = fallbackText;
               }
+            }
+            if (rawOutputBlocks.length > 0) {
+              out._rawOutput = rawOutputBlocks.join("\n\n");
             }
             const result2 = {
               // Keep issues empty for custom-schema rendering; consumers read from output.*
@@ -11115,6 +11178,10 @@ var init_config_schema = __esm({
               type: "number",
               description: "Maximum number of checks to run in parallel (default: 3)"
             },
+            max_ai_concurrency: {
+              type: "number",
+              description: "Maximum total concurrent AI API calls across all checks (default: unlimited). When set, creates a shared concurrency limiter that gates every LLM request across all ProbeAgent instances in this run."
+            },
             fail_fast: {
               type: "boolean",
               description: "Stop execution when any check fails (default: false)"
@@ -11161,6 +11228,18 @@ var init_config_schema = __esm({
               $ref: "#/definitions/WorkspaceConfig",
               description: "Workspace isolation configuration for sandboxed execution"
             },
+            sandbox: {
+              type: "string",
+              description: "Workspace-level default sandbox name (all checks use this unless overridden)"
+            },
+            sandboxes: {
+              $ref: "#/definitions/Record%3Cstring%2CSandboxConfig%3E",
+              description: "Named sandbox environment definitions"
+            },
+            sandbox_defaults: {
+              $ref: "#/definitions/SandboxDefaults",
+              description: "Workspace-level sandbox defaults (env allowlist, etc.)"
+            },
             slack: {
               $ref: "#/definitions/SlackConfig",
               description: "Slack configuration"
@@ -11171,7 +11250,7 @@ var init_config_schema = __esm({
             },
             policy: {
               $ref: "#/definitions/PolicyConfig",
-              description: "Enterprise policy engine configuration (EE feature)"
+              description: "Enterprise policy engine configuration"
             }
           },
           required: ["version"],
@@ -11474,7 +11553,7 @@ var init_config_schema = __esm({
             },
             ai_bash_config_js: {
               type: "string",
-              description: "JavaScript expression to dynamically compute bash configuration for this AI check. Expression has access to: outputs, inputs, pr, files, env, memory. Must return a BashConfig object with optional allow/deny string arrays.\n\nExample: ``` return outputs['build-config']?.bash_config ?? {}; ```"
+              description: "JavaScript expression to dynamically compute bash configuration for this AI check. Expression has access to: outputs, inputs, pr, files, env, memory Must return a BashConfig object with allow/deny arrays.\n\nExample: ``` return outputs['build-config']?.bash_config ?? {}; ```"
             },
             claude_code: {
               $ref: "#/definitions/ClaudeCodeConfig",
@@ -11740,7 +11819,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -11756,7 +11835,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -11825,6 +11904,10 @@ var init_config_schema = __esm({
             persist_worktree: {
               type: "boolean",
               description: "Keep worktree after workflow completion (default: false)"
+            },
+            sandbox: {
+              type: "string",
+              description: "Sandbox name to use for this check (overrides workspace-level default)"
             },
             policy: {
               $ref: "#/definitions/StepPolicyOverride",
@@ -11970,6 +12053,14 @@ var init_config_schema = __esm({
             completion_prompt: {
               type: "string",
               description: "Completion prompt for post-completion validation/review (runs after attempt_completion)"
+            },
+            enable_scheduler: {
+              type: "boolean",
+              description: "Enable the schedule tool for scheduling workflow executions (requires scheduler configuration)"
+            },
+            enableExecutePlan: {
+              type: "boolean",
+              description: "Enable the execute_plan DSL orchestration tool (replaces analyze_all when enabled)"
             }
           },
           additionalProperties: false,
@@ -12432,7 +12523,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -12447,13 +12538,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407>>": {
+        "Record<string,Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-12605-26099-src_types_config.ts-0-46407>": {
+        "Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381>": {
           type: "object",
           additionalProperties: false
         },
@@ -12567,9 +12658,9 @@ var init_config_schema = __esm({
             run: {
               type: "array",
               items: {
-                type: "string"
+                $ref: "#/definitions/OnSuccessRunItem"
               },
-              description: "Post-success steps to run"
+              description: "Post-success steps to run - can be step names or rich invocations with arguments"
             },
             goto: {
               type: "string",
@@ -12600,6 +12691,20 @@ var init_config_schema = __esm({
           patternProperties: {
             "^x-": {}
           }
+        },
+        OnSuccessRunItem: {
+          anyOf: [
+            {
+              type: "string"
+            },
+            {
+              $ref: "#/definitions/OnInitStepInvocation"
+            },
+            {
+              $ref: "#/definitions/OnInitWorkflowInvocation"
+            }
+          ],
+          description: "Success routing run item - can be step name, step with args, or workflow with args"
         },
         OnFinishConfig: {
           type: "object",
@@ -12637,6 +12742,40 @@ var init_config_schema = __esm({
           },
           additionalProperties: false,
           description: "Finish routing configuration for forEach checks Runs once after ALL iterations of forEach and ALL dependent checks complete",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        StepPolicyOverride: {
+          type: "object",
+          properties: {
+            require: {
+              anyOf: [
+                {
+                  type: "string"
+                },
+                {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                }
+              ],
+              description: "Required role(s) - any of these roles suffices"
+            },
+            deny: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Explicit deny for roles"
+            },
+            rule: {
+              type: "string",
+              description: "Custom OPA rule path for this step"
+            }
+          },
+          additionalProperties: false,
           patternProperties: {
             "^x-": {}
           }
@@ -13047,6 +13186,141 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
+        "Record<string,SandboxConfig>": {
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/SandboxConfig"
+          }
+        },
+        SandboxConfig: {
+          type: "object",
+          properties: {
+            image: {
+              type: "string",
+              description: 'Docker image to use (e.g., "node:20-alpine")'
+            },
+            dockerfile: {
+              type: "string",
+              description: "Path to Dockerfile (relative to config file or absolute)"
+            },
+            dockerfile_inline: {
+              type: "string",
+              description: "Inline Dockerfile content"
+            },
+            compose: {
+              type: "string",
+              description: "Path to docker-compose file"
+            },
+            service: {
+              type: "string",
+              description: "Service name within the compose file"
+            },
+            workdir: {
+              type: "string",
+              description: "Working directory inside container (default: /workspace)"
+            },
+            env_passthrough: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Glob patterns for host env vars to forward into sandbox"
+            },
+            network: {
+              type: "boolean",
+              description: "Enable/disable network access (default: true)"
+            },
+            read_only: {
+              type: "boolean",
+              description: "Mount repo as read-only (default: false)"
+            },
+            resources: {
+              $ref: "#/definitions/SandboxResourceConfig",
+              description: "Resource limits"
+            },
+            visor_path: {
+              type: "string",
+              description: "Where visor is mounted inside container (default: /opt/visor)"
+            },
+            cache: {
+              $ref: "#/definitions/SandboxCacheConfig",
+              description: "Cache volume configuration"
+            }
+          },
+          additionalProperties: false,
+          description: "Configuration for a single sandbox environment",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        SandboxResourceConfig: {
+          type: "object",
+          properties: {
+            memory: {
+              type: "string",
+              description: 'Memory limit (e.g., "512m", "2g")'
+            },
+            cpu: {
+              type: "number",
+              description: "CPU limit (e.g., 1.0, 0.5)"
+            }
+          },
+          additionalProperties: false,
+          description: "Resource limits for sandbox containers",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        SandboxCacheConfig: {
+          type: "object",
+          properties: {
+            prefix: {
+              type: "string",
+              description: "Liquid template for cache scope prefix (default: git branch)"
+            },
+            fallback_prefix: {
+              type: "string",
+              description: "Fallback prefix when current prefix has no cache"
+            },
+            paths: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Paths inside the container to cache"
+            },
+            ttl: {
+              type: "string",
+              description: 'Time-to-live for cache volumes (e.g., "7d", "24h")'
+            },
+            max_scopes: {
+              type: "number",
+              description: "Maximum number of cache scopes to keep"
+            }
+          },
+          required: ["paths"],
+          additionalProperties: false,
+          description: "Cache configuration for sandbox volumes",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        SandboxDefaults: {
+          type: "object",
+          properties: {
+            env_passthrough: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Base env var patterns for all sandboxes (replaces hardcoded defaults when set)"
+            }
+          },
+          additionalProperties: false,
+          patternProperties: {
+            "^x-": {}
+          }
+        },
         SlackConfig: {
           type: "object",
           properties: {
@@ -13106,7 +13380,16 @@ var init_config_schema = __esm({
               properties: {
                 path: {
                   type: "string",
-                  description: "Path to schedules JSON file (default: .visor/schedules.json)"
+                  description: "Path to schedules JSON file (legacy, triggers auto-migration)"
+                },
+                driver: {
+                  type: "string",
+                  enum: ["sqlite", "postgresql", "mysql", "mssql"],
+                  description: "Database driver (default: 'sqlite')"
+                },
+                connection: {
+                  $ref: "#/definitions/SchedulerStorageConnectionConfig",
+                  description: "Database connection configuration"
                 }
               },
               additionalProperties: false,
@@ -13114,6 +13397,10 @@ var init_config_schema = __esm({
               patternProperties: {
                 "^x-": {}
               }
+            },
+            ha: {
+              $ref: "#/definitions/SchedulerHAConfig",
+              description: "High-availability configuration for multi-node deployments"
             },
             limits: {
               $ref: "#/definitions/SchedulerLimitsConfig",
@@ -13142,44 +13429,123 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        PolicyConfig: {
+        SchedulerStorageConnectionConfig: {
           type: "object",
           properties: {
-            engine: {
+            filename: {
               type: "string",
-              enum: ["local", "remote", "disabled"],
-              description: "Policy engine mode: 'local' (WASM), 'remote' (HTTP OPA server), or 'disabled'"
+              description: "SQLite database file path (default: '.visor/schedules.db')"
             },
-            rules: {
-              anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
-              description: "Path to .rego files or .wasm bundle (local mode)"
-            },
-            data: {
+            host: {
               type: "string",
-              description: "Path to a JSON file to load as OPA data document (local mode)"
+              description: "Database host (PostgreSQL/MySQL/MSSQL)"
             },
-            url: {
-              type: "string",
-              description: "OPA server URL (remote mode)"
-            },
-            fallback: {
-              type: "string",
-              enum: ["allow", "deny", "warn"],
-              description: "Default decision when policy evaluation fails (default: 'deny'). Use 'warn' for audit mode: violations are logged but not enforced."
-            },
-            timeout: {
+            port: {
               type: "number",
-              description: "Evaluation timeout in milliseconds (default: 5000)"
+              description: "Database port (PostgreSQL/MySQL/MSSQL)"
             },
-            roles: {
+            database: {
+              type: "string",
+              description: "Database name (PostgreSQL/MySQL/MSSQL)"
+            },
+            user: {
+              type: "string",
+              description: "Database user (PostgreSQL/MySQL/MSSQL)"
+            },
+            password: {
+              type: "string",
+              description: "Database password (PostgreSQL/MySQL/MSSQL)"
+            },
+            ssl: {
+              anyOf: [
+                {
+                  type: "boolean"
+                },
+                {
+                  $ref: "#/definitions/SchedulerSslConfig"
+                }
+              ],
+              description: "SSL/TLS configuration (PostgreSQL/MySQL/MSSQL)"
+            },
+            connection_string: {
+              type: "string",
+              description: "Connection string URL (e.g., postgresql://user:pass@host/db)"
+            },
+            pool: {
               type: "object",
-              additionalProperties: {
-                $ref: "#/definitions/PolicyRoleConfig"
+              properties: {
+                min: {
+                  type: "number"
+                },
+                max: {
+                  type: "number"
+                }
               },
-              description: "Role definitions: map role names to conditions"
+              additionalProperties: false,
+              description: "Connection pool configuration",
+              patternProperties: {
+                "^x-": {}
+              }
             }
           },
           additionalProperties: false,
+          description: "Scheduler storage connection configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        SchedulerSslConfig: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+              description: "Enable SSL (default: true when SslConfig object is provided)"
+            },
+            reject_unauthorized: {
+              type: "boolean",
+              description: "Reject unauthorized certificates (default: true)"
+            },
+            ca: {
+              type: "string",
+              description: "Path to CA certificate PEM file"
+            },
+            cert: {
+              type: "string",
+              description: "Path to client certificate PEM file"
+            },
+            key: {
+              type: "string",
+              description: "Path to client key PEM file"
+            }
+          },
+          additionalProperties: false,
+          description: "SSL/TLS configuration for scheduler database connections",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        SchedulerHAConfig: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+              description: "Enable distributed locking for multi-node deployments (default: false)"
+            },
+            node_id: {
+              type: "string",
+              description: "Unique node identifier (default: hostname-pid)"
+            },
+            lock_ttl: {
+              type: "number",
+              description: "Lock time-to-live in seconds (default: 60)"
+            },
+            heartbeat_interval: {
+              type: "number",
+              description: "Heartbeat interval for lock renewal in seconds (default: 15)"
+            }
+          },
+          additionalProperties: false,
+          description: "Scheduler high-availability configuration",
           patternProperties: {
             "^x-": {}
           }
@@ -13238,45 +13604,6 @@ var init_config_schema = __esm({
           },
           additionalProperties: false,
           description: "Scheduler permissions for dynamic schedule creation",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        PolicyRoleConfig: {
-          type: "object",
-          properties: {
-            author_association: {
-              type: "array",
-              items: { type: "string" },
-              description: "GitHub author associations that map to this role"
-            },
-            teams: {
-              type: "array",
-              items: { type: "string" },
-              description: "GitHub team slugs"
-            },
-            users: {
-              type: "array",
-              items: { type: "string" },
-              description: "Explicit GitHub usernames"
-            },
-            slack_users: {
-              type: "array",
-              items: { type: "string" },
-              description: "Slack user IDs (e.g., U0123ABC)"
-            },
-            emails: {
-              type: "array",
-              items: { type: "string" },
-              description: "Email addresses for identity matching"
-            },
-            slack_channels: {
-              type: "array",
-              items: { type: "string" },
-              description: "Slack channel IDs \u2014 role only applies when triggered from these channels"
-            }
-          },
-          additionalProperties: false,
           patternProperties: {
             "^x-": {}
           }
@@ -13346,21 +13673,106 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        StepPolicyOverride: {
+        PolicyConfig: {
           type: "object",
           properties: {
-            require: {
-              anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
-              description: "Required role(s) \u2014 any of these roles suffices"
-            },
-            deny: {
-              type: "array",
-              items: { type: "string" },
-              description: "Explicit deny for roles"
-            },
-            rule: {
+            engine: {
               type: "string",
-              description: "Custom OPA rule path for this step"
+              enum: ["local", "remote", "disabled"],
+              description: "Policy engine mode"
+            },
+            rules: {
+              anyOf: [
+                {
+                  type: "string"
+                },
+                {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                }
+              ],
+              description: "Path to .rego files or .wasm bundle (local mode)"
+            },
+            data: {
+              type: "string",
+              description: "Path to a JSON file to load as OPA data document"
+            },
+            url: {
+              type: "string",
+              description: "OPA server URL (remote mode)"
+            },
+            fallback: {
+              type: "string",
+              enum: ["allow", "deny", "warn"],
+              description: "Default decision when policy evaluation fails"
+            },
+            timeout: {
+              type: "number",
+              description: "Evaluation timeout in ms (default: 5000)"
+            },
+            roles: {
+              $ref: "#/definitions/Record%3Cstring%2CPolicyRoleConfig%3E",
+              description: "Role definitions: map role names to conditions"
+            }
+          },
+          required: ["engine"],
+          additionalProperties: false,
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        "Record<string,PolicyRoleConfig>": {
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/PolicyRoleConfig"
+          }
+        },
+        PolicyRoleConfig: {
+          type: "object",
+          properties: {
+            author_association: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "GitHub author associations that map to this role"
+            },
+            teams: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "GitHub team slugs (requires GitHub API)"
+            },
+            users: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Explicit GitHub usernames"
+            },
+            slack_users: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: 'Slack user IDs (e.g., ["U0123ABC"])'
+            },
+            emails: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: 'Email addresses for identity matching (e.g., ["alice@co.com"])'
+            },
+            slack_channels: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Slack channel IDs \u2014 role only applies when triggered from these channels"
             }
           },
           additionalProperties: false,
@@ -15520,6 +15932,20 @@ var init_workflow_check_provider = __esm({
             `[WorkflowProvider] Workflow '${workflow.id}' has null/undefined outputs: [${nullOutputs.join(", ")}]. This may indicate value_js expressions are not finding expected data.`
           );
         }
+        if (!outputs._rawOutput) {
+          const rawParts = [];
+          for (const stepOutput of Object.values(outputsMap)) {
+            if (stepOutput && typeof stepOutput === "object" && typeof stepOutput._rawOutput === "string") {
+              rawParts.push(stepOutput._rawOutput);
+            }
+          }
+          if (rawParts.length > 0) {
+            outputs._rawOutput = rawParts.join("\n\n");
+            logger.debug(
+              `[WorkflowProvider] Propagated _rawOutput from steps (${rawParts.length} blocks, ${outputs._rawOutput.length} chars)`
+            );
+          }
+        }
         return outputs;
       }
       /**
@@ -15692,7 +16118,7 @@ function workflowInputsToJsonSchema(inputs) {
     required: required.length > 0 ? required : void 0
   };
 }
-function createWorkflowToolDefinition(workflow, argsOverrides) {
+function createWorkflowToolDefinition(workflow, argsOverrides, nameOverride) {
   const baseSchema = workflowInputsToJsonSchema(workflow.inputs);
   let inputSchema = baseSchema;
   if (argsOverrides && baseSchema && typeof baseSchema === "object") {
@@ -15710,7 +16136,7 @@ function createWorkflowToolDefinition(workflow, argsOverrides) {
     };
   }
   return {
-    name: workflow.id,
+    name: nameOverride || workflow.id,
     description: workflow.description || `Execute the ${workflow.name} workflow`,
     inputSchema,
     // Workflow tools don't have an exec command - they're executed specially
@@ -15760,6 +16186,16 @@ async function executeWorkflowAsTool(workflowId, args, context2, argsOverrides) 
   );
   logger.debug(`[WorkflowToolExecutor] Workflow '${workflowId}' output preview: ${outputPreview}`);
   if (output !== void 0) {
+    if (output && typeof output === "object" && typeof output._rawOutput === "string") {
+      const rawOutput = output._rawOutput;
+      const cleanOutput = { ...output };
+      delete cleanOutput._rawOutput;
+      const jsonStr = JSON.stringify(cleanOutput, null, 2);
+      logger.debug(
+        `[WorkflowToolExecutor] Wrapping _rawOutput (${rawOutput.length} chars) in RAW_OUTPUT delimiters for '${workflowId}'`
+      );
+      return jsonStr + "\n<<<RAW_OUTPUT>>>\n" + rawOutput + "\n<<<END_RAW_OUTPUT>>>";
+    }
     return output;
   }
   if (result.content) {
@@ -15784,7 +16220,7 @@ function resolveWorkflowToolFromItem(item) {
       logger.warn(`[WorkflowToolExecutor] Workflow '${item.workflow}' not found in registry`);
       return void 0;
     }
-    return createWorkflowToolDefinition(workflow, item.args);
+    return createWorkflowToolDefinition(workflow, item.args, item.name);
   }
   return void 0;
 }
@@ -18165,7 +18601,7 @@ var init_ai_check_provider = __esm({
     init_sandbox();
     init_schedule_tool();
     init_schedule_tool_handler();
-    AICheckProvider = class extends CheckProvider {
+    AICheckProvider = class _AICheckProvider extends CheckProvider {
       aiReviewService;
       liquidEngine;
       sandbox = null;
@@ -18895,13 +19331,10 @@ ${preview}`);
               if (decision.capabilities.allowEdit === false) aiConfig.allowEdit = false;
               if (decision.capabilities.allowBash === false) aiConfig.allowBash = false;
               if (decision.capabilities.allowedTools) {
-                if (aiConfig.allowedTools) {
-                  aiConfig.allowedTools = aiConfig.allowedTools.filter(
-                    (t) => decision.capabilities.allowedTools.includes(t)
-                  );
-                } else {
-                  aiConfig.allowedTools = decision.capabilities.allowedTools;
-                }
+                aiConfig.allowedTools = _AICheckProvider.intersectAllowedTools(
+                  aiConfig.allowedTools,
+                  decision.capabilities.allowedTools
+                );
               }
             }
           } catch (err) {
@@ -19022,7 +19455,8 @@ ${preview}`);
           if (cfg.workflow && typeof cfg.workflow === "string") {
             workflowEntriesFromMcp.push({
               workflow: cfg.workflow,
-              args: cfg.inputs
+              args: cfg.inputs,
+              name: serverName
             });
             mcpEntriesToRemove.push(serverName);
             logger.debug(
@@ -19160,6 +19594,27 @@ ${preview}`);
           } catch (error) {
             logger.error(
               `[AICheckProvider] Failed to evaluate ai_bash_config_js: ${error instanceof Error ? error.message : "Unknown error"}`
+            );
+          }
+        }
+        const allowedToolsJsExpr = config.ai_allowed_tools_js;
+        if (allowedToolsJsExpr && _dependencyResults) {
+          try {
+            const dynamicAllowedTools = this.evaluateAllowedToolsJs(
+              allowedToolsJsExpr,
+              prInfo,
+              _dependencyResults,
+              config
+            );
+            if (dynamicAllowedTools !== null) {
+              aiConfig.allowedTools = dynamicAllowedTools;
+              this.logDebug(
+                `[AI Provider] ai_allowed_tools_js evaluated to: ${JSON.stringify(dynamicAllowedTools)}`
+              );
+            }
+          } catch (error) {
+            logger.error(
+              `[AICheckProvider] Failed to evaluate ai_allowed_tools_js: ${error instanceof Error ? error.message : "Unknown error"}`
             );
           }
         }
@@ -19667,6 +20122,65 @@ ${processedPrompt}` : processedPrompt;
         }
       }
       /**
+       * Evaluate ai_allowed_tools_js expression to dynamically compute allowed tools list.
+       * Returns a string array of tool names, or null if the expression returns a non-array.
+       */
+      evaluateAllowedToolsJs(expression, prInfo, dependencyResults, config) {
+        if (!this.sandbox) {
+          this.sandbox = createSecureSandbox();
+        }
+        const outputs = {};
+        for (const [checkId, result] of dependencyResults.entries()) {
+          const summary = result;
+          outputs[checkId] = summary.output !== void 0 ? summary.output : summary;
+        }
+        const jsContext = {
+          outputs,
+          inputs: config.inputs || {},
+          pr: {
+            number: prInfo.number,
+            title: prInfo.title,
+            description: prInfo.body,
+            author: prInfo.author,
+            branch: prInfo.head,
+            base: prInfo.base,
+            authorAssociation: prInfo.authorAssociation
+          },
+          files: prInfo.files?.map((f) => ({
+            filename: f.filename,
+            status: f.status,
+            additions: f.additions,
+            deletions: f.deletions,
+            changes: f.changes
+          })) || [],
+          env: this.buildSafeEnv(),
+          memory: config.__memoryAccessor || {}
+        };
+        try {
+          const result = compileAndRun(this.sandbox, expression, jsContext, {
+            injectLog: true,
+            wrapFunction: true,
+            logPrefix: "[ai_allowed_tools_js]"
+          });
+          if (!Array.isArray(result)) {
+            logger.warn(
+              `[AICheckProvider] ai_allowed_tools_js must return an array, got ${typeof result}`
+            );
+            return null;
+          }
+          const tools = result.filter((item) => typeof item === "string");
+          logger.debug(
+            `[AICheckProvider] ai_allowed_tools_js evaluated to ${tools.length} tools: ${tools.join(", ")}`
+          );
+          return tools;
+        } catch (error) {
+          logger.error(
+            `[AICheckProvider] Failed to evaluate ai_allowed_tools_js: ${error instanceof Error ? error.message : "Unknown error"}`
+          );
+          return null;
+        }
+      }
+      /**
        * Build a safe subset of environment variables for sandbox access.
        * Excludes sensitive keys like API keys, secrets, tokens.
        */
@@ -19727,6 +20241,22 @@ ${processedPrompt}` : processedPrompt;
         }
         return tools;
       }
+      /**
+       * Intersect config-level allowedTools with policy-level allowedTools.
+       * When the config list contains glob patterns ("*", "!" exclusions),
+       * it is passed through unchanged — ProbeAgent resolves those patterns.
+       * Literal tool name lists are intersected normally.
+       */
+      static intersectAllowedTools(configTools, policyTools) {
+        if (!configTools) {
+          return policyTools;
+        }
+        const hasGlobs = configTools.some((t) => t === "*" || t.startsWith("!"));
+        if (hasGlobs) {
+          return configTools;
+        }
+        return configTools.filter((t) => policyTools.includes(t));
+      }
       getSupportedConfigKeys() {
         return [
           "type",
@@ -19764,6 +20294,7 @@ ${processedPrompt}` : processedPrompt;
           "ai_custom_tools",
           "ai_custom_tools_js",
           "ai_bash_config_js",
+          "ai_allowed_tools_js",
           "env"
         ];
       }
@@ -47351,7 +47882,7 @@ async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
     const fs21 = await import("fs/promises");
     const path25 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
-    const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
+    const schema = typeof schemaRaw === "string" && !schemaRaw.includes("{{") && !schemaRaw.includes("{%") ? schemaRaw : typeof schemaRaw === "object" ? "code-review" : "plain";
     let templateContent;
     if (checkConfig.template && checkConfig.template.content) {
       templateContent = String(checkConfig.template.content);
@@ -51288,7 +51819,8 @@ var init_client = __esm({
             user: m.user,
             text: m.text,
             bot_id: m.bot_id,
-            thread_ts: m.thread_ts
+            thread_ts: m.thread_ts,
+            files: Array.isArray(m.files) ? m.files : void 0
           }));
         } catch (e) {
           console.warn(
@@ -51311,9 +51843,9 @@ var init_client = __esm({
           initial_comment
         }) => {
           try {
-            const getUrlResp = await this.api("files.getUploadURLExternal", {
+            const getUrlResp = await this.apiForm("files.getUploadURLExternal", {
               filename,
-              length: content.length
+              length: String(content.length)
             });
             if (!getUrlResp || getUrlResp.ok !== true || !getUrlResp.upload_url) {
               console.warn(
@@ -51368,6 +51900,19 @@ var init_client = __esm({
             Authorization: `Bearer ${this.token}`
           },
           body: JSON.stringify(body)
+        });
+        return await res.json();
+      }
+      /** Send a Slack API request as application/x-www-form-urlencoded (required by some file methods). */
+      async apiForm(method, params) {
+        const body = new URLSearchParams(params);
+        const res = await fetch(`https://slack.com/api/${method}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Authorization: `Bearer ${this.token}`
+          },
+          body: body.toString()
         });
         return await res.json();
       }
@@ -51534,6 +52079,47 @@ function markdownToSlack(text) {
   }
   out = lines.join("\n");
   return out;
+}
+function extractFileSections(text) {
+  const sections = [];
+  const delimRegex = /^--- ([\w][\w.\-]*\.\w+) ---$/gm;
+  const delimiters = [];
+  let m;
+  while ((m = delimRegex.exec(text)) !== null) {
+    delimiters.push({
+      filename: m[1],
+      start: m.index,
+      end: m.index + m[0].length
+    });
+  }
+  if (delimiters.length === 0) return sections;
+  for (let i = 0; i < delimiters.length; i++) {
+    const open = delimiters[i];
+    const contentStart = open.end < text.length && text[open.end] === "\n" ? open.end + 1 : open.end;
+    const sectionEnd = i + 1 < delimiters.length ? delimiters[i + 1].start : text.length;
+    const content = text.substring(contentStart, sectionEnd).trim();
+    if (content.length > 0) {
+      sections.push({
+        fullMatch: text.substring(open.start, sectionEnd),
+        filename: open.filename,
+        content,
+        startIndex: open.start,
+        endIndex: sectionEnd
+      });
+    }
+  }
+  return sections;
+}
+function replaceFileSections(text, sections, replacement = (idx) => `_(See file: ${sections[idx].filename} above)_`) {
+  if (sections.length === 0) return text;
+  const sorted = [...sections].sort((a, b) => b.startIndex - a.startIndex);
+  let result = text;
+  sorted.forEach((section, sortedIndex) => {
+    const originalIndex = sections.length - 1 - sortedIndex;
+    const rep = typeof replacement === "function" ? replacement(originalIndex) : replacement;
+    result = result.slice(0, section.startIndex) + rep + result.slice(section.endIndex);
+  });
+  return result;
 }
 function formatSlackText(text) {
   return markdownToSlack(text);
@@ -51963,6 +52549,9 @@ ${message}`;
               text = String(out);
             }
           }
+          if (out && typeof out._rawOutput === "string" && out._rawOutput.trim().length > 0) {
+            text = (text || "") + "\n\n" + out._rawOutput.trim();
+          }
           if (!text) {
             ctx.logger.info(
               `[slack-frontend] skip posting AI reply for ${checkId}: no renderable text in check output`
@@ -52020,6 +52609,39 @@ ${message}`;
                 (idx) => uploadedCount.includes(idx) ? "_(See diagram above)_" : "_(Diagram rendering failed)_"
               );
             }
+          }
+          processedText = processedText.replace(/\\n/g, "\n");
+          const fileSections = extractFileSections(processedText);
+          if (fileSections.length > 0) {
+            const uploadedFileIndices = [];
+            for (let i = 0; i < fileSections.length; i++) {
+              const section = fileSections[i];
+              try {
+                const buffer = Buffer.from(section.content, "utf-8");
+                const uploadResult = await slack.files.uploadV2({
+                  content: buffer,
+                  filename: section.filename,
+                  channel,
+                  thread_ts: threadTs,
+                  title: section.filename
+                });
+                if (uploadResult.ok) {
+                  uploadedFileIndices.push(i);
+                  ctx.logger.info(`[slack-frontend] uploaded file ${section.filename} to ${channel}`);
+                } else {
+                  ctx.logger.warn(`[slack-frontend] upload failed for file ${section.filename}`);
+                }
+              } catch (e) {
+                ctx.logger.warn(
+                  `[slack-frontend] failed to upload file ${section.filename}: ${e instanceof Error ? e.message : String(e)}`
+                );
+              }
+            }
+            processedText = replaceFileSections(
+              processedText,
+              fileSections,
+              (idx) => uploadedFileIndices.includes(idx) ? `_(See file: ${fileSections[idx].filename} above)_` : `_(File upload failed: ${fileSections[idx].filename})_`
+            );
           }
           let decoratedText = processedText;
           const telemetryEnabled = telemetryCfg === true || telemetryCfg && typeof telemetryCfg === "object" && telemetryCfg.enabled === true;
