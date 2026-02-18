@@ -529,6 +529,11 @@ export class SlackFrontend implements Frontend {
           text = String(out);
         }
       }
+      // Append raw output from DSL execute_plan (bypasses LLM rewriting chain)
+      if (out && typeof out._rawOutput === 'string' && out._rawOutput.trim().length > 0) {
+        text = (text || '') + '\n\n' + out._rawOutput.trim();
+      }
+
       if (!text) {
         ctx.logger.info(
           `[slack-frontend] skip posting AI reply for ${checkId}: no renderable text in check output`

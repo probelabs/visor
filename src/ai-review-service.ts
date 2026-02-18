@@ -2438,6 +2438,26 @@ ${'='.repeat(60)}
       // Handle different schema types differently
       let reviewData: AIResponseFormat = undefined as unknown as AIResponseFormat;
 
+      // Extract <<<RAW_OUTPUT>>> blocks appended by ProbeAgent after schema JSON.
+      // These carry DSL output() content that must bypass LLM rewriting and be
+      // propagated directly to the user (Slack, CLI, etc.).
+      // Declared here so it's accessible across all parsing paths below.
+      const RAW_OUTPUT_RE = /\n<<<RAW_OUTPUT>>>\n([\s\S]*?)\n<<<END_RAW_OUTPUT>>>/g;
+      const rawOutputBlocks: string[] = [];
+      let responseForParsing = response;
+      {
+        let rawMatch: RegExpExecArray | null;
+        while ((rawMatch = RAW_OUTPUT_RE.exec(response)) !== null) {
+          rawOutputBlocks.push(rawMatch[1]);
+        }
+        if (rawOutputBlocks.length > 0) {
+          responseForParsing = response.replace(RAW_OUTPUT_RE, '');
+          log(
+            `📦 Extracted ${rawOutputBlocks.length} RAW_OUTPUT blocks (${rawOutputBlocks.reduce((s, b) => s + b.length, 0)} chars) from response`
+          );
+        }
+      }
+
       // Handle plain schema or no schema - no JSON parsing, treat as assistant-style text output
       if (_schema === 'plain' || !_schema) {
         log(
@@ -2465,7 +2485,7 @@ ${'='.repeat(60)}
 
         // Sanitize response: strip BOM, zero-width chars, and other invisible characters
         // that can cause JSON parsing to fail even when the text looks valid
-        const sanitizedResponse = response
+        const sanitizedResponse = responseForParsing
           .replace(/^\uFEFF/, '') // BOM
           .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, '') // Zero-width chars, NBSP
           .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // Control chars (except \t \n \r)
@@ -2522,10 +2542,12 @@ ${'='.repeat(60)}
               response.toLowerCase().includes('unable to')
             ) {
               console.error('🚫 AI refused to analyze - returning refusal as output');
-              const trimmed = response.trim();
+              const trimmed = responseForParsing.trim();
+              const out: any = trimmed ? { text: trimmed } : {};
+              if (rawOutputBlocks.length > 0) out._rawOutput = rawOutputBlocks.join('\n\n');
               return {
                 issues: [],
-                output: trimmed ? { text: trimmed } : {},
+                output: out,
                 debug: debugInfo,
               };
             }
@@ -2534,10 +2556,12 @@ ${'='.repeat(60)}
             // This allows Probe (or other AI providers) to handle JSON validation
             // and avoids false positives from bracket-matching (e.g., mermaid diagrams)
             log('🔧 Treating response as plain text (no JSON extraction)');
-            const trimmed = response.trim();
+            const trimmed = responseForParsing.trim();
+            const fallbackOut: any = { text: trimmed };
+            if (rawOutputBlocks.length > 0) fallbackOut._rawOutput = rawOutputBlocks.join('\n\n');
             return {
               issues: [],
-              output: { text: trimmed },
+              output: fallbackOut,
               debug: debugInfo,
             };
           }
@@ -2625,6 +2649,11 @@ ${'='.repeat(60)}
           if (fallbackText) {
             (out as any).text = fallbackText;
           }
+        }
+
+        // Attach raw output blocks from DSL execute_plan so frontends can render them
+        if (rawOutputBlocks.length > 0) {
+          (out as any)._rawOutput = rawOutputBlocks.join('\n\n');
         }
 
         const result: ReviewSummary & { output?: unknown } = {
