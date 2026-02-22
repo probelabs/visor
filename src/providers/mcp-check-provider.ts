@@ -471,13 +471,11 @@ export class McpCheckProvider extends CheckProvider {
         );
       }
 
-      const tool = this.customToolExecutor.getTool(config.method);
-      if (!tool) {
+      const hasTool = await this.customToolExecutor.hasTool(config.method);
+      if (!hasTool) {
+        const availableToolNames = await this.customToolExecutor.getToolNames();
         throw new Error(
-          `Custom tool not found: ${config.method}. Available tools: ${this.customToolExecutor
-            .getTools()
-            .map(t => t.name)
-            .join(', ')}`
+          `Custom tool not found: ${config.method}. Available tools: ${availableToolNames.join(', ')}`
         );
       }
 

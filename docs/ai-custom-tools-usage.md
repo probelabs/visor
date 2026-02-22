@@ -55,6 +55,26 @@ When you use either `ai_custom_tools` or `tools: [...]` within an MCP server con
 
 ## Examples
 
+### Example 0: OpenAPI API Bundle Tool
+
+```yaml
+tools:
+  users-api:
+    type: api
+    name: users-api
+    spec: ./openapi/users.yaml
+    whitelist: [get*]
+    targetUrl: https://api.example.com
+
+steps:
+  api-assistant:
+    type: ai
+    prompt: Use users API tools to answer requests.
+    ai_custom_tools: [users-api]
+```
+
+`users-api` is a reusable tool bundle; each OpenAPI operation becomes an MCP tool exposed to AI.
+
 ### Example 1: Security Scanning
 
 ```yaml

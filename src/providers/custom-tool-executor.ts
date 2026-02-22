@@ -6,6 +6,11 @@ import Sandbox from '@nyariv/sandboxjs';
 import { logger } from '../logger';
 import { commandExecutor } from '../utils/command-executor';
 import Ajv from 'ajv';
+import {
+  ApiToolRegistry,
+  executeMappedApiTool,
+  isApiToolDefinition,
+} from './api-tool-executor';
 
 /**
  * Executes custom tools defined in YAML configuration
@@ -16,6 +21,7 @@ export class CustomToolExecutor {
   private sandbox?: Sandbox;
   private tools: Map<string, CustomToolDefinition>;
   private ajv: Ajv;
+  private apiToolRegistry: ApiToolRegistry;
 
   constructor(tools?: Record<string, CustomToolDefinition>) {
     this.liquid = createExtendedLiquid({
@@ -24,7 +30,8 @@ export class CustomToolExecutor {
       strictVariables: false,
     });
     this.tools = new Map(Object.entries(tools || {}));
-    this.ajv = new Ajv({ allErrors: true, verbose: true });
+    this.ajv = new Ajv({ allErrors: true, verbose: true, strict: false });
+    this.apiToolRegistry = new ApiToolRegistry();
   }
 
   /**
@@ -33,6 +40,13 @@ export class CustomToolExecutor {
   registerTool(tool: CustomToolDefinition): void {
     if (!tool.name) {
       throw new Error('Tool must have a name');
+    }
+    if (isApiToolDefinition(tool)) {
+      if (!tool.spec) {
+        throw new Error(`API tool '${tool.name}' must define 'spec'`);
+      }
+    } else if (!tool.exec) {
+      throw new Error(`Tool '${tool.name}' must define 'exec' (or set type: 'api')`);
     }
     this.tools.set(tool.name, tool);
   }
@@ -92,6 +106,35 @@ export class CustomToolExecutor {
   }
 
   /**
+   * Validate input against a JSON schema object
+   */
+  private validateInputSchema(
+    toolName: string,
+    schema: Record<string, unknown> | undefined,
+    input: Record<string, unknown>
+  ): void {
+    if (!schema) {
+      return;
+    }
+
+    const validate = this.ajv.compile(schema);
+    const valid = validate(input);
+
+    if (!valid) {
+      const errors = validate.errors
+        ?.map(err => {
+          if (err.instancePath) {
+            return `${err.instancePath}: ${err.message}`;
+          }
+          return err.message;
+        })
+        .join(', ');
+
+      throw new Error(`Input validation failed for tool '${toolName}': ${errors}`);
+    }
+  }
+
+  /**
    * Execute a custom tool
    */
   async execute(
@@ -111,7 +154,22 @@ export class CustomToolExecutor {
     }
   ): Promise<unknown> {
     const tool = this.tools.get(toolName);
+    if (tool && isApiToolDefinition(tool)) {
+      throw new Error(
+        `Tool '${toolName}' is an API bundle. Call one of its generated operations instead.`
+      );
+    }
+
     if (!tool) {
+      const apiMappedTool = await this.apiToolRegistry.getMappedTool(toolName, this.tools);
+      if (apiMappedTool) {
+        this.validateInputSchema(
+          toolName,
+          apiMappedTool.mcpToolDefinition.inputSchema,
+          args as Record<string, unknown>
+        );
+        return await executeMappedApiTool(apiMappedTool, args);
+      }
       throw new Error(`Tool not found: ${toolName}`);
     }
 
@@ -126,6 +184,10 @@ export class CustomToolExecutor {
     };
 
     // Render command with Liquid
+    if (!tool.exec) {
+      throw new Error(`Tool '${toolName}' is missing exec command`);
+    }
+
     const command = await this.liquid.parseAndRender(tool.exec, templateContext);
 
     // Render stdin if provided
@@ -202,6 +264,63 @@ export class CustomToolExecutor {
   }
 
   /**
+   * Check if a tool exists (direct or API-generated)
+   */
+  async hasTool(toolName: string): Promise<boolean> {
+    if (this.tools.has(toolName)) {
+      const tool = this.tools.get(toolName);
+      return !isApiToolDefinition(tool);
+    }
+    const apiMappedTool = await this.apiToolRegistry.getMappedTool(toolName, this.tools);
+    return Boolean(apiMappedTool);
+  }
+
+  /**
+   * Get all available tool names, including API-generated operations
+   */
+  async getToolNames(): Promise<string[]> {
+    const names: string[] = [];
+    for (const tool of this.tools.values()) {
+      if (!isApiToolDefinition(tool)) {
+        names.push(tool.name);
+      }
+    }
+    const apiTools = await this.apiToolRegistry.listMappedTools(this.tools);
+    for (const mapped of apiTools) {
+      names.push(mapped.mcpToolDefinition.name);
+    }
+    return names;
+  }
+
+  /**
+   * List MCP-compatible tool definitions including API-generated operations
+   */
+  async listMcpTools(): Promise<
+    Array<{
+      name: string;
+      description?: string;
+      inputSchema?: Record<string, unknown>;
+    }>
+  > {
+    const directTools = this.getTools()
+      .filter(tool => !isApiToolDefinition(tool))
+      .map(tool => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema as Record<string, unknown> | undefined,
+      }));
+
+    const apiTools = await this.apiToolRegistry.listMappedTools(this.tools);
+    const mappedApiTools = apiTools.map(tool => ({
+      name: tool.mcpToolDefinition.name,
+      description: tool.mcpToolDefinition.description,
+      inputSchema: tool.mcpToolDefinition.inputSchema,
+    }));
+
+    return [...directTools, ...mappedApiTools];
+  }
+
+  /**
    * Apply JavaScript transform to output
    */
   private async applyJavaScriptTransform(
@@ -240,13 +359,15 @@ export class CustomToolExecutor {
     inputSchema?: Record<string, unknown>;
     handler: (args: Record<string, unknown>) => Promise<unknown>;
   }> {
-    return Array.from(this.tools.values()).map(tool => ({
+    return Array.from(this.tools.values())
+      .filter(tool => !isApiToolDefinition(tool))
+      .map(tool => ({
       name: tool.name,
       description: tool.description,
       inputSchema: tool.inputSchema as Record<string, unknown>,
       handler: async (args: Record<string, unknown>) => {
         return this.execute(tool.name, args);
       },
-    }));
+      }));
   }
 }

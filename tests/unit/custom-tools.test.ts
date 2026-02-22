@@ -1,5 +1,9 @@
 import { CustomToolExecutor } from '../../src/providers/custom-tool-executor';
 import { CustomToolDefinition } from '../../src/types/config';
+import fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
+import http from 'http';
 
 describe('CustomToolExecutor', () => {
   let executor: CustomToolExecutor;
@@ -359,6 +363,197 @@ describe('CustomToolExecutor', () => {
 
       const result = await handler({ value: 'test' });
       expect(result).toContain('Result: test');
+    });
+  });
+
+  describe('api tool type', () => {
+    let server: http.Server;
+    let baseUrl: string;
+    let tempDir: string;
+    let specPath: string;
+
+    beforeEach(async () => {
+      server = http.createServer((req, res) => {
+        if (!req.url) {
+          res.statusCode = 404;
+          res.end();
+          return;
+        }
+
+        if (req.method === 'GET' && req.url.startsWith('/users/')) {
+          const id = req.url.split('/').pop();
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ id, name: `User-${id}` }));
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/users') {
+          let raw = '';
+          req.on('data', chunk => {
+            raw += chunk.toString();
+          });
+          req.on('end', () => {
+            const body = raw ? JSON.parse(raw) : {};
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ created: true, body }));
+          });
+          return;
+        }
+
+        res.statusCode = 404;
+        res.end();
+      });
+
+      await new Promise<void>(resolve => {
+        server.listen(0, '127.0.0.1', () => resolve());
+      });
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      baseUrl = `http://127.0.0.1:${port}`;
+
+      tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'visor-api-tool-test-'));
+      specPath = path.join(tempDir, 'openapi.json');
+      await fs.writeFile(
+        specPath,
+        JSON.stringify(
+          {
+            openapi: '3.0.0',
+            info: { title: 'Test API', version: '1.0.0' },
+            servers: [{ url: baseUrl }],
+            paths: {
+              '/users/{id}': {
+                get: {
+                  operationId: 'getUser',
+                  summary: 'Get a user',
+                  parameters: [
+                    {
+                      name: 'id',
+                      in: 'path',
+                      required: true,
+                      schema: { type: 'string' },
+                    },
+                  ],
+                  responses: {
+                    200: {
+                      description: 'OK',
+                      content: {
+                        'application/json': {
+                          schema: {
+                            type: 'object',
+                            properties: {
+                              id: { type: 'string' },
+                              name: { type: 'string' },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              '/users': {
+                post: {
+                  operationId: 'createUser',
+                  summary: 'Create a user',
+                  requestBody: {
+                    required: true,
+                    content: {
+                      'application/json': {
+                        schema: {
+                          type: 'object',
+                          properties: {
+                            name: { type: 'string' },
+                          },
+                          required: ['name'],
+                        },
+                      },
+                    },
+                  },
+                  responses: {
+                    200: {
+                      description: 'Created',
+                      content: {
+                        'application/json': {
+                          schema: {
+                            type: 'object',
+                            properties: {
+                              created: { type: 'boolean' },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          null,
+          2
+        ),
+        'utf8'
+      );
+    });
+
+    afterEach(async () => {
+      await new Promise<void>(resolve => {
+        server.close(() => resolve());
+      });
+      await fs.rm(tempDir, { recursive: true, force: true });
+    });
+
+    it('should expose OpenAPI operations as MCP tools', async () => {
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api',
+        type: 'api',
+        spec: specPath,
+      };
+      executor.registerTool(apiTool);
+
+      const tools = await executor.listMcpTools();
+      const names = tools.map(tool => tool.name);
+
+      expect(names).toContain('getUser');
+      expect(names).toContain('createUser');
+      expect(names).not.toContain('users-api');
+    });
+
+    it('should execute generated OpenAPI operation tools', async () => {
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api',
+        type: 'api',
+        spec: specPath,
+      };
+      executor.registerTool(apiTool);
+
+      const getResult = await executor.execute('getUser', { id: '123' }, {});
+      expect(getResult).toEqual({ id: '123', name: 'User-123' });
+
+      const createResult = await executor.execute(
+        'createUser',
+        { requestBody: { name: 'Alice' } },
+        {}
+      );
+      expect(createResult).toEqual({
+        created: true,
+        body: { name: 'Alice' },
+      });
+    });
+
+    it('should support whitelist filtering for OpenAPI operations', async () => {
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api',
+        type: 'api',
+        spec: specPath,
+        whitelist: ['get*'],
+      };
+      executor.registerTool(apiTool);
+
+      const tools = await executor.listMcpTools();
+      const names = tools.map(tool => tool.name);
+
+      expect(names).toContain('getUser');
+      expect(names).not.toContain('createUser');
     });
   });
 });

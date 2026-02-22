@@ -297,6 +297,38 @@ tools:
       {% endcase %}
 ```
 
+### 5. OpenAPI Tool Bundle (`type: api`)
+
+You can expose an OpenAPI spec as MCP tools by defining a single reusable API bundle:
+
+```yaml
+tools:
+  petstore-api:
+    type: api
+    name: petstore-api
+    description: Petstore API as MCP tools
+    spec: ./petstore-openapi.yaml
+    overlays:
+      - ./petstore-overlay.yaml
+    whitelist:
+      - "get*"
+      - "POST:/pets*"
+    targetUrl: https://petstore.example.com
+    headers:
+      X-Api-Version: "2026-01"
+    apiKey: "${{ env.PETSTORE_API_KEY }}"
+```
+
+Behavior:
+
+- Each OpenAPI operation with an `operationId` is exposed as an MCP tool.
+- Tool names/descriptions come from OpenAPI and support `x-mcp` overrides.
+- Inputs include path/query/header parameters and `requestBody`.
+- Security schemes from OpenAPI are applied at call time using `apiKey` / `securityCredentials`.
+- `whitelist`/`blacklist` supports glob patterns for `operationId` and `METHOD:/path`.
+
+This works with `ai_custom_tools`, `ai_mcp_servers.<name>.tools`, and `transport: custom` MCP execution.
+
 ## Tool Libraries and Extends
 
 ### Creating a Tool Library
