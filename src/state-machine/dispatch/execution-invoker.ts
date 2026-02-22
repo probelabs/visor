@@ -630,6 +630,7 @@ export async function executeSingleCheck(
       ...checkConfig,
       eventContext: (context.prInfo as any)?.eventContext || {},
       __outputHistory: outputHistory,
+      __globalTools: context.config.tools || {},
       // Propagate workflow inputs for template access via {{ inputs.* }}
       workflowInputs,
       ai: {

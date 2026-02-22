@@ -63,6 +63,19 @@ export class ConfigManager {
   private validGroupByOptions: GroupByOption[] = ['check', 'file', 'severity', 'group'];
 
   /**
+   * Annotate tools with the originating config directory for relative asset resolution.
+   */
+  private annotateToolBaseDirs(config: Partial<VisorConfig>, baseDir: string): void {
+    if (!config.tools || typeof config.tools !== 'object') {
+      return;
+    }
+    for (const tool of Object.values(config.tools)) {
+      if (!tool || typeof tool !== 'object') continue;
+      (tool as any).__baseDir = (tool as any).__baseDir || baseDir;
+    }
+  }
+
+  /**
    * Load configuration from a file
    */
   public async loadConfig(
@@ -142,6 +155,9 @@ export class ConfigManager {
       if ((parsedConfig as any).id && typeof (parsedConfig as any).id === 'string') {
         parsedConfig = await this.convertWorkflowToConfig(parsedConfig, path.dirname(resolvedPath));
       }
+
+      // Tag tools with this config's directory so relative API specs/overlays resolve correctly.
+      this.annotateToolBaseDirs(parsedConfig, path.dirname(resolvedPath));
 
       // Normalize 'checks' and 'steps'. Prefer checks when this config used extends/include
       // so child overrides win over bundled defaults that may live under steps.
@@ -227,6 +243,8 @@ export class ConfigManager {
       if ((parsedConfig as any).id && typeof (parsedConfig as any).id === 'string') {
         parsedConfig = await this.convertWorkflowToConfig(parsedConfig, baseDir || process.cwd());
       }
+
+      this.annotateToolBaseDirs(parsedConfig, baseDir || process.cwd());
 
       parsedConfig = this.normalizeStepsAndChecks(parsedConfig, !!extendsValue);
       await this.loadWorkflows(parsedConfig, baseDir || process.cwd());
@@ -909,6 +927,52 @@ export class ConfigManager {
     // Validate global MCP servers if present
     if (config.ai_mcp_servers) {
       this.validateMcpServersObject(config.ai_mcp_servers, 'ai_mcp_servers', errors, warnings);
+    }
+
+    // Validate custom tools section
+    if (config.tools) {
+      for (const [toolName, toolDef] of Object.entries(config.tools)) {
+        const type = toolDef.type || 'command';
+        if (type === 'api') {
+          const spec = toolDef.spec;
+          const hasStringSpec = typeof spec === 'string' && spec.trim().length > 0;
+          const hasInlineSpec =
+            !!spec && typeof spec === 'object' && !Array.isArray(spec);
+          if (!hasStringSpec && !hasInlineSpec) {
+            errors.push({
+              field: `tools.${toolName}.spec`,
+              message: `Invalid tool configuration for "${toolName}": missing spec field (required for type: api)`,
+            });
+          }
+
+          const overlays = toolDef.overlays;
+          if (overlays !== undefined) {
+            const isInlineOverlay =
+              !!overlays && typeof overlays === 'object' && !Array.isArray(overlays);
+            const isStringOverlay = typeof overlays === 'string';
+            const isMixedArrayOverlay =
+              Array.isArray(overlays) &&
+              overlays.every(
+                item =>
+                  typeof item === 'string' ||
+                  (!!item && typeof item === 'object' && !Array.isArray(item))
+              );
+
+            if (!isInlineOverlay && !isStringOverlay && !isMixedArrayOverlay) {
+              errors.push({
+                field: `tools.${toolName}.overlays`,
+                message: `Invalid tool configuration for "${toolName}": overlays must be a string, object, or array of strings/objects`,
+                value: overlays,
+              });
+            }
+          }
+        } else if (!toolDef.exec || typeof toolDef.exec !== 'string') {
+          errors.push({
+            field: `tools.${toolName}.exec`,
+            message: `Invalid tool configuration for "${toolName}": missing exec field (required for command tools)`,
+          });
+        }
+      }
     }
 
     // Validate output configuration if present
@@ -1739,6 +1803,10 @@ export class ConfigManager {
             ]);
             if (topLevel && allowedTopLevelKeys.has(addl)) {
               // Do not warn for these keys.
+              continue;
+            }
+            // Internal tool metadata used to resolve relative tool assets.
+            if (!topLevel && addl === '__baseDir' && pathStr.startsWith('tools.')) {
               continue;
             }
             // At check level, allow 'sandbox' without warning

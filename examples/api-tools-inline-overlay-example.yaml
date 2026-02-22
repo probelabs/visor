@@ -1,0 +1,126 @@
+version: "1.0"
+
+tools:
+  users-api-file-overlay:
+    type: api
+    name: users-api-file-overlay
+    description: File-based OpenAPI and overlay definitions
+    spec: ./openapi/users-api.json
+    headers:
+      Authorization: "Bearer ${USERS_API_BEARER_TOKEN}"
+      X-Tenant-Id: "${USERS_API_TENANT_ID}"
+    overlays:
+      - ./openapi/users-overlay-rename.yaml
+    whitelist:
+      - getUserFromFileOverlay
+
+  users-api-inline-mixed-overlay:
+    type: api
+    name: users-api-inline-mixed-overlay
+    description: Inline OpenAPI plus mixed file + inline overlays
+    headers:
+      Authorization: "Bearer ${PROFILES_API_BEARER_TOKEN}"
+      X-Tenant-Id: "${USERS_API_TENANT_ID}"
+    spec:
+      openapi: "3.0.0"
+      info:
+        title: Profiles API Inline Example
+        version: "1.0.0"
+      servers:
+        - url: https://api.example.invalid
+      paths:
+        /profiles/{id}:
+          get:
+            operationId: getProfile
+            summary: Get profile by id
+            parameters:
+              - name: id
+                in: path
+                required: true
+                schema:
+                  type: string
+            responses:
+              "200":
+                description: Profile payload
+                content:
+                  application/json:
+                    schema:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        handle:
+                          type: string
+    overlays:
+      - ./openapi/profiles-overlay-rename.yaml
+      - actions:
+          - target: "$.paths['/profiles/{id}'].get.operationId"
+            update: getProfileFromInlineOverlay
+
+checks:
+  api-file-overlay-required-input:
+    type: mcp
+    transport: custom
+    method: getUserFromFileOverlay
+    methodArgs: {}
+    on:
+      - manual
+
+  api-inline-overlay-required-input:
+    type: mcp
+    transport: custom
+    method: getProfileFromInlineOverlay
+    methodArgs: {}
+    on:
+      - issue_comment
+
+  api-inline-overlay-original-name-blocked:
+    type: mcp
+    transport: custom
+    method: getProfile
+    methodArgs: {}
+    on:
+      - pr_opened
+
+tests:
+  defaults:
+    strict: true
+  cases:
+    - name: api-inline-example-file-overlay-tool-is-generated
+      description: File-based OpenAPI + overlay renames getUser to getUserFromFileOverlay
+      event: manual
+      fixture: local.minimal
+      expect:
+        calls:
+          - step: api-file-overlay-required-input
+            exactly: 1
+        outputs:
+          - step: api-file-overlay-required-input
+            path: issues[0].message
+            matches: "(?i)required property 'id'"
+
+    - name: api-inline-example-inline-spec-and-mixed-overlays-work
+      description: Inline OpenAPI supports file and inline overlays, applied in order
+      event: issue_comment
+      fixture: gh.issue_comment.standard
+      expect:
+        calls:
+          - step: api-inline-overlay-required-input
+            exactly: 1
+        outputs:
+          - step: api-inline-overlay-required-input
+            path: issues[0].message
+            matches: "(?i)required property 'id'"
+
+    - name: api-inline-example-original-operation-id-is-not-exposed
+      description: Final overlay output hides the original getProfile method name
+      event: pr_opened
+      fixture: gh.pr_open.minimal
+      expect:
+        calls:
+          - step: api-inline-overlay-original-name-blocked
+            exactly: 1
+        outputs:
+          - step: api-inline-overlay-original-name-blocked
+            path: issues[0].message
+            matches: "(?i)Custom tool not found: getProfile"

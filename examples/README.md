@@ -81,6 +81,7 @@ Example configurations demonstrating various Visor features and use cases.
 ### AI Provider Examples
 - **`ai-custom-tools-example.yaml`** - AI with custom shell-based tools via ephemeral MCP servers
 - **`ai-custom-tools-simple.yaml`** - Simplified AI custom tools example
+- **`api-tools-ai-example.yaml`** - AI check using reusable OpenAPI-backed `type: api` tool bundles (includes embedded tests)
 - **`ai-retry-fallback-config.yaml`** - AI with retry and fallback providers
 - **`ai-with-bash.yaml`** - AI check combined with bash command execution
 - **`ai-with-mcp.yaml`** - AI check with MCP tool integration
@@ -91,6 +92,9 @@ Example configurations demonstrating various Visor features and use cases.
 ### MCP & Tools Examples
 - **`mcp-provider-example.yaml`** - MCP provider with stdio/SSE/HTTP transports
 - **`custom-tools-example.yaml`** - Custom tool definitions
+- **`api-tools-library.yaml`** - Reusable OpenAPI API tool bundle definitions (`type: api`)
+- **`api-tools-mcp-example.yaml`** - MCP checks calling OpenAPI-generated operations from reusable API bundle (includes embedded tests)
+- **`api-tools-inline-overlay-example.yaml`** - Inline/file OpenAPI overlay example with reusable API tools (includes embedded tests)
 - **`tools-library.yaml`** - Reusable tool library (git, docker, npm, testing, code quality tools)
 - **`reusable-tools.yaml`** - Patterns for reusable tool definitions
 - **`project-with-tools.yaml`** - Project configuration with integrated tools

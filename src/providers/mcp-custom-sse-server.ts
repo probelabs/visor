@@ -54,6 +54,13 @@ interface MCPToolsListResponse {
   };
 }
 
+type MCPInputSchema = {
+  type: 'object';
+  properties?: Record<string, unknown>;
+  required?: string[];
+  additionalProperties?: boolean;
+};
+
 /**
  * MCP Tool Call Request
  */
@@ -704,8 +711,26 @@ export class CustomToolsSSEServer implements CustomMCPServer {
    * Handle tools/list MCP request
    */
   private async handleToolsList(id: number | string): Promise<MCPToolsListResponse> {
-    // Get all tools from the tools map (includes both regular and workflow tools)
-    const allTools = Array.from(this.tools.values());
+    const normalizeInputSchema = (schema: Record<string, unknown> | undefined): MCPInputSchema => {
+      if (schema && schema.type === 'object') {
+        return schema as unknown as MCPInputSchema;
+      }
+      return {
+        type: 'object',
+        properties: {},
+        required: [],
+      };
+    };
+
+    const regularTools = await this.toolExecutor.listMcpTools();
+    const workflowTools = Array.from(this.tools.values())
+      .filter(isWorkflowTool)
+      .map(tool => ({
+        name: tool.name,
+        description: tool.description || `Execute ${tool.name}`,
+        inputSchema: normalizeInputSchema(tool.inputSchema as Record<string, unknown> | undefined),
+      }));
+    const allTools = [...regularTools, ...workflowTools];
 
     if (this.debug) {
       logger.debug(
@@ -720,11 +745,7 @@ export class CustomToolsSSEServer implements CustomMCPServer {
         tools: allTools.map(tool => ({
           name: tool.name,
           description: tool.description || `Execute ${tool.name}`,
-          inputSchema: tool.inputSchema || {
-            type: 'object',
-            properties: {},
-            required: [],
-          },
+          inputSchema: normalizeInputSchema(tool.inputSchema),
         })),
       },
     };

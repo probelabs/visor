@@ -193,6 +193,53 @@ With two facts extracted where only one is invalid, the correction pass runs for
       message_contains: "github/op_failed"
 ```
 
+## 9) API tool (`type: api`) with YAML tests
+
+You can verify OpenAPI-to-MCP conversion without real network calls by asserting generated-tool validation behavior:
+
+```yaml
+tools:
+  users-api:
+    type: api
+    name: users-api
+    spec: ./fixtures/api-tool-openapi.json
+    headers:
+      Authorization: "Bearer ${API_TEST_BEARER_TOKEN}"
+      X-Tenant-Id: "${API_TEST_TENANT_ID}"
+    whitelist: [get*]
+
+checks:
+  api-tool-missing-required-input:
+    type: mcp
+    transport: custom
+    method: getUser
+    methodArgs: {}
+    on: [manual]
+
+tests:
+  cases:
+    - name: api-tool-generated-operation-validates-input
+      event: manual
+      fixture: gh.pr_open.minimal
+      expect:
+        calls:
+          - step: api-tool-missing-required-input
+            exactly: 1
+        outputs:
+          - step: api-tool-missing-required-input
+            path: issues[0].message
+            matches: "(?i)required property 'id'"
+```
+
+This confirms generated operation tools are registered and invoked through `transport: custom`.
+The same config supports env-backed custom headers (for example `Authorization: "Bearer ${API_TEST_BEARER_TOKEN}"`).
+
+Also see end-to-end example suites:
+
+- `examples/api-tools-mcp-example.yaml` (embedded tests)
+- `examples/api-tools-ai-example.yaml` (embedded tests)
+- `examples/api-tools-inline-overlay-example.yaml` (embedded tests)
+
 ## Related Documentation
 
 - [Getting Started](./getting-started.md) - Introduction to the test framework

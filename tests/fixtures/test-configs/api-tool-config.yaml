@@ -1,0 +1,26 @@
+version: "1.0"
+
+tools:
+  users-api:
+    type: api
+    name: users-api
+    spec: ../api-tool-openapi.json
+    whitelist:
+      - "get*"
+
+checks:
+  api-tool-missing-required-input:
+    type: mcp
+    transport: custom
+    method: getUser
+    methodArgs: {}
+    on: [manual]
+
+  api-tool-whitelist-enforced:
+    type: mcp
+    transport: custom
+    method: createUser
+    methodArgs:
+      requestBody:
+        name: Alice
+    on: [issue_comment]

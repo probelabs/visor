@@ -102,7 +102,7 @@ export class ConfigWatcher {
   private configPath: string;
   private reloader: ConfigReloader;
   private debounceMs: number;
-  private watchers: Map<string, fs.FSWatcher> = new Map();
+  private watchers: Map<string, { close: () => void }> = new Map();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private signalHandler: (() => void) | null = null;
 
@@ -192,6 +192,8 @@ export class ConfigWatcher {
   }
 
   private watchFile(filePath: string): void {
+    const closeFns: Array<() => void> = [];
+
     try {
       const watcher = fs.watch(filePath, { persistent: false }, _eventType => {
         this.debouncedReload();
@@ -201,11 +203,33 @@ export class ConfigWatcher {
         logger.warn(`[ConfigWatcher] Watch error on ${filePath}: ${err.message}`);
       });
 
-      this.watchers.set(filePath, watcher);
+      closeFns.push(() => watcher.close());
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn(`[ConfigWatcher] Could not watch ${filePath}: ${msg}`);
     }
+
+    // Fallback polling watcher for environments where fs.watch can miss events.
+    const pollIntervalMs = Math.max(100, Math.floor(this.debounceMs / 2));
+    const pollListener = (curr: fs.Stats, prev: fs.Stats) => {
+      if (
+        curr.mtimeMs !== prev.mtimeMs ||
+        curr.ctimeMs !== prev.ctimeMs ||
+        curr.size !== prev.size
+      ) {
+        this.debouncedReload();
+      }
+    };
+    fs.watchFile(filePath, { interval: pollIntervalMs, persistent: false }, pollListener);
+    closeFns.push(() => fs.unwatchFile(filePath, pollListener));
+
+    this.watchers.set(filePath, {
+      close: () => {
+        for (const close of closeFns) {
+          close();
+        }
+      },
+    });
   }
 
   private debouncedReload(): void {

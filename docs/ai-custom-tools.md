@@ -2,7 +2,12 @@
 
 ## Overview
 
-This feature allows AI checks to use custom shell-based tools defined in your Visor configuration. Custom tools are automatically exposed to AI via ephemeral SSE (Server-Sent Events) MCP (Model Context Protocol) servers that start on-demand and clean up automatically.
+This feature allows AI checks to use custom tools defined in your Visor configuration:
+
+- shell/command tools (`exec`)
+- OpenAPI-backed API tool bundles (`type: api`)
+
+Custom tools are automatically exposed to AI via ephemeral SSE (Server-Sent Events) MCP (Model Context Protocol) servers that start on-demand and clean up automatically.
 
 ## Key Benefits
 
@@ -119,6 +124,43 @@ steps:
 - You prefer all MCP configuration in one place
 
 ### Basic Example
+
+### API Bundle Example (`type: api`)
+
+```yaml
+tools:
+  users-api:
+    type: api
+    name: users-api
+    spec: ./openapi/users.yaml
+    headers:
+      Authorization: "Bearer ${USERS_API_BEARER_TOKEN}"
+      X-Tenant-Id: "${USERS_API_TENANT_ID}"
+    overlays:
+      - ./openapi/users-overlay.yaml
+      - actions:
+          - target: "$.paths['/users/{id}'].get.operationId"
+            update: getUserFromInlineOverlay
+    whitelist: [getUser*, GET:/users/*]
+    targetUrl: https://api.example.com
+
+steps:
+  assistant:
+    type: ai
+    prompt: Use the users API tools to answer user questions.
+    ai_custom_tools: [users-api]
+```
+
+Each OpenAPI operation with an `operationId` is exposed as an MCP tool for the AI check.
+`spec` and `overlays` can both be loaded from file/URL or provided inline as YAML objects.
+Custom `headers` are supported, and header values can use env interpolation (for example `${USERS_API_BEARER_TOKEN}`).
+
+See runnable examples:
+
+- `examples/api-tools-library.yaml`
+- `examples/api-tools-ai-example.yaml` (embedded tests)
+- `examples/api-tools-mcp-example.yaml` (embedded tests)
+- `examples/api-tools-inline-overlay-example.yaml` (embedded tests)
 
 ### Advanced Example with Multiple Tools
 

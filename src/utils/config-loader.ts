@@ -61,6 +61,20 @@ export class ConfigLoader {
   }
 
   /**
+   * Annotate tool definitions with their source base directory.
+   * This is used at runtime to resolve relative tool assets (e.g., API specs).
+   */
+  private annotateToolsBaseDir(config: Partial<VisorConfig>, baseDir: string): void {
+    if (!config.tools || typeof config.tools !== 'object') {
+      return;
+    }
+    for (const tool of Object.values(config.tools)) {
+      if (!tool || typeof tool !== 'object') continue;
+      (tool as any).__baseDir = (tool as any).__baseDir || baseDir;
+    }
+  }
+
+  /**
    * Determine the source type from a string
    */
   private getSourceType(source: string): ConfigSourceType {
@@ -164,6 +178,9 @@ export class ConfigLoader {
         delete (config as any).include;
       }
 
+      // Remember where this config came from to resolve relative tool assets.
+      this.annotateToolsBaseDir(config, path.dirname(resolvedPath));
+
       // Update base directory for nested extends
       const previousBaseDir = this.options.baseDir;
       this.options.baseDir = path.dirname(resolvedPath);
@@ -240,6 +257,14 @@ export class ConfigLoader {
 
       if (!config || typeof config !== 'object') {
         throw new Error(`Invalid YAML in remote configuration: ${url}`);
+      }
+
+      try {
+        const parsed = new URL(url);
+        const baseUrl = new URL('.', parsed).toString();
+        this.annotateToolsBaseDir(config, baseUrl);
+      } catch {
+        // Best-effort only.
       }
 
       // Cache the configuration
@@ -428,11 +453,22 @@ export class ConfigLoader {
    */
   private validateLocalPath(resolvedPath: string): void {
     const projectRoot = this.options.projectRoot || process.cwd();
-    const normalizedPath = path.normalize(resolvedPath);
-    const normalizedRoot = path.normalize(projectRoot);
+    const canonicalize = (p: string): string => {
+      const resolved = path.resolve(p);
+      try {
+        return path.normalize(fs.realpathSync.native(resolved));
+      } catch {
+        return path.normalize(resolved);
+      }
+    };
+    const normalizedPath = canonicalize(resolvedPath);
+    const normalizedRoot = canonicalize(projectRoot);
 
     // Check if the resolved path is within the project root
-    if (!normalizedPath.startsWith(normalizedRoot)) {
+    if (
+      normalizedPath !== normalizedRoot &&
+      !normalizedPath.startsWith(`${normalizedRoot}${path.sep}`)
+    ) {
       throw new Error(
         `Security error: Path traversal detected. Cannot access files outside project root: ${projectRoot}`
       );
@@ -445,7 +481,7 @@ export class ConfigLoader {
       '/.ssh/',
       '/.aws/',
       '/.env',
-      '/private/',
+      '/private/etc/',
     ];
 
     const lowerPath = normalizedPath.toLowerCase();

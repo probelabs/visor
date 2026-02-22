@@ -270,6 +270,17 @@ export class StateMachineExecutionEngine {
         }
       : config;
 
+    // Register global custom tools once per run so MCP custom transport can resolve them.
+    try {
+      const { CheckProviderRegistry } = await import('./providers/check-provider-registry');
+      const registry = CheckProviderRegistry.getInstance();
+      registry.setCustomTools(configWithTagFilter.tools || {});
+    } catch (error) {
+      logger.warn(
+        `[StateMachine] Failed to register custom tools: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+
     // Build engine context
     const context = this.buildEngineContext(
       configWithTagFilter,

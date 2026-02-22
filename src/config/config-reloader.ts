@@ -27,6 +27,7 @@ export class ConfigReloader {
   private snapshotStore: ConfigSnapshotStore;
   private onSwap: (newConfig: VisorConfig) => void;
   private onError?: (err: Error) => void;
+  private lastConfigHash: string | null = null;
 
   constructor(options: ConfigReloaderOptions) {
     this.configPath = options.configPath;
@@ -44,12 +45,17 @@ export class ConfigReloader {
     try {
       logger.info(`[ConfigReloader] Reloading config from ${this.configPath}`);
       const newConfig = await this.configManager.loadConfig(this.configPath);
+      const snapshot = createSnapshotFromConfig(newConfig, 'reload', this.configPath);
+
+      // Avoid duplicate swaps when multiple filesystem events fire for one edit.
+      if (snapshot.config_hash === this.lastConfigHash) {
+        logger.debug('[ConfigReloader] No config changes detected; skipping swap');
+        return true;
+      }
 
       // Snapshot is best-effort — a save failure must not block the config swap
       try {
-        await this.snapshotStore.save(
-          createSnapshotFromConfig(newConfig, 'reload', this.configPath)
-        );
+        await this.snapshotStore.save(snapshot);
       } catch (snapErr: unknown) {
         logger.warn(
           `[ConfigReloader] Snapshot save failed (config will still be applied): ${snapErr}`
@@ -57,6 +63,7 @@ export class ConfigReloader {
       }
 
       this.onSwap(newConfig);
+      this.lastConfigHash = snapshot.config_hash;
       logger.info('[ConfigReloader] Config reloaded successfully');
       return true;
     } catch (err: unknown) {

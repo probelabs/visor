@@ -1,0 +1,55 @@
+version: "1.0"
+
+# Reuse API bundle definition from a separate file.
+extends: ./api-tools-library.yaml
+
+checks:
+  # Generated operation tool validates required OpenAPI args before any HTTP call.
+  api-tool-missing-required-input:
+    type: mcp
+    transport: custom
+    method: getUser
+    methodArgs: {}
+    on:
+      - manual
+
+  # Whitelist in api-tools-library.yaml allows get* only, so createUser is blocked.
+  api-tool-whitelist-enforced:
+    type: mcp
+    transport: custom
+    method: createUser
+    methodArgs:
+      requestBody:
+        name: Alice
+    on:
+      - issue_comment
+
+tests:
+  defaults:
+    strict: true
+  cases:
+    - name: api-example-validates-generated-operation-input
+      description: getUser requires path parameter id from the OpenAPI schema
+      event: manual
+      fixture: local.minimal
+      expect:
+        calls:
+          - step: api-tool-missing-required-input
+            exactly: 1
+        outputs:
+          - step: api-tool-missing-required-input
+            path: issues[0].message
+            matches: "(?i)required property 'id'"
+
+    - name: api-example-enforces-operation-whitelist
+      description: createUser is not exposed because api bundle whitelist is get*
+      event: issue_comment
+      fixture: gh.issue_comment.standard
+      expect:
+        calls:
+          - step: api-tool-whitelist-enforced
+            exactly: 1
+        outputs:
+          - step: api-tool-whitelist-enforced
+            path: issues[0].message
+            matches: "(?i)Custom tool not found: createUser"

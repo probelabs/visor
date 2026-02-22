@@ -1,5 +1,9 @@
 import { CustomToolExecutor } from '../../src/providers/custom-tool-executor';
 import { CustomToolDefinition } from '../../src/types/config';
+import fs from 'fs/promises';
+import os from 'os';
+import path from 'path';
+import http from 'http';
 
 describe('CustomToolExecutor', () => {
   let executor: CustomToolExecutor;
@@ -359,6 +363,339 @@ describe('CustomToolExecutor', () => {
 
       const result = await handler({ value: 'test' });
       expect(result).toContain('Result: test');
+    });
+  });
+
+  describe('api tool type', () => {
+    let server: http.Server;
+    let baseUrl: string;
+    let tempDir: string;
+    let specPath: string;
+    let fileOverlayPath: string;
+    let specDoc: Record<string, unknown>;
+
+    beforeEach(async () => {
+      server = http.createServer((req, res) => {
+        if (!req.url) {
+          res.statusCode = 404;
+          res.end();
+          return;
+        }
+
+        if (req.method === 'GET' && req.url.startsWith('/users/')) {
+          const id = req.url.split('/').pop();
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ id, name: `User-${id}` }));
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/users') {
+          let raw = '';
+          req.on('data', chunk => {
+            raw += chunk.toString();
+          });
+          req.on('end', () => {
+            const body = raw ? JSON.parse(raw) : {};
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ created: true, body }));
+          });
+          return;
+        }
+
+        res.statusCode = 404;
+        res.end();
+      });
+
+      await new Promise<void>(resolve => {
+        server.listen(0, '127.0.0.1', () => resolve());
+      });
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      baseUrl = `http://127.0.0.1:${port}`;
+
+      tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'visor-api-tool-test-'));
+      specPath = path.join(tempDir, 'openapi.json');
+      fileOverlayPath = path.join(tempDir, 'rename-overlay.yaml');
+      specDoc = {
+        openapi: '3.0.0',
+        info: { title: 'Test API', version: '1.0.0' },
+        servers: [{ url: baseUrl }],
+        paths: {
+          '/users/{id}': {
+            get: {
+              operationId: 'getUser',
+              summary: 'Get a user',
+              parameters: [
+                {
+                  name: 'id',
+                  in: 'path',
+                  required: true,
+                  schema: { type: 'string' },
+                },
+              ],
+              responses: {
+                200: {
+                  description: 'OK',
+                  content: {
+                    'application/json': {
+                      schema: {
+                        type: 'object',
+                        properties: {
+                          id: { type: 'string' },
+                          name: { type: 'string' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '/users': {
+            post: {
+              operationId: 'createUser',
+              summary: 'Create a user',
+              requestBody: {
+                required: true,
+                content: {
+                  'application/json': {
+                    schema: {
+                      type: 'object',
+                      properties: {
+                        name: { type: 'string' },
+                      },
+                      required: ['name'],
+                    },
+                  },
+                },
+              },
+              responses: {
+                200: {
+                  description: 'Created',
+                  content: {
+                    'application/json': {
+                      schema: {
+                        type: 'object',
+                        properties: {
+                          created: { type: 'boolean' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+      await fs.writeFile(
+        specPath,
+        JSON.stringify(specDoc, null, 2),
+        'utf8'
+      );
+      await fs.writeFile(
+        fileOverlayPath,
+        [
+          'actions:',
+          `  - target: "$.paths['/users/{id}'].get.operationId"`,
+          '    update: getUserFromFileOverlay',
+          '',
+        ].join('\n'),
+        'utf8'
+      );
+    });
+
+    afterEach(async () => {
+      await new Promise<void>(resolve => {
+        server.close(() => resolve());
+      });
+      await fs.rm(tempDir, { recursive: true, force: true });
+    });
+
+    it('should expose OpenAPI operations as MCP tools', async () => {
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api',
+        type: 'api',
+        spec: specPath,
+      };
+      executor.registerTool(apiTool);
+
+      const tools = await executor.listMcpTools();
+      const names = tools.map(tool => tool.name);
+
+      expect(names).toContain('getUser');
+      expect(names).toContain('createUser');
+      expect(names).not.toContain('users-api');
+    });
+
+    it('should execute generated OpenAPI operation tools', async () => {
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api',
+        type: 'api',
+        spec: specPath,
+      };
+      executor.registerTool(apiTool);
+
+      const getResult = await executor.execute('getUser', { id: '123' }, {});
+      expect(getResult).toEqual({ id: '123', name: 'User-123' });
+
+      const createResult = await executor.execute(
+        'createUser',
+        { requestBody: { name: 'Alice' } },
+        {}
+      );
+      expect(createResult).toEqual({
+        created: true,
+        body: { name: 'Alice' },
+      });
+    });
+
+    it('should support whitelist filtering for OpenAPI operations', async () => {
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api',
+        type: 'api',
+        spec: specPath,
+        whitelist: ['get*'],
+      };
+      executor.registerTool(apiTool);
+
+      const tools = await executor.listMcpTools();
+      const names = tools.map(tool => tool.name);
+
+      expect(names).toContain('getUser');
+      expect(names).not.toContain('createUser');
+    });
+
+    it('should support inline OpenAPI spec objects', async () => {
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api-inline-spec',
+        type: 'api',
+        spec: specDoc,
+      };
+      executor.registerTool(apiTool);
+
+      const tools = await executor.listMcpTools();
+      const names = tools.map(tool => tool.name);
+
+      expect(names).toContain('getUser');
+      expect(names).toContain('createUser');
+    });
+
+    it('should support inline overlay objects', async () => {
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api-inline-overlay',
+        type: 'api',
+        spec: specPath,
+        overlays: {
+          actions: [
+            {
+              target: "$.paths['/users/{id}'].get.operationId",
+              update: 'getUserFromInlineOverlay',
+            },
+          ],
+        },
+      };
+      executor.registerTool(apiTool);
+
+      const tools = await executor.listMcpTools();
+      const names = tools.map(tool => tool.name);
+
+      expect(names).toContain('getUserFromInlineOverlay');
+      expect(names).not.toContain('getUser');
+    });
+
+    it('should support file overlays with inline spec', async () => {
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api-inline-spec-file-overlay',
+        type: 'api',
+        spec: specDoc,
+        overlays: fileOverlayPath,
+      };
+      executor.registerTool(apiTool);
+
+      const tools = await executor.listMcpTools();
+      const names = tools.map(tool => tool.name);
+
+      expect(names).toContain('getUserFromFileOverlay');
+      expect(names).not.toContain('getUser');
+    });
+
+    it('should apply mixed overlay sources in order', async () => {
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api-mixed-overlays',
+        type: 'api',
+        spec: specPath,
+        overlays: [
+          fileOverlayPath,
+          {
+            actions: [
+              {
+                target: "$.paths['/users/{id}'].get.operationId",
+                update: 'getUserFromMixedInlineOverlay',
+              },
+            ],
+          },
+        ],
+      };
+      executor.registerTool(apiTool);
+
+      const tools = await executor.listMcpTools();
+      const names = tools.map(tool => tool.name);
+
+      expect(names).toContain('getUserFromMixedInlineOverlay');
+      expect(names).not.toContain('getUserFromFileOverlay');
+    });
+
+    it('should include API tool context when OpenAPI dereference fails', async () => {
+      const brokenSpec = {
+        openapi: '3.0.0',
+        info: { title: 'Broken API', version: '1.0.0' },
+        servers: [{ url: baseUrl }],
+        paths: {
+          '/broken': {
+            get: {
+              operationId: 'brokenOp',
+              responses: {
+                200: {
+                  description: 'OK',
+                  content: {
+                    'application/json': {
+                      schema: {
+                        $ref: '#/components/schemas/DoesNotExist',
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api-broken-spec',
+        type: 'api',
+        spec: brokenSpec,
+      };
+      executor.registerTool(apiTool);
+
+      await expect(executor.listMcpTools()).rejects.toThrow(
+        "Failed to dereference OpenAPI spec for API tool 'users-api-broken-spec' from inline spec"
+      );
+    });
+
+    it('should include tool and operation context when endpoint URL construction fails', async () => {
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api-invalid-url',
+        type: 'api',
+        spec: specDoc,
+        targetUrl: 'http://[::1',
+      };
+      executor.registerTool(apiTool);
+
+      await expect(executor.execute('getUser', { id: '123' }, {})).rejects.toThrow(
+        "Failed to construct endpoint URL for API tool 'users-api-invalid-url' operation 'getUser' (GET /users/{id})"
+      );
     });
   });
 });

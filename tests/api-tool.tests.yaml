@@ -1,0 +1,31 @@
+version: "1.0"
+extends: ./fixtures/test-configs/api-tool-config.yaml
+
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+
+  cases:
+    - name: api-tool-generated-operation-validates-input
+      event: manual
+      expect:
+        calls:
+          - step: api-tool-missing-required-input
+            exactly: 1
+        outputs:
+          - step: api-tool-missing-required-input
+            path: issues[0].message
+            matches: "(?i)required property 'id'"
+
+    - name: api-tool-whitelist-blocks-filtered-operations
+      event: issue_comment
+      fixture: gh.issue_comment.standard
+      expect:
+        calls:
+          - step: api-tool-whitelist-enforced
+            exactly: 1
+        outputs:
+          - step: api-tool-whitelist-enforced
+            path: issues[0].message
+            matches: "(?i)Custom tool not found: createUser"
