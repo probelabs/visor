@@ -299,7 +299,8 @@ tools:
 
 ### 5. OpenAPI Tool Bundle (`type: api`)
 
-You can expose an OpenAPI spec as MCP tools by defining a single reusable API bundle:
+You can expose an OpenAPI spec as MCP tools by defining a single reusable API bundle.
+Both `spec` and `overlays` support file/URL and inline object forms:
 
 ```yaml
 tools:
@@ -316,7 +317,34 @@ tools:
     targetUrl: https://petstore.example.com
     headers:
       X-Api-Version: "2026-01"
+      Authorization: "Bearer ${PETSTORE_BEARER_TOKEN}"
+      X-Tenant-Id: "${PETSTORE_TENANT_ID}"
     apiKey: "${{ env.PETSTORE_API_KEY }}"
+
+  profiles-api:
+    type: api
+    name: profiles-api
+    spec:
+      openapi: "3.0.0"
+      info: { title: Profiles API, version: "1.0.0" }
+      servers: [{ url: "https://api.example.com" }]
+      paths:
+        /profiles/{id}:
+          get:
+            operationId: getProfile
+            parameters:
+              - name: id
+                in: path
+                required: true
+                schema: { type: string }
+            responses:
+              "200":
+                description: OK
+    overlays:
+      - ./profiles-overlay.yaml
+      - actions:
+          - target: "$.paths['/profiles/{id}'].get.operationId"
+            update: getProfileFromInlineOverlay
 ```
 
 Behavior:
@@ -326,14 +354,17 @@ Behavior:
 - Inputs include path/query/header parameters and `requestBody`.
 - Security schemes from OpenAPI are applied at call time using `apiKey` / `securityCredentials`.
 - `whitelist`/`blacklist` supports glob patterns for `operationId` and `METHOD:/path`.
+- Overlay behavior matches `api-to-mcp`: action-based overlays (`actions[].target/update/remove`) plus deep-merge overlays when `actions` is omitted.
+- `headers` values can reference environment variables (for example, `${PETSTORE_BEARER_TOKEN}` or `${{ env.PETSTORE_BEARER_TOKEN }}`).
 
 This works with `ai_custom_tools`, `ai_mcp_servers.<name>.tools`, and `transport: custom` MCP execution.
 
 Runnable examples in this repo:
 
 - `examples/api-tools-library.yaml` (reusable API bundle in a separate file)
-- `examples/api-tools-mcp-example.yaml` + `examples/api-tools-mcp-example.tests.yaml`
-- `examples/api-tools-ai-example.yaml` + `examples/api-tools-ai-example.tests.yaml`
+- `examples/api-tools-mcp-example.yaml` (includes embedded tests)
+- `examples/api-tools-ai-example.yaml` (includes embedded tests)
+- `examples/api-tools-inline-overlay-example.yaml` (includes embedded tests)
 
 ## Tool Libraries and Extends
 

@@ -1196,10 +1196,13 @@ export interface CustomToolDefinition {
   outputSchema?: Record<string, unknown>;
 
   // === OpenAPI-backed API tool fields (type: 'api') ===
-  /** OpenAPI specification path or URL (required for type: 'api') */
-  spec?: string;
-  /** Overlay file paths/URLs to apply in order */
-  overlays?: string[] | string;
+  /** OpenAPI specification path/URL or inline object (required for type: 'api') */
+  spec?: string | Record<string, unknown>;
+  /** Overlay path/URL, inline object, or a mixed array applied in order */
+  overlays?:
+    | string
+    | Record<string, unknown>
+    | Array<string | Record<string, unknown>>;
   /** Override API base URL instead of OpenAPI servers */
   targetUrl?: string;
   /** Alias for targetUrl (snake_case) */

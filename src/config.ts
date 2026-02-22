@@ -934,11 +934,37 @@ export class ConfigManager {
       for (const [toolName, toolDef] of Object.entries(config.tools)) {
         const type = toolDef.type || 'command';
         if (type === 'api') {
-          if (!toolDef.spec || typeof toolDef.spec !== 'string') {
+          const spec = toolDef.spec;
+          const hasStringSpec = typeof spec === 'string' && spec.trim().length > 0;
+          const hasInlineSpec =
+            !!spec && typeof spec === 'object' && !Array.isArray(spec);
+          if (!hasStringSpec && !hasInlineSpec) {
             errors.push({
               field: `tools.${toolName}.spec`,
               message: `Invalid tool configuration for "${toolName}": missing spec field (required for type: api)`,
             });
+          }
+
+          const overlays = toolDef.overlays;
+          if (overlays !== undefined) {
+            const isInlineOverlay =
+              !!overlays && typeof overlays === 'object' && !Array.isArray(overlays);
+            const isStringOverlay = typeof overlays === 'string';
+            const isMixedArrayOverlay =
+              Array.isArray(overlays) &&
+              overlays.every(
+                item =>
+                  typeof item === 'string' ||
+                  (!!item && typeof item === 'object' && !Array.isArray(item))
+              );
+
+            if (!isInlineOverlay && !isStringOverlay && !isMixedArrayOverlay) {
+              errors.push({
+                field: `tools.${toolName}.overlays`,
+                message: `Invalid tool configuration for "${toolName}": overlays must be a string, object, or array of strings/objects`,
+                value: overlays,
+              });
+            }
           }
         } else if (!toolDef.exec || typeof toolDef.exec !== 'string') {
           errors.push({

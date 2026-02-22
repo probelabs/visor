@@ -1,0 +1,72 @@
+version: "1.0"
+
+tools:
+  users-api-file-overlay:
+    type: api
+    name: users-api-file-overlay
+    spec: ../api-tool-openapi.json
+    overlays:
+      - ../api-tool-file-overlay.yaml
+    whitelist:
+      - getUserFromFileOverlay
+
+  users-api-inline-mixed-overlay:
+    type: api
+    name: users-api-inline-mixed-overlay
+    spec:
+      openapi: "3.0.0"
+      info:
+        title: Inline Overlay Test API
+        version: "1.0.0"
+      servers:
+        - url: https://example.invalid
+      paths:
+        /profiles/{id}:
+          get:
+            operationId: getProfile
+            summary: Get profile by id
+            parameters:
+              - name: id
+                in: path
+                required: true
+                schema:
+                  type: string
+            responses:
+              "200":
+                description: Profile payload
+                content:
+                  application/json:
+                    schema:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        handle:
+                          type: string
+    overlays:
+      - ../api-tool-inline-file-overlay.yaml
+      - actions:
+          - target: "$.paths['/profiles/{id}'].get.operationId"
+            update: getProfileFromInlineOverlay
+
+checks:
+  api-file-spec-file-overlay-validates-input:
+    type: mcp
+    transport: custom
+    method: getUserFromFileOverlay
+    methodArgs: {}
+    on: [manual]
+
+  api-inline-spec-mixed-overlays-validates-input:
+    type: mcp
+    transport: custom
+    method: getProfileFromInlineOverlay
+    methodArgs: {}
+    on: [issue_comment]
+
+  api-inline-spec-original-operation-replaced:
+    type: mcp
+    transport: custom
+    method: getProfile
+    methodArgs: {}
+    on: [pr_opened]

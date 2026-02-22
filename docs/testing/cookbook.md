@@ -203,6 +203,9 @@ tools:
     type: api
     name: users-api
     spec: ./fixtures/api-tool-openapi.json
+    headers:
+      Authorization: "Bearer ${API_TEST_BEARER_TOKEN}"
+      X-Tenant-Id: "${API_TEST_TENANT_ID}"
     whitelist: [get*]
 
 checks:
@@ -229,11 +232,13 @@ tests:
 ```
 
 This confirms generated operation tools are registered and invoked through `transport: custom`.
+The same config supports env-backed custom headers (for example `Authorization: "Bearer ${API_TEST_BEARER_TOKEN}"`).
 
 Also see end-to-end example suites:
 
-- `examples/api-tools-mcp-example.tests.yaml`
-- `examples/api-tools-ai-example.tests.yaml`
+- `examples/api-tools-mcp-example.yaml` (embedded tests)
+- `examples/api-tools-ai-example.yaml` (embedded tests)
+- `examples/api-tools-inline-overlay-example.yaml` (embedded tests)
 
 ## Related Documentation
 

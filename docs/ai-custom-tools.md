@@ -133,6 +133,14 @@ tools:
     type: api
     name: users-api
     spec: ./openapi/users.yaml
+    headers:
+      Authorization: "Bearer ${USERS_API_BEARER_TOKEN}"
+      X-Tenant-Id: "${USERS_API_TENANT_ID}"
+    overlays:
+      - ./openapi/users-overlay.yaml
+      - actions:
+          - target: "$.paths['/users/{id}'].get.operationId"
+            update: getUserFromInlineOverlay
     whitelist: [getUser*, GET:/users/*]
     targetUrl: https://api.example.com
 
@@ -144,14 +152,15 @@ steps:
 ```
 
 Each OpenAPI operation with an `operationId` is exposed as an MCP tool for the AI check.
+`spec` and `overlays` can both be loaded from file/URL or provided inline as YAML objects.
+Custom `headers` are supported, and header values can use env interpolation (for example `${USERS_API_BEARER_TOKEN}`).
 
 See runnable examples:
 
 - `examples/api-tools-library.yaml`
-- `examples/api-tools-ai-example.yaml`
-- `examples/api-tools-mcp-example.yaml`
-- `examples/api-tools-ai-example.tests.yaml`
-- `examples/api-tools-mcp-example.tests.yaml`
+- `examples/api-tools-ai-example.yaml` (embedded tests)
+- `examples/api-tools-mcp-example.yaml` (embedded tests)
+- `examples/api-tools-inline-overlay-example.yaml` (embedded tests)
 
 ### Advanced Example with Multiple Tools
 

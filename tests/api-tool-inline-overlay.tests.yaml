@@ -1,0 +1,43 @@
+version: "1.0"
+extends: ./fixtures/test-configs/api-tool-inline-overlay-config.yaml
+
+tests:
+  defaults:
+    strict: true
+
+  cases:
+    - name: api-tool-file-overlay-renames-generated-operation
+      event: manual
+      fixture: local.minimal
+      expect:
+        calls:
+          - step: api-file-spec-file-overlay-validates-input
+            exactly: 1
+        outputs:
+          - step: api-file-spec-file-overlay-validates-input
+            path: issues[0].message
+            matches: "(?i)required property 'id'"
+
+    - name: api-tool-inline-spec-mixed-overlays-apply-in-order
+      event: issue_comment
+      fixture: gh.issue_comment.standard
+      expect:
+        calls:
+          - step: api-inline-spec-mixed-overlays-validates-input
+            exactly: 1
+        outputs:
+          - step: api-inline-spec-mixed-overlays-validates-input
+            path: issues[0].message
+            matches: "(?i)required property 'id'"
+
+    - name: api-tool-inline-overlay-replaces-original-operation
+      event: pr_opened
+      fixture: gh.pr_open.minimal
+      expect:
+        calls:
+          - step: api-inline-spec-original-operation-replaced
+            exactly: 1
+        outputs:
+          - step: api-inline-spec-original-operation-replaced
+            path: issues[0].message
+            matches: "(?i)Custom tool not found: getProfile"

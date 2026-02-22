@@ -63,6 +63,14 @@ tools:
     type: api
     name: users-api
     spec: ./openapi/users.yaml
+    headers:
+      Authorization: "Bearer ${USERS_API_BEARER_TOKEN}"
+      X-Tenant-Id: "${USERS_API_TENANT_ID}"
+    overlays:
+      - ./openapi/users-overlay.yaml
+      - actions:
+          - target: "$.paths['/users/{id}'].get.operationId"
+            update: getUserFromInlineOverlay
     whitelist: [get*]
     targetUrl: https://api.example.com
 
@@ -74,14 +82,15 @@ steps:
 ```
 
 `users-api` is a reusable tool bundle; each OpenAPI operation becomes an MCP tool exposed to AI.
+`spec` and `overlays` support both inline objects and file/URL references.
+`headers` also supports environment-variable interpolation (for example `Authorization: "Bearer ${USERS_API_BEARER_TOKEN}"`).
 
 Repository examples:
 
 - `examples/api-tools-library.yaml`
-- `examples/api-tools-ai-example.yaml`
-- `examples/api-tools-mcp-example.yaml`
-- `examples/api-tools-ai-example.tests.yaml`
-- `examples/api-tools-mcp-example.tests.yaml`
+- `examples/api-tools-ai-example.yaml` (embedded tests)
+- `examples/api-tools-mcp-example.yaml` (embedded tests)
+- `examples/api-tools-inline-overlay-example.yaml` (embedded tests)
 
 ### Example 1: Security Scanning
 

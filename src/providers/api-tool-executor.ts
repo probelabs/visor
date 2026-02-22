@@ -9,6 +9,7 @@ import { logger } from '../logger';
 import type { CustomToolDefinition } from '../types/config';
 
 type JsonSchemaObject = Record<string, unknown>;
+type OverlaySource = string | Record<string, unknown>;
 
 interface ApiToolConfig {
   customHeaders: Record<string, string>;
@@ -71,6 +72,25 @@ function toStringArray(value: string[] | string | undefined): string[] {
     .split(',')
     .map(item => item.trim())
     .filter(Boolean);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function toOverlaySourceArray(
+  value: string | Record<string, unknown> | Array<string | Record<string, unknown>> | undefined
+): OverlaySource[] {
+  if (!value) return [];
+  if (typeof value === 'string' || isPlainObject(value)) {
+    return [value];
+  }
+  if (Array.isArray(value)) {
+    return value.filter(
+      item => typeof item === 'string' || isPlainObject(item)
+    ) as OverlaySource[];
+  }
+  return [];
 }
 
 function resolvePathOrUrl(candidate: string, baseDir: string): string {
@@ -418,23 +438,33 @@ async function loadOpenApiDocument(tool: CustomToolDefinition): Promise<any> {
     }
     return configuredBaseDir || process.cwd();
   })();
-  const specLocation = resolvePathOrUrl(tool.spec, baseDir);
-
   let openapi: any;
-  if (isHttpUrl(specLocation)) {
-    const raw = await readTextFromPathOrUrl(specLocation);
-    const parsed = parseJsonOrYaml(raw, specLocation);
-    openapi = await SwaggerParser.dereference(parsed);
+  if (typeof tool.spec === 'string') {
+    const specLocation = resolvePathOrUrl(tool.spec, baseDir);
+    if (isHttpUrl(specLocation)) {
+      const raw = await readTextFromPathOrUrl(specLocation);
+      const parsed = parseJsonOrYaml(raw, specLocation);
+      openapi = await SwaggerParser.dereference(parsed);
+    } else {
+      openapi = await SwaggerParser.dereference(specLocation);
+    }
+  } else if (isPlainObject(tool.spec)) {
+    openapi = await SwaggerParser.dereference(JSON.parse(JSON.stringify(tool.spec)));
   } else {
-    openapi = await SwaggerParser.dereference(specLocation);
+    throw new Error(
+      `API tool '${tool.name}' has invalid spec field (expected string path/URL or object)`
+    );
   }
 
-  const overlays = toStringArray(tool.overlays);
+  const overlays = toOverlaySourceArray(tool.overlays);
   let working = openapi;
-  for (const overlayPath of overlays) {
-    const resolved = resolvePathOrUrl(overlayPath, baseDir);
-    const raw = await readTextFromPathOrUrl(resolved);
-    const overlay = parseJsonOrYaml(raw, resolved);
+  for (const overlaySource of overlays) {
+    let overlay: any = overlaySource;
+    if (typeof overlaySource === 'string') {
+      const resolved = resolvePathOrUrl(overlaySource, baseDir);
+      const raw = await readTextFromPathOrUrl(resolved);
+      overlay = parseJsonOrYaml(raw, resolved);
+    }
     working = applyOverlayActions(working, overlay);
   }
 

@@ -8,6 +8,9 @@ tools:
     name: users-api
     description: Reusable users API tool bundle generated from OpenAPI
     spec: ./openapi/users-api.json
+    headers:
+      Authorization: "Bearer ${USERS_API_BEARER_TOKEN}"
+      X-Tenant-Id: "${USERS_API_TENANT_ID}"
     whitelist:
       - "get*"
 

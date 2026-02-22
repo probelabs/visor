@@ -781,39 +781,34 @@ export class VisorTestRunner {
     }
     // Load merged config via ConfigManager (honors extends), then clone for test overrides
     const cm = new ConfigManager();
-    // Prefer loading the base config referenced by extends; fall back to the tests file
-    let configFileToLoad = testsPath;
-    const parentExt = suite.extends;
-    if (parentExt) {
-      const first = Array.isArray(parentExt) ? parentExt[0] : parentExt;
-      if (typeof first === 'string') {
-        const resolved = path.isAbsolute(first)
-          ? first
-          : path.resolve(path.dirname(testsPath), first);
-        configFileToLoad = resolved;
-      }
-    }
     let config: any;
-    if (configFileToLoad !== testsPath) {
-      config = await cm.loadConfig(configFileToLoad, { validate: true, mergeDefaults: true });
+    // Prefer co-located config when present, even if tests use extends.
+    // This preserves local checks/steps and still honors extends through ConfigManager.
+    const rawCfg = fs.readFileSync(testsPath, 'utf8');
+    const docAny = yaml.load(rawCfg) as any;
+    const hasCoLocatedConfig =
+      !!docAny && typeof docAny === 'object' && (docAny.steps || docAny.checks);
+    if (hasCoLocatedConfig) {
+      const cfgObj: Record<string, unknown> = { ...(docAny as Record<string, unknown>) };
+      delete (cfgObj as Record<string, unknown>)['tests'];
+      config = await cm.loadConfigFromObject(cfgObj as any, {
+        validate: true,
+        mergeDefaults: true,
+        baseDir: path.dirname(testsPath),
+      });
     } else {
-      // Load co-located config directly from the tests file by stripping
-      // the tests block in-memory. No temp files, preserve relative baseDir.
-      const rawCfg = fs.readFileSync(testsPath, 'utf8');
-      const docAny = yaml.load(rawCfg) as any;
-      if (docAny && typeof docAny === 'object' && (docAny.steps || docAny.checks)) {
-        const cfgObj: Record<string, unknown> = { ...(docAny as Record<string, unknown>) };
-        delete (cfgObj as Record<string, unknown>)['tests'];
-        config = await cm.loadConfigFromObject(cfgObj as any, {
-          validate: true,
-          mergeDefaults: true,
-          baseDir: path.dirname(testsPath),
-        });
-      } else {
-        // If it's not a co-located config, fall back to loading the tests file as a config
-        // (this will likely fail validation explicitly and be reported cleanly).
-        config = await cm.loadConfig(configFileToLoad, { validate: true, mergeDefaults: true });
+      // For tests-only files, prefer loading the base config referenced by extends.
+      let configFileToLoad = testsPath;
+      const parentExt = suite.extends;
+      if (parentExt) {
+        const first = Array.isArray(parentExt) ? parentExt[0] : parentExt;
+        if (typeof first === 'string') {
+          configFileToLoad = path.isAbsolute(first)
+            ? first
+            : path.resolve(path.dirname(testsPath), first);
+        }
       }
+      config = await cm.loadConfig(configFileToLoad, { validate: true, mergeDefaults: true });
     }
     if (!config.checks) {
       throw new Error('Loaded config has no checks; cannot run tests');

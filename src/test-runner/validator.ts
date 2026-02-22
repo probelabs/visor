@@ -24,6 +24,7 @@ const schema: any = {
     // Optional: co-located config (ignored by tests DSL validator)
     steps: { type: 'object' },
     checks: { type: 'object' },
+    tools: { type: 'object' },
     output: { type: 'object' },
     hooks: { type: 'object' },
     slack: { type: 'object' },
@@ -396,6 +397,7 @@ const knownKeys = new Set([
   'version',
   'extends',
   'tests',
+  'tools',
   'workspace',
   // tests
   'tests.defaults',

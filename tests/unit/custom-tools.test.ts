@@ -371,6 +371,8 @@ describe('CustomToolExecutor', () => {
     let baseUrl: string;
     let tempDir: string;
     let specPath: string;
+    let fileOverlayPath: string;
+    let specDoc: Record<string, unknown>;
 
     beforeEach(async () => {
       server = http.createServer((req, res) => {
@@ -413,73 +415,34 @@ describe('CustomToolExecutor', () => {
 
       tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'visor-api-tool-test-'));
       specPath = path.join(tempDir, 'openapi.json');
-      await fs.writeFile(
-        specPath,
-        JSON.stringify(
-          {
-            openapi: '3.0.0',
-            info: { title: 'Test API', version: '1.0.0' },
-            servers: [{ url: baseUrl }],
-            paths: {
-              '/users/{id}': {
-                get: {
-                  operationId: 'getUser',
-                  summary: 'Get a user',
-                  parameters: [
-                    {
-                      name: 'id',
-                      in: 'path',
-                      required: true,
-                      schema: { type: 'string' },
-                    },
-                  ],
-                  responses: {
-                    200: {
-                      description: 'OK',
-                      content: {
-                        'application/json': {
-                          schema: {
-                            type: 'object',
-                            properties: {
-                              id: { type: 'string' },
-                              name: { type: 'string' },
-                            },
-                          },
-                        },
-                      },
-                    },
-                  },
+      fileOverlayPath = path.join(tempDir, 'rename-overlay.yaml');
+      specDoc = {
+        openapi: '3.0.0',
+        info: { title: 'Test API', version: '1.0.0' },
+        servers: [{ url: baseUrl }],
+        paths: {
+          '/users/{id}': {
+            get: {
+              operationId: 'getUser',
+              summary: 'Get a user',
+              parameters: [
+                {
+                  name: 'id',
+                  in: 'path',
+                  required: true,
+                  schema: { type: 'string' },
                 },
-              },
-              '/users': {
-                post: {
-                  operationId: 'createUser',
-                  summary: 'Create a user',
-                  requestBody: {
-                    required: true,
-                    content: {
-                      'application/json': {
-                        schema: {
-                          type: 'object',
-                          properties: {
-                            name: { type: 'string' },
-                          },
-                          required: ['name'],
-                        },
-                      },
-                    },
-                  },
-                  responses: {
-                    200: {
-                      description: 'Created',
-                      content: {
-                        'application/json': {
-                          schema: {
-                            type: 'object',
-                            properties: {
-                              created: { type: 'boolean' },
-                            },
-                          },
+              ],
+              responses: {
+                200: {
+                  description: 'OK',
+                  content: {
+                    'application/json': {
+                      schema: {
+                        type: 'object',
+                        properties: {
+                          id: { type: 'string' },
+                          name: { type: 'string' },
                         },
                       },
                     },
@@ -488,9 +451,56 @@ describe('CustomToolExecutor', () => {
               },
             },
           },
-          null,
-          2
-        ),
+          '/users': {
+            post: {
+              operationId: 'createUser',
+              summary: 'Create a user',
+              requestBody: {
+                required: true,
+                content: {
+                  'application/json': {
+                    schema: {
+                      type: 'object',
+                      properties: {
+                        name: { type: 'string' },
+                      },
+                      required: ['name'],
+                    },
+                  },
+                },
+              },
+              responses: {
+                200: {
+                  description: 'Created',
+                  content: {
+                    'application/json': {
+                      schema: {
+                        type: 'object',
+                        properties: {
+                          created: { type: 'boolean' },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+      await fs.writeFile(
+        specPath,
+        JSON.stringify(specDoc, null, 2),
+        'utf8'
+      );
+      await fs.writeFile(
+        fileOverlayPath,
+        [
+          'actions:',
+          `  - target: "$.paths['/users/{id}'].get.operationId"`,
+          '    update: getUserFromFileOverlay',
+          '',
+        ].join('\n'),
         'utf8'
       );
     });
@@ -554,6 +564,86 @@ describe('CustomToolExecutor', () => {
 
       expect(names).toContain('getUser');
       expect(names).not.toContain('createUser');
+    });
+
+    it('should support inline OpenAPI spec objects', async () => {
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api-inline-spec',
+        type: 'api',
+        spec: specDoc,
+      };
+      executor.registerTool(apiTool);
+
+      const tools = await executor.listMcpTools();
+      const names = tools.map(tool => tool.name);
+
+      expect(names).toContain('getUser');
+      expect(names).toContain('createUser');
+    });
+
+    it('should support inline overlay objects', async () => {
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api-inline-overlay',
+        type: 'api',
+        spec: specPath,
+        overlays: {
+          actions: [
+            {
+              target: "$.paths['/users/{id}'].get.operationId",
+              update: 'getUserFromInlineOverlay',
+            },
+          ],
+        },
+      };
+      executor.registerTool(apiTool);
+
+      const tools = await executor.listMcpTools();
+      const names = tools.map(tool => tool.name);
+
+      expect(names).toContain('getUserFromInlineOverlay');
+      expect(names).not.toContain('getUser');
+    });
+
+    it('should support file overlays with inline spec', async () => {
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api-inline-spec-file-overlay',
+        type: 'api',
+        spec: specDoc,
+        overlays: fileOverlayPath,
+      };
+      executor.registerTool(apiTool);
+
+      const tools = await executor.listMcpTools();
+      const names = tools.map(tool => tool.name);
+
+      expect(names).toContain('getUserFromFileOverlay');
+      expect(names).not.toContain('getUser');
+    });
+
+    it('should apply mixed overlay sources in order', async () => {
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api-mixed-overlays',
+        type: 'api',
+        spec: specPath,
+        overlays: [
+          fileOverlayPath,
+          {
+            actions: [
+              {
+                target: "$.paths['/users/{id}'].get.operationId",
+                update: 'getUserFromMixedInlineOverlay',
+              },
+            ],
+          },
+        ],
+      };
+      executor.registerTool(apiTool);
+
+      const tools = await executor.listMcpTools();
+      const names = tools.map(tool => tool.name);
+
+      expect(names).toContain('getUserFromMixedInlineOverlay');
+      expect(names).not.toContain('getUserFromFileOverlay');
     });
   });
 });
