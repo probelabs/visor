@@ -693,9 +693,10 @@ var require_package = __commonJS({
         format: "prettier --write src tests",
         "format:check": "prettier --check src tests",
         clean: "",
+        "clean:traces": "node scripts/clean-traces.js",
         prebuild: "npm run clean && node scripts/generate-config-schema.js",
-        pretest: "node scripts/generate-config-schema.js && npm run build:cli",
-        "pretest:unit": "node scripts/generate-config-schema.js && npm run build:cli",
+        pretest: "npm run clean:traces && node scripts/generate-config-schema.js && npm run build:cli",
+        "pretest:unit": "npm run clean:traces && node scripts/generate-config-schema.js && npm run build:cli",
         "test:with-build": "npm run build:cli && jest",
         "test:yaml": "node dist/index.js test --progress compact",
         "test:yaml:parallel": "node dist/index.js test --progress compact --max-parallel 4",
@@ -742,13 +743,14 @@ var require_package = __commonJS({
       homepage: "https://github.com/probelabs/visor#readme",
       dependencies: {
         "@actions/core": "^1.11.1",
+        "@apidevtools/swagger-parser": "^12.1.0",
         "@modelcontextprotocol/sdk": "^1.25.3",
         "@nyariv/sandboxjs": "github:probelabs/SandboxJS#f1c13b8eee98734a8ea024061eada4aa9a9ff2e9",
         "@octokit/action": "^8.0.2",
         "@octokit/auth-app": "^8.1.0",
         "@octokit/core": "^7.0.3",
         "@octokit/rest": "^22.0.0",
-        "@probelabs/probe": "^0.6.0-rc245",
+        "@probelabs/probe": "^0.6.0-rc255",
         "@types/commander": "^2.12.0",
         "@types/uuid": "^10.0.0",
         ajv: "^8.17.1",
@@ -757,10 +759,13 @@ var require_package = __commonJS({
         blessed: "^0.1.81",
         "cli-table3": "^0.6.5",
         commander: "^14.0.0",
+        deepmerge: "^4.3.1",
         dotenv: "^17.2.3",
         ignore: "^7.0.5",
         "js-yaml": "^4.1.0",
+        "jsonpath-plus": "^10.4.0",
         liquidjs: "^10.21.1",
+        minimatch: "^10.2.2",
         "node-cron": "^3.0.3",
         open: "^9.1.0",
         "simple-git": "^3.28.0",
@@ -938,19 +943,19 @@ function __getOrCreateNdjsonPath() {
   try {
     if (process.env.VISOR_TELEMETRY_SINK && process.env.VISOR_TELEMETRY_SINK !== "file")
       return null;
-    const path25 = require("path");
-    const fs21 = require("fs");
+    const path26 = require("path");
+    const fs22 = require("fs");
     if (process.env.VISOR_FALLBACK_TRACE_FILE) {
       __ndjsonPath = process.env.VISOR_FALLBACK_TRACE_FILE;
-      const dir = path25.dirname(__ndjsonPath);
-      if (!fs21.existsSync(dir)) fs21.mkdirSync(dir, { recursive: true });
+      const dir = path26.dirname(__ndjsonPath);
+      if (!fs22.existsSync(dir)) fs22.mkdirSync(dir, { recursive: true });
       return __ndjsonPath;
     }
-    const outDir = process.env.VISOR_TRACE_DIR || path25.join(process.cwd(), "output", "traces");
-    if (!fs21.existsSync(outDir)) fs21.mkdirSync(outDir, { recursive: true });
+    const outDir = process.env.VISOR_TRACE_DIR || path26.join(process.cwd(), "output", "traces");
+    if (!fs22.existsSync(outDir)) fs22.mkdirSync(outDir, { recursive: true });
     if (!__ndjsonPath) {
       const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      __ndjsonPath = path25.join(outDir, `${ts}.ndjson`);
+      __ndjsonPath = path26.join(outDir, `${ts}.ndjson`);
     }
     return __ndjsonPath;
   } catch {
@@ -959,11 +964,11 @@ function __getOrCreateNdjsonPath() {
 }
 function _appendRunMarker() {
   try {
-    const fs21 = require("fs");
+    const fs22 = require("fs");
     const p = __getOrCreateNdjsonPath();
     if (!p) return;
     const line = { name: "visor.run", attributes: { started: true } };
-    fs21.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
+    fs22.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
   } catch {
   }
 }
@@ -3697,9 +3702,9 @@ function configureLiquidWithExtensions(liquid) {
   });
   liquid.registerFilter("get", (obj, pathExpr) => {
     if (obj == null) return void 0;
-    const path25 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
-    if (!path25) return obj;
-    const parts = path25.split(".");
+    const path26 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
+    if (!path26) return obj;
+    const parts = path26.split(".");
     let cur = obj;
     for (const p of parts) {
       if (cur == null) return void 0;
@@ -3818,9 +3823,9 @@ function configureLiquidWithExtensions(liquid) {
           }
         }
         const defaultRole = typeof rolesCfg.default === "string" && rolesCfg.default.trim() ? rolesCfg.default.trim() : void 0;
-        const getNested = (obj, path25) => {
-          if (!obj || !path25) return void 0;
-          const parts = path25.split(".");
+        const getNested = (obj, path26) => {
+          if (!obj || !path26) return void 0;
+          const parts = path26.split(".");
           let cur = obj;
           for (const p of parts) {
             if (cur == null) return void 0;
@@ -6372,8 +6377,8 @@ var init_dependency_gating = __esm({
 async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs21 = await import("fs/promises");
-    const path25 = await import("path");
+    const fs22 = await import("fs/promises");
+    const path26 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
@@ -6381,24 +6386,24 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
       templateContent = String(checkConfig.template.content);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path25.resolve(process.cwd(), file);
-      templateContent = await fs21.readFile(resolved, "utf-8");
+      const resolved = path26.resolve(process.cwd(), file);
+      templateContent = await fs22.readFile(resolved, "utf-8");
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path25.join(__dirname, "output", sanitized, "template.liquid"),
+          path26.join(__dirname, "output", sanitized, "template.liquid"),
           // bundled: dist/output/
-          path25.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path26.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // source: output/
-          path25.join(process.cwd(), "output", sanitized, "template.liquid"),
+          path26.join(process.cwd(), "output", sanitized, "template.liquid"),
           // fallback: cwd/output/
-          path25.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          path26.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
           // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs21.readFile(p, "utf-8");
+            templateContent = await fs22.readFile(p, "utf-8");
             if (templateContent) break;
           } catch {
           }
@@ -6803,7 +6808,7 @@ async function processDiffWithOutline(diffContent) {
   }
   try {
     const originalProbePath = process.env.PROBE_PATH;
-    const fs21 = require("fs");
+    const fs22 = require("fs");
     const possiblePaths = [
       // Relative to current working directory (most common in production)
       path6.join(process.cwd(), "node_modules/@probelabs/probe/bin/probe-binary"),
@@ -6814,7 +6819,7 @@ async function processDiffWithOutline(diffContent) {
     ];
     let probeBinaryPath;
     for (const candidatePath of possiblePaths) {
-      if (fs21.existsSync(candidatePath)) {
+      if (fs22.existsSync(candidatePath)) {
         probeBinaryPath = candidatePath;
         break;
       }
@@ -7900,8 +7905,8 @@ ${schemaString}`);
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs21 = require("fs");
-              const path25 = require("path");
+              const fs22 = require("fs");
+              const path26 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const provider = this.config.provider || "auto";
               const model = this.config.model || "default";
@@ -8015,20 +8020,20 @@ ${"=".repeat(60)}
 `;
               readableVersion += `${"=".repeat(60)}
 `;
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path25.join(process.cwd(), "debug-artifacts");
-              if (!fs21.existsSync(debugArtifactsDir)) {
-                fs21.mkdirSync(debugArtifactsDir, { recursive: true });
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path26.join(process.cwd(), "debug-artifacts");
+              if (!fs22.existsSync(debugArtifactsDir)) {
+                fs22.mkdirSync(debugArtifactsDir, { recursive: true });
               }
-              const debugFile = path25.join(
+              const debugFile = path26.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.json`
               );
-              fs21.writeFileSync(debugFile, debugJson, "utf-8");
-              const readableFile = path25.join(
+              fs22.writeFileSync(debugFile, debugJson, "utf-8");
+              const readableFile = path26.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.txt`
               );
-              fs21.writeFileSync(readableFile, readableVersion, "utf-8");
+              fs22.writeFileSync(readableFile, readableVersion, "utf-8");
               log(`
 \u{1F4BE} Full debug info saved to:`);
               log(`   JSON: ${debugFile}`);
@@ -8061,8 +8066,8 @@ ${"=".repeat(60)}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs21 = require("fs");
-              const path25 = require("path");
+              const fs22 = require("fs");
+              const path26 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny2 = agent;
               let fullHistory = [];
@@ -8073,8 +8078,8 @@ ${"=".repeat(60)}
               } else if (agentAny2._messages) {
                 fullHistory = agentAny2._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path25.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path25.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path26.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path26.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -8086,7 +8091,7 @@ ${"=".repeat(60)}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs21.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs22.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -8113,7 +8118,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs21.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs22.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -8122,11 +8127,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs21 = require("fs");
-              const path25 = require("path");
+              const fs22 = require("fs");
+              const path26 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path25.join(process.cwd(), "debug-artifacts");
-              const responseFile = path25.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path26.join(process.cwd(), "debug-artifacts");
+              const responseFile = path26.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -8159,7 +8164,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs21.writeFileSync(responseFile, responseContent, "utf-8");
+              fs22.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -8175,9 +8180,9 @@ ${"=".repeat(60)}
                 await agentAny._telemetryConfig.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${agentAny._traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs21 = require("fs");
-                  if (fs21.existsSync(agentAny._traceFilePath)) {
-                    const stats = fs21.statSync(agentAny._traceFilePath);
+                  const fs22 = require("fs");
+                  if (fs22.existsSync(agentAny._traceFilePath)) {
+                    const stats = fs22.statSync(agentAny._traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::${agentAny._traceFilePath} (${stats.size} bytes)`
                     );
@@ -8378,8 +8383,8 @@ ${schemaString}`);
           const model = this.config.model || "default";
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs21 = require("fs");
-              const path25 = require("path");
+              const fs22 = require("fs");
+              const path26 = require("path");
               const os2 = require("os");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const debugData = {
@@ -8453,18 +8458,18 @@ ${"=".repeat(60)}
               readableVersion += `${"=".repeat(60)}
 `;
               const tempDir = os2.tmpdir();
-              const promptFile = path25.join(tempDir, `visor-prompt-${timestamp}.txt`);
-              fs21.writeFileSync(promptFile, prompt, "utf-8");
+              const promptFile = path26.join(tempDir, `visor-prompt-${timestamp}.txt`);
+              fs22.writeFileSync(promptFile, prompt, "utf-8");
               log(`
 \u{1F4BE} Prompt saved to: ${promptFile}`);
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path25.join(process.cwd(), "debug-artifacts");
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path26.join(process.cwd(), "debug-artifacts");
               try {
-                const base = path25.join(
+                const base = path26.join(
                   debugArtifactsDir,
                   `prompt-${_checkName || "unknown"}-${timestamp}`
                 );
-                fs21.writeFileSync(base + ".json", debugJson, "utf-8");
-                fs21.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
+                fs22.writeFileSync(base + ".json", debugJson, "utf-8");
+                fs22.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
                 log(`
 \u{1F4BE} Full debug info saved to directory: ${debugArtifactsDir}`);
               } catch {
@@ -8509,8 +8514,8 @@ $ ${cliCommand}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs21 = require("fs");
-              const path25 = require("path");
+              const fs22 = require("fs");
+              const path26 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny = agent;
               let fullHistory = [];
@@ -8521,8 +8526,8 @@ $ ${cliCommand}
               } else if (agentAny._messages) {
                 fullHistory = agentAny._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path25.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path25.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path26.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path26.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -8534,7 +8539,7 @@ $ ${cliCommand}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs21.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs22.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -8561,7 +8566,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs21.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs22.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -8570,11 +8575,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs21 = require("fs");
-              const path25 = require("path");
+              const fs22 = require("fs");
+              const path26 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path25.join(process.cwd(), "debug-artifacts");
-              const responseFile = path25.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path26.join(process.cwd(), "debug-artifacts");
+              const responseFile = path26.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -8607,7 +8612,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs21.writeFileSync(responseFile, responseContent, "utf-8");
+              fs22.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -8625,9 +8630,9 @@ ${"=".repeat(60)}
                 await telemetry.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs21 = require("fs");
-                  if (fs21.existsSync(traceFilePath)) {
-                    const stats = fs21.statSync(traceFilePath);
+                  const fs22 = require("fs");
+                  if (fs22.existsSync(traceFilePath)) {
+                    const stats = fs22.statSync(traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::OpenTelemetry trace file size: ${stats.size} bytes`
                     );
@@ -8665,8 +8670,8 @@ ${"=".repeat(60)}
        * Load schema content from schema files or inline definitions
        */
       async loadSchemaContent(schema) {
-        const fs21 = require("fs").promises;
-        const path25 = require("path");
+        const fs22 = require("fs").promises;
+        const path26 = require("path");
         if (typeof schema === "object" && schema !== null) {
           log("\u{1F4CB} Using inline schema object from configuration");
           return JSON.stringify(schema);
@@ -8679,14 +8684,14 @@ ${"=".repeat(60)}
           }
         } catch {
         }
-        if ((schema.startsWith("./") || schema.includes(".json")) && !path25.isAbsolute(schema)) {
+        if ((schema.startsWith("./") || schema.includes(".json")) && !path26.isAbsolute(schema)) {
           if (schema.includes("..") || schema.includes("\0")) {
             throw new Error("Invalid schema path: path traversal not allowed");
           }
           try {
-            const schemaPath = path25.resolve(process.cwd(), schema);
+            const schemaPath = path26.resolve(process.cwd(), schema);
             log(`\u{1F4CB} Loading custom schema from file: ${schemaPath}`);
-            const schemaContent = await fs21.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs22.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch (error) {
             throw new Error(
@@ -8700,22 +8705,22 @@ ${"=".repeat(60)}
         }
         const candidatePaths = [
           // GitHub Action bundle location
-          path25.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
+          path26.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
           // Historical fallback when src/output was inadvertently bundled as output1/
-          path25.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
+          path26.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
           // Local dev (repo root)
-          path25.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
+          path26.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
         ];
         for (const schemaPath of candidatePaths) {
           try {
-            const schemaContent = await fs21.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs22.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch {
           }
         }
-        const distPath = path25.join(__dirname, "output", sanitizedSchemaName, "schema.json");
-        const distAltPath = path25.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
-        const cwdPath = path25.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
+        const distPath = path26.join(__dirname, "output", sanitizedSchemaName, "schema.json");
+        const distAltPath = path26.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
+        const cwdPath = path26.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
         throw new Error(
           `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath}, ${distAltPath}, and ${cwdPath}. Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
         );
@@ -9391,6 +9396,770 @@ var init_command_executor = __esm({
   }
 });
 
+// src/providers/api-tool-executor.ts
+function isHttpUrl(value) {
+  return value.startsWith("http://") || value.startsWith("https://");
+}
+function toStringArray(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+function isPlainObject(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+function toOverlaySourceArray(value) {
+  if (!value) return [];
+  if (typeof value === "string" || isPlainObject(value)) {
+    return [value];
+  }
+  if (Array.isArray(value)) {
+    return value.filter(
+      (item) => typeof item === "string" || isPlainObject(item)
+    );
+  }
+  return [];
+}
+function resolvePathOrUrl(candidate, baseDir) {
+  if (isHttpUrl(candidate)) return candidate;
+  if (import_path4.default.isAbsolute(candidate)) return candidate;
+  if (isHttpUrl(baseDir)) {
+    return new URL(candidate, baseDir).toString();
+  }
+  return import_path4.default.resolve(baseDir, candidate);
+}
+async function readTextFromPathOrUrl(location) {
+  if (isHttpUrl(location)) {
+    const res = await fetch(location);
+    if (!res.ok) {
+      throw new Error(`Failed to fetch ${location}: ${res.status} ${res.statusText}`);
+    }
+    return await res.text();
+  }
+  return await import_promises2.default.readFile(location, "utf8");
+}
+function parseJsonOrYaml(raw, location) {
+  const ext = import_path4.default.extname(location).toLowerCase();
+  if (ext === ".yaml" || ext === ".yml") {
+    return import_js_yaml.default.load(raw);
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return import_js_yaml.default.load(raw);
+  }
+}
+function parseOverlayTargetPath(pathValue) {
+  if (!Array.isArray(pathValue) || pathValue.length === 0) return "$";
+  return pathValue.map((segment, index) => {
+    if (index === 0) return "$";
+    if (typeof segment === "number") return `[${segment}]`;
+    if (/^[A-Za-z_][\w$]*$/.test(segment)) return `.${segment}`;
+    return `['${segment.replace(/'/g, "\\'")}']`;
+  }).join("");
+}
+function applyOverlayActions(target, overlay) {
+  const cloned = JSON.parse(JSON.stringify(target));
+  if (!overlay || typeof overlay !== "object") return cloned;
+  const actions = Array.isArray(overlay.actions) ? overlay.actions : [];
+  if (actions.length === 0) {
+    return (0, import_deepmerge.default)(cloned, overlay, {
+      arrayMerge: (dst, src) => dst.concat(src)
+    });
+  }
+  for (const action of actions) {
+    const targetExpr = action?.target;
+    if (!targetExpr || typeof targetExpr !== "string") continue;
+    let matches = [];
+    try {
+      matches = (0, import_jsonpath_plus.JSONPath)({
+        path: targetExpr,
+        json: cloned,
+        resultType: "all"
+      });
+    } catch (error) {
+      logger.warn(`[ApiToolExecutor] Invalid overlay target "${targetExpr}": ${error}`);
+      continue;
+    }
+    if (matches.length === 0) {
+      continue;
+    }
+    for (const match of matches) {
+      if (!match || typeof match !== "object") continue;
+      const parent = match.parent;
+      const key = match.parentProperty;
+      if (parent === void 0 || key === void 0) {
+        const jsonPath = parseOverlayTargetPath(
+          match.path || []
+        );
+        logger.debug(`[ApiToolExecutor] Overlay target has no writable parent: ${jsonPath}`);
+        continue;
+      }
+      if (action.remove === true) {
+        if (Array.isArray(parent)) {
+          parent.splice(Number(key), 1);
+        } else if (parent && typeof parent === "object") {
+          delete parent[key];
+        }
+        continue;
+      }
+      if (action.update === void 0) {
+        continue;
+      }
+      const current = match.value;
+      if (Array.isArray(current)) {
+        current.push(action.update);
+      } else if (current && typeof current === "object") {
+        const merged = (0, import_deepmerge.default)(current, action.update, {
+          arrayMerge: (dst, src) => dst.concat(src)
+        });
+        if (Array.isArray(parent)) {
+          parent[Number(key)] = merged;
+        } else {
+          parent[key] = merged;
+        }
+      } else if (Array.isArray(parent)) {
+        parent[Number(key)] = action.update;
+      } else {
+        parent[key] = action.update;
+      }
+    }
+  }
+  return cloned;
+}
+function isRefObject(value) {
+  return Boolean(value && typeof value === "object" && "$ref" in value);
+}
+function isSchemaObject(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && !isRefObject(value));
+}
+function getSchemaFromContent(content) {
+  if (!content || typeof content !== "object") return void 0;
+  const entries = Object.values(content);
+  const withSchema = entries.find((entry) => entry && typeof entry === "object" && entry.schema);
+  return withSchema?.schema;
+}
+function mapOpenApiTypeToJsonType(schema) {
+  if (!schema || !schema.type) return { type: "string" };
+  const openApiType = String(schema.type);
+  const nullable = schema.nullable === true;
+  switch (openApiType) {
+    case "integer":
+    case "number":
+    case "boolean":
+    case "string":
+    case "array":
+    case "object":
+      return { type: openApiType, format: schema.format, nullable };
+    default:
+      return { type: "string", format: schema.format, nullable };
+  }
+}
+function openApiSchemaToJsonSchema(schema) {
+  if (!schema) {
+    return { type: "string" };
+  }
+  const mapped = mapOpenApiTypeToJsonType(schema);
+  const result = {
+    type: mapped.nullable ? [mapped.type, "null"] : mapped.type
+  };
+  if (mapped.format) result.format = mapped.format;
+  if (schema.description !== void 0) result.description = schema.description;
+  if (schema.default !== void 0) result.default = schema.default;
+  if (schema.enum !== void 0) result.enum = schema.enum;
+  if (schema.example !== void 0) result.example = schema.example;
+  if (schema.minimum !== void 0) result.minimum = schema.minimum;
+  if (schema.maximum !== void 0) result.maximum = schema.maximum;
+  if (schema.minLength !== void 0) result.minLength = schema.minLength;
+  if (schema.maxLength !== void 0) result.maxLength = schema.maxLength;
+  if (schema.pattern !== void 0) result.pattern = schema.pattern;
+  if (schema.multipleOf !== void 0) result.multipleOf = schema.multipleOf;
+  if (schema.minItems !== void 0) result.minItems = schema.minItems;
+  if (schema.maxItems !== void 0) result.maxItems = schema.maxItems;
+  if (schema.uniqueItems !== void 0) result.uniqueItems = schema.uniqueItems;
+  if (schema.type === "object" && schema.properties && typeof schema.properties === "object") {
+    const props = {};
+    for (const [propName, propSchema] of Object.entries(schema.properties)) {
+      if (isSchemaObject(propSchema)) {
+        props[propName] = openApiSchemaToJsonSchema(propSchema);
+      }
+    }
+    result.properties = props;
+    if (Array.isArray(schema.required) && schema.required.length > 0) {
+      result.required = schema.required;
+    }
+    if (schema.additionalProperties === true || schema.additionalProperties === false) {
+      result.additionalProperties = schema.additionalProperties;
+    } else if (isSchemaObject(schema.additionalProperties)) {
+      result.additionalProperties = openApiSchemaToJsonSchema(schema.additionalProperties);
+    }
+  }
+  if (schema.type === "array" && isSchemaObject(schema.items)) {
+    result.items = openApiSchemaToJsonSchema(schema.items);
+  }
+  for (const [key, value] of Object.entries(schema)) {
+    if (key.startsWith("x-")) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+function shouldIncludeOperation(operationId, pathValue, method, whitelist, blacklist) {
+  const methodPath = `${method.toUpperCase()}:${pathValue}`;
+  const opKey = operationId || methodPath;
+  if (whitelist.length > 0) {
+    return whitelist.some((pattern) => (0, import_minimatch.minimatch)(opKey, pattern) || (0, import_minimatch.minimatch)(methodPath, pattern));
+  }
+  if (blacklist.length > 0) {
+    return !blacklist.some((pattern) => (0, import_minimatch.minimatch)(opKey, pattern) || (0, import_minimatch.minimatch)(methodPath, pattern));
+  }
+  return true;
+}
+function getApiToolConfig(tool) {
+  return {
+    customHeaders: tool.headers || {},
+    disableXMcp: Boolean(tool.disableXMcp ?? tool.disable_x_mcp ?? false),
+    apiKey: tool.apiKey ?? tool.api_key,
+    securitySchemeName: tool.securitySchemeName ?? tool.security_scheme_name,
+    securityCredentials: tool.securityCredentials || tool.security_credentials || {},
+    requestTimeoutMs: tool.requestTimeoutMs ?? tool.request_timeout_ms ?? tool.timeout ?? 3e4
+  };
+}
+function buildOutputSchema(operation) {
+  const responses = operation.responses;
+  if (!responses || typeof responses !== "object") return void 0;
+  const successCode = Object.keys(responses).find((code) => code.startsWith("2"));
+  if (!successCode) return void 0;
+  const response = responses[successCode];
+  if (!response || typeof response !== "object" || isRefObject(response)) return void 0;
+  const jsonSchema = response.content?.["application/json"]?.schema || getSchemaFromContent(response.content);
+  if (!isSchemaObject(jsonSchema)) return void 0;
+  const mapped = openApiSchemaToJsonSchema(jsonSchema);
+  if (response.description && typeof response.description === "string") {
+    mapped.description = response.description;
+  }
+  return mapped;
+}
+function getToolName(operationId, operation, pathItem, tool) {
+  let toolName = operationId;
+  const opExtension = operation["x-mcp"];
+  const pathExtension = pathItem["x-mcp"];
+  if (opExtension && typeof opExtension === "object" && typeof opExtension.name === "string") {
+    toolName = opExtension.name;
+  } else if (pathExtension && typeof pathExtension === "object" && typeof pathExtension.name === "string") {
+    toolName = pathExtension.name;
+  }
+  const prefix = tool.namePrefix || tool.name_prefix;
+  if (prefix) {
+    return `${prefix}${toolName}`;
+  }
+  return toolName;
+}
+function getToolDescription(operation, pathItem) {
+  const opExtension = operation["x-mcp"];
+  const pathExtension = pathItem["x-mcp"];
+  if (opExtension && typeof opExtension === "object" && typeof opExtension.description === "string") {
+    return opExtension.description;
+  }
+  if (pathExtension && typeof pathExtension === "object" && typeof pathExtension.description === "string") {
+    return pathExtension.description;
+  }
+  return typeof operation.description === "string" && operation.description || typeof operation.summary === "string" && operation.summary || typeof pathItem.summary === "string" && pathItem.summary || "No description available.";
+}
+function isApiToolDefinition(tool) {
+  return Boolean(tool && tool.type === "api");
+}
+async function loadOpenApiDocument(tool) {
+  if (!tool.spec) {
+    throw new Error(`API tool '${tool.name}' is missing required field: spec`);
+  }
+  const configuredBaseDir = tool.__baseDir;
+  const baseDir = (() => {
+    if (tool.cwd) {
+      if (import_path4.default.isAbsolute(tool.cwd) || isHttpUrl(tool.cwd)) {
+        return tool.cwd;
+      }
+      if (configuredBaseDir) {
+        return resolvePathOrUrl(tool.cwd, configuredBaseDir);
+      }
+      return import_path4.default.resolve(tool.cwd);
+    }
+    return configuredBaseDir || process.cwd();
+  })();
+  const dereferenceWithContext = async (source, spec) => {
+    try {
+      return await import_swagger_parser.default.dereference(spec);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Failed to dereference OpenAPI spec for API tool '${tool.name}' from ${source}: ${errorMessage}`
+      );
+    }
+  };
+  let openapi;
+  if (typeof tool.spec === "string") {
+    const specLocation = resolvePathOrUrl(tool.spec, baseDir);
+    if (isHttpUrl(specLocation)) {
+      const raw = await readTextFromPathOrUrl(specLocation);
+      const parsed = parseJsonOrYaml(raw, specLocation);
+      openapi = await dereferenceWithContext(specLocation, parsed);
+    } else {
+      openapi = await dereferenceWithContext(specLocation, specLocation);
+    }
+  } else if (isPlainObject(tool.spec)) {
+    openapi = await dereferenceWithContext(
+      "inline spec",
+      JSON.parse(JSON.stringify(tool.spec))
+    );
+  } else {
+    throw new Error(
+      `API tool '${tool.name}' has invalid spec field (expected string path/URL or object)`
+    );
+  }
+  const overlays = toOverlaySourceArray(tool.overlays);
+  let working = openapi;
+  for (const overlaySource of overlays) {
+    let overlay = overlaySource;
+    if (typeof overlaySource === "string") {
+      const resolved = resolvePathOrUrl(overlaySource, baseDir);
+      const raw = await readTextFromPathOrUrl(resolved);
+      overlay = parseJsonOrYaml(raw, resolved);
+    }
+    working = applyOverlayActions(working, overlay);
+  }
+  return working;
+}
+function mapOpenApiToTools(openapi, tool) {
+  const paths = openapi?.paths;
+  if (!paths || typeof paths !== "object") {
+    return [];
+  }
+  const targetUrl = tool.targetUrl || tool.target_url;
+  const baseServerUrl = String(targetUrl || openapi?.servers?.[0]?.url || "").replace(/\/$/, "");
+  if (!baseServerUrl) {
+    throw new Error(
+      `API tool '${tool.name}' cannot determine target API URL. Set targetUrl/target_url or provide OpenAPI servers[].`
+    );
+  }
+  const whitelist = toStringArray(tool.whitelist);
+  const blacklist = toStringArray(tool.blacklist);
+  const globalSecurity = Array.isArray(openapi?.security) ? openapi.security : null;
+  const securitySchemes = openapi?.components?.securitySchemes;
+  const mapped = [];
+  const apiToolConfig = getApiToolConfig(tool);
+  for (const [pathValue, pathItemRaw] of Object.entries(paths)) {
+    const pathItem = pathItemRaw;
+    if (!pathItem || typeof pathItem !== "object") continue;
+    for (const [method, operationRaw] of Object.entries(pathItem)) {
+      if (!HTTP_METHODS.has(method.toLowerCase())) continue;
+      const operation = operationRaw;
+      if (!operation || typeof operation !== "object") continue;
+      const operationId = typeof operation.operationId === "string" ? String(operation.operationId) : void 0;
+      if (!operationId) {
+        logger.debug(
+          `[ApiToolExecutor] Skipping ${method.toUpperCase()} ${pathValue} (missing operationId)`
+        );
+        continue;
+      }
+      if (!shouldIncludeOperation(operationId, pathValue, method, whitelist, blacklist)) {
+        continue;
+      }
+      const toolName = getToolName(operationId, operation, pathItem, tool);
+      const toolDescription = getToolDescription(operation, pathItem);
+      const inputSchema = {
+        type: "object",
+        properties: {}
+      };
+      const requiredNames = /* @__PURE__ */ new Set();
+      const allParameters = [
+        ...Array.isArray(pathItem.parameters) ? pathItem.parameters : [],
+        ...Array.isArray(operation.parameters) ? operation.parameters : []
+      ].filter((param) => param && typeof param === "object" && !isRefObject(param));
+      for (const param of allParameters) {
+        const paramObj = param;
+        const paramName = typeof paramObj.name === "string" ? paramObj.name : "";
+        if (!paramName) continue;
+        if (!isSchemaObject(paramObj.schema)) continue;
+        const schema = openApiSchemaToJsonSchema(paramObj.schema);
+        if (typeof paramObj.description === "string") {
+          schema.description = paramObj.description;
+        }
+        schema["x-parameter-location"] = paramObj.in || "query";
+        if (paramObj.example !== void 0) schema.example = paramObj.example;
+        if (paramObj.deprecated === true) schema.deprecated = true;
+        inputSchema.properties[paramName] = schema;
+        if (paramObj.required === true) requiredNames.add(paramName);
+      }
+      const requestBody = !isRefObject(operation.requestBody) ? operation.requestBody : void 0;
+      if (requestBody && typeof requestBody === "object") {
+        const reqSchema = requestBody.content?.["application/json"]?.schema || getSchemaFromContent(requestBody.content);
+        if (isSchemaObject(reqSchema)) {
+          const bodySchema = openApiSchemaToJsonSchema(reqSchema);
+          if (typeof requestBody.description === "string") {
+            bodySchema.description = requestBody.description;
+          }
+          const contentTypes = Object.keys(requestBody.content || {});
+          if (contentTypes.length > 0) {
+            bodySchema["x-content-types"] = contentTypes;
+          }
+          inputSchema.properties.requestBody = bodySchema;
+          if (requestBody.required === true) {
+            requiredNames.add("requestBody");
+          }
+        }
+      }
+      if (requiredNames.size > 0) {
+        inputSchema.required = Array.from(requiredNames);
+      }
+      const securityRequirements = Array.isArray(operation.security) ? operation.security : globalSecurity;
+      mapped.push({
+        sourceToolName: tool.name,
+        mcpToolDefinition: {
+          name: toolName,
+          description: toolDescription,
+          inputSchema,
+          outputSchema: buildOutputSchema(operation)
+        },
+        apiCallDetails: {
+          method: method.toUpperCase(),
+          pathTemplate: pathValue,
+          serverUrl: baseServerUrl,
+          parameters: allParameters,
+          requestBody,
+          securityRequirements,
+          securitySchemes,
+          apiToolConfig
+        }
+      });
+    }
+  }
+  return mapped;
+}
+function validateParameterValue(value, paramDef) {
+  const schema = paramDef.schema;
+  if (!schema || typeof schema !== "object") return null;
+  const schemaType = schema.type;
+  if (schemaType === "integer") {
+    if (typeof value !== "number" || !Number.isInteger(value)) {
+      return "must be an integer";
+    }
+  } else if (schemaType === "number") {
+    if (typeof value !== "number") {
+      return `expected number, got ${typeof value}`;
+    }
+  } else if (schemaType === "boolean") {
+    if (typeof value !== "boolean") {
+      return `expected boolean, got ${typeof value}`;
+    }
+  } else if (schemaType === "string") {
+    if (typeof value !== "string") {
+      return `expected string, got ${typeof value}`;
+    }
+  } else if (schemaType === "array") {
+    if (!Array.isArray(value)) {
+      return `expected array, got ${typeof value}`;
+    }
+  } else if (schemaType === "object") {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return `expected object, got ${Array.isArray(value) ? "array" : typeof value}`;
+    }
+  }
+  if (schema.minimum !== void 0 && typeof value === "number" && value < schema.minimum) {
+    return `must be >= ${schema.minimum}`;
+  }
+  if (schema.maximum !== void 0 && typeof value === "number" && value > schema.maximum) {
+    return `must be <= ${schema.maximum}`;
+  }
+  if (schema.minLength !== void 0 && typeof value === "string" && value.length < schema.minLength) {
+    return `length must be >= ${schema.minLength}`;
+  }
+  if (schema.maxLength !== void 0 && typeof value === "string" && value.length > schema.maxLength) {
+    return `length must be <= ${schema.maxLength}`;
+  }
+  if (Array.isArray(schema.enum) && !schema.enum.includes(value)) {
+    return `must be one of: ${schema.enum.join(", ")}`;
+  }
+  return null;
+}
+function applySecurityToRequest(details, headers, queryParams) {
+  const requirements = details.securityRequirements;
+  if (!requirements || requirements.length === 0) {
+    return;
+  }
+  const schemes = details.securitySchemes || {};
+  const cfg = details.apiToolConfig;
+  const tryResolveCredential = (schemeName) => {
+    if (cfg.securityCredentials[schemeName]) {
+      return cfg.securityCredentials[schemeName];
+    }
+    if (cfg.securitySchemeName && cfg.securitySchemeName !== schemeName) {
+      return void 0;
+    }
+    return cfg.apiKey;
+  };
+  for (const requirement of requirements) {
+    const schemeNames = Object.keys(requirement);
+    if (schemeNames.length === 0) return;
+    const tempHeaders = { ...headers };
+    const tempQuery = new URLSearchParams(queryParams);
+    let satisfied = true;
+    for (const schemeName of schemeNames) {
+      const scheme = schemes[schemeName];
+      if (!scheme || typeof scheme !== "object") {
+        satisfied = false;
+        break;
+      }
+      const credential = tryResolveCredential(schemeName);
+      if (!credential) {
+        satisfied = false;
+        break;
+      }
+      switch (scheme.type) {
+        case "apiKey":
+          if (scheme.in === "header") {
+            tempHeaders[String(scheme.name)] = credential;
+          } else if (scheme.in === "query") {
+            tempQuery.set(String(scheme.name), credential);
+          } else if (scheme.in === "cookie") {
+            const cookieName = String(scheme.name);
+            const existing = tempHeaders["Cookie"];
+            tempHeaders["Cookie"] = existing ? `${existing}; ${cookieName}=${credential}` : `${cookieName}=${credential}`;
+          } else {
+            satisfied = false;
+          }
+          break;
+        case "http":
+          if (typeof scheme.scheme !== "string") {
+            satisfied = false;
+            break;
+          }
+          if (scheme.scheme.toLowerCase() === "bearer") {
+            tempHeaders["Authorization"] = `Bearer ${credential}`;
+          } else if (scheme.scheme.toLowerCase() === "basic") {
+            tempHeaders["Authorization"] = `Basic ${Buffer.from(credential).toString("base64")}`;
+          } else {
+            satisfied = false;
+          }
+          break;
+        case "oauth2":
+        case "openIdConnect":
+          tempHeaders["Authorization"] = `Bearer ${credential}`;
+          break;
+        default:
+          satisfied = false;
+      }
+      if (!satisfied) {
+        break;
+      }
+    }
+    if (satisfied) {
+      Object.assign(headers, tempHeaders);
+      queryParams.forEach((_value, key) => queryParams.delete(key));
+      tempQuery.forEach((value, key) => queryParams.append(key, value));
+      return;
+    }
+  }
+}
+function responseBodyToString(body) {
+  if (typeof body === "string") return body;
+  try {
+    return JSON.stringify(body);
+  } catch {
+    return String(body);
+  }
+}
+async function executeMappedApiTool(mappedTool, args) {
+  const { apiCallDetails } = mappedTool;
+  const { method, pathTemplate, serverUrl, parameters, requestBody, apiToolConfig } = apiCallDetails;
+  const urlPath = pathTemplate.replace(/{([^}]+)}/g, (_token, rawName) => {
+    const value = args[rawName];
+    if (value === void 0 || value === null) {
+      return `{${rawName}}`;
+    }
+    return encodeURIComponent(String(value));
+  });
+  if (urlPath.includes("{") || urlPath.includes("}")) {
+    throw new Error(`Missing required path parameters for ${method} ${pathTemplate}`);
+  }
+  let endpoint;
+  try {
+    endpoint = new URL(`${serverUrl}${urlPath}`);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Failed to construct endpoint URL for API tool '${mappedTool.sourceToolName}' operation '${mappedTool.mcpToolDefinition.name}' (${method} ${pathTemplate}) with serverUrl '${serverUrl}': ${errorMessage}`
+    );
+  }
+  const queryParams = new URLSearchParams(endpoint.search);
+  const headers = { ...apiToolConfig.customHeaders };
+  let requestBodyValue;
+  for (const param of parameters) {
+    const name = String(param.name || "");
+    if (!name) continue;
+    const value = args[name];
+    if (value === void 0 || value === null) {
+      if (param.required) {
+        throw new Error(`Missing required parameter: ${name}`);
+      }
+      continue;
+    }
+    const validationError = validateParameterValue(value, param);
+    if (validationError) {
+      throw new Error(`Parameter '${name}' ${validationError}`);
+    }
+    switch (param.in) {
+      case "query":
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            queryParams.append(name, String(item));
+          }
+        } else {
+          queryParams.set(name, String(value));
+        }
+        break;
+      case "header":
+        headers[name] = String(value);
+        break;
+      case "path":
+        break;
+      case "cookie": {
+        const existing = headers["Cookie"];
+        headers["Cookie"] = existing ? `${existing}; ${name}=${String(value)}` : `${name}=${String(value)}`;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  if (requestBody && requestBody.required && args.requestBody === void 0) {
+    throw new Error("Missing required requestBody parameter");
+  }
+  if (args.requestBody !== void 0) {
+    requestBodyValue = args.requestBody;
+    if (!headers["Content-Type"]) {
+      headers["Content-Type"] = "application/json";
+    }
+  }
+  if (!apiToolConfig.disableXMcp) {
+    headers["X-MCP"] = "1";
+  }
+  applySecurityToRequest(apiCallDetails, headers, queryParams);
+  endpoint.search = queryParams.toString();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), apiToolConfig.requestTimeoutMs);
+  try {
+    const response = await fetch(endpoint.toString(), {
+      method,
+      headers,
+      body: requestBodyValue === void 0 ? void 0 : headers["Content-Type"]?.includes("application/json") ? JSON.stringify(requestBodyValue) : String(requestBodyValue),
+      signal: controller.signal
+    });
+    const raw = await response.text();
+    let body = raw;
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("json") && raw.trim().length > 0) {
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        body = raw;
+      }
+    } else if (raw.trim().length > 0) {
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        body = raw;
+      }
+    } else {
+      body = null;
+    }
+    if (response.ok) {
+      return body;
+    }
+    throw new Error(`API Error ${response.status}: ${responseBodyToString(body)}`);
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`API request timed out after ${apiToolConfig.requestTimeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+var import_promises2, import_path4, import_js_yaml, import_swagger_parser, import_deepmerge, import_jsonpath_plus, import_minimatch, HTTP_METHODS, ApiToolRegistry;
+var init_api_tool_executor = __esm({
+  "src/providers/api-tool-executor.ts"() {
+    "use strict";
+    import_promises2 = __toESM(require("fs/promises"));
+    import_path4 = __toESM(require("path"));
+    import_js_yaml = __toESM(require("js-yaml"));
+    import_swagger_parser = __toESM(require("@apidevtools/swagger-parser"));
+    import_deepmerge = __toESM(require("deepmerge"));
+    import_jsonpath_plus = require("jsonpath-plus");
+    import_minimatch = require("minimatch");
+    init_logger();
+    HTTP_METHODS = /* @__PURE__ */ new Set([
+      "get",
+      "put",
+      "post",
+      "delete",
+      "options",
+      "head",
+      "patch",
+      "trace"
+    ]);
+    ApiToolRegistry = class {
+      bundleCache = /* @__PURE__ */ new Map();
+      operationCache = /* @__PURE__ */ new Map();
+      registerMappedTools(sourceToolName, mappedTools) {
+        this.bundleCache.set(sourceToolName, mappedTools);
+        for (const mapped of mappedTools) {
+          const existing = this.operationCache.get(mapped.mcpToolDefinition.name);
+          if (existing && existing.sourceToolName !== sourceToolName) {
+            logger.warn(
+              `[ApiToolExecutor] Tool name collision: '${mapped.mcpToolDefinition.name}' from '${sourceToolName}' overrides '${existing.sourceToolName}'. Use namePrefix to avoid collisions.`
+            );
+          }
+          this.operationCache.set(mapped.mcpToolDefinition.name, mapped);
+        }
+      }
+      async ensureBundle(sourceToolName, tool) {
+        const cached = this.bundleCache.get(sourceToolName);
+        if (cached) return cached;
+        if (!isApiToolDefinition(tool)) {
+          return [];
+        }
+        const openapi = await loadOpenApiDocument(tool);
+        const mapped = mapOpenApiToTools(openapi, tool);
+        this.registerMappedTools(sourceToolName, mapped);
+        return mapped;
+      }
+      async ensureAll(toolMap) {
+        for (const [sourceToolName, tool] of toolMap.entries()) {
+          if (!isApiToolDefinition(tool)) continue;
+          await this.ensureBundle(sourceToolName, tool);
+        }
+      }
+      async listMappedTools(toolMap) {
+        await this.ensureAll(toolMap);
+        return Array.from(this.operationCache.values());
+      }
+      async getMappedTool(toolName, toolMap) {
+        const cached = this.operationCache.get(toolName);
+        if (cached) return cached;
+        for (const [sourceToolName, tool] of toolMap.entries()) {
+          if (!isApiToolDefinition(tool)) continue;
+          await this.ensureBundle(sourceToolName, tool);
+          const resolved = this.operationCache.get(toolName);
+          if (resolved) return resolved;
+        }
+        return void 0;
+      }
+    };
+  }
+});
+
 // src/providers/custom-tool-executor.ts
 var import_ajv, CustomToolExecutor;
 var init_custom_tool_executor = __esm({
@@ -9401,11 +10170,13 @@ var init_custom_tool_executor = __esm({
     init_logger();
     init_command_executor();
     import_ajv = __toESM(require("ajv"));
+    init_api_tool_executor();
     CustomToolExecutor = class {
       liquid;
       sandbox;
       tools;
       ajv;
+      apiToolRegistry;
       constructor(tools) {
         this.liquid = createExtendedLiquid({
           cache: false,
@@ -9413,7 +10184,8 @@ var init_custom_tool_executor = __esm({
           strictVariables: false
         });
         this.tools = new Map(Object.entries(tools || {}));
-        this.ajv = new import_ajv.default({ allErrors: true, verbose: true });
+        this.ajv = new import_ajv.default({ allErrors: true, verbose: true, strict: false });
+        this.apiToolRegistry = new ApiToolRegistry();
       }
       /**
        * Register a custom tool
@@ -9421,6 +10193,13 @@ var init_custom_tool_executor = __esm({
       registerTool(tool) {
         if (!tool.name) {
           throw new Error("Tool must have a name");
+        }
+        if (isApiToolDefinition(tool)) {
+          if (!tool.spec) {
+            throw new Error(`API tool '${tool.name}' must define 'spec'`);
+          }
+        } else if (!tool.exec) {
+          throw new Error(`Tool '${tool.name}' must define 'exec' (or set type: 'api')`);
         }
         this.tools.set(tool.name, tool);
       }
@@ -9465,11 +10244,44 @@ var init_custom_tool_executor = __esm({
         }
       }
       /**
+       * Validate input against a JSON schema object
+       */
+      validateInputSchema(toolName, schema, input) {
+        if (!schema) {
+          return;
+        }
+        const validate = this.ajv.compile(schema);
+        const valid = validate(input);
+        if (!valid) {
+          const errors = validate.errors?.map((err) => {
+            if (err.instancePath) {
+              return `${err.instancePath}: ${err.message}`;
+            }
+            return err.message;
+          }).join(", ");
+          throw new Error(`Input validation failed for tool '${toolName}': ${errors}`);
+        }
+      }
+      /**
        * Execute a custom tool
        */
       async execute(toolName, args, context2) {
         const tool = this.tools.get(toolName);
+        if (tool && isApiToolDefinition(tool)) {
+          throw new Error(
+            `Tool '${toolName}' is an API bundle. Call one of its generated operations instead.`
+          );
+        }
         if (!tool) {
+          const apiMappedTool = await this.apiToolRegistry.getMappedTool(toolName, this.tools);
+          if (apiMappedTool) {
+            this.validateInputSchema(
+              toolName,
+              apiMappedTool.mcpToolDefinition.inputSchema,
+              args
+            );
+            return await executeMappedApiTool(apiMappedTool, args);
+          }
           throw new Error(`Tool not found: ${toolName}`);
         }
         this.validateInput(tool, args);
@@ -9478,6 +10290,9 @@ var init_custom_tool_executor = __esm({
           args,
           input: args
         };
+        if (!tool.exec) {
+          throw new Error(`Tool '${toolName}' is missing exec command`);
+        }
         const command = await this.liquid.parseAndRender(tool.exec, templateContext);
         let stdin;
         if (tool.stdin) {
@@ -9538,6 +10353,50 @@ var init_custom_tool_executor = __esm({
         return output;
       }
       /**
+       * Check if a tool exists (direct or API-generated)
+       */
+      async hasTool(toolName) {
+        if (this.tools.has(toolName)) {
+          const tool = this.tools.get(toolName);
+          return !isApiToolDefinition(tool);
+        }
+        const apiMappedTool = await this.apiToolRegistry.getMappedTool(toolName, this.tools);
+        return Boolean(apiMappedTool);
+      }
+      /**
+       * Get all available tool names, including API-generated operations
+       */
+      async getToolNames() {
+        const names = [];
+        for (const tool of this.tools.values()) {
+          if (!isApiToolDefinition(tool)) {
+            names.push(tool.name);
+          }
+        }
+        const apiTools = await this.apiToolRegistry.listMappedTools(this.tools);
+        for (const mapped of apiTools) {
+          names.push(mapped.mcpToolDefinition.name);
+        }
+        return names;
+      }
+      /**
+       * List MCP-compatible tool definitions including API-generated operations
+       */
+      async listMcpTools() {
+        const directTools = this.getTools().filter((tool) => !isApiToolDefinition(tool)).map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema
+        }));
+        const apiTools = await this.apiToolRegistry.listMappedTools(this.tools);
+        const mappedApiTools = apiTools.map((tool) => ({
+          name: tool.mcpToolDefinition.name,
+          description: tool.mcpToolDefinition.description,
+          inputSchema: tool.mcpToolDefinition.inputSchema
+        }));
+        return [...directTools, ...mappedApiTools];
+      }
+      /**
        * Apply JavaScript transform to output
        */
       async applyJavaScriptTransform(transformJs, output, context2) {
@@ -9564,7 +10423,7 @@ var init_custom_tool_executor = __esm({
        * Convert custom tools to MCP tool format
        */
       toMcpTools() {
-        return Array.from(this.tools.values()).map((tool) => ({
+        return Array.from(this.tools.values()).filter((tool) => !isApiToolDefinition(tool)).map((tool) => ({
           name: tool.name,
           description: tool.description,
           inputSchema: tool.inputSchema,
@@ -9582,12 +10441,12 @@ var workflow_registry_exports = {};
 __export(workflow_registry_exports, {
   WorkflowRegistry: () => WorkflowRegistry
 });
-var import_fs3, path8, yaml, import_ajv2, import_ajv_formats, WorkflowRegistry;
+var import_fs3, path9, yaml, import_ajv2, import_ajv_formats, WorkflowRegistry;
 var init_workflow_registry = __esm({
   "src/workflow-registry.ts"() {
     "use strict";
     import_fs3 = require("fs");
-    path8 = __toESM(require("path"));
+    path9 = __toESM(require("path"));
     yaml = __toESM(require("js-yaml"));
     init_logger();
     init_dependency_resolver();
@@ -9923,9 +10782,9 @@ var init_workflow_registry = __esm({
           const importBasePath = new URL(".", resolvedUrl).toString();
           return { content: await response.text(), resolvedSource: resolvedUrl, importBasePath };
         }
-        const filePath = path8.isAbsolute(source) ? source : path8.resolve(basePath || process.cwd(), source);
+        const filePath = path9.isAbsolute(source) ? source : path9.resolve(basePath || process.cwd(), source);
         const content = await import_fs3.promises.readFile(filePath, "utf-8");
-        return { content, resolvedSource: filePath, importBasePath: path8.dirname(filePath) };
+        return { content, resolvedSource: filePath, importBasePath: path9.dirname(filePath) };
       }
       /**
        * Parse workflow content (YAML or JSON)
@@ -10682,12 +11541,12 @@ var init_config_merger = __esm({
 });
 
 // src/utils/config-loader.ts
-var fs7, path9, yaml2, ConfigLoader;
+var fs8, path10, yaml2, ConfigLoader;
 var init_config_loader = __esm({
   "src/utils/config-loader.ts"() {
     "use strict";
-    fs7 = __toESM(require("fs"));
-    path9 = __toESM(require("path"));
+    fs8 = __toESM(require("fs"));
+    path10 = __toESM(require("path"));
     yaml2 = __toESM(require("js-yaml"));
     ConfigLoader = class {
       constructor(options = {}) {
@@ -10707,6 +11566,19 @@ var init_config_loader = __esm({
       }
       cache = /* @__PURE__ */ new Map();
       loadedConfigs = /* @__PURE__ */ new Set();
+      /**
+       * Annotate tool definitions with their source base directory.
+       * This is used at runtime to resolve relative tool assets (e.g., API specs).
+       */
+      annotateToolsBaseDir(config, baseDir) {
+        if (!config.tools || typeof config.tools !== "object") {
+          return;
+        }
+        for (const tool of Object.values(config.tools)) {
+          if (!tool || typeof tool !== "object") continue;
+          tool.__baseDir = tool.__baseDir || baseDir;
+        }
+      }
       /**
        * Determine the source type from a string
        */
@@ -10768,7 +11640,7 @@ var init_config_loader = __esm({
             return source.toLowerCase();
           case "local" /* LOCAL */:
             const basePath = this.options.baseDir || process.cwd();
-            return path9.resolve(basePath, source);
+            return path10.resolve(basePath, source);
           default:
             return source;
         }
@@ -10778,10 +11650,10 @@ var init_config_loader = __esm({
        */
       async fetchLocalConfig(filePath) {
         const basePath = this.options.baseDir || process.cwd();
-        const resolvedPath = path9.resolve(basePath, filePath);
+        const resolvedPath = path10.resolve(basePath, filePath);
         this.validateLocalPath(resolvedPath);
         try {
-          const content = fs7.readFileSync(resolvedPath, "utf8");
+          const content = fs8.readFileSync(resolvedPath, "utf8");
           const config = yaml2.load(content);
           if (!config || typeof config !== "object") {
             throw new Error(`Invalid YAML in configuration file: ${resolvedPath}`);
@@ -10791,8 +11663,9 @@ var init_config_loader = __esm({
             config.extends = Array.isArray(inc) ? inc : [inc];
             delete config.include;
           }
+          this.annotateToolsBaseDir(config, path10.dirname(resolvedPath));
           const previousBaseDir = this.options.baseDir;
-          this.options.baseDir = path9.dirname(resolvedPath);
+          this.options.baseDir = path10.dirname(resolvedPath);
           try {
             if (config.extends) {
               const processedConfig = await this.processExtends(config);
@@ -10848,6 +11721,12 @@ var init_config_loader = __esm({
           if (!config || typeof config !== "object") {
             throw new Error(`Invalid YAML in remote configuration: ${url}`);
           }
+          try {
+            const parsed = new URL(url);
+            const baseUrl = new URL(".", parsed).toString();
+            this.annotateToolsBaseDir(config, baseUrl);
+          } catch {
+          }
           this.cache.set(url, {
             config,
             timestamp: Date.now(),
@@ -10875,25 +11754,25 @@ var init_config_loader = __esm({
       async fetchDefaultConfig() {
         const possiblePaths = [
           // Only support new non-dot filename
-          path9.join(__dirname, "defaults", "visor.yaml"),
+          path10.join(__dirname, "defaults", "visor.yaml"),
           // When running from source
-          path9.join(__dirname, "..", "..", "defaults", "visor.yaml"),
+          path10.join(__dirname, "..", "..", "defaults", "visor.yaml"),
           // Try via package root
-          this.findPackageRoot() ? path9.join(this.findPackageRoot(), "defaults", "visor.yaml") : "",
+          this.findPackageRoot() ? path10.join(this.findPackageRoot(), "defaults", "visor.yaml") : "",
           // GitHub Action environment variable
-          process.env.GITHUB_ACTION_PATH ? path9.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml") : "",
-          process.env.GITHUB_ACTION_PATH ? path9.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml") : ""
+          process.env.GITHUB_ACTION_PATH ? path10.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml") : "",
+          process.env.GITHUB_ACTION_PATH ? path10.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml") : ""
         ].filter((p) => p);
         let defaultConfigPath;
         for (const possiblePath of possiblePaths) {
-          if (fs7.existsSync(possiblePath)) {
+          if (fs8.existsSync(possiblePath)) {
             defaultConfigPath = possiblePath;
             break;
           }
         }
         if (defaultConfigPath) {
           console.error(`\u{1F4E6} Loading bundled default configuration from ${defaultConfigPath}`);
-          const content = fs7.readFileSync(defaultConfigPath, "utf8");
+          const content = fs8.readFileSync(defaultConfigPath, "utf8");
           let config = yaml2.load(content);
           if (!config || typeof config !== "object") {
             throw new Error("Invalid default configuration");
@@ -10907,7 +11786,7 @@ var init_config_loader = __esm({
           if (config.extends) {
             const previousBaseDir = this.options.baseDir;
             try {
-              this.options.baseDir = path9.dirname(defaultConfigPath);
+              this.options.baseDir = path10.dirname(defaultConfigPath);
               return await this.processExtends(config);
             } finally {
               this.options.baseDir = previousBaseDir;
@@ -10984,9 +11863,17 @@ var init_config_loader = __esm({
        */
       validateLocalPath(resolvedPath) {
         const projectRoot = this.options.projectRoot || process.cwd();
-        const normalizedPath = path9.normalize(resolvedPath);
-        const normalizedRoot = path9.normalize(projectRoot);
-        if (!normalizedPath.startsWith(normalizedRoot)) {
+        const canonicalize = (p) => {
+          const resolved = path10.resolve(p);
+          try {
+            return path10.normalize(fs8.realpathSync.native(resolved));
+          } catch {
+            return path10.normalize(resolved);
+          }
+        };
+        const normalizedPath = canonicalize(resolvedPath);
+        const normalizedRoot = canonicalize(projectRoot);
+        if (normalizedPath !== normalizedRoot && !normalizedPath.startsWith(`${normalizedRoot}${path10.sep}`)) {
           throw new Error(
             `Security error: Path traversal detected. Cannot access files outside project root: ${projectRoot}`
           );
@@ -10997,7 +11884,7 @@ var init_config_loader = __esm({
           "/.ssh/",
           "/.aws/",
           "/.env",
-          "/private/"
+          "/private/etc/"
         ];
         const lowerPath = normalizedPath.toLowerCase();
         for (const pattern of sensitivePatterns) {
@@ -11011,19 +11898,19 @@ var init_config_loader = __esm({
        */
       findPackageRoot() {
         let currentDir = __dirname;
-        const root = path9.parse(currentDir).root;
+        const root = path10.parse(currentDir).root;
         while (currentDir !== root) {
-          const packageJsonPath = path9.join(currentDir, "package.json");
-          if (fs7.existsSync(packageJsonPath)) {
+          const packageJsonPath = path10.join(currentDir, "package.json");
+          if (fs8.existsSync(packageJsonPath)) {
             try {
-              const packageJson = JSON.parse(fs7.readFileSync(packageJsonPath, "utf8"));
+              const packageJson = JSON.parse(fs8.readFileSync(packageJsonPath, "utf8"));
               if (packageJson.name === "@probelabs/visor") {
                 return currentDir;
               }
             } catch {
             }
           }
-          currentDir = path9.dirname(currentDir);
+          currentDir = path10.dirname(currentDir);
         }
         return null;
       }
@@ -11271,6 +12158,11 @@ var init_config_schema = __esm({
         CustomToolDefinition: {
           type: "object",
           properties: {
+            type: {
+              type: "string",
+              enum: ["command", "api"],
+              description: "Tool implementation type (defaults to 'command')"
+            },
             name: {
               type: "string",
               description: "Tool name - used to reference the tool in MCP blocks"
@@ -11308,7 +12200,7 @@ var init_config_schema = __esm({
             },
             exec: {
               type: "string",
-              description: "Command to execute - supports Liquid template"
+              description: "Command to execute - supports Liquid template (required for type: 'command')"
             },
             stdin: {
               type: "string",
@@ -11341,9 +12233,132 @@ var init_config_schema = __esm({
             outputSchema: {
               $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
               description: "Expected output schema for validation"
+            },
+            spec: {
+              anyOf: [
+                {
+                  type: "string"
+                },
+                {
+                  $ref: "#/definitions/Record%3Cstring%2Cunknown%3E"
+                }
+              ],
+              description: "OpenAPI specification path/URL or inline object (required for type: 'api')"
+            },
+            overlays: {
+              anyOf: [
+                {
+                  type: "string"
+                },
+                {
+                  $ref: "#/definitions/Record%3Cstring%2Cunknown%3E"
+                },
+                {
+                  type: "array",
+                  items: {
+                    anyOf: [
+                      {
+                        type: "string"
+                      },
+                      {
+                        $ref: "#/definitions/Record%3Cstring%2Cunknown%3E"
+                      }
+                    ]
+                  }
+                }
+              ],
+              description: "Overlay path/URL, inline object, or a mixed array applied in order"
+            },
+            targetUrl: {
+              type: "string",
+              description: "Override API base URL instead of OpenAPI servers"
+            },
+            target_url: {
+              type: "string",
+              description: "Alias for targetUrl (snake_case)"
+            },
+            whitelist: {
+              anyOf: [
+                {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                },
+                {
+                  type: "string"
+                }
+              ],
+              description: "Include only operations matching these glob patterns (operationId or METHOD:/path)"
+            },
+            blacklist: {
+              anyOf: [
+                {
+                  type: "array",
+                  items: {
+                    type: "string"
+                  }
+                },
+                {
+                  type: "string"
+                }
+              ],
+              description: "Exclude operations matching these glob patterns (ignored when whitelist is set)"
+            },
+            headers: {
+              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
+              description: "Extra headers added to all API requests"
+            },
+            disableXMcp: {
+              type: "boolean",
+              description: "Disable X-MCP: 1 request header"
+            },
+            disable_x_mcp: {
+              type: "boolean",
+              description: "Alias for disableXMcp (snake_case)"
+            },
+            apiKey: {
+              type: "string",
+              description: "API key fallback credential used by security schemes"
+            },
+            api_key: {
+              type: "string",
+              description: "Alias for apiKey (snake_case)"
+            },
+            securitySchemeName: {
+              type: "string",
+              description: "Preferred security scheme name (optional hint)"
+            },
+            security_scheme_name: {
+              type: "string",
+              description: "Alias for securitySchemeName (snake_case)"
+            },
+            securityCredentials: {
+              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
+              description: "Credentials by OpenAPI security scheme name"
+            },
+            security_credentials: {
+              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
+              description: "Alias for securityCredentials (snake_case)"
+            },
+            namePrefix: {
+              type: "string",
+              description: "Optional prefix prepended to generated operation tool names"
+            },
+            name_prefix: {
+              type: "string",
+              description: "Alias for namePrefix (snake_case)"
+            },
+            requestTimeoutMs: {
+              type: "number",
+              description: "Request timeout in milliseconds for API calls"
+            },
+            request_timeout_ms: {
+              type: "number",
+              description: "Alias for requestTimeoutMs (snake_case)"
             }
           },
-          required: ["name", "exec"],
+          required: ["name"],
           additionalProperties: false,
           description: "Custom tool definition for use in MCP blocks",
           patternProperties: {
@@ -11819,7 +12834,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -11835,7 +12850,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -12523,7 +13538,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -12538,13 +13553,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381>>": {
+        "Record<string,Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381>": {
+        "Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314>": {
           type: "object",
           additionalProperties: false
         },
@@ -13792,13 +14807,13 @@ __export(config_exports, {
   ConfigManager: () => ConfigManager,
   VALID_EVENT_TRIGGERS: () => VALID_EVENT_TRIGGERS
 });
-var yaml3, fs8, path10, import_simple_git, import_ajv3, import_ajv_formats2, VALID_EVENT_TRIGGERS, ConfigManager, __ajvValidate, __ajvErrors;
+var yaml3, fs9, path11, import_simple_git, import_ajv3, import_ajv_formats2, VALID_EVENT_TRIGGERS, ConfigManager, __ajvValidate, __ajvErrors;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
     yaml3 = __toESM(require("js-yaml"));
-    fs8 = __toESM(require("fs"));
-    path10 = __toESM(require("path"));
+    fs9 = __toESM(require("fs"));
+    path11 = __toESM(require("path"));
     init_logger();
     import_simple_git = __toESM(require("simple-git"));
     init_config_loader();
@@ -13838,15 +14853,27 @@ var init_config = __esm({
       validOutputFormats = ["table", "json", "markdown", "sarif"];
       validGroupByOptions = ["check", "file", "severity", "group"];
       /**
+       * Annotate tools with the originating config directory for relative asset resolution.
+       */
+      annotateToolBaseDirs(config, baseDir) {
+        if (!config.tools || typeof config.tools !== "object") {
+          return;
+        }
+        for (const tool of Object.values(config.tools)) {
+          if (!tool || typeof tool !== "object") continue;
+          tool.__baseDir = tool.__baseDir || baseDir;
+        }
+      }
+      /**
        * Load configuration from a file
        */
       async loadConfig(configPath, options = {}) {
         const { validate = true, mergeDefaults = true, allowedRemotePatterns } = options;
-        const resolvedPath = path10.isAbsolute(configPath) ? configPath : path10.resolve(process.cwd(), configPath);
+        const resolvedPath = path11.isAbsolute(configPath) ? configPath : path11.resolve(process.cwd(), configPath);
         try {
           let configContent;
           try {
-            configContent = fs8.readFileSync(resolvedPath, "utf8");
+            configContent = fs9.readFileSync(resolvedPath, "utf8");
           } catch (readErr) {
             if (readErr && (readErr.code === "ENOENT" || readErr.code === "ENOTDIR")) {
               throw new Error(`Configuration file not found: ${resolvedPath}`);
@@ -13868,7 +14895,7 @@ var init_config = __esm({
           const extendsValue = parsedConfig.extends || parsedConfig.include;
           if (extendsValue) {
             const loaderOptions = {
-              baseDir: path10.dirname(resolvedPath),
+              baseDir: path11.dirname(resolvedPath),
               allowRemote: this.isRemoteExtendsAllowed(),
               maxDepth: 10,
               allowedRemotePatterns
@@ -13887,10 +14914,11 @@ var init_config = __esm({
             parsedConfig = merger.removeDisabledChecks(parsedConfig);
           }
           if (parsedConfig.id && typeof parsedConfig.id === "string") {
-            parsedConfig = await this.convertWorkflowToConfig(parsedConfig, path10.dirname(resolvedPath));
+            parsedConfig = await this.convertWorkflowToConfig(parsedConfig, path11.dirname(resolvedPath));
           }
+          this.annotateToolBaseDirs(parsedConfig, path11.dirname(resolvedPath));
           parsedConfig = this.normalizeStepsAndChecks(parsedConfig, !!extendsValue);
-          await this.loadWorkflows(parsedConfig, path10.dirname(resolvedPath));
+          await this.loadWorkflows(parsedConfig, path11.dirname(resolvedPath));
           if (validate) {
             this.validateConfig(parsedConfig);
           }
@@ -13949,6 +14977,7 @@ var init_config = __esm({
           if (parsedConfig.id && typeof parsedConfig.id === "string") {
             parsedConfig = await this.convertWorkflowToConfig(parsedConfig, baseDir || process.cwd());
           }
+          this.annotateToolBaseDirs(parsedConfig, baseDir || process.cwd());
           parsedConfig = this.normalizeStepsAndChecks(parsedConfig, !!extendsValue);
           await this.loadWorkflows(parsedConfig, baseDir || process.cwd());
           if (validate) this.validateConfig(parsedConfig);
@@ -13968,16 +14997,16 @@ var init_config = __esm({
         const searchDirs = [gitRoot, process.cwd()].filter(Boolean);
         for (const baseDir of searchDirs) {
           const candidates = ["visor.yaml", "visor.yml", ".visor.yaml", ".visor.yml"].map(
-            (p) => path10.join(baseDir, p)
+            (p) => path11.join(baseDir, p)
           );
           for (const p of candidates) {
             try {
-              const st = fs8.statSync(p);
+              const st = fs9.statSync(p);
               if (!st.isFile()) continue;
-              const isLegacy = path10.basename(p).startsWith(".");
+              const isLegacy = path11.basename(p).startsWith(".");
               if (isLegacy) {
                 if (process.env.VISOR_STRICT_CONFIG_NAME === "true") {
-                  const rel = path10.relative(baseDir, p);
+                  const rel = path11.relative(baseDir, p);
                   throw new Error(
                     `Legacy config detected: ${rel}. Please rename to visor.yaml (or visor.yml).`
                   );
@@ -14040,23 +15069,23 @@ var init_config = __esm({
           const possiblePaths = [];
           if (typeof __dirname !== "undefined") {
             possiblePaths.push(
-              path10.join(__dirname, "defaults", "visor.yaml"),
-              path10.join(__dirname, "..", "defaults", "visor.yaml")
+              path11.join(__dirname, "defaults", "visor.yaml"),
+              path11.join(__dirname, "..", "defaults", "visor.yaml")
             );
           }
           const pkgRoot = this.findPackageRoot();
           if (pkgRoot) {
-            possiblePaths.push(path10.join(pkgRoot, "defaults", "visor.yaml"));
+            possiblePaths.push(path11.join(pkgRoot, "defaults", "visor.yaml"));
           }
           if (process.env.GITHUB_ACTION_PATH) {
             possiblePaths.push(
-              path10.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml"),
-              path10.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml")
+              path11.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml"),
+              path11.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml")
             );
           }
           let bundledConfigPath;
           for (const possiblePath of possiblePaths) {
-            if (fs8.existsSync(possiblePath)) {
+            if (fs9.existsSync(possiblePath)) {
               bundledConfigPath = possiblePath;
               break;
             }
@@ -14064,7 +15093,7 @@ var init_config = __esm({
           if (bundledConfigPath) {
             console.error(`\u{1F4E6} Loading bundled default configuration from ${bundledConfigPath}`);
             const readAndParse = (p) => {
-              const raw = fs8.readFileSync(p, "utf8");
+              const raw = fs9.readFileSync(p, "utf8");
               const obj = yaml3.load(raw);
               if (!obj || typeof obj !== "object") return {};
               if (obj.include && !obj.extends) {
@@ -14074,7 +15103,7 @@ var init_config = __esm({
               }
               return obj;
             };
-            const baseDir = path10.dirname(bundledConfigPath);
+            const baseDir = path11.dirname(bundledConfigPath);
             const merger = new (init_config_merger(), __toCommonJS(config_merger_exports)).ConfigMerger();
             const loadWithExtendsSync = (p) => {
               const current = readAndParse(p);
@@ -14086,7 +15115,7 @@ var init_config = __esm({
               let acc = {};
               for (const src of list) {
                 const rel = typeof src === "string" ? src : String(src);
-                const abs = path10.isAbsolute(rel) ? rel : path10.resolve(baseDir, rel);
+                const abs = path11.isAbsolute(rel) ? rel : path11.resolve(baseDir, rel);
                 const parentCfg = loadWithExtendsSync(abs);
                 acc = merger.merge(acc, parentCfg);
               }
@@ -14110,18 +15139,18 @@ var init_config = __esm({
        */
       findPackageRoot() {
         let currentDir = __dirname;
-        while (currentDir !== path10.dirname(currentDir)) {
-          const packageJsonPath = path10.join(currentDir, "package.json");
-          if (fs8.existsSync(packageJsonPath)) {
+        while (currentDir !== path11.dirname(currentDir)) {
+          const packageJsonPath = path11.join(currentDir, "package.json");
+          if (fs9.existsSync(packageJsonPath)) {
             try {
-              const packageJson = JSON.parse(fs8.readFileSync(packageJsonPath, "utf8"));
+              const packageJson = JSON.parse(fs9.readFileSync(packageJsonPath, "utf8"));
               if (packageJson.name === "@probelabs/visor") {
                 return currentDir;
               }
             } catch {
             }
           }
-          currentDir = path10.dirname(currentDir);
+          currentDir = path11.dirname(currentDir);
         }
         return null;
       }
@@ -14460,6 +15489,42 @@ ${errors}`);
         }
         if (config.ai_mcp_servers) {
           this.validateMcpServersObject(config.ai_mcp_servers, "ai_mcp_servers", errors, warnings);
+        }
+        if (config.tools) {
+          for (const [toolName, toolDef] of Object.entries(config.tools)) {
+            const type = toolDef.type || "command";
+            if (type === "api") {
+              const spec = toolDef.spec;
+              const hasStringSpec = typeof spec === "string" && spec.trim().length > 0;
+              const hasInlineSpec = !!spec && typeof spec === "object" && !Array.isArray(spec);
+              if (!hasStringSpec && !hasInlineSpec) {
+                errors.push({
+                  field: `tools.${toolName}.spec`,
+                  message: `Invalid tool configuration for "${toolName}": missing spec field (required for type: api)`
+                });
+              }
+              const overlays = toolDef.overlays;
+              if (overlays !== void 0) {
+                const isInlineOverlay = !!overlays && typeof overlays === "object" && !Array.isArray(overlays);
+                const isStringOverlay = typeof overlays === "string";
+                const isMixedArrayOverlay = Array.isArray(overlays) && overlays.every(
+                  (item) => typeof item === "string" || !!item && typeof item === "object" && !Array.isArray(item)
+                );
+                if (!isInlineOverlay && !isStringOverlay && !isMixedArrayOverlay) {
+                  errors.push({
+                    field: `tools.${toolName}.overlays`,
+                    message: `Invalid tool configuration for "${toolName}": overlays must be a string, object, or array of strings/objects`,
+                    value: overlays
+                  });
+                }
+              }
+            } else if (!toolDef.exec || typeof toolDef.exec !== "string") {
+              errors.push({
+                field: `tools.${toolName}.exec`,
+                message: `Invalid tool configuration for "${toolName}": missing exec field (required for command tools)`
+              });
+            }
+          }
         }
         if (config.output) {
           this.validateOutputConfig(config.output, errors);
@@ -14878,7 +15943,7 @@ ${errors}`);
         if (policy.engine === "local" && policy.rules) {
           const rulesPath = Array.isArray(policy.rules) ? policy.rules : [policy.rules];
           for (const rp of rulesPath) {
-            if (typeof rp === "string" && !fs8.existsSync(path10.resolve(rp))) {
+            if (typeof rp === "string" && !fs9.existsSync(path11.resolve(rp))) {
               warnings.push({
                 field: "policy.rules",
                 message: `Policy rules path does not exist: ${rp}. It will be resolved at runtime.`,
@@ -14928,7 +15993,7 @@ ${errors}`);
             });
           }
         }
-        if (policy.data && typeof policy.data === "string" && !fs8.existsSync(path10.resolve(policy.data))) {
+        if (policy.data && typeof policy.data === "string" && !fs9.existsSync(path11.resolve(policy.data))) {
           warnings.push({
             field: "policy.data",
             message: `Policy data file does not exist: ${policy.data}. It will be resolved at runtime.`,
@@ -15078,7 +16143,7 @@ ${errors}`);
         try {
           if (!__ajvValidate) {
             try {
-              const jsonPath = path10.resolve(__dirname, "generated", "config-schema.json");
+              const jsonPath = path11.resolve(__dirname, "generated", "config-schema.json");
               const jsonSchema = require(jsonPath);
               if (jsonSchema) {
                 const ajv = new import_ajv3.default({ allErrors: true, allowUnionTypes: true, strict: false });
@@ -15126,6 +16191,9 @@ ${errors}`);
                   "policy"
                 ]);
                 if (topLevel && allowedTopLevelKeys.has(addl)) {
+                  continue;
+                }
+                if (!topLevel && addl === "__baseDir" && pathStr.startsWith("tools.")) {
                   continue;
                 }
                 if (!topLevel && addl === "sandbox" && pathStr.match(/^(checks|steps)\.[^.]+$/)) {
@@ -15332,7 +16400,7 @@ var workflow_check_provider_exports = {};
 __export(workflow_check_provider_exports, {
   WorkflowCheckProvider: () => WorkflowCheckProvider
 });
-var path11, yaml4, WorkflowCheckProvider;
+var path12, yaml4, WorkflowCheckProvider;
 var init_workflow_check_provider = __esm({
   "src/providers/workflow-check-provider.ts"() {
     "use strict";
@@ -15343,7 +16411,7 @@ var init_workflow_check_provider = __esm({
     init_sandbox();
     init_human_id();
     init_liquid_extensions();
-    path11 = __toESM(require("path"));
+    path12 = __toESM(require("path"));
     yaml4 = __toESM(require("js-yaml"));
     WorkflowCheckProvider = class extends CheckProvider {
       registry;
@@ -15552,13 +16620,13 @@ var init_workflow_check_provider = __esm({
         const loadConfigLiquid = createExtendedLiquid();
         const loadConfig2 = (filePath) => {
           try {
-            const normalizedBasePath = path11.normalize(basePath);
-            const resolvedPath = path11.isAbsolute(filePath) ? path11.normalize(filePath) : path11.normalize(path11.resolve(basePath, filePath));
-            const basePathWithSep = normalizedBasePath.endsWith(path11.sep) ? normalizedBasePath : normalizedBasePath + path11.sep;
+            const normalizedBasePath = path12.normalize(basePath);
+            const resolvedPath = path12.isAbsolute(filePath) ? path12.normalize(filePath) : path12.normalize(path12.resolve(basePath, filePath));
+            const basePathWithSep = normalizedBasePath.endsWith(path12.sep) ? normalizedBasePath : normalizedBasePath + path12.sep;
             if (!resolvedPath.startsWith(basePathWithSep) && resolvedPath !== normalizedBasePath) {
               throw new Error(`Path '${filePath}' escapes base directory`);
             }
-            const configDir = path11.dirname(resolvedPath);
+            const configDir = path12.dirname(resolvedPath);
             const rawContent = require("fs").readFileSync(resolvedPath, "utf-8");
             const renderedContent = loadConfigLiquid.parseAndRenderSync(rawContent, {
               basePath: configDir
@@ -16009,17 +17077,17 @@ var init_workflow_check_provider = __esm({
        * so it can be executed by the state machine as a nested workflow.
        */
       async loadWorkflowFromConfigPath(sourcePath, baseDir) {
-        const path25 = require("path");
-        const fs21 = require("fs");
+        const path26 = require("path");
+        const fs22 = require("fs");
         const yaml5 = require("js-yaml");
-        const resolved = path25.isAbsolute(sourcePath) ? sourcePath : path25.resolve(baseDir, sourcePath);
-        if (!fs21.existsSync(resolved)) {
+        const resolved = path26.isAbsolute(sourcePath) ? sourcePath : path26.resolve(baseDir, sourcePath);
+        if (!fs22.existsSync(resolved)) {
           throw new Error(`Workflow config not found at: ${resolved}`);
         }
-        const rawContent = fs21.readFileSync(resolved, "utf8");
+        const rawContent = fs22.readFileSync(resolved, "utf8");
         const rawData = yaml5.load(rawContent);
         if (rawData.imports && Array.isArray(rawData.imports)) {
-          const configDir = path25.dirname(resolved);
+          const configDir = path26.dirname(resolved);
           for (const source of rawData.imports) {
             const results = await this.registry.import(source, {
               basePath: configDir,
@@ -16049,8 +17117,8 @@ ${errors}`);
         if (!steps || Object.keys(steps).length === 0) {
           throw new Error(`Config '${resolved}' does not contain any steps to execute as a workflow`);
         }
-        const id = path25.basename(resolved).replace(/\.(ya?ml)$/i, "");
-        const name = loaded.name || `Workflow from ${path25.basename(resolved)}`;
+        const id = path26.basename(resolved).replace(/\.(ya?ml)$/i, "");
+        const name = loaded.name || `Workflow from ${path26.basename(resolved)}`;
         const workflowDef = {
           id,
           name,
@@ -16289,11 +17357,11 @@ function fromDbRow(row) {
     previousResponse: row.previous_response ?? void 0
   };
 }
-var import_path4, import_fs4, import_uuid, SqliteStoreBackend;
+var import_path5, import_fs4, import_uuid, SqliteStoreBackend;
 var init_sqlite_store = __esm({
   "src/scheduler/store/sqlite-store.ts"() {
     "use strict";
-    import_path4 = __toESM(require("path"));
+    import_path5 = __toESM(require("path"));
     import_fs4 = __toESM(require("fs"));
     import_uuid = require("uuid");
     init_logger();
@@ -16306,8 +17374,8 @@ var init_sqlite_store = __esm({
         this.dbPath = filename || ".visor/schedules.db";
       }
       async initialize() {
-        const resolvedPath = import_path4.default.resolve(process.cwd(), this.dbPath);
-        const dir = import_path4.default.dirname(resolvedPath);
+        const resolvedPath = import_path5.default.resolve(process.cwd(), this.dbPath);
+        const dir = import_path5.default.dirname(resolvedPath);
         import_fs4.default.mkdirSync(dir, { recursive: true });
         const { createRequire } = require("module");
         const runtimeRequire = createRequire(__filename);
@@ -16703,10 +17771,10 @@ var init_store = __esm({
 
 // src/scheduler/store/json-migrator.ts
 async function migrateJsonToBackend(jsonPath, backend) {
-  const resolvedPath = import_path5.default.resolve(process.cwd(), jsonPath);
+  const resolvedPath = import_path6.default.resolve(process.cwd(), jsonPath);
   let content;
   try {
-    content = await import_promises2.default.readFile(resolvedPath, "utf-8");
+    content = await import_promises3.default.readFile(resolvedPath, "utf-8");
   } catch (err) {
     if (err.code === "ENOENT") {
       return 0;
@@ -16753,7 +17821,7 @@ async function migrateJsonToBackend(jsonPath, backend) {
 async function renameToMigrated(resolvedPath) {
   const migratedPath = `${resolvedPath}.migrated`;
   try {
-    await import_promises2.default.rename(resolvedPath, migratedPath);
+    await import_promises3.default.rename(resolvedPath, migratedPath);
     logger.info(`[JsonMigrator] Backed up ${resolvedPath} \u2192 ${migratedPath}`);
   } catch (err) {
     logger.warn(
@@ -16761,12 +17829,12 @@ async function renameToMigrated(resolvedPath) {
     );
   }
 }
-var import_promises2, import_path5;
+var import_promises3, import_path6;
 var init_json_migrator = __esm({
   "src/scheduler/store/json-migrator.ts"() {
     "use strict";
-    import_promises2 = __toESM(require("fs/promises"));
-    import_path5 = __toESM(require("path"));
+    import_promises3 = __toESM(require("fs/promises"));
+    import_path6 = __toESM(require("path"));
     init_logger();
   }
 });
@@ -18374,7 +19442,23 @@ var init_mcp_custom_sse_server = __esm({
        * Handle tools/list MCP request
        */
       async handleToolsList(id) {
-        const allTools = Array.from(this.tools.values());
+        const normalizeInputSchema = (schema) => {
+          if (schema && schema.type === "object") {
+            return schema;
+          }
+          return {
+            type: "object",
+            properties: {},
+            required: []
+          };
+        };
+        const regularTools = await this.toolExecutor.listMcpTools();
+        const workflowTools = Array.from(this.tools.values()).filter(isWorkflowTool).map((tool) => ({
+          name: tool.name,
+          description: tool.description || `Execute ${tool.name}`,
+          inputSchema: normalizeInputSchema(tool.inputSchema)
+        }));
+        const allTools = [...regularTools, ...workflowTools];
         if (this.debug) {
           logger.debug(
             `[CustomToolsSSEServer:${this.sessionId}] Listing ${allTools.length} tools: ${allTools.map((t) => t.name).join(", ")}`
@@ -18387,11 +19471,7 @@ var init_mcp_custom_sse_server = __esm({
             tools: allTools.map((tool) => ({
               name: tool.name,
               description: tool.description || `Execute ${tool.name}`,
-              inputSchema: tool.inputSchema || {
-                type: "object",
-                properties: {},
-                required: []
-              }
+              inputSchema: normalizeInputSchema(tool.inputSchema)
             }))
           }
         };
@@ -18582,7 +19662,7 @@ var init_mcp_custom_sse_server = __esm({
 });
 
 // src/providers/ai-check-provider.ts
-var import_promises3, import_path6, AICheckProvider;
+var import_promises4, import_path7, AICheckProvider;
 var init_ai_check_provider = __esm({
   "src/providers/ai-check-provider.ts"() {
     "use strict";
@@ -18591,8 +19671,8 @@ var init_ai_check_provider = __esm({
     init_env_resolver();
     init_issue_filter();
     init_liquid_extensions();
-    import_promises3 = __toESM(require("fs/promises"));
-    import_path6 = __toESM(require("path"));
+    import_promises4 = __toESM(require("fs/promises"));
+    import_path7 = __toESM(require("path"));
     init_lazy_otel();
     init_state_capture();
     init_mcp_custom_sse_server();
@@ -18756,7 +19836,7 @@ var init_ai_check_provider = __esm({
         const hasFileExtension = /\.[a-zA-Z0-9]{1,10}$/i.test(str);
         const hasPathSeparators = /[\/\\]/.test(str);
         const isRelativePath = /^\.{1,2}\//.test(str);
-        const isAbsolutePath = import_path6.default.isAbsolute(str);
+        const isAbsolutePath = import_path7.default.isAbsolute(str);
         const hasTypicalFileChars = /^[a-zA-Z0-9._\-\/\\:~]+$/.test(str);
         if (!(hasFileExtension || isRelativePath || isAbsolutePath || hasPathSeparators)) {
           return false;
@@ -18766,14 +19846,14 @@ var init_ai_check_provider = __esm({
         }
         try {
           let resolvedPath;
-          if (import_path6.default.isAbsolute(str)) {
-            resolvedPath = import_path6.default.normalize(str);
+          if (import_path7.default.isAbsolute(str)) {
+            resolvedPath = import_path7.default.normalize(str);
           } else {
-            resolvedPath = import_path6.default.resolve(process.cwd(), str);
+            resolvedPath = import_path7.default.resolve(process.cwd(), str);
           }
-          const fs21 = require("fs").promises;
+          const fs22 = require("fs").promises;
           try {
-            const stat = await fs21.stat(resolvedPath);
+            const stat = await fs22.stat(resolvedPath);
             return stat.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
@@ -18790,14 +19870,14 @@ var init_ai_check_provider = __esm({
           throw new Error("Prompt file must have .liquid extension");
         }
         let resolvedPath;
-        if (import_path6.default.isAbsolute(promptPath)) {
+        if (import_path7.default.isAbsolute(promptPath)) {
           resolvedPath = promptPath;
         } else {
-          resolvedPath = import_path6.default.resolve(process.cwd(), promptPath);
+          resolvedPath = import_path7.default.resolve(process.cwd(), promptPath);
         }
-        if (!import_path6.default.isAbsolute(promptPath)) {
-          const normalizedPath = import_path6.default.normalize(resolvedPath);
-          const currentDir = import_path6.default.resolve(process.cwd());
+        if (!import_path7.default.isAbsolute(promptPath)) {
+          const normalizedPath = import_path7.default.normalize(resolvedPath);
+          const currentDir = import_path7.default.resolve(process.cwd());
           if (!normalizedPath.startsWith(currentDir)) {
             throw new Error("Invalid prompt file path: path traversal detected");
           }
@@ -18806,7 +19886,7 @@ var init_ai_check_provider = __esm({
           throw new Error("Invalid prompt file path: path traversal detected");
         }
         try {
-          const promptContent = await import_promises3.default.readFile(resolvedPath, "utf-8");
+          const promptContent = await import_promises4.default.readFile(resolvedPath, "utf-8");
           return promptContent;
         } catch (error) {
           throw new Error(
@@ -20789,7 +21869,7 @@ var init_template_context = __esm({
 });
 
 // src/providers/http-client-provider.ts
-var fs12, path15, HttpClientProvider;
+var fs13, path16, HttpClientProvider;
 var init_http_client_provider = __esm({
   "src/providers/http-client-provider.ts"() {
     "use strict";
@@ -20799,8 +21879,8 @@ var init_http_client_provider = __esm({
     init_sandbox();
     init_template_context();
     init_logger();
-    fs12 = __toESM(require("fs"));
-    path15 = __toESM(require("path"));
+    fs13 = __toESM(require("fs"));
+    path16 = __toESM(require("path"));
     HttpClientProvider = class extends CheckProvider {
       liquid;
       sandbox;
@@ -20895,14 +21975,14 @@ var init_http_client_provider = __esm({
             const parentContext = context2?._parentContext;
             const workingDirectory = parentContext?.workingDirectory;
             const workspaceEnabled = parentContext?.workspace?.isEnabled?.();
-            if (workspaceEnabled && workingDirectory && !path15.isAbsolute(resolvedOutputFile)) {
-              resolvedOutputFile = path15.join(workingDirectory, resolvedOutputFile);
+            if (workspaceEnabled && workingDirectory && !path16.isAbsolute(resolvedOutputFile)) {
+              resolvedOutputFile = path16.join(workingDirectory, resolvedOutputFile);
               logger.debug(
                 `[http_client] Resolved relative output_file to workspace: ${resolvedOutputFile}`
               );
             }
-            if (skipIfExists && fs12.existsSync(resolvedOutputFile)) {
-              const stats = fs12.statSync(resolvedOutputFile);
+            if (skipIfExists && fs13.existsSync(resolvedOutputFile)) {
+              const stats = fs13.statSync(resolvedOutputFile);
               logger.verbose(`[http_client] File cached: ${resolvedOutputFile} (${stats.size} bytes)`);
               return {
                 issues: [],
@@ -21113,13 +22193,13 @@ var init_http_client_provider = __esm({
               ]
             };
           }
-          const parentDir = path15.dirname(outputFile);
-          if (parentDir && !fs12.existsSync(parentDir)) {
-            fs12.mkdirSync(parentDir, { recursive: true });
+          const parentDir = path16.dirname(outputFile);
+          if (parentDir && !fs13.existsSync(parentDir)) {
+            fs13.mkdirSync(parentDir, { recursive: true });
           }
           const arrayBuffer = await response.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
-          fs12.writeFileSync(outputFile, buffer);
+          fs13.writeFileSync(outputFile, buffer);
           const contentType = response.headers.get("content-type") || "application/octet-stream";
           logger.verbose(`[http_client] Downloaded: ${outputFile} (${buffer.length} bytes)`);
           return {
@@ -21878,7 +22958,7 @@ var init_claude_code_types = __esm({
 function isClaudeCodeConstructor(value) {
   return typeof value === "function";
 }
-var import_promises4, import_path7, ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError, ClaudeCodeCheckProvider;
+var import_promises5, import_path8, ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError, ClaudeCodeCheckProvider;
 var init_claude_code_check_provider = __esm({
   "src/providers/claude-code-check-provider.ts"() {
     "use strict";
@@ -21886,8 +22966,8 @@ var init_claude_code_check_provider = __esm({
     init_env_resolver();
     init_issue_filter();
     init_liquid_extensions();
-    import_promises4 = __toESM(require("fs/promises"));
-    import_path7 = __toESM(require("path"));
+    import_promises5 = __toESM(require("fs/promises"));
+    import_path8 = __toESM(require("path"));
     init_claude_code_types();
     ClaudeCodeSDKNotInstalledError = class extends Error {
       constructor() {
@@ -22035,7 +23115,7 @@ var init_claude_code_check_provider = __esm({
         const hasFileExtension = /\.[a-zA-Z0-9]{1,10}$/i.test(str);
         const hasPathSeparators = /[\/\\]/.test(str);
         const isRelativePath = /^\.{1,2}\//.test(str);
-        const isAbsolutePath = import_path7.default.isAbsolute(str);
+        const isAbsolutePath = import_path8.default.isAbsolute(str);
         const hasTypicalFileChars = /^[a-zA-Z0-9._\-\/\\:~]+$/.test(str);
         if (!(hasFileExtension || isRelativePath || isAbsolutePath || hasPathSeparators)) {
           return false;
@@ -22045,13 +23125,13 @@ var init_claude_code_check_provider = __esm({
         }
         try {
           let resolvedPath;
-          if (import_path7.default.isAbsolute(str)) {
-            resolvedPath = import_path7.default.normalize(str);
+          if (import_path8.default.isAbsolute(str)) {
+            resolvedPath = import_path8.default.normalize(str);
           } else {
-            resolvedPath = import_path7.default.resolve(process.cwd(), str);
+            resolvedPath = import_path8.default.resolve(process.cwd(), str);
           }
           try {
-            const stat = await import_promises4.default.stat(resolvedPath);
+            const stat = await import_promises5.default.stat(resolvedPath);
             return stat.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
@@ -22068,14 +23148,14 @@ var init_claude_code_check_provider = __esm({
           throw new Error("Prompt file must have .liquid extension");
         }
         let resolvedPath;
-        if (import_path7.default.isAbsolute(promptPath)) {
+        if (import_path8.default.isAbsolute(promptPath)) {
           resolvedPath = promptPath;
         } else {
-          resolvedPath = import_path7.default.resolve(process.cwd(), promptPath);
+          resolvedPath = import_path8.default.resolve(process.cwd(), promptPath);
         }
-        if (!import_path7.default.isAbsolute(promptPath)) {
-          const normalizedPath = import_path7.default.normalize(resolvedPath);
-          const currentDir = import_path7.default.resolve(process.cwd());
+        if (!import_path8.default.isAbsolute(promptPath)) {
+          const normalizedPath = import_path8.default.normalize(resolvedPath);
+          const currentDir = import_path8.default.resolve(process.cwd());
           if (!normalizedPath.startsWith(currentDir)) {
             throw new Error("Invalid prompt file path: path traversal detected");
           }
@@ -22084,7 +23164,7 @@ var init_claude_code_check_provider = __esm({
           throw new Error("Invalid prompt file path: path traversal detected");
         }
         try {
-          const promptContent = await import_promises4.default.readFile(resolvedPath, "utf-8");
+          const promptContent = await import_promises5.default.readFile(resolvedPath, "utf-8");
           return promptContent;
         } catch (error) {
           throw new Error(
@@ -24654,14 +25734,14 @@ var require_util = __commonJS({
         }
         const port = url.port != null ? url.port : url.protocol === "https:" ? 443 : 80;
         let origin = url.origin != null ? url.origin : `${url.protocol}//${url.hostname}:${port}`;
-        let path25 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
+        let path26 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
         if (origin.endsWith("/")) {
           origin = origin.substring(0, origin.length - 1);
         }
-        if (path25 && !path25.startsWith("/")) {
-          path25 = `/${path25}`;
+        if (path26 && !path26.startsWith("/")) {
+          path26 = `/${path26}`;
         }
-        url = new URL(origin + path25);
+        url = new URL(origin + path26);
       }
       return url;
     }
@@ -26275,20 +27355,20 @@ var require_parseParams = __commonJS({
 var require_basename = __commonJS({
   "node_modules/@fastify/busboy/lib/utils/basename.js"(exports2, module2) {
     "use strict";
-    module2.exports = function basename4(path25) {
-      if (typeof path25 !== "string") {
+    module2.exports = function basename4(path26) {
+      if (typeof path26 !== "string") {
         return "";
       }
-      for (var i = path25.length - 1; i >= 0; --i) {
-        switch (path25.charCodeAt(i)) {
+      for (var i = path26.length - 1; i >= 0; --i) {
+        switch (path26.charCodeAt(i)) {
           case 47:
           // '/'
           case 92:
-            path25 = path25.slice(i + 1);
-            return path25 === ".." || path25 === "." ? "" : path25;
+            path26 = path26.slice(i + 1);
+            return path26 === ".." || path26 === "." ? "" : path26;
         }
       }
-      return path25 === ".." || path25 === "." ? "" : path25;
+      return path26 === ".." || path26 === "." ? "" : path26;
     };
   }
 });
@@ -29319,7 +30399,7 @@ var require_request = __commonJS({
     }
     var Request = class _Request {
       constructor(origin, {
-        path: path25,
+        path: path26,
         method,
         body,
         headers,
@@ -29333,11 +30413,11 @@ var require_request = __commonJS({
         throwOnError,
         expectContinue
       }, handler) {
-        if (typeof path25 !== "string") {
+        if (typeof path26 !== "string") {
           throw new InvalidArgumentError("path must be a string");
-        } else if (path25[0] !== "/" && !(path25.startsWith("http://") || path25.startsWith("https://")) && method !== "CONNECT") {
+        } else if (path26[0] !== "/" && !(path26.startsWith("http://") || path26.startsWith("https://")) && method !== "CONNECT") {
           throw new InvalidArgumentError("path must be an absolute URL or start with a slash");
-        } else if (invalidPathRegex.exec(path25) !== null) {
+        } else if (invalidPathRegex.exec(path26) !== null) {
           throw new InvalidArgumentError("invalid request path");
         }
         if (typeof method !== "string") {
@@ -29400,7 +30480,7 @@ var require_request = __commonJS({
         this.completed = false;
         this.aborted = false;
         this.upgrade = upgrade || null;
-        this.path = query ? util.buildURL(path25, query) : path25;
+        this.path = query ? util.buildURL(path26, query) : path26;
         this.origin = origin;
         this.idempotent = idempotent == null ? method === "HEAD" || method === "GET" : idempotent;
         this.blocking = blocking == null ? false : blocking;
@@ -30408,9 +31488,9 @@ var require_RedirectHandler = __commonJS({
           return this.handler.onHeaders(statusCode, headers, resume, statusText);
         }
         const { origin, pathname, search } = util.parseURL(new URL(this.location, this.opts.origin && new URL(this.opts.path, this.opts.origin)));
-        const path25 = search ? `${pathname}${search}` : pathname;
+        const path26 = search ? `${pathname}${search}` : pathname;
         this.opts.headers = cleanRequestHeaders(this.opts.headers, statusCode === 303, this.opts.origin !== origin);
-        this.opts.path = path25;
+        this.opts.path = path26;
         this.opts.origin = origin;
         this.opts.maxRedirections = 0;
         this.opts.query = null;
@@ -31652,7 +32732,7 @@ var require_client = __commonJS({
         writeH2(client, client[kHTTP2Session], request);
         return;
       }
-      const { body, method, path: path25, host, upgrade, headers, blocking, reset } = request;
+      const { body, method, path: path26, host, upgrade, headers, blocking, reset } = request;
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
         body.read(0);
@@ -31702,7 +32782,7 @@ var require_client = __commonJS({
       if (blocking) {
         socket[kBlocking] = true;
       }
-      let header = `${method} ${path25} HTTP/1.1\r
+      let header = `${method} ${path26} HTTP/1.1\r
 `;
       if (typeof host === "string") {
         header += `host: ${host}\r
@@ -31765,7 +32845,7 @@ upgrade: ${upgrade}\r
       return true;
     }
     function writeH2(client, session, request) {
-      const { body, method, path: path25, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
+      const { body, method, path: path26, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
       let headers;
       if (typeof reqHeaders === "string") headers = Request[kHTTP2CopyHeaders](reqHeaders.trim());
       else headers = reqHeaders;
@@ -31808,7 +32888,7 @@ upgrade: ${upgrade}\r
         });
         return true;
       }
-      headers[HTTP2_HEADER_PATH] = path25;
+      headers[HTTP2_HEADER_PATH] = path26;
       headers[HTTP2_HEADER_SCHEME] = "https";
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
@@ -34051,20 +35131,20 @@ var require_mock_utils = __commonJS({
       }
       return true;
     }
-    function safeUrl(path25) {
-      if (typeof path25 !== "string") {
-        return path25;
+    function safeUrl(path26) {
+      if (typeof path26 !== "string") {
+        return path26;
       }
-      const pathSegments = path25.split("?");
+      const pathSegments = path26.split("?");
       if (pathSegments.length !== 2) {
-        return path25;
+        return path26;
       }
       const qp = new URLSearchParams(pathSegments.pop());
       qp.sort();
       return [...pathSegments, qp.toString()].join("?");
     }
-    function matchKey(mockDispatch2, { path: path25, method, body, headers }) {
-      const pathMatch = matchValue(mockDispatch2.path, path25);
+    function matchKey(mockDispatch2, { path: path26, method, body, headers }) {
+      const pathMatch = matchValue(mockDispatch2.path, path26);
       const methodMatch = matchValue(mockDispatch2.method, method);
       const bodyMatch = typeof mockDispatch2.body !== "undefined" ? matchValue(mockDispatch2.body, body) : true;
       const headersMatch = matchHeaders(mockDispatch2, headers);
@@ -34082,7 +35162,7 @@ var require_mock_utils = __commonJS({
     function getMockDispatch(mockDispatches, key) {
       const basePath = key.query ? buildURL(key.path, key.query) : key.path;
       const resolvedPath = typeof basePath === "string" ? safeUrl(basePath) : basePath;
-      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path25 }) => matchValue(safeUrl(path25), resolvedPath));
+      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path26 }) => matchValue(safeUrl(path26), resolvedPath));
       if (matchedMockDispatches.length === 0) {
         throw new MockNotMatchedError(`Mock dispatch not matched for path '${resolvedPath}'`);
       }
@@ -34119,9 +35199,9 @@ var require_mock_utils = __commonJS({
       }
     }
     function buildKey(opts) {
-      const { path: path25, method, body, headers, query } = opts;
+      const { path: path26, method, body, headers, query } = opts;
       return {
-        path: path25,
+        path: path26,
         method,
         body,
         headers,
@@ -34570,10 +35650,10 @@ var require_pending_interceptors_formatter = __commonJS({
       }
       format(pendingInterceptors) {
         const withPrettyHeaders = pendingInterceptors.map(
-          ({ method, path: path25, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
+          ({ method, path: path26, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
             Method: method,
             Origin: origin,
-            Path: path25,
+            Path: path26,
             "Status code": statusCode,
             Persistent: persist ? "\u2705" : "\u274C",
             Invocations: timesInvoked,
@@ -39194,8 +40274,8 @@ var require_util6 = __commonJS({
         }
       }
     }
-    function validateCookiePath(path25) {
-      for (const char of path25) {
+    function validateCookiePath(path26) {
+      for (const char of path26) {
         const code = char.charCodeAt(0);
         if (code < 33 || char === ";") {
           throw new Error("Invalid cookie path");
@@ -40875,11 +41955,11 @@ var require_undici = __commonJS({
           if (typeof opts.path !== "string") {
             throw new InvalidArgumentError("invalid opts.path");
           }
-          let path25 = opts.path;
+          let path26 = opts.path;
           if (!opts.path.startsWith("/")) {
-            path25 = `/${path25}`;
+            path26 = `/${path26}`;
           }
-          url = new URL(util.parseOrigin(url).origin + path25);
+          url = new URL(util.parseOrigin(url).origin + path26);
         } else {
           if (!opts) {
             opts = typeof url === "object" ? url : {};
@@ -41307,10 +42387,11 @@ var init_mcp_check_provider = __esm({
               'No custom tools available. Define tools in the "tools" section of your configuration.'
             );
           }
-          const tool = this.customToolExecutor.getTool(config.method);
-          if (!tool) {
+          const hasTool = await this.customToolExecutor.hasTool(config.method);
+          if (!hasTool) {
+            const availableToolNames = await this.customToolExecutor.getToolNames();
             throw new Error(
-              `Custom tool not found: ${config.method}. Available tools: ${this.customToolExecutor.getTools().map((t) => t.name).join(", ")}`
+              `Custom tool not found: ${config.method}. Available tools: ${availableToolNames.join(", ")}`
             );
           }
           const context2 = {
@@ -42163,7 +43244,7 @@ var init_stdin_reader = __esm({
 });
 
 // src/providers/human-input-check-provider.ts
-var fs14, path17, HumanInputCheckProvider;
+var fs15, path18, HumanInputCheckProvider;
 var init_human_input_check_provider = __esm({
   "src/providers/human-input-check-provider.ts"() {
     "use strict";
@@ -42172,8 +43253,8 @@ var init_human_input_check_provider = __esm({
     init_prompt_state();
     init_liquid_extensions();
     init_stdin_reader();
-    fs14 = __toESM(require("fs"));
-    path17 = __toESM(require("path"));
+    fs15 = __toESM(require("fs"));
+    path18 = __toESM(require("path"));
     HumanInputCheckProvider = class _HumanInputCheckProvider extends CheckProvider {
       liquid;
       /**
@@ -42347,19 +43428,19 @@ var init_human_input_check_provider = __esm({
        */
       async tryReadFile(filePath) {
         try {
-          const absolutePath = path17.isAbsolute(filePath) ? filePath : path17.resolve(process.cwd(), filePath);
-          const normalizedPath = path17.normalize(absolutePath);
+          const absolutePath = path18.isAbsolute(filePath) ? filePath : path18.resolve(process.cwd(), filePath);
+          const normalizedPath = path18.normalize(absolutePath);
           const cwd = process.cwd();
-          if (!normalizedPath.startsWith(cwd + path17.sep) && normalizedPath !== cwd) {
+          if (!normalizedPath.startsWith(cwd + path18.sep) && normalizedPath !== cwd) {
             return null;
           }
           try {
-            await fs14.promises.access(normalizedPath, fs14.constants.R_OK);
-            const stats = await fs14.promises.stat(normalizedPath);
+            await fs15.promises.access(normalizedPath, fs15.constants.R_OK);
+            const stats = await fs15.promises.stat(normalizedPath);
             if (!stats.isFile()) {
               return null;
             }
-            const content = await fs14.promises.readFile(normalizedPath, "utf-8");
+            const content = await fs15.promises.readFile(normalizedPath, "utf-8");
             return content.trim();
           } catch {
             return null;
@@ -42801,13 +43882,13 @@ var init_script_check_provider = __esm({
 });
 
 // src/utils/worktree-manager.ts
-var fs15, fsp, path18, crypto, WorktreeManager, worktreeManager;
+var fs16, fsp, path19, crypto, WorktreeManager, worktreeManager;
 var init_worktree_manager = __esm({
   "src/utils/worktree-manager.ts"() {
     "use strict";
-    fs15 = __toESM(require("fs"));
+    fs16 = __toESM(require("fs"));
     fsp = __toESM(require("fs/promises"));
-    path18 = __toESM(require("path"));
+    path19 = __toESM(require("path"));
     crypto = __toESM(require("crypto"));
     init_command_executor();
     init_logger();
@@ -42823,7 +43904,7 @@ var init_worktree_manager = __esm({
         } catch {
           cwd = "/tmp";
         }
-        const defaultBasePath = process.env.VISOR_WORKTREE_PATH || path18.join(cwd, ".visor", "worktrees");
+        const defaultBasePath = process.env.VISOR_WORKTREE_PATH || path19.join(cwd, ".visor", "worktrees");
         this.config = {
           enabled: true,
           base_path: defaultBasePath,
@@ -42860,20 +43941,20 @@ var init_worktree_manager = __esm({
         }
         const reposDir = this.getReposDir();
         const worktreesDir = this.getWorktreesDir();
-        if (!fs15.existsSync(reposDir)) {
-          fs15.mkdirSync(reposDir, { recursive: true });
+        if (!fs16.existsSync(reposDir)) {
+          fs16.mkdirSync(reposDir, { recursive: true });
           logger.debug(`Created repos directory: ${reposDir}`);
         }
-        if (!fs15.existsSync(worktreesDir)) {
-          fs15.mkdirSync(worktreesDir, { recursive: true });
+        if (!fs16.existsSync(worktreesDir)) {
+          fs16.mkdirSync(worktreesDir, { recursive: true });
           logger.debug(`Created worktrees directory: ${worktreesDir}`);
         }
       }
       getReposDir() {
-        return path18.join(this.config.base_path, "repos");
+        return path19.join(this.config.base_path, "repos");
       }
       getWorktreesDir() {
-        return path18.join(this.config.base_path, "worktrees");
+        return path19.join(this.config.base_path, "worktrees");
       }
       /**
        * Generate a deterministic worktree ID based on repository and ref.
@@ -42891,8 +43972,8 @@ var init_worktree_manager = __esm({
       async getOrCreateBareRepo(repository, repoUrl, token, fetchDepth, cloneTimeoutMs) {
         const reposDir = this.getReposDir();
         const repoName = repository.replace(/\//g, "-");
-        const bareRepoPath = path18.join(reposDir, `${repoName}.git`);
-        if (fs15.existsSync(bareRepoPath)) {
+        const bareRepoPath = path19.join(reposDir, `${repoName}.git`);
+        if (fs16.existsSync(bareRepoPath)) {
           logger.debug(`Bare repository already exists: ${bareRepoPath}`);
           const verifyResult = await this.verifyBareRepoRemote(bareRepoPath, repoUrl);
           if (verifyResult === "timeout") {
@@ -43011,11 +44092,11 @@ var init_worktree_manager = __esm({
           options.cloneTimeoutMs
         );
         const worktreeId = this.generateWorktreeId(repository, ref);
-        let worktreePath = options.workingDirectory || path18.join(this.getWorktreesDir(), worktreeId);
+        let worktreePath = options.workingDirectory || path19.join(this.getWorktreesDir(), worktreeId);
         if (options.workingDirectory) {
           worktreePath = this.validatePath(options.workingDirectory);
         }
-        if (fs15.existsSync(worktreePath)) {
+        if (fs16.existsSync(worktreePath)) {
           logger.debug(`Worktree already exists: ${worktreePath}`);
           const metadata2 = await this.loadMetadata(worktreePath);
           if (metadata2) {
@@ -43256,9 +44337,9 @@ var init_worktree_manager = __esm({
         const result = await this.executeGitCommand(removeCmd, { timeout: 3e4 });
         if (result.exitCode !== 0) {
           logger.warn(`Failed to remove worktree via git: ${result.stderr}`);
-          if (fs15.existsSync(worktree_path)) {
+          if (fs16.existsSync(worktree_path)) {
             logger.debug(`Manually removing worktree directory`);
-            fs15.rmSync(worktree_path, { recursive: true, force: true });
+            fs16.rmSync(worktree_path, { recursive: true, force: true });
           }
         }
         this.activeWorktrees.delete(worktreeId);
@@ -43268,19 +44349,19 @@ var init_worktree_manager = __esm({
        * Save worktree metadata
        */
       async saveMetadata(worktreePath, metadata) {
-        const metadataPath = path18.join(worktreePath, ".visor-metadata.json");
-        fs15.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
+        const metadataPath = path19.join(worktreePath, ".visor-metadata.json");
+        fs16.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
       }
       /**
        * Load worktree metadata
        */
       async loadMetadata(worktreePath) {
-        const metadataPath = path18.join(worktreePath, ".visor-metadata.json");
-        if (!fs15.existsSync(metadataPath)) {
+        const metadataPath = path19.join(worktreePath, ".visor-metadata.json");
+        if (!fs16.existsSync(metadataPath)) {
           return null;
         }
         try {
-          const content = fs15.readFileSync(metadataPath, "utf8");
+          const content = fs16.readFileSync(metadataPath, "utf8");
           return JSON.parse(content);
         } catch (error) {
           logger.warn(`Failed to load metadata: ${error}`);
@@ -43292,14 +44373,14 @@ var init_worktree_manager = __esm({
        */
       async listWorktrees() {
         const worktreesDir = this.getWorktreesDir();
-        if (!fs15.existsSync(worktreesDir)) {
+        if (!fs16.existsSync(worktreesDir)) {
           return [];
         }
-        const entries = fs15.readdirSync(worktreesDir, { withFileTypes: true });
+        const entries = fs16.readdirSync(worktreesDir, { withFileTypes: true });
         const worktrees = [];
         for (const entry of entries) {
           if (!entry.isDirectory()) continue;
-          const worktreePath = path18.join(worktreesDir, entry.name);
+          const worktreePath = path19.join(worktreesDir, entry.name);
           const metadata = await this.loadMetadata(worktreePath);
           if (metadata) {
             worktrees.push({
@@ -43431,8 +44512,8 @@ var init_worktree_manager = __esm({
        * Validate path to prevent directory traversal
        */
       validatePath(userPath) {
-        const resolvedPath = path18.resolve(userPath);
-        if (!path18.isAbsolute(resolvedPath)) {
+        const resolvedPath = path19.resolve(userPath);
+        if (!path19.isAbsolute(resolvedPath)) {
           throw new Error("Path must be absolute");
         }
         const sensitivePatterns = [
@@ -45141,6 +46222,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       ...checkConfig,
       eventContext: context2.prInfo?.eventContext || {},
       __outputHistory: outputHistory,
+      __globalTools: context2.config.tools || {},
       // Propagate workflow inputs for template access via {{ inputs.* }}
       workflowInputs,
       ai: {
@@ -45458,23 +46540,23 @@ __export(renderer_schema_exports, {
 });
 async function loadRendererSchema(name) {
   try {
-    const fs21 = await import("fs/promises");
-    const path25 = await import("path");
+    const fs22 = await import("fs/promises");
+    const path26 = await import("path");
     const sanitized = String(name).replace(/[^a-zA-Z0-9-]/g, "");
     if (!sanitized) return void 0;
     const candidates = [
       // When bundled with ncc, __dirname is dist/ and output/ is at dist/output/
-      path25.join(__dirname, "output", sanitized, "schema.json"),
+      path26.join(__dirname, "output", sanitized, "schema.json"),
       // When running from source, __dirname is src/state-machine/dispatch/ and output/ is at output/
-      path25.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
+      path26.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
       // When running from a checkout with output/ folder copied to CWD
-      path25.join(process.cwd(), "output", sanitized, "schema.json"),
+      path26.join(process.cwd(), "output", sanitized, "schema.json"),
       // Fallback: cwd/dist/output/
-      path25.join(process.cwd(), "dist", "output", sanitized, "schema.json")
+      path26.join(process.cwd(), "dist", "output", sanitized, "schema.json")
     ];
     for (const p of candidates) {
       try {
-        const raw = await fs21.readFile(p, "utf-8");
+        const raw = await fs22.readFile(p, "utf-8");
         return JSON.parse(raw);
       } catch {
       }
@@ -47893,8 +48975,8 @@ function updateStats2(results, state, isForEachIteration = false) {
 async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs21 = await import("fs/promises");
-    const path25 = await import("path");
+    const fs22 = await import("fs/promises");
+    const path26 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" && !schemaRaw.includes("{{") && !schemaRaw.includes("{%") ? schemaRaw : typeof schemaRaw === "object" ? "code-review" : "plain";
     let templateContent;
@@ -47903,27 +48985,27 @@ async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
       logger.debug(`[LevelDispatch] Using inline template for ${checkId}`);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path25.resolve(process.cwd(), file);
-      templateContent = await fs21.readFile(resolved, "utf-8");
+      const resolved = path26.resolve(process.cwd(), file);
+      templateContent = await fs22.readFile(resolved, "utf-8");
       logger.debug(`[LevelDispatch] Using template file for ${checkId}: ${resolved}`);
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path25.join(__dirname, "output", sanitized, "template.liquid"),
+          path26.join(__dirname, "output", sanitized, "template.liquid"),
           // bundled: dist/output/
-          path25.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path26.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // source (from state-machine/states)
-          path25.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
+          path26.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
           // source (alternate)
-          path25.join(process.cwd(), "output", sanitized, "template.liquid"),
+          path26.join(process.cwd(), "output", sanitized, "template.liquid"),
           // fallback: cwd/output/
-          path25.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          path26.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
           // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs21.readFile(p, "utf-8");
+            templateContent = await fs22.readFile(p, "utf-8");
             if (templateContent) {
               logger.debug(`[LevelDispatch] Using schema template for ${checkId}: ${p}`);
               break;
@@ -48530,14 +49612,14 @@ var init_runner = __esm({
 });
 
 // src/sandbox/docker-image-sandbox.ts
-var import_util2, import_child_process2, import_fs5, import_path8, import_os, import_crypto2, execFileAsync, EXEC_MAX_BUFFER, DockerImageSandbox;
+var import_util2, import_child_process2, import_fs5, import_path9, import_os, import_crypto2, execFileAsync, EXEC_MAX_BUFFER, DockerImageSandbox;
 var init_docker_image_sandbox = __esm({
   "src/sandbox/docker-image-sandbox.ts"() {
     "use strict";
     import_util2 = require("util");
     import_child_process2 = require("child_process");
     import_fs5 = require("fs");
-    import_path8 = require("path");
+    import_path9 = require("path");
     import_os = require("os");
     import_crypto2 = require("crypto");
     init_logger();
@@ -48582,8 +49664,8 @@ var init_docker_image_sandbox = __esm({
                   `Sandbox '${this.name}' has invalid dockerfile_inline: must contain a FROM instruction`
                 );
               }
-              const tmpDir = (0, import_fs5.mkdtempSync)((0, import_path8.join)((0, import_os.tmpdir)(), "visor-build-"));
-              const dockerfilePath = (0, import_path8.join)(tmpDir, "Dockerfile");
+              const tmpDir = (0, import_fs5.mkdtempSync)((0, import_path9.join)((0, import_os.tmpdir)(), "visor-build-"));
+              const dockerfilePath = (0, import_path9.join)(tmpDir, "Dockerfile");
               (0, import_fs5.writeFileSync)(dockerfilePath, this.config.dockerfile_inline, "utf8");
               try {
                 logger.info(`Building sandbox image '${imageName}' from inline Dockerfile`);
@@ -49020,11 +50102,11 @@ var init_cache_volume_manager = __esm({
 });
 
 // src/sandbox/sandbox-manager.ts
-var import_path9, import_fs6, SandboxManager;
+var import_path10, import_fs6, SandboxManager;
 var init_sandbox_manager = __esm({
   "src/sandbox/sandbox-manager.ts"() {
     "use strict";
-    import_path9 = require("path");
+    import_path10 = require("path");
     import_fs6 = require("fs");
     init_docker_image_sandbox();
     init_docker_compose_sandbox();
@@ -49044,10 +50126,10 @@ var init_sandbox_manager = __esm({
       }
       constructor(sandboxDefs, repoPath, gitBranch) {
         this.sandboxDefs = sandboxDefs;
-        this.repoPath = (0, import_path9.resolve)(repoPath);
+        this.repoPath = (0, import_path10.resolve)(repoPath);
         this.gitBranch = gitBranch;
         this.cacheManager = new CacheVolumeManager();
-        this.visorDistPath = (0, import_fs6.existsSync)((0, import_path9.join)(__dirname, "index.js")) ? __dirname : (0, import_path9.resolve)((0, import_path9.dirname)(__dirname));
+        this.visorDistPath = (0, import_fs6.existsSync)((0, import_path10.join)(__dirname, "index.js")) ? __dirname : (0, import_path10.resolve)((0, import_path10.dirname)(__dirname));
       }
       /**
        * Resolve which sandbox a check should use.
@@ -49164,13 +50246,13 @@ var init_sandbox_manager = __esm({
 });
 
 // src/utils/file-exclusion.ts
-var import_ignore, fs16, path19, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
+var import_ignore, fs17, path20, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
 var init_file_exclusion = __esm({
   "src/utils/file-exclusion.ts"() {
     "use strict";
     import_ignore = __toESM(require("ignore"));
-    fs16 = __toESM(require("fs"));
-    path19 = __toESM(require("path"));
+    fs17 = __toESM(require("fs"));
+    path20 = __toESM(require("path"));
     DEFAULT_EXCLUSION_PATTERNS = [
       "dist/",
       "build/",
@@ -49189,7 +50271,7 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to include (optional, defaults to common build artifacts)
        */
       constructor(workingDirectory = process.cwd(), additionalPatterns = DEFAULT_EXCLUSION_PATTERNS) {
-        const normalizedPath = path19.resolve(workingDirectory);
+        const normalizedPath = path20.resolve(workingDirectory);
         if (normalizedPath.includes("\0")) {
           throw new Error("Invalid workingDirectory: contains null bytes");
         }
@@ -49201,11 +50283,11 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to add to gitignore rules
        */
       loadGitignore(additionalPatterns) {
-        const gitignorePath = path19.resolve(this.workingDirectory, ".gitignore");
-        const resolvedWorkingDir = path19.resolve(this.workingDirectory);
+        const gitignorePath = path20.resolve(this.workingDirectory, ".gitignore");
+        const resolvedWorkingDir = path20.resolve(this.workingDirectory);
         try {
-          const relativePath = path19.relative(resolvedWorkingDir, gitignorePath);
-          if (relativePath.startsWith("..") || path19.isAbsolute(relativePath)) {
+          const relativePath = path20.relative(resolvedWorkingDir, gitignorePath);
+          if (relativePath.startsWith("..") || path20.isAbsolute(relativePath)) {
             throw new Error("Invalid gitignore path: path traversal detected");
           }
           if (relativePath !== ".gitignore") {
@@ -49215,8 +50297,8 @@ var init_file_exclusion = __esm({
           if (additionalPatterns && additionalPatterns.length > 0) {
             this.gitignore.add(additionalPatterns);
           }
-          if (fs16.existsSync(gitignorePath)) {
-            const rawContent = fs16.readFileSync(gitignorePath, "utf8");
+          if (fs17.existsSync(gitignorePath)) {
+            const rawContent = fs17.readFileSync(gitignorePath, "utf8");
             const gitignoreContent = rawContent.replace(/[\r\n]+/g, "\n").replace(/[\x00-\x09\x0B-\x1F\x7F]/g, "").split("\n").filter((line) => line.length < 1e3).join("\n").trim();
             this.gitignore.add(gitignoreContent);
             if (process.env.VISOR_DEBUG === "true") {
@@ -49248,13 +50330,13 @@ var git_repository_analyzer_exports = {};
 __export(git_repository_analyzer_exports, {
   GitRepositoryAnalyzer: () => GitRepositoryAnalyzer
 });
-var import_simple_git2, path20, fs17, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
+var import_simple_git2, path21, fs18, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
 var init_git_repository_analyzer = __esm({
   "src/git-repository-analyzer.ts"() {
     "use strict";
     import_simple_git2 = require("simple-git");
-    path20 = __toESM(require("path"));
-    fs17 = __toESM(require("fs"));
+    path21 = __toESM(require("path"));
+    fs18 = __toESM(require("fs"));
     init_file_exclusion();
     MAX_PATCH_SIZE = 50 * 1024;
     GitRepositoryAnalyzer = class {
@@ -49443,7 +50525,7 @@ ${file.patch}`).join("\n\n");
               console.error(`\u23ED\uFE0F  Skipping excluded file: ${file}`);
               continue;
             }
-            const filePath = path20.join(this.cwd, file);
+            const filePath = path21.join(this.cwd, file);
             const fileChange = await this.analyzeFileChange(file, status2, filePath, includeContext);
             changes.push(fileChange);
           }
@@ -49519,7 +50601,7 @@ ${file.patch}`).join("\n\n");
         let content;
         let truncated = false;
         try {
-          if (includeContext && status !== "added" && fs17.existsSync(filePath)) {
+          if (includeContext && status !== "added" && fs18.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const result = this.truncatePatch(diff, filename);
@@ -49529,7 +50611,7 @@ ${file.patch}`).join("\n\n");
               additions = lines.filter((line) => line.startsWith("+")).length;
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
-          } else if (status !== "added" && fs17.existsSync(filePath)) {
+          } else if (status !== "added" && fs18.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const lines = diff.split("\n");
@@ -49537,17 +50619,17 @@ ${file.patch}`).join("\n\n");
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
           }
-          if (status === "added" && fs17.existsSync(filePath)) {
+          if (status === "added" && fs18.existsSync(filePath)) {
             try {
-              const stats = fs17.statSync(filePath);
+              const stats = fs18.statSync(filePath);
               if (stats.isFile() && stats.size < 1024 * 1024) {
                 if (includeContext) {
-                  content = fs17.readFileSync(filePath, "utf8");
+                  content = fs18.readFileSync(filePath, "utf8");
                   const result = this.truncatePatch(content, filename);
                   patch = result.patch;
                   truncated = result.truncated;
                 }
-                const fileContent = includeContext ? content : fs17.readFileSync(filePath, "utf8");
+                const fileContent = includeContext ? content : fs18.readFileSync(filePath, "utf8");
                 additions = fileContent.split("\n").length;
               }
             } catch {
@@ -49638,12 +50720,12 @@ function shellEscape(str) {
 function sanitizePathComponent(name) {
   return name.replace(/\.\./g, "").replace(/[\/\\]/g, "-").replace(/^\.+/, "").trim() || "unnamed";
 }
-var fsp2, path21, WorkspaceManager;
+var fsp2, path22, WorkspaceManager;
 var init_workspace_manager = __esm({
   "src/utils/workspace-manager.ts"() {
     "use strict";
     fsp2 = __toESM(require("fs/promises"));
-    path21 = __toESM(require("path"));
+    path22 = __toESM(require("path"));
     init_command_executor();
     init_logger();
     WorkspaceManager = class _WorkspaceManager {
@@ -49677,7 +50759,7 @@ var init_workspace_manager = __esm({
         };
         this.basePath = this.config.basePath;
         const workspaceDirName = sanitizePathComponent(this.config.name || this.sessionId);
-        this.workspacePath = path21.join(this.basePath, workspaceDirName);
+        this.workspacePath = path22.join(this.basePath, workspaceDirName);
       }
       /**
        * Get or create a WorkspaceManager instance for a session
@@ -49772,7 +50854,7 @@ var init_workspace_manager = __esm({
           configuredMainProjectName || this.extractProjectName(this.originalPath)
         );
         this.usedNames.add(mainProjectName);
-        const mainProjectPath = path21.join(this.workspacePath, mainProjectName);
+        const mainProjectPath = path22.join(this.workspacePath, mainProjectName);
         const isGitRepo = await this.isGitRepository(this.originalPath);
         if (isGitRepo) {
           await this.createMainProjectWorktree(mainProjectPath);
@@ -49813,7 +50895,7 @@ var init_workspace_manager = __esm({
         let projectName = sanitizePathComponent(description || this.extractRepoName(repository));
         projectName = this.getUniqueName(projectName);
         this.usedNames.add(projectName);
-        const workspacePath = path21.join(this.workspacePath, projectName);
+        const workspacePath = path22.join(this.workspacePath, projectName);
         await fsp2.rm(workspacePath, { recursive: true, force: true });
         try {
           await fsp2.symlink(worktreePath, workspacePath);
@@ -49952,7 +51034,7 @@ var init_workspace_manager = __esm({
        * Extract project name from path
        */
       extractProjectName(dirPath) {
-        return path21.basename(dirPath);
+        return path22.basename(dirPath);
       }
       /**
        * Extract repository name from owner/repo format
@@ -50186,12 +51268,12 @@ var ndjson_sink_exports = {};
 __export(ndjson_sink_exports, {
   NdjsonSink: () => NdjsonSink
 });
-var import_fs7, import_path10, NdjsonSink;
+var import_fs7, import_path11, NdjsonSink;
 var init_ndjson_sink = __esm({
   "src/frontends/ndjson-sink.ts"() {
     "use strict";
     import_fs7 = __toESM(require("fs"));
-    import_path10 = __toESM(require("path"));
+    import_path11 = __toESM(require("path"));
     NdjsonSink = class {
       name = "ndjson-sink";
       cfg;
@@ -50223,8 +51305,8 @@ var init_ndjson_sink = __esm({
         this.unsub = void 0;
       }
       resolveFile(p) {
-        if (import_path10.default.isAbsolute(p)) return p;
-        return import_path10.default.join(process.cwd(), p);
+        if (import_path11.default.isAbsolute(p)) return p;
+        return import_path11.default.join(process.cwd(), p);
       }
     };
   }
@@ -51951,16 +53033,16 @@ function extractMermaidDiagrams(text) {
 }
 async function renderMermaidToPng(mermaidCode) {
   const tmpDir = os.tmpdir();
-  const inputFile = path23.join(
+  const inputFile = path24.join(
     tmpDir,
     `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}.mmd`
   );
-  const outputFile = path23.join(
+  const outputFile = path24.join(
     tmpDir,
     `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}.png`
   );
   try {
-    fs19.writeFileSync(inputFile, mermaidCode, "utf-8");
+    fs20.writeFileSync(inputFile, mermaidCode, "utf-8");
     const chromiumPaths = [
       "/usr/bin/chromium",
       "/usr/bin/chromium-browser",
@@ -51969,7 +53051,7 @@ async function renderMermaidToPng(mermaidCode) {
     ];
     let chromiumPath;
     for (const p of chromiumPaths) {
-      if (fs19.existsSync(p)) {
+      if (fs20.existsSync(p)) {
         chromiumPath = p;
         break;
       }
@@ -52021,19 +53103,19 @@ async function renderMermaidToPng(mermaidCode) {
       console.warn(`Mermaid rendering failed: ${result.error}`);
       return null;
     }
-    if (!fs19.existsSync(outputFile)) {
+    if (!fs20.existsSync(outputFile)) {
       console.warn("Mermaid output file not created");
       return null;
     }
-    const pngBuffer = fs19.readFileSync(outputFile);
+    const pngBuffer = fs20.readFileSync(outputFile);
     return pngBuffer;
   } catch (e) {
     console.warn(`Mermaid rendering error: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   } finally {
     try {
-      if (fs19.existsSync(inputFile)) fs19.unlinkSync(inputFile);
-      if (fs19.existsSync(outputFile)) fs19.unlinkSync(outputFile);
+      if (fs20.existsSync(inputFile)) fs20.unlinkSync(inputFile);
+      if (fs20.existsSync(outputFile)) fs20.unlinkSync(outputFile);
     } catch {
     }
   }
@@ -52138,13 +53220,13 @@ function replaceFileSections(text, sections, replacement = (idx) => `_(See file:
 function formatSlackText(text) {
   return markdownToSlack(text);
 }
-var import_child_process5, fs19, path23, os;
+var import_child_process5, fs20, path24, os;
 var init_markdown = __esm({
   "src/slack/markdown.ts"() {
     "use strict";
     import_child_process5 = require("child_process");
-    fs19 = __toESM(require("fs"));
-    path23 = __toESM(require("path"));
+    fs20 = __toESM(require("fs"));
+    path24 = __toESM(require("path"));
     os = __toESM(require("os"));
   }
 });
@@ -53121,15 +54203,15 @@ function serializeRunState(state) {
     ])
   };
 }
-var path24, fs20, StateMachineExecutionEngine;
+var path25, fs21, StateMachineExecutionEngine;
 var init_state_machine_execution_engine = __esm({
   "src/state-machine-execution-engine.ts"() {
     "use strict";
     init_runner();
     init_logger();
     init_sandbox_manager();
-    path24 = __toESM(require("path"));
-    fs20 = __toESM(require("fs"));
+    path25 = __toESM(require("path"));
+    fs21 = __toESM(require("fs"));
     StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       workingDirectory;
       executionContext;
@@ -53319,6 +54401,15 @@ var init_state_machine_execution_engine = __esm({
           ...config,
           tag_filter: tagFilter
         } : config;
+        try {
+          const { CheckProviderRegistry: CheckProviderRegistry2 } = await Promise.resolve().then(() => (init_check_provider_registry(), check_provider_registry_exports));
+          const registry = CheckProviderRegistry2.getInstance();
+          registry.setCustomTools(configWithTagFilter.tools || {});
+        } catch (error) {
+          logger.warn(
+            `[StateMachine] Failed to register custom tools: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
         const context2 = this.buildEngineContext(
           configWithTagFilter,
           prInfo,
@@ -53505,9 +54596,9 @@ var init_state_machine_execution_engine = __esm({
                   }
                   const checkId = String(ev?.checkId || "unknown");
                   const threadKey = ev?.threadKey || (channel && threadTs ? `${channel}:${threadTs}` : "session");
-                  const baseDir = process.env.VISOR_SNAPSHOT_DIR || path24.resolve(process.cwd(), ".visor", "snapshots");
-                  fs20.mkdirSync(baseDir, { recursive: true });
-                  const filePath = path24.join(baseDir, `${threadKey}-${checkId}.json`);
+                  const baseDir = process.env.VISOR_SNAPSHOT_DIR || path25.resolve(process.cwd(), ".visor", "snapshots");
+                  fs21.mkdirSync(baseDir, { recursive: true });
+                  const filePath = path25.join(baseDir, `${threadKey}-${checkId}.json`);
                   await this.saveSnapshotToFile(filePath);
                   logger.info(`[Snapshot] Saved run snapshot: ${filePath}`);
                   try {
@@ -53648,7 +54739,7 @@ var init_state_machine_execution_engine = __esm({
        * Does not include secrets. Intended for debugging and future resume support.
        */
       async saveSnapshotToFile(filePath) {
-        const fs21 = await import("fs/promises");
+        const fs22 = await import("fs/promises");
         const ctx = this._lastContext;
         const runner = this._lastRunner;
         if (!ctx || !runner) {
@@ -53668,14 +54759,14 @@ var init_state_machine_execution_engine = __esm({
           journal: entries,
           requestedChecks: ctx.requestedChecks || []
         };
-        await fs21.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+        await fs22.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
       }
       /**
        * Load a snapshot JSON from file and return it. Resume support can build on this.
        */
       async loadSnapshotFromFile(filePath) {
-        const fs21 = await import("fs/promises");
-        const raw = await fs21.readFile(filePath, "utf8");
+        const fs22 = await import("fs/promises");
+        const raw = await fs22.readFile(filePath, "utf8");
         return JSON.parse(raw);
       }
       /**

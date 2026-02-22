@@ -193,6 +193,11 @@ export declare const configSchema: {
         readonly CustomToolDefinition: {
             readonly type: "object";
             readonly properties: {
+                readonly type: {
+                    readonly type: "string";
+                    readonly enum: readonly ["command", "api"];
+                    readonly description: "Tool implementation type (defaults to 'command')";
+                };
                 readonly name: {
                     readonly type: "string";
                     readonly description: "Tool name - used to reference the tool in MCP blocks";
@@ -230,7 +235,7 @@ export declare const configSchema: {
                 };
                 readonly exec: {
                     readonly type: "string";
-                    readonly description: "Command to execute - supports Liquid template";
+                    readonly description: "Command to execute - supports Liquid template (required for type: 'command')";
                 };
                 readonly stdin: {
                     readonly type: "string";
@@ -264,8 +269,115 @@ export declare const configSchema: {
                     readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
                     readonly description: "Expected output schema for validation";
                 };
+                readonly spec: {
+                    readonly anyOf: readonly [{
+                        readonly type: "string";
+                    }, {
+                        readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    }];
+                    readonly description: "OpenAPI specification path/URL or inline object (required for type: 'api')";
+                };
+                readonly overlays: {
+                    readonly anyOf: readonly [{
+                        readonly type: "string";
+                    }, {
+                        readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    }, {
+                        readonly type: "array";
+                        readonly items: {
+                            readonly anyOf: readonly [{
+                                readonly type: "string";
+                            }, {
+                                readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                            }];
+                        };
+                    }];
+                    readonly description: "Overlay path/URL, inline object, or a mixed array applied in order";
+                };
+                readonly targetUrl: {
+                    readonly type: "string";
+                    readonly description: "Override API base URL instead of OpenAPI servers";
+                };
+                readonly target_url: {
+                    readonly type: "string";
+                    readonly description: "Alias for targetUrl (snake_case)";
+                };
+                readonly whitelist: {
+                    readonly anyOf: readonly [{
+                        readonly type: "array";
+                        readonly items: {
+                            readonly type: "string";
+                        };
+                    }, {
+                        readonly type: "string";
+                    }];
+                    readonly description: "Include only operations matching these glob patterns (operationId or METHOD:/path)";
+                };
+                readonly blacklist: {
+                    readonly anyOf: readonly [{
+                        readonly type: "array";
+                        readonly items: {
+                            readonly type: "string";
+                        };
+                    }, {
+                        readonly type: "string";
+                    }];
+                    readonly description: "Exclude operations matching these glob patterns (ignored when whitelist is set)";
+                };
+                readonly headers: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cstring%3E";
+                    readonly description: "Extra headers added to all API requests";
+                };
+                readonly disableXMcp: {
+                    readonly type: "boolean";
+                    readonly description: "Disable X-MCP: 1 request header";
+                };
+                readonly disable_x_mcp: {
+                    readonly type: "boolean";
+                    readonly description: "Alias for disableXMcp (snake_case)";
+                };
+                readonly apiKey: {
+                    readonly type: "string";
+                    readonly description: "API key fallback credential used by security schemes";
+                };
+                readonly api_key: {
+                    readonly type: "string";
+                    readonly description: "Alias for apiKey (snake_case)";
+                };
+                readonly securitySchemeName: {
+                    readonly type: "string";
+                    readonly description: "Preferred security scheme name (optional hint)";
+                };
+                readonly security_scheme_name: {
+                    readonly type: "string";
+                    readonly description: "Alias for securitySchemeName (snake_case)";
+                };
+                readonly securityCredentials: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cstring%3E";
+                    readonly description: "Credentials by OpenAPI security scheme name";
+                };
+                readonly security_credentials: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cstring%3E";
+                    readonly description: "Alias for securityCredentials (snake_case)";
+                };
+                readonly namePrefix: {
+                    readonly type: "string";
+                    readonly description: "Optional prefix prepended to generated operation tool names";
+                };
+                readonly name_prefix: {
+                    readonly type: "string";
+                    readonly description: "Alias for namePrefix (snake_case)";
+                };
+                readonly requestTimeoutMs: {
+                    readonly type: "number";
+                    readonly description: "Request timeout in milliseconds for API calls";
+                };
+                readonly request_timeout_ms: {
+                    readonly type: "number";
+                    readonly description: "Alias for requestTimeoutMs (snake_case)";
+                };
             };
-            readonly required: readonly ["name", "exec"];
+            readonly required: readonly ["name"];
             readonly additionalProperties: false;
             readonly description: "Custom tool definition for use in MCP blocks";
             readonly patternProperties: {
@@ -726,7 +838,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -742,7 +854,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -1394,7 +1506,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1409,13 +1521,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-51381>': {
+        readonly 'Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };

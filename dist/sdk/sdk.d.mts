@@ -1088,6 +1088,8 @@ interface VisorHooks {
  * Custom tool definition for use in MCP blocks
  */
 interface CustomToolDefinition {
+    /** Tool implementation type (defaults to 'command') */
+    type?: 'command' | 'api';
     /** Tool name - used to reference the tool in MCP blocks */
     name: string;
     /** Description of what the tool does */
@@ -1099,8 +1101,8 @@ interface CustomToolDefinition {
         required?: string[];
         additionalProperties?: boolean;
     };
-    /** Command to execute - supports Liquid template */
-    exec: string;
+    /** Command to execute - supports Liquid template (required for type: 'command') */
+    exec?: string;
     /** Optional stdin input - supports Liquid template */
     stdin?: string;
     /** Transform the raw output - supports Liquid template */
@@ -1117,6 +1119,44 @@ interface CustomToolDefinition {
     parseJson?: boolean;
     /** Expected output schema for validation */
     outputSchema?: Record<string, unknown>;
+    /** OpenAPI specification path/URL or inline object (required for type: 'api') */
+    spec?: string | Record<string, unknown>;
+    /** Overlay path/URL, inline object, or a mixed array applied in order */
+    overlays?: string | Record<string, unknown> | Array<string | Record<string, unknown>>;
+    /** Override API base URL instead of OpenAPI servers */
+    targetUrl?: string;
+    /** Alias for targetUrl (snake_case) */
+    target_url?: string;
+    /** Include only operations matching these glob patterns (operationId or METHOD:/path) */
+    whitelist?: string[] | string;
+    /** Exclude operations matching these glob patterns (ignored when whitelist is set) */
+    blacklist?: string[] | string;
+    /** Extra headers added to all API requests */
+    headers?: Record<string, string>;
+    /** Disable X-MCP: 1 request header */
+    disableXMcp?: boolean;
+    /** Alias for disableXMcp (snake_case) */
+    disable_x_mcp?: boolean;
+    /** API key fallback credential used by security schemes */
+    apiKey?: string;
+    /** Alias for apiKey (snake_case) */
+    api_key?: string;
+    /** Preferred security scheme name (optional hint) */
+    securitySchemeName?: string;
+    /** Alias for securitySchemeName (snake_case) */
+    security_scheme_name?: string;
+    /** Credentials by OpenAPI security scheme name */
+    securityCredentials?: Record<string, string>;
+    /** Alias for securityCredentials (snake_case) */
+    security_credentials?: Record<string, string>;
+    /** Optional prefix prepended to generated operation tool names */
+    namePrefix?: string;
+    /** Alias for namePrefix (snake_case) */
+    name_prefix?: string;
+    /** Request timeout in milliseconds for API calls */
+    requestTimeoutMs?: number;
+    /** Alias for requestTimeoutMs (snake_case) */
+    request_timeout_ms?: number;
 }
 /**
  * Workflow input definition for standalone reusable workflows
