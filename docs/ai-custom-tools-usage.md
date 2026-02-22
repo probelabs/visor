@@ -75,6 +75,14 @@ steps:
 
 `users-api` is a reusable tool bundle; each OpenAPI operation becomes an MCP tool exposed to AI.
 
+Repository examples:
+
+- `examples/api-tools-library.yaml`
+- `examples/api-tools-ai-example.yaml`
+- `examples/api-tools-mcp-example.yaml`
+- `examples/api-tools-ai-example.tests.yaml`
+- `examples/api-tools-mcp-example.tests.yaml`
+
 ### Example 1: Security Scanning
 
 ```yaml

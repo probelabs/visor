@@ -1,0 +1,25 @@
+version: "1.0"
+
+# Reuse API bundle definition from a separate file.
+extends: ./api-tools-library.yaml
+
+checks:
+  # Generated operation tool validates required OpenAPI args before any HTTP call.
+  api-tool-missing-required-input:
+    type: mcp
+    transport: custom
+    method: getUser
+    methodArgs: {}
+    on:
+      - manual
+
+  # Whitelist in api-tools-library.yaml allows get* only, so createUser is blocked.
+  api-tool-whitelist-enforced:
+    type: mcp
+    transport: custom
+    method: createUser
+    methodArgs:
+      requestBody:
+        name: Alice
+    on:
+      - issue_comment

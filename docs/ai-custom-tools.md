@@ -145,6 +145,14 @@ steps:
 
 Each OpenAPI operation with an `operationId` is exposed as an MCP tool for the AI check.
 
+See runnable examples:
+
+- `examples/api-tools-library.yaml`
+- `examples/api-tools-ai-example.yaml`
+- `examples/api-tools-mcp-example.yaml`
+- `examples/api-tools-ai-example.tests.yaml`
+- `examples/api-tools-mcp-example.tests.yaml`
+
 ### Advanced Example with Multiple Tools
 
 ```yaml

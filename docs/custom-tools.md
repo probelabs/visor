@@ -329,6 +329,12 @@ Behavior:
 
 This works with `ai_custom_tools`, `ai_mcp_servers.<name>.tools`, and `transport: custom` MCP execution.
 
+Runnable examples in this repo:
+
+- `examples/api-tools-library.yaml` (reusable API bundle in a separate file)
+- `examples/api-tools-mcp-example.yaml` + `examples/api-tools-mcp-example.tests.yaml`
+- `examples/api-tools-ai-example.yaml` + `examples/api-tools-ai-example.tests.yaml`
+
 ## Tool Libraries and Extends
 
 ### Creating a Tool Library

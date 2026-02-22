@@ -1,0 +1,15 @@
+version: "1.0"
+
+# Reusable OpenAPI API bundle.
+# Import this file via `extends:` from other configs to expose generated MCP tools.
+tools:
+  users-api:
+    type: api
+    name: users-api
+    description: Reusable users API tool bundle generated from OpenAPI
+    spec: ./openapi/users-api.json
+    whitelist:
+      - "get*"
+
+# Library-only file: no executable steps here.
+steps: {}

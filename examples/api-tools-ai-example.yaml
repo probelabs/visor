@@ -1,0 +1,28 @@
+version: "1.0"
+
+# Reuse the API bundle from a separate tools file and expose it to AI.
+extends: ./api-tools-library.yaml
+
+checks:
+  api-assistant:
+    type: ai
+    prompt: |
+      You have access to users-api MCP tools generated from OpenAPI.
+      Explain how to call getUser and which required fields are needed.
+    ai_custom_tools:
+      - users-api
+    ai:
+      provider: anthropic
+      model: claude-3-5-sonnet-20241022
+    on:
+      - manual
+
+  api-tool-whitelist-check:
+    type: mcp
+    transport: custom
+    method: createUser
+    methodArgs:
+      requestBody:
+        name: Alice
+    on:
+      - issue_comment

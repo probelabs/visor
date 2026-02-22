@@ -230,6 +230,11 @@ tests:
 
 This confirms generated operation tools are registered and invoked through `transport: custom`.
 
+Also see end-to-end example suites:
+
+- `examples/api-tools-mcp-example.tests.yaml`
+- `examples/api-tools-ai-example.tests.yaml`
+
 ## Related Documentation
 
 - [Getting Started](./getting-started.md) - Introduction to the test framework
