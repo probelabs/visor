@@ -22436,6 +22436,7 @@ var init_command_check_provider = __esm({
     init_sandbox();
     init_liquid_extensions();
     init_logger();
+    init_env_resolver();
     init_command_executor();
     init_author_permissions();
     init_lazy_otel();
@@ -22637,7 +22638,7 @@ var init_command_check_provider = __esm({
           if (config.env) {
             for (const [key, value] of Object.entries(config.env)) {
               if (value !== void 0 && value !== null) {
-                scriptEnv[key] = String(value);
+                scriptEnv[key] = String(EnvironmentResolver.resolveValue(value));
               }
             }
           }
@@ -41420,11 +41421,24 @@ var init_mcp_check_provider = __esm({
        * Execute MCP method using stdio transport
        */
       async executeStdioMethod(config, methodArgs, timeout) {
+        const env = {};
+        for (const [key, value] of Object.entries(process.env)) {
+          if (value !== void 0) {
+            env[key] = value;
+          }
+        }
+        if (config.env) {
+          for (const [key, value] of Object.entries(config.env)) {
+            if (value !== void 0 && value !== null) {
+              env[key] = String(EnvironmentResolver.resolveValue(value));
+            }
+          }
+        }
         return this.executeWithTransport(
           () => new import_stdio.StdioClientTransport({
             command: config.command,
             args: config.command_args,
-            env: config.env,
+            env,
             cwd: config.workingDirectory,
             stderr: "pipe"
             // Prevent child stderr from corrupting TUI
