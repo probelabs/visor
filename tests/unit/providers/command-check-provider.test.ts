@@ -376,6 +376,63 @@ describe('CommandCheckProvider', () => {
 
       process.env = originalEnv;
     });
+
+    it('should resolve ${VAR} placeholders in env config values', async () => {
+      const originalEnv = process.env;
+      process.env = {
+        ...originalEnv,
+        MY_API_TOKEN: 'resolved-secret-123',
+        MY_SUBDOMAIN: 'mycompany',
+      };
+
+      const config: CheckProviderConfig = {
+        type: 'command',
+        exec: 'echo "test"',
+        env: {
+          API_KEY: '${MY_API_TOKEN}',
+          SUBDOMAIN: '${MY_SUBDOMAIN}',
+          STATIC_VAR: 'plain-value',
+        },
+      };
+
+      mockExecute.mockResolvedValue({
+        stdout: 'test\n',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await provider.execute(mockPRInfo, config);
+
+      const callArgs = mockExecute.mock.calls[0];
+      const envArg = callArgs[1]!.env;
+      expect(envArg).toHaveProperty('API_KEY', 'resolved-secret-123');
+      expect(envArg).toHaveProperty('SUBDOMAIN', 'mycompany');
+      expect(envArg).toHaveProperty('STATIC_VAR', 'plain-value');
+
+      process.env = originalEnv;
+    });
+
+    it('should leave unresolvable ${VAR} placeholders as-is in env config', async () => {
+      const config: CheckProviderConfig = {
+        type: 'command',
+        exec: 'echo "test"',
+        env: {
+          MISSING: '${NONEXISTENT_VAR_XYZ}',
+        },
+      };
+
+      mockExecute.mockResolvedValue({
+        stdout: 'test\n',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await provider.execute(mockPRInfo, config);
+
+      const callArgs = mockExecute.mock.calls[0];
+      const envArg = callArgs[1]!.env;
+      expect(envArg).toHaveProperty('MISSING', '${NONEXISTENT_VAR_XYZ}');
+    });
   });
 
   describe('Transform Logic', () => {

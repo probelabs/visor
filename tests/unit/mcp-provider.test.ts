@@ -1,5 +1,11 @@
 import { McpCheckProvider } from '../../src/providers/mcp-check-provider';
 import { EnvironmentResolver } from '../../src/utils/env-resolver';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+
+// Mock the MCP SDK to capture env passed to StdioClientTransport
+jest.mock('@modelcontextprotocol/sdk/client/stdio.js');
+jest.mock('@modelcontextprotocol/sdk/client/index.js');
 
 describe('MCP Check Provider', () => {
   let provider: McpCheckProvider;
@@ -381,6 +387,176 @@ describe('MCP Check Provider', () => {
       };
 
       await expect(provider.validateConfig(config)).resolves.toBe(true);
+    });
+  });
+
+  describe('stdio environment variable handling', () => {
+    let capturedEnv: Record<string, string> | undefined;
+    const mockPrInfo = {
+      number: 1,
+      title: 'Test PR',
+      author: 'test',
+      head: 'feature',
+      base: 'main',
+      files: [],
+      diff: '',
+      body: '',
+      labels: [],
+      comments: [],
+      reviewComments: [],
+      commits: [],
+    };
+
+    beforeEach(() => {
+      capturedEnv = undefined;
+
+      // Mock StdioClientTransport to capture the env parameter
+      (StdioClientTransport as jest.MockedClass<typeof StdioClientTransport>).mockImplementation(
+        (params: any) => {
+          capturedEnv = params.env;
+          return {
+            start: jest.fn(),
+            close: jest.fn(),
+            send: jest.fn(),
+          } as any;
+        }
+      );
+
+      // Mock Client to simulate successful MCP connection and tool call
+      (Client as jest.MockedClass<typeof Client>).mockImplementation(
+        () =>
+          ({
+            connect: jest.fn().mockResolvedValue(undefined),
+            close: jest.fn().mockResolvedValue(undefined),
+            listTools: jest.fn().mockResolvedValue({ tools: [] }),
+            callTool: jest.fn().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }] }),
+          }) as any
+      );
+
+      // Set up test env vars (simulating .env-loaded values)
+      process.env.ZENDESK_SUBDOMAIN = 'tyksupport';
+      process.env.ZENDESK_EMAIL = 'leo@tyk.io';
+      process.env.ZENDESK_API_TOKEN = 'secret-token-123';
+      process.env.SOME_INHERITED_VAR = 'inherited-value';
+    });
+
+    afterEach(() => {
+      delete process.env.ZENDESK_SUBDOMAIN;
+      delete process.env.ZENDESK_EMAIL;
+      delete process.env.ZENDESK_API_TOKEN;
+      delete process.env.SOME_INHERITED_VAR;
+      jest.restoreAllMocks();
+    });
+
+    it('should resolve ${VAR} placeholders in env config', async () => {
+      const config = {
+        type: 'mcp' as const,
+        transport: 'stdio' as const,
+        command: 'uvx',
+        method: 'test_tool',
+        env: {
+          ZENDESK_SUBDOMAIN: '${ZENDESK_SUBDOMAIN}',
+          ZENDESK_EMAIL: '${ZENDESK_EMAIL}',
+          ZENDESK_API_KEY: '${ZENDESK_API_TOKEN}',
+        },
+      };
+
+      await provider.execute(mockPrInfo as any, config);
+
+      expect(capturedEnv).toBeDefined();
+      expect(capturedEnv!.ZENDESK_SUBDOMAIN).toBe('tyksupport');
+      expect(capturedEnv!.ZENDESK_EMAIL).toBe('leo@tyk.io');
+      expect(capturedEnv!.ZENDESK_API_KEY).toBe('secret-token-123');
+    });
+
+    it('should resolve ${{ env.VAR }} placeholders in env config', async () => {
+      const config = {
+        type: 'mcp' as const,
+        transport: 'stdio' as const,
+        command: 'uvx',
+        method: 'test_tool',
+        env: {
+          MY_SUBDOMAIN: '${{ env.ZENDESK_SUBDOMAIN }}',
+        },
+      };
+
+      await provider.execute(mockPrInfo as any, config);
+
+      expect(capturedEnv).toBeDefined();
+      expect(capturedEnv!.MY_SUBDOMAIN).toBe('tyksupport');
+    });
+
+    it('should inherit process.env variables in child process env', async () => {
+      const config = {
+        type: 'mcp' as const,
+        transport: 'stdio' as const,
+        command: 'uvx',
+        method: 'test_tool',
+        env: {
+          CUSTOM_VAR: 'custom-value',
+        },
+      };
+
+      await provider.execute(mockPrInfo as any, config);
+
+      expect(capturedEnv).toBeDefined();
+      // Should have the explicitly set config var
+      expect(capturedEnv!.CUSTOM_VAR).toBe('custom-value');
+      // Should also inherit process.env vars (e.g., .env-loaded values)
+      expect(capturedEnv!.SOME_INHERITED_VAR).toBe('inherited-value');
+      expect(capturedEnv!.ZENDESK_SUBDOMAIN).toBe('tyksupport');
+      // Should have standard system vars too
+      expect(capturedEnv!.HOME).toBe(process.env.HOME);
+    });
+
+    it('should let config env override process.env values', async () => {
+      const config = {
+        type: 'mcp' as const,
+        transport: 'stdio' as const,
+        command: 'uvx',
+        method: 'test_tool',
+        env: {
+          ZENDESK_SUBDOMAIN: 'overridden-value',
+        },
+      };
+
+      await provider.execute(mockPrInfo as any, config);
+
+      expect(capturedEnv).toBeDefined();
+      expect(capturedEnv!.ZENDESK_SUBDOMAIN).toBe('overridden-value');
+    });
+
+    it('should pass process.env when no config env specified', async () => {
+      const config = {
+        type: 'mcp' as const,
+        transport: 'stdio' as const,
+        command: 'uvx',
+        method: 'test_tool',
+      };
+
+      await provider.execute(mockPrInfo as any, config);
+
+      expect(capturedEnv).toBeDefined();
+      // Should still inherit process.env
+      expect(capturedEnv!.ZENDESK_SUBDOMAIN).toBe('tyksupport');
+      expect(capturedEnv!.SOME_INHERITED_VAR).toBe('inherited-value');
+    });
+
+    it('should leave unresolvable placeholders as-is', async () => {
+      const config = {
+        type: 'mcp' as const,
+        transport: 'stdio' as const,
+        command: 'uvx',
+        method: 'test_tool',
+        env: {
+          MISSING: '${NONEXISTENT_VAR_XYZ}',
+        },
+      };
+
+      await provider.execute(mockPrInfo as any, config);
+
+      expect(capturedEnv).toBeDefined();
+      expect(capturedEnv!.MISSING).toBe('${NONEXISTENT_VAR_XYZ}');
     });
   });
 });

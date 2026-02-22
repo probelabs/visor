@@ -7,6 +7,7 @@ import Sandbox from '@nyariv/sandboxjs';
 import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { logger } from '../logger';
+import { EnvironmentResolver } from '../utils/env-resolver';
 import { commandExecutor } from '../utils/command-executor';
 import {
   createPermissionHelpers,
@@ -275,7 +276,7 @@ export class CommandCheckProvider extends CheckProvider {
       if (config.env) {
         for (const [key, value] of Object.entries(config.env)) {
           if (value !== undefined && value !== null) {
-            scriptEnv[key] = String(value);
+            scriptEnv[key] = String(EnvironmentResolver.resolveValue(value));
           }
         }
       }

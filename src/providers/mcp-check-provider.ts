@@ -622,12 +622,31 @@ export class McpCheckProvider extends CheckProvider {
     methodArgs: Record<string, unknown>,
     timeout: number
   ): Promise<unknown> {
+    // Build env: start with process.env as base (inherits .env-loaded vars),
+    // then overlay resolved config env on top. This fixes two issues:
+    // 1. MCP SDK's StdioClientTransport only passes a minimal safe set of vars
+    //    (HOME, PATH, etc.) when env is provided, stripping .env-loaded values.
+    // 2. Config env values like "${VAR_NAME}" need interpolation via EnvironmentResolver.
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value !== undefined) {
+        env[key] = value;
+      }
+    }
+    if (config.env) {
+      for (const [key, value] of Object.entries(config.env)) {
+        if (value !== undefined && value !== null) {
+          env[key] = String(EnvironmentResolver.resolveValue(value));
+        }
+      }
+    }
+
     return this.executeWithTransport(
       () =>
         new StdioClientTransport({
           command: config.command!,
           args: config.command_args as string[] | undefined,
-          env: config.env,
+          env,
           cwd: config.workingDirectory,
           stderr: 'pipe', // Prevent child stderr from corrupting TUI
         }),
