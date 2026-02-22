@@ -645,5 +645,57 @@ describe('CustomToolExecutor', () => {
       expect(names).toContain('getUserFromMixedInlineOverlay');
       expect(names).not.toContain('getUserFromFileOverlay');
     });
+
+    it('should include API tool context when OpenAPI dereference fails', async () => {
+      const brokenSpec = {
+        openapi: '3.0.0',
+        info: { title: 'Broken API', version: '1.0.0' },
+        servers: [{ url: baseUrl }],
+        paths: {
+          '/broken': {
+            get: {
+              operationId: 'brokenOp',
+              responses: {
+                200: {
+                  description: 'OK',
+                  content: {
+                    'application/json': {
+                      schema: {
+                        $ref: '#/components/schemas/DoesNotExist',
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api-broken-spec',
+        type: 'api',
+        spec: brokenSpec,
+      };
+      executor.registerTool(apiTool);
+
+      await expect(executor.listMcpTools()).rejects.toThrow(
+        "Failed to dereference OpenAPI spec for API tool 'users-api-broken-spec' from inline spec"
+      );
+    });
+
+    it('should include tool and operation context when endpoint URL construction fails', async () => {
+      const apiTool: CustomToolDefinition = {
+        name: 'users-api-invalid-url',
+        type: 'api',
+        spec: specDoc,
+        targetUrl: 'http://[::1',
+      };
+      executor.registerTool(apiTool);
+
+      await expect(executor.execute('getUser', { id: '123' }, {})).rejects.toThrow(
+        "Failed to construct endpoint URL for API tool 'users-api-invalid-url' operation 'getUser' (GET /users/{id})"
+      );
+    });
   });
 });

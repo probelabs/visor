@@ -438,18 +438,35 @@ async function loadOpenApiDocument(tool: CustomToolDefinition): Promise<any> {
     }
     return configuredBaseDir || process.cwd();
   })();
+  const dereferenceWithContext = async (
+    source: string,
+    spec: any
+  ): Promise<any> => {
+    try {
+      return await SwaggerParser.dereference(spec);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Failed to dereference OpenAPI spec for API tool '${tool.name}' from ${source}: ${errorMessage}`
+      );
+    }
+  };
+
   let openapi: any;
   if (typeof tool.spec === 'string') {
     const specLocation = resolvePathOrUrl(tool.spec, baseDir);
     if (isHttpUrl(specLocation)) {
       const raw = await readTextFromPathOrUrl(specLocation);
       const parsed = parseJsonOrYaml(raw, specLocation);
-      openapi = await SwaggerParser.dereference(parsed);
+      openapi = await dereferenceWithContext(specLocation, parsed);
     } else {
-      openapi = await SwaggerParser.dereference(specLocation);
+      openapi = await dereferenceWithContext(specLocation, specLocation);
     }
   } else if (isPlainObject(tool.spec)) {
-    openapi = await SwaggerParser.dereference(JSON.parse(JSON.stringify(tool.spec)));
+    openapi = await dereferenceWithContext(
+      'inline spec',
+      JSON.parse(JSON.stringify(tool.spec))
+    );
   } else {
     throw new Error(
       `API tool '${tool.name}' has invalid spec field (expected string path/URL or object)`
@@ -780,7 +797,15 @@ export async function executeMappedApiTool(
     throw new Error(`Missing required path parameters for ${method} ${pathTemplate}`);
   }
 
-  const endpoint = new URL(`${serverUrl}${urlPath}`);
+  let endpoint: URL;
+  try {
+    endpoint = new URL(`${serverUrl}${urlPath}`);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Failed to construct endpoint URL for API tool '${mappedTool.sourceToolName}' operation '${mappedTool.mcpToolDefinition.name}' (${method} ${pathTemplate}) with serverUrl '${serverUrl}': ${errorMessage}`
+    );
+  }
   const queryParams = new URLSearchParams(endpoint.search);
   const headers: Record<string, string> = { ...apiToolConfig.customHeaders };
   let requestBodyValue: unknown;
