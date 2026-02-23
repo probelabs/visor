@@ -105,6 +105,7 @@ export class ConfigWatcher {
   private watchers: Map<string, { close: () => void }> = new Map();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private signalHandler: (() => void) | null = null;
+  private lastReloadTs = 0;
 
   constructor(configPath: string, reloader: ConfigReloader, debounceMs?: number) {
     this.configPath = configPath;
@@ -233,11 +234,16 @@ export class ConfigWatcher {
   }
 
   private debouncedReload(): void {
+    // Skip if a reload completed very recently — prevents the polling fallback
+    // from re-triggering after the native fs.watch already handled the event.
+    if (this.lastReloadTs && Date.now() - this.lastReloadTs < this.debounceMs) return;
+
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
     }
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
+      this.lastReloadTs = Date.now();
       logger.info('[ConfigWatcher] File change detected, reloading config');
       this.safeReload();
     }, this.debounceMs);
