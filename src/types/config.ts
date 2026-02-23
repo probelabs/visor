@@ -483,6 +483,16 @@ export interface CheckConfig {
   transform_js?: string;
   /** Script content to execute for script checks */
   content?: string;
+  /** Tool names to expose inside script checks (string names or workflow references) */
+  tools?: Array<string | { workflow: string; args?: Record<string, unknown> }>;
+  /** JavaScript expression to dynamically compute tools for script checks */
+  tools_js?: string;
+  /** MCP servers whose tools are exposed inside script checks */
+  mcp_servers?: Record<string, McpServerConfig>;
+  /** Enable fetch() function in script checks (default: false) */
+  enable_fetch?: boolean;
+  /** Enable bash() function in script checks (default: false) */
+  enable_bash?: boolean;
   /** Cron schedule expression (e.g., "0 2 * * *") - optional for any check type */
   schedule?: string;
   /** Focus area for the check (security/performance/style/architecture/all) - optional */
