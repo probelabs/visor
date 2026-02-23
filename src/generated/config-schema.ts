@@ -545,6 +545,47 @@ export const configSchema = {
           type: 'string',
           description: 'Script content to execute for script checks',
         },
+        tools: {
+          type: 'array',
+          items: {
+            anyOf: [
+              {
+                type: 'string',
+              },
+              {
+                type: 'object',
+                properties: {
+                  workflow: {
+                    type: 'string',
+                  },
+                  args: {
+                    $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+                  },
+                },
+                required: ['workflow'],
+                additionalProperties: false,
+              },
+            ],
+          },
+          description:
+            'Tool names to expose inside script checks (string names or workflow references)',
+        },
+        tools_js: {
+          type: 'string',
+          description: 'JavaScript expression to dynamically compute tools for script checks',
+        },
+        mcp_servers: {
+          $ref: '#/definitions/Record%3Cstring%2CMcpServerConfig%3E',
+          description: 'MCP servers whose tools are exposed inside script checks',
+        },
+        enable_fetch: {
+          type: 'boolean',
+          description: 'Enable fetch() function in script checks (default: false)',
+        },
+        enable_bash: {
+          type: 'boolean',
+          description: 'Enable bash() function in script checks (default: false)',
+        },
         schedule: {
           type: 'string',
           description: 'Cron schedule expression (e.g., "0 2 * * *") - optional for any check type',
@@ -917,7 +958,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53881%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -934,7 +975,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53881%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1039,6 +1080,75 @@ export const configSchema = {
         'git-checkout',
       ],
       description: 'Valid check types in configuration',
+    },
+    'Record<string,McpServerConfig>': {
+      type: 'object',
+      additionalProperties: {
+        $ref: '#/definitions/McpServerConfig',
+      },
+    },
+    McpServerConfig: {
+      type: 'object',
+      properties: {
+        command: {
+          type: 'string',
+          description: 'Command to execute (presence indicates stdio server)',
+        },
+        args: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Arguments to pass to the command',
+        },
+        env: {
+          $ref: '#/definitions/Record%3Cstring%2Cstring%3E',
+          description: 'Environment variables for the MCP server',
+        },
+        url: {
+          type: 'string',
+          description: 'URL endpoint (presence indicates external server)',
+        },
+        transport: {
+          type: 'string',
+          enum: ['stdio', 'sse', 'http'],
+          description: 'Transport type',
+        },
+        workflow: {
+          type: 'string',
+          description: 'Workflow ID or path (presence indicates workflow tool)',
+        },
+        inputs: {
+          $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+          description: 'Inputs to pass to workflow',
+        },
+        description: {
+          type: 'string',
+          description: 'Tool description for AI',
+        },
+        allowedMethods: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description:
+            'Whitelist specific methods from this MCP server (supports wildcards like "search_*")',
+        },
+        blockedMethods: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description:
+            'Block specific methods from this MCP server (supports wildcards like "*_delete")',
+        },
+      },
+      additionalProperties: false,
+      description:
+        'Unified MCP server/tool entry - type detected by which properties are present\n\nDetection logic (priority order): 1. Has `command` → stdio MCP server (external process) 2. Has `url` → SSE/HTTP MCP server (external endpoint) 3. Has `workflow` → workflow tool reference 4. Empty `{}` or just key → auto-detect from `tools:` section',
+      patternProperties: {
+        '^x-': {},
+      },
     },
     EventTrigger: {
       type: 'string',
@@ -1172,75 +1282,6 @@ export const configSchema = {
       },
       additionalProperties: false,
       description: 'AI provider configuration',
-      patternProperties: {
-        '^x-': {},
-      },
-    },
-    'Record<string,McpServerConfig>': {
-      type: 'object',
-      additionalProperties: {
-        $ref: '#/definitions/McpServerConfig',
-      },
-    },
-    McpServerConfig: {
-      type: 'object',
-      properties: {
-        command: {
-          type: 'string',
-          description: 'Command to execute (presence indicates stdio server)',
-        },
-        args: {
-          type: 'array',
-          items: {
-            type: 'string',
-          },
-          description: 'Arguments to pass to the command',
-        },
-        env: {
-          $ref: '#/definitions/Record%3Cstring%2Cstring%3E',
-          description: 'Environment variables for the MCP server',
-        },
-        url: {
-          type: 'string',
-          description: 'URL endpoint (presence indicates external server)',
-        },
-        transport: {
-          type: 'string',
-          enum: ['stdio', 'sse', 'http'],
-          description: 'Transport type',
-        },
-        workflow: {
-          type: 'string',
-          description: 'Workflow ID or path (presence indicates workflow tool)',
-        },
-        inputs: {
-          $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
-          description: 'Inputs to pass to workflow',
-        },
-        description: {
-          type: 'string',
-          description: 'Tool description for AI',
-        },
-        allowedMethods: {
-          type: 'array',
-          items: {
-            type: 'string',
-          },
-          description:
-            'Whitelist specific methods from this MCP server (supports wildcards like "search_*")',
-        },
-        blockedMethods: {
-          type: 'array',
-          items: {
-            type: 'string',
-          },
-          description:
-            'Block specific methods from this MCP server (supports wildcards like "*_delete")',
-        },
-      },
-      additionalProperties: false,
-      description:
-        'Unified MCP server/tool entry - type detected by which properties are present\n\nDetection logic (priority order): 1. Has `command` → stdio MCP server (external process) 2. Has `url` → SSE/HTTP MCP server (external endpoint) 3. Has `workflow` → workflow tool reference 4. Empty `{}` or just key → auto-detect from `tools:` section',
       patternProperties: {
         '^x-': {},
       },
@@ -1635,7 +1676,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53881%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1650,14 +1691,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314>>':
+    'Record<string,Partial<interface-src_types_config.ts-13489-28083-src_types_config.ts-0-53881>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53881%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314>': {
+    'Partial<interface-src_types_config.ts-13489-28083-src_types_config.ts-0-53881>': {
       type: 'object',
       additionalProperties: false,
     },

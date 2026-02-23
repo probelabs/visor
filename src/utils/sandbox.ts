@@ -309,3 +309,55 @@ export function compileAndRun<T = unknown>(
   }
   return out as T;
 }
+
+/**
+ * Compile and execute user-provided JS with async support.
+ *
+ * Uses sandbox.compileAsync() + .run() (same pattern as Probe's DSL runtime).
+ * The code must already be transformed (async IIFE wrapped) by the caller —
+ * this function does NOT apply wrapping heuristics like compileAndRun does.
+ */
+export async function compileAndRunAsync<T = unknown>(
+  sandbox: Sandbox,
+  transformedCode: string,
+  scope: Record<string, unknown>,
+  opts: CompileOptions = { injectLog: true, logPrefix: '[async-sandbox]' }
+): Promise<T> {
+  const inject = opts?.injectLog === true;
+  let safePrefix = String(opts?.logPrefix ?? '[async-sandbox]');
+  safePrefix = safePrefix
+    .replace(/[\r\n\t\0]/g, '')
+    .replace(/[`$\\]/g, '')
+    .replace(/\$\{/g, '')
+    .slice(0, 64);
+
+  const scopeWithLog = inject
+    ? {
+        ...scope,
+        log: (...args: unknown[]) => {
+          try {
+            console.log(safePrefix, ...args);
+          } catch {}
+        },
+      }
+    : scope;
+
+  const codePreview = transformedCode.replace(/\s+/g, ' ').trim().slice(0, 100);
+  const contextInfo = safePrefix !== '[async-sandbox]' ? ` [${safePrefix}]` : '';
+
+  let exec: ReturnType<typeof sandbox.compileAsync>;
+  try {
+    exec = sandbox.compileAsync(transformedCode);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`async_sandbox_compile_error${contextInfo}: ${msg} | code: ${codePreview}`);
+  }
+
+  try {
+    const result = await exec(scopeWithLog).run();
+    return result as T;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`async_sandbox_execution_error${contextInfo}: ${msg} | code: ${codePreview}`);
+  }
+}

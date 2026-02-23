@@ -18,11 +18,11 @@ import { CustomToolsSSEServer } from './mcp-custom-sse-server';
 import { CustomToolDefinition } from '../types/config';
 import { logger } from '../logger';
 import {
-  resolveWorkflowToolFromItem,
   isWorkflowToolReference,
   WorkflowToolReference,
   WorkflowToolContext,
 } from './workflow-tool-executor';
+import { resolveTools } from '../utils/tool-resolver';
 import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import type Sandbox from '@nyariv/sandboxjs';
 import { getScheduleToolDefinition } from '../scheduler/schedule-tool';
@@ -2177,52 +2177,10 @@ export class AICheckProvider extends CheckProvider {
     toolItems: Array<string | WorkflowToolReference>,
     config: CheckProviderConfig
   ): Map<string, CustomToolDefinition> {
-    const tools = new Map<string, CustomToolDefinition>();
-
-    // Get tools from global config (passed through check config)
     const globalTools = (config as any).__globalTools as
       | Record<string, CustomToolDefinition>
       | undefined;
-
-    for (const item of toolItems) {
-      // First, try to resolve as a workflow tool
-      const workflowTool = resolveWorkflowToolFromItem(item);
-      if (workflowTool) {
-        logger.debug(`[AICheckProvider] Loaded workflow '${workflowTool.name}' as custom tool`);
-        tools.set(workflowTool.name, workflowTool);
-        continue;
-      }
-
-      // If it's not a workflow, try to load from global tools
-      if (typeof item === 'string') {
-        // Check global tools
-        if (globalTools && globalTools[item]) {
-          const tool = globalTools[item];
-          tool.name = tool.name || item;
-          tools.set(item, tool);
-          continue;
-        }
-
-        // Not found in either location
-        logger.warn(
-          `[AICheckProvider] Custom tool '${item}' not found in global tools or workflow registry`
-        );
-      } else if (isWorkflowToolReference(item)) {
-        // Workflow reference that wasn't found in registry
-        logger.warn(
-          `[AICheckProvider] Workflow '${item.workflow}' referenced but not found in registry`
-        );
-      }
-    }
-
-    // Warn if no tools were loaded but items were specified
-    if (tools.size === 0 && toolItems.length > 0 && !globalTools) {
-      logger.warn(
-        `[AICheckProvider] ai_custom_tools specified but no global tools found in configuration and no workflows matched`
-      );
-    }
-
-    return tools;
+    return resolveTools(toolItems, globalTools, '[AICheckProvider]');
   }
 
   /**
