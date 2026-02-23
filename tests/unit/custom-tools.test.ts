@@ -488,11 +488,7 @@ describe('CustomToolExecutor', () => {
           },
         },
       };
-      await fs.writeFile(
-        specPath,
-        JSON.stringify(specDoc, null, 2),
-        'utf8'
-      );
+      await fs.writeFile(specPath, JSON.stringify(specDoc, null, 2), 'utf8');
       await fs.writeFile(
         fileOverlayPath,
         [

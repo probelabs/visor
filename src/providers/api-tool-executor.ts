@@ -48,16 +48,7 @@ interface JsonPathMatch {
   value: any;
 }
 
-const HTTP_METHODS = new Set([
-  'get',
-  'put',
-  'post',
-  'delete',
-  'options',
-  'head',
-  'patch',
-  'trace',
-]);
+const HTTP_METHODS = new Set(['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace']);
 
 function isHttpUrl(value: string): boolean {
   return value.startsWith('http://') || value.startsWith('https://');
@@ -86,9 +77,7 @@ function toOverlaySourceArray(
     return [value];
   }
   if (Array.isArray(value)) {
-    return value.filter(
-      item => typeof item === 'string' || isPlainObject(item)
-    ) as OverlaySource[];
+    return value.filter(item => typeof item === 'string' || isPlainObject(item)) as OverlaySource[];
   }
   return [];
 }
@@ -222,7 +211,9 @@ function isRefObject(value: any): boolean {
 }
 
 function isSchemaObject(value: any): value is Record<string, any> {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && !isRefObject(value));
+  return Boolean(
+    value && typeof value === 'object' && !Array.isArray(value) && !isRefObject(value)
+  );
 }
 
 function getSchemaFromContent(content: unknown): unknown {
@@ -232,9 +223,11 @@ function getSchemaFromContent(content: unknown): unknown {
   return withSchema?.schema;
 }
 
-function mapOpenApiTypeToJsonType(
-  schema: Record<string, any> | undefined
-): { type: string; format?: string; nullable?: boolean } {
+function mapOpenApiTypeToJsonType(schema: Record<string, any> | undefined): {
+  type: string;
+  format?: string;
+  nullable?: boolean;
+} {
   if (!schema || !schema.type) return { type: 'string' };
   const openApiType = String(schema.type);
   const nullable = schema.nullable === true;
@@ -349,7 +342,8 @@ function buildOutputSchema(operation: Record<string, any>): JsonSchemaObject | u
   const response = responses[successCode];
   if (!response || typeof response !== 'object' || isRefObject(response)) return undefined;
 
-  const jsonSchema = response.content?.['application/json']?.schema || getSchemaFromContent(response.content);
+  const jsonSchema =
+    response.content?.['application/json']?.schema || getSchemaFromContent(response.content);
 
   if (!isSchemaObject(jsonSchema)) return undefined;
 
@@ -388,10 +382,7 @@ function getToolName(
   return toolName;
 }
 
-function getToolDescription(
-  operation: Record<string, any>,
-  pathItem: Record<string, any>
-): string {
+function getToolDescription(operation: Record<string, any>, pathItem: Record<string, any>): string {
   const opExtension = operation['x-mcp'];
   const pathExtension = pathItem['x-mcp'];
   if (
@@ -438,10 +429,7 @@ async function loadOpenApiDocument(tool: CustomToolDefinition): Promise<any> {
     }
     return configuredBaseDir || process.cwd();
   })();
-  const dereferenceWithContext = async (
-    source: string,
-    spec: any
-  ): Promise<any> => {
+  const dereferenceWithContext = async (source: string, spec: any): Promise<any> => {
     try {
       return await SwaggerParser.dereference(spec);
     } catch (error) {
@@ -463,10 +451,7 @@ async function loadOpenApiDocument(tool: CustomToolDefinition): Promise<any> {
       openapi = await dereferenceWithContext(specLocation, specLocation);
     }
   } else if (isPlainObject(tool.spec)) {
-    openapi = await dereferenceWithContext(
-      'inline spec',
-      JSON.parse(JSON.stringify(tool.spec))
-    );
+    openapi = await dereferenceWithContext('inline spec', JSON.parse(JSON.stringify(tool.spec)));
   } else {
     throw new Error(
       `API tool '${tool.name}' has invalid spec field (expected string path/URL or object)`
@@ -566,7 +551,8 @@ function mapOpenApiToTools(openapi: any, tool: CustomToolDefinition): ApiMappedT
       const requestBody = !isRefObject(operation.requestBody) ? operation.requestBody : undefined;
       if (requestBody && typeof requestBody === 'object') {
         const reqSchema =
-          requestBody.content?.['application/json']?.schema || getSchemaFromContent(requestBody.content);
+          requestBody.content?.['application/json']?.schema ||
+          getSchemaFromContent(requestBody.content);
         if (isSchemaObject(reqSchema)) {
           const bodySchema = openApiSchemaToJsonSchema(reqSchema);
           if (typeof requestBody.description === 'string') {
@@ -783,7 +769,8 @@ export async function executeMappedApiTool(
   args: Record<string, unknown>
 ): Promise<unknown> {
   const { apiCallDetails } = mappedTool;
-  const { method, pathTemplate, serverUrl, parameters, requestBody, apiToolConfig } = apiCallDetails;
+  const { method, pathTemplate, serverUrl, parameters, requestBody, apiToolConfig } =
+    apiCallDetails;
 
   const urlPath = pathTemplate.replace(/{([^}]+)}/g, (_token: string, rawName: string) => {
     const value = args[rawName];
@@ -845,7 +832,9 @@ export async function executeMappedApiTool(
         break;
       case 'cookie': {
         const existing = headers['Cookie'];
-        headers['Cookie'] = existing ? `${existing}; ${name}=${String(value)}` : `${name}=${String(value)}`;
+        headers['Cookie'] = existing
+          ? `${existing}; ${name}=${String(value)}`
+          : `${name}=${String(value)}`;
         break;
       }
       default:
