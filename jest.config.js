@@ -4,6 +4,8 @@ module.exports = {
   testMatch: ['**/__tests__/**/*.ts', '**/?(*.)+(spec|test).ts'],
   testPathIgnorePatterns: ['/node_modules/', '/tests/ee/'],
   transform: {
+    // Fix @swc/jest bug: const __dirname in ESM -> CJS conflicts with CJS wrapper param
+    'node_modules/@probelabs/probe/.+\\.js$': '<rootDir>/tests/transforms/probe-esm-fix.js',
     '^.+\\.(t|j)sx?$': [
       '@swc/jest',
       {

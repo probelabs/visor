@@ -43,11 +43,10 @@ export class TestExecutionWrapper {
       this.engine.setExecutionContext(merged);
     } catch {}
 
-    // Record baseline for stage-local GitHub calls
+    // Record baseline for stage-local GitHub calls using the flow's own recorder
     let baseCalls = 0;
     try {
-      const { getGlobalRecorder } = require('../recorders/global-recorder');
-      const rec = getGlobalRecorder && getGlobalRecorder();
+      const rec: any = (prInfo as any)?.eventContext?.octokit;
       baseCalls = rec && Array.isArray(rec.calls) ? rec.calls.length : 0;
     } catch {}
 
@@ -74,8 +73,7 @@ export class TestExecutionWrapper {
         // Only create when no createComment occurred during this grouped run (stage-local)
         let alreadyCreated = false;
         try {
-          const { getGlobalRecorder } = require('../recorders/global-recorder');
-          const rec = getGlobalRecorder && getGlobalRecorder();
+          const rec: any = (prInfo as any)?.eventContext?.octokit;
           if (rec && Array.isArray(rec.calls)) {
             const recent = rec.calls.slice(baseCalls);
             alreadyCreated = recent.some((c: any) => c && c.op === 'issues.createComment');
