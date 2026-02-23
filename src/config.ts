@@ -936,8 +936,7 @@ export class ConfigManager {
         if (type === 'api') {
           const spec = toolDef.spec;
           const hasStringSpec = typeof spec === 'string' && spec.trim().length > 0;
-          const hasInlineSpec =
-            !!spec && typeof spec === 'object' && !Array.isArray(spec);
+          const hasInlineSpec = !!spec && typeof spec === 'object' && !Array.isArray(spec);
           if (!hasStringSpec && !hasInlineSpec) {
             errors.push({
               field: `tools.${toolName}.spec`,

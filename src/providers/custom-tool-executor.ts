@@ -6,11 +6,7 @@ import Sandbox from '@nyariv/sandboxjs';
 import { logger } from '../logger';
 import { commandExecutor } from '../utils/command-executor';
 import Ajv from 'ajv';
-import {
-  ApiToolRegistry,
-  executeMappedApiTool,
-  isApiToolDefinition,
-} from './api-tool-executor';
+import { ApiToolRegistry, executeMappedApiTool, isApiToolDefinition } from './api-tool-executor';
 
 /**
  * Executes custom tools defined in YAML configuration
@@ -362,12 +358,12 @@ export class CustomToolExecutor {
     return Array.from(this.tools.values())
       .filter(tool => !isApiToolDefinition(tool))
       .map(tool => ({
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.inputSchema as Record<string, unknown>,
-      handler: async (args: Record<string, unknown>) => {
-        return this.execute(tool.name, args);
-      },
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema as Record<string, unknown>,
+        handler: async (args: Record<string, unknown>) => {
+          return this.execute(tool.name, args);
+        },
       }));
   }
 }
