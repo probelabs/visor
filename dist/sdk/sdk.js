@@ -9416,9 +9416,7 @@ function toOverlaySourceArray(value) {
     return [value];
   }
   if (Array.isArray(value)) {
-    return value.filter(
-      (item) => typeof item === "string" || isPlainObject(item)
-    );
+    return value.filter((item) => typeof item === "string" || isPlainObject(item));
   }
   return [];
 }
@@ -9533,7 +9531,9 @@ function isRefObject(value) {
   return Boolean(value && typeof value === "object" && "$ref" in value);
 }
 function isSchemaObject(value) {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value) && !isRefObject(value));
+  return Boolean(
+    value && typeof value === "object" && !Array.isArray(value) && !isRefObject(value)
+  );
 }
 function getSchemaFromContent(content) {
   if (!content || typeof content !== "object") return void 0;
@@ -9709,10 +9709,7 @@ async function loadOpenApiDocument(tool) {
       openapi = await dereferenceWithContext(specLocation, specLocation);
     }
   } else if (isPlainObject(tool.spec)) {
-    openapi = await dereferenceWithContext(
-      "inline spec",
-      JSON.parse(JSON.stringify(tool.spec))
-    );
+    openapi = await dereferenceWithContext("inline spec", JSON.parse(JSON.stringify(tool.spec)));
   } else {
     throw new Error(
       `API tool '${tool.name}' has invalid spec field (expected string path/URL or object)`
@@ -10099,16 +10096,7 @@ var init_api_tool_executor = __esm({
     import_jsonpath_plus = require("jsonpath-plus");
     import_minimatch = require("minimatch");
     init_logger();
-    HTTP_METHODS = /* @__PURE__ */ new Set([
-      "get",
-      "put",
-      "post",
-      "delete",
-      "options",
-      "head",
-      "patch",
-      "trace"
-    ]);
+    HTTP_METHODS = /* @__PURE__ */ new Set(["get", "put", "post", "delete", "options", "head", "patch", "trace"]);
     ApiToolRegistry = class {
       bundleCache = /* @__PURE__ */ new Map();
       operationCache = /* @__PURE__ */ new Map();
@@ -12834,7 +12822,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -12850,7 +12838,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -13538,7 +13526,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -13553,13 +13541,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314>>": {
+        "Record<string,Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314>": {
+        "Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300>": {
           type: "object",
           additionalProperties: false
         },

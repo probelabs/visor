@@ -924,7 +924,7 @@
           "description": "Arguments/inputs for the workflow"
         },
         "overrides": {
-          "$ref": "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E%3E",
+          "$ref": "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300%3E%3E",
           "description": "Override specific step configurations in the workflow"
         },
         "output_mapping": {
@@ -940,7 +940,7 @@
           "description": "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
         },
         "workflow_overrides": {
-          "$ref": "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E%3E",
+          "$ref": "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300%3E%3E",
           "description": "Alias for overrides - workflow step overrides (backward compatibility)"
         },
         "ref": {
@@ -1665,7 +1665,7 @@
           "description": "Custom output name (defaults to workflow name)"
         },
         "overrides": {
-          "$ref": "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E%3E",
+          "$ref": "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300%3E%3E",
           "description": "Step overrides"
         },
         "output_mapping": {
@@ -1682,13 +1682,13 @@
         "^x-": {}
       }
     },
-    "Record<string,Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314>>": {
+    "Record<string,Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300>>": {
       "type": "object",
       "additionalProperties": {
-        "$ref": "#/definitions/Partial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314%3E"
+        "$ref": "#/definitions/Partial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300%3E"
       }
     },
-    "Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53314>": {
+    "Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300>": {
       "type": "object",
       "additionalProperties": false
     },
