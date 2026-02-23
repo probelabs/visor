@@ -63,9 +63,23 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
+### Credential Propagation
+
+When running as a GitHub Action, Visor automatically propagates the authenticated token to all child processes. This means:
+
+- **Command checks** using `gh` CLI or `git` against private repos work out of the box
+- **AI agents** (Claude Code) can use `gh` and `git` in bash steps
+- **MCP servers** (stdio) inherit the GitHub credentials
+- **Git operations** (clone, push, fetch) authenticate automatically via `GIT_CONFIG_*` env vars
+
+No additional configuration is needed — authentication is set up once and flows everywhere.
+
+For CLI mode authentication and detailed setup, see [GitHub Authentication](github-auth.md).
+
 ### Related Documentation
 
 - [AI Configuration](ai-configuration.md) - Configure AI providers and models
+- [GitHub Authentication](github-auth.md) - Token and GitHub App auth setup
 - [GitHub Checks](GITHUB_CHECKS.md) - GitHub Check runs integration
 - [Tag Filtering](tag-filtering.md) - Filter checks by tags
 - [Configuration](configuration.md) - Full configuration reference

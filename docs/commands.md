@@ -167,6 +167,14 @@ See [Tag Filtering](tag-filtering.md) for detailed tag filtering documentation.
 #### Config Reloading
 - `--watch` - Watch config file for changes and reload automatically (requires `--config`). Also reloads on `SIGUSR2` signal (non-Windows). Intended for long-running modes like `--slack`.
 
+#### GitHub Authentication
+- `--github-token <token>` - GitHub token for API operations (env: `GITHUB_TOKEN`)
+- `--github-app-id <id>` - GitHub App ID (env: `GITHUB_APP_ID`)
+- `--github-private-key <key>` - GitHub App private key, PEM content or file path (env: `GITHUB_APP_PRIVATE_KEY`)
+- `--github-installation-id <id>` - GitHub App installation ID, auto-detected if omitted
+
+See [GitHub Authentication](github-auth.md) for setup guide and details.
+
 #### Other Options
 - `--slack` - Enable Slack Socket Mode runner
 - `--mode <mode>` - Run mode: `cli` (default) or `github-actions`

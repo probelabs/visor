@@ -46,7 +46,16 @@ Visor supports two authentication methods for GitHub integration:
 - Organization-wide installations
 - Audit logging and traceability
 
-See [GitHub Checks](./GITHUB_CHECKS.md) and [Action Reference](./action-reference.md) for complete authentication setup.
+### Credential Propagation
+
+When Visor authenticates, it automatically injects credentials into `process.env` so that all child processes (command checks, AI agents, MCP servers, git operations) inherit them. This includes:
+
+- `GITHUB_TOKEN` and `GH_TOKEN` for the `gh` CLI
+- `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_*`/`GIT_CONFIG_VALUE_*` for authenticated git HTTPS access
+
+No temp files are written, no global git config is modified, and credentials are scoped to the Visor process tree.
+
+See [GitHub Authentication](./github-auth.md) for complete setup guide including CLI options, GitHub App creation steps, and troubleshooting.
 
 ---
 
@@ -456,6 +465,7 @@ See [Configuration](./configuration.md) for complete extends documentation.
 
 ## Related Documentation
 
+- [GitHub Authentication](./github-auth.md) - Token and GitHub App auth setup, credential propagation
 - [AI Configuration](./ai-configuration.md) - AI provider security options
 - [HTTP Integration](./http.md) - HTTP authentication and TLS
 - [Command Provider](./command-provider.md) - Command injection prevention

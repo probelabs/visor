@@ -7,7 +7,6 @@ import * as dotenv from 'dotenv';
 dotenv.config({ override: true, quiet: true });
 
 import { Octokit } from '@octokit/rest';
-import { createAppAuth } from '@octokit/auth-app';
 import { getInput, setOutput, setFailed } from '@actions/core';
 import { parseComment, getHelpText, CommandRegistry } from './commands';
 import { PRAnalyzer, PRInfo } from './pr-analyzer';
@@ -19,95 +18,52 @@ import { ConfigManager } from './config';
 import { ReactionManager } from './github-reactions';
 import { generateFooter, hasVisorFooter } from './footer';
 import { extractTextFromJson } from './utils/json-text-extractor';
+import {
+  createAuthenticatedOctokit as sharedCreateAuth,
+  injectGitHubCredentials,
+} from './github-auth';
 
 /**
- * Create an authenticated Octokit instance using either GitHub App || token authentication
+ * Create an authenticated Octokit instance using either GitHub App or token authentication.
+ * Delegates to the shared github-auth module and injects credentials into process.env
+ * so child processes (git, gh CLI, Claude Code agents) can authenticate automatically.
  */
 async function createAuthenticatedOctokit(): Promise<{ octokit: Octokit; authType: string }> {
-  const token = getInput('github-token');
-  const appId = getInput('app-id');
-  const privateKey = getInput('private-key');
-  const installationId = getInput('installation-id');
+  const options = {
+    token: getInput('github-token'),
+    appId: getInput('app-id'),
+    privateKey: getInput('private-key'),
+    installationId: getInput('installation-id'),
+    owner: getInput('owner') || process.env.GITHUB_REPOSITORY_OWNER,
+    repo: getInput('repo') || process.env.GITHUB_REPOSITORY?.split('/')[1],
+  };
 
-  // Prefer GitHub App authentication if app credentials are provided
-  if (appId && privateKey) {
-    console.log('🔐 Using GitHub App authentication');
-
-    try {
-      // Note: createAppAuth is used in the Octokit constructor below
-
-      // If no installation ID provided, try to get it for the current repository
-      let finalInstallationId: number | undefined;
-
-      // Validate && parse the installation ID if provided
-      if (installationId) {
-        finalInstallationId = parseInt(installationId, 10);
-        if (isNaN(finalInstallationId) || finalInstallationId <= 0) {
-          throw new Error('Invalid installation-id provided. It must be a positive integer.');
-        }
-      }
-
-      if (!finalInstallationId) {
-        const owner = getInput('owner') || process.env.GITHUB_REPOSITORY_OWNER;
-        const repo = getInput('repo') || process.env.GITHUB_REPOSITORY?.split('/')[1];
-
-        if (owner && repo) {
-          // Create a temporary JWT-authenticated client to find the installation
-          const appOctokit = new Octokit({
-            authStrategy: createAppAuth,
-            auth: {
-              appId,
-              privateKey,
-            },
-          });
-
-          try {
-            const { data: installation } = await appOctokit.rest.apps.getRepoInstallation({
-              owner,
-              repo,
-            });
-            finalInstallationId = installation.id;
-            console.log(`✅ Auto-detected installation ID: ${finalInstallationId}`);
-          } catch {
-            console.warn(
-              '⚠️ Could not auto-detect installation ID. Please check app permissions && installation status.'
-            );
-            throw new Error(
-              'GitHub App installation ID is required but could not be auto-detected. Please ensure the app is installed on this repository || provide the `installation-id` manually.'
-            );
-          }
-        }
-      }
-
-      // Create the authenticated Octokit instance
-      const octokit = new Octokit({
-        authStrategy: createAppAuth,
-        auth: {
-          appId,
-          privateKey,
-          installationId: finalInstallationId,
-        },
-      });
-
-      return { octokit, authType: 'github-app' };
-    } catch (error) {
-      console.error(
-        '❌ GitHub App authentication failed. Please check your App ID, Private Key, && installation permissions.'
+  try {
+    const result = await sharedCreateAuth(options);
+    if (!result) {
+      throw new Error(
+        'Either github-token or app-id/private-key must be provided for authentication'
       );
-      throw new Error(`GitHub App authentication failed`, { cause: error });
     }
-  }
 
-  // Fall back to token authentication
-  if (token) {
-    console.log('🔑 Using GitHub token authentication');
-    return {
-      octokit: new Octokit({ auth: token }),
-      authType: 'token',
-    };
-  }
+    console.log(
+      result.authType === 'github-app'
+        ? '🔐 Using GitHub App authentication'
+        : '🔑 Using GitHub token authentication'
+    );
 
-  throw new Error('Either github-token || app-id/private-key must be provided for authentication');
+    // Inject credentials for child processes (git, gh, Claude Code agents)
+    injectGitHubCredentials(result.token);
+
+    return result;
+  } catch (error) {
+    if (options.appId && options.privateKey) {
+      console.error(
+        '❌ GitHub App authentication failed. Please check your App ID, Private Key, and installation permissions.'
+      );
+    }
+    throw error;
+  }
 }
 
 export async function run(): Promise<void> {

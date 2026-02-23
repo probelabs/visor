@@ -12,6 +12,7 @@ Visor is an AI-powered workflow orchestration tool for code review, automation, 
 | [Configuration](./configuration.md) | Core configuration reference for `.visor.yaml` files |
 | [Commands](./commands.md) | CLI commands and PR comment commands reference |
 | [Action Reference](./action-reference.md) | GitHub Action inputs, outputs, and usage examples |
+| [GitHub Authentication](./github-auth.md) | Token and GitHub App auth setup for CLI, CI, and child processes |
 | [CI/CLI Mode](./ci-cli-mode.md) | Running Visor in CI pipelines and CLI mode |
 
 ---
