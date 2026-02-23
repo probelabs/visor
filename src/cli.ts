@@ -92,6 +92,16 @@ export class CLI {
         '--watch',
         'Watch config file for changes and reload automatically (requires --config)'
       )
+      .option('--github-token <token>', 'GitHub token for API operations (env: GITHUB_TOKEN)')
+      .option('--github-app-id <id>', 'GitHub App ID (env: GITHUB_APP_ID)')
+      .option(
+        '--github-private-key <key>',
+        'GitHub App private key, PEM content or file path (env: GITHUB_APP_PRIVATE_KEY)'
+      )
+      .option(
+        '--github-installation-id <id>',
+        'GitHub App installation ID, auto-detected if omitted'
+      )
       .addHelpText('after', this.getExamplesText())
       .exitOverride(); // Prevent automatic process.exit for better error handling
 
@@ -186,6 +196,16 @@ export class CLI {
           '--watch',
           'Watch config file for changes and reload automatically (requires --config)'
         )
+        .option('--github-token <token>', 'GitHub token for API operations (env: GITHUB_TOKEN)')
+        .option('--github-app-id <id>', 'GitHub App ID (env: GITHUB_APP_ID)')
+        .option(
+          '--github-private-key <key>',
+          'GitHub App private key, PEM content or file path (env: GITHUB_APP_PRIVATE_KEY)'
+        )
+        .option(
+          '--github-installation-id <id>',
+          'GitHub App installation ID, auto-detected if omitted'
+        )
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
         .addHelpText('after', this.getExamplesText())
@@ -263,6 +283,10 @@ export class CLI {
         workspaceName: options.workspaceName,
         workspaceProjectName: options.workspaceProjectName,
         watch: Boolean(options.watch),
+        githubToken: options.githubToken,
+        githubAppId: options.githubAppId,
+        githubPrivateKey: options.githubPrivateKey,
+        githubInstallationId: options.githubInstallationId,
       };
     } catch (error: unknown) {
       // Handle commander.js exit overrides for help/version ONLY

@@ -8,8 +8,12 @@ The `github` provider performs safe, native GitHub operations via Octokit — no
 
 ## Requirements
 
-- `GITHUB_TOKEN` (or the Action input `github-token`) must be present.
-- `GITHUB_REPOSITORY` is auto‑set in Actions.
+- An authenticated Octokit instance must be available. Provided automatically when:
+  - Running as a GitHub Action with `github-token` or `app-id`/`private-key` inputs
+  - Running in CLI mode with `--github-token`, `--github-app-id`/`--github-private-key`, or `GITHUB_TOKEN` env var
+- `GITHUB_REPOSITORY` is auto-set in Actions. In CLI mode, set it if needed.
+
+See [GitHub Authentication](./github-auth.md) for setup details.
 
 ## Configuration
 

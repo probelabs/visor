@@ -20,6 +20,12 @@ import { flushNdjson } from './telemetry/fallback-ndjson';
 import { withActiveSpan, getVisorRunAttributes } from './telemetry/trace-helpers';
 import { DebugVisualizerServer } from './debug-visualizer/ws-server';
 import open from 'open';
+import {
+  createAuthenticatedOctokit as createGitHubAuth,
+  resolveAuthFromEnvironment,
+  injectGitHubCredentials,
+  type GitHubAuthOptions,
+} from './github-auth';
 
 /**
  * Execute a single check in sandbox mode (--run-check).
@@ -998,6 +1004,40 @@ export async function main(): Promise<void> {
 
     // Build execution context for providers
     const executionContext: import('./providers/check-provider.interface').ExecutionContext = {};
+
+    // Set up GitHub authentication (optional in CLI mode)
+    // Resolves from CLI flags first, then environment variables
+    {
+      const authOpts: GitHubAuthOptions = {
+        token: options.githubToken,
+        appId: options.githubAppId,
+        privateKey: options.githubPrivateKey,
+        installationId: options.githubInstallationId,
+      };
+
+      // Fall back to environment variables if no explicit CLI flags
+      if (!authOpts.token && !authOpts.appId) {
+        Object.assign(authOpts, resolveAuthFromEnvironment());
+      }
+
+      if (authOpts.token || authOpts.appId) {
+        try {
+          const authResult = await createGitHubAuth(authOpts);
+          if (authResult) {
+            // Inject token + git credentials into process.env for child processes
+            injectGitHubCredentials(authResult.token);
+            // Set Octokit on execution context for in-process API calls
+            (executionContext as any).octokit = authResult.octokit;
+            logger.info(`🔑 GitHub auth: ${authResult.authType}`);
+          }
+        } catch (err) {
+          logger.warn(
+            `⚠️  GitHub auth failed: ${err instanceof Error ? err.message : String(err)}`
+          );
+          logger.warn('Continuing without GitHub API access');
+        }
+      }
+    }
 
     // Set CLI message for human-input checks if provided
     if (options.message !== undefined) {

@@ -28,6 +28,7 @@ module.exports = {
   ],
   moduleNameMapper: {
     '^@octokit/auth-app$': '<rootDir>/__mocks__/@octokit/auth-app.ts',
+    '^@octokit/rest$': '<rootDir>/__mocks__/@octokit/rest.ts',
     '^@probelabs/probe$': '<rootDir>/__mocks__/@probelabs/probe.ts',
     '^open$': '<rootDir>/__mocks__/open.ts',
   },

@@ -70,6 +70,51 @@ jobs:
           sarif_file: results.sarif
 ```
 
+## GitHub Authentication
+
+Visor supports GitHub authentication in CLI mode via flags or environment variables. When configured, credentials are automatically propagated to all child processes — command checks, AI agents, MCP servers, and git operations work out of the box.
+
+### Token Auth
+
+```yaml
+jobs:
+  visor-cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npx -y @probelabs/visor@latest --config .visor.yaml --output json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+### GitHub App Auth
+
+```yaml
+jobs:
+  visor-cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          npx -y @probelabs/visor@latest --config .visor.yaml \
+            --github-app-id "$GITHUB_APP_ID" \
+            --github-private-key "$GITHUB_APP_PRIVATE_KEY"
+        env:
+          GITHUB_APP_ID: ${{ secrets.VISOR_APP_ID }}
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.VISOR_PRIVATE_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+| Option | Environment Variable | Description |
+|--------|---------------------|-------------|
+| `--github-token <token>` | `GITHUB_TOKEN` / `GH_TOKEN` | Personal access token |
+| `--github-app-id <id>` | `GITHUB_APP_ID` | GitHub App ID |
+| `--github-private-key <key>` | `GITHUB_APP_PRIVATE_KEY` | App private key (PEM content or file path) |
+| `--github-installation-id <id>` | `GITHUB_APP_INSTALLATION_ID` | Installation ID (auto-detected if omitted) |
+
+This enables `gh` CLI commands and `git` operations against private repos inside command checks and AI agent steps. See [GitHub Authentication](./github-auth.md) for full details.
+
 ## Environment Variables
 
 ### AI Provider Keys
@@ -88,7 +133,11 @@ Set one of the following based on your AI provider:
 
 | Variable | Description |
 |----------|-------------|
-| `GITHUB_TOKEN` | Required for `--mode github-actions` |
+| `GITHUB_TOKEN` | GitHub token for API access and child process propagation |
+| `GH_TOKEN` | Alternative to `GITHUB_TOKEN` (both are set when auth is configured) |
+| `GITHUB_APP_ID` | GitHub App ID (for App authentication) |
+| `GITHUB_APP_PRIVATE_KEY` | GitHub App private key, PEM content or file path |
+| `GITHUB_APP_INSTALLATION_ID` | GitHub App installation ID (optional, auto-detected) |
 
 ## Exit Codes
 
@@ -128,7 +177,7 @@ jobs:
 
 ## Notes
 
-- In CLI mode, GitHub credentials are not required. Provide your AI provider keys as environment variables.
+- GitHub credentials are optional in CLI mode. Provide them when your workflow uses `gh` CLI, accesses private repos, or uses the `github` provider.
 - If you want PR comments/checks, use `--mode github-actions` with `GITHUB_TOKEN`.
 - Use `--output-file` for reliable file output instead of shell redirection (`> file`).
 - The `--fail-fast` flag is useful in CI to stop early when issues are found.
