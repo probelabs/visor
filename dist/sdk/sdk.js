@@ -753,6 +753,8 @@ var require_package = __commonJS({
         "@probelabs/probe": "^0.6.0-rc255",
         "@types/commander": "^2.12.0",
         "@types/uuid": "^10.0.0",
+        acorn: "^8.16.0",
+        "acorn-walk": "^8.3.5",
         ajv: "^8.17.1",
         "ajv-formats": "^3.0.1",
         "better-sqlite3": "^11.0.0",
@@ -2315,6 +2317,36 @@ ${src}
     }
   }
   return out;
+}
+async function compileAndRunAsync(sandbox, transformedCode, scope, opts = { injectLog: true, logPrefix: "[async-sandbox]" }) {
+  const inject = opts?.injectLog === true;
+  let safePrefix = String(opts?.logPrefix ?? "[async-sandbox]");
+  safePrefix = safePrefix.replace(/[\r\n\t\0]/g, "").replace(/[`$\\]/g, "").replace(/\$\{/g, "").slice(0, 64);
+  const scopeWithLog = inject ? {
+    ...scope,
+    log: (...args) => {
+      try {
+        console.log(safePrefix, ...args);
+      } catch {
+      }
+    }
+  } : scope;
+  const codePreview = transformedCode.replace(/\s+/g, " ").trim().slice(0, 100);
+  const contextInfo = safePrefix !== "[async-sandbox]" ? ` [${safePrefix}]` : "";
+  let exec2;
+  try {
+    exec2 = sandbox.compileAsync(transformedCode);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`async_sandbox_compile_error${contextInfo}: ${msg} | code: ${codePreview}`);
+  }
+  try {
+    const result = await exec2(scopeWithLog).run();
+    return result;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`async_sandbox_execution_error${contextInfo}: ${msg} | code: ${codePreview}`);
+  }
 }
 var import_sandboxjs;
 var init_sandbox = __esm({
@@ -12477,6 +12509,46 @@ var init_config_schema = __esm({
               type: "string",
               description: "Script content to execute for script checks"
             },
+            tools: {
+              type: "array",
+              items: {
+                anyOf: [
+                  {
+                    type: "string"
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      workflow: {
+                        type: "string"
+                      },
+                      args: {
+                        $ref: "#/definitions/Record%3Cstring%2Cunknown%3E"
+                      }
+                    },
+                    required: ["workflow"],
+                    additionalProperties: false
+                  }
+                ]
+              },
+              description: "Tool names to expose inside script checks (string names or workflow references)"
+            },
+            tools_js: {
+              type: "string",
+              description: "JavaScript expression to dynamically compute tools for script checks"
+            },
+            mcp_servers: {
+              $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E",
+              description: "MCP servers whose tools are exposed inside script checks"
+            },
+            enable_fetch: {
+              type: "boolean",
+              description: "Enable fetch() function in script checks (default: false)"
+            },
+            enable_bash: {
+              type: "boolean",
+              description: "Enable bash() function in script checks (default: false)"
+            },
             schedule: {
               type: "string",
               description: 'Cron schedule expression (e.g., "0 2 * * *") - optional for any check type'
@@ -12822,7 +12894,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -12838,7 +12910,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -12943,6 +13015,72 @@ var init_config_schema = __esm({
             "git-checkout"
           ],
           description: "Valid check types in configuration"
+        },
+        "Record<string,McpServerConfig>": {
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/McpServerConfig"
+          }
+        },
+        McpServerConfig: {
+          type: "object",
+          properties: {
+            command: {
+              type: "string",
+              description: "Command to execute (presence indicates stdio server)"
+            },
+            args: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Arguments to pass to the command"
+            },
+            env: {
+              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
+              description: "Environment variables for the MCP server"
+            },
+            url: {
+              type: "string",
+              description: "URL endpoint (presence indicates external server)"
+            },
+            transport: {
+              type: "string",
+              enum: ["stdio", "sse", "http"],
+              description: "Transport type"
+            },
+            workflow: {
+              type: "string",
+              description: "Workflow ID or path (presence indicates workflow tool)"
+            },
+            inputs: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Inputs to pass to workflow"
+            },
+            description: {
+              type: "string",
+              description: "Tool description for AI"
+            },
+            allowedMethods: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: 'Whitelist specific methods from this MCP server (supports wildcards like "search_*")'
+            },
+            blockedMethods: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: 'Block specific methods from this MCP server (supports wildcards like "*_delete")'
+            }
+          },
+          additionalProperties: false,
+          description: "Unified MCP server/tool entry - type detected by which properties are present\n\nDetection logic (priority order): 1. Has `command` \u2192 stdio MCP server (external process) 2. Has `url` \u2192 SSE/HTTP MCP server (external endpoint) 3. Has `workflow` \u2192 workflow tool reference 4. Empty `{}` or just key \u2192 auto-detect from `tools:` section",
+          patternProperties: {
+            "^x-": {}
+          }
         },
         EventTrigger: {
           type: "string",
@@ -13068,72 +13206,6 @@ var init_config_schema = __esm({
           },
           additionalProperties: false,
           description: "AI provider configuration",
-          patternProperties: {
-            "^x-": {}
-          }
-        },
-        "Record<string,McpServerConfig>": {
-          type: "object",
-          additionalProperties: {
-            $ref: "#/definitions/McpServerConfig"
-          }
-        },
-        McpServerConfig: {
-          type: "object",
-          properties: {
-            command: {
-              type: "string",
-              description: "Command to execute (presence indicates stdio server)"
-            },
-            args: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: "Arguments to pass to the command"
-            },
-            env: {
-              $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
-              description: "Environment variables for the MCP server"
-            },
-            url: {
-              type: "string",
-              description: "URL endpoint (presence indicates external server)"
-            },
-            transport: {
-              type: "string",
-              enum: ["stdio", "sse", "http"],
-              description: "Transport type"
-            },
-            workflow: {
-              type: "string",
-              description: "Workflow ID or path (presence indicates workflow tool)"
-            },
-            inputs: {
-              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
-              description: "Inputs to pass to workflow"
-            },
-            description: {
-              type: "string",
-              description: "Tool description for AI"
-            },
-            allowedMethods: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: 'Whitelist specific methods from this MCP server (supports wildcards like "search_*")'
-            },
-            blockedMethods: {
-              type: "array",
-              items: {
-                type: "string"
-              },
-              description: 'Block specific methods from this MCP server (supports wildcards like "*_delete")'
-            }
-          },
-          additionalProperties: false,
-          description: "Unified MCP server/tool entry - type detected by which properties are present\n\nDetection logic (priority order): 1. Has `command` \u2192 stdio MCP server (external process) 2. Has `url` \u2192 SSE/HTTP MCP server (external endpoint) 3. Has `workflow` \u2192 workflow tool reference 4. Empty `{}` or just key \u2192 auto-detect from `tools:` section",
           patternProperties: {
             "^x-": {}
           }
@@ -13526,7 +13598,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -13541,13 +13613,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300>>": {
+        "Record<string,Partial<interface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300>": {
+        "Partial<interface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867>": {
           type: "object",
           additionalProperties: false
         },
@@ -18100,6 +18172,13 @@ var init_schedule_parser = __esm({
 });
 
 // src/scheduler/schedule-tool.ts
+var schedule_tool_exports = {};
+__export(schedule_tool_exports, {
+  buildScheduleToolContext: () => buildScheduleToolContext,
+  getScheduleToolDefinition: () => getScheduleToolDefinition,
+  handleScheduleAction: () => handleScheduleAction,
+  isScheduleTool: () => isScheduleTool
+});
 function matchGlobPattern(pattern, value) {
   const regexPattern = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
   return new RegExp(`^${regexPattern}$`).test(value);
@@ -19649,6 +19728,43 @@ var init_mcp_custom_sse_server = __esm({
   }
 });
 
+// src/utils/tool-resolver.ts
+function resolveTools(toolItems, globalTools, logPrefix = "[ToolResolver]") {
+  const tools = /* @__PURE__ */ new Map();
+  for (const item of toolItems) {
+    const workflowTool = resolveWorkflowToolFromItem(item);
+    if (workflowTool) {
+      logger.debug(`${logPrefix} Loaded workflow '${workflowTool.name}' as tool`);
+      tools.set(workflowTool.name, workflowTool);
+      continue;
+    }
+    if (typeof item === "string") {
+      if (globalTools && globalTools[item]) {
+        const tool = globalTools[item];
+        tool.name = tool.name || item;
+        tools.set(item, tool);
+        continue;
+      }
+      logger.warn(`${logPrefix} Tool '${item}' not found in global tools or workflow registry`);
+    } else if (isWorkflowToolReference(item)) {
+      logger.warn(`${logPrefix} Workflow '${item.workflow}' referenced but not found in registry`);
+    }
+  }
+  if (tools.size === 0 && toolItems.length > 0 && !globalTools) {
+    logger.warn(
+      `${logPrefix} Tools specified but no global tools found in configuration and no workflows matched`
+    );
+  }
+  return tools;
+}
+var init_tool_resolver = __esm({
+  "src/utils/tool-resolver.ts"() {
+    "use strict";
+    init_workflow_tool_executor();
+    init_logger();
+  }
+});
+
 // src/providers/ai-check-provider.ts
 var import_promises4, import_path7, AICheckProvider;
 var init_ai_check_provider = __esm({
@@ -19666,6 +19782,7 @@ var init_ai_check_provider = __esm({
     init_mcp_custom_sse_server();
     init_logger();
     init_workflow_tool_executor();
+    init_tool_resolver();
     init_sandbox();
     init_schedule_tool();
     init_schedule_tool_handler();
@@ -21277,37 +21394,8 @@ ${processedPrompt}` : processedPrompt;
        * Supports both traditional custom tools and workflow-as-tool references
        */
       loadCustomTools(toolItems, config) {
-        const tools = /* @__PURE__ */ new Map();
         const globalTools = config.__globalTools;
-        for (const item of toolItems) {
-          const workflowTool = resolveWorkflowToolFromItem(item);
-          if (workflowTool) {
-            logger.debug(`[AICheckProvider] Loaded workflow '${workflowTool.name}' as custom tool`);
-            tools.set(workflowTool.name, workflowTool);
-            continue;
-          }
-          if (typeof item === "string") {
-            if (globalTools && globalTools[item]) {
-              const tool = globalTools[item];
-              tool.name = tool.name || item;
-              tools.set(item, tool);
-              continue;
-            }
-            logger.warn(
-              `[AICheckProvider] Custom tool '${item}' not found in global tools or workflow registry`
-            );
-          } else if (isWorkflowToolReference(item)) {
-            logger.warn(
-              `[AICheckProvider] Workflow '${item.workflow}' referenced but not found in registry`
-            );
-          }
-        }
-        if (tools.size === 0 && toolItems.length > 0 && !globalTools) {
-          logger.warn(
-            `[AICheckProvider] ai_custom_tools specified but no global tools found in configuration and no workflows matched`
-          );
-        }
-        return tools;
+        return resolveTools(toolItems, globalTools, "[AICheckProvider]");
       }
       /**
        * Intersect config-level allowedTools with policy-level allowedTools.
@@ -43713,6 +43801,494 @@ ${snippet}`
   }
 });
 
+// src/utils/script-tool-environment.ts
+function formatSyntaxError(code, err) {
+  const line = err.loc?.line ?? 0;
+  const col = err.loc?.column ?? 0;
+  const baseMsg = err.message?.replace(/\s*\(\d+:\d+\)$/, "") || "Syntax error";
+  if (!line) return `Syntax error: ${baseMsg}`;
+  const lines = code.split("\n");
+  const snippetLines = [];
+  const start = Math.max(0, line - 2);
+  const end = Math.min(lines.length, line + 1);
+  for (let i = start; i < end; i++) {
+    const lineNum = String(i + 1).padStart(3, " ");
+    if (i === line - 1) {
+      snippetLines.push(`  > ${lineNum} | ${lines[i]}`);
+      snippetLines.push(`    ${" ".repeat(lineNum.length)} | ${" ".repeat(col)}^`);
+    } else {
+      snippetLines.push(`    ${lineNum} | ${lines[i]}`);
+    }
+  }
+  return `Syntax error at line ${line}, column ${col}: ${baseMsg}
+
+${snippetLines.join("\n")}`;
+}
+function levenshtein(a, b) {
+  const m = a.length;
+  const n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+function transformScriptForAsync(code, asyncFunctionNames, opts) {
+  if (asyncFunctionNames.size === 0) {
+    return `return (() => {
+${code}
+})()`;
+  }
+  let ast;
+  try {
+    ast = acorn.parse(code, {
+      ecmaVersion: 2022,
+      sourceType: "script",
+      allowReturnOutsideFunction: true,
+      locations: true
+    });
+  } catch (e) {
+    throw new Error(formatSyntaxError(code, e));
+  }
+  if (opts?.knownGlobals) {
+    lintUnknownCalls(code, ast, opts.knownGlobals, opts.disabledBuiltins);
+  }
+  const insertions = [];
+  const functionsNeedingAsync = /* @__PURE__ */ new Set();
+  const functionScopes = [];
+  walk.full(ast, (node) => {
+    if (node.type === "ArrowFunctionExpression" || node.type === "FunctionExpression") {
+      functionScopes.push(node);
+    }
+  });
+  walk.full(ast, (node) => {
+    if (node.type !== "CallExpression") return;
+    const calleeName = getCalleeName(node);
+    if (!calleeName || !asyncFunctionNames.has(calleeName)) return;
+    insertions.push({ offset: node.start, text: "await " });
+    for (const fn of functionScopes) {
+      const body2 = fn.body;
+      if (body2 && body2.start <= node.start && body2.end >= node.end) {
+        functionsNeedingAsync.add(fn);
+      }
+    }
+  });
+  walk.full(ast, (node) => {
+    if (node.type !== "CallExpression") return;
+    const callNode = node;
+    const calleeName = getCalleeName(callNode);
+    if (calleeName !== "map" || !callNode.arguments || callNode.arguments.length < 2) return;
+    const callback = callNode.arguments[1];
+    if (callback.type === "ArrowFunctionExpression" || callback.type === "FunctionExpression") {
+      let hasAsyncCall = false;
+      walk.full(callback, (inner) => {
+        if (inner.type === "CallExpression") {
+          const innerName = getCalleeName(inner);
+          if (innerName && asyncFunctionNames.has(innerName)) {
+            hasAsyncCall = true;
+          }
+        }
+      });
+      if (hasAsyncCall) {
+        functionsNeedingAsync.add(callback);
+      }
+    }
+  });
+  walk.full(ast, (node) => {
+    if (node.type === "WhileStatement" || node.type === "ForStatement" || node.type === "ForOfStatement" || node.type === "ForInStatement") {
+      const body2 = node.body;
+      if (body2 && body2.type === "BlockStatement" && body2.body && body2.body.length > 0) {
+        insertions.push({ offset: body2.start + 1, text: " __checkLoop();" });
+      }
+    }
+  });
+  for (const fn of functionsNeedingAsync) {
+    insertions.push({ offset: fn.start, text: "async " });
+  }
+  const body = ast.body;
+  if (body && body.length > 0) {
+    const lastStmt = body[body.length - 1];
+    if (lastStmt.type === "ExpressionStatement") {
+      insertions.push({ offset: lastStmt.start, text: "return " });
+    }
+  }
+  insertions.sort((a, b) => b.offset - a.offset);
+  let transformed = code;
+  for (const ins of insertions) {
+    transformed = transformed.slice(0, ins.offset) + ins.text + transformed.slice(ins.offset);
+  }
+  return `return (async () => {
+${transformed}
+})()`;
+}
+function getCalleeName(callExpr) {
+  const callee = callExpr.callee;
+  if (callee.type === "Identifier" && callee.name) {
+    return callee.name;
+  }
+  return null;
+}
+function lintUnknownCalls(_code, ast, knownGlobals, disabledBuiltins) {
+  const declaredFunctions = /* @__PURE__ */ new Set();
+  walk.full(ast, (node) => {
+    if (node.type === "FunctionDeclaration" && node.id?.name) {
+      declaredFunctions.add(node.id.name);
+    }
+    if (node.type === "VariableDeclarator" && node.id?.name) {
+      const init = node.init;
+      if (init && (init.type === "ArrowFunctionExpression" || init.type === "FunctionExpression")) {
+        declaredFunctions.add(node.id.name);
+      }
+    }
+  });
+  const warnings = [];
+  walk.full(ast, (node) => {
+    if (node.type !== "CallExpression") return;
+    const name = getCalleeName(node);
+    if (!name) return;
+    if (knownGlobals.has(name) || JS_BUILTINS.has(name) || declaredFunctions.has(name)) return;
+    const loc = node.loc?.start;
+    const lineInfo = loc ? ` (line ${loc.line}, column ${loc.column})` : "";
+    if (disabledBuiltins?.has(name)) {
+      const hint = disabledBuiltins.get(name);
+      warnings.push(`'${name}()' is not enabled${lineInfo}. ${hint}`);
+      return;
+    }
+    const allNames = [...knownGlobals];
+    let bestMatch = "";
+    let bestDist = Infinity;
+    for (const candidate of allNames) {
+      const dist = levenshtein(name.toLowerCase(), candidate.toLowerCase());
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestMatch = candidate;
+      }
+    }
+    const maxLen = Math.max(name.length, bestMatch.length);
+    const suggestion = bestDist <= Math.ceil(maxLen * 0.4) ? ` Did you mean '${bestMatch}'?` : "";
+    warnings.push(`Unknown function '${name}()'${lineInfo}.${suggestion}`);
+  });
+  if (warnings.length > 0) {
+    throw new Error(`Script lint errors:
+${warnings.map((w) => `  - ${w}`).join("\n")}`);
+  }
+}
+function tryParseJSON(text) {
+  if (typeof text !== "string") return text;
+  const firstChar = text.trimStart()[0];
+  if (firstChar === "{" || firstChar === "[") {
+    try {
+      return JSON.parse(text);
+    } catch {
+    }
+  }
+  return text;
+}
+function buildToolGlobals(opts) {
+  const { resolvedTools, mcpClients, toolContext, workflowContext } = opts;
+  const globals = {};
+  const asyncFunctionNames = /* @__PURE__ */ new Set();
+  const commandTools = {};
+  for (const [name, tool] of resolvedTools) {
+    if (!isWorkflowTool(tool)) {
+      commandTools[name] = tool;
+    }
+  }
+  const toolExecutor = new CustomToolExecutor(commandTools);
+  const allToolInfo = [];
+  for (const [name, tool] of resolvedTools) {
+    const toolFn = async (args = {}) => {
+      try {
+        if (isWorkflowTool(tool)) {
+          if (!workflowContext) {
+            return `ERROR: Workflow context not available for tool '${name}'`;
+          }
+          return await executeWorkflowAsTool(
+            tool.__workflowId,
+            args,
+            workflowContext,
+            tool.__argsOverrides
+          );
+        }
+        return await toolExecutor.execute(name, args, toolContext);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        logger.warn(`[script:${name}] Tool error: ${msg}`);
+        return `ERROR: ${msg}`;
+      }
+    };
+    globals[name] = toolFn;
+    asyncFunctionNames.add(name);
+    allToolInfo.push({ name, description: tool.description });
+  }
+  if (mcpClients) {
+    for (const entry of mcpClients) {
+      for (const mcpTool of entry.tools) {
+        const globalName = `${entry.serverName}_${mcpTool.name}`;
+        const mcpToolFn = async (args = {}) => {
+          try {
+            const result = await entry.client.callTool({
+              name: mcpTool.name,
+              arguments: args
+            });
+            const content = result?.content;
+            if (Array.isArray(content) && content.length > 0) {
+              const text = content[0]?.text;
+              if (text !== void 0) {
+                return tryParseJSON(text);
+              }
+            }
+            return result;
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            logger.warn(`[script:${globalName}] MCP tool error: ${msg}`);
+            return `ERROR: ${msg}`;
+          }
+        };
+        globals[globalName] = mcpToolFn;
+        asyncFunctionNames.add(globalName);
+        allToolInfo.push({ name: globalName, description: mcpTool.description });
+      }
+    }
+  }
+  const callToolFn = async (name, args = {}) => {
+    const fn = globals[name];
+    if (!fn || typeof fn !== "function") {
+      const available = Array.from(asyncFunctionNames).join(", ");
+      return `ERROR: Tool '${name}' not found. Available: ${available}`;
+    }
+    return fn(args);
+  };
+  globals.callTool = callToolFn;
+  asyncFunctionNames.add("callTool");
+  globals.listTools = () => {
+    return [...allToolInfo];
+  };
+  return { globals, asyncFunctionNames };
+}
+function buildBuiltinGlobals(opts) {
+  const globals = {};
+  const asyncFunctionNames = /* @__PURE__ */ new Set();
+  const scheduleFn = async (args = {}) => {
+    try {
+      const { handleScheduleAction: handleScheduleAction2, buildScheduleToolContext: buildScheduleToolContext2 } = await Promise.resolve().then(() => (init_schedule_tool(), schedule_tool_exports));
+      const { extractSlackContext: extractSlackContext2 } = await Promise.resolve().then(() => (init_schedule_tool_handler(), schedule_tool_handler_exports));
+      const parentCtx = opts.sessionInfo?._parentContext;
+      const webhookData = parentCtx?.prInfo?.eventContext?.webhookData;
+      const visorCfg = parentCtx?.config;
+      const slackContext = webhookData ? extractSlackContext2(webhookData) : null;
+      const availableWorkflows = visorCfg?.checks ? Object.keys(visorCfg.checks) : void 0;
+      const permissions = visorCfg?.scheduler?.permissions;
+      const context2 = buildScheduleToolContext2(
+        {
+          slackContext: slackContext || void 0,
+          cliContext: slackContext ? void 0 : { userId: "script" }
+        },
+        availableWorkflows,
+        permissions
+      );
+      return await handleScheduleAction2(args, context2);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.warn(`[script:schedule] Error: ${msg}`);
+      return `ERROR: ${msg}`;
+    }
+  };
+  globals.schedule = scheduleFn;
+  asyncFunctionNames.add("schedule");
+  if (opts.config.enable_fetch === true) {
+    const fetchFn = async (args = {}) => {
+      try {
+        const url = String(args.url || "");
+        if (!url) return "ERROR: url is required";
+        const method = String(args.method || "GET");
+        const headers = args.headers || {};
+        const body = args.body != null ? String(args.body) : void 0;
+        const timeout = Number(args.timeout) || 3e4;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeout);
+        try {
+          const resp = await globalThis.fetch(url, {
+            method,
+            headers,
+            body: method !== "GET" ? body : void 0,
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          const contentType = resp.headers.get("content-type") || "";
+          if (contentType.includes("json")) return await resp.json();
+          const text = await resp.text();
+          try {
+            return JSON.parse(text);
+          } catch {
+            return text;
+          }
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        logger.warn(`[script:fetch] Error: ${msg}`);
+        return `ERROR: ${msg}`;
+      }
+    };
+    globals.fetch = fetchFn;
+    asyncFunctionNames.add("fetch");
+  }
+  const octokit = opts.config.eventContext?.octokit;
+  if (octokit) {
+    const githubFn = async (args = {}) => {
+      try {
+        const op = String(args.op || "");
+        const repoEnv = process.env.GITHUB_REPOSITORY || "";
+        let owner = "";
+        let repo = "";
+        if (repoEnv.includes("/")) {
+          [owner, repo] = repoEnv.split("/");
+        }
+        if (!owner || !repo) {
+          const ec = opts.config.eventContext || {};
+          owner = owner || ec.repository?.owner?.login || "";
+          repo = repo || ec.repository?.name || "";
+        }
+        const prNumber = opts.prInfo?.number;
+        if (!owner || !repo || !prNumber) {
+          return "ERROR: Missing GitHub repo/PR context";
+        }
+        const values = Array.isArray(args.values) ? args.values.map(String) : typeof args.value === "string" ? [args.value] : typeof args.values === "string" ? [args.values] : [];
+        switch (op) {
+          case "labels.add":
+            await octokit.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number: prNumber,
+              labels: values
+            });
+            return { success: true, op };
+          case "labels.remove":
+            for (const name of values) {
+              try {
+                await octokit.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number: prNumber,
+                  name
+                });
+              } catch {
+              }
+            }
+            return { success: true, op };
+          case "comment.create":
+            await octokit.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: prNumber,
+              body: values[0] || ""
+            });
+            return { success: true, op };
+          default:
+            return `ERROR: Unknown github op '${op}'. Supported: labels.add, labels.remove, comment.create`;
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        logger.warn(`[script:github] Error: ${msg}`);
+        return `ERROR: ${msg}`;
+      }
+    };
+    globals.github = githubFn;
+    asyncFunctionNames.add("github");
+  }
+  if (opts.config.enable_bash === true) {
+    const bashFn = async (args = {}) => {
+      try {
+        const { CommandExecutor: CommandExecutor2 } = await Promise.resolve().then(() => (init_command_executor(), command_executor_exports));
+        const executor = CommandExecutor2.getInstance();
+        const command = String(args.command || "");
+        if (!command) return "ERROR: command is required";
+        return await executor.execute(command, {
+          cwd: args.cwd ? String(args.cwd) : void 0,
+          env: args.env,
+          timeout: Number(args.timeout) || 3e4
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        logger.warn(`[script:bash] Error: ${msg}`);
+        return `ERROR: ${msg}`;
+      }
+    };
+    globals.bash = bashFn;
+    asyncFunctionNames.add("bash");
+  }
+  return { globals, asyncFunctionNames };
+}
+var acorn, walk, JS_BUILTINS;
+var init_script_tool_environment = __esm({
+  "src/utils/script-tool-environment.ts"() {
+    "use strict";
+    acorn = __toESM(require("acorn"));
+    walk = __toESM(require("acorn-walk"));
+    init_custom_tool_executor();
+    init_workflow_tool_executor();
+    init_logger();
+    JS_BUILTINS = /* @__PURE__ */ new Set([
+      // Constructors & types
+      "Array",
+      "Object",
+      "String",
+      "Number",
+      "Boolean",
+      "Date",
+      "RegExp",
+      "Error",
+      "TypeError",
+      "RangeError",
+      "Map",
+      "Set",
+      "WeakMap",
+      "WeakSet",
+      "Promise",
+      "Symbol",
+      "BigInt",
+      "Proxy",
+      "Reflect",
+      // Static methods commonly called as functions
+      "parseInt",
+      "parseFloat",
+      "isNaN",
+      "isFinite",
+      "encodeURIComponent",
+      "decodeURIComponent",
+      "encodeURI",
+      "decodeURI",
+      // Timers
+      "setTimeout",
+      "clearTimeout",
+      "setInterval",
+      "clearInterval",
+      // JSON/Math accessed via method calls are on objects, but just in case
+      "JSON",
+      "Math",
+      "console",
+      // Node.js globals — sandbox blocks these at runtime with a better error
+      "require",
+      "process",
+      "Buffer",
+      "global",
+      "globalThis",
+      // Common patterns
+      "eval",
+      "Function",
+      "alert",
+      "confirm",
+      "prompt"
+    ]);
+  }
+});
+
 // src/providers/script-check-provider.ts
 var ScriptCheckProvider;
 var init_script_check_provider = __esm({
@@ -43725,6 +44301,10 @@ var init_script_check_provider = __esm({
     init_sandbox();
     init_template_context();
     init_script_memory_ops();
+    init_tool_resolver();
+    init_script_tool_environment();
+    init_workflow_tool_executor();
+    init_env_resolver();
     ScriptCheckProvider = class extends CheckProvider {
       liquid;
       constructor() {
@@ -43741,7 +44321,7 @@ var init_script_check_provider = __esm({
         return "script";
       }
       getDescription() {
-        return "Execute JavaScript with access to PR context, dependency outputs, and memory.";
+        return "Execute JavaScript with access to PR context, dependency outputs, memory, and tools.";
       }
       async validateConfig(config) {
         if (!config || typeof config !== "object") return false;
@@ -43791,16 +44371,77 @@ var init_script_check_provider = __esm({
         ctx.atob = (str) => {
           return Buffer.from(String(str), "base64").toString("binary");
         };
+        const { globals: builtinGlobals, asyncFunctionNames: builtinAsyncNames } = buildBuiltinGlobals({
+          config,
+          prInfo,
+          sessionInfo: _sessionInfo
+        });
+        Object.assign(ctx, builtinGlobals);
+        const hasTools = Array.isArray(config.tools) || config.tools_js || config.mcp_servers;
         const sandbox = this.createSecureSandbox();
         let result;
+        let mcpClients = [];
         try {
-          result = compileAndRun(
+          const asyncFunctionNames = new Set(builtinAsyncNames);
+          if (hasTools) {
+            const toolItems = this.resolveToolItems(config, prInfo, dependencyResults, ctx);
+            const globalTools = config.__globalTools;
+            const resolvedTools = resolveTools(toolItems, globalTools, "[script]");
+            mcpClients = await this.connectMcpServers(config.mcp_servers);
+            const toolContext = {
+              pr: ctx.pr,
+              files: ctx.files || prInfo.files,
+              outputs: ctx.outputs,
+              env: process.env
+            };
+            const parentCtx = _sessionInfo?._parentContext;
+            const workflowContext = {
+              prInfo,
+              outputs: dependencyResults,
+              executionContext: _sessionInfo,
+              workspace: parentCtx?.workspace
+            };
+            const { globals: toolGlobals, asyncFunctionNames: toolAsyncNames } = buildToolGlobals({
+              resolvedTools,
+              mcpClients,
+              toolContext,
+              workflowContext
+            });
+            Object.assign(ctx, toolGlobals);
+            for (const name of toolAsyncNames) asyncFunctionNames.add(name);
+          }
+          let loopIterations = 0;
+          const maxLoopIterations = 1e4;
+          ctx.__checkLoop = () => {
+            loopIterations++;
+            if (loopIterations > maxLoopIterations) {
+              throw new Error(`Loop exceeded maximum of ${maxLoopIterations} iterations`);
+            }
+          };
+          const knownGlobals = new Set(Object.keys(ctx));
+          for (const name of asyncFunctionNames) knownGlobals.add(name);
+          knownGlobals.add("__checkLoop");
+          knownGlobals.add("log");
+          const disabledBuiltins = /* @__PURE__ */ new Map();
+          if (!config.enable_bash) {
+            disabledBuiltins.set("bash", "Add 'enable_bash: true' to your check config to enable it.");
+          }
+          if (!config.enable_fetch) {
+            disabledBuiltins.set(
+              "fetch",
+              "Add 'enable_fetch: true' to your check config to enable it."
+            );
+          }
+          const transformed = transformScriptForAsync(script, asyncFunctionNames, {
+            knownGlobals,
+            disabledBuiltins
+          });
+          result = await compileAndRunAsync(
             sandbox,
-            script,
+            transformed,
             { ...ctx },
             {
               injectLog: true,
-              wrapFunction: true,
               logPrefix: "[script]"
             }
           );
@@ -43820,6 +44461,8 @@ var init_script_check_provider = __esm({
             ],
             output: null
           };
+        } finally {
+          await this.disconnectMcpClients(mcpClients);
         }
         try {
           if (needsSave() && memoryStore.getConfig().storage === "file" && memoryStore.getConfig().auto_save) {
@@ -43845,17 +44488,167 @@ var init_script_check_provider = __esm({
         }
         return out;
       }
+      /**
+       * Resolve tool items from static config and optional JS expression.
+       */
+      resolveToolItems(config, prInfo, dependencyResults, ctx) {
+        let items = [];
+        const staticTools = config.tools;
+        if (Array.isArray(staticTools)) {
+          items = staticTools.filter(
+            (item) => typeof item === "string" || isWorkflowToolReference(item)
+          );
+        }
+        const toolsJsExpr = config.tools_js;
+        if (toolsJsExpr && dependencyResults) {
+          try {
+            const jsSandbox = this.createSecureSandbox();
+            const jsCtx = ctx || buildProviderTemplateContext(prInfo, dependencyResults);
+            jsCtx.env = process.env;
+            jsCtx.inputs = config.workflowInputs || {};
+            const evalResult = compileAndRun(jsSandbox, toolsJsExpr, jsCtx, {
+              injectLog: true,
+              wrapFunction: true,
+              logPrefix: "[tools_js]"
+            });
+            if (Array.isArray(evalResult)) {
+              const dynamic = evalResult.filter(
+                (item) => typeof item === "string" || isWorkflowToolReference(item)
+              );
+              const existingNames = new Set(items.map((i) => typeof i === "string" ? i : i.workflow));
+              for (const tool of dynamic) {
+                const name = typeof tool === "string" ? tool : tool.workflow;
+                if (!existingNames.has(name)) {
+                  items.push(tool);
+                }
+              }
+            }
+          } catch (error) {
+            logger.error(
+              `[script] Failed to evaluate tools_js: ${error instanceof Error ? error.message : "Unknown error"}`
+            );
+          }
+        }
+        return items;
+      }
+      /**
+       * Connect to MCP servers and discover their tools.
+       */
+      async connectMcpServers(mcpServersConfig) {
+        if (!mcpServersConfig || Object.keys(mcpServersConfig).length === 0) {
+          return [];
+        }
+        const entries = [];
+        for (const [serverName, serverConfig] of Object.entries(mcpServersConfig)) {
+          try {
+            const { Client: Client2 } = await import("@modelcontextprotocol/sdk/client/index.js");
+            const client = new Client2(
+              { name: "visor-script-client", version: "1.0.0" },
+              { capabilities: {} }
+            );
+            const env = {};
+            for (const [key, value] of Object.entries(process.env)) {
+              if (value !== void 0) env[key] = value;
+            }
+            if (serverConfig.env) {
+              for (const [key, value] of Object.entries(serverConfig.env)) {
+                env[key] = String(EnvironmentResolver.resolveValue(String(value)));
+              }
+            }
+            const timeout = (serverConfig.timeout || 60) * 1e3;
+            if (serverConfig.command) {
+              const { StdioClientTransport: StdioClientTransport2 } = await import("@modelcontextprotocol/sdk/client/stdio.js");
+              const transport = new StdioClientTransport2({
+                command: serverConfig.command,
+                args: serverConfig.args,
+                env,
+                stderr: "pipe"
+              });
+              await Promise.race([
+                client.connect(transport),
+                new Promise(
+                  (_, reject) => setTimeout(() => reject(new Error("MCP connection timeout")), timeout)
+                )
+              ]);
+            } else if (serverConfig.url) {
+              const transportType = serverConfig.transport || "sse";
+              if (transportType === "sse") {
+                const { SSEClientTransport: SSEClientTransport2 } = await import("@modelcontextprotocol/sdk/client/sse.js");
+                await Promise.race([
+                  client.connect(new SSEClientTransport2(new URL(serverConfig.url))),
+                  new Promise(
+                    (_, reject) => setTimeout(() => reject(new Error("MCP connection timeout")), timeout)
+                  )
+                ]);
+              } else {
+                const { StreamableHTTPClientTransport: StreamableHTTPClientTransport2 } = await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+                await Promise.race([
+                  client.connect(new StreamableHTTPClientTransport2(new URL(serverConfig.url))),
+                  new Promise(
+                    (_, reject) => setTimeout(() => reject(new Error("MCP connection timeout")), timeout)
+                  )
+                ]);
+              }
+            } else {
+              logger.warn(`[script] MCP server '${serverName}' has no command or url, skipping`);
+              continue;
+            }
+            let tools = [];
+            try {
+              const listResult = await client.listTools();
+              tools = (listResult?.tools || []).map((t) => ({
+                name: t.name,
+                description: t.description,
+                inputSchema: t.inputSchema
+              }));
+              logger.debug(
+                `[script] MCP '${serverName}': ${tools.length} tools [${tools.map((t) => t.name).join(", ")}]`
+              );
+            } catch (err) {
+              logger.warn(
+                `[script] Could not list tools from MCP '${serverName}': ${err instanceof Error ? err.message : String(err)}`
+              );
+            }
+            entries.push({ client, serverName, tools });
+          } catch (err) {
+            logger.error(
+              `[script] Failed to connect MCP '${serverName}': ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        }
+        return entries;
+      }
+      /**
+       * Disconnect all MCP clients.
+       */
+      async disconnectMcpClients(clients) {
+        for (const entry of clients) {
+          try {
+            await entry.client.close();
+          } catch (err) {
+            logger.debug(
+              `[script] Error closing MCP '${entry.serverName}': ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        }
+      }
       getSupportedConfigKeys() {
         return [
           "type",
           "content",
+          "tools",
+          "tools_js",
+          "mcp_servers",
+          "enable_fetch",
+          "enable_bash",
           "depends_on",
           "group",
           "on",
           "if",
           "fail_if",
           "on_fail",
-          "on_success"
+          "on_success",
+          "timeout"
         ];
       }
       async isAvailable() {
@@ -43864,7 +44657,6 @@ var init_script_check_provider = __esm({
       getRequirements() {
         return ["No external dependencies required"];
       }
-      // No local buildTemplateContext; uses shared builder above
     };
   }
 });

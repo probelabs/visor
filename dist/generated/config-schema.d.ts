@@ -508,6 +508,43 @@ export declare const configSchema: {
                     readonly type: "string";
                     readonly description: "Script content to execute for script checks";
                 };
+                readonly tools: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly anyOf: readonly [{
+                            readonly type: "string";
+                        }, {
+                            readonly type: "object";
+                            readonly properties: {
+                                readonly workflow: {
+                                    readonly type: "string";
+                                };
+                                readonly args: {
+                                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                                };
+                            };
+                            readonly required: readonly ["workflow"];
+                            readonly additionalProperties: false;
+                        }];
+                    };
+                    readonly description: "Tool names to expose inside script checks (string names or workflow references)";
+                };
+                readonly tools_js: {
+                    readonly type: "string";
+                    readonly description: "JavaScript expression to dynamically compute tools for script checks";
+                };
+                readonly mcp_servers: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2CMcpServerConfig%3E";
+                    readonly description: "MCP servers whose tools are exposed inside script checks";
+                };
+                readonly enable_fetch: {
+                    readonly type: "boolean";
+                    readonly description: "Enable fetch() function in script checks (default: false)";
+                };
+                readonly enable_bash: {
+                    readonly type: "boolean";
+                    readonly description: "Enable bash() function in script checks (default: false)";
+                };
                 readonly schedule: {
                     readonly type: "string";
                     readonly description: "Cron schedule expression (e.g., \"0 2 * * *\") - optional for any check type";
@@ -838,7 +875,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -854,7 +891,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -940,6 +977,72 @@ export declare const configSchema: {
             readonly type: "string";
             readonly enum: readonly ["ai", "command", "script", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input", "workflow", "git-checkout"];
             readonly description: "Valid check types in configuration";
+        };
+        readonly 'Record<string,McpServerConfig>': {
+            readonly type: "object";
+            readonly additionalProperties: {
+                readonly $ref: "#/definitions/McpServerConfig";
+            };
+        };
+        readonly McpServerConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly command: {
+                    readonly type: "string";
+                    readonly description: "Command to execute (presence indicates stdio server)";
+                };
+                readonly args: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Arguments to pass to the command";
+                };
+                readonly env: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cstring%3E";
+                    readonly description: "Environment variables for the MCP server";
+                };
+                readonly url: {
+                    readonly type: "string";
+                    readonly description: "URL endpoint (presence indicates external server)";
+                };
+                readonly transport: {
+                    readonly type: "string";
+                    readonly enum: readonly ["stdio", "sse", "http"];
+                    readonly description: "Transport type";
+                };
+                readonly workflow: {
+                    readonly type: "string";
+                    readonly description: "Workflow ID or path (presence indicates workflow tool)";
+                };
+                readonly inputs: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    readonly description: "Inputs to pass to workflow";
+                };
+                readonly description: {
+                    readonly type: "string";
+                    readonly description: "Tool description for AI";
+                };
+                readonly allowedMethods: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Whitelist specific methods from this MCP server (supports wildcards like \"search_*\")";
+                };
+                readonly blockedMethods: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Block specific methods from this MCP server (supports wildcards like \"*_delete\")";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Unified MCP server/tool entry - type detected by which properties are present\n\nDetection logic (priority order): 1. Has `command` → stdio MCP server (external process) 2. Has `url` → SSE/HTTP MCP server (external endpoint) 3. Has `workflow` → workflow tool reference 4. Empty `{}` or just key → auto-detect from `tools:` section";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
         };
         readonly EventTrigger: {
             readonly type: "string";
@@ -1056,72 +1159,6 @@ export declare const configSchema: {
             };
             readonly additionalProperties: false;
             readonly description: "AI provider configuration";
-            readonly patternProperties: {
-                readonly '^x-': {};
-            };
-        };
-        readonly 'Record<string,McpServerConfig>': {
-            readonly type: "object";
-            readonly additionalProperties: {
-                readonly $ref: "#/definitions/McpServerConfig";
-            };
-        };
-        readonly McpServerConfig: {
-            readonly type: "object";
-            readonly properties: {
-                readonly command: {
-                    readonly type: "string";
-                    readonly description: "Command to execute (presence indicates stdio server)";
-                };
-                readonly args: {
-                    readonly type: "array";
-                    readonly items: {
-                        readonly type: "string";
-                    };
-                    readonly description: "Arguments to pass to the command";
-                };
-                readonly env: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2Cstring%3E";
-                    readonly description: "Environment variables for the MCP server";
-                };
-                readonly url: {
-                    readonly type: "string";
-                    readonly description: "URL endpoint (presence indicates external server)";
-                };
-                readonly transport: {
-                    readonly type: "string";
-                    readonly enum: readonly ["stdio", "sse", "http"];
-                    readonly description: "Transport type";
-                };
-                readonly workflow: {
-                    readonly type: "string";
-                    readonly description: "Workflow ID or path (presence indicates workflow tool)";
-                };
-                readonly inputs: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
-                    readonly description: "Inputs to pass to workflow";
-                };
-                readonly description: {
-                    readonly type: "string";
-                    readonly description: "Tool description for AI";
-                };
-                readonly allowedMethods: {
-                    readonly type: "array";
-                    readonly items: {
-                        readonly type: "string";
-                    };
-                    readonly description: "Whitelist specific methods from this MCP server (supports wildcards like \"search_*\")";
-                };
-                readonly blockedMethods: {
-                    readonly type: "array";
-                    readonly items: {
-                        readonly type: "string";
-                    };
-                    readonly description: "Block specific methods from this MCP server (supports wildcards like \"*_delete\")";
-                };
-            };
-            readonly additionalProperties: false;
-            readonly description: "Unified MCP server/tool entry - type detected by which properties are present\n\nDetection logic (priority order): 1. Has `command` → stdio MCP server (external process) 2. Has `url` → SSE/HTTP MCP server (external endpoint) 3. Has `workflow` → workflow tool reference 4. Empty `{}` or just key → auto-detect from `tools:` section";
             readonly patternProperties: {
                 readonly '^x-': {};
             };
@@ -1506,7 +1543,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1521,13 +1558,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-13489-27516-src_types_config.ts-0-53300>': {
+        readonly 'Partial<interface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };
