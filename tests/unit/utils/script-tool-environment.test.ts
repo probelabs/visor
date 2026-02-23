@@ -30,10 +30,7 @@ describe('transformScriptForAsync', () => {
 
   describe('await injection', () => {
     it('inserts await before async function calls', () => {
-      const result = transformScriptForAsync(
-        'const x = myTool({ key: 1 });',
-        new Set(['myTool'])
-      );
+      const result = transformScriptForAsync('const x = myTool({ key: 1 });', new Set(['myTool']));
       expect(result).toContain('await myTool(');
     });
 
@@ -180,19 +177,21 @@ describe('transformScriptForAsync', () => {
 
     it('does not warn on user-declared arrow functions', () => {
       expect(() => {
-        transformScriptForAsync(
-          'const helper = () => 1;\nhelper();',
-          new Set(['schedule']),
-          { knownGlobals }
-        );
+        transformScriptForAsync('const helper = () => 1;\nhelper();', new Set(['schedule']), {
+          knownGlobals,
+        });
       }).not.toThrow();
     });
 
     it('does not warn on method calls (obj.method())', () => {
       expect(() => {
-        transformScriptForAsync('const arr = [1,2,3]; arr.filter(x => x > 1);', new Set(['schedule']), {
-          knownGlobals,
-        });
+        transformScriptForAsync(
+          'const arr = [1,2,3]; arr.filter(x => x > 1);',
+          new Set(['schedule']),
+          {
+            knownGlobals,
+          }
+        );
       }).not.toThrow();
     });
   });
@@ -330,9 +329,7 @@ describe('buildToolGlobals', () => {
   });
 
   it('provides callTool dispatcher', () => {
-    const resolvedTools = new Map<string, any>([
-      ['tool-a', { name: 'tool-a', exec: 'echo a' }],
-    ]);
+    const resolvedTools = new Map<string, any>([['tool-a', { name: 'tool-a', exec: 'echo a' }]]);
 
     const { globals, asyncFunctionNames } = buildToolGlobals({
       resolvedTools,
@@ -345,9 +342,7 @@ describe('buildToolGlobals', () => {
   });
 
   it('callTool returns error for unknown tool', async () => {
-    const resolvedTools = new Map<string, any>([
-      ['tool-a', { name: 'tool-a', exec: 'echo a' }],
-    ]);
+    const resolvedTools = new Map<string, any>([['tool-a', { name: 'tool-a', exec: 'echo a' }]]);
 
     const { globals } = buildToolGlobals({
       resolvedTools,
@@ -427,9 +422,7 @@ describe('buildToolGlobals', () => {
     const mockClient = {
       callTool: jest.fn().mockResolvedValue({ content: [{ text: 'hello world' }] }),
     };
-    const mcpClients = [
-      { client: mockClient, serverName: 'srv', tools: [{ name: 'echo' }] },
-    ];
+    const mcpClients = [{ client: mockClient, serverName: 'srv', tools: [{ name: 'echo' }] }];
 
     const { globals } = buildToolGlobals({
       resolvedTools: new Map(),
@@ -445,9 +438,7 @@ describe('buildToolGlobals', () => {
     const mockClient = {
       callTool: jest.fn().mockRejectedValue(new Error('connection refused')),
     };
-    const mcpClients = [
-      { client: mockClient, serverName: 'srv', tools: [{ name: 'broken' }] },
-    ];
+    const mcpClients = [{ client: mockClient, serverName: 'srv', tools: [{ name: 'broken' }] }];
 
     const { globals } = buildToolGlobals({
       resolvedTools: new Map(),
@@ -477,27 +468,42 @@ describe('async script execution (integration)', () => {
   it('returns value from simple expression', async () => {
     const code = '({ ok: true })';
     const transformed = transformScriptForAsync(code, new Set(['schedule']));
-    const result = await compileAndRunAsync(sandbox, transformed, { schedule: async () => ({}) }, {
-      injectLog: false,
-    });
+    const result = await compileAndRunAsync(
+      sandbox,
+      transformed,
+      { schedule: async () => ({}) },
+      {
+        injectLog: false,
+      }
+    );
     expect(result).toEqual({ ok: true });
   });
 
   it('returns value from IIFE', async () => {
     const code = '(() => { const x = 5; return { val: x }; })()';
     const transformed = transformScriptForAsync(code, new Set(['schedule']));
-    const result = await compileAndRunAsync(sandbox, transformed, { schedule: async () => ({}) }, {
-      injectLog: false,
-    });
+    const result = await compileAndRunAsync(
+      sandbox,
+      transformed,
+      { schedule: async () => ({}) },
+      {
+        injectLog: false,
+      }
+    );
     expect(result).toEqual({ val: 5 });
   });
 
   it('returns value from explicit return', async () => {
     const code = 'const x = 10;\nreturn x * 2;';
     const transformed = transformScriptForAsync(code, new Set(['schedule']));
-    const result = await compileAndRunAsync(sandbox, transformed, { schedule: async () => ({}) }, {
-      injectLog: false,
-    });
+    const result = await compileAndRunAsync(
+      sandbox,
+      transformed,
+      { schedule: async () => ({}) },
+      {
+        injectLog: false,
+      }
+    );
     expect(result).toBe(20);
   });
 
@@ -505,9 +511,14 @@ describe('async script execution (integration)', () => {
     const mockTool = async (args: any) => ({ doubled: args.n * 2 });
     const code = 'const r = myTool({ n: 21 });\nreturn r;';
     const transformed = transformScriptForAsync(code, new Set(['myTool']));
-    const result = await compileAndRunAsync(sandbox, transformed, { myTool: mockTool }, {
-      injectLog: false,
-    });
+    const result = await compileAndRunAsync(
+      sandbox,
+      transformed,
+      { myTool: mockTool },
+      {
+        injectLog: false,
+      }
+    );
     expect(result).toEqual({ doubled: 42 });
   });
 
@@ -515,9 +526,14 @@ describe('async script execution (integration)', () => {
     const mockTool = async (args: any) => args.val + 1;
     const code = 'myTool({ val: 99 })';
     const transformed = transformScriptForAsync(code, new Set(['myTool']));
-    const result = await compileAndRunAsync(sandbox, transformed, { myTool: mockTool }, {
-      injectLog: false,
-    });
+    const result = await compileAndRunAsync(
+      sandbox,
+      transformed,
+      { myTool: mockTool },
+      {
+        injectLog: false,
+      }
+    );
     expect(result).toBe(100);
   });
 
