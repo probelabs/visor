@@ -204,6 +204,18 @@ export function transformScriptForAsync(
     insertions.push({ offset: fn.start, text: 'async ' });
   }
 
+  // Auto-return: if the last top-level statement is an ExpressionStatement
+  // (e.g., an IIFE call, object literal, or function call), insert `return`
+  // so its value is returned from the async wrapper. This replicates the
+  // completion-value semantics that compileAndRun provides for sync code.
+  const body = (ast as any).body as acorn.Node[];
+  if (body && body.length > 0) {
+    const lastStmt = body[body.length - 1];
+    if (lastStmt.type === 'ExpressionStatement') {
+      insertions.push({ offset: lastStmt.start, text: 'return ' });
+    }
+  }
+
   // Sort insertions by offset descending (apply from end to preserve offsets)
   insertions.sort((a, b) => b.offset - a.offset);
 

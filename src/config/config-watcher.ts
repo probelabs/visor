@@ -105,7 +105,7 @@ export class ConfigWatcher {
   private watchers: Map<string, { close: () => void }> = new Map();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private signalHandler: (() => void) | null = null;
-  private lastReloadTs = 0;
+  private lastProcessedMtimes = new Map<string, number>();
 
   constructor(configPath: string, reloader: ConfigReloader, debounceMs?: number) {
     this.configPath = configPath;
@@ -234,16 +234,37 @@ export class ConfigWatcher {
   }
 
   private debouncedReload(): void {
-    // Skip if a reload completed very recently — prevents the polling fallback
-    // from re-triggering after the native fs.watch already handled the event.
-    if (this.lastReloadTs && Date.now() - this.lastReloadTs < this.debounceMs) return;
+    // Deduplicate by checking actual file mtimes — this is deterministic and
+    // prevents the polling fallback from re-triggering a reload for the same
+    // write that fs.watch already handled. Time-based cooldowns are fragile
+    // under CI load; mtime comparison is not.
+    let anyChanged = false;
+    for (const [filePath] of this.watchers) {
+      try {
+        const mtime = fs.statSync(filePath).mtimeMs;
+        if (mtime !== this.lastProcessedMtimes.get(filePath)) {
+          anyChanged = true;
+          break;
+        }
+      } catch {
+        anyChanged = true; // deleted or inaccessible → treat as changed
+      }
+    }
+    if (!anyChanged) return;
 
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
     }
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
-      this.lastReloadTs = Date.now();
+      // Snapshot mtimes so duplicate events for the same write are suppressed
+      for (const [filePath] of this.watchers) {
+        try {
+          this.lastProcessedMtimes.set(filePath, fs.statSync(filePath).mtimeMs);
+        } catch {
+          this.lastProcessedMtimes.delete(filePath);
+        }
+      }
       logger.info('[ConfigWatcher] File change detected, reloading config');
       this.safeReload();
     }, this.debounceMs);
