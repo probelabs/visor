@@ -268,7 +268,9 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
     if (opts.patchConsole !== false) patchConsole();
   } catch (error) {
     // OTel not installed or failed to init; continue silently
-    console.error('[telemetry] Failed to initialize OTel SDK:', error);
+    if (process.env.VISOR_DEBUG === 'true' || process.env.DEBUG) {
+      console.error('[telemetry] Failed to initialize OTel SDK:', error);
+    }
   }
 }
 
