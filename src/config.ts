@@ -541,6 +541,21 @@ export class ConfigManager {
     if (workflowData.inputs) {
       visorConfig.inputs = workflowData.inputs;
     }
+    if (workflowData.tools) {
+      visorConfig.tools = workflowData.tools;
+    }
+    if (workflowData.id) {
+      (visorConfig as any).id = workflowData.id;
+    }
+    if (workflowData.name) {
+      (visorConfig as any).name = workflowData.name;
+    }
+    if (workflowData.description) {
+      (visorConfig as any).description = workflowData.description;
+    }
+    if (workflowData.on) {
+      (visorConfig as any).on = workflowData.on;
+    }
 
     logger.debug(
       `Standalone workflow config has ${Object.keys(workflowSteps).length} workflow steps as checks`
