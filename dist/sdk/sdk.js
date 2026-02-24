@@ -15271,6 +15271,21 @@ ${errors}`);
         if (workflowData.inputs) {
           visorConfig.inputs = workflowData.inputs;
         }
+        if (workflowData.tools) {
+          visorConfig.tools = workflowData.tools;
+        }
+        if (workflowData.id) {
+          visorConfig.id = workflowData.id;
+        }
+        if (workflowData.name) {
+          visorConfig.name = workflowData.name;
+        }
+        if (workflowData.description) {
+          visorConfig.description = workflowData.description;
+        }
+        if (workflowData.on) {
+          visorConfig.on = workflowData.on;
+        }
         logger.debug(
           `Standalone workflow config has ${Object.keys(workflowSteps).length} workflow steps as checks`
         );
