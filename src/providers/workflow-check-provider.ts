@@ -1039,6 +1039,7 @@ export class WorkflowCheckProvider extends CheckProvider {
       // Carry over optional inputs/outputs if present so callers can consume them
       inputs: (loaded as any).inputs,
       outputs: (loaded as any).outputs,
+      tools: (loaded as any).tools,
     } as WorkflowDefinition;
 
     return workflowDef;
