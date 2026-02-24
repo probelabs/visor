@@ -2699,8 +2699,8 @@ async function executeSingleCheck(
     if ((result as any).output !== undefined) {
       const output = (result as any).output;
       if (output !== null && typeof output === 'object' && !Array.isArray(output)) {
-        // Only add timestamp to plain objects
-        outputWithTimestamp = { ...output, ts: Date.now() };
+        // Only add timestamp to plain objects if they don't already have one
+        outputWithTimestamp = 'ts' in output ? { ...output, _engine_ts: Date.now() } : { ...output, ts: Date.now() };
       } else {
         // Preserve primitives, arrays, and null as-is
         outputWithTimestamp = output;

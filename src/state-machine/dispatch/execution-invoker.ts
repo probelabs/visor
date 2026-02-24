@@ -817,9 +817,12 @@ export async function executeSingleCheck(
     let outputWithTimestamp: any = undefined;
     if ((result as any).output !== undefined) {
       const output = (result as any).output;
-      if (output !== null && typeof output === 'object' && !Array.isArray(output))
-        outputWithTimestamp = { ...output, ts: Date.now() };
-      else outputWithTimestamp = output;
+      if (output !== null && typeof output === 'object' && !Array.isArray(output)) {
+        // Only inject 'ts' if the output doesn't already have one (avoids overwriting Slack API timestamps)
+        outputWithTimestamp = 'ts' in output ? { ...output, _engine_ts: Date.now() } : { ...output, ts: Date.now() };
+      } else {
+        outputWithTimestamp = output;
+      }
     }
 
     const enrichedResultWithContent = renderedContent
