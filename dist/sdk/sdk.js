@@ -6928,6 +6928,221 @@ var init_comment_metadata = __esm({
   }
 });
 
+// src/slack/markdown.ts
+function extractMermaidDiagrams(text) {
+  const diagrams = [];
+  const regex = /```mermaid\s*\n([\s\S]*?)```/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    diagrams.push({
+      fullMatch: match[0],
+      code: match[1].trim(),
+      startIndex: match.index,
+      endIndex: match.index + match[0].length
+    });
+  }
+  return diagrams;
+}
+async function renderMermaidToPng(mermaidCode) {
+  const tmpDir = os.tmpdir();
+  const inputFile = path7.join(
+    tmpDir,
+    `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}.mmd`
+  );
+  const outputFile = path7.join(
+    tmpDir,
+    `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}.png`
+  );
+  try {
+    fs5.writeFileSync(inputFile, mermaidCode, "utf-8");
+    const chromiumPaths = [
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+      "/usr/bin/google-chrome",
+      "/usr/bin/chrome"
+    ];
+    let chromiumPath;
+    for (const p of chromiumPaths) {
+      if (fs5.existsSync(p)) {
+        chromiumPath = p;
+        break;
+      }
+    }
+    const env = { ...process.env };
+    if (chromiumPath) {
+      env.PUPPETEER_EXECUTABLE_PATH = chromiumPath;
+    }
+    const result = await new Promise((resolve11) => {
+      const proc = (0, import_child_process.spawn)(
+        "npx",
+        [
+          "--yes",
+          "@mermaid-js/mermaid-cli",
+          "-i",
+          inputFile,
+          "-o",
+          outputFile,
+          "-e",
+          "png",
+          "-b",
+          "white",
+          "-w",
+          "1200"
+        ],
+        {
+          timeout: 6e4,
+          // 60 second timeout (first run may download packages)
+          stdio: ["pipe", "pipe", "pipe"],
+          env
+        }
+      );
+      let stderr = "";
+      proc.stderr?.on("data", (data) => {
+        stderr += data.toString();
+      });
+      proc.on("close", (code) => {
+        if (code === 0) {
+          resolve11({ success: true });
+        } else {
+          resolve11({ success: false, error: stderr || `Exit code ${code}` });
+        }
+      });
+      proc.on("error", (err) => {
+        resolve11({ success: false, error: err.message });
+      });
+    });
+    if (!result.success) {
+      console.warn(`Mermaid rendering failed: ${result.error}`);
+      return null;
+    }
+    if (!fs5.existsSync(outputFile)) {
+      console.warn("Mermaid output file not created");
+      return null;
+    }
+    const pngBuffer = fs5.readFileSync(outputFile);
+    return pngBuffer;
+  } catch (e) {
+    console.warn(`Mermaid rendering error: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  } finally {
+    try {
+      if (fs5.existsSync(inputFile)) fs5.unlinkSync(inputFile);
+      if (fs5.existsSync(outputFile)) fs5.unlinkSync(outputFile);
+    } catch {
+    }
+  }
+}
+function replaceMermaidBlocks(text, diagrams, replacement = "_(See diagram above)_") {
+  if (diagrams.length === 0) return text;
+  const sorted = [...diagrams].sort((a, b) => b.startIndex - a.startIndex);
+  let result = text;
+  sorted.forEach((diagram, sortedIndex) => {
+    const originalIndex = diagrams.length - 1 - sortedIndex;
+    const rep = typeof replacement === "function" ? replacement(originalIndex) : replacement;
+    result = result.slice(0, diagram.startIndex) + rep + result.slice(diagram.endIndex);
+  });
+  return result;
+}
+function markdownToSlack(text) {
+  if (!text || typeof text !== "string") return "";
+  let out = text;
+  out = out.replace(
+    /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
+    (_m, alt, url) => `<${url}|${alt || "image"}>`
+  );
+  out = out.replace(
+    /\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
+    (_m, label, url) => `<${url}|${label}>`
+  );
+  out = out.replace(/\*\*([^*]+)\*\*/g, (_m, inner) => `*${inner}*`);
+  out = out.replace(/__([^_]+)__/g, (_m, inner) => `*${inner}*`);
+  const lines = out.split(/\r?\n/);
+  let inCodeBlock = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trimStart();
+    if (/^```/.test(trimmed)) {
+      inCodeBlock = !inCodeBlock;
+      continue;
+    }
+    if (inCodeBlock) continue;
+    const headerMatch = /^(#{1,6})\s+(.+)$/.exec(trimmed);
+    if (headerMatch) {
+      const [, hashes, headerText] = headerMatch;
+      const prevLine = i > 0 ? lines[i - 1].trim() : "";
+      const prevIsHeaderOrFence = /^#{1,6}\s+/.test(prevLine) || /^\*[^*]+\*$/.test(prevLine) || /^```/.test(prevLine);
+      if (hashes.length <= 2 && i > 0 && prevLine !== "" && !prevIsHeaderOrFence) {
+        lines[i] = `
+*${headerText.trim()}*`;
+      } else {
+        lines[i] = `*${headerText.trim()}*`;
+      }
+      continue;
+    }
+    const bulletMatch = /^(\s*)([-*])\s+(.+)$/.exec(line);
+    if (bulletMatch) {
+      const [, indent, , rest] = bulletMatch;
+      lines[i] = `${indent}\u2022 ${rest}`;
+    }
+  }
+  out = lines.join("\n");
+  return out;
+}
+function extractFileSections(text) {
+  const sections = [];
+  const delimRegex = /^--- ([\w][\w.\-]*\.\w+) ---$/gm;
+  const delimiters = [];
+  let m;
+  while ((m = delimRegex.exec(text)) !== null) {
+    delimiters.push({
+      filename: m[1],
+      start: m.index,
+      end: m.index + m[0].length
+    });
+  }
+  if (delimiters.length === 0) return sections;
+  for (let i = 0; i < delimiters.length; i++) {
+    const open = delimiters[i];
+    const contentStart = open.end < text.length && text[open.end] === "\n" ? open.end + 1 : open.end;
+    const sectionEnd = i + 1 < delimiters.length ? delimiters[i + 1].start : text.length;
+    const content = text.substring(contentStart, sectionEnd).trim();
+    if (content.length > 0) {
+      sections.push({
+        fullMatch: text.substring(open.start, sectionEnd),
+        filename: open.filename,
+        content,
+        startIndex: open.start,
+        endIndex: sectionEnd
+      });
+    }
+  }
+  return sections;
+}
+function replaceFileSections(text, sections, replacement = (idx) => `_(See file: ${sections[idx].filename} above)_`) {
+  if (sections.length === 0) return text;
+  const sorted = [...sections].sort((a, b) => b.startIndex - a.startIndex);
+  let result = text;
+  sorted.forEach((section, sortedIndex) => {
+    const originalIndex = sections.length - 1 - sortedIndex;
+    const rep = typeof replacement === "function" ? replacement(originalIndex) : replacement;
+    result = result.slice(0, section.startIndex) + rep + result.slice(section.endIndex);
+  });
+  return result;
+}
+function formatSlackText(text) {
+  return markdownToSlack(text);
+}
+var import_child_process, fs5, path7, os;
+var init_markdown = __esm({
+  "src/slack/markdown.ts"() {
+    "use strict";
+    import_child_process = require("child_process");
+    fs5 = __toESM(require("fs"));
+    path7 = __toESM(require("path"));
+    os = __toESM(require("os"));
+  }
+});
+
 // src/ai-review-service.ts
 function log(...args) {
   logger.debug(args.join(" "));
@@ -7088,6 +7303,7 @@ var init_ai_review_service = __esm({
     init_tracer_init();
     init_diff_processor();
     init_comment_metadata();
+    init_markdown();
     AIReviewService = class {
       config;
       sessionRegistry;
@@ -8902,6 +9118,16 @@ ${"=".repeat(60)}
             if (rawOutputBlocks.length > 0) {
               out._rawOutput = rawOutputBlocks.join("\n\n");
             }
+            if (typeof out.text === "string" && typeof out._rawOutput === "string") {
+              const fileSections = extractFileSections(out.text);
+              if (fileSections.length > 0) {
+                const cleaned = replaceFileSections(out.text, fileSections, "").trim();
+                log(
+                  `\u{1F9F9} Stripped ${fileSections.length} file section(s) from text field (${out.text.length} \u2192 ${cleaned.length} chars) \u2014 content preserved in _rawOutput`
+                );
+                out.text = cleaned;
+              }
+            }
             const result2 = {
               // Keep issues empty for custom-schema rendering; consumers read from output.*
               issues: [],
@@ -9196,12 +9422,12 @@ var issue_filter_exports = {};
 __export(issue_filter_exports, {
   IssueFilter: () => IssueFilter
 });
-var fs5, path7, IssueFilter;
+var fs6, path8, IssueFilter;
 var init_issue_filter = __esm({
   "src/issue-filter.ts"() {
     "use strict";
-    fs5 = __toESM(require("fs"));
-    path7 = __toESM(require("path"));
+    fs6 = __toESM(require("fs"));
+    path8 = __toESM(require("path"));
     IssueFilter = class {
       fileCache = /* @__PURE__ */ new Map();
       suppressionEnabled;
@@ -9269,17 +9495,17 @@ var init_issue_filter = __esm({
           return this.fileCache.get(filePath);
         }
         try {
-          const resolvedPath = path7.isAbsolute(filePath) ? filePath : path7.join(workingDir, filePath);
-          if (!fs5.existsSync(resolvedPath)) {
-            if (fs5.existsSync(filePath)) {
-              const content2 = fs5.readFileSync(filePath, "utf8");
+          const resolvedPath = path8.isAbsolute(filePath) ? filePath : path8.join(workingDir, filePath);
+          if (!fs6.existsSync(resolvedPath)) {
+            if (fs6.existsSync(filePath)) {
+              const content2 = fs6.readFileSync(filePath, "utf8");
               const lines2 = content2.split("\n");
               this.fileCache.set(filePath, lines2);
               return lines2;
             }
             return null;
           }
-          const content = fs5.readFileSync(resolvedPath, "utf8");
+          const content = fs6.readFileSync(resolvedPath, "utf8");
           const lines = content.split("\n");
           this.fileCache.set(filePath, lines);
           return lines;
@@ -9303,11 +9529,11 @@ __export(command_executor_exports, {
   CommandExecutor: () => CommandExecutor,
   commandExecutor: () => commandExecutor
 });
-var import_child_process, import_util, CommandExecutor, commandExecutor;
+var import_child_process2, import_util, CommandExecutor, commandExecutor;
 var init_command_executor = __esm({
   "src/utils/command-executor.ts"() {
     "use strict";
-    import_child_process = require("child_process");
+    import_child_process2 = require("child_process");
     import_util = require("util");
     init_logger();
     CommandExecutor = class _CommandExecutor {
@@ -9324,7 +9550,7 @@ var init_command_executor = __esm({
        * Execute a shell command with optional stdin, environment, and timeout
        */
       async execute(command, options = {}) {
-        const execAsync = (0, import_util.promisify)(import_child_process.exec);
+        const execAsync = (0, import_util.promisify)(import_child_process2.exec);
         const timeout = options.timeout || 3e4;
         if (options.stdin) {
           return this.executeWithStdin(command, options);
@@ -9349,7 +9575,7 @@ var init_command_executor = __esm({
        */
       executeWithStdin(command, options) {
         return new Promise((resolve11, reject) => {
-          const childProcess = (0, import_child_process.exec)(
+          const childProcess = (0, import_child_process2.exec)(
             command,
             {
               cwd: options.cwd,
@@ -10029,7 +10255,9 @@ async function executeMappedApiTool(mappedTool, args) {
     }
   }
   const finalUrl = endpoint.toString() + "?" + queryParams.toString();
-  console.error(`[ApiToolExecutor] Calling URL: ${method} ${finalUrl} | args: ${JSON.stringify(args)}`);
+  console.error(
+    `[ApiToolExecutor] Calling URL: ${method} ${finalUrl} | args: ${JSON.stringify(args)}`
+  );
   let requestBodyValue;
   for (const param of parameters) {
     const name = String(param.name || "");
@@ -10468,12 +10696,12 @@ var workflow_registry_exports = {};
 __export(workflow_registry_exports, {
   WorkflowRegistry: () => WorkflowRegistry
 });
-var import_fs3, path9, yaml, import_ajv2, import_ajv_formats, WorkflowRegistry;
+var import_fs3, path10, yaml, import_ajv2, import_ajv_formats, WorkflowRegistry;
 var init_workflow_registry = __esm({
   "src/workflow-registry.ts"() {
     "use strict";
     import_fs3 = require("fs");
-    path9 = __toESM(require("path"));
+    path10 = __toESM(require("path"));
     yaml = __toESM(require("js-yaml"));
     init_logger();
     init_dependency_resolver();
@@ -10809,9 +11037,9 @@ var init_workflow_registry = __esm({
           const importBasePath = new URL(".", resolvedUrl).toString();
           return { content: await response.text(), resolvedSource: resolvedUrl, importBasePath };
         }
-        const filePath = path9.isAbsolute(source) ? source : path9.resolve(basePath || process.cwd(), source);
+        const filePath = path10.isAbsolute(source) ? source : path10.resolve(basePath || process.cwd(), source);
         const content = await import_fs3.promises.readFile(filePath, "utf-8");
-        return { content, resolvedSource: filePath, importBasePath: path9.dirname(filePath) };
+        return { content, resolvedSource: filePath, importBasePath: path10.dirname(filePath) };
       }
       /**
        * Parse workflow content (YAML or JSON)
@@ -11569,12 +11797,12 @@ var init_config_merger = __esm({
 });
 
 // src/utils/config-loader.ts
-var fs8, path10, yaml2, ConfigLoader;
+var fs9, path11, yaml2, ConfigLoader;
 var init_config_loader = __esm({
   "src/utils/config-loader.ts"() {
     "use strict";
-    fs8 = __toESM(require("fs"));
-    path10 = __toESM(require("path"));
+    fs9 = __toESM(require("fs"));
+    path11 = __toESM(require("path"));
     yaml2 = __toESM(require("js-yaml"));
     ConfigLoader = class {
       constructor(options = {}) {
@@ -11668,7 +11896,7 @@ var init_config_loader = __esm({
             return source.toLowerCase();
           case "local" /* LOCAL */:
             const basePath = this.options.baseDir || process.cwd();
-            return path10.resolve(basePath, source);
+            return path11.resolve(basePath, source);
           default:
             return source;
         }
@@ -11678,10 +11906,10 @@ var init_config_loader = __esm({
        */
       async fetchLocalConfig(filePath) {
         const basePath = this.options.baseDir || process.cwd();
-        const resolvedPath = path10.resolve(basePath, filePath);
+        const resolvedPath = path11.resolve(basePath, filePath);
         this.validateLocalPath(resolvedPath);
         try {
-          const content = fs8.readFileSync(resolvedPath, "utf8");
+          const content = fs9.readFileSync(resolvedPath, "utf8");
           const config = yaml2.load(content);
           if (!config || typeof config !== "object") {
             throw new Error(`Invalid YAML in configuration file: ${resolvedPath}`);
@@ -11691,9 +11919,9 @@ var init_config_loader = __esm({
             config.extends = Array.isArray(inc) ? inc : [inc];
             delete config.include;
           }
-          this.annotateToolsBaseDir(config, path10.dirname(resolvedPath));
+          this.annotateToolsBaseDir(config, path11.dirname(resolvedPath));
           const previousBaseDir = this.options.baseDir;
-          this.options.baseDir = path10.dirname(resolvedPath);
+          this.options.baseDir = path11.dirname(resolvedPath);
           try {
             if (config.extends) {
               const processedConfig = await this.processExtends(config);
@@ -11782,25 +12010,25 @@ var init_config_loader = __esm({
       async fetchDefaultConfig() {
         const possiblePaths = [
           // Only support new non-dot filename
-          path10.join(__dirname, "defaults", "visor.yaml"),
+          path11.join(__dirname, "defaults", "visor.yaml"),
           // When running from source
-          path10.join(__dirname, "..", "..", "defaults", "visor.yaml"),
+          path11.join(__dirname, "..", "..", "defaults", "visor.yaml"),
           // Try via package root
-          this.findPackageRoot() ? path10.join(this.findPackageRoot(), "defaults", "visor.yaml") : "",
+          this.findPackageRoot() ? path11.join(this.findPackageRoot(), "defaults", "visor.yaml") : "",
           // GitHub Action environment variable
-          process.env.GITHUB_ACTION_PATH ? path10.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml") : "",
-          process.env.GITHUB_ACTION_PATH ? path10.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml") : ""
+          process.env.GITHUB_ACTION_PATH ? path11.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml") : "",
+          process.env.GITHUB_ACTION_PATH ? path11.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml") : ""
         ].filter((p) => p);
         let defaultConfigPath;
         for (const possiblePath of possiblePaths) {
-          if (fs8.existsSync(possiblePath)) {
+          if (fs9.existsSync(possiblePath)) {
             defaultConfigPath = possiblePath;
             break;
           }
         }
         if (defaultConfigPath) {
           console.error(`\u{1F4E6} Loading bundled default configuration from ${defaultConfigPath}`);
-          const content = fs8.readFileSync(defaultConfigPath, "utf8");
+          const content = fs9.readFileSync(defaultConfigPath, "utf8");
           let config = yaml2.load(content);
           if (!config || typeof config !== "object") {
             throw new Error("Invalid default configuration");
@@ -11814,7 +12042,7 @@ var init_config_loader = __esm({
           if (config.extends) {
             const previousBaseDir = this.options.baseDir;
             try {
-              this.options.baseDir = path10.dirname(defaultConfigPath);
+              this.options.baseDir = path11.dirname(defaultConfigPath);
               return await this.processExtends(config);
             } finally {
               this.options.baseDir = previousBaseDir;
@@ -11892,16 +12120,16 @@ var init_config_loader = __esm({
       validateLocalPath(resolvedPath) {
         const projectRoot = this.options.projectRoot || process.cwd();
         const canonicalize = (p) => {
-          const resolved = path10.resolve(p);
+          const resolved = path11.resolve(p);
           try {
-            return path10.normalize(fs8.realpathSync.native(resolved));
+            return path11.normalize(fs9.realpathSync.native(resolved));
           } catch {
-            return path10.normalize(resolved);
+            return path11.normalize(resolved);
           }
         };
         const normalizedPath = canonicalize(resolvedPath);
         const normalizedRoot = canonicalize(projectRoot);
-        if (normalizedPath !== normalizedRoot && !normalizedPath.startsWith(`${normalizedRoot}${path10.sep}`)) {
+        if (normalizedPath !== normalizedRoot && !normalizedPath.startsWith(`${normalizedRoot}${path11.sep}`)) {
           throw new Error(
             `Security error: Path traversal detected. Cannot access files outside project root: ${projectRoot}`
           );
@@ -11926,19 +12154,19 @@ var init_config_loader = __esm({
        */
       findPackageRoot() {
         let currentDir = __dirname;
-        const root = path10.parse(currentDir).root;
+        const root = path11.parse(currentDir).root;
         while (currentDir !== root) {
-          const packageJsonPath = path10.join(currentDir, "package.json");
-          if (fs8.existsSync(packageJsonPath)) {
+          const packageJsonPath = path11.join(currentDir, "package.json");
+          if (fs9.existsSync(packageJsonPath)) {
             try {
-              const packageJson = JSON.parse(fs8.readFileSync(packageJsonPath, "utf8"));
+              const packageJson = JSON.parse(fs9.readFileSync(packageJsonPath, "utf8"));
               if (packageJson.name === "@probelabs/visor") {
                 return currentDir;
               }
             } catch {
             }
           }
-          currentDir = path10.dirname(currentDir);
+          currentDir = path11.dirname(currentDir);
         }
         return null;
       }
@@ -14875,13 +15103,13 @@ __export(config_exports, {
   ConfigManager: () => ConfigManager,
   VALID_EVENT_TRIGGERS: () => VALID_EVENT_TRIGGERS
 });
-var yaml3, fs9, path11, import_simple_git, import_ajv3, import_ajv_formats2, VALID_EVENT_TRIGGERS, ConfigManager, __ajvValidate, __ajvErrors;
+var yaml3, fs10, path12, import_simple_git, import_ajv3, import_ajv_formats2, VALID_EVENT_TRIGGERS, ConfigManager, __ajvValidate, __ajvErrors;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
     yaml3 = __toESM(require("js-yaml"));
-    fs9 = __toESM(require("fs"));
-    path11 = __toESM(require("path"));
+    fs10 = __toESM(require("fs"));
+    path12 = __toESM(require("path"));
     init_logger();
     import_simple_git = __toESM(require("simple-git"));
     init_config_loader();
@@ -14937,11 +15165,11 @@ var init_config = __esm({
        */
       async loadConfig(configPath, options = {}) {
         const { validate = true, mergeDefaults = true, allowedRemotePatterns } = options;
-        const resolvedPath = path11.isAbsolute(configPath) ? configPath : path11.resolve(process.cwd(), configPath);
+        const resolvedPath = path12.isAbsolute(configPath) ? configPath : path12.resolve(process.cwd(), configPath);
         try {
           let configContent;
           try {
-            configContent = fs9.readFileSync(resolvedPath, "utf8");
+            configContent = fs10.readFileSync(resolvedPath, "utf8");
           } catch (readErr) {
             if (readErr && (readErr.code === "ENOENT" || readErr.code === "ENOTDIR")) {
               throw new Error(`Configuration file not found: ${resolvedPath}`);
@@ -14963,7 +15191,7 @@ var init_config = __esm({
           const extendsValue = parsedConfig.extends || parsedConfig.include;
           if (extendsValue) {
             const loaderOptions = {
-              baseDir: path11.dirname(resolvedPath),
+              baseDir: path12.dirname(resolvedPath),
               allowRemote: this.isRemoteExtendsAllowed(),
               maxDepth: 10,
               allowedRemotePatterns
@@ -14982,11 +15210,11 @@ var init_config = __esm({
             parsedConfig = merger.removeDisabledChecks(parsedConfig);
           }
           if (parsedConfig.id && typeof parsedConfig.id === "string") {
-            parsedConfig = await this.convertWorkflowToConfig(parsedConfig, path11.dirname(resolvedPath));
+            parsedConfig = await this.convertWorkflowToConfig(parsedConfig, path12.dirname(resolvedPath));
           }
-          this.annotateToolBaseDirs(parsedConfig, path11.dirname(resolvedPath));
+          this.annotateToolBaseDirs(parsedConfig, path12.dirname(resolvedPath));
           parsedConfig = this.normalizeStepsAndChecks(parsedConfig, !!extendsValue);
-          await this.loadWorkflows(parsedConfig, path11.dirname(resolvedPath));
+          await this.loadWorkflows(parsedConfig, path12.dirname(resolvedPath));
           if (validate) {
             this.validateConfig(parsedConfig);
           }
@@ -15065,16 +15293,16 @@ var init_config = __esm({
         const searchDirs = [gitRoot, process.cwd()].filter(Boolean);
         for (const baseDir of searchDirs) {
           const candidates = ["visor.yaml", "visor.yml", ".visor.yaml", ".visor.yml"].map(
-            (p) => path11.join(baseDir, p)
+            (p) => path12.join(baseDir, p)
           );
           for (const p of candidates) {
             try {
-              const st = fs9.statSync(p);
+              const st = fs10.statSync(p);
               if (!st.isFile()) continue;
-              const isLegacy = path11.basename(p).startsWith(".");
+              const isLegacy = path12.basename(p).startsWith(".");
               if (isLegacy) {
                 if (process.env.VISOR_STRICT_CONFIG_NAME === "true") {
-                  const rel = path11.relative(baseDir, p);
+                  const rel = path12.relative(baseDir, p);
                   throw new Error(
                     `Legacy config detected: ${rel}. Please rename to visor.yaml (or visor.yml).`
                   );
@@ -15137,23 +15365,23 @@ var init_config = __esm({
           const possiblePaths = [];
           if (typeof __dirname !== "undefined") {
             possiblePaths.push(
-              path11.join(__dirname, "defaults", "visor.yaml"),
-              path11.join(__dirname, "..", "defaults", "visor.yaml")
+              path12.join(__dirname, "defaults", "visor.yaml"),
+              path12.join(__dirname, "..", "defaults", "visor.yaml")
             );
           }
           const pkgRoot = this.findPackageRoot();
           if (pkgRoot) {
-            possiblePaths.push(path11.join(pkgRoot, "defaults", "visor.yaml"));
+            possiblePaths.push(path12.join(pkgRoot, "defaults", "visor.yaml"));
           }
           if (process.env.GITHUB_ACTION_PATH) {
             possiblePaths.push(
-              path11.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml"),
-              path11.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml")
+              path12.join(process.env.GITHUB_ACTION_PATH, "defaults", "visor.yaml"),
+              path12.join(process.env.GITHUB_ACTION_PATH, "dist", "defaults", "visor.yaml")
             );
           }
           let bundledConfigPath;
           for (const possiblePath of possiblePaths) {
-            if (fs9.existsSync(possiblePath)) {
+            if (fs10.existsSync(possiblePath)) {
               bundledConfigPath = possiblePath;
               break;
             }
@@ -15161,7 +15389,7 @@ var init_config = __esm({
           if (bundledConfigPath) {
             console.error(`\u{1F4E6} Loading bundled default configuration from ${bundledConfigPath}`);
             const readAndParse = (p) => {
-              const raw = fs9.readFileSync(p, "utf8");
+              const raw = fs10.readFileSync(p, "utf8");
               const obj = yaml3.load(raw);
               if (!obj || typeof obj !== "object") return {};
               if (obj.include && !obj.extends) {
@@ -15171,7 +15399,7 @@ var init_config = __esm({
               }
               return obj;
             };
-            const baseDir = path11.dirname(bundledConfigPath);
+            const baseDir = path12.dirname(bundledConfigPath);
             const merger = new (init_config_merger(), __toCommonJS(config_merger_exports)).ConfigMerger();
             const loadWithExtendsSync = (p) => {
               const current = readAndParse(p);
@@ -15183,7 +15411,7 @@ var init_config = __esm({
               let acc = {};
               for (const src of list) {
                 const rel = typeof src === "string" ? src : String(src);
-                const abs = path11.isAbsolute(rel) ? rel : path11.resolve(baseDir, rel);
+                const abs = path12.isAbsolute(rel) ? rel : path12.resolve(baseDir, rel);
                 const parentCfg = loadWithExtendsSync(abs);
                 acc = merger.merge(acc, parentCfg);
               }
@@ -15207,18 +15435,18 @@ var init_config = __esm({
        */
       findPackageRoot() {
         let currentDir = __dirname;
-        while (currentDir !== path11.dirname(currentDir)) {
-          const packageJsonPath = path11.join(currentDir, "package.json");
-          if (fs9.existsSync(packageJsonPath)) {
+        while (currentDir !== path12.dirname(currentDir)) {
+          const packageJsonPath = path12.join(currentDir, "package.json");
+          if (fs10.existsSync(packageJsonPath)) {
             try {
-              const packageJson = JSON.parse(fs9.readFileSync(packageJsonPath, "utf8"));
+              const packageJson = JSON.parse(fs10.readFileSync(packageJsonPath, "utf8"));
               if (packageJson.name === "@probelabs/visor") {
                 return currentDir;
               }
             } catch {
             }
           }
-          currentDir = path11.dirname(currentDir);
+          currentDir = path12.dirname(currentDir);
         }
         return null;
       }
@@ -16026,7 +16254,7 @@ ${errors}`);
         if (policy.engine === "local" && policy.rules) {
           const rulesPath = Array.isArray(policy.rules) ? policy.rules : [policy.rules];
           for (const rp of rulesPath) {
-            if (typeof rp === "string" && !fs9.existsSync(path11.resolve(rp))) {
+            if (typeof rp === "string" && !fs10.existsSync(path12.resolve(rp))) {
               warnings.push({
                 field: "policy.rules",
                 message: `Policy rules path does not exist: ${rp}. It will be resolved at runtime.`,
@@ -16076,7 +16304,7 @@ ${errors}`);
             });
           }
         }
-        if (policy.data && typeof policy.data === "string" && !fs9.existsSync(path11.resolve(policy.data))) {
+        if (policy.data && typeof policy.data === "string" && !fs10.existsSync(path12.resolve(policy.data))) {
           warnings.push({
             field: "policy.data",
             message: `Policy data file does not exist: ${policy.data}. It will be resolved at runtime.`,
@@ -16226,7 +16454,7 @@ ${errors}`);
         try {
           if (!__ajvValidate) {
             try {
-              const jsonPath = path11.resolve(__dirname, "generated", "config-schema.json");
+              const jsonPath = path12.resolve(__dirname, "generated", "config-schema.json");
               const jsonSchema = require(jsonPath);
               if (jsonSchema) {
                 const ajv = new import_ajv3.default({ allErrors: true, allowUnionTypes: true, strict: false });
@@ -16483,7 +16711,7 @@ var workflow_check_provider_exports = {};
 __export(workflow_check_provider_exports, {
   WorkflowCheckProvider: () => WorkflowCheckProvider
 });
-var path12, yaml4, WorkflowCheckProvider;
+var path13, yaml4, WorkflowCheckProvider;
 var init_workflow_check_provider = __esm({
   "src/providers/workflow-check-provider.ts"() {
     "use strict";
@@ -16494,7 +16722,7 @@ var init_workflow_check_provider = __esm({
     init_sandbox();
     init_human_id();
     init_liquid_extensions();
-    path12 = __toESM(require("path"));
+    path13 = __toESM(require("path"));
     yaml4 = __toESM(require("js-yaml"));
     WorkflowCheckProvider = class extends CheckProvider {
       registry;
@@ -16703,13 +16931,13 @@ var init_workflow_check_provider = __esm({
         const loadConfigLiquid = createExtendedLiquid();
         const loadConfig2 = (filePath) => {
           try {
-            const normalizedBasePath = path12.normalize(basePath);
-            const resolvedPath = path12.isAbsolute(filePath) ? path12.normalize(filePath) : path12.normalize(path12.resolve(basePath, filePath));
-            const basePathWithSep = normalizedBasePath.endsWith(path12.sep) ? normalizedBasePath : normalizedBasePath + path12.sep;
+            const normalizedBasePath = path13.normalize(basePath);
+            const resolvedPath = path13.isAbsolute(filePath) ? path13.normalize(filePath) : path13.normalize(path13.resolve(basePath, filePath));
+            const basePathWithSep = normalizedBasePath.endsWith(path13.sep) ? normalizedBasePath : normalizedBasePath + path13.sep;
             if (!resolvedPath.startsWith(basePathWithSep) && resolvedPath !== normalizedBasePath) {
               throw new Error(`Path '${filePath}' escapes base directory`);
             }
-            const configDir = path12.dirname(resolvedPath);
+            const configDir = path13.dirname(resolvedPath);
             const rawContent = require("fs").readFileSync(resolvedPath, "utf-8");
             const renderedContent = loadConfigLiquid.parseAndRenderSync(rawContent, {
               basePath: configDir
@@ -21969,7 +22197,7 @@ var init_template_context = __esm({
 });
 
 // src/providers/http-client-provider.ts
-var fs13, path16, HttpClientProvider;
+var fs14, path17, HttpClientProvider;
 var init_http_client_provider = __esm({
   "src/providers/http-client-provider.ts"() {
     "use strict";
@@ -21979,8 +22207,8 @@ var init_http_client_provider = __esm({
     init_sandbox();
     init_template_context();
     init_logger();
-    fs13 = __toESM(require("fs"));
-    path16 = __toESM(require("path"));
+    fs14 = __toESM(require("fs"));
+    path17 = __toESM(require("path"));
     HttpClientProvider = class extends CheckProvider {
       liquid;
       sandbox;
@@ -22075,14 +22303,14 @@ var init_http_client_provider = __esm({
             const parentContext = context2?._parentContext;
             const workingDirectory = parentContext?.workingDirectory;
             const workspaceEnabled = parentContext?.workspace?.isEnabled?.();
-            if (workspaceEnabled && workingDirectory && !path16.isAbsolute(resolvedOutputFile)) {
-              resolvedOutputFile = path16.join(workingDirectory, resolvedOutputFile);
+            if (workspaceEnabled && workingDirectory && !path17.isAbsolute(resolvedOutputFile)) {
+              resolvedOutputFile = path17.join(workingDirectory, resolvedOutputFile);
               logger.debug(
                 `[http_client] Resolved relative output_file to workspace: ${resolvedOutputFile}`
               );
             }
-            if (skipIfExists && fs13.existsSync(resolvedOutputFile)) {
-              const stats = fs13.statSync(resolvedOutputFile);
+            if (skipIfExists && fs14.existsSync(resolvedOutputFile)) {
+              const stats = fs14.statSync(resolvedOutputFile);
               logger.verbose(`[http_client] File cached: ${resolvedOutputFile} (${stats.size} bytes)`);
               return {
                 issues: [],
@@ -22293,13 +22521,13 @@ var init_http_client_provider = __esm({
               ]
             };
           }
-          const parentDir = path16.dirname(outputFile);
-          if (parentDir && !fs13.existsSync(parentDir)) {
-            fs13.mkdirSync(parentDir, { recursive: true });
+          const parentDir = path17.dirname(outputFile);
+          if (parentDir && !fs14.existsSync(parentDir)) {
+            fs14.mkdirSync(parentDir, { recursive: true });
           }
           const arrayBuffer = await response.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
-          fs13.writeFileSync(outputFile, buffer);
+          fs14.writeFileSync(outputFile, buffer);
           const contentType = response.headers.get("content-type") || "application/octet-stream";
           logger.verbose(`[http_client] Downloaded: ${outputFile} (${buffer.length} bytes)`);
           return {
@@ -43364,7 +43592,7 @@ var init_stdin_reader = __esm({
 });
 
 // src/providers/human-input-check-provider.ts
-var fs15, path18, HumanInputCheckProvider;
+var fs16, path19, HumanInputCheckProvider;
 var init_human_input_check_provider = __esm({
   "src/providers/human-input-check-provider.ts"() {
     "use strict";
@@ -43373,8 +43601,8 @@ var init_human_input_check_provider = __esm({
     init_prompt_state();
     init_liquid_extensions();
     init_stdin_reader();
-    fs15 = __toESM(require("fs"));
-    path18 = __toESM(require("path"));
+    fs16 = __toESM(require("fs"));
+    path19 = __toESM(require("path"));
     HumanInputCheckProvider = class _HumanInputCheckProvider extends CheckProvider {
       liquid;
       /**
@@ -43548,19 +43776,19 @@ var init_human_input_check_provider = __esm({
        */
       async tryReadFile(filePath) {
         try {
-          const absolutePath = path18.isAbsolute(filePath) ? filePath : path18.resolve(process.cwd(), filePath);
-          const normalizedPath = path18.normalize(absolutePath);
+          const absolutePath = path19.isAbsolute(filePath) ? filePath : path19.resolve(process.cwd(), filePath);
+          const normalizedPath = path19.normalize(absolutePath);
           const cwd = process.cwd();
-          if (!normalizedPath.startsWith(cwd + path18.sep) && normalizedPath !== cwd) {
+          if (!normalizedPath.startsWith(cwd + path19.sep) && normalizedPath !== cwd) {
             return null;
           }
           try {
-            await fs15.promises.access(normalizedPath, fs15.constants.R_OK);
-            const stats = await fs15.promises.stat(normalizedPath);
+            await fs16.promises.access(normalizedPath, fs16.constants.R_OK);
+            const stats = await fs16.promises.stat(normalizedPath);
             if (!stats.isFile()) {
               return null;
             }
-            const content = await fs15.promises.readFile(normalizedPath, "utf-8");
+            const content = await fs16.promises.readFile(normalizedPath, "utf-8");
             return content.trim();
           } catch {
             return null;
@@ -44706,13 +44934,13 @@ var init_script_check_provider = __esm({
 });
 
 // src/utils/worktree-manager.ts
-var fs16, fsp, path19, crypto, WorktreeManager, worktreeManager;
+var fs17, fsp, path20, crypto, WorktreeManager, worktreeManager;
 var init_worktree_manager = __esm({
   "src/utils/worktree-manager.ts"() {
     "use strict";
-    fs16 = __toESM(require("fs"));
+    fs17 = __toESM(require("fs"));
     fsp = __toESM(require("fs/promises"));
-    path19 = __toESM(require("path"));
+    path20 = __toESM(require("path"));
     crypto = __toESM(require("crypto"));
     init_command_executor();
     init_logger();
@@ -44728,7 +44956,7 @@ var init_worktree_manager = __esm({
         } catch {
           cwd = "/tmp";
         }
-        const defaultBasePath = process.env.VISOR_WORKTREE_PATH || path19.join(cwd, ".visor", "worktrees");
+        const defaultBasePath = process.env.VISOR_WORKTREE_PATH || path20.join(cwd, ".visor", "worktrees");
         this.config = {
           enabled: true,
           base_path: defaultBasePath,
@@ -44765,20 +44993,20 @@ var init_worktree_manager = __esm({
         }
         const reposDir = this.getReposDir();
         const worktreesDir = this.getWorktreesDir();
-        if (!fs16.existsSync(reposDir)) {
-          fs16.mkdirSync(reposDir, { recursive: true });
+        if (!fs17.existsSync(reposDir)) {
+          fs17.mkdirSync(reposDir, { recursive: true });
           logger.debug(`Created repos directory: ${reposDir}`);
         }
-        if (!fs16.existsSync(worktreesDir)) {
-          fs16.mkdirSync(worktreesDir, { recursive: true });
+        if (!fs17.existsSync(worktreesDir)) {
+          fs17.mkdirSync(worktreesDir, { recursive: true });
           logger.debug(`Created worktrees directory: ${worktreesDir}`);
         }
       }
       getReposDir() {
-        return path19.join(this.config.base_path, "repos");
+        return path20.join(this.config.base_path, "repos");
       }
       getWorktreesDir() {
-        return path19.join(this.config.base_path, "worktrees");
+        return path20.join(this.config.base_path, "worktrees");
       }
       /**
        * Generate a deterministic worktree ID based on repository and ref.
@@ -44796,8 +45024,8 @@ var init_worktree_manager = __esm({
       async getOrCreateBareRepo(repository, repoUrl, token, fetchDepth, cloneTimeoutMs) {
         const reposDir = this.getReposDir();
         const repoName = repository.replace(/\//g, "-");
-        const bareRepoPath = path19.join(reposDir, `${repoName}.git`);
-        if (fs16.existsSync(bareRepoPath)) {
+        const bareRepoPath = path20.join(reposDir, `${repoName}.git`);
+        if (fs17.existsSync(bareRepoPath)) {
           logger.debug(`Bare repository already exists: ${bareRepoPath}`);
           const verifyResult = await this.verifyBareRepoRemote(bareRepoPath, repoUrl);
           if (verifyResult === "timeout") {
@@ -44916,11 +45144,11 @@ var init_worktree_manager = __esm({
           options.cloneTimeoutMs
         );
         const worktreeId = this.generateWorktreeId(repository, ref);
-        let worktreePath = options.workingDirectory || path19.join(this.getWorktreesDir(), worktreeId);
+        let worktreePath = options.workingDirectory || path20.join(this.getWorktreesDir(), worktreeId);
         if (options.workingDirectory) {
           worktreePath = this.validatePath(options.workingDirectory);
         }
-        if (fs16.existsSync(worktreePath)) {
+        if (fs17.existsSync(worktreePath)) {
           logger.debug(`Worktree already exists: ${worktreePath}`);
           const metadata2 = await this.loadMetadata(worktreePath);
           if (metadata2) {
@@ -45161,9 +45389,9 @@ var init_worktree_manager = __esm({
         const result = await this.executeGitCommand(removeCmd, { timeout: 3e4 });
         if (result.exitCode !== 0) {
           logger.warn(`Failed to remove worktree via git: ${result.stderr}`);
-          if (fs16.existsSync(worktree_path)) {
+          if (fs17.existsSync(worktree_path)) {
             logger.debug(`Manually removing worktree directory`);
-            fs16.rmSync(worktree_path, { recursive: true, force: true });
+            fs17.rmSync(worktree_path, { recursive: true, force: true });
           }
         }
         this.activeWorktrees.delete(worktreeId);
@@ -45173,19 +45401,19 @@ var init_worktree_manager = __esm({
        * Save worktree metadata
        */
       async saveMetadata(worktreePath, metadata) {
-        const metadataPath = path19.join(worktreePath, ".visor-metadata.json");
-        fs16.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
+        const metadataPath = path20.join(worktreePath, ".visor-metadata.json");
+        fs17.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
       }
       /**
        * Load worktree metadata
        */
       async loadMetadata(worktreePath) {
-        const metadataPath = path19.join(worktreePath, ".visor-metadata.json");
-        if (!fs16.existsSync(metadataPath)) {
+        const metadataPath = path20.join(worktreePath, ".visor-metadata.json");
+        if (!fs17.existsSync(metadataPath)) {
           return null;
         }
         try {
-          const content = fs16.readFileSync(metadataPath, "utf8");
+          const content = fs17.readFileSync(metadataPath, "utf8");
           return JSON.parse(content);
         } catch (error) {
           logger.warn(`Failed to load metadata: ${error}`);
@@ -45197,14 +45425,14 @@ var init_worktree_manager = __esm({
        */
       async listWorktrees() {
         const worktreesDir = this.getWorktreesDir();
-        if (!fs16.existsSync(worktreesDir)) {
+        if (!fs17.existsSync(worktreesDir)) {
           return [];
         }
-        const entries = fs16.readdirSync(worktreesDir, { withFileTypes: true });
+        const entries = fs17.readdirSync(worktreesDir, { withFileTypes: true });
         const worktrees = [];
         for (const entry of entries) {
           if (!entry.isDirectory()) continue;
-          const worktreePath = path19.join(worktreesDir, entry.name);
+          const worktreePath = path20.join(worktreesDir, entry.name);
           const metadata = await this.loadMetadata(worktreePath);
           if (metadata) {
             worktrees.push({
@@ -45336,8 +45564,8 @@ var init_worktree_manager = __esm({
        * Validate path to prevent directory traversal
        */
       validatePath(userPath) {
-        const resolvedPath = path19.resolve(userPath);
-        if (!path19.isAbsolute(resolvedPath)) {
+        const resolvedPath = path20.resolve(userPath);
+        if (!path20.isAbsolute(resolvedPath)) {
           throw new Error("Path must be absolute");
         }
         const sensitivePatterns = [
@@ -50438,19 +50666,19 @@ var init_runner = __esm({
 });
 
 // src/sandbox/docker-image-sandbox.ts
-var import_util2, import_child_process2, import_fs5, import_path9, import_os, import_crypto2, execFileAsync, EXEC_MAX_BUFFER, DockerImageSandbox;
+var import_util2, import_child_process3, import_fs5, import_path9, import_os, import_crypto2, execFileAsync, EXEC_MAX_BUFFER, DockerImageSandbox;
 var init_docker_image_sandbox = __esm({
   "src/sandbox/docker-image-sandbox.ts"() {
     "use strict";
     import_util2 = require("util");
-    import_child_process2 = require("child_process");
+    import_child_process3 = require("child_process");
     import_fs5 = require("fs");
     import_path9 = require("path");
     import_os = require("os");
     import_crypto2 = require("crypto");
     init_logger();
     init_sandbox_telemetry();
-    execFileAsync = (0, import_util2.promisify)(import_child_process2.execFile);
+    execFileAsync = (0, import_util2.promisify)(import_child_process3.execFile);
     EXEC_MAX_BUFFER = 50 * 1024 * 1024;
     DockerImageSandbox = class {
       name;
@@ -50622,15 +50850,15 @@ var init_docker_image_sandbox = __esm({
 });
 
 // src/sandbox/docker-compose-sandbox.ts
-var import_util3, import_child_process3, import_crypto3, execFileAsync2, EXEC_MAX_BUFFER2, DockerComposeSandbox;
+var import_util3, import_child_process4, import_crypto3, execFileAsync2, EXEC_MAX_BUFFER2, DockerComposeSandbox;
 var init_docker_compose_sandbox = __esm({
   "src/sandbox/docker-compose-sandbox.ts"() {
     "use strict";
     import_util3 = require("util");
-    import_child_process3 = require("child_process");
+    import_child_process4 = require("child_process");
     import_crypto3 = require("crypto");
     init_logger();
-    execFileAsync2 = (0, import_util3.promisify)(import_child_process3.execFile);
+    execFileAsync2 = (0, import_util3.promisify)(import_child_process4.execFile);
     EXEC_MAX_BUFFER2 = 50 * 1024 * 1024;
     DockerComposeSandbox = class {
       name;
@@ -50744,15 +50972,15 @@ function parseTtl(ttl) {
   if (minMatch) ms += parseInt(minMatch[1], 10) * 6e4;
   return ms || 6048e5;
 }
-var import_util4, import_child_process4, import_crypto4, execFileAsync3, EXEC_MAX_BUFFER3, CacheVolumeManager;
+var import_util4, import_child_process5, import_crypto4, execFileAsync3, EXEC_MAX_BUFFER3, CacheVolumeManager;
 var init_cache_volume_manager = __esm({
   "src/sandbox/cache-volume-manager.ts"() {
     "use strict";
     import_util4 = require("util");
-    import_child_process4 = require("child_process");
+    import_child_process5 = require("child_process");
     import_crypto4 = require("crypto");
     init_logger();
-    execFileAsync3 = (0, import_util4.promisify)(import_child_process4.execFile);
+    execFileAsync3 = (0, import_util4.promisify)(import_child_process5.execFile);
     EXEC_MAX_BUFFER3 = 10 * 1024 * 1024;
     CacheVolumeManager = class {
       /**
@@ -51072,13 +51300,13 @@ var init_sandbox_manager = __esm({
 });
 
 // src/utils/file-exclusion.ts
-var import_ignore, fs17, path20, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
+var import_ignore, fs18, path21, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
 var init_file_exclusion = __esm({
   "src/utils/file-exclusion.ts"() {
     "use strict";
     import_ignore = __toESM(require("ignore"));
-    fs17 = __toESM(require("fs"));
-    path20 = __toESM(require("path"));
+    fs18 = __toESM(require("fs"));
+    path21 = __toESM(require("path"));
     DEFAULT_EXCLUSION_PATTERNS = [
       "dist/",
       "build/",
@@ -51097,7 +51325,7 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to include (optional, defaults to common build artifacts)
        */
       constructor(workingDirectory = process.cwd(), additionalPatterns = DEFAULT_EXCLUSION_PATTERNS) {
-        const normalizedPath = path20.resolve(workingDirectory);
+        const normalizedPath = path21.resolve(workingDirectory);
         if (normalizedPath.includes("\0")) {
           throw new Error("Invalid workingDirectory: contains null bytes");
         }
@@ -51109,11 +51337,11 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to add to gitignore rules
        */
       loadGitignore(additionalPatterns) {
-        const gitignorePath = path20.resolve(this.workingDirectory, ".gitignore");
-        const resolvedWorkingDir = path20.resolve(this.workingDirectory);
+        const gitignorePath = path21.resolve(this.workingDirectory, ".gitignore");
+        const resolvedWorkingDir = path21.resolve(this.workingDirectory);
         try {
-          const relativePath = path20.relative(resolvedWorkingDir, gitignorePath);
-          if (relativePath.startsWith("..") || path20.isAbsolute(relativePath)) {
+          const relativePath = path21.relative(resolvedWorkingDir, gitignorePath);
+          if (relativePath.startsWith("..") || path21.isAbsolute(relativePath)) {
             throw new Error("Invalid gitignore path: path traversal detected");
           }
           if (relativePath !== ".gitignore") {
@@ -51123,8 +51351,8 @@ var init_file_exclusion = __esm({
           if (additionalPatterns && additionalPatterns.length > 0) {
             this.gitignore.add(additionalPatterns);
           }
-          if (fs17.existsSync(gitignorePath)) {
-            const rawContent = fs17.readFileSync(gitignorePath, "utf8");
+          if (fs18.existsSync(gitignorePath)) {
+            const rawContent = fs18.readFileSync(gitignorePath, "utf8");
             const gitignoreContent = rawContent.replace(/[\r\n]+/g, "\n").replace(/[\x00-\x09\x0B-\x1F\x7F]/g, "").split("\n").filter((line) => line.length < 1e3).join("\n").trim();
             this.gitignore.add(gitignoreContent);
             if (process.env.VISOR_DEBUG === "true") {
@@ -51156,13 +51384,13 @@ var git_repository_analyzer_exports = {};
 __export(git_repository_analyzer_exports, {
   GitRepositoryAnalyzer: () => GitRepositoryAnalyzer
 });
-var import_simple_git2, path21, fs18, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
+var import_simple_git2, path22, fs19, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
 var init_git_repository_analyzer = __esm({
   "src/git-repository-analyzer.ts"() {
     "use strict";
     import_simple_git2 = require("simple-git");
-    path21 = __toESM(require("path"));
-    fs18 = __toESM(require("fs"));
+    path22 = __toESM(require("path"));
+    fs19 = __toESM(require("fs"));
     init_file_exclusion();
     MAX_PATCH_SIZE = 50 * 1024;
     GitRepositoryAnalyzer = class {
@@ -51351,7 +51579,7 @@ ${file.patch}`).join("\n\n");
               console.error(`\u23ED\uFE0F  Skipping excluded file: ${file}`);
               continue;
             }
-            const filePath = path21.join(this.cwd, file);
+            const filePath = path22.join(this.cwd, file);
             const fileChange = await this.analyzeFileChange(file, status2, filePath, includeContext);
             changes.push(fileChange);
           }
@@ -51427,7 +51655,7 @@ ${file.patch}`).join("\n\n");
         let content;
         let truncated = false;
         try {
-          if (includeContext && status !== "added" && fs18.existsSync(filePath)) {
+          if (includeContext && status !== "added" && fs19.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const result = this.truncatePatch(diff, filename);
@@ -51437,7 +51665,7 @@ ${file.patch}`).join("\n\n");
               additions = lines.filter((line) => line.startsWith("+")).length;
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
-          } else if (status !== "added" && fs18.existsSync(filePath)) {
+          } else if (status !== "added" && fs19.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const lines = diff.split("\n");
@@ -51445,17 +51673,17 @@ ${file.patch}`).join("\n\n");
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
           }
-          if (status === "added" && fs18.existsSync(filePath)) {
+          if (status === "added" && fs19.existsSync(filePath)) {
             try {
-              const stats = fs18.statSync(filePath);
+              const stats = fs19.statSync(filePath);
               if (stats.isFile() && stats.size < 1024 * 1024) {
                 if (includeContext) {
-                  content = fs18.readFileSync(filePath, "utf8");
+                  content = fs19.readFileSync(filePath, "utf8");
                   const result = this.truncatePatch(content, filename);
                   patch = result.patch;
                   truncated = result.truncated;
                 }
-                const fileContent = includeContext ? content : fs18.readFileSync(filePath, "utf8");
+                const fileContent = includeContext ? content : fs19.readFileSync(filePath, "utf8");
                 additions = fileContent.split("\n").length;
               }
             } catch {
@@ -51546,12 +51774,12 @@ function shellEscape(str) {
 function sanitizePathComponent(name) {
   return name.replace(/\.\./g, "").replace(/[\/\\]/g, "-").replace(/^\.+/, "").trim() || "unnamed";
 }
-var fsp2, path22, WorkspaceManager;
+var fsp2, path23, WorkspaceManager;
 var init_workspace_manager = __esm({
   "src/utils/workspace-manager.ts"() {
     "use strict";
     fsp2 = __toESM(require("fs/promises"));
-    path22 = __toESM(require("path"));
+    path23 = __toESM(require("path"));
     init_command_executor();
     init_logger();
     WorkspaceManager = class _WorkspaceManager {
@@ -51585,7 +51813,7 @@ var init_workspace_manager = __esm({
         };
         this.basePath = this.config.basePath;
         const workspaceDirName = sanitizePathComponent(this.config.name || this.sessionId);
-        this.workspacePath = path22.join(this.basePath, workspaceDirName);
+        this.workspacePath = path23.join(this.basePath, workspaceDirName);
       }
       /**
        * Get or create a WorkspaceManager instance for a session
@@ -51680,7 +51908,7 @@ var init_workspace_manager = __esm({
           configuredMainProjectName || this.extractProjectName(this.originalPath)
         );
         this.usedNames.add(mainProjectName);
-        const mainProjectPath = path22.join(this.workspacePath, mainProjectName);
+        const mainProjectPath = path23.join(this.workspacePath, mainProjectName);
         const isGitRepo = await this.isGitRepository(this.originalPath);
         if (isGitRepo) {
           await this.createMainProjectWorktree(mainProjectPath);
@@ -51721,7 +51949,7 @@ var init_workspace_manager = __esm({
         let projectName = sanitizePathComponent(description || this.extractRepoName(repository));
         projectName = this.getUniqueName(projectName);
         this.usedNames.add(projectName);
-        const workspacePath = path22.join(this.workspacePath, projectName);
+        const workspacePath = path23.join(this.workspacePath, projectName);
         await fsp2.rm(workspacePath, { recursive: true, force: true });
         try {
           await fsp2.symlink(worktreePath, workspacePath);
@@ -51860,7 +52088,7 @@ var init_workspace_manager = __esm({
        * Extract project name from path
        */
       extractProjectName(dirPath) {
-        return path22.basename(dirPath);
+        return path23.basename(dirPath);
       }
       /**
        * Extract repository name from owner/repo format
@@ -53839,221 +54067,6 @@ var init_client = __esm({
         return await res.json();
       }
     };
-  }
-});
-
-// src/slack/markdown.ts
-function extractMermaidDiagrams(text) {
-  const diagrams = [];
-  const regex = /```mermaid\s*\n([\s\S]*?)```/g;
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    diagrams.push({
-      fullMatch: match[0],
-      code: match[1].trim(),
-      startIndex: match.index,
-      endIndex: match.index + match[0].length
-    });
-  }
-  return diagrams;
-}
-async function renderMermaidToPng(mermaidCode) {
-  const tmpDir = os.tmpdir();
-  const inputFile = path24.join(
-    tmpDir,
-    `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}.mmd`
-  );
-  const outputFile = path24.join(
-    tmpDir,
-    `mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}.png`
-  );
-  try {
-    fs20.writeFileSync(inputFile, mermaidCode, "utf-8");
-    const chromiumPaths = [
-      "/usr/bin/chromium",
-      "/usr/bin/chromium-browser",
-      "/usr/bin/google-chrome",
-      "/usr/bin/chrome"
-    ];
-    let chromiumPath;
-    for (const p of chromiumPaths) {
-      if (fs20.existsSync(p)) {
-        chromiumPath = p;
-        break;
-      }
-    }
-    const env = { ...process.env };
-    if (chromiumPath) {
-      env.PUPPETEER_EXECUTABLE_PATH = chromiumPath;
-    }
-    const result = await new Promise((resolve11) => {
-      const proc = (0, import_child_process5.spawn)(
-        "npx",
-        [
-          "--yes",
-          "@mermaid-js/mermaid-cli",
-          "-i",
-          inputFile,
-          "-o",
-          outputFile,
-          "-e",
-          "png",
-          "-b",
-          "white",
-          "-w",
-          "1200"
-        ],
-        {
-          timeout: 6e4,
-          // 60 second timeout (first run may download packages)
-          stdio: ["pipe", "pipe", "pipe"],
-          env
-        }
-      );
-      let stderr = "";
-      proc.stderr?.on("data", (data) => {
-        stderr += data.toString();
-      });
-      proc.on("close", (code) => {
-        if (code === 0) {
-          resolve11({ success: true });
-        } else {
-          resolve11({ success: false, error: stderr || `Exit code ${code}` });
-        }
-      });
-      proc.on("error", (err) => {
-        resolve11({ success: false, error: err.message });
-      });
-    });
-    if (!result.success) {
-      console.warn(`Mermaid rendering failed: ${result.error}`);
-      return null;
-    }
-    if (!fs20.existsSync(outputFile)) {
-      console.warn("Mermaid output file not created");
-      return null;
-    }
-    const pngBuffer = fs20.readFileSync(outputFile);
-    return pngBuffer;
-  } catch (e) {
-    console.warn(`Mermaid rendering error: ${e instanceof Error ? e.message : String(e)}`);
-    return null;
-  } finally {
-    try {
-      if (fs20.existsSync(inputFile)) fs20.unlinkSync(inputFile);
-      if (fs20.existsSync(outputFile)) fs20.unlinkSync(outputFile);
-    } catch {
-    }
-  }
-}
-function replaceMermaidBlocks(text, diagrams, replacement = "_(See diagram above)_") {
-  if (diagrams.length === 0) return text;
-  const sorted = [...diagrams].sort((a, b) => b.startIndex - a.startIndex);
-  let result = text;
-  sorted.forEach((diagram, sortedIndex) => {
-    const originalIndex = diagrams.length - 1 - sortedIndex;
-    const rep = typeof replacement === "function" ? replacement(originalIndex) : replacement;
-    result = result.slice(0, diagram.startIndex) + rep + result.slice(diagram.endIndex);
-  });
-  return result;
-}
-function markdownToSlack(text) {
-  if (!text || typeof text !== "string") return "";
-  let out = text;
-  out = out.replace(
-    /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
-    (_m, alt, url) => `<${url}|${alt || "image"}>`
-  );
-  out = out.replace(
-    /\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
-    (_m, label, url) => `<${url}|${label}>`
-  );
-  out = out.replace(/\*\*([^*]+)\*\*/g, (_m, inner) => `*${inner}*`);
-  out = out.replace(/__([^_]+)__/g, (_m, inner) => `*${inner}*`);
-  const lines = out.split(/\r?\n/);
-  let inCodeBlock = false;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trimStart();
-    if (/^```/.test(trimmed)) {
-      inCodeBlock = !inCodeBlock;
-      continue;
-    }
-    if (inCodeBlock) continue;
-    const headerMatch = /^(#{1,6})\s+(.+)$/.exec(trimmed);
-    if (headerMatch) {
-      const [, hashes, headerText] = headerMatch;
-      const prevLine = i > 0 ? lines[i - 1].trim() : "";
-      const prevIsHeaderOrFence = /^#{1,6}\s+/.test(prevLine) || /^\*[^*]+\*$/.test(prevLine) || /^```/.test(prevLine);
-      if (hashes.length <= 2 && i > 0 && prevLine !== "" && !prevIsHeaderOrFence) {
-        lines[i] = `
-*${headerText.trim()}*`;
-      } else {
-        lines[i] = `*${headerText.trim()}*`;
-      }
-      continue;
-    }
-    const bulletMatch = /^(\s*)([-*])\s+(.+)$/.exec(line);
-    if (bulletMatch) {
-      const [, indent, , rest] = bulletMatch;
-      lines[i] = `${indent}\u2022 ${rest}`;
-    }
-  }
-  out = lines.join("\n");
-  return out;
-}
-function extractFileSections(text) {
-  const sections = [];
-  const delimRegex = /^--- ([\w][\w.\-]*\.\w+) ---$/gm;
-  const delimiters = [];
-  let m;
-  while ((m = delimRegex.exec(text)) !== null) {
-    delimiters.push({
-      filename: m[1],
-      start: m.index,
-      end: m.index + m[0].length
-    });
-  }
-  if (delimiters.length === 0) return sections;
-  for (let i = 0; i < delimiters.length; i++) {
-    const open = delimiters[i];
-    const contentStart = open.end < text.length && text[open.end] === "\n" ? open.end + 1 : open.end;
-    const sectionEnd = i + 1 < delimiters.length ? delimiters[i + 1].start : text.length;
-    const content = text.substring(contentStart, sectionEnd).trim();
-    if (content.length > 0) {
-      sections.push({
-        fullMatch: text.substring(open.start, sectionEnd),
-        filename: open.filename,
-        content,
-        startIndex: open.start,
-        endIndex: sectionEnd
-      });
-    }
-  }
-  return sections;
-}
-function replaceFileSections(text, sections, replacement = (idx) => `_(See file: ${sections[idx].filename} above)_`) {
-  if (sections.length === 0) return text;
-  const sorted = [...sections].sort((a, b) => b.startIndex - a.startIndex);
-  let result = text;
-  sorted.forEach((section, sortedIndex) => {
-    const originalIndex = sections.length - 1 - sortedIndex;
-    const rep = typeof replacement === "function" ? replacement(originalIndex) : replacement;
-    result = result.slice(0, section.startIndex) + rep + result.slice(section.endIndex);
-  });
-  return result;
-}
-function formatSlackText(text) {
-  return markdownToSlack(text);
-}
-var import_child_process5, fs20, path24, os;
-var init_markdown = __esm({
-  "src/slack/markdown.ts"() {
-    "use strict";
-    import_child_process5 = require("child_process");
-    fs20 = __toESM(require("fs"));
-    path24 = __toESM(require("path"));
-    os = __toESM(require("os"));
   }
 });
 
