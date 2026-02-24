@@ -10023,6 +10023,13 @@ async function executeMappedApiTool(mappedTool, args) {
   }
   const queryParams = new URLSearchParams(endpoint.search);
   const headers = { ...apiToolConfig.customHeaders };
+  for (const key of Object.keys(headers)) {
+    if (typeof headers[key] === "string") {
+      headers[key] = headers[key].replace(/\${([^}]+)}/g, (_, name) => process.env[name] || "");
+    }
+  }
+  const finalUrl = endpoint.toString() + "?" + queryParams.toString();
+  console.error(`[ApiToolExecutor] Calling URL: ${method} ${finalUrl} | args: ${JSON.stringify(args)}`);
   let requestBodyValue;
   for (const param of parameters) {
     const name = String(param.name || "");
@@ -42369,6 +42376,16 @@ var init_mcp_check_provider = __esm({
                 ]
               };
             }
+          } else if (methodArgs && typeof methodArgs === "object") {
+            const renderedArgs = {};
+            for (const [key, value] of Object.entries(methodArgs)) {
+              if (typeof value === "string" && (value.includes("{{") || value.includes("{%"))) {
+                renderedArgs[key] = await this.liquid.parseAndRender(value, templateContext);
+              } else {
+                renderedArgs[key] = value;
+              }
+            }
+            methodArgs = renderedArgs;
           }
           const result = await this.executeMcpMethod(
             cfg,
@@ -47191,9 +47208,11 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
     let outputWithTimestamp = void 0;
     if (result.output !== void 0) {
       const output = result.output;
-      if (output !== null && typeof output === "object" && !Array.isArray(output))
-        outputWithTimestamp = { ...output, ts: Date.now() };
-      else outputWithTimestamp = output;
+      if (output !== null && typeof output === "object" && !Array.isArray(output)) {
+        outputWithTimestamp = "ts" in output ? { ...output, _engine_ts: Date.now() } : { ...output, ts: Date.now() };
+      } else {
+        outputWithTimestamp = output;
+      }
     }
     const enrichedResultWithContent = renderedContent ? { ...enrichedResult, content: renderedContent } : enrichedResult;
     const enrichedResultWithTimestamp = outputWithTimestamp !== void 0 ? { ...enrichedResultWithContent, output: outputWithTimestamp } : enrichedResultWithContent;
@@ -49406,7 +49425,7 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
     if (result.output !== void 0) {
       const output = result.output;
       if (output !== null && typeof output === "object" && !Array.isArray(output)) {
-        outputWithTimestamp = { ...output, ts: Date.now() };
+        outputWithTimestamp = "ts" in output ? { ...output, _engine_ts: Date.now() } : { ...output, ts: Date.now() };
       } else {
         outputWithTimestamp = output;
       }
