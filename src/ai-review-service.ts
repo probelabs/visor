@@ -9,6 +9,7 @@ import { withActiveSpan } from './telemetry/trace-helpers';
 import { initializeTracer } from './utils/tracer-init';
 import { processDiffWithOutline } from './utils/diff-processor';
 import { shouldFilterVisorReviewComment } from './utils/comment-metadata';
+import { extractFileSections, replaceFileSections } from './slack/markdown';
 
 /**
  * Helper function to log debug messages using the centralized logger
@@ -2654,6 +2655,21 @@ ${'='.repeat(60)}
         // Attach raw output blocks from DSL execute_plan so frontends can render them
         if (rawOutputBlocks.length > 0) {
           (out as any)._rawOutput = rawOutputBlocks.join('\n\n');
+        }
+
+        // Strip --- filename.ext --- delimited file sections from text when _rawOutput
+        // already preserves them. The LLM may copy output() content into answer.text
+        // despite it being captured via _outputBuffer → _rawOutput. Strip to avoid
+        // duplication — frontends will render file sections from _rawOutput.
+        if (typeof (out as any).text === 'string' && typeof (out as any)._rawOutput === 'string') {
+          const fileSections = extractFileSections((out as any).text);
+          if (fileSections.length > 0) {
+            const cleaned = replaceFileSections((out as any).text, fileSections, '').trim();
+            log(
+              `🧹 Stripped ${fileSections.length} file section(s) from text field (${(out as any).text.length} → ${cleaned.length} chars) — content preserved in _rawOutput`
+            );
+            (out as any).text = cleaned;
+          }
         }
 
         const result: ReviewSummary & { output?: unknown } = {
