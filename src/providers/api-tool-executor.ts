@@ -800,9 +800,11 @@ export async function executeMappedApiTool(
       headers[key] = headers[key].replace(/\${([^}]+)}/g, (_, name) => process.env[name] || '');
     }
   }
-  
+
   const finalUrl = endpoint.toString() + '?' + queryParams.toString();
-  console.error(`[ApiToolExecutor] Calling URL: ${method} ${finalUrl} | args: ${JSON.stringify(args)}`);
+  console.error(
+    `[ApiToolExecutor] Calling URL: ${method} ${finalUrl} | args: ${JSON.stringify(args)}`
+  );
 
   let requestBodyValue: unknown;
 
