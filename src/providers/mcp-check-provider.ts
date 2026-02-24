@@ -331,6 +331,17 @@ export class McpCheckProvider extends CheckProvider {
             ],
           };
         }
+      } else if (methodArgs && typeof methodArgs === 'object') {
+        // Shallow render string values in methodArgs
+        const renderedArgs: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(methodArgs)) {
+          if (typeof value === 'string' && (value.includes('{{') || value.includes('{%'))) {
+            renderedArgs[key] = await this.liquid.parseAndRender(value, templateContext);
+          } else {
+            renderedArgs[key] = value;
+          }
+        }
+        methodArgs = renderedArgs;
       }
 
       // Create MCP client and execute method

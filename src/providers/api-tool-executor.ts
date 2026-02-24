@@ -795,6 +795,15 @@ export async function executeMappedApiTool(
   }
   const queryParams = new URLSearchParams(endpoint.search);
   const headers: Record<string, string> = { ...apiToolConfig.customHeaders };
+  for (const key of Object.keys(headers)) {
+    if (typeof headers[key] === 'string') {
+      headers[key] = headers[key].replace(/\${([^}]+)}/g, (_, name) => process.env[name] || '');
+    }
+  }
+  
+  const finalUrl = endpoint.toString() + '?' + queryParams.toString();
+  console.error(`[ApiToolExecutor] Calling URL: ${method} ${finalUrl} | args: ${JSON.stringify(args)}`);
+
   let requestBodyValue: unknown;
 
   for (const param of parameters) {
