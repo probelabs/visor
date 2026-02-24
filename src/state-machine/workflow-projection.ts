@@ -66,6 +66,7 @@ export function projectWorkflowToGraph(
   // Create a synthetic config for this workflow
   const config: VisorConfig = {
     checks,
+    tools: workflow.tools,
     version: '1.0',
     output: {
       pr_comment: {

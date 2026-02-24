@@ -105,6 +105,8 @@ export interface WorkflowDefinition {
   inputs?: WorkflowInputParam[];
   /** Output parameters */
   outputs?: WorkflowOutputParam[];
+  /** Custom tools definition used by this workflow */
+  tools?: Record<string, import('./config').CustomToolDefinition>;
   /** Workflow steps - at root level like regular configs */
   steps: Record<string, WorkflowStep>;
 

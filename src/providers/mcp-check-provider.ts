@@ -334,7 +334,13 @@ export class McpCheckProvider extends CheckProvider {
       }
 
       // Create MCP client and execute method
-      const result = await this.executeMcpMethod(cfg, methodArgs, prInfo, dependencyResults);
+      const result = await this.executeMcpMethod(
+        cfg,
+        methodArgs,
+        prInfo,
+        dependencyResults,
+        sessionInfo
+      );
 
       // Apply transforms if specified
       let finalOutput = result;
@@ -458,26 +464,41 @@ export class McpCheckProvider extends CheckProvider {
     config: McpCheckConfig,
     methodArgs: Record<string, unknown>,
     prInfo?: PRInfo,
-    dependencyResults?: Map<string, ReviewSummary>
+    dependencyResults?: Map<string, ReviewSummary>,
+    sessionInfo?: any
   ): Promise<unknown> {
     const transport = config.transport || 'stdio';
     const timeout = (config.timeout || 60) * 1000; // Convert to milliseconds
 
     if (transport === 'custom') {
-      // Execute custom YAML-defined tool
-      if (!this.customToolExecutor) {
-        throw new Error(
-          'No custom tools available. Define tools in the "tools" section of your configuration.'
-        );
+      // Check both local execution context and global registry for tools
+      const localTools =
+        sessionInfo?._parentContext?.config?.tools || sessionInfo?.config?.tools || {};
+
+      let localExecutor: CustomToolExecutor | undefined;
+
+      if (Object.keys(localTools).length > 0) {
+        localExecutor = new CustomToolExecutor(localTools);
       }
 
-      const hasTool = await this.customToolExecutor.hasTool(config.method);
-      if (!hasTool) {
-        const availableToolNames = await this.customToolExecutor.getToolNames();
+      const hasLocalTool = localExecutor ? await localExecutor.hasTool(config.method) : false;
+      const hasGlobalTool = this.customToolExecutor
+        ? await this.customToolExecutor.hasTool(config.method)
+        : false;
+
+      if (!hasLocalTool && !hasGlobalTool) {
+        const localNames = localExecutor ? await localExecutor.getToolNames() : [];
+        const globalNames = this.customToolExecutor
+          ? await this.customToolExecutor.getToolNames()
+          : [];
+        const availableToolNames = [...new Set([...localNames, ...globalNames])];
+
         throw new Error(
           `Custom tool not found: ${config.method}. Available tools: ${availableToolNames.join(', ')}`
         );
       }
+
+      const activeExecutor = hasLocalTool ? localExecutor! : this.customToolExecutor!;
 
       // Build context for custom tool execution
       const context = {
@@ -495,7 +516,7 @@ export class McpCheckProvider extends CheckProvider {
         env: this.getSafeEnvironmentVariables(),
       };
 
-      return await this.customToolExecutor.execute(config.method, methodArgs, context);
+      return await activeExecutor.execute(config.method, methodArgs, context);
     } else if (transport === 'stdio') {
       return await this.executeStdioMethod(config, methodArgs, timeout);
     } else if (transport === 'sse') {
