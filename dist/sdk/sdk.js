@@ -772,11 +772,7 @@ var require_package = __commonJS({
         open: "^9.1.0",
         "simple-git": "^3.28.0",
         uuid: "^11.1.0",
-        ws: "^8.18.3"
-      },
-      optionalDependencies: {
-        "@anthropic/claude-code-sdk": "npm:null@*",
-        "@open-policy-agent/opa-wasm": "^1.10.0",
+        ws: "^8.18.3",
         "@opentelemetry/api": "^1.9.0",
         "@opentelemetry/core": "^1.30.1",
         "@opentelemetry/exporter-trace-otlp-grpc": "^0.203.0",
@@ -786,7 +782,11 @@ var require_package = __commonJS({
         "@opentelemetry/sdk-metrics": "^1.30.1",
         "@opentelemetry/sdk-node": "^0.203.0",
         "@opentelemetry/sdk-trace-base": "^1.30.1",
-        "@opentelemetry/semantic-conventions": "^1.30.1",
+        "@opentelemetry/semantic-conventions": "^1.30.1"
+      },
+      optionalDependencies: {
+        "@anthropic/claude-code-sdk": "npm:null@*",
+        "@open-policy-agent/opa-wasm": "^1.10.0",
         knex: "^3.1.0",
         mysql2: "^3.11.0",
         pg: "^8.13.0",
