@@ -11238,6 +11238,7 @@ function projectWorkflowToGraph(workflow, workflowInputs, _parentCheckId) {
   }
   const config = {
     checks,
+    tools: workflow.tools,
     version: "1.0",
     output: {
       pr_comment: {
@@ -17189,7 +17190,8 @@ ${errors}`);
           on: loaded.on,
           // Carry over optional inputs/outputs if present so callers can consume them
           inputs: loaded.inputs,
-          outputs: loaded.outputs
+          outputs: loaded.outputs,
+          tools: loaded.tools
         };
         return workflowDef;
       }
@@ -42353,7 +42355,13 @@ var init_mcp_check_provider = __esm({
               };
             }
           }
-          const result = await this.executeMcpMethod(cfg, methodArgs, prInfo, dependencyResults);
+          const result = await this.executeMcpMethod(
+            cfg,
+            methodArgs,
+            prInfo,
+            dependencyResults,
+            sessionInfo
+          );
           let finalOutput = result;
           if (cfg.transform) {
             try {
@@ -42454,22 +42462,26 @@ var init_mcp_check_provider = __esm({
       /**
        * Execute an MCP method using the configured transport
        */
-      async executeMcpMethod(config, methodArgs, prInfo, dependencyResults) {
+      async executeMcpMethod(config, methodArgs, prInfo, dependencyResults, sessionInfo) {
         const transport = config.transport || "stdio";
         const timeout = (config.timeout || 60) * 1e3;
         if (transport === "custom") {
-          if (!this.customToolExecutor) {
-            throw new Error(
-              'No custom tools available. Define tools in the "tools" section of your configuration.'
-            );
+          const localTools = sessionInfo?._parentContext?.config?.tools || sessionInfo?.config?.tools || {};
+          let localExecutor;
+          if (Object.keys(localTools).length > 0) {
+            localExecutor = new CustomToolExecutor(localTools);
           }
-          const hasTool = await this.customToolExecutor.hasTool(config.method);
-          if (!hasTool) {
-            const availableToolNames = await this.customToolExecutor.getToolNames();
+          const hasLocalTool = localExecutor ? await localExecutor.hasTool(config.method) : false;
+          const hasGlobalTool = this.customToolExecutor ? await this.customToolExecutor.hasTool(config.method) : false;
+          if (!hasLocalTool && !hasGlobalTool) {
+            const localNames = localExecutor ? await localExecutor.getToolNames() : [];
+            const globalNames = this.customToolExecutor ? await this.customToolExecutor.getToolNames() : [];
+            const availableToolNames = [.../* @__PURE__ */ new Set([...localNames, ...globalNames])];
             throw new Error(
               `Custom tool not found: ${config.method}. Available tools: ${availableToolNames.join(", ")}`
             );
           }
+          const activeExecutor = hasLocalTool ? localExecutor : this.customToolExecutor;
           const context2 = {
             pr: prInfo ? {
               number: prInfo.number,
@@ -42482,7 +42494,7 @@ var init_mcp_check_provider = __esm({
             outputs: this.buildOutputContext(dependencyResults),
             env: this.getSafeEnvironmentVariables()
           };
-          return await this.customToolExecutor.execute(config.method, methodArgs, context2);
+          return await activeExecutor.execute(config.method, methodArgs, context2);
         } else if (transport === "stdio") {
           return await this.executeStdioMethod(config, methodArgs, timeout);
         } else if (transport === "sse") {
