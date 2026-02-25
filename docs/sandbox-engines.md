@@ -85,7 +85,21 @@ Bubblewrap (`bwrap`) provides lightweight process isolation using Linux kernel n
 ### Requirements
 
 - **Linux only** (uses kernel namespaces, which are not available on macOS/Windows)
-- `bwrap` binary must be installed (`apt install bubblewrap` on Debian/Ubuntu)
+- `bwrap` binary must be installed:
+
+```bash
+# Debian / Ubuntu
+apt install bubblewrap
+
+# Fedora / RHEL / CentOS
+dnf install bubblewrap
+
+# Arch Linux
+pacman -S bubblewrap
+
+# Alpine
+apk add bubblewrap
+```
 
 ### How It Works
 
