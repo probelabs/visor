@@ -308,6 +308,7 @@ export class McpCheckProvider extends CheckProvider {
         outputs: this.buildOutputContext(dependencyResults),
         args: sessionInfo?.args || {},
         env: this.getSafeEnvironmentVariables(),
+        inputs: (config as any).workflowInputs || sessionInfo?.workflowInputs || {},
       };
 
       // Render method arguments if needed
