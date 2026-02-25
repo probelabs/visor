@@ -425,6 +425,8 @@ The following global configuration options are available and documented in detai
 | `http_server` | HTTP server for receiving webhooks | [HTTP Integration](./http.md) |
 | `memory` | Memory storage configuration | [Memory](./memory.md) |
 | `output` | Output configuration (PR comments, file comments) | [Output Formats](./output-formats.md) |
+| `sandbox` | Default sandbox name for all steps | [Sandbox Engines](./sandbox-engines.md) |
+| `sandboxes` | Named sandbox definitions (Docker, Bubblewrap, Seatbelt) | [Sandbox Engines](./sandbox-engines.md) |
 | `workspace` | Workspace isolation configuration | [Workspace Isolation RFC](./rfc/workspace-isolation.md) |
 
 Example combining several options:
