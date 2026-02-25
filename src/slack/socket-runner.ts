@@ -9,7 +9,9 @@ import { RateLimiter, type RateLimitConfig } from './rate-limiter';
 import type { SlackBotConfig } from '../types/bot';
 import { withActiveSpan, getVisorRunAttributes } from '../telemetry/trace-helpers';
 import { Scheduler } from '../scheduler/scheduler';
+import { createHash } from 'crypto';
 import { createSlackOutputAdapter } from './slack-output-adapter';
+import { WorkspaceManager } from '../utils/workspace-manager';
 
 type SlackSocketConfig = {
   appToken?: string; // xapp- token
@@ -164,6 +166,9 @@ export class SlackSocketRunner {
 
     const url = await this.openConnection();
     await this.connect(url);
+
+    // Clean up stale workspace directories from previous runs
+    WorkspaceManager.cleanupStale().catch(() => {});
   }
 
   private async openConnection(): Promise<string> {
@@ -478,6 +483,23 @@ export class SlackSocketRunner {
         return this.cfg;
       }
     })();
+
+    // Derive stable workspace name from Slack thread identity so all messages
+    // in the same thread share the same workspace directory (git checkouts persist).
+    const wsChannel = String(ev.channel || '');
+    const wsThreadTs = String(ev.thread_ts || ev.ts || ev.event_ts || '');
+    if (wsChannel && wsThreadTs) {
+      const hash = createHash('sha256')
+        .update(`${wsChannel}:${wsThreadTs}`)
+        .digest('hex')
+        .slice(0, 8);
+      const workspaceName = `slack-${hash}`;
+      if (!(cfgForRun as any).workspace) {
+        (cfgForRun as any).workspace = {};
+      }
+      (cfgForRun as any).workspace.name = workspaceName;
+      (cfgForRun as any).workspace.cleanup_on_exit = false;
+    }
 
     // Seed first message for this thread to allow initial human-input to consume it exactly once
     try {
