@@ -1060,48 +1060,127 @@ export class ConfigManager {
       });
     }
 
-    // Must have exactly one mode
-    const modes = [
-      config.image ? 'image' : null,
-      config.dockerfile || config.dockerfile_inline ? 'dockerfile' : null,
-      config.compose ? 'compose' : null,
-    ].filter(Boolean);
-
-    if (modes.length === 0) {
+    // Validate engine field if present
+    if (config.engine && config.engine !== 'docker' && config.engine !== 'bubblewrap') {
       errors.push({
-        field: `sandboxes.${name}`,
-        message: `Sandbox '${name}' must specify one of: image, dockerfile, dockerfile_inline, or compose`,
-      });
-    } else if (modes.length > 1) {
-      errors.push({
-        field: `sandboxes.${name}`,
-        message: `Sandbox '${name}' has multiple modes (${modes.join(', ')}). Specify exactly one.`,
+        field: `sandboxes.${name}.engine`,
+        message: `Sandbox '${name}' has invalid engine '${config.engine}'. Must be 'docker' or 'bubblewrap'.`,
       });
     }
 
-    // Compose mode requires service
-    if (config.compose && !config.service) {
-      errors.push({
-        field: `sandboxes.${name}.service`,
-        message: `Sandbox '${name}' uses compose mode but is missing required 'service' field`,
-      });
+    const isBubblewrap = config.engine === 'bubblewrap';
+
+    if (isBubblewrap) {
+      // Bubblewrap engine: reject Docker-only fields
+      const dockerOnlyFields: Array<[string, unknown]> = [
+        ['image', config.image],
+        ['dockerfile', config.dockerfile],
+        ['dockerfile_inline', config.dockerfile_inline],
+        ['compose', config.compose],
+        ['service', config.service],
+        ['cache', config.cache],
+        ['visor_path', config.visor_path],
+        ['resources', config.resources],
+      ];
+      for (const [field, value] of dockerOnlyFields) {
+        if (value !== undefined) {
+          errors.push({
+            field: `sandboxes.${name}.${field}`,
+            message: `Sandbox '${name}' uses bubblewrap engine but has Docker-only field '${field}'. Remove it or switch to engine: docker.`,
+          });
+        }
+      }
+    } else {
+      // Docker engine (default): must have exactly one mode
+      const modes = [
+        config.image ? 'image' : null,
+        config.dockerfile || config.dockerfile_inline ? 'dockerfile' : null,
+        config.compose ? 'compose' : null,
+      ].filter(Boolean);
+
+      if (modes.length === 0) {
+        errors.push({
+          field: `sandboxes.${name}`,
+          message: `Sandbox '${name}' must specify one of: image, dockerfile, dockerfile_inline, or compose`,
+        });
+      } else if (modes.length > 1) {
+        errors.push({
+          field: `sandboxes.${name}`,
+          message: `Sandbox '${name}' has multiple modes (${modes.join(', ')}). Specify exactly one.`,
+        });
+      }
+
+      // Compose mode requires service
+      if (config.compose && !config.service) {
+        errors.push({
+          field: `sandboxes.${name}.service`,
+          message: `Sandbox '${name}' uses compose mode but is missing required 'service' field`,
+        });
+      }
+
+      // Validate file paths don't contain traversal
+      if (config.dockerfile && /\.\./.test(config.dockerfile)) {
+        errors.push({
+          field: `sandboxes.${name}.dockerfile`,
+          message: `Dockerfile path '${config.dockerfile}' in sandbox '${name}' must not contain '..' path traversal`,
+        });
+      }
+      if (config.compose && /\.\./.test(config.compose)) {
+        errors.push({
+          field: `sandboxes.${name}.compose`,
+          message: `Compose file path '${config.compose}' in sandbox '${name}' must not contain '..' path traversal`,
+        });
+      }
+
+      // Validate visor_path
+      if (config.visor_path) {
+        if (!config.visor_path.startsWith('/')) {
+          errors.push({
+            field: `sandboxes.${name}.visor_path`,
+            message: `visor_path '${config.visor_path}' in sandbox '${name}' must be an absolute path (start with /)`,
+          });
+        }
+        if (/\.\./.test(config.visor_path)) {
+          errors.push({
+            field: `sandboxes.${name}.visor_path`,
+            message: `visor_path '${config.visor_path}' in sandbox '${name}' must not contain '..' path traversal`,
+          });
+        }
+      }
+
+      // Validate cache paths are absolute and safe
+      if (config.cache?.paths) {
+        for (const p of config.cache.paths) {
+          if (!p.startsWith('/')) {
+            errors.push({
+              field: `sandboxes.${name}.cache.paths`,
+              message: `Cache path '${p}' in sandbox '${name}' must be absolute (start with /)`,
+              value: p,
+            });
+          }
+          if (/\.\./.test(p)) {
+            errors.push({
+              field: `sandboxes.${name}.cache.paths`,
+              message: `Cache path '${p}' in sandbox '${name}' must not contain '..' path traversal`,
+              value: p,
+            });
+          }
+        }
+      }
+
+      // Validate resource limits
+      if (config.resources?.cpu !== undefined) {
+        if (typeof config.resources.cpu !== 'number' || config.resources.cpu <= 0) {
+          errors.push({
+            field: `sandboxes.${name}.resources.cpu`,
+            message: `CPU limit in sandbox '${name}' must be a positive number`,
+            value: config.resources.cpu,
+          });
+        }
+      }
     }
 
-    // Validate file paths don't contain traversal
-    if (config.dockerfile && /\.\./.test(config.dockerfile)) {
-      errors.push({
-        field: `sandboxes.${name}.dockerfile`,
-        message: `Dockerfile path '${config.dockerfile}' in sandbox '${name}' must not contain '..' path traversal`,
-      });
-    }
-    if (config.compose && /\.\./.test(config.compose)) {
-      errors.push({
-        field: `sandboxes.${name}.compose`,
-        message: `Compose file path '${config.compose}' in sandbox '${name}' must not contain '..' path traversal`,
-      });
-    }
-
-    // Validate container paths are absolute and safe
+    // Common validations for all engines
     if (config.workdir) {
       if (!config.workdir.startsWith('/')) {
         errors.push({
@@ -1113,51 +1192,6 @@ export class ConfigManager {
         errors.push({
           field: `sandboxes.${name}.workdir`,
           message: `Workdir '${config.workdir}' in sandbox '${name}' must not contain '..' path traversal`,
-        });
-      }
-    }
-    if (config.visor_path) {
-      if (!config.visor_path.startsWith('/')) {
-        errors.push({
-          field: `sandboxes.${name}.visor_path`,
-          message: `visor_path '${config.visor_path}' in sandbox '${name}' must be an absolute path (start with /)`,
-        });
-      }
-      if (/\.\./.test(config.visor_path)) {
-        errors.push({
-          field: `sandboxes.${name}.visor_path`,
-          message: `visor_path '${config.visor_path}' in sandbox '${name}' must not contain '..' path traversal`,
-        });
-      }
-    }
-
-    // Validate cache paths are absolute and safe
-    if (config.cache?.paths) {
-      for (const p of config.cache.paths) {
-        if (!p.startsWith('/')) {
-          errors.push({
-            field: `sandboxes.${name}.cache.paths`,
-            message: `Cache path '${p}' in sandbox '${name}' must be absolute (start with /)`,
-            value: p,
-          });
-        }
-        if (/\.\./.test(p)) {
-          errors.push({
-            field: `sandboxes.${name}.cache.paths`,
-            message: `Cache path '${p}' in sandbox '${name}' must not contain '..' path traversal`,
-            value: p,
-          });
-        }
-      }
-    }
-
-    // Validate resource limits
-    if (config.resources?.cpu !== undefined) {
-      if (typeof config.resources.cpu !== 'number' || config.resources.cpu <= 0) {
-        errors.push({
-          field: `sandboxes.${name}.resources.cpu`,
-          message: `CPU limit in sandbox '${name}' must be a positive number`,
-          value: config.resources.cpu,
         });
       }
     }

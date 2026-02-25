@@ -1,6 +1,7 @@
 /**
- * SandboxManager — lifecycle management for Docker sandbox environments.
- * Handles lazy container startup, reuse, exec routing, and cleanup.
+ * SandboxManager — lifecycle management for sandbox environments.
+ * Handles lazy container/process startup, reuse, exec routing, and cleanup.
+ * Supports Docker (image, compose) and Bubblewrap (Linux namespaces) engines.
  */
 
 import { resolve, dirname, join } from 'path';
@@ -75,6 +76,14 @@ export class SandboxManager {
     }
 
     const mode = config.compose ? 'compose' : 'image';
+
+    // Bubblewrap engine: ephemeral per-exec, no persistent container
+    if (config.engine === 'bubblewrap') {
+      const { BubblewrapSandbox } = require('./bubblewrap-sandbox');
+      const instance = new BubblewrapSandbox(name, config, this.repoPath);
+      this.instances.set(name, instance);
+      return instance;
+    }
 
     return withActiveSpan(
       'visor.sandbox.start',
