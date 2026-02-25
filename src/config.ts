@@ -1061,17 +1061,17 @@ export class ConfigManager {
     }
 
     // Validate engine field if present
-    if (config.engine && config.engine !== 'docker' && config.engine !== 'bubblewrap') {
+    if (config.engine && !['docker', 'bubblewrap', 'seatbelt'].includes(config.engine)) {
       errors.push({
         field: `sandboxes.${name}.engine`,
-        message: `Sandbox '${name}' has invalid engine '${config.engine}'. Must be 'docker' or 'bubblewrap'.`,
+        message: `Sandbox '${name}' has invalid engine '${config.engine}'. Must be 'docker', 'bubblewrap', or 'seatbelt'.`,
       });
     }
 
-    const isBubblewrap = config.engine === 'bubblewrap';
+    const isNativeEngine = config.engine === 'bubblewrap' || config.engine === 'seatbelt';
 
-    if (isBubblewrap) {
-      // Bubblewrap engine: reject Docker-only fields
+    if (isNativeEngine) {
+      // Native engine (bubblewrap/seatbelt): reject Docker-only fields
       const dockerOnlyFields: Array<[string, unknown]> = [
         ['image', config.image],
         ['dockerfile', config.dockerfile],
@@ -1086,7 +1086,7 @@ export class ConfigManager {
         if (value !== undefined) {
           errors.push({
             field: `sandboxes.${name}.${field}`,
-            message: `Sandbox '${name}' uses bubblewrap engine but has Docker-only field '${field}'. Remove it or switch to engine: docker.`,
+            message: `Sandbox '${name}' uses ${config.engine} engine but has Docker-only field '${field}'. Remove it or switch to engine: docker.`,
           });
         }
       }

@@ -1,7 +1,7 @@
 /**
  * SandboxManager — lifecycle management for sandbox environments.
  * Handles lazy container/process startup, reuse, exec routing, and cleanup.
- * Supports Docker (image, compose) and Bubblewrap (Linux namespaces) engines.
+ * Supports Docker (image, compose), Bubblewrap (Linux namespaces), and Seatbelt (macOS sandbox-exec) engines.
  */
 
 import { resolve, dirname, join } from 'path';
@@ -81,6 +81,14 @@ export class SandboxManager {
     if (config.engine === 'bubblewrap') {
       const { BubblewrapSandbox } = require('./bubblewrap-sandbox');
       const instance = new BubblewrapSandbox(name, config, this.repoPath);
+      this.instances.set(name, instance);
+      return instance;
+    }
+
+    // Seatbelt engine: macOS sandbox-exec, ephemeral per-exec
+    if (config.engine === 'seatbelt') {
+      const { SeatbeltSandbox } = require('./seatbelt-sandbox');
+      const instance = new SeatbeltSandbox(name, config, this.repoPath);
       this.instances.set(name, instance);
       return instance;
     }
