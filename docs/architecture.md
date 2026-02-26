@@ -897,6 +897,20 @@ workspace:
 
 This creates isolated directories for each execution, preventing cross-contamination.
 
+### Process Sandbox Engines
+
+Visor supports three sandbox engines for isolating command execution:
+
+| Engine | Platform | Isolation Model |
+|--------|----------|-----------------|
+| **Docker** | Linux, macOS, Windows | Full container isolation |
+| **Bubblewrap** | Linux only | Linux kernel namespaces (PID, mount, network) |
+| **Seatbelt** | macOS only | macOS `sandbox-exec` with SBPL profiles |
+
+All three implement the `SandboxInstance` interface and are routed through `SandboxManager`. Configure via the `sandboxes:` block and `sandbox:` default in `.visor.yaml`.
+
+See [Sandbox Engines](./sandbox-engines.md) for complete documentation.
+
 ### Environment Variable Handling
 
 Sensitive values can be passed via environment:
@@ -1045,6 +1059,8 @@ Currently, Visor does not cache AI responses between runs. For expensive operati
 ## Related Documentation
 
 - [Configuration](./configuration.md) - Configuration file reference
+- [Sandbox Engines](./sandbox-engines.md) - Docker, Bubblewrap, and Seatbelt isolation
+- [Security](./security.md) - Security overview and best practices
 - [Providers](./providers/) - Provider-specific documentation
 - [Custom Tools](./custom-tools.md) - Creating custom tools
 - [MCP Provider](./mcp-provider.md) - MCP integration details
@@ -1110,6 +1126,18 @@ src/
     host.ts                   # Frontend manager
     github/                   # GitHub integration frontend
     slack/                    # Slack integration frontend
+
+  sandbox/
+    types.ts                  # SandboxInstance interface, SandboxConfig
+    sandbox-manager.ts        # Lifecycle management, engine routing
+    docker-image-sandbox.ts   # Docker image-based sandbox
+    docker-compose-sandbox.ts # Docker Compose sandbox
+    bubblewrap-sandbox.ts     # Linux namespace isolation (bwrap)
+    seatbelt-sandbox.ts       # macOS sandbox-exec isolation
+    check-runner.ts           # Check execution in sandboxes
+    env-filter.ts             # Environment variable filtering
+    cache-volume-manager.ts   # Docker cache volumes
+    sandbox-telemetry.ts      # Telemetry for sandbox operations
 
   utils/
     config-loader.ts          # Remote config loading

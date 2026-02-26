@@ -226,6 +226,45 @@ This protection is implemented in the configuration loader and applies to:
 
 ---
 
+## Process Sandbox Engines
+
+Visor supports three sandbox engines that isolate command execution from the host system:
+
+| Engine | Platform | Isolation Model |
+|--------|----------|-----------------|
+| **Docker** | Linux, macOS, Windows | Full container isolation |
+| **Bubblewrap** | Linux only | Linux kernel namespaces (PID, mount, network) |
+| **Seatbelt** | macOS only | `sandbox-exec` with SBPL deny-by-default profiles |
+
+### What Sandboxes Protect Against
+
+- **Filesystem escape**: Commands cannot access files outside allowed paths (`~/.ssh`, `~/.aws`, `~/.config` are inaccessible)
+- **Environment leakage**: All engines strip inherited environment variables; only explicitly passed vars are visible
+- **Network exfiltration**: Optional network isolation (`network: false`) blocks all network access
+- **Process visibility**: Bubblewrap uses PID namespaces to hide host processes
+
+### What Sandboxes Do NOT Protect Against
+
+- **CPU/Memory abuse**: No resource limits enforced by bubblewrap or seatbelt (use Docker `resources:` or external cgroups)
+- **Kernel exploits**: Namespace escapes via kernel bugs (bubblewrap/seatbelt are not full VMs)
+- **Network attacks**: When `network: true` (the default), sandboxed commands have full network access
+
+### Credential Isolation in Sandboxes
+
+| Resource | Without Sandbox | With Sandbox |
+|----------|----------------|--------------|
+| `~/.ssh/` | Accessible | Not mounted / denied |
+| `~/.aws/` | Accessible | Not mounted / denied |
+| `~/.gitconfig` | Accessible | Not mounted / denied (git auth via env vars) |
+| `~/.config/gh/` | Accessible | Not mounted / denied |
+| Host env vars | All inherited | Only explicitly passed vars |
+
+GitHub credentials are propagated securely via environment variables (`GITHUB_TOKEN`, `GIT_CONFIG_COUNT`/`KEY`/`VALUE`), so authenticated git and `gh` CLI operations work inside any sandbox engine without exposing credential files.
+
+See [Sandbox Engines](./sandbox-engines.md) for complete configuration and usage documentation.
+
+---
+
 ## Command Provider Security
 
 The command provider executes shell commands with security safeguards.
@@ -465,6 +504,7 @@ See [Configuration](./configuration.md) for complete extends documentation.
 
 ## Related Documentation
 
+- [Sandbox Engines](./sandbox-engines.md) - Process isolation with Docker, Bubblewrap, and Seatbelt
 - [GitHub Authentication](./github-auth.md) - Token and GitHub App auth setup, credential propagation
 - [AI Configuration](./ai-configuration.md) - AI provider security options
 - [HTTP Integration](./http.md) - HTTP authentication and TLS

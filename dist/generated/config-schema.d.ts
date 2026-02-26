@@ -2202,6 +2202,11 @@ export declare const configSchema: {
         readonly SandboxConfig: {
             readonly type: "object";
             readonly properties: {
+                readonly engine: {
+                    readonly type: "string";
+                    readonly enum: readonly ["docker", "bubblewrap", "seatbelt"];
+                    readonly description: "Sandbox engine type: 'docker' (default), 'bubblewrap' (Linux namespaces), or 'seatbelt' (macOS sandbox-exec)";
+                };
                 readonly image: {
                     readonly type: "string";
                     readonly description: "Docker image to use (e.g., \"node:20-alpine\")";

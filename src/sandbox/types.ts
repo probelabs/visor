@@ -1,5 +1,5 @@
 /**
- * Types for Docker-based sandbox execution environments
+ * Types for sandbox execution environments (Docker and Bubblewrap)
  */
 
 import type { ReviewIssue } from '../reviewer';
@@ -35,7 +35,10 @@ export interface SandboxResourceConfig {
  * Configuration for a single sandbox environment
  */
 export interface SandboxConfig {
-  // Mode 1: pre-built image
+  /** Sandbox engine type: 'docker' (default), 'bubblewrap' (Linux namespaces), or 'seatbelt' (macOS sandbox-exec) */
+  engine?: 'docker' | 'bubblewrap' | 'seatbelt';
+
+  // Mode 1: pre-built image (docker only)
   /** Docker image to use (e.g., "node:20-alpine") */
   image?: string;
 

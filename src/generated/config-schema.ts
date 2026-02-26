@@ -2358,6 +2358,12 @@ export const configSchema = {
     SandboxConfig: {
       type: 'object',
       properties: {
+        engine: {
+          type: 'string',
+          enum: ['docker', 'bubblewrap', 'seatbelt'],
+          description:
+            "Sandbox engine type: 'docker' (default), 'bubblewrap' (Linux namespaces), or 'seatbelt' (macOS sandbox-exec)",
+        },
         image: {
           type: 'string',
           description: 'Docker image to use (e.g., "node:20-alpine")',
