@@ -8501,12 +8501,15 @@ ${"=".repeat(60)}
           if (!systemPrompt && schema !== "code-review") {
             systemPrompt = "You are general assistant, follow user instructions.";
           }
+          log(
+            `\u{1F527} AIReviewService config: allowEdit=${this.config.allowEdit}, allowBash=${this.config.allowBash}, promptType=${this.config.promptType}`
+          );
           const options = {
             sessionId,
             // Prefer config promptType, then env override, else fallback to code-review when schema is set
             promptType: this.config.promptType && this.config.promptType.trim() ? this.config.promptType.trim() : explicitPromptType ? explicitPromptType : schema === "code-review" ? "code-review-template" : void 0,
             allowEdit: false,
-            // We don't want the agent to modify files
+            // Default: don't allow file modifications
             debug: this.config.debug || false,
             // Use systemPrompt (native in rc168+) with fallback to customPrompt for backward compat
             systemPrompt: systemPrompt || this.config.systemPrompt || this.config.customPrompt
@@ -8595,6 +8598,9 @@ ${"=".repeat(60)}
           if (this.config.model) {
             options.model = this.config.model;
           }
+          log(
+            `\u{1F527} ProbeAgent options: allowEdit=${options.allowEdit}, enableBash=${options.enableBash}, promptType=${options.promptType}`
+          );
           const agent = new import_probe2.ProbeAgent(options);
           if (typeof agent.initialize === "function") {
             await agent.initialize();
@@ -15543,14 +15549,9 @@ ${errors}`);
         const { WorkflowRegistry: WorkflowRegistry2 } = await Promise.resolve().then(() => (init_workflow_registry(), workflow_registry_exports));
         const registry = WorkflowRegistry2.getInstance();
         for (const source of config.imports) {
-          const results = await registry.import(source, { basePath, validate: true });
+          const results = await registry.import(source, { basePath, validate: true, override: true });
           for (const result of results) {
             if (!result.valid && result.errors) {
-              const isAlreadyExists = result.errors.every((e) => e.message.includes("already exists"));
-              if (isAlreadyExists) {
-                logger.debug(`Workflow from '${source}' already imported, skipping`);
-                continue;
-              }
               const errors = result.errors.map((e) => `  ${e.path}: ${e.message}`).join("\n");
               throw new Error(`Failed to import workflow from '${source}':
 ${errors}`);
@@ -45055,7 +45056,7 @@ var init_worktree_manager = __esm({
       /**
        * Get or create bare repository
        */
-      async getOrCreateBareRepo(repository, repoUrl, token, fetchDepth, cloneTimeoutMs) {
+      async getOrCreateBareRepo(repository, repoUrl, _token, fetchDepth, cloneTimeoutMs) {
         const reposDir = this.getReposDir();
         const repoName = repository.replace(/\//g, "-");
         const bareRepoPath = path20.join(reposDir, `${repoName}.git`);
@@ -45071,11 +45072,12 @@ var init_worktree_manager = __esm({
             );
             await fsp.rm(bareRepoPath, { recursive: true, force: true });
           } else {
+            await this.resetBareRepoRemoteUrl(bareRepoPath, repoUrl);
             await this.updateBareRepo(bareRepoPath);
             return bareRepoPath;
           }
         }
-        const cloneUrl = this.buildAuthenticatedUrl(repoUrl, token);
+        const cloneUrl = repoUrl;
         const redactedUrl = this.redactUrl(cloneUrl);
         logger.info(
           `Cloning bare repository: ${redactedUrl}${fetchDepth ? ` (depth: ${fetchDepth})` : ""}`
@@ -45154,6 +45156,33 @@ var init_worktree_manager = __esm({
           }
           logger.warn(`Error verifying bare repo remote: ${error}`);
           return false;
+        }
+      }
+      /**
+       * Ensure the origin remote URL of a bare repo is a plain URL (no embedded token).
+       *
+       * Older bare repos may have been cloned with a token in the URL
+       * (https://x-access-token:TOKEN@github.com/...). This causes stale-token
+       * failures because GIT_CONFIG insteadOf rules can't rewrite URLs that
+       * already have credentials. Resetting to the plain URL lets insteadOf
+       * handle auth with the freshest token.
+       */
+      async resetBareRepoRemoteUrl(bareRepoPath, plainRepoUrl) {
+        try {
+          const cmd = `git -C ${this.escapeShellArg(bareRepoPath)} remote set-url origin ${this.escapeShellArg(plainRepoUrl)}`;
+          const result = await this.executeGitCommand(cmd, { timeout: 1e4 });
+          if (result.exitCode !== 0) {
+            logger.warn(
+              `Failed to reset bare repo remote URL: ${result.stderr}. Git operations may fail with stale token if the URL has embedded credentials.`
+            );
+          } else {
+            logger.debug(`Reset bare repo remote URL to plain URL for ${bareRepoPath}`);
+          }
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          logger.warn(
+            `Error resetting bare repo remote URL: ${msg}. Git operations may fail with stale token if the URL has embedded credentials.`
+          );
         }
       }
       /**
@@ -51210,10 +51239,12 @@ var init_bubblewrap_sandbox = __esm({
       name;
       config;
       repoPath;
-      constructor(name, config, repoPath) {
+      visorDistPath;
+      constructor(name, config, repoPath, visorDistPath) {
         this.name = name;
         this.config = config;
         this.repoPath = (0, import_path10.resolve)(repoPath);
+        this.visorDistPath = (0, import_path10.resolve)(visorDistPath);
       }
       /**
        * Check if bwrap binary is available on the system.
@@ -51294,6 +51325,8 @@ var init_bubblewrap_sandbox = __esm({
         } else {
           args.push("--bind", this.repoPath, workdir);
         }
+        const visorPath = this.config.visor_path || "/opt/visor";
+        args.push("--ro-bind", this.visorDistPath, visorPath);
         args.push("--chdir", workdir);
         args.push("--unshare-pid");
         args.push("--new-session");
@@ -51335,10 +51368,12 @@ var init_seatbelt_sandbox = __esm({
       name;
       config;
       repoPath;
-      constructor(name, config, repoPath) {
+      visorDistPath;
+      constructor(name, config, repoPath, visorDistPath) {
         this.name = name;
         this.config = config;
         this.repoPath = (0, import_fs7.realpathSync)((0, import_path11.resolve)(repoPath));
+        this.visorDistPath = (0, import_fs7.realpathSync)((0, import_path11.resolve)(visorDistPath));
       }
       /**
        * Check if sandbox-exec binary is available on the system.
@@ -51439,6 +51474,8 @@ var init_seatbelt_sandbox = __esm({
         if (!this.config.read_only) {
           lines.push(`(allow file-write* (subpath "${repoPath}"))`);
         }
+        const visorDistPath = this.escapePath(this.visorDistPath);
+        lines.push(`(allow file-read* (subpath "${visorDistPath}"))`);
         if (this.config.network !== false) {
           lines.push("(allow network*)");
         }
@@ -51511,13 +51548,13 @@ var init_sandbox_manager = __esm({
         const mode = config.compose ? "compose" : "image";
         if (config.engine === "bubblewrap") {
           const { BubblewrapSandbox: BubblewrapSandbox2 } = (init_bubblewrap_sandbox(), __toCommonJS(bubblewrap_sandbox_exports));
-          const instance = new BubblewrapSandbox2(name, config, this.repoPath);
+          const instance = new BubblewrapSandbox2(name, config, this.repoPath, this.visorDistPath);
           this.instances.set(name, instance);
           return instance;
         }
         if (config.engine === "seatbelt") {
           const { SeatbeltSandbox: SeatbeltSandbox2 } = (init_seatbelt_sandbox(), __toCommonJS(seatbelt_sandbox_exports));
-          const instance = new SeatbeltSandbox2(name, config, this.repoPath);
+          const instance = new SeatbeltSandbox2(name, config, this.repoPath, this.visorDistPath);
           this.instances.set(name, instance);
           return instance;
         }
