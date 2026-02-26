@@ -226,15 +226,35 @@ export class WorkspaceManager {
     const isGitRepo = await this.isGitRepository(this.originalPath);
 
     if (isGitRepo) {
-      // Create worktree for main project
-      await this.createMainProjectWorktree(mainProjectPath);
+      // Check if main project worktree already exists (reused workspace, e.g. Slack thread)
+      const exists = await this.pathExists(mainProjectPath);
+      if (exists) {
+        logger.info(`[Workspace] Reusing existing main project worktree: ${mainProjectPath}`);
+        const isValid = await this.isGitRepository(mainProjectPath);
+        if (!isValid) {
+          logger.warn(`[Workspace] Existing path is not a valid git dir, recreating`);
+          await fsp.rm(mainProjectPath, { recursive: true, force: true });
+          try {
+            await commandExecutor.execute(
+              `git -C ${shellEscape(this.originalPath)} worktree prune`,
+              { timeout: 10000 }
+            );
+          } catch {}
+          await this.createMainProjectWorktree(mainProjectPath);
+        }
+      } else {
+        await this.createMainProjectWorktree(mainProjectPath);
+      }
     } else {
       // If not a git repo, create a symlink instead
       logger.debug(`Original path is not a git repo, creating symlink`);
-      try {
-        await fsp.symlink(this.originalPath, mainProjectPath);
-      } catch (error) {
-        throw new Error(`Failed to create symlink for main project: ${error}`);
+      const exists = await this.pathExists(mainProjectPath);
+      if (!exists) {
+        try {
+          await fsp.symlink(this.originalPath, mainProjectPath);
+        } catch (error) {
+          throw new Error(`Failed to create symlink for main project: ${error}`);
+        }
       }
     }
 
@@ -325,6 +345,17 @@ export class WorkspaceManager {
    * @param timeout Maximum time to wait for active operations (default: 60s)
    */
   async cleanup(timeout: number = 60000): Promise<void> {
+    // Respect cleanupOnExit flag — persisted workspaces (e.g. Slack threads) should not be cleaned up
+    if (!this.config.cleanupOnExit) {
+      logger.debug(`[Workspace] Skipping cleanup (cleanupOnExit=false): ${this.workspacePath}`);
+      WorkspaceManager.instances.delete(this.sessionId);
+      this.initialized = false;
+      this.mainProjectInfo = null;
+      this.projects.clear();
+      this.usedNames.clear();
+      return;
+    }
+
     logger.info(
       `Cleaning up workspace: ${this.workspacePath} (active operations: ${this.activeOperations})`
     );
@@ -390,6 +421,71 @@ export class WorkspaceManager {
     } catch (error) {
       logger.warn(`Failed to cleanup workspace: ${error}`);
     }
+  }
+
+  /**
+   * Check if a path exists (file or directory).
+   */
+  private async pathExists(p: string): Promise<boolean> {
+    try {
+      await fsp.access(p);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Clean up stale workspace directories older than maxAge.
+   * Call periodically (e.g. at socket-runner startup) to prevent disk bloat.
+   */
+  static async cleanupStale(
+    basePath: string = process.env.VISOR_WORKSPACE_PATH || '/tmp/visor-workspaces',
+    maxAgeMs: number = 24 * 60 * 60 * 1000
+  ): Promise<number> {
+    let cleaned = 0;
+    try {
+      const entries = await fsp.readdir(basePath, { withFileTypes: true });
+      const now = Date.now();
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const dirPath = path.join(basePath, entry.name);
+        try {
+          const stat = await fsp.stat(dirPath);
+          if (now - stat.mtimeMs > maxAgeMs) {
+            // Prune any git worktrees before removing the directory
+            try {
+              const subdirs = await fsp.readdir(dirPath, { withFileTypes: true });
+              for (const sub of subdirs) {
+                if (!sub.isDirectory()) continue;
+                const subPath = path.join(dirPath, sub.name);
+                const gitFilePath = path.join(subPath, '.git');
+                try {
+                  const gitContent = await fsp.readFile(gitFilePath, 'utf-8');
+                  const match = gitContent.match(/gitdir:\s*(.+)/);
+                  if (match) {
+                    const worktreeGitDir = match[1].trim();
+                    const repoGitDir = worktreeGitDir.replace(/\/\.git\/worktrees\/.*$/, '');
+                    await commandExecutor.execute(
+                      `git -C ${shellEscape(repoGitDir)} worktree remove ${shellEscape(subPath)} --force`,
+                      { timeout: 10000 }
+                    );
+                  }
+                } catch {}
+              }
+            } catch {}
+            await fsp.rm(dirPath, { recursive: true, force: true });
+            cleaned++;
+          }
+        } catch {}
+      }
+      if (cleaned > 0) {
+        logger.info(`[Workspace] Cleaned up ${cleaned} stale workspace(s) from ${basePath}`);
+      }
+    } catch (error) {
+      logger.debug(`[Workspace] Stale cleanup error: ${error}`);
+    }
+    return cleaned;
   }
 
   /**
