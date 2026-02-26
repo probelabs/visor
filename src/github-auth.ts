@@ -264,8 +264,12 @@ export async function refreshGitHubCredentials(): Promise<void> {
       logger.debug('[github-auth] Refreshed GitHub App installation token');
     }
   } catch (err) {
+    const age = _cachedAppToken
+      ? `${Math.round((now - _cachedAppToken.generatedAt) / 60000)}min old`
+      : 'no cached token';
     logger.warn(
-      `[github-auth] Failed to refresh GitHub App token: ${err instanceof Error ? err.message : String(err)}`
+      `[github-auth] Failed to refresh GitHub App token (${age}): ${err instanceof Error ? err.message : String(err)}. ` +
+        'Child processes may fail with authentication errors.'
     );
   }
 }

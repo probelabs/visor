@@ -299,13 +299,19 @@ export class WorktreeManager {
       const cmd = `git -C ${this.escapeShellArg(bareRepoPath)} remote set-url origin ${this.escapeShellArg(plainRepoUrl)}`;
       const result = await this.executeGitCommand(cmd, { timeout: 10000 });
       if (result.exitCode !== 0) {
-        logger.warn(`Failed to reset bare repo remote URL: ${result.stderr}`);
+        logger.warn(
+          `Failed to reset bare repo remote URL: ${result.stderr}. ` +
+            'Git operations may fail with stale token if the URL has embedded credentials.'
+        );
       } else {
         logger.debug(`Reset bare repo remote URL to plain URL for ${bareRepoPath}`);
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      logger.warn(`Error resetting bare repo remote URL: ${msg}`);
+      logger.warn(
+        `Error resetting bare repo remote URL: ${msg}. ` +
+          'Git operations may fail with stale token if the URL has embedded credentials.'
+      );
     }
   }
 
