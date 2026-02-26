@@ -760,7 +760,7 @@ var require_package = __commonJS({
         "@opentelemetry/sdk-node": "^0.203.0",
         "@opentelemetry/sdk-trace-base": "^1.30.1",
         "@opentelemetry/semantic-conventions": "^1.30.1",
-        "@probelabs/probe": "^0.6.0-rc258",
+        "@probelabs/probe": "^0.6.0-rc259",
         "@types/commander": "^2.12.0",
         "@types/uuid": "^10.0.0",
         acorn: "^8.16.0",
@@ -42582,7 +42582,8 @@ var init_mcp_check_provider = __esm({
             fileCount: prInfo.files.length,
             outputs: this.buildOutputContext(dependencyResults),
             args: sessionInfo?.args || {},
-            env: this.getSafeEnvironmentVariables()
+            env: this.getSafeEnvironmentVariables(),
+            inputs: config.workflowInputs || sessionInfo?.workflowInputs || {}
           };
           let methodArgs = cfg.methodArgs || {};
           if (cfg.argsTransform) {
