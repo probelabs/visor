@@ -103,7 +103,7 @@ interface StepPolicyOverride {
 }
 
 /**
- * Types for Docker-based sandbox execution environments
+ * Types for sandbox execution environments (Docker and Bubblewrap)
  */
 
 /**
@@ -134,6 +134,8 @@ interface SandboxResourceConfig {
  * Configuration for a single sandbox environment
  */
 interface SandboxConfig {
+    /** Sandbox engine type: 'docker' (default), 'bubblewrap' (Linux namespaces), or 'seatbelt' (macOS sandbox-exec) */
+    engine?: 'docker' | 'bubblewrap' | 'seatbelt';
     /** Docker image to use (e.g., "node:20-alpine") */
     image?: string;
     /** Path to Dockerfile (relative to config file or absolute) */

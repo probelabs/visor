@@ -864,11 +864,11 @@ function getTracer() {
 }
 async function withActiveSpan(name, attrs, fn) {
   const tracer = getTracer();
-  return await new Promise((resolve11, reject) => {
+  return await new Promise((resolve13, reject) => {
     const callback = async (span) => {
       try {
         const res = await fn(span);
-        resolve11(res);
+        resolve13(res);
       } catch (err) {
         try {
           if (err instanceof Error) span.recordException(err);
@@ -6972,7 +6972,7 @@ async function renderMermaidToPng(mermaidCode) {
     if (chromiumPath) {
       env.PUPPETEER_EXECUTABLE_PATH = chromiumPath;
     }
-    const result = await new Promise((resolve11) => {
+    const result = await new Promise((resolve13) => {
       const proc = (0, import_child_process.spawn)(
         "npx",
         [
@@ -7002,13 +7002,13 @@ async function renderMermaidToPng(mermaidCode) {
       });
       proc.on("close", (code) => {
         if (code === 0) {
-          resolve11({ success: true });
+          resolve13({ success: true });
         } else {
-          resolve11({ success: false, error: stderr || `Exit code ${code}` });
+          resolve13({ success: false, error: stderr || `Exit code ${code}` });
         }
       });
       proc.on("error", (err) => {
-        resolve11({ success: false, error: err.message });
+        resolve13({ success: false, error: err.message });
       });
     });
     if (!result.success) {
@@ -9213,7 +9213,7 @@ ${"=".repeat(60)}
        * Generate mock response for testing
        */
       async generateMockResponse(_prompt, _checkName, _schema) {
-        await new Promise((resolve11) => setTimeout(resolve11, 500));
+        await new Promise((resolve13) => setTimeout(resolve13, 500));
         const name = (_checkName || "").toLowerCase();
         if (name.includes("extract-facts")) {
           const arr = Array.from({ length: 6 }, (_, i) => ({
@@ -9574,7 +9574,7 @@ var init_command_executor = __esm({
        * Execute command with stdin input
        */
       executeWithStdin(command, options) {
-        return new Promise((resolve11, reject) => {
+        return new Promise((resolve13, reject) => {
           const childProcess = (0, import_child_process2.exec)(
             command,
             {
@@ -9586,7 +9586,7 @@ var init_command_executor = __esm({
               if (error && error.killed && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM")) {
                 reject(new Error(`Command timed out after ${options.timeout || 3e4}ms`));
               } else {
-                resolve11({
+                resolve13({
                   stdout: stdout || "",
                   stderr: stderr || "",
                   exitCode: error ? error.code || 1 : 0
@@ -14506,6 +14506,11 @@ var init_config_schema = __esm({
         SandboxConfig: {
           type: "object",
           properties: {
+            engine: {
+              type: "string",
+              enum: ["docker", "bubblewrap", "seatbelt"],
+              description: "Sandbox engine type: 'docker' (default), 'bubblewrap' (Linux namespaces), or 'seatbelt' (macOS sandbox-exec)"
+            },
             image: {
               type: "string",
               description: 'Docker image to use (e.g., "node:20-alpine")'
@@ -15883,39 +15888,108 @@ ${errors}`);
             message: `Sandbox name '${name}' contains invalid characters. Only letters, numbers, dots, hyphens, underscores allowed.`
           });
         }
-        const modes = [
-          config.image ? "image" : null,
-          config.dockerfile || config.dockerfile_inline ? "dockerfile" : null,
-          config.compose ? "compose" : null
-        ].filter(Boolean);
-        if (modes.length === 0) {
+        if (config.engine && !["docker", "bubblewrap", "seatbelt"].includes(config.engine)) {
           errors.push({
-            field: `sandboxes.${name}`,
-            message: `Sandbox '${name}' must specify one of: image, dockerfile, dockerfile_inline, or compose`
-          });
-        } else if (modes.length > 1) {
-          errors.push({
-            field: `sandboxes.${name}`,
-            message: `Sandbox '${name}' has multiple modes (${modes.join(", ")}). Specify exactly one.`
+            field: `sandboxes.${name}.engine`,
+            message: `Sandbox '${name}' has invalid engine '${config.engine}'. Must be 'docker', 'bubblewrap', or 'seatbelt'.`
           });
         }
-        if (config.compose && !config.service) {
-          errors.push({
-            field: `sandboxes.${name}.service`,
-            message: `Sandbox '${name}' uses compose mode but is missing required 'service' field`
-          });
-        }
-        if (config.dockerfile && /\.\./.test(config.dockerfile)) {
-          errors.push({
-            field: `sandboxes.${name}.dockerfile`,
-            message: `Dockerfile path '${config.dockerfile}' in sandbox '${name}' must not contain '..' path traversal`
-          });
-        }
-        if (config.compose && /\.\./.test(config.compose)) {
-          errors.push({
-            field: `sandboxes.${name}.compose`,
-            message: `Compose file path '${config.compose}' in sandbox '${name}' must not contain '..' path traversal`
-          });
+        const isNativeEngine = config.engine === "bubblewrap" || config.engine === "seatbelt";
+        if (isNativeEngine) {
+          const dockerOnlyFields = [
+            ["image", config.image],
+            ["dockerfile", config.dockerfile],
+            ["dockerfile_inline", config.dockerfile_inline],
+            ["compose", config.compose],
+            ["service", config.service],
+            ["cache", config.cache],
+            ["visor_path", config.visor_path],
+            ["resources", config.resources]
+          ];
+          for (const [field, value] of dockerOnlyFields) {
+            if (value !== void 0) {
+              errors.push({
+                field: `sandboxes.${name}.${field}`,
+                message: `Sandbox '${name}' uses ${config.engine} engine but has Docker-only field '${field}'. Remove it or switch to engine: docker.`
+              });
+            }
+          }
+        } else {
+          const modes = [
+            config.image ? "image" : null,
+            config.dockerfile || config.dockerfile_inline ? "dockerfile" : null,
+            config.compose ? "compose" : null
+          ].filter(Boolean);
+          if (modes.length === 0) {
+            errors.push({
+              field: `sandboxes.${name}`,
+              message: `Sandbox '${name}' must specify one of: image, dockerfile, dockerfile_inline, or compose`
+            });
+          } else if (modes.length > 1) {
+            errors.push({
+              field: `sandboxes.${name}`,
+              message: `Sandbox '${name}' has multiple modes (${modes.join(", ")}). Specify exactly one.`
+            });
+          }
+          if (config.compose && !config.service) {
+            errors.push({
+              field: `sandboxes.${name}.service`,
+              message: `Sandbox '${name}' uses compose mode but is missing required 'service' field`
+            });
+          }
+          if (config.dockerfile && /\.\./.test(config.dockerfile)) {
+            errors.push({
+              field: `sandboxes.${name}.dockerfile`,
+              message: `Dockerfile path '${config.dockerfile}' in sandbox '${name}' must not contain '..' path traversal`
+            });
+          }
+          if (config.compose && /\.\./.test(config.compose)) {
+            errors.push({
+              field: `sandboxes.${name}.compose`,
+              message: `Compose file path '${config.compose}' in sandbox '${name}' must not contain '..' path traversal`
+            });
+          }
+          if (config.visor_path) {
+            if (!config.visor_path.startsWith("/")) {
+              errors.push({
+                field: `sandboxes.${name}.visor_path`,
+                message: `visor_path '${config.visor_path}' in sandbox '${name}' must be an absolute path (start with /)`
+              });
+            }
+            if (/\.\./.test(config.visor_path)) {
+              errors.push({
+                field: `sandboxes.${name}.visor_path`,
+                message: `visor_path '${config.visor_path}' in sandbox '${name}' must not contain '..' path traversal`
+              });
+            }
+          }
+          if (config.cache?.paths) {
+            for (const p of config.cache.paths) {
+              if (!p.startsWith("/")) {
+                errors.push({
+                  field: `sandboxes.${name}.cache.paths`,
+                  message: `Cache path '${p}' in sandbox '${name}' must be absolute (start with /)`,
+                  value: p
+                });
+              }
+              if (/\.\./.test(p)) {
+                errors.push({
+                  field: `sandboxes.${name}.cache.paths`,
+                  message: `Cache path '${p}' in sandbox '${name}' must not contain '..' path traversal`,
+                  value: p
+                });
+              }
+            }
+          }
+          if (config.resources?.cpu !== void 0) {
+            if (typeof config.resources.cpu !== "number" || config.resources.cpu <= 0) {
+              errors.push({
+                field: `sandboxes.${name}.resources.cpu`,
+                message: `CPU limit in sandbox '${name}' must be a positive number`,
+                value: config.resources.cpu
+              });
+            }
+          }
         }
         if (config.workdir) {
           if (!config.workdir.startsWith("/")) {
@@ -15928,47 +16002,6 @@ ${errors}`);
             errors.push({
               field: `sandboxes.${name}.workdir`,
               message: `Workdir '${config.workdir}' in sandbox '${name}' must not contain '..' path traversal`
-            });
-          }
-        }
-        if (config.visor_path) {
-          if (!config.visor_path.startsWith("/")) {
-            errors.push({
-              field: `sandboxes.${name}.visor_path`,
-              message: `visor_path '${config.visor_path}' in sandbox '${name}' must be an absolute path (start with /)`
-            });
-          }
-          if (/\.\./.test(config.visor_path)) {
-            errors.push({
-              field: `sandboxes.${name}.visor_path`,
-              message: `visor_path '${config.visor_path}' in sandbox '${name}' must not contain '..' path traversal`
-            });
-          }
-        }
-        if (config.cache?.paths) {
-          for (const p of config.cache.paths) {
-            if (!p.startsWith("/")) {
-              errors.push({
-                field: `sandboxes.${name}.cache.paths`,
-                message: `Cache path '${p}' in sandbox '${name}' must be absolute (start with /)`,
-                value: p
-              });
-            }
-            if (/\.\./.test(p)) {
-              errors.push({
-                field: `sandboxes.${name}.cache.paths`,
-                message: `Cache path '${p}' in sandbox '${name}' must not contain '..' path traversal`,
-                value: p
-              });
-            }
-          }
-        }
-        if (config.resources?.cpu !== void 0) {
-          if (typeof config.resources.cpu !== "number" || config.resources.cpu <= 0) {
-            errors.push({
-              field: `sandboxes.${name}.resources.cpu`,
-              message: `CPU limit in sandbox '${name}' must be a positive number`,
-              value: config.resources.cpu
             });
           }
         }
@@ -19334,7 +19367,7 @@ var init_mcp_custom_sse_server = __esm({
        * Returns the actual bound port number
        */
       async start() {
-        return new Promise((resolve11, reject) => {
+        return new Promise((resolve13, reject) => {
           try {
             this.server = import_http.default.createServer((req, res) => {
               this.handleRequest(req, res).catch((error) => {
@@ -19368,7 +19401,7 @@ var init_mcp_custom_sse_server = __esm({
                 );
               }
               this.startKeepalive();
-              resolve11(this.port);
+              resolve13(this.port);
             });
           } catch (error) {
             reject(error);
@@ -19431,7 +19464,7 @@ var init_mcp_custom_sse_server = __esm({
             logger.debug(
               `[CustomToolsSSEServer:${this.sessionId}] Grace period before stop: ${waitMs}ms (activeToolCalls=${this.activeToolCalls})`
             );
-            await new Promise((resolve11) => setTimeout(resolve11, waitMs));
+            await new Promise((resolve13) => setTimeout(resolve13, waitMs));
           }
         }
         if (this.activeToolCalls > 0) {
@@ -19440,7 +19473,7 @@ var init_mcp_custom_sse_server = __esm({
             `[CustomToolsSSEServer:${this.sessionId}] Waiting for ${this.activeToolCalls} active tool call(s) before stop`
           );
           while (this.activeToolCalls > 0 && Date.now() - startedAt < effectiveDrainTimeoutMs) {
-            await new Promise((resolve11) => setTimeout(resolve11, 250));
+            await new Promise((resolve13) => setTimeout(resolve13, 250));
           }
           if (this.activeToolCalls > 0) {
             logger.warn(
@@ -19465,21 +19498,21 @@ var init_mcp_custom_sse_server = __esm({
         }
         this.connections.clear();
         if (this.server) {
-          await new Promise((resolve11, reject) => {
+          await new Promise((resolve13, reject) => {
             const timeout = setTimeout(() => {
               if (this.debug) {
                 logger.debug(
                   `[CustomToolsSSEServer:${this.sessionId}] Force closing server after timeout`
                 );
               }
-              this.server?.close(() => resolve11());
+              this.server?.close(() => resolve13());
             }, 5e3);
             this.server.close((error) => {
               clearTimeout(timeout);
               if (error) {
                 reject(error);
               } else {
-                resolve11();
+                resolve13();
               }
             });
           });
@@ -19905,7 +19938,7 @@ var init_mcp_custom_sse_server = __esm({
               logger.warn(
                 `[CustomToolsSSEServer:${this.sessionId}] Tool ${toolName} failed (attempt ${attempt + 1}/${retryCount + 1}): ${errorMsg}. Retrying in ${delay}ms`
               );
-              await new Promise((resolve11) => setTimeout(resolve11, delay));
+              await new Promise((resolve13) => setTimeout(resolve13, delay));
               attempt++;
             }
           }
@@ -20210,8 +20243,8 @@ var init_ai_check_provider = __esm({
           }
           const fs22 = require("fs").promises;
           try {
-            const stat = await fs22.stat(resolvedPath);
-            return stat.isFile();
+            const stat2 = await fs22.stat(resolvedPath);
+            return stat2.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
           }
@@ -23459,8 +23492,8 @@ var init_claude_code_check_provider = __esm({
             resolvedPath = import_path8.default.resolve(process.cwd(), str);
           }
           try {
-            const stat = await import_promises5.default.stat(resolvedPath);
-            return stat.isFile();
+            const stat2 = await import_promises5.default.stat(resolvedPath);
+            return stat2.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
           }
@@ -29089,8 +29122,8 @@ var require_util2 = __commonJS({
     function createDeferredPromise() {
       let res;
       let rej;
-      const promise = new Promise((resolve11, reject) => {
-        res = resolve11;
+      const promise = new Promise((resolve13, reject) => {
+        res = resolve13;
         rej = reject;
       });
       return { promise, resolve: res, reject: rej };
@@ -30595,8 +30628,8 @@ Content-Type: ${value.type || "application/octet-stream"}\r
                 });
               }
             });
-            const busboyResolve = new Promise((resolve11, reject) => {
-              busboy.on("finish", resolve11);
+            const busboyResolve = new Promise((resolve13, reject) => {
+              busboy.on("finish", resolve13);
               busboy.on("error", (err) => reject(new TypeError(err)));
             });
             if (this.body !== null) for await (const chunk of consumeBody(this[kState].body)) busboy.write(chunk);
@@ -31130,9 +31163,9 @@ var require_dispatcher_base = __commonJS({
       }
       close(callback) {
         if (callback === void 0) {
-          return new Promise((resolve11, reject) => {
+          return new Promise((resolve13, reject) => {
             this.close((err, data) => {
-              return err ? reject(err) : resolve11(data);
+              return err ? reject(err) : resolve13(data);
             });
           });
         }
@@ -31170,12 +31203,12 @@ var require_dispatcher_base = __commonJS({
           err = null;
         }
         if (callback === void 0) {
-          return new Promise((resolve11, reject) => {
+          return new Promise((resolve13, reject) => {
             this.destroy(err, (err2, data) => {
               return err2 ? (
                 /* istanbul ignore next: should never error */
                 reject(err2)
-              ) : resolve11(data);
+              ) : resolve13(data);
             });
           });
         }
@@ -32237,16 +32270,16 @@ var require_client = __commonJS({
         return this[kNeedDrain] < 2;
       }
       async [kClose]() {
-        return new Promise((resolve11) => {
+        return new Promise((resolve13) => {
           if (!this[kSize]) {
-            resolve11(null);
+            resolve13(null);
           } else {
-            this[kClosedResolve] = resolve11;
+            this[kClosedResolve] = resolve13;
           }
         });
       }
       async [kDestroy](err) {
-        return new Promise((resolve11) => {
+        return new Promise((resolve13) => {
           const requests = this[kQueue].splice(this[kPendingIdx]);
           for (let i = 0; i < requests.length; i++) {
             const request = requests[i];
@@ -32257,7 +32290,7 @@ var require_client = __commonJS({
               this[kClosedResolve]();
               this[kClosedResolve] = null;
             }
-            resolve11();
+            resolve13();
           };
           if (this[kHTTP2Session] != null) {
             util.destroy(this[kHTTP2Session], err);
@@ -32837,7 +32870,7 @@ var require_client = __commonJS({
         });
       }
       try {
-        const socket = await new Promise((resolve11, reject) => {
+        const socket = await new Promise((resolve13, reject) => {
           client[kConnector]({
             host,
             hostname,
@@ -32849,7 +32882,7 @@ var require_client = __commonJS({
             if (err) {
               reject(err);
             } else {
-              resolve11(socket2);
+              resolve13(socket2);
             }
           });
         });
@@ -33473,12 +33506,12 @@ upgrade: ${upgrade}\r
           cb();
         }
       }
-      const waitForDrain = () => new Promise((resolve11, reject) => {
+      const waitForDrain = () => new Promise((resolve13, reject) => {
         assert(callback === null);
         if (socket[kError]) {
           reject(socket[kError]);
         } else {
-          callback = resolve11;
+          callback = resolve13;
         }
       });
       if (client[kHTTPConnVersion] === "h2") {
@@ -33824,8 +33857,8 @@ var require_pool_base = __commonJS({
         if (this[kQueue].isEmpty()) {
           return Promise.all(this[kClients].map((c) => c.close()));
         } else {
-          return new Promise((resolve11) => {
-            this[kClosedResolve] = resolve11;
+          return new Promise((resolve13) => {
+            this[kClosedResolve] = resolve13;
           });
         }
       }
@@ -34403,7 +34436,7 @@ var require_readable = __commonJS({
         if (this.closed) {
           return Promise.resolve(null);
         }
-        return new Promise((resolve11, reject) => {
+        return new Promise((resolve13, reject) => {
           const signalListenerCleanup = signal ? util.addAbortListener(signal, () => {
             this.destroy();
           }) : noop;
@@ -34412,7 +34445,7 @@ var require_readable = __commonJS({
             if (signal && signal.aborted) {
               reject(signal.reason || Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
             } else {
-              resolve11(null);
+              resolve13(null);
             }
           }).on("error", noop).on("data", function(chunk) {
             limit -= chunk.length;
@@ -34434,11 +34467,11 @@ var require_readable = __commonJS({
         throw new TypeError("unusable");
       }
       assert(!stream[kConsume]);
-      return new Promise((resolve11, reject) => {
+      return new Promise((resolve13, reject) => {
         stream[kConsume] = {
           type,
           stream,
-          resolve: resolve11,
+          resolve: resolve13,
           reject,
           length: 0,
           body: []
@@ -34473,12 +34506,12 @@ var require_readable = __commonJS({
       }
     }
     function consumeEnd(consume2) {
-      const { type, body, resolve: resolve11, stream, length } = consume2;
+      const { type, body, resolve: resolve13, stream, length } = consume2;
       try {
         if (type === "text") {
-          resolve11(toUSVString(Buffer.concat(body)));
+          resolve13(toUSVString(Buffer.concat(body)));
         } else if (type === "json") {
-          resolve11(JSON.parse(Buffer.concat(body)));
+          resolve13(JSON.parse(Buffer.concat(body)));
         } else if (type === "arrayBuffer") {
           const dst = new Uint8Array(length);
           let pos = 0;
@@ -34486,12 +34519,12 @@ var require_readable = __commonJS({
             dst.set(buf, pos);
             pos += buf.byteLength;
           }
-          resolve11(dst.buffer);
+          resolve13(dst.buffer);
         } else if (type === "blob") {
           if (!Blob2) {
             Blob2 = require("buffer").Blob;
           }
-          resolve11(new Blob2(body, { type: stream[kContentType] }));
+          resolve13(new Blob2(body, { type: stream[kContentType] }));
         }
         consumeFinish(consume2);
       } catch (err) {
@@ -34748,9 +34781,9 @@ var require_api_request = __commonJS({
     };
     function request(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve11, reject) => {
+        return new Promise((resolve13, reject) => {
           request.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve11(data);
+            return err ? reject(err) : resolve13(data);
           });
         });
       }
@@ -34923,9 +34956,9 @@ var require_api_stream = __commonJS({
     };
     function stream(opts, factory, callback) {
       if (callback === void 0) {
-        return new Promise((resolve11, reject) => {
+        return new Promise((resolve13, reject) => {
           stream.call(this, opts, factory, (err, data) => {
-            return err ? reject(err) : resolve11(data);
+            return err ? reject(err) : resolve13(data);
           });
         });
       }
@@ -35206,9 +35239,9 @@ var require_api_upgrade = __commonJS({
     };
     function upgrade(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve11, reject) => {
+        return new Promise((resolve13, reject) => {
           upgrade.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve11(data);
+            return err ? reject(err) : resolve13(data);
           });
         });
       }
@@ -35297,9 +35330,9 @@ var require_api_connect = __commonJS({
     };
     function connect(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve11, reject) => {
+        return new Promise((resolve13, reject) => {
           connect.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve11(data);
+            return err ? reject(err) : resolve13(data);
           });
         });
       }
@@ -35823,7 +35856,7 @@ var require_mock_interceptor = __commonJS({
 var require_mock_client = __commonJS({
   "node_modules/undici/lib/mock/mock-client.js"(exports2, module2) {
     "use strict";
-    var { promisify: promisify5 } = require("util");
+    var { promisify: promisify7 } = require("util");
     var Client2 = require_client();
     var { buildMockDispatch } = require_mock_utils();
     var {
@@ -35863,7 +35896,7 @@ var require_mock_client = __commonJS({
         return new MockInterceptor(opts, this[kDispatches]);
       }
       async [kClose]() {
-        await promisify5(this[kOriginalClose])();
+        await promisify7(this[kOriginalClose])();
         this[kConnected] = 0;
         this[kMockAgent][Symbols.kClients].delete(this[kOrigin]);
       }
@@ -35876,7 +35909,7 @@ var require_mock_client = __commonJS({
 var require_mock_pool = __commonJS({
   "node_modules/undici/lib/mock/mock-pool.js"(exports2, module2) {
     "use strict";
-    var { promisify: promisify5 } = require("util");
+    var { promisify: promisify7 } = require("util");
     var Pool = require_pool();
     var { buildMockDispatch } = require_mock_utils();
     var {
@@ -35916,7 +35949,7 @@ var require_mock_pool = __commonJS({
         return new MockInterceptor(opts, this[kDispatches]);
       }
       async [kClose]() {
-        await promisify5(this[kOriginalClose])();
+        await promisify7(this[kOriginalClose])();
         this[kConnected] = 0;
         this[kMockAgent][Symbols.kClients].delete(this[kOrigin]);
       }
@@ -38922,7 +38955,7 @@ var require_fetch = __commonJS({
       async function dispatch({ body }) {
         const url = requestCurrentURL(request);
         const agent = fetchParams.controller.dispatcher;
-        return new Promise((resolve11, reject) => agent.dispatch(
+        return new Promise((resolve13, reject) => agent.dispatch(
           {
             path: url.pathname + url.search,
             origin: url.origin,
@@ -38998,7 +39031,7 @@ var require_fetch = __commonJS({
                   }
                 }
               }
-              resolve11({
+              resolve13({
                 status,
                 statusText,
                 headersList: headers[kHeadersList],
@@ -39041,7 +39074,7 @@ var require_fetch = __commonJS({
                 const val = headersList[n + 1].toString("latin1");
                 headers[kHeadersList].append(key, val);
               }
-              resolve11({
+              resolve13({
                 status,
                 statusText: STATUS_CODES[status],
                 headersList: headers[kHeadersList],
@@ -42836,7 +42869,7 @@ var init_mcp_check_provider = __esm({
             logger.warn(
               `MCP ${transportName} failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${error instanceof Error ? error.message : String(error)}`
             );
-            await new Promise((resolve11) => setTimeout(resolve11, delay));
+            await new Promise((resolve13) => setTimeout(resolve13, delay));
             attempt += 1;
           } finally {
             try {
@@ -43118,7 +43151,7 @@ async function acquirePromptLock() {
     activePrompt = true;
     return;
   }
-  await new Promise((resolve11) => waiters.push(resolve11));
+  await new Promise((resolve13) => waiters.push(resolve13));
   activePrompt = true;
 }
 function releasePromptLock() {
@@ -43128,7 +43161,7 @@ function releasePromptLock() {
 }
 async function interactivePrompt(options) {
   await acquirePromptLock();
-  return new Promise((resolve11, reject) => {
+  return new Promise((resolve13, reject) => {
     const dbg = process.env.VISOR_DEBUG === "true";
     try {
       if (dbg) {
@@ -43215,12 +43248,12 @@ async function interactivePrompt(options) {
     };
     const finish = (value) => {
       cleanup();
-      resolve11(value);
+      resolve13(value);
     };
     if (options.timeout && options.timeout > 0) {
       timeoutId = setTimeout(() => {
         cleanup();
-        if (defaultValue !== void 0) return resolve11(defaultValue);
+        if (defaultValue !== void 0) return resolve13(defaultValue);
         return reject(new Error("Input timeout"));
       }, options.timeout);
     }
@@ -43352,7 +43385,7 @@ async function interactivePrompt(options) {
   });
 }
 async function simplePrompt(prompt) {
-  return new Promise((resolve11) => {
+  return new Promise((resolve13) => {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout
@@ -43368,7 +43401,7 @@ async function simplePrompt(prompt) {
     rl.question(`${prompt}
 > `, (answer) => {
       rl.close();
-      resolve11(answer.trim());
+      resolve13(answer.trim());
     });
   });
 }
@@ -43536,7 +43569,7 @@ function isStdinAvailable() {
   return !process.stdin.isTTY;
 }
 async function readStdin(timeout, maxSize = 1024 * 1024) {
-  return new Promise((resolve11, reject) => {
+  return new Promise((resolve13, reject) => {
     let data = "";
     let timeoutId;
     if (timeout) {
@@ -43563,7 +43596,7 @@ async function readStdin(timeout, maxSize = 1024 * 1024) {
     };
     const onEnd = () => {
       cleanup();
-      resolve11(data.trim());
+      resolve13(data.trim());
     };
     const onError = (err) => {
       cleanup();
@@ -50489,8 +50522,8 @@ var init_runner = __esm({
         stats.sort((a, b) => (b.errorMessage ? 1 : 0) - (a.errorMessage ? 1 : 0));
         const results = this.aggregateResultsFromJournal();
         let totalDuration = 0;
-        for (const stat of stats) {
-          totalDuration = Math.max(totalDuration, stat.totalDuration);
+        for (const stat2 of stats) {
+          totalDuration = Math.max(totalDuration, stat2.totalDuration);
         }
         try {
           for (const s of stats) {
@@ -51156,13 +51189,275 @@ var init_cache_volume_manager = __esm({
   }
 });
 
+// src/sandbox/bubblewrap-sandbox.ts
+var bubblewrap_sandbox_exports = {};
+__export(bubblewrap_sandbox_exports, {
+  BubblewrapSandbox: () => BubblewrapSandbox
+});
+var import_util5, import_child_process6, import_fs6, import_path10, execFileAsync4, EXEC_MAX_BUFFER4, BubblewrapSandbox;
+var init_bubblewrap_sandbox = __esm({
+  "src/sandbox/bubblewrap-sandbox.ts"() {
+    "use strict";
+    import_util5 = require("util");
+    import_child_process6 = require("child_process");
+    import_fs6 = require("fs");
+    import_path10 = require("path");
+    init_logger();
+    init_sandbox_telemetry();
+    execFileAsync4 = (0, import_util5.promisify)(import_child_process6.execFile);
+    EXEC_MAX_BUFFER4 = 50 * 1024 * 1024;
+    BubblewrapSandbox = class {
+      name;
+      config;
+      repoPath;
+      constructor(name, config, repoPath) {
+        this.name = name;
+        this.config = config;
+        this.repoPath = (0, import_path10.resolve)(repoPath);
+      }
+      /**
+       * Check if bwrap binary is available on the system.
+       */
+      static async isAvailable() {
+        try {
+          await execFileAsync4("which", ["bwrap"], { timeout: 5e3 });
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      /**
+       * Execute a command inside a bubblewrap sandbox.
+       * Each exec creates a fresh namespace — no persistent container.
+       */
+      async exec(options) {
+        const args = this.buildArgs(options);
+        args.push("--", "/bin/sh", "-c", options.command);
+        logger.debug(
+          `[BubblewrapSandbox] Executing in sandbox '${this.name}': ${options.command.slice(0, 100)}`
+        );
+        try {
+          const { stdout, stderr } = await execFileAsync4("bwrap", args, {
+            maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER4,
+            timeout: options.timeoutMs || 6e5
+          });
+          addEvent2("visor.sandbox.bwrap.exec", {
+            "visor.sandbox.name": this.name,
+            "visor.sandbox.exit_code": 0
+          });
+          return { stdout, stderr, exitCode: 0 };
+        } catch (err) {
+          const execErr = err;
+          const exitCode = typeof execErr.code === "number" ? execErr.code : 1;
+          addEvent2("visor.sandbox.bwrap.exec", {
+            "visor.sandbox.name": this.name,
+            "visor.sandbox.exit_code": exitCode
+          });
+          return {
+            stdout: execErr.stdout || "",
+            stderr: execErr.stderr || "",
+            exitCode
+          };
+        }
+      }
+      /**
+       * No-op: bubblewrap processes are ephemeral (no persistent container to stop).
+       */
+      async stop() {
+      }
+      /**
+       * Build the bwrap command-line arguments.
+       */
+      buildArgs(options) {
+        const workdir = this.config.workdir || "/workspace";
+        const args = [];
+        args.push("--ro-bind", "/usr", "/usr");
+        args.push("--ro-bind", "/bin", "/bin");
+        if ((0, import_fs6.existsSync)("/lib")) {
+          args.push("--ro-bind", "/lib", "/lib");
+        }
+        if ((0, import_fs6.existsSync)("/lib64")) {
+          args.push("--ro-bind", "/lib64", "/lib64");
+        }
+        if ((0, import_fs6.existsSync)("/etc/resolv.conf")) {
+          args.push("--ro-bind", "/etc/resolv.conf", "/etc/resolv.conf");
+        }
+        if ((0, import_fs6.existsSync)("/etc/ssl")) {
+          args.push("--ro-bind", "/etc/ssl", "/etc/ssl");
+        }
+        args.push("--dev", "/dev");
+        args.push("--proc", "/proc");
+        args.push("--tmpfs", "/tmp");
+        args.push("--tmpfs", "/root");
+        if (this.config.read_only) {
+          args.push("--ro-bind", this.repoPath, workdir);
+        } else {
+          args.push("--bind", this.repoPath, workdir);
+        }
+        args.push("--chdir", workdir);
+        args.push("--unshare-pid");
+        args.push("--new-session");
+        args.push("--die-with-parent");
+        if (this.config.network === false) {
+          args.push("--unshare-net");
+        }
+        args.push("--clearenv");
+        for (const [key, value] of Object.entries(options.env)) {
+          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+            throw new Error(`Invalid environment variable name: '${key}'`);
+          }
+          args.push("--setenv", key, value);
+        }
+        return args;
+      }
+    };
+  }
+});
+
+// src/sandbox/seatbelt-sandbox.ts
+var seatbelt_sandbox_exports = {};
+__export(seatbelt_sandbox_exports, {
+  SeatbeltSandbox: () => SeatbeltSandbox
+});
+var import_util6, import_child_process7, import_path11, import_fs7, execFileAsync5, EXEC_MAX_BUFFER5, SeatbeltSandbox;
+var init_seatbelt_sandbox = __esm({
+  "src/sandbox/seatbelt-sandbox.ts"() {
+    "use strict";
+    import_util6 = require("util");
+    import_child_process7 = require("child_process");
+    import_path11 = require("path");
+    import_fs7 = require("fs");
+    init_logger();
+    init_sandbox_telemetry();
+    execFileAsync5 = (0, import_util6.promisify)(import_child_process7.execFile);
+    EXEC_MAX_BUFFER5 = 50 * 1024 * 1024;
+    SeatbeltSandbox = class {
+      name;
+      config;
+      repoPath;
+      constructor(name, config, repoPath) {
+        this.name = name;
+        this.config = config;
+        this.repoPath = (0, import_fs7.realpathSync)((0, import_path11.resolve)(repoPath));
+      }
+      /**
+       * Check if sandbox-exec binary is available on the system.
+       */
+      static async isAvailable() {
+        try {
+          await execFileAsync5("which", ["sandbox-exec"], { timeout: 5e3 });
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      /**
+       * Execute a command inside a macOS seatbelt sandbox.
+       * Each exec creates a fresh sandbox process — no persistent container.
+       */
+      async exec(options) {
+        const profile = this.buildProfile();
+        for (const key of Object.keys(options.env)) {
+          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+            throw new Error(`Invalid environment variable name: '${key}'`);
+          }
+        }
+        const args = ["-p", profile];
+        args.push("/usr/bin/env", "-i");
+        for (const [key, value] of Object.entries(options.env)) {
+          args.push(`${key}=${value}`);
+        }
+        args.push("/bin/sh", "-c", options.command);
+        logger.debug(
+          `[SeatbeltSandbox] Executing in sandbox '${this.name}': ${options.command.slice(0, 100)}`
+        );
+        try {
+          const { stdout, stderr } = await execFileAsync5("sandbox-exec", args, {
+            maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER5,
+            timeout: options.timeoutMs || 6e5,
+            cwd: this.repoPath
+          });
+          addEvent2("visor.sandbox.seatbelt.exec", {
+            "visor.sandbox.name": this.name,
+            "visor.sandbox.exit_code": 0
+          });
+          return { stdout, stderr, exitCode: 0 };
+        } catch (err) {
+          const execErr = err;
+          const exitCode = typeof execErr.code === "number" ? execErr.code : 1;
+          addEvent2("visor.sandbox.seatbelt.exec", {
+            "visor.sandbox.name": this.name,
+            "visor.sandbox.exit_code": exitCode
+          });
+          return {
+            stdout: execErr.stdout || "",
+            stderr: execErr.stderr || "",
+            exitCode
+          };
+        }
+      }
+      /**
+       * No-op: sandbox-exec processes are ephemeral (no persistent container to stop).
+       */
+      async stop() {
+      }
+      /**
+       * Escape a path for use inside an SBPL profile string.
+       * Escapes backslashes and double quotes.
+       */
+      escapePath(p) {
+        return p.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      }
+      /**
+       * Build the SBPL (Seatbelt Profile Language) profile string.
+       */
+      buildProfile() {
+        const repoPath = this.escapePath(this.repoPath);
+        const lines = [];
+        lines.push("(version 1)");
+        lines.push("(deny default)");
+        lines.push("(allow process-exec)");
+        lines.push("(allow process-fork)");
+        lines.push("(allow file-read*");
+        lines.push('  (literal "/")');
+        lines.push('  (subpath "/usr")');
+        lines.push('  (subpath "/bin")');
+        lines.push('  (subpath "/sbin")');
+        lines.push('  (subpath "/Library")');
+        lines.push('  (subpath "/System")');
+        lines.push('  (subpath "/private")');
+        lines.push('  (subpath "/var")');
+        lines.push('  (subpath "/etc")');
+        lines.push('  (subpath "/dev")');
+        lines.push('  (subpath "/tmp"))');
+        lines.push("(allow file-write*");
+        lines.push('  (subpath "/tmp")');
+        lines.push('  (subpath "/private/tmp")');
+        lines.push('  (subpath "/dev"))');
+        lines.push('(allow file-write* (regex #"/private/var/folders/.*/T/xcrun_db"))');
+        lines.push(`(allow file-read* (subpath "${repoPath}"))`);
+        if (!this.config.read_only) {
+          lines.push(`(allow file-write* (subpath "${repoPath}"))`);
+        }
+        if (this.config.network !== false) {
+          lines.push("(allow network*)");
+        }
+        lines.push("(allow sysctl-read)");
+        lines.push("(allow mach-lookup)");
+        lines.push("(allow signal)");
+        return lines.join("\n");
+      }
+    };
+  }
+});
+
 // src/sandbox/sandbox-manager.ts
-var import_path10, import_fs6, SandboxManager;
+var import_path12, import_fs8, SandboxManager;
 var init_sandbox_manager = __esm({
   "src/sandbox/sandbox-manager.ts"() {
     "use strict";
-    import_path10 = require("path");
-    import_fs6 = require("fs");
+    import_path12 = require("path");
+    import_fs8 = require("fs");
     init_docker_image_sandbox();
     init_docker_compose_sandbox();
     init_cache_volume_manager();
@@ -51181,10 +51476,10 @@ var init_sandbox_manager = __esm({
       }
       constructor(sandboxDefs, repoPath, gitBranch) {
         this.sandboxDefs = sandboxDefs;
-        this.repoPath = (0, import_path10.resolve)(repoPath);
+        this.repoPath = (0, import_path12.resolve)(repoPath);
         this.gitBranch = gitBranch;
         this.cacheManager = new CacheVolumeManager();
-        this.visorDistPath = (0, import_fs6.existsSync)((0, import_path10.join)(__dirname, "index.js")) ? __dirname : (0, import_path10.resolve)((0, import_path10.dirname)(__dirname));
+        this.visorDistPath = (0, import_fs8.existsSync)((0, import_path12.join)(__dirname, "index.js")) ? __dirname : (0, import_path12.resolve)((0, import_path12.dirname)(__dirname));
       }
       /**
        * Resolve which sandbox a check should use.
@@ -51214,6 +51509,18 @@ var init_sandbox_manager = __esm({
           throw new Error(`Sandbox '${name}' is not defined`);
         }
         const mode = config.compose ? "compose" : "image";
+        if (config.engine === "bubblewrap") {
+          const { BubblewrapSandbox: BubblewrapSandbox2 } = (init_bubblewrap_sandbox(), __toCommonJS(bubblewrap_sandbox_exports));
+          const instance = new BubblewrapSandbox2(name, config, this.repoPath);
+          this.instances.set(name, instance);
+          return instance;
+        }
+        if (config.engine === "seatbelt") {
+          const { SeatbeltSandbox: SeatbeltSandbox2 } = (init_seatbelt_sandbox(), __toCommonJS(seatbelt_sandbox_exports));
+          const instance = new SeatbeltSandbox2(name, config, this.repoPath);
+          this.instances.set(name, instance);
+          return instance;
+        }
         return withActiveSpan2(
           "visor.sandbox.start",
           {
@@ -51861,8 +52168,8 @@ var init_workspace_manager = __esm({
         );
         if (this.cleanupRequested && this.activeOperations === 0) {
           logger.debug(`[Workspace] All references released, proceeding with deferred cleanup`);
-          for (const resolve11 of this.cleanupResolvers) {
-            resolve11();
+          for (const resolve13 of this.cleanupResolvers) {
+            resolve13();
           }
           this.cleanupResolvers = [];
         }
@@ -51912,13 +52219,34 @@ var init_workspace_manager = __esm({
         const mainProjectPath = path23.join(this.workspacePath, mainProjectName);
         const isGitRepo = await this.isGitRepository(this.originalPath);
         if (isGitRepo) {
-          await this.createMainProjectWorktree(mainProjectPath);
+          const exists = await this.pathExists(mainProjectPath);
+          if (exists) {
+            logger.info(`[Workspace] Reusing existing main project worktree: ${mainProjectPath}`);
+            const isValid = await this.isGitRepository(mainProjectPath);
+            if (!isValid) {
+              logger.warn(`[Workspace] Existing path is not a valid git dir, recreating`);
+              await fsp2.rm(mainProjectPath, { recursive: true, force: true });
+              try {
+                await commandExecutor.execute(
+                  `git -C ${shellEscape(this.originalPath)} worktree prune`,
+                  { timeout: 1e4 }
+                );
+              } catch {
+              }
+              await this.createMainProjectWorktree(mainProjectPath);
+            }
+          } else {
+            await this.createMainProjectWorktree(mainProjectPath);
+          }
         } else {
           logger.debug(`Original path is not a git repo, creating symlink`);
-          try {
-            await fsp2.symlink(this.originalPath, mainProjectPath);
-          } catch (error) {
-            throw new Error(`Failed to create symlink for main project: ${error}`);
+          const exists = await this.pathExists(mainProjectPath);
+          if (!exists) {
+            try {
+              await fsp2.symlink(this.originalPath, mainProjectPath);
+            } catch (error) {
+              throw new Error(`Failed to create symlink for main project: ${error}`);
+            }
           }
         }
         this.registerCleanupHandlers();
@@ -51978,6 +52306,15 @@ var init_workspace_manager = __esm({
        * @param timeout Maximum time to wait for active operations (default: 60s)
        */
       async cleanup(timeout = 6e4) {
+        if (!this.config.cleanupOnExit) {
+          logger.debug(`[Workspace] Skipping cleanup (cleanupOnExit=false): ${this.workspacePath}`);
+          _WorkspaceManager.instances.delete(this.sessionId);
+          this.initialized = false;
+          this.mainProjectInfo = null;
+          this.projects.clear();
+          this.usedNames.clear();
+          return;
+        }
         logger.info(
           `Cleaning up workspace: ${this.workspacePath} (active operations: ${this.activeOperations})`
         );
@@ -51987,19 +52324,19 @@ var init_workspace_manager = __esm({
           );
           this.cleanupRequested = true;
           await Promise.race([
-            new Promise((resolve11) => {
+            new Promise((resolve13) => {
               if (this.activeOperations === 0) {
-                resolve11();
+                resolve13();
               } else {
-                this.cleanupResolvers.push(resolve11);
+                this.cleanupResolvers.push(resolve13);
               }
             }),
-            new Promise((resolve11) => {
+            new Promise((resolve13) => {
               setTimeout(() => {
                 logger.warn(
                   `[Workspace] Cleanup timeout after ${timeout}ms, proceeding anyway (${this.activeOperations} operations still active)`
                 );
-                resolve11();
+                resolve13();
               }, timeout);
             })
           ]);
@@ -52028,6 +52365,68 @@ var init_workspace_manager = __esm({
         } catch (error) {
           logger.warn(`Failed to cleanup workspace: ${error}`);
         }
+      }
+      /**
+       * Check if a path exists (file or directory).
+       */
+      async pathExists(p) {
+        try {
+          await fsp2.access(p);
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      /**
+       * Clean up stale workspace directories older than maxAge.
+       * Call periodically (e.g. at socket-runner startup) to prevent disk bloat.
+       */
+      static async cleanupStale(basePath = process.env.VISOR_WORKSPACE_PATH || "/tmp/visor-workspaces", maxAgeMs = 24 * 60 * 60 * 1e3) {
+        let cleaned = 0;
+        try {
+          const entries = await fsp2.readdir(basePath, { withFileTypes: true });
+          const now = Date.now();
+          for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+            const dirPath = path23.join(basePath, entry.name);
+            try {
+              const stat2 = await fsp2.stat(dirPath);
+              if (now - stat2.mtimeMs > maxAgeMs) {
+                try {
+                  const subdirs = await fsp2.readdir(dirPath, { withFileTypes: true });
+                  for (const sub of subdirs) {
+                    if (!sub.isDirectory()) continue;
+                    const subPath = path23.join(dirPath, sub.name);
+                    const gitFilePath = path23.join(subPath, ".git");
+                    try {
+                      const gitContent = await fsp2.readFile(gitFilePath, "utf-8");
+                      const match = gitContent.match(/gitdir:\s*(.+)/);
+                      if (match) {
+                        const worktreeGitDir = match[1].trim();
+                        const repoGitDir = worktreeGitDir.replace(/\/\.git\/worktrees\/.*$/, "");
+                        await commandExecutor.execute(
+                          `git -C ${shellEscape(repoGitDir)} worktree remove ${shellEscape(subPath)} --force`,
+                          { timeout: 1e4 }
+                        );
+                      }
+                    } catch {
+                    }
+                  }
+                } catch {
+                }
+                await fsp2.rm(dirPath, { recursive: true, force: true });
+                cleaned++;
+              }
+            } catch {
+            }
+          }
+          if (cleaned > 0) {
+            logger.info(`[Workspace] Cleaned up ${cleaned} stale workspace(s) from ${basePath}`);
+          }
+        } catch (error) {
+          logger.debug(`[Workspace] Stale cleanup error: ${error}`);
+        }
+        return cleaned;
       }
       /**
        * Create worktree for the main project
@@ -52323,12 +52722,12 @@ var ndjson_sink_exports = {};
 __export(ndjson_sink_exports, {
   NdjsonSink: () => NdjsonSink
 });
-var import_fs7, import_path11, NdjsonSink;
+var import_fs9, import_path13, NdjsonSink;
 var init_ndjson_sink = __esm({
   "src/frontends/ndjson-sink.ts"() {
     "use strict";
-    import_fs7 = __toESM(require("fs"));
-    import_path11 = __toESM(require("path"));
+    import_fs9 = __toESM(require("fs"));
+    import_path13 = __toESM(require("path"));
     NdjsonSink = class {
       name = "ndjson-sink";
       cfg;
@@ -52349,7 +52748,7 @@ var init_ndjson_sink = __esm({
               payload: envelope && envelope.payload || envelope,
               safe: true
             });
-            await import_fs7.default.promises.appendFile(this.filePath, line + "\n");
+            await import_fs9.default.promises.appendFile(this.filePath, line + "\n");
           } catch (err) {
             ctx.logger.error("[ndjson-sink] Failed to write event:", err);
           }
@@ -52360,8 +52759,8 @@ var init_ndjson_sink = __esm({
         this.unsub = void 0;
       }
       resolveFile(p) {
-        if (import_path11.default.isAbsolute(p)) return p;
-        return import_path11.default.join(process.cwd(), p);
+        if (import_path13.default.isAbsolute(p)) return p;
+        return import_path13.default.join(process.cwd(), p);
       }
     };
   }
@@ -53184,8 +53583,8 @@ ${content}
        * Sleep utility
        */
       sleep(ms) {
-        return new Promise((resolve11) => {
-          const t = setTimeout(resolve11, ms);
+        return new Promise((resolve13) => {
+          const t = setTimeout(resolve13, ms);
           if (typeof t.unref === "function") {
             try {
               t.unref();
@@ -53459,8 +53858,8 @@ ${end}`);
       async updateGroupedComment(ctx, comments, group, changedIds) {
         const existingLock = this.updateLocks.get(group);
         let resolveLock;
-        const ourLock = new Promise((resolve11) => {
-          resolveLock = resolve11;
+        const ourLock = new Promise((resolve13) => {
+          resolveLock = resolve13;
         });
         this.updateLocks.set(group, ourLock);
         try {
@@ -53772,7 +54171,7 @@ ${blocks}
        * Sleep utility for enforcing delays
        */
       sleep(ms) {
-        return new Promise((resolve11) => setTimeout(resolve11, ms));
+        return new Promise((resolve13) => setTimeout(resolve13, ms));
       }
     };
   }
