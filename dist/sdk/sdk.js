@@ -42582,7 +42582,8 @@ var init_mcp_check_provider = __esm({
             fileCount: prInfo.files.length,
             outputs: this.buildOutputContext(dependencyResults),
             args: sessionInfo?.args || {},
-            env: this.getSafeEnvironmentVariables()
+            env: this.getSafeEnvironmentVariables(),
+            inputs: config.workflowInputs || sessionInfo?.workflowInputs || {}
           };
           let methodArgs = cfg.methodArgs || {};
           if (cfg.argsTransform) {
