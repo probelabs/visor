@@ -57,10 +57,13 @@ describeIfBwrap('Bubblewrap Sandbox Integration', () => {
 
   function getBubblewrapSandbox(name: string, config: any, repoPath: string) {
     const { BubblewrapSandbox } = require('../../src/sandbox/bubblewrap-sandbox');
+    // Use the project's dist directory as visorDistPath for integration tests
+    const visorDistPath = require('path').resolve(__dirname, '../../dist');
     return new BubblewrapSandbox(
       name,
       config,
-      repoPath
+      repoPath,
+      visorDistPath
     ) as import('../../src/sandbox/bubblewrap-sandbox').BubblewrapSandbox;
   }
 

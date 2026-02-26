@@ -28,7 +28,7 @@ describe('SeatbeltSandbox', () => {
         engine: 'seatbelt',
       };
 
-      const sandbox = new SeatbeltSandbox('test', config, '/repo');
+      const sandbox = new SeatbeltSandbox('test', config, '/repo', '/dist/visor');
 
       expect(sandbox.name).toBe('test');
       expect(sandbox.config).toBe(config);
@@ -39,7 +39,7 @@ describe('SeatbeltSandbox', () => {
   describe('exec', () => {
     it('should build correct sandbox-exec args with default config', async () => {
       const config: SandboxConfig = { engine: 'seatbelt' };
-      const sandbox = new SeatbeltSandbox('test', config, '/repo');
+      const sandbox = new SeatbeltSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (
@@ -93,9 +93,30 @@ describe('SeatbeltSandbox', () => {
       expect(opts.cwd).toBe('/repo');
     });
 
+    it('should include file-read rule for visor dist path', async () => {
+      const config: SandboxConfig = { engine: 'seatbelt' };
+      const sandbox = new SeatbeltSandbox('test', config, '/repo', '/dist/visor');
+
+      mockExecFile.mockImplementation(
+        (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
+          if (cb) cb(null, { stdout: '', stderr: '' });
+        }
+      );
+
+      await sandbox.exec({
+        command: 'ls',
+        env: {},
+        timeoutMs: 5000,
+        maxBuffer: 1024,
+      });
+
+      const profile: string = mockExecFile.mock.calls[0][1][1];
+      expect(profile).toContain('(allow file-read* (subpath "/dist/visor"))');
+    });
+
     it('should include file-write rule for workspace when not read_only', async () => {
       const config: SandboxConfig = { engine: 'seatbelt' };
-      const sandbox = new SeatbeltSandbox('test', config, '/repo');
+      const sandbox = new SeatbeltSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -116,7 +137,7 @@ describe('SeatbeltSandbox', () => {
 
     it('should NOT include file-write rule for workspace when read_only', async () => {
       const config: SandboxConfig = { engine: 'seatbelt', read_only: true };
-      const sandbox = new SeatbeltSandbox('test', config, '/repo');
+      const sandbox = new SeatbeltSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -138,7 +159,7 @@ describe('SeatbeltSandbox', () => {
 
     it('should include network rule when network is not false', async () => {
       const config: SandboxConfig = { engine: 'seatbelt', network: true };
-      const sandbox = new SeatbeltSandbox('test', config, '/repo');
+      const sandbox = new SeatbeltSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -159,7 +180,7 @@ describe('SeatbeltSandbox', () => {
 
     it('should NOT include network rule when network is false', async () => {
       const config: SandboxConfig = { engine: 'seatbelt', network: false };
-      const sandbox = new SeatbeltSandbox('test', config, '/repo');
+      const sandbox = new SeatbeltSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -180,7 +201,7 @@ describe('SeatbeltSandbox', () => {
 
     it('should include system path read access in profile', async () => {
       const config: SandboxConfig = { engine: 'seatbelt' };
-      const sandbox = new SeatbeltSandbox('test', config, '/repo');
+      const sandbox = new SeatbeltSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -214,7 +235,7 @@ describe('SeatbeltSandbox', () => {
 
     it('should reject invalid env var names', async () => {
       const config: SandboxConfig = { engine: 'seatbelt' };
-      const sandbox = new SeatbeltSandbox('test', config, '/repo');
+      const sandbox = new SeatbeltSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -234,7 +255,7 @@ describe('SeatbeltSandbox', () => {
 
     it('should handle non-zero exit codes', async () => {
       const config: SandboxConfig = { engine: 'seatbelt' };
-      const sandbox = new SeatbeltSandbox('test', config, '/repo');
+      const sandbox = new SeatbeltSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -262,7 +283,7 @@ describe('SeatbeltSandbox', () => {
 
     it('should pass timeout and maxBuffer to execFile', async () => {
       const config: SandboxConfig = { engine: 'seatbelt' };
-      const sandbox = new SeatbeltSandbox('test', config, '/repo');
+      const sandbox = new SeatbeltSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -284,7 +305,7 @@ describe('SeatbeltSandbox', () => {
 
     it('should escape paths with special characters in SBPL profile', async () => {
       const config: SandboxConfig = { engine: 'seatbelt' };
-      const sandbox = new SeatbeltSandbox('test', config, '/repo/path with spaces');
+      const sandbox = new SeatbeltSandbox('test', config, '/repo/path with spaces', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -305,7 +326,7 @@ describe('SeatbeltSandbox', () => {
 
     it('should escape quotes in repo path', async () => {
       const config: SandboxConfig = { engine: 'seatbelt' };
-      const sandbox = new SeatbeltSandbox('test', config, '/repo/path"with"quotes');
+      const sandbox = new SeatbeltSandbox('test', config, '/repo/path"with"quotes', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -328,7 +349,7 @@ describe('SeatbeltSandbox', () => {
   describe('stop', () => {
     it('should be a no-op (sandbox-exec processes are ephemeral)', async () => {
       const config: SandboxConfig = { engine: 'seatbelt' };
-      const sandbox = new SeatbeltSandbox('test', config, '/repo');
+      const sandbox = new SeatbeltSandbox('test', config, '/repo', '/dist/visor');
 
       // Should not throw
       await sandbox.stop();

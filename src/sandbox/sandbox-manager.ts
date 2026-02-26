@@ -80,7 +80,7 @@ export class SandboxManager {
     // Bubblewrap engine: ephemeral per-exec, no persistent container
     if (config.engine === 'bubblewrap') {
       const { BubblewrapSandbox } = require('./bubblewrap-sandbox');
-      const instance = new BubblewrapSandbox(name, config, this.repoPath);
+      const instance = new BubblewrapSandbox(name, config, this.repoPath, this.visorDistPath);
       this.instances.set(name, instance);
       return instance;
     }
@@ -88,7 +88,7 @@ export class SandboxManager {
     // Seatbelt engine: macOS sandbox-exec, ephemeral per-exec
     if (config.engine === 'seatbelt') {
       const { SeatbeltSandbox } = require('./seatbelt-sandbox');
-      const instance = new SeatbeltSandbox(name, config, this.repoPath);
+      const instance = new SeatbeltSandbox(name, config, this.repoPath, this.visorDistPath);
       this.instances.set(name, instance);
       return instance;
     }

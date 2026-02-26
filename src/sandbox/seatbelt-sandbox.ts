@@ -21,13 +21,15 @@ export class SeatbeltSandbox implements SandboxInstance {
   name: string;
   config: SandboxConfig;
   private repoPath: string;
+  private visorDistPath: string;
 
-  constructor(name: string, config: SandboxConfig, repoPath: string) {
+  constructor(name: string, config: SandboxConfig, repoPath: string, visorDistPath: string) {
     this.name = name;
     this.config = config;
     // Resolve symlinks — macOS has /var → /private/var, /tmp → /private/tmp etc.
     // sandbox-exec operates on real paths, so we must resolve before building profiles.
     this.repoPath = realpathSync(resolve(repoPath));
+    this.visorDistPath = realpathSync(resolve(visorDistPath));
   }
 
   /**
@@ -158,6 +160,10 @@ export class SeatbeltSandbox implements SandboxInstance {
     if (!this.config.read_only) {
       lines.push(`(allow file-write* (subpath "${repoPath}"))`);
     }
+
+    // Visor dist read access — required for child visor process
+    const visorDistPath = this.escapePath(this.visorDistPath);
+    lines.push(`(allow file-read* (subpath "${visorDistPath}"))`);
 
     // Network access (unless explicitly disabled)
     if (this.config.network !== false) {

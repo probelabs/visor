@@ -35,7 +35,7 @@ describe('BubblewrapSandbox', () => {
         workdir: '/workspace',
       };
 
-      const sandbox = new BubblewrapSandbox('test', config, '/repo');
+      const sandbox = new BubblewrapSandbox('test', config, '/repo', '/dist/visor');
 
       expect(sandbox.name).toBe('test');
       expect(sandbox.config).toBe(config);
@@ -46,7 +46,7 @@ describe('BubblewrapSandbox', () => {
   describe('exec', () => {
     it('should build correct bwrap args with default config', async () => {
       const config: SandboxConfig = { engine: 'bubblewrap' };
-      const sandbox = new BubblewrapSandbox('test', config, '/repo');
+      const sandbox = new BubblewrapSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (
@@ -87,6 +87,12 @@ describe('BubblewrapSandbox', () => {
       expect(args[bindIdx + 1]).toBe('/repo');
       expect(args[bindIdx + 2]).toBe('/workspace');
 
+      // Should mount visor dist as read-only
+      const visorBindIdx = args.indexOf('/opt/visor');
+      expect(visorBindIdx).toBeGreaterThan(-1);
+      expect(args[visorBindIdx - 1]).toBe('/dist/visor');
+      expect(args[visorBindIdx - 2]).toBe('--ro-bind');
+
       // Should have namespace isolation
       expect(args).toContain('--unshare-pid');
       expect(args).toContain('--new-session');
@@ -108,7 +114,7 @@ describe('BubblewrapSandbox', () => {
 
     it('should use --ro-bind for read_only workspace', async () => {
       const config: SandboxConfig = { engine: 'bubblewrap', read_only: true };
-      const sandbox = new BubblewrapSandbox('test', config, '/repo');
+      const sandbox = new BubblewrapSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -134,7 +140,7 @@ describe('BubblewrapSandbox', () => {
 
     it('should add --unshare-net when network is false', async () => {
       const config: SandboxConfig = { engine: 'bubblewrap', network: false };
-      const sandbox = new BubblewrapSandbox('test', config, '/repo');
+      const sandbox = new BubblewrapSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -155,7 +161,7 @@ describe('BubblewrapSandbox', () => {
 
     it('should NOT add --unshare-net when network is true or undefined', async () => {
       const config: SandboxConfig = { engine: 'bubblewrap', network: true };
-      const sandbox = new BubblewrapSandbox('test', config, '/repo');
+      const sandbox = new BubblewrapSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -176,7 +182,7 @@ describe('BubblewrapSandbox', () => {
 
     it('should use custom workdir', async () => {
       const config: SandboxConfig = { engine: 'bubblewrap', workdir: '/app' };
-      const sandbox = new BubblewrapSandbox('test', config, '/repo');
+      const sandbox = new BubblewrapSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -204,7 +210,7 @@ describe('BubblewrapSandbox', () => {
 
     it('should reject invalid env var names', async () => {
       const config: SandboxConfig = { engine: 'bubblewrap' };
-      const sandbox = new BubblewrapSandbox('test', config, '/repo');
+      const sandbox = new BubblewrapSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -224,7 +230,7 @@ describe('BubblewrapSandbox', () => {
 
     it('should handle non-zero exit codes', async () => {
       const config: SandboxConfig = { engine: 'bubblewrap' };
-      const sandbox = new BubblewrapSandbox('test', config, '/repo');
+      const sandbox = new BubblewrapSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -257,7 +263,7 @@ describe('BubblewrapSandbox', () => {
       });
 
       const config: SandboxConfig = { engine: 'bubblewrap' };
-      const sandbox = new BubblewrapSandbox('test', config, '/repo');
+      const sandbox = new BubblewrapSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -281,7 +287,7 @@ describe('BubblewrapSandbox', () => {
 
     it('should pass timeout and maxBuffer to execFile', async () => {
       const config: SandboxConfig = { engine: 'bubblewrap' };
-      const sandbox = new BubblewrapSandbox('test', config, '/repo');
+      const sandbox = new BubblewrapSandbox('test', config, '/repo', '/dist/visor');
 
       mockExecFile.mockImplementation(
         (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
@@ -305,7 +311,7 @@ describe('BubblewrapSandbox', () => {
   describe('stop', () => {
     it('should be a no-op (bubblewrap processes are ephemeral)', async () => {
       const config: SandboxConfig = { engine: 'bubblewrap' };
-      const sandbox = new BubblewrapSandbox('test', config, '/repo');
+      const sandbox = new BubblewrapSandbox('test', config, '/repo', '/dist/visor');
 
       // Should not throw
       await sandbox.stop();

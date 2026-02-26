@@ -469,6 +469,16 @@ async function handleTestCommand(argv: string[]): Promise<void> {
   const debugFlag = hasFlag('--debug') || process.env.VISOR_DEBUG === 'true';
   configureLoggerFromCli({ output: 'table', debug: debugFlag, verbose: false, quiet: false });
 
+  // Initialize telemetry for test runs (auto-enabled in --no-mocks mode)
+  const telemetryEnabled = noMocks || process.env.VISOR_TELEMETRY_ENABLED === 'true';
+  if (telemetryEnabled) {
+    await initTelemetry({
+      enabled: true,
+      sink: (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || 'file',
+      file: { dir: process.env.VISOR_TRACE_DIR },
+    });
+  }
+
   console.log('🧪 Visor Test Runner');
   try {
     const { discoverAndPrint, validateTestsOnly, VisorTestRunner, discoverSuites, runSuites } =
@@ -751,8 +761,18 @@ async function handleTestCommand(argv: string[]): Promise<void> {
         console.error(`📝 Markdown summary written to ${dest}`);
       }
     } catch {}
+    if (telemetryEnabled) {
+      try {
+        await shutdownTelemetry();
+      } catch {}
+    }
     process.exit(failures > 0 ? 1 : 0);
   } catch (err) {
+    if (telemetryEnabled) {
+      try {
+        await shutdownTelemetry();
+      } catch {}
+    }
     console.error('❌ test: ' + (err instanceof Error ? err.message : String(err)));
     process.exit(1);
   }
@@ -1026,6 +1046,11 @@ export async function main(): Promise<void> {
           if (authResult) {
             // Inject token + git credentials into process.env for child processes
             injectGitHubCredentials(authResult.token);
+            // Mark as fresh so long-running modes (Slack, scheduler) don't regenerate immediately
+            if (authResult.authType === 'github-app') {
+              const { markTokenFresh } = await import('./github-auth');
+              markTokenFresh();
+            }
             // Set Octokit on execution context for in-process API calls
             (executionContext as any).octokit = authResult.octokit;
             logger.info(`🔑 GitHub auth: ${authResult.authType}`);
