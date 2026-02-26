@@ -118,6 +118,53 @@ describe('WorktreeManager', () => {
     }
   });
 
+  it('resets bare repo remote URL to plain URL (no embedded token) when reusing', async () => {
+    const { commandExecutor } = require('../../src/utils/command-executor');
+    const execMock = commandExecutor.execute as jest.Mock;
+
+    const repo = 'TykTechnologies/tyk';
+    const repoUrl = `https://github.com/${repo}.git`;
+
+    const manager = WorktreeManager.getInstance();
+    // Align with whichever base path the singleton resolved
+    const managerConfig = manager.getConfig();
+    const reposDir = `${managerConfig.base_path}/repos`;
+    fs.mkdirSync(reposDir, { recursive: true });
+    const bareRepoPath = `${reposDir}/${repo.replace(/\//g, '-')}.git`;
+    fs.mkdirSync(bareRepoPath, { recursive: true });
+
+    execMock.mockImplementation(async (cmd: string) => {
+      if (cmd.includes('remote get-url')) {
+        // Simulate bare repo with a stale token baked into the URL
+        return {
+          stdout: 'https://x-access-token:ghs_OLD_EXPIRED@github.com/TykTechnologies/tyk.git',
+          stderr: '',
+          exitCode: 0,
+        };
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    });
+
+    try {
+      await manager.getOrCreateBareRepo(repo, repoUrl, 'ghs_ANY_TOKEN');
+    } catch {
+      // Ignore fs errors in unit test
+    }
+
+    const calls = execMock.mock.calls.map((c: any[]) => c[0] as string);
+
+    // Should have called `remote set-url` to reset to the plain URL
+    const setUrlCall = calls.find((cmd: string) => cmd.includes('remote set-url'));
+    expect(setUrlCall).toBeDefined();
+    // The URL should be the plain repo URL — no token embedded
+    expect(setUrlCall).toContain(repoUrl);
+    expect(setUrlCall).not.toContain('x-access-token');
+    expect(setUrlCall).not.toContain('ghs_OLD_EXPIRED');
+
+    // Cleanup the bare repo we created
+    fs.rmSync(bareRepoPath, { recursive: true, force: true });
+  });
+
   it('refreshes existing worktree when ref advances', async () => {
     const { commandExecutor } = require('../../src/utils/command-executor');
     const execMock = commandExecutor.execute as jest.Mock;

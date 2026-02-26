@@ -579,17 +579,11 @@ export class ConfigManager {
     const registry = WorkflowRegistry.getInstance();
 
     // Import workflow files
+    // Use override: true so config reloads pick up changes to workflow definitions
     for (const source of config.imports) {
-      const results = await registry.import(source, { basePath, validate: true });
+      const results = await registry.import(source, { basePath, validate: true, override: true });
       for (const result of results) {
         if (!result.valid && result.errors) {
-          // Check if error is just "already exists" - skip silently
-          // This allows multiple workflows to import the same dependency
-          const isAlreadyExists = result.errors.every(e => e.message.includes('already exists'));
-          if (isAlreadyExists) {
-            logger.debug(`Workflow from '${source}' already imported, skipping`);
-            continue;
-          }
           const errors = result.errors.map(e => `  ${e.path}: ${e.message}`).join('\n');
           throw new Error(`Failed to import workflow from '${source}':\n${errors}`);
         }

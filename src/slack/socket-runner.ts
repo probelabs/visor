@@ -164,6 +164,12 @@ export class SlackSocketRunner {
       logger.warn(`[SlackSocket] Scheduler init failed: ${e instanceof Error ? e.message : e}`);
     }
 
+    // Start background GitHub App token refresh timer (no-op if no App credentials)
+    try {
+      const { startTokenRefreshTimer } = await import('../github-auth');
+      startTokenRefreshTimer();
+    } catch {}
+
     const url = await this.openConnection();
     await this.connect(url);
 
@@ -514,6 +520,13 @@ export class SlackSocketRunner {
       if (ch && rootTs && cleaned) mgr.setFirstMessage(ch, rootTs, cleaned);
     } catch {}
 
+    // Refresh GitHub App installation token before each run.
+    // Installation tokens expire after 1 hour; this is a no-op if still fresh.
+    try {
+      const { refreshGitHubCredentials } = await import('../github-auth');
+      await refreshGitHubCredentials();
+    } catch {}
+
     logger.info('[SlackSocket] Dispatching engine run for Slack event');
     try {
       // Rate limiting (optional)
@@ -615,6 +628,12 @@ export class SlackSocketRunner {
    * Stop the socket runner and clean up resources
    */
   async stop(): Promise<void> {
+    // Stop background GitHub App token refresh
+    try {
+      const { stopTokenRefreshTimer } = await import('../github-auth');
+      stopTokenRefreshTimer();
+    } catch {}
+
     // Stop the generic scheduler if active
     if (this.genericScheduler) {
       try {

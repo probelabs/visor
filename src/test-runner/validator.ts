@@ -31,6 +31,8 @@ const schema: any = {
     frontends: { type: 'array' },
     workspace: { type: 'object' },
     scheduler: { type: 'object' },
+    sandboxes: { type: 'object' },
+    sandbox: { type: 'string' },
     // Workflow definition fields (for workflow files with co-located tests)
     id: { type: 'string' },
     name: { type: 'string' },
@@ -120,6 +122,9 @@ const schema: any = {
         name: { type: 'string' },
         description: { type: 'string' },
         skip: { type: 'boolean' },
+        requires: {
+          oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+        },
         strict: { type: 'boolean' },
         ai_include_code_context: { type: 'boolean' },
         tags: {
@@ -413,6 +418,7 @@ const knownKeys = new Set([
   'name',
   'description',
   'skip',
+  'requires',
   'strict',
   'event',
   'fixture',

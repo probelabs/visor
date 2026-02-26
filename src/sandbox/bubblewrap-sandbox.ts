@@ -20,11 +20,13 @@ export class BubblewrapSandbox implements SandboxInstance {
   name: string;
   config: SandboxConfig;
   private repoPath: string;
+  private visorDistPath: string;
 
-  constructor(name: string, config: SandboxConfig, repoPath: string) {
+  constructor(name: string, config: SandboxConfig, repoPath: string, visorDistPath: string) {
     this.name = name;
     this.config = config;
     this.repoPath = resolve(repoPath);
+    this.visorDistPath = resolve(visorDistPath);
   }
 
   /**
@@ -123,6 +125,10 @@ export class BubblewrapSandbox implements SandboxInstance {
     } else {
       args.push('--bind', this.repoPath, workdir);
     }
+
+    // Visor dist mount (read-only) — required for child visor process
+    const visorPath = this.config.visor_path || '/opt/visor';
+    args.push('--ro-bind', this.visorDistPath, visorPath);
 
     // Working directory inside sandbox
     args.push('--chdir', workdir);

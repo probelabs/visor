@@ -1811,6 +1811,10 @@ ${'='.repeat(60)}
         systemPrompt = 'You are general assistant, follow user instructions.';
       }
 
+      log(
+        `🔧 AIReviewService config: allowEdit=${this.config.allowEdit}, allowBash=${this.config.allowBash}, promptType=${this.config.promptType}`
+      );
+
       const options: TracedProbeAgentOptions = {
         sessionId: sessionId,
         // Prefer config promptType, then env override, else fallback to code-review when schema is set
@@ -1822,7 +1826,7 @@ ${'='.repeat(60)}
               : schema === 'code-review'
                 ? ('code-review-template' as any)
                 : undefined,
-        allowEdit: false, // We don't want the agent to modify files
+        allowEdit: false, // Default: don't allow file modifications
         debug: this.config.debug || false,
         // Use systemPrompt (native in rc168+) with fallback to customPrompt for backward compat
         systemPrompt: systemPrompt || this.config.systemPrompt || this.config.customPrompt,
@@ -1877,6 +1881,7 @@ ${'='.repeat(60)}
         (options as any).fallback = this.config.fallback;
       }
 
+      // Enable Edit and Create tools if configured
       // Enable Edit and Create tools if configured
       if (this.config.allowEdit !== undefined) {
         (options as any).allowEdit = this.config.allowEdit;
@@ -1960,6 +1965,10 @@ ${'='.repeat(60)}
       if (this.config.model) {
         options.model = this.config.model;
       }
+
+      log(
+        `🔧 ProbeAgent options: allowEdit=${(options as any).allowEdit}, enableBash=${(options as any).enableBash}, promptType=${options.promptType}`
+      );
 
       const agent = new ProbeAgent(options);
 

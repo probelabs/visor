@@ -57,10 +57,13 @@ describeIfSeatbelt('Seatbelt Sandbox Integration', () => {
 
   function getSeatbeltSandbox(name: string, config: any, repoPath: string) {
     const { SeatbeltSandbox } = require('../../src/sandbox/seatbelt-sandbox');
+    // Use the project's dist directory as visorDistPath for integration tests
+    const visorDistPath = require('path').resolve(__dirname, '../../dist');
     return new SeatbeltSandbox(
       name,
       config,
-      repoPath
+      repoPath,
+      visorDistPath
     ) as import('../../src/sandbox/seatbelt-sandbox').SeatbeltSandbox;
   }
 

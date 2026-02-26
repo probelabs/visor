@@ -40,7 +40,8 @@ export class FlowStage {
     private readonly warnUnmockedProviders: WarnUnmockedFn,
     private readonly defaultIncludeTags?: string[],
     private readonly defaultExcludeTags?: string[],
-    private readonly defaultFrontends?: any[]
+    private readonly defaultFrontends?: any[],
+    private readonly noMocks?: boolean
   ) {}
 
   async run(
@@ -96,7 +97,16 @@ export class FlowStage {
           this.prompts[k].push(p);
           // prompts are captured for assertions only — no ad-hoc console/file output
         },
-        mockForStep: (step: string) => mockMgr.get(step),
+        mockForStep: (step: string) => {
+          if (this.noMocks) return undefined;
+          const raw = mockMgr.get(step);
+          // Strip tool_calls from mock value — handled separately for stageHist injection
+          if (raw && typeof raw === 'object' && 'tool_calls' in (raw as any)) {
+            const { tool_calls: _unused, ...rest } = raw as any; // eslint-disable-line @typescript-eslint/no-unused-vars
+            return rest;
+          }
+          return raw;
+        },
       },
     } as any);
 
@@ -278,6 +288,27 @@ export class FlowStage {
       for (const [k, arr] of Object.entries(outHistory || {})) {
         stageHist[k] = Array.isArray(arr) ? (arr as unknown[]) : [];
       }
+
+      // Inject synthetic outputHistory entries for tool_calls declared in mocks.
+      // When a mock (e.g. generate-response) declares tool_calls, the AI never runs
+      // and no workflow tools are invoked. This injects entries so the evaluator
+      // counts them as executed steps, enabling at_least assertions in mock mode.
+      if (!this.noMocks) {
+        for (const [, mockVal] of Object.entries(mergedMocks)) {
+          if (mockVal && typeof mockVal === 'object' && 'tool_calls' in (mockVal as any)) {
+            const toolCalls = (mockVal as any).tool_calls;
+            if (Array.isArray(toolCalls)) {
+              for (const tc of toolCalls) {
+                if (tc && typeof tc === 'object' && typeof tc.step === 'string') {
+                  if (!stageHist[tc.step]) stageHist[tc.step] = [];
+                  stageHist[tc.step].push(tc.output !== undefined ? tc.output : {});
+                }
+              }
+            }
+          }
+        }
+      }
+
       try {
         if (process.env.VISOR_DEBUG === 'true') {
           const parts = Object.entries(stageHist)

@@ -778,6 +778,12 @@ export class Scheduler {
     const endpoint = '/scheduler/trigger';
     webhookData.set(endpoint, syntheticPayload);
 
+    // Refresh GitHub App installation token (no-op if not using App auth or still fresh)
+    try {
+      const { refreshGitHubCredentials } = await import('../github-auth');
+      await refreshGitHubCredentials();
+    } catch {}
+
     // Use common preparation helper
     const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule);
 
@@ -913,6 +919,12 @@ Please provide an updated response based on the reminder above. You may referenc
         );
       }
     }
+
+    // Refresh GitHub App installation token (no-op if not using App auth or still fresh)
+    try {
+      const { refreshGitHubCredentials } = await import('../github-auth');
+      await refreshGitHubCredentials();
+    } catch {}
 
     // Use common execution helper
     const {

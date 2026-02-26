@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { execFileSync } from 'child_process';
 import * as yaml from 'js-yaml';
 import { ConfigManager } from '../config';
 import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
@@ -272,6 +273,34 @@ export async function runSuites(
 }
 function isObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+function checkRequirements(requires?: string | string[]): { met: boolean; reason?: string } {
+  if (!requires) return { met: true };
+  const reqs = Array.isArray(requires) ? requires : [requires];
+  for (const req of reqs) {
+    switch (req.toLowerCase()) {
+      case 'linux':
+        if (process.platform !== 'linux')
+          return { met: false, reason: `requires linux (got ${process.platform})` };
+        break;
+      case 'darwin':
+        if (process.platform !== 'darwin')
+          return { met: false, reason: `requires darwin (got ${process.platform})` };
+        break;
+      case 'windows':
+        if (process.platform !== 'win32')
+          return { met: false, reason: `requires windows (got ${process.platform})` };
+        break;
+      default:
+        // Treat as tool name — check availability via `which`
+        try {
+          execFileSync('which', [req], { timeout: 5000, stdio: 'ignore' });
+        } catch {
+          return { met: false, reason: `'${req}' not found in PATH` };
+        }
+    }
+  }
+  return { met: true };
 }
 export class VisorTestRunner {
   constructor(private readonly cwd: string = process.cwd()) {}
@@ -850,7 +879,12 @@ export class VisorTestRunner {
     const defaultIncludeTags = parseTags(defaultsAny?.tags);
     const defaultExcludeTags = parseTags(defaultsAny?.exclude_tags);
     // Test overrides: force AI provider to 'mock' when requested (default: mock per RFC)
+    // In --no-mocks mode, skip the mock provider override so real AI providers execute.
     const cfg = JSON.parse(JSON.stringify(config));
+    const noMocksAll = options.noMocks || false;
+    const noMocksForAi =
+      !noMocksAll && options.noMocksFor ? options.noMocksFor.includes('ai') : false;
+    const skipAiMockOverride = noMocksAll || noMocksForAi;
     const allowCtxEnv =
       String(process.env.VISOR_TEST_ALLOW_CODE_CONTEXT || '').toLowerCase() === 'true';
     const forceNoCtxEnv =
@@ -866,13 +900,22 @@ export class VisorTestRunner {
           : allowCtxEnv
             ? false
             : (prev.skip_code_context as boolean | undefined);
-        chk.ai = {
-          ...prev,
-          provider: aiProviderDefault,
-          ...(skipCtx === undefined ? {} : { skip_code_context: skipCtx }),
-          disable_tools: true,
-          timeout: Math.min(15000, (prev.timeout as number) || 15000),
-        } as any;
+        if (skipAiMockOverride) {
+          // --no-mocks or --no-mocks-for ai: keep the original provider/timeout/tools,
+          // only apply code-context overrides if requested.
+          chk.ai = {
+            ...prev,
+            ...(skipCtx === undefined ? {} : { skip_code_context: skipCtx }),
+          } as any;
+        } else {
+          chk.ai = {
+            ...prev,
+            provider: aiProviderDefault,
+            ...(skipCtx === undefined ? {} : { skip_code_context: skipCtx }),
+            disable_tools: true,
+            timeout: Math.min(15000, (prev.timeout as number) || 15000),
+          } as any;
+        }
         cfg.checks[name] = chk;
       }
     }
@@ -899,7 +942,12 @@ export class VisorTestRunner {
         console.log(
           this.color('🔴 NO-MOCKS MODE: Running with real providers (no mock injection)', '33')
         );
-        console.log(this.gray('   Step outputs will be captured and printed as suggested mocks\n'));
+        console.log(this.gray('   Step outputs will be captured and printed as suggested mocks'));
+        if (process.env.VISOR_TELEMETRY_ENABLED === 'true') {
+          const traceDir = process.env.VISOR_TRACE_DIR || 'output/traces';
+          console.log(this.gray(`   Tracing enabled → ${traceDir}`));
+        }
+        console.log();
       } else if (noMocksForTypes && noMocksForTypes.length > 0) {
         console.log(
           this.color(
@@ -924,6 +972,12 @@ export class VisorTestRunner {
         caseResults.push({ name: _case.name, passed: true, /* annotate skip */ errors: [] as any });
         return { name: _case.name, failed: 0 };
       }
+      const reqResult = checkRequirements((_case as any).requires);
+      if (!reqResult.met) {
+        console.log(`⏭ SKIP ${(_case as any).name} (${reqResult.reason})`);
+        caseResults.push({ name: _case.name, passed: true, errors: [] as any });
+        return { name: _case.name, failed: 0 };
+      }
       if (Array.isArray((_case as any).flow) && (_case as any).flow.length > 0) {
         const flowRes = await this.runFlowCase(
           _case,
@@ -931,7 +985,8 @@ export class VisorTestRunner {
           defaultStrict,
           options.bail || false,
           defaultPromptCap,
-          stageFilter
+          stageFilter,
+          noMocksMode
         );
         const failed = flowRes.failures;
         caseResults.push({ name: _case.name, passed: failed === 0, stages: flowRes.stages });
@@ -1352,7 +1407,8 @@ export class VisorTestRunner {
     defaultStrict: boolean,
     bail: boolean,
     promptCap?: number,
-    stageFilter?: string
+    stageFilter?: string,
+    noMocks?: boolean
   ): Promise<{ failures: number; stages: Array<{ name: string; errors?: string[] }> }> {
     const suiteDefaults: any = (this as any).suiteDefaults || {};
     const ghRec = suiteDefaults.github_recorder as
@@ -1430,7 +1486,8 @@ export class VisorTestRunner {
           this.warnUnmockedProviders.bind(this),
           defaultIncludeTags,
           defaultExcludeTags,
-          (suiteDefaults.frontends || undefined) as any[]
+          (suiteDefaults.frontends || undefined) as any[],
+          noMocks
         );
         const outcome = await stageRunner.run(stage, flowCase, strict);
         const expect = (stage as any).expect || {};

@@ -122,7 +122,7 @@ export class WorktreeManager {
   async getOrCreateBareRepo(
     repository: string,
     repoUrl: string,
-    token?: string,
+    _token?: string,
     fetchDepth?: number,
     cloneTimeoutMs?: number
   ): Promise<string> {
@@ -147,14 +147,26 @@ export class WorktreeManager {
         await fsp.rm(bareRepoPath, { recursive: true, force: true });
         // Fall through to clone below
       } else {
+        // Refresh the remote URL with the current token so that fetch/push
+        // use valid credentials. The bare repo may have been cloned with a
+        // token that has since expired (GitHub App installation tokens live
+        // only 1 hour). Without this, git operations inside worktrees
+        // derived from this bare repo will fail with "Authentication failed".
+        // If the bare repo was cloned with a token embedded in the URL,
+        // reset it to the plain URL so git uses GIT_CONFIG insteadOf rules
+        // for auth (which always have the freshest token).
+        await this.resetBareRepoRemoteUrl(bareRepoPath, repoUrl);
         // Update remote refs
         await this.updateBareRepo(bareRepoPath);
         return bareRepoPath;
       }
     }
 
-    // Clone as bare repository
-    const cloneUrl = this.buildAuthenticatedUrl(repoUrl, token);
+    // Clone as bare repository — use the plain URL, not buildAuthenticatedUrl().
+    // Auth is handled by GIT_CONFIG insteadOf rules (set by injectGitHubCredentials),
+    // which keeps the stored origin URL token-free. This prevents stale tokens from
+    // being baked into the bare repo's remote config.
+    const cloneUrl = repoUrl;
     const redactedUrl = this.redactUrl(cloneUrl);
 
     logger.info(
@@ -270,6 +282,36 @@ export class WorktreeManager {
       }
       logger.warn(`Error verifying bare repo remote: ${error}`);
       return false;
+    }
+  }
+
+  /**
+   * Ensure the origin remote URL of a bare repo is a plain URL (no embedded token).
+   *
+   * Older bare repos may have been cloned with a token in the URL
+   * (https://x-access-token:TOKEN@github.com/...). This causes stale-token
+   * failures because GIT_CONFIG insteadOf rules can't rewrite URLs that
+   * already have credentials. Resetting to the plain URL lets insteadOf
+   * handle auth with the freshest token.
+   */
+  private async resetBareRepoRemoteUrl(bareRepoPath: string, plainRepoUrl: string): Promise<void> {
+    try {
+      const cmd = `git -C ${this.escapeShellArg(bareRepoPath)} remote set-url origin ${this.escapeShellArg(plainRepoUrl)}`;
+      const result = await this.executeGitCommand(cmd, { timeout: 10000 });
+      if (result.exitCode !== 0) {
+        logger.warn(
+          `Failed to reset bare repo remote URL: ${result.stderr}. ` +
+            'Git operations may fail with stale token if the URL has embedded credentials.'
+        );
+      } else {
+        logger.debug(`Reset bare repo remote URL to plain URL for ${bareRepoPath}`);
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.warn(
+        `Error resetting bare repo remote URL: ${msg}. ` +
+          'Git operations may fail with stale token if the URL has embedded credentials.'
+      );
     }
   }
 
