@@ -164,6 +164,29 @@ export class Scheduler {
   }
 
   /**
+   * Cancel a schedule's in-memory job (cron or timeout).
+   * Called after deleting from DB to ensure the job doesn't fire again.
+   */
+  cancelSchedule(scheduleId: string): void {
+    // Stop cron job if it exists
+    const cronJob = this.cronJobs.get(scheduleId);
+    if (cronJob) {
+      cronJob.stop();
+      this.cronJobs.delete(scheduleId);
+      logger.debug(`[Scheduler] Cancelled cron job for schedule ${scheduleId}`);
+      return;
+    }
+
+    // Clear timeout if it exists
+    const timeout = this.oneTimeTimeouts.get(scheduleId);
+    if (timeout) {
+      clearTimeout(timeout);
+      this.oneTimeTimeouts.delete(scheduleId);
+      logger.debug(`[Scheduler] Cancelled timeout for schedule ${scheduleId}`);
+    }
+  }
+
+  /**
    * Start the scheduler
    */
   async start(): Promise<void> {
@@ -626,6 +649,26 @@ export class Scheduler {
    * Execute a scheduled workflow
    */
   private async executeSchedule(schedule: Schedule): Promise<void> {
+    // DB freshness check: verify the schedule still exists and is active
+    // This prevents execution of cancelled or paused schedules when the
+    // in-memory job fires after a DB-only cancellation
+    try {
+      const fresh = await this.store.getAsync(schedule.id);
+      if (!fresh || fresh.status !== 'active') {
+        logger.info(
+          `[Scheduler] Schedule ${schedule.id} is no longer active (${fresh ? fresh.status : 'deleted'}), skipping execution`
+        );
+        // Clean up the in-memory job since the schedule is gone/inactive
+        this.cancelSchedule(schedule.id);
+        return;
+      }
+    } catch {
+      // If we can't check the DB, log and proceed (don't block execution on DB errors)
+      logger.warn(
+        `[Scheduler] Could not verify schedule ${schedule.id} freshness, proceeding with execution`
+      );
+    }
+
     const description = schedule.workflow || 'reminder';
     logger.info(`[Scheduler] Executing schedule ${schedule.id}: ${description}`);
 
