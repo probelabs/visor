@@ -649,9 +649,13 @@ export class Scheduler {
    * Execute a scheduled workflow
    */
   private async executeSchedule(schedule: Schedule): Promise<void> {
-    // DB freshness check: verify the schedule still exists and is active
+    // DB freshness check: verify the schedule still exists and is active.
     // This prevents execution of cancelled or paused schedules when the
-    // in-memory job fires after a DB-only cancellation
+    // in-memory job fires after a DB-only cancellation.
+    // Note: This is a single indexed primary-key lookup (<1ms for SQLite),
+    // and only runs for user-created schedules (static cron jobs use
+    // executeStaticCronJob instead), so the overhead is negligible
+    // compared to the workflow execution that follows.
     try {
       const fresh = await this.store.getAsync(schedule.id);
       if (!fresh || fresh.status !== 'active') {
