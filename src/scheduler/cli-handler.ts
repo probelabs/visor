@@ -8,7 +8,7 @@
  *   visor schedule cancel <id>              - Cancel a schedule
  */
 import { ScheduleStore, ScheduleOutputContext } from './schedule-store';
-import { Scheduler } from './scheduler';
+import { Scheduler, getScheduler } from './scheduler';
 import { parseScheduleExpression, getNextRunTime } from './schedule-parser';
 import { configureLoggerFromCli } from '../logger';
 import { ConfigManager } from '../config';
@@ -435,6 +435,12 @@ async function handleCancel(
   }
 
   await store.deleteAsync(schedule.id);
+
+  // Also cancel the in-memory job (cron or timeout) so it doesn't fire
+  const scheduler = getScheduler();
+  if (scheduler) {
+    scheduler.cancelSchedule(schedule.id);
+  }
 
   console.log('Schedule cancelled successfully!');
   console.log();

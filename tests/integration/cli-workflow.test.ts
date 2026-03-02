@@ -274,11 +274,16 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
   });
 
   describe('Non-Git Repository Handling', () => {
+    // These tests run the CLI in a non-git temp directory. The CLI internally
+    // attempts `git diff --stat main` which hangs until its own timeout (~12s),
+    // so we need a longer Jest timeout than the default 10s.
+    const nonGitTimeout = 30000;
+
     it(
       'should show error when not in a git repository',
       async () => {
         // Don't initialize git in temp directory
-        const result = await runCLI(['--check', 'security']);
+        const result = await runCLI(['--check', 'security'], { timeout: nonGitTimeout });
 
         expect(result.exitCode).toBe(1);
         // CLI may report "Not a git repository" or "No changes to analyze"
@@ -288,13 +293,13 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
           stderr.includes('Not a git repository') || stderr.includes('No changes to analyze')
         ).toBe(true);
       },
-      timeout
+      nonGitTimeout
     );
 
     it(
       'should handle empty directory gracefully',
       async () => {
-        const result = await runCLI(['--check', 'performance']);
+        const result = await runCLI(['--check', 'performance'], { timeout: nonGitTimeout });
 
         expect(result.exitCode).toBe(1);
         const stderr = result.stderr + result.stdout;
@@ -302,7 +307,7 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
           stderr.includes('Not a git repository') || stderr.includes('No changes to analyze')
         ).toBe(true);
       },
-      timeout
+      nonGitTimeout
     );
   });
 

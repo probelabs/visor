@@ -193,6 +193,15 @@ export async function initializeWorkspace(context: EngineContext): Promise<Engin
       process.env.VISOR_WORKSPACE_MAIN_PROJECT = info.mainProjectPath;
       process.env.VISOR_WORKSPACE_MAIN_PROJECT_NAME = info.mainProjectName;
       process.env.VISOR_ORIGINAL_WORKDIR = originalPath;
+
+      // Prevent git from walking above the workspace base path.
+      // Without this, git commands in workspace subdirectories can discover
+      // a rogue .git in a parent directory (e.g. /tmp/.git) and leak
+      // operations across all workspaces.
+      const basePath =
+        workspaceConfig?.base_path || process.env.VISOR_WORKSPACE_PATH || '/tmp/visor-workspaces';
+      const existing = process.env.GIT_CEILING_DIRECTORIES;
+      process.env.GIT_CEILING_DIRECTORIES = existing ? `${existing}:${basePath}` : basePath;
     } catch {}
 
     logger.info(`[Workspace] Initialized workspace: ${info.workspacePath}`);

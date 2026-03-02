@@ -689,6 +689,16 @@ export class WorktreeManager {
       }
     }
 
+    // Clean up sibling metadata file
+    const metadataPath = this.getMetadataPath(worktree_path);
+    try {
+      if (fs.existsSync(metadataPath)) {
+        fs.unlinkSync(metadataPath);
+      }
+    } catch {
+      // best-effort cleanup
+    }
+
     // Remove from active list
     this.activeWorktrees.delete(worktreeId);
 
@@ -696,10 +706,19 @@ export class WorktreeManager {
   }
 
   /**
+   * Get the metadata file path for a worktree.
+   * Stored as a sibling file OUTSIDE the worktree to avoid being committed
+   * when agents run `git add .` inside the checked-out repo.
+   */
+  private getMetadataPath(worktreePath: string): string {
+    return worktreePath.replace(/\/?$/, '') + '.metadata.json';
+  }
+
+  /**
    * Save worktree metadata
    */
   private async saveMetadata(worktreePath: string, metadata: WorktreeMetadata): Promise<void> {
-    const metadataPath = path.join(worktreePath, '.visor-metadata.json');
+    const metadataPath = this.getMetadataPath(worktreePath);
     fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
   }
 
@@ -707,14 +726,23 @@ export class WorktreeManager {
    * Load worktree metadata
    */
   private async loadMetadata(worktreePath: string): Promise<WorktreeMetadata | null> {
-    const metadataPath = path.join(worktreePath, '.visor-metadata.json');
+    const metadataPath = this.getMetadataPath(worktreePath);
 
-    if (!fs.existsSync(metadataPath)) {
+    // Also check legacy location (inside worktree) for backwards compatibility
+    const legacyPath = path.join(worktreePath, '.visor-metadata.json');
+
+    const pathToRead = fs.existsSync(metadataPath)
+      ? metadataPath
+      : fs.existsSync(legacyPath)
+        ? legacyPath
+        : null;
+
+    if (!pathToRead) {
       return null;
     }
 
     try {
-      const content = fs.readFileSync(metadataPath, 'utf8');
+      const content = fs.readFileSync(pathToRead, 'utf8');
       return JSON.parse(content);
     } catch (error) {
       logger.warn(`Failed to load metadata: ${error}`);
