@@ -20989,6 +20989,13 @@ var init_mcp_custom_sse_server = __esm({
 // src/utils/tool-resolver.ts
 function resolveTools(toolItems, globalTools, logPrefix = "[ToolResolver]") {
   const tools = /* @__PURE__ */ new Map();
+  const registry = WorkflowRegistry.getInstance();
+  const registeredWorkflows = registry.list().map((w) => w.id);
+  if (toolItems.some((item) => typeof item !== "string" && isWorkflowToolReference(item))) {
+    logger.info(
+      `${logPrefix} Resolving ${toolItems.length} tool items. WorkflowRegistry has ${registeredWorkflows.length} workflows: [${registeredWorkflows.join(", ")}]`
+    );
+  }
   for (const item of toolItems) {
     const workflowTool = resolveWorkflowToolFromItem(item);
     if (workflowTool) {
@@ -21005,7 +21012,9 @@ function resolveTools(toolItems, globalTools, logPrefix = "[ToolResolver]") {
       }
       logger.warn(`${logPrefix} Tool '${item}' not found in global tools or workflow registry`);
     } else if (isWorkflowToolReference(item)) {
-      logger.warn(`${logPrefix} Workflow '${item.workflow}' referenced but not found in registry`);
+      logger.warn(
+        `${logPrefix} Workflow '${item.workflow}' referenced but not found in registry. Available: [${registeredWorkflows.join(", ")}]`
+      );
     }
   }
   if (tools.size === 0 && toolItems.length > 0 && !globalTools) {
@@ -21019,6 +21028,7 @@ var init_tool_resolver = __esm({
   "src/utils/tool-resolver.ts"() {
     "use strict";
     init_workflow_tool_executor();
+    init_workflow_registry();
     init_logger();
   }
 });
@@ -21822,10 +21832,41 @@ ${preview}`);
             if (Object.keys(dynamicServers).length > 0) {
               Object.assign(mcpServers, dynamicServers);
             }
+            try {
+              const span = trace.getSpan(context.active());
+              if (span) {
+                span.addEvent("tool_setup.mcp_servers_js", {
+                  "tool_setup.server_count": Object.keys(dynamicServers).length,
+                  "tool_setup.server_names": Object.keys(dynamicServers).join(","),
+                  "tool_setup.workflow_entries": Object.entries(dynamicServers).filter(([, cfg]) => cfg?.workflow).map(([name, cfg]) => `${name}\u2192${cfg.workflow}`).join(",")
+                });
+              }
+            } catch {
+            }
           } catch (error) {
-            logger.error(
-              `[AICheckProvider] Failed to evaluate ai_mcp_servers_js: ${error instanceof Error ? error.message : "Unknown error"}`
-            );
+            const errMsg = error instanceof Error ? error.message : "Unknown error";
+            logger.error(`[AICheckProvider] Failed to evaluate ai_mcp_servers_js: ${errMsg}`);
+            try {
+              const span = trace.getSpan(context.active());
+              if (span) {
+                span.addEvent("tool_setup.mcp_servers_js_error", {
+                  "tool_setup.error": errMsg
+                });
+              }
+            } catch {
+            }
+          }
+        } else if (mcpServersJsExpr && !_dependencyResults) {
+          try {
+            const span = trace.getSpan(context.active());
+            if (span) {
+              span.addEvent("tool_setup.mcp_servers_js_skipped", {
+                "tool_setup.reason": "no_dependency_results",
+                "tool_setup.has_expr": true,
+                "tool_setup.has_deps": false
+              });
+            }
+          } catch {
           }
         }
         for (const serverConfig of Object.values(mcpServers)) {
@@ -21963,6 +22004,27 @@ ${preview}`);
           }
           try {
             const customTools = this.loadCustomTools(customToolsToLoad, config);
+            try {
+              const span = trace.getSpan(context.active());
+              if (span) {
+                const requestedNames = customToolsToLoad.map(
+                  (item) => typeof item === "string" ? item : `${item.name || item.workflow}(wf:${item.workflow})`
+                );
+                span.addEvent("tool_setup.resolution", {
+                  "tool_setup.requested_count": customToolsToLoad.length,
+                  "tool_setup.requested_names": requestedNames.join(","),
+                  "tool_setup.resolved_count": customTools.size,
+                  "tool_setup.resolved_names": Array.from(customTools.keys()).join(","),
+                  "tool_setup.missing_count": customToolsToLoad.length - customTools.size
+                });
+              }
+            } catch {
+            }
+            if (customToolsToLoad.length > 0 && customTools.size === 0) {
+              logger.warn(
+                `[AICheckProvider] All ${customToolsToLoad.length} custom tools failed to resolve! Requested: ${customToolsToLoad.map((item) => typeof item === "string" ? item : item.workflow).join(", ")}. AI will have no workflow tools available.`
+              );
+            }
             if (scheduleToolEnabled) {
               const scheduleTool = getScheduleToolDefinition();
               customTools.set(scheduleTool.name, scheduleTool);
@@ -22000,10 +22062,34 @@ ${preview}`);
               };
             }
           } catch (error) {
+            const errMsg = error instanceof Error ? error.message : "Unknown error";
             logger.error(
-              `[AICheckProvider] Failed to start custom tools SSE server '${customToolsServerName}': ${error instanceof Error ? error.message : "Unknown error"}`
+              `[AICheckProvider] Failed to start custom tools SSE server '${customToolsServerName}': ${errMsg}`
             );
+            try {
+              const span = trace.getSpan(context.active());
+              if (span) {
+                span.addEvent("tool_setup.sse_server_error", {
+                  "tool_setup.error": errMsg,
+                  "tool_setup.server_name": customToolsServerName || ""
+                });
+              }
+            } catch {
+            }
           }
+        }
+        try {
+          const span = trace.getSpan(context.active());
+          if (span) {
+            const finalServerNames = Object.keys(mcpServers);
+            span.addEvent("tool_setup.final", {
+              "tool_setup.final_server_count": finalServerNames.length,
+              "tool_setup.final_server_names": finalServerNames.join(","),
+              "tool_setup.has_custom_tools_server": !!customToolsServer,
+              "tool_setup.tools_disabled": !!config.ai?.disableTools
+            });
+          }
+        } catch {
         }
         if (Object.keys(mcpServers).length > 0 && !config.ai?.disableTools) {
           aiConfig.mcpServers = mcpServers;
