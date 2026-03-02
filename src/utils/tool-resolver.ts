@@ -12,6 +12,7 @@ import {
   isWorkflowToolReference,
   WorkflowToolReference,
 } from '../providers/workflow-tool-executor';
+import { WorkflowRegistry } from '../workflow-registry';
 import { logger } from '../logger';
 
 /**
@@ -27,6 +28,16 @@ export function resolveTools(
   logPrefix = '[ToolResolver]'
 ): Map<string, CustomToolDefinition> {
   const tools = new Map<string, CustomToolDefinition>();
+
+  // Log registry state once for debugging workflow resolution failures
+  const registry = WorkflowRegistry.getInstance();
+  const registeredWorkflows = registry.list().map(w => w.id);
+  if (toolItems.some(item => typeof item !== 'string' && isWorkflowToolReference(item))) {
+    logger.info(
+      `${logPrefix} Resolving ${toolItems.length} tool items. ` +
+        `WorkflowRegistry has ${registeredWorkflows.length} workflows: [${registeredWorkflows.join(', ')}]`
+    );
+  }
 
   for (const item of toolItems) {
     // First, try to resolve as a workflow tool
@@ -48,7 +59,10 @@ export function resolveTools(
 
       logger.warn(`${logPrefix} Tool '${item}' not found in global tools or workflow registry`);
     } else if (isWorkflowToolReference(item)) {
-      logger.warn(`${logPrefix} Workflow '${item.workflow}' referenced but not found in registry`);
+      logger.warn(
+        `${logPrefix} Workflow '${item.workflow}' referenced but not found in registry. ` +
+          `Available: [${registeredWorkflows.join(', ')}]`
+      );
     }
   }
 
