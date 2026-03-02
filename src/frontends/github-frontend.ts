@@ -214,6 +214,11 @@ export class GitHubFrontend implements Frontend {
   stop(): void {
     for (const s of this.subs) s.unsubscribe();
     this.subs = [];
+    if (this._timer) {
+      clearTimeout(this._timer);
+      this._timer = null;
+    }
+    this._pendingIds.clear();
   }
 
   private async buildFullBody(ctx: FrontendContext, group: string): Promise<string> {

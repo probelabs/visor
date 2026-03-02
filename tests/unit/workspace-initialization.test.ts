@@ -54,6 +54,8 @@ describe('Workspace Initialization', () => {
 
     // Set environment variable to override base path
     process.env.VISOR_WORKSPACE_PATH = testBasePath;
+    // Re-enable workspace (global setup disables it for speed)
+    delete process.env.VISOR_WORKSPACE_ENABLED;
   });
 
   afterEach(() => {
