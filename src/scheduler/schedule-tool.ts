@@ -5,6 +5,7 @@
 import { CustomToolDefinition } from '../types/config';
 import { ScheduleStore, Schedule, ScheduleOutputContext } from './schedule-store';
 import { isValidCronExpression, getNextRunTime } from './schedule-parser';
+import { getScheduler } from './scheduler';
 import { logger } from '../logger';
 
 /**
@@ -615,8 +616,14 @@ async function handleCancel(
     };
   }
 
-  // Delete the schedule
+  // Delete the schedule from DB
   await store.deleteAsync(schedule.id);
+
+  // Also cancel the in-memory job (cron or timeout) so it doesn't fire
+  const scheduler = getScheduler();
+  if (scheduler) {
+    scheduler.cancelSchedule(schedule.id);
+  }
 
   logger.info(`[ScheduleTool] Cancelled schedule ${schedule.id} for user ${context.userId}`);
 

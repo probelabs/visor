@@ -60,6 +60,7 @@ describe('Workspace Initialization', () => {
     // Cleanup
     delete process.env.VISOR_WORKSPACE_PATH;
     delete process.env.VISOR_WORKSPACE_ENABLED;
+    delete process.env.GIT_CEILING_DIRECTORIES;
 
     if (fs.existsSync(testBasePath)) {
       fs.rmSync(testBasePath, { recursive: true, force: true });
@@ -156,6 +157,69 @@ describe('Workspace Initialization', () => {
 
       // Cleanup
       await result.workspace?.cleanup();
+    });
+
+    it('sets GIT_CEILING_DIRECTORIES to workspace base path', async () => {
+      const { commandExecutor } = require('../../src/utils/command-executor');
+      // Mock: not a git repository
+      commandExecutor.execute.mockResolvedValue({ exitCode: 1, stdout: '', stderr: '' });
+
+      // Clear any existing value
+      const origCeiling = process.env.GIT_CEILING_DIRECTORIES;
+      delete process.env.GIT_CEILING_DIRECTORIES;
+
+      const cfg: VisorConfig = {
+        version: '1',
+        output: { format: 'json' },
+        checks: {},
+      } as any;
+
+      const ctx = buildEngineContextForRun(testWorkingDir, cfg, mockPRInfo as any);
+      const result = await initializeWorkspace(ctx);
+
+      expect(result.workspace).toBeDefined();
+      // GIT_CEILING_DIRECTORIES should be set to prevent git walk-up past workspace
+      expect(process.env.GIT_CEILING_DIRECTORIES).toBeDefined();
+      expect(process.env.GIT_CEILING_DIRECTORIES).toContain(testBasePath);
+
+      // Cleanup
+      await result.workspace?.cleanup();
+      if (origCeiling !== undefined) {
+        process.env.GIT_CEILING_DIRECTORIES = origCeiling;
+      } else {
+        delete process.env.GIT_CEILING_DIRECTORIES;
+      }
+    });
+
+    it('preserves existing GIT_CEILING_DIRECTORIES entries', async () => {
+      const { commandExecutor } = require('../../src/utils/command-executor');
+      commandExecutor.execute.mockResolvedValue({ exitCode: 1, stdout: '', stderr: '' });
+
+      const origCeiling = process.env.GIT_CEILING_DIRECTORIES;
+      process.env.GIT_CEILING_DIRECTORIES = '/some/existing/path';
+
+      const cfg: VisorConfig = {
+        version: '1',
+        output: { format: 'json' },
+        checks: {},
+      } as any;
+
+      const ctx = buildEngineContextForRun(testWorkingDir, cfg, mockPRInfo as any);
+      const result = await initializeWorkspace(ctx);
+
+      expect(result.workspace).toBeDefined();
+      // Should contain both the existing path and the workspace base path
+      const ceiling = process.env.GIT_CEILING_DIRECTORIES || '';
+      expect(ceiling).toContain('/some/existing/path');
+      expect(ceiling).toContain(testBasePath);
+
+      // Cleanup
+      await result.workspace?.cleanup();
+      if (origCeiling !== undefined) {
+        process.env.GIT_CEILING_DIRECTORIES = origCeiling;
+      } else {
+        delete process.env.GIT_CEILING_DIRECTORIES;
+      }
     });
 
     it('uses custom base_path from config', async () => {
