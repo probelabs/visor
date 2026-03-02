@@ -537,28 +537,19 @@ export class WorkspaceManager {
   }
 
   /**
-   * Fetch latest from origin in the source repository.
+   * Fetch latest from origin, resolve the upstream default branch, and return
+   * both the ref name and the resolved commit SHA.
    */
-  private async fetchOrigin(): Promise<void> {
+  private async fetchAndResolveUpstream(): Promise<{ upstreamRef: string; targetSha: string }> {
+    // Fetch latest from origin
     logger.debug(`[Workspace] Fetching latest from origin`);
-    const result = await commandExecutor.execute(
+    const fetchResult = await commandExecutor.execute(
       `git -C ${shellEscape(this.originalPath)} fetch origin --prune 2>&1`,
       { timeout: 120000 }
     );
-    if (result.exitCode !== 0) {
-      logger.warn(`[Workspace] fetch origin failed (will use cached refs): ${result.stderr}`);
+    if (fetchResult.exitCode !== 0) {
+      logger.warn(`[Workspace] fetch origin failed (will use cached refs): ${fetchResult.stderr}`);
     }
-  }
-
-  /**
-   * Refresh an existing worktree to the latest upstream default branch
-   * and ensure it has no modified or untracked files.
-   */
-  private async refreshWorktreeToUpstream(worktreePath: string): Promise<void> {
-    logger.info(`[Workspace] Refreshing worktree to latest upstream: ${worktreePath}`);
-
-    // Fetch latest from origin
-    await this.fetchOrigin();
 
     // Resolve the upstream ref
     const upstreamRef = await this.resolveUpstreamRef();
@@ -571,27 +562,53 @@ export class WorkspaceManager {
     if (shaResult.exitCode !== 0) {
       throw new Error(`Failed to resolve upstream ref ${upstreamRef}: ${shaResult.stderr}`);
     }
-    const targetSha = shaResult.stdout.trim();
 
-    // Reset worktree to the upstream commit
+    return { upstreamRef, targetSha: shaResult.stdout.trim() };
+  }
+
+  /**
+   * Reset a worktree to a specific commit and clean all modifications.
+   */
+  private async resetAndCleanWorktree(worktreePath: string, targetSha: string): Promise<void> {
+    const escapedPath = shellEscape(worktreePath);
+    const escapedSha = shellEscape(targetSha);
+
     const resetResult = await commandExecutor.execute(
+      `git -C ${escapedPath} reset --hard ${escapedSha}`,
+      { timeout: 10000 }
+    );
+    if (resetResult.exitCode !== 0) {
+      logger.warn(`[Workspace] reset --hard failed: ${resetResult.stderr}`);
+    }
+
+    const cleanResult = await commandExecutor.execute(`git -C ${escapedPath} clean -fdx`, {
+      timeout: 30000,
+    });
+    if (cleanResult.exitCode !== 0) {
+      logger.warn(`[Workspace] clean -fdx failed: ${cleanResult.stderr}`);
+    }
+  }
+
+  /**
+   * Refresh an existing worktree to the latest upstream default branch
+   * and ensure it has no modified or untracked files.
+   */
+  private async refreshWorktreeToUpstream(worktreePath: string): Promise<void> {
+    logger.info(`[Workspace] Refreshing worktree to latest upstream: ${worktreePath}`);
+
+    const { upstreamRef, targetSha } = await this.fetchAndResolveUpstream();
+
+    // Point worktree to the upstream commit
+    const checkoutResult = await commandExecutor.execute(
       `git -C ${shellEscape(worktreePath)} checkout --detach ${shellEscape(targetSha)}`,
       { timeout: 30000 }
     );
-    if (resetResult.exitCode !== 0) {
-      throw new Error(`Failed to update worktree to ${upstreamRef}: ${resetResult.stderr}`);
+    if (checkoutResult.exitCode !== 0) {
+      throw new Error(`Failed to update worktree to ${upstreamRef}: ${checkoutResult.stderr}`);
     }
 
-    // Hard reset to discard any staged changes
-    await commandExecutor.execute(
-      `git -C ${shellEscape(worktreePath)} reset --hard ${shellEscape(targetSha)}`,
-      { timeout: 10000 }
-    );
-
-    // Clean untracked files and directories (including ignored files)
-    await commandExecutor.execute(`git -C ${shellEscape(worktreePath)} clean -fdx`, {
-      timeout: 30000,
-    });
+    // Reset and clean
+    await this.resetAndCleanWorktree(worktreePath, targetSha);
 
     logger.info(`[Workspace] Worktree updated to ${upstreamRef} (${targetSha.slice(0, 8)})`);
   }
@@ -609,21 +626,7 @@ export class WorkspaceManager {
   private async createMainProjectWorktree(targetPath: string): Promise<void> {
     logger.debug(`Creating main project worktree: ${targetPath}`);
 
-    // Fetch latest from origin to ensure we have up-to-date refs
-    await this.fetchOrigin();
-
-    // Resolve the upstream default branch
-    const upstreamRef = await this.resolveUpstreamRef();
-
-    // Get the commit SHA for the upstream ref
-    const shaResult = await commandExecutor.execute(
-      `git -C ${shellEscape(this.originalPath)} rev-parse ${shellEscape(upstreamRef)}`,
-      { timeout: 10000 }
-    );
-    if (shaResult.exitCode !== 0) {
-      throw new Error(`Failed to resolve upstream ref ${upstreamRef}: ${shaResult.stderr}`);
-    }
-    const targetSha = shaResult.stdout.trim();
+    const { upstreamRef, targetSha } = await this.fetchAndResolveUpstream();
 
     // Create worktree using detached HEAD at the upstream commit
     const createCmd = `git -C ${shellEscape(this.originalPath)} worktree add --detach ${shellEscape(targetPath)} ${shellEscape(targetSha)}`;
@@ -633,10 +636,8 @@ export class WorkspaceManager {
       throw new Error(`Failed to create main project worktree: ${result.stderr}`);
     }
 
-    // Clean any untracked files (shouldn't be any in a fresh worktree, but defense in depth)
-    await commandExecutor.execute(`git -C ${shellEscape(targetPath)} clean -fdx`, {
-      timeout: 30000,
-    });
+    // Clean (shouldn't be needed in a fresh worktree, but defense in depth)
+    await this.resetAndCleanWorktree(targetPath, targetSha);
 
     logger.info(
       `Created main project worktree at ${targetPath} (${upstreamRef} -> ${targetSha.slice(0, 8)})`

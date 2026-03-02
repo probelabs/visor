@@ -417,8 +417,8 @@ describe('WorkspaceManager', () => {
         fs.mkdirSync(testOriginalPath, { recursive: true });
       }
 
-      // First init: createMainProjectWorktree (fetch upstream, resolve ref, worktree add, clean)
-      // Second init: refreshWorktreeToUpstream (fetch, resolve, checkout, reset, clean)
+      // First init: createMainProjectWorktree (fetch, resolve, sha, worktree add, reset, clean)
+      // Second init: refreshWorktreeToUpstream (fetch, resolve, sha, checkout, reset, clean)
       commandExecutor.execute
         // --- First init: createMainProjectWorktree ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original)
@@ -427,6 +427,7 @@ describe('WorkspaceManager', () => {
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // clean -fdx
         // --- Second init: reuse path → refreshWorktreeToUpstream ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original) on 2nd init
@@ -483,7 +484,7 @@ describe('WorkspaceManager', () => {
         fs.mkdirSync(testOriginalPath, { recursive: true });
       }
 
-      // First init: createMainProjectWorktree (fetch, resolve upstream, worktree add, clean)
+      // First init: createMainProjectWorktree (fetch, resolve, sha, worktree add, reset, clean)
       // Second init: invalid path → prune → createMainProjectWorktree again
       commandExecutor.execute
         // --- First init: createMainProjectWorktree ---
@@ -493,6 +494,7 @@ describe('WorkspaceManager', () => {
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // clean -fdx
         // --- Second init: invalid worktree → recreate ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original) 2nd
@@ -503,6 +505,7 @@ describe('WorkspaceManager', () => {
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add (recreate)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
 
       const manager1 = WorkspaceManager.getInstance('invalid-wt-1', testOriginalPath, {
@@ -698,6 +701,180 @@ describe('WorkspaceManager', () => {
 
       fs.rmSync(testOriginalPath, { recursive: true, force: true });
       fs.rmSync(worktreePath, { recursive: true, force: true });
+    });
+  });
+
+  describe('upstream resolution edge cases', () => {
+    it('succeeds when fetch origin fails (uses cached refs)', async () => {
+      const { commandExecutor } = require('../../src/utils/command-executor');
+
+      if (!fs.existsSync(testOriginalPath)) {
+        fs.mkdirSync(testOriginalPath, { recursive: true });
+      }
+
+      commandExecutor.execute
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'fatal: no remote' }) // fetch origin FAILS
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
+
+      const manager = WorkspaceManager.getInstance('fetch-fail-1', testOriginalPath, {
+        basePath: testBasePath,
+      });
+
+      const info = await manager.initialize();
+      expect(info.sessionId).toBe('fetch-fail-1');
+
+      fs.rmSync(manager.getWorkspacePath(), { recursive: true, force: true });
+      fs.rmSync(testOriginalPath, { recursive: true, force: true });
+    });
+
+    it('falls back to origin/master when origin/main does not exist', async () => {
+      const { commandExecutor } = require('../../src/utils/command-executor');
+
+      if (!fs.existsSync(testOriginalPath)) {
+        fs.mkdirSync(testOriginalPath, { recursive: true });
+      }
+
+      commandExecutor.execute
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // rev-parse origin/main FAILS
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'master-sha\n', stderr: '' }) // rev-parse origin/master
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'master-sha\n', stderr: '' }) // rev-parse origin/master (sha)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
+
+      const manager = WorkspaceManager.getInstance('master-fallback-1', testOriginalPath, {
+        basePath: testBasePath,
+      });
+
+      const info = await manager.initialize();
+      expect(info.sessionId).toBe('master-fallback-1');
+
+      // Verify worktree add was called with the master SHA
+      const executeCalls = commandExecutor.execute.mock.calls;
+      const worktreeAddCall = executeCalls.find((call: any[]) =>
+        String(call[0]).includes('worktree add')
+      );
+      expect(worktreeAddCall[0]).toContain('master-sha');
+
+      fs.rmSync(manager.getWorkspacePath(), { recursive: true, force: true });
+      fs.rmSync(testOriginalPath, { recursive: true, force: true });
+    });
+
+    it('falls back to local HEAD when no remote branches exist', async () => {
+      const { commandExecutor } = require('../../src/utils/command-executor');
+
+      if (!fs.existsSync(testOriginalPath)) {
+        fs.mkdirSync(testOriginalPath, { recursive: true });
+      }
+
+      commandExecutor.execute
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'no remote' }) // fetch origin fails
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // rev-parse origin/main fails
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // rev-parse origin/master fails
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'local-head\n', stderr: '' }) // rev-parse HEAD (sha)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
+
+      const manager = WorkspaceManager.getInstance('no-remote-1', testOriginalPath, {
+        basePath: testBasePath,
+      });
+
+      const info = await manager.initialize();
+      expect(info.sessionId).toBe('no-remote-1');
+
+      // Verify worktree add was called with local HEAD sha
+      const executeCalls = commandExecutor.execute.mock.calls;
+      const worktreeAddCall = executeCalls.find((call: any[]) =>
+        String(call[0]).includes('worktree add')
+      );
+      expect(worktreeAddCall[0]).toContain('local-head');
+
+      fs.rmSync(manager.getWorkspacePath(), { recursive: true, force: true });
+      fs.rmSync(testOriginalPath, { recursive: true, force: true });
+    });
+
+    it('uses origin/HEAD symbolic ref when available', async () => {
+      const { commandExecutor } = require('../../src/utils/command-executor');
+
+      if (!fs.existsSync(testOriginalPath)) {
+        fs.mkdirSync(testOriginalPath, { recursive: true });
+      }
+
+      commandExecutor.execute
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: 'refs/remotes/origin/develop\n',
+          stderr: '',
+        }) // symbolic-ref → origin/develop
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'develop-sha\n', stderr: '' }) // rev-parse origin/develop (sha)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
+
+      const manager = WorkspaceManager.getInstance('symbolic-1', testOriginalPath, {
+        basePath: testBasePath,
+      });
+
+      const info = await manager.initialize();
+      expect(info.sessionId).toBe('symbolic-1');
+
+      // Verify worktree add was called with the develop SHA
+      const executeCalls = commandExecutor.execute.mock.calls;
+      const worktreeAddCall = executeCalls.find((call: any[]) =>
+        String(call[0]).includes('worktree add')
+      );
+      expect(worktreeAddCall[0]).toContain('develop-sha');
+
+      fs.rmSync(manager.getWorkspacePath(), { recursive: true, force: true });
+      fs.rmSync(testOriginalPath, { recursive: true, force: true });
+    });
+
+    it('continues when reset --hard and clean -fdx fail', async () => {
+      const { commandExecutor } = require('../../src/utils/command-executor');
+      const { logger } = require('../../src/logger');
+
+      if (!fs.existsSync(testOriginalPath)) {
+        fs.mkdirSync(testOriginalPath, { recursive: true });
+      }
+
+      commandExecutor.execute
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'reset failed' }) // reset --hard FAILS
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'clean failed' }); // clean -fdx FAILS
+
+      const manager = WorkspaceManager.getInstance('reset-fail-1', testOriginalPath, {
+        basePath: testBasePath,
+      });
+
+      // Should NOT throw despite reset/clean failures
+      const info = await manager.initialize();
+      expect(info.sessionId).toBe('reset-fail-1');
+
+      // Verify warnings were logged
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('reset --hard failed'));
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('clean -fdx failed'));
+
+      fs.rmSync(manager.getWorkspacePath(), { recursive: true, force: true });
+      fs.rmSync(testOriginalPath, { recursive: true, force: true });
     });
   });
 });
