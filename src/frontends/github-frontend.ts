@@ -38,6 +38,7 @@ export class GitHubFrontend implements Frontend {
   public minUpdateDelayMs: number = 1000; // Minimum delay between updates (public for testing)
   // Cache of created GitHub comment IDs per group to handle API eventual consistency
   private createdCommentGithubIds: Map<string, number> = new Map();
+  private _stopped = false;
 
   start(ctx: FrontendContext): void {
     const log = ctx.logger;
@@ -211,7 +212,8 @@ export class GitHubFrontend implements Frontend {
     );
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
+    this._stopped = true;
     for (const s of this.subs) s.unsubscribe();
     this.subs = [];
     if (this._timer) {
@@ -219,6 +221,13 @@ export class GitHubFrontend implements Frontend {
       this._timer = null;
     }
     this._pendingIds.clear();
+    // Drain any in-flight updateGroupedComment operations so callers that
+    // await stop() (e.g. FrontendsHost.stopAll) are guaranteed no async
+    // work leaks after stop resolves.
+    const pending = Array.from(this.updateLocks.values());
+    if (pending.length > 0) {
+      await Promise.allSettled(pending);
+    }
   }
 
   private async buildFullBody(ctx: FrontendContext, group: string): Promise<string> {
@@ -330,6 +339,7 @@ ${end}`);
     changedIds?: string | string[]
   ) {
     try {
+      if (this._stopped) return;
       if (!ctx.run.repo || !ctx.run.pr) return;
 
       // Check if PR comments are enabled (default to true if not specified)
