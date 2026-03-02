@@ -241,6 +241,9 @@ export class WorkspaceManager {
             );
           } catch {}
           await this.createMainProjectWorktree(mainProjectPath);
+        } else {
+          // Worktree exists and is valid — update to latest upstream and clean
+          await this.refreshWorktreeToUpstream(mainProjectPath);
         }
       } else {
         await this.createMainProjectWorktree(mainProjectPath);
@@ -489,6 +492,111 @@ export class WorkspaceManager {
   }
 
   /**
+   * Resolve the upstream default branch ref.
+   * Tries origin/HEAD (symbolic), then origin/main, then origin/master.
+   * Falls back to local HEAD if no remote is configured.
+   */
+  private async resolveUpstreamRef(): Promise<string> {
+    const esc = shellEscape(this.originalPath);
+
+    // First, try to resolve origin/HEAD (follows the remote's default branch)
+    const symbolicResult = await commandExecutor.execute(
+      `git -C ${esc} symbolic-ref refs/remotes/origin/HEAD 2>/dev/null`,
+      { timeout: 10000 }
+    );
+    if (symbolicResult.exitCode === 0 && symbolicResult.stdout.trim()) {
+      // Returns something like "refs/remotes/origin/main"
+      const ref = symbolicResult.stdout.trim().replace('refs/remotes/', '');
+      logger.debug(`[Workspace] Resolved upstream default branch via origin/HEAD: ${ref}`);
+      return ref;
+    }
+
+    // Try origin/main
+    const mainResult = await commandExecutor.execute(
+      `git -C ${esc} rev-parse --verify origin/main 2>/dev/null`,
+      { timeout: 10000 }
+    );
+    if (mainResult.exitCode === 0) {
+      logger.debug(`[Workspace] Using origin/main as upstream ref`);
+      return 'origin/main';
+    }
+
+    // Try origin/master
+    const masterResult = await commandExecutor.execute(
+      `git -C ${esc} rev-parse --verify origin/master 2>/dev/null`,
+      { timeout: 10000 }
+    );
+    if (masterResult.exitCode === 0) {
+      logger.debug(`[Workspace] Using origin/master as upstream ref`);
+      return 'origin/master';
+    }
+
+    // Fallback: no remote configured, use local HEAD
+    logger.warn(`[Workspace] No upstream remote found, falling back to local HEAD`);
+    return 'HEAD';
+  }
+
+  /**
+   * Fetch latest from origin in the source repository.
+   */
+  private async fetchOrigin(): Promise<void> {
+    logger.debug(`[Workspace] Fetching latest from origin`);
+    const result = await commandExecutor.execute(
+      `git -C ${shellEscape(this.originalPath)} fetch origin --prune 2>&1`,
+      { timeout: 120000 }
+    );
+    if (result.exitCode !== 0) {
+      logger.warn(`[Workspace] fetch origin failed (will use cached refs): ${result.stderr}`);
+    }
+  }
+
+  /**
+   * Refresh an existing worktree to the latest upstream default branch
+   * and ensure it has no modified or untracked files.
+   */
+  private async refreshWorktreeToUpstream(worktreePath: string): Promise<void> {
+    logger.info(`[Workspace] Refreshing worktree to latest upstream: ${worktreePath}`);
+
+    // Fetch latest from origin
+    await this.fetchOrigin();
+
+    // Resolve the upstream ref
+    const upstreamRef = await this.resolveUpstreamRef();
+
+    // Get the commit SHA for the upstream ref
+    const shaResult = await commandExecutor.execute(
+      `git -C ${shellEscape(this.originalPath)} rev-parse ${shellEscape(upstreamRef)}`,
+      { timeout: 10000 }
+    );
+    if (shaResult.exitCode !== 0) {
+      throw new Error(`Failed to resolve upstream ref ${upstreamRef}: ${shaResult.stderr}`);
+    }
+    const targetSha = shaResult.stdout.trim();
+
+    // Reset worktree to the upstream commit
+    const resetResult = await commandExecutor.execute(
+      `git -C ${shellEscape(worktreePath)} checkout --detach ${shellEscape(targetSha)}`,
+      { timeout: 30000 }
+    );
+    if (resetResult.exitCode !== 0) {
+      throw new Error(`Failed to update worktree to ${upstreamRef}: ${resetResult.stderr}`);
+    }
+
+    // Hard reset to discard any staged changes
+    await commandExecutor.execute(
+      `git -C ${shellEscape(worktreePath)} reset --hard ${shellEscape(targetSha)}`,
+      { timeout: 10000 }
+    );
+
+    // Clean untracked files and directories (including ignored files)
+    await commandExecutor.execute(`git -C ${shellEscape(worktreePath)} clean -fdx`, {
+      timeout: 30000,
+    });
+
+    logger.info(`[Workspace] Worktree updated to ${upstreamRef} (${targetSha.slice(0, 8)})`);
+  }
+
+  /**
    * Create worktree for the main project
    *
    * visor-disable: architecture - Not using WorktreeManager here because:
@@ -501,29 +609,38 @@ export class WorkspaceManager {
   private async createMainProjectWorktree(targetPath: string): Promise<void> {
     logger.debug(`Creating main project worktree: ${targetPath}`);
 
-    // Get current HEAD
-    const headResult = await commandExecutor.execute(
-      `git -C ${shellEscape(this.originalPath)} rev-parse HEAD`,
-      {
-        timeout: 10000,
-      }
+    // Fetch latest from origin to ensure we have up-to-date refs
+    await this.fetchOrigin();
+
+    // Resolve the upstream default branch
+    const upstreamRef = await this.resolveUpstreamRef();
+
+    // Get the commit SHA for the upstream ref
+    const shaResult = await commandExecutor.execute(
+      `git -C ${shellEscape(this.originalPath)} rev-parse ${shellEscape(upstreamRef)}`,
+      { timeout: 10000 }
     );
-
-    if (headResult.exitCode !== 0) {
-      throw new Error(`Failed to get HEAD: ${headResult.stderr}`);
+    if (shaResult.exitCode !== 0) {
+      throw new Error(`Failed to resolve upstream ref ${upstreamRef}: ${shaResult.stderr}`);
     }
+    const targetSha = shaResult.stdout.trim();
 
-    const headRef = headResult.stdout.trim();
-
-    // Create worktree using detached HEAD to avoid branch conflicts
-    const createCmd = `git -C ${shellEscape(this.originalPath)} worktree add --detach ${shellEscape(targetPath)} ${shellEscape(headRef)}`;
+    // Create worktree using detached HEAD at the upstream commit
+    const createCmd = `git -C ${shellEscape(this.originalPath)} worktree add --detach ${shellEscape(targetPath)} ${shellEscape(targetSha)}`;
     const result = await commandExecutor.execute(createCmd, { timeout: 60000 });
 
     if (result.exitCode !== 0) {
       throw new Error(`Failed to create main project worktree: ${result.stderr}`);
     }
 
-    logger.debug(`Created main project worktree at ${targetPath}`);
+    // Clean any untracked files (shouldn't be any in a fresh worktree, but defense in depth)
+    await commandExecutor.execute(`git -C ${shellEscape(targetPath)} clean -fdx`, {
+      timeout: 30000,
+    });
+
+    logger.info(
+      `Created main project worktree at ${targetPath} (${upstreamRef} -> ${targetSha.slice(0, 8)})`
+    );
   }
 
   /**

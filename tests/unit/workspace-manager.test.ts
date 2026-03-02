@@ -417,17 +417,27 @@ describe('WorkspaceManager', () => {
         fs.mkdirSync(testOriginalPath, { recursive: true });
       }
 
-      // First call: isGitRepository(originalPath) = true
-      // Second call: rev-parse HEAD = success
-      // Third call: worktree add = success
-      // Fourth call (on re-init): isGitRepository(originalPath) = true
-      // Fifth call (on re-init): isGitRepository(mainProjectPath) = true (valid existing)
+      // First init: createMainProjectWorktree (fetch upstream, resolve ref, worktree add, clean)
+      // Second init: refreshWorktreeToUpstream (fetch, resolve, checkout, reset, clean)
       commandExecutor.execute
+        // --- First init: createMainProjectWorktree ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original)
-        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse HEAD
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref (no origin/HEAD)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // clean -fdx
+        // --- Second init: reuse path → refreshWorktreeToUpstream ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original) on 2nd init
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }); // isGitRepository(mainProject) valid
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(mainProject) valid
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref (no origin/HEAD)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'def456\n', stderr: '' }) // rev-parse --verify origin/main
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'def456\n', stderr: '' }) // rev-parse origin/main (sha)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // checkout --detach
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
 
       const manager1 = WorkspaceManager.getInstance('reuse-git-1', testOriginalPath, {
         basePath: testBasePath,
@@ -473,17 +483,27 @@ describe('WorkspaceManager', () => {
         fs.mkdirSync(testOriginalPath, { recursive: true });
       }
 
-      // First init: git repo, HEAD, worktree add
-      // Second init: git repo, pathExists=true, isGitRepository(mainProject)=false, worktree prune, HEAD, worktree add
+      // First init: createMainProjectWorktree (fetch, resolve upstream, worktree add, clean)
+      // Second init: invalid path → prune → createMainProjectWorktree again
       commandExecutor.execute
+        // --- First init: createMainProjectWorktree ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original)
-        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse HEAD
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref (no origin/HEAD)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // clean -fdx
+        // --- Second init: invalid worktree → recreate ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original) 2nd
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // isGitRepository(mainProject) = INVALID
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
-        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse HEAD
-        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // worktree add (recreate)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin (recreate)
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref (no origin/HEAD)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add (recreate)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
 
       const manager1 = WorkspaceManager.getInstance('invalid-wt-1', testOriginalPath, {
         basePath: testBasePath,
