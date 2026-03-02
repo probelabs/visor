@@ -843,6 +843,100 @@ describe('WorkspaceManager', () => {
       fs.rmSync(testOriginalPath, { recursive: true, force: true });
     });
 
+    it('falls back to HEAD when upstream ref rev-parse fails', async () => {
+      const { commandExecutor } = require('../../src/utils/command-executor');
+
+      if (!fs.existsSync(testOriginalPath)) {
+        fs.mkdirSync(testOriginalPath, { recursive: true });
+      }
+
+      commandExecutor.execute
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main succeeds
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'bad ref' }) // rev-parse origin/main (SHA) FAILS
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'head-sha\n', stderr: '' }) // rev-parse HEAD fallback
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
+
+      const manager = WorkspaceManager.getInstance('sha-fallback-1', testOriginalPath, {
+        basePath: testBasePath,
+      });
+
+      const info = await manager.initialize();
+      expect(info.sessionId).toBe('sha-fallback-1');
+
+      // Verify worktree was created with the HEAD fallback sha
+      const executeCalls = commandExecutor.execute.mock.calls;
+      const worktreeAddCall = executeCalls.find((call: any[]) =>
+        String(call[0]).includes('worktree add')
+      );
+      expect(worktreeAddCall[0]).toContain('head-sha');
+
+      fs.rmSync(manager.getWorkspacePath(), { recursive: true, force: true });
+      fs.rmSync(testOriginalPath, { recursive: true, force: true });
+    });
+
+    it('continues with stale worktree when refresh checkout fails', async () => {
+      const { commandExecutor } = require('../../src/utils/command-executor');
+      const { logger } = require('../../src/logger');
+
+      if (!fs.existsSync(testOriginalPath)) {
+        fs.mkdirSync(testOriginalPath, { recursive: true });
+      }
+
+      commandExecutor.execute
+        // --- First init: createMainProjectWorktree ---
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // clean -fdx
+        // --- Second init: refreshWorktreeToUpstream with checkout failure ---
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(mainProject)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'def456\n', stderr: '' }) // rev-parse --verify origin/main
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'def456\n', stderr: '' }) // rev-parse origin/main (sha)
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'checkout failed' }) // checkout --detach FAILS
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard HEAD (cleanup fallback)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
+
+      const manager1 = WorkspaceManager.getInstance('checkout-fail-1', testOriginalPath, {
+        basePath: testBasePath,
+        name: 'checkout-fail-ws',
+        cleanupOnExit: false,
+      });
+
+      await manager1.initialize();
+      const workspacePath = manager1.getWorkspacePath();
+      const mainProjectPath = path.join(workspacePath, 'test-project');
+      fs.mkdirSync(mainProjectPath, { recursive: true });
+      await manager1.cleanup();
+
+      // Second initialization — checkout will fail but should NOT throw
+      const manager2 = WorkspaceManager.getInstance('checkout-fail-2', testOriginalPath, {
+        basePath: testBasePath,
+        name: 'checkout-fail-ws',
+        cleanupOnExit: false,
+      });
+
+      const info = await manager2.initialize();
+      expect(info.sessionId).toBe('checkout-fail-2');
+
+      // Verify warning was logged about checkout failure
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('checkout --detach failed'));
+
+      fs.rmSync(workspacePath, { recursive: true, force: true });
+      fs.rmSync(testOriginalPath, { recursive: true, force: true });
+    });
+
     it('continues when reset --hard and clean -fdx fail', async () => {
       const { commandExecutor } = require('../../src/utils/command-executor');
       const { logger } = require('../../src/logger');

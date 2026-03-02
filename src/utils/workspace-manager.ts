@@ -492,6 +492,16 @@ export class WorkspaceManager {
   }
 
   /**
+   * visor-disable: architecture - The helpers below (resolveUpstreamRef,
+   * fetchAndResolveUpstream, resetAndCleanWorktree, refreshWorktreeToUpstream)
+   * are NOT duplicates of WorktreeManager's fetchRef/getCommitShaForRef/cleanWorktree.
+   * WorktreeManager operates on BARE repo caches cloned from remote URLs, while
+   * WorkspaceManager operates on the LOCAL working repo the user already has checked out.
+   * The git commands differ (e.g. `fetch origin --prune` vs `fetch origin <ref>:<ref>`)
+   * and sharing code would require adding a "local mode" to WorktreeManager for no benefit.
+   */
+
+  /**
    * Resolve the upstream default branch ref.
    * Tries origin/HEAD (symbolic), then origin/main, then origin/master.
    * Falls back to local HEAD if no remote is configured.
@@ -559,11 +569,22 @@ export class WorkspaceManager {
       `git -C ${shellEscape(this.originalPath)} rev-parse ${shellEscape(upstreamRef)}`,
       { timeout: 10000 }
     );
-    if (shaResult.exitCode !== 0) {
-      throw new Error(`Failed to resolve upstream ref ${upstreamRef}: ${shaResult.stderr}`);
+    if (shaResult.exitCode === 0) {
+      return { upstreamRef, targetSha: shaResult.stdout.trim() };
     }
 
-    return { upstreamRef, targetSha: shaResult.stdout.trim() };
+    // Upstream ref unresolvable — fall back to local HEAD
+    logger.warn(
+      `[Workspace] Could not resolve ${upstreamRef} (${shaResult.stderr.trim()}), falling back to HEAD`
+    );
+    const headResult = await commandExecutor.execute(
+      `git -C ${shellEscape(this.originalPath)} rev-parse HEAD`,
+      { timeout: 10000 }
+    );
+    if (headResult.exitCode !== 0) {
+      throw new Error(`Repository has no commits — cannot create worktree: ${headResult.stderr}`);
+    }
+    return { upstreamRef: 'HEAD', targetSha: headResult.stdout.trim() };
   }
 
   /**
@@ -596,32 +617,36 @@ export class WorkspaceManager {
   private async refreshWorktreeToUpstream(worktreePath: string): Promise<void> {
     logger.info(`[Workspace] Refreshing worktree to latest upstream: ${worktreePath}`);
 
-    const { upstreamRef, targetSha } = await this.fetchAndResolveUpstream();
+    try {
+      const { upstreamRef, targetSha } = await this.fetchAndResolveUpstream();
 
-    // Point worktree to the upstream commit
-    const checkoutResult = await commandExecutor.execute(
-      `git -C ${shellEscape(worktreePath)} checkout --detach ${shellEscape(targetSha)}`,
-      { timeout: 30000 }
-    );
-    if (checkoutResult.exitCode !== 0) {
-      throw new Error(`Failed to update worktree to ${upstreamRef}: ${checkoutResult.stderr}`);
+      // Point worktree to the upstream commit
+      const checkoutResult = await commandExecutor.execute(
+        `git -C ${shellEscape(worktreePath)} checkout --detach ${shellEscape(targetSha)}`,
+        { timeout: 30000 }
+      );
+      if (checkoutResult.exitCode !== 0) {
+        logger.warn(
+          `[Workspace] checkout --detach failed (worktree stays at current commit): ${checkoutResult.stderr}`
+        );
+        // Still clean even if checkout failed — the worktree is valid, just at old commit
+        await this.resetAndCleanWorktree(worktreePath, 'HEAD');
+        return;
+      }
+
+      // Reset and clean
+      await this.resetAndCleanWorktree(worktreePath, targetSha);
+
+      logger.info(`[Workspace] Worktree updated to ${upstreamRef} (${targetSha.slice(0, 8)})`);
+    } catch (error) {
+      // Best-effort: a stale worktree is better than failing initialization entirely
+      logger.warn(`[Workspace] Failed to refresh worktree (continuing with stale state): ${error}`);
     }
-
-    // Reset and clean
-    await this.resetAndCleanWorktree(worktreePath, targetSha);
-
-    logger.info(`[Workspace] Worktree updated to ${upstreamRef} (${targetSha.slice(0, 8)})`);
   }
 
   /**
-   * Create worktree for the main project
-   *
-   * visor-disable: architecture - Not using WorktreeManager here because:
-   * 1. WorktreeManager expects remote URLs and clones to bare repos first
-   * 2. This operates on the LOCAL repo we're already in (no cloning needed)
-   * 3. Adding a "local mode" to WorktreeManager would add complexity for minimal benefit
-   * The git commands here are simpler (just rev-parse + worktree add) vs WorktreeManager's
-   * full clone/bare-repo/fetch/worktree pipeline.
+   * Create worktree for the main project.
+   * See visor-disable comment above resolveUpstreamRef for why this doesn't use WorktreeManager.
    */
   private async createMainProjectWorktree(targetPath: string): Promise<void> {
     logger.debug(`Creating main project worktree: ${targetPath}`);

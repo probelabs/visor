@@ -7,160 +7,143 @@ import {
 } from '../../src/reviewer';
 import { PRInfo } from '../../src/pr-analyzer';
 
-// Mock CheckExecutionEngine
+// Helper: build GroupedCheckResults from prInfo + checks (shared by both engine mocks)
+function buildMockGroupedResults(_prInfo: any, _checks: string[], _config: any, _debug?: boolean) {
+  const issues: any[] = [];
+
+  if (_checks.includes('security-review') || _checks.includes('basic-review')) {
+    if (
+      _prInfo.files[0]?.patch?.includes('eval') ||
+      _prInfo.files[0]?.patch?.includes('innerHTML')
+    ) {
+      issues.push({
+        file: 'src/test.ts',
+        line: 5,
+        ruleId: 'security-review/dangerous-eval',
+        message: 'Dangerous eval usage detected - security vulnerability',
+        severity: 'critical',
+        category: 'security',
+      });
+    }
+  }
+
+  if (_prInfo.files.some((f: any) => f.additions > 100)) {
+    const checkName =
+      _checks.find((c: string) => c.includes('large') || c.includes('basic')) || _checks[0];
+    issues.push({
+      file: _prInfo.files.find((f: any) => f.additions > 100)?.filename || 'src/large.ts',
+      line: 1,
+      ruleId: `${checkName}/large-change`,
+      message: 'Large file change detected, consider breaking into smaller PRs',
+      severity: 'warning',
+      category: 'style',
+    });
+  }
+
+  if (issues.length === 0) {
+    const checkName = _checks[0] || 'basic-review';
+    issues.push({
+      file: 'src/test.ts',
+      line: 10,
+      ruleId: `${checkName}/naming-convention`,
+      message: 'Consider using const instead of let',
+      severity: 'info',
+      category: 'style',
+    });
+  }
+
+  const groupedResults: any = {};
+  for (const checkName of _checks) {
+    const group = _config?.checks?.[checkName]?.group || 'default';
+    if (!groupedResults[group]) {
+      groupedResults[group] = [];
+    }
+
+    const checkIssues = issues.filter(
+      (i: any) => i.ruleId?.startsWith(`${checkName}/`) || !i.ruleId?.includes('/')
+    );
+
+    let content = '';
+    if (checkIssues.length > 0) {
+      content += checkIssues
+        .map(
+          (i: any) =>
+            `- **${i.severity.toUpperCase()}**: ${i.message} (${i.file}:${i.line}) [${i.category}]`
+        )
+        .join('\n');
+    }
+    if (!content) {
+      content = 'No issues found.';
+    }
+
+    groupedResults[group].push({
+      checkName,
+      content,
+      group,
+      debug: _debug ? { provider: 'mock', model: 'mock-model' } : undefined,
+    });
+  }
+
+  return { issues, groupedResults };
+}
+
+// Mock StateMachineExecutionEngine (used by reviewPR via dynamic import)
+jest.mock('../../src/state-machine-execution-engine', () => {
+  return {
+    StateMachineExecutionEngine: jest.fn().mockImplementation(() => ({
+      executeGroupedChecks: jest
+        .fn()
+        .mockImplementation(
+          async (
+            _prInfo: any,
+            _checks: string[],
+            _unused1: any,
+            _config: any,
+            _unused2: any,
+            _debug: boolean
+          ) => {
+            const { groupedResults } = buildMockGroupedResults(_prInfo, _checks, _config, _debug);
+            return { results: groupedResults };
+          }
+        ),
+    })),
+  };
+});
+
+// Mock CheckExecutionEngine (legacy, kept for any remaining callers)
 jest.mock('../../src/check-execution-engine', () => {
   return {
     CheckExecutionEngine: jest.fn().mockImplementation(() => ({
       executeReviewChecks: jest
         .fn()
-        .mockImplementation(async (_prInfo, _checks, _unused1, _config, _unused2, _debug) => {
-          // Return mock results similar to AIReviewService mock
-          const issues: any[] = [];
-
-          // Generate mock issues based on check names
-          if (_checks.includes('security-review') || _checks.includes('basic-review')) {
-            if (
-              _prInfo.files[0]?.patch?.includes('eval') ||
-              _prInfo.files[0]?.patch?.includes('innerHTML')
-            ) {
-              issues.push({
-                file: 'src/test.ts',
-                line: 5,
-                ruleId: 'security-review/dangerous-eval',
-                message: 'Dangerous eval usage detected - security vulnerability',
-                severity: 'critical',
-                category: 'security',
-              });
-            }
+        .mockImplementation(
+          async (
+            _prInfo: any,
+            _checks: string[],
+            _unused1: any,
+            _config: any,
+            _unused2: any,
+            _debug: boolean
+          ) => {
+            const { issues } = buildMockGroupedResults(_prInfo, _checks, _config, _debug);
+            return { issues };
           }
-
-          // Large file detection
-          if (_prInfo.files.some((f: any) => f.additions > 100)) {
-            const checkName =
-              _checks.find((c: string) => c.includes('large') || c.includes('basic')) || _checks[0];
-            issues.push({
-              file: _prInfo.files.find((f: any) => f.additions > 100)?.filename || 'src/large.ts',
-              line: 1,
-              ruleId: `${checkName}/large-change`,
-              message: 'Large file change detected, consider breaking into smaller PRs',
-              severity: 'warning',
-              category: 'style',
-            });
-          }
-
-          // Test file handling (removed suggestions)
-          // Test file detection logic removed as suggestions field is deprecated
-
-          // Default response if no specific conditions met
-          if (issues.length === 0) {
-            const checkName = _checks[0] || 'basic-review';
-            issues.push({
-              file: 'src/test.ts',
-              line: 10,
-              ruleId: `${checkName}/naming-convention`,
-              message: 'Consider using const instead of let',
-              severity: 'info',
-              category: 'style',
-            });
-          }
-
-          // Default suggestions logic removed as suggestions field is deprecated
-
-          return { issues };
-        }),
+        ),
       executeGroupedChecks: jest
         .fn()
-        .mockImplementation(async (_prInfo, _checks, _unused1, _config, _unused2, _debug) => {
-          // Return GroupedCheckResults format
-          const issues: any[] = [];
-
-          // Generate mock issues based on check names
-          if (_checks.includes('security-review') || _checks.includes('basic-review')) {
-            if (
-              _prInfo.files[0]?.patch?.includes('eval') ||
-              _prInfo.files[0]?.patch?.includes('innerHTML')
-            ) {
-              issues.push({
-                file: 'src/test.ts',
-                line: 5,
-                ruleId: 'security-review/dangerous-eval',
-                message: 'Dangerous eval usage detected - security vulnerability',
-                severity: 'critical',
-                category: 'security',
-              });
-            }
+        .mockImplementation(
+          async (
+            _prInfo: any,
+            _checks: string[],
+            _unused1: any,
+            _config: any,
+            _unused2: any,
+            _debug: boolean
+          ) => {
+            const { groupedResults } = buildMockGroupedResults(_prInfo, _checks, _config, _debug);
+            return groupedResults;
           }
-
-          // Large file detection
-          if (_prInfo.files.some((f: any) => f.additions > 100)) {
-            const checkName =
-              _checks.find((c: string) => c.includes('large') || c.includes('basic')) || _checks[0];
-            issues.push({
-              file: _prInfo.files.find((f: any) => f.additions > 100)?.filename || 'src/large.ts',
-              line: 1,
-              ruleId: `${checkName}/large-change`,
-              message: 'Large file change detected, consider breaking into smaller PRs',
-              severity: 'warning',
-              category: 'style',
-            });
-          }
-
-          // Test file handling (removed suggestions)
-          // Test file detection logic removed as suggestions field is deprecated
-
-          // Default response if no specific conditions met
-          if (issues.length === 0) {
-            const checkName = _checks[0] || 'basic-review';
-            issues.push({
-              file: 'src/test.ts',
-              line: 10,
-              ruleId: `${checkName}/naming-convention`,
-              message: 'Consider using const instead of let',
-              severity: 'info',
-              category: 'style',
-            });
-          }
-
-          // Default suggestions logic removed as suggestions field is deprecated
-
-          // Convert to GroupedCheckResults format
-          const groupedResults: any = {};
-          for (const checkName of _checks) {
-            const group = _config?.checks?.[checkName]?.group || 'default';
-            if (!groupedResults[group]) {
-              groupedResults[group] = [];
-            }
-
-            // Create a simple content string for this check
-            const checkIssues = issues.filter(
-              i => i.ruleId?.startsWith(`${checkName}/`) || !i.ruleId?.includes('/')
-            );
-            // Check suggestions filtering removed as suggestions field is deprecated
-
-            let content = '';
-            if (checkIssues.length > 0) {
-              content += checkIssues
-                .map(
-                  i =>
-                    `- **${i.severity.toUpperCase()}**: ${i.message} (${i.file}:${i.line}) [${i.category}]`
-                )
-                .join('\n');
-            }
-            // Suggestions content generation removed as suggestions field is deprecated
-            if (!content) {
-              content = 'No issues found.';
-            }
-
-            groupedResults[group].push({
-              checkName,
-              content,
-              group,
-              debug: _debug ? { provider: 'mock', model: 'mock-model' } : undefined,
-            });
-          }
-
-          return groupedResults;
-        }),
+        ),
     })),
   };
 });
