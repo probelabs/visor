@@ -418,6 +418,15 @@ export class WorkflowRegistry {
   ): Promise<{ content: string; resolvedSource: string; importBasePath?: string }> {
     const baseIsUrl = basePath?.startsWith('http://') || basePath?.startsWith('https://');
 
+    // Handle visor:// and visor-ee:// built-in workflow URLs
+    if (source.startsWith('visor://') || source.startsWith('visor-ee://')) {
+      const relativePath = source.replace(/^visor(?:-ee)?:\/\//, '');
+      const packageRoot = path.resolve(__dirname, '..');
+      const filePath = path.resolve(packageRoot, relativePath);
+      const content = await fs.readFile(filePath, 'utf-8');
+      return { content, resolvedSource: filePath, importBasePath: path.dirname(filePath) };
+    }
+
     // Handle URLs
     if (source.startsWith('http://') || source.startsWith('https://')) {
       const response = await fetch(source);

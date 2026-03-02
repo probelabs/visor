@@ -1,0 +1,1250 @@
+# =============================================================================
+# code-talk: Reusable workflow for AI-powered code exploration
+# =============================================================================
+#
+# A battle-tested workflow for answering code questions across multiple
+# repositories with architecture-aware routing.
+#
+# Usage:
+#   imports:
+#     - ./code-talk.yaml
+#
+#   checks:
+#     code-help:
+#       type: workflow
+#       workflow: code-talk
+#       args:
+#         question: "How does authentication work?"
+#         architecture: ./ARCHITECTURE.md
+#         docs_repo: my-org/docs
+#         projects:
+#           - id: backend
+#             repo: my-org/backend
+#             description: Backend API services
+#
+# =============================================================================
+
+id: code-talk
+name: Code Talk
+description: AI-powered code exploration across multiple repositories with confidence scoring
+version: "1.0.0"
+
+inputs:
+  - name: question
+    required: true
+    description: The code question to answer
+    schema:
+      type: string
+
+  - name: architecture
+    required: true
+    description: |
+      Architecture model - file path or inline markdown describing
+      project topology and routing rules
+    schema:
+      type: string
+
+  - name: docs_repo
+    required: true
+    description: Documentation repository (owner/name format)
+    schema:
+      type: string
+
+  - name: projects
+    required: true
+    description: |
+      Array of available code projects for AI routing:
+        - id: unique identifier for routing
+        - repo: GitHub repository (owner/name)
+        - description: used by AI for routing decisions
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id: { type: string }
+          repo: { type: string }
+          description: { type: string }
+        required: [id, repo, description]
+
+  - name: max_projects
+    default: 3
+    description: Maximum code projects to checkout (excludes docs)
+    schema:
+      type: number
+
+  - name: docs_ref
+    default: main
+    description: Git ref for docs repository
+    schema:
+      type: string
+
+  - name: routing_prompt
+    required: false
+    description: Additional routing instructions (appended to built-in)
+    schema:
+      type: string
+
+  - name: exploration_prompt
+    required: false
+    description: Additional exploration instructions (appended to built-in)
+    schema:
+      type: string
+
+  - name: ai_model
+    required: false
+    description: Override AI model for exploration step
+    schema:
+      type: string
+
+outputs:
+  - name: answer
+    description: The answer object with text
+    value_js: |
+      const result = outputs?.['explore-code'];
+      if (result?.answer) return result.answer;
+      const routeOutput = outputs?.['route-projects'];
+      // Handle proper notes field
+      const routeNotes = routeOutput?.notes;
+      if (typeof routeNotes === 'string' && routeNotes.trim().length > 0) {
+        return { text: routeNotes };
+      }
+      // Fallback: if AI returned {text: "..."} instead of proper schema
+      const routeText = routeOutput?.text;
+      if (typeof routeText === 'string' && routeText.trim().length > 0) {
+        return { text: routeText };
+      }
+      return null;
+
+  - name: references
+    description: Code/doc references from exploration
+    value_js: |
+      const result = outputs?.['explore-code'];
+      return result?.references ?? [];
+
+  - name: confidence
+    description: |
+      Confidence in the final answer ("high", "medium", or "low").
+      Treat non-high confidence as a signal to verify before acting.
+    value_js: |
+      const result = outputs?.['explore-code'];
+      if (result?.confidence) return result.confidence;
+      const routeNotes = outputs?.['route-projects']?.notes;
+      if (typeof routeNotes === 'string' && routeNotes.trim().length > 0) return 'low';
+      return 'low';
+
+  - name: confidence_reason
+    description: |
+      Why confidence is not high. Should explain missing evidence,
+      ambiguity, or investigation gaps. May be empty only when confidence is high.
+    value_js: |
+      const result = outputs?.['explore-code'];
+      const confidence = result?.confidence;
+      const reason = result?.confidence_reason;
+      if (typeof reason === 'string') return reason;
+      if (confidence === 'high') return '';
+      const routeNotes = outputs?.['route-projects']?.notes;
+      if (typeof routeNotes === 'string' && routeNotes.trim().length > 0) return routeNotes;
+      return 'No confidence explanation was provided by explore-code.';
+
+  - name: projects_explored
+    description: Which project IDs were checked out
+    value_js: |
+      // Try to get from history first
+      const historyItems = outputs?.history?.['project-items'];
+      const lastItems = Array.isArray(historyItems) ? historyItems[historyItems.length - 1] : historyItems;
+      if (Array.isArray(lastItems)) {
+        return lastItems
+          .map(function (p) { return p?.project_id; })
+          .filter(function (p) { return p; });
+      }
+      // Fallback: try to get from direct output
+      const projectItems = outputs?.['project-items'];
+      if (Array.isArray(projectItems)) {
+        return projectItems
+          .map(function (p) { return p?.project_id; })
+          .filter(function (p) { return p; });
+      }
+      return [];
+
+  - name: projects_explored_details
+    description: Project details for routed projects (id, repo, description, reason)
+    value_js: |
+      const normalizeFromItems = function (items) {
+        const result = [];
+        if (!Array.isArray(items)) return result;
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (!item) continue;
+          const id = item.project_id ?? item.id;
+          const repo = item.repository ?? item.repo;
+          if (!id || !repo) continue;
+          result.push({
+            id,
+            repo,
+            description: item.description ?? '',
+            reason: item.reason ?? ''
+          });
+        }
+        return result;
+      };
+
+      // Prefer detailed project-items output (includes repo/description/reason)
+      const historyItems = outputs?.history?.['project-items'];
+      const lastHistory = Array.isArray(historyItems) ? historyItems[historyItems.length - 1] : historyItems;
+      const normalized = normalizeFromItems(lastHistory);
+      if (normalized.length > 0) return normalized;
+
+      const directItems = normalizeFromItems(outputs?.['project-items']);
+      if (directItems.length > 0) return directItems;
+
+      // Fallback: map project IDs to inputs.projects
+      let ids = [];
+      if (Array.isArray(lastHistory)) {
+        ids = lastHistory
+          .map(function (p) { return p?.project_id; })
+          .filter(function (p) { return p; });
+      }
+      if (ids.length === 0) {
+        const projectItems = outputs?.['project-items'];
+        if (Array.isArray(projectItems)) {
+          ids = projectItems
+            .map(function (p) { return p?.project_id; })
+            .filter(function (p) { return p; });
+        }
+      }
+
+      const inputProjects = Array.isArray(inputs?.projects) ? inputs.projects : [];
+      const byId = {};
+      for (let j = 0; j < inputProjects.length; j++) {
+        const p = inputProjects[j];
+        if (p?.id) {
+          byId[p.id] = p;
+        }
+      }
+
+      const mapped = [];
+      for (let k = 0; k < ids.length; k++) {
+        const pid = ids[k];
+        const info = byId[pid];
+        if (!info?.repo) continue;
+        mapped.push({
+          id: pid,
+          repo: info.repo,
+          description: info.description ?? '',
+          reason: ''
+        });
+      }
+      return mapped;
+
+  - name: checkout_projects
+    description: Checked-out project paths aligned with routed projects
+    value_js: |
+      const historyItems = outputs?.history?.['project-items'];
+      const lastHistory = Array.isArray(historyItems) ? historyItems[historyItems.length - 1] : historyItems;
+      const items = Array.isArray(outputs?.['project-items'])
+        ? outputs['project-items']
+        : Array.isArray(lastHistory)
+          ? lastHistory
+          : [];
+
+      const checkoutOutput = outputs?.['checkout-projects'];
+      const checkouts = Array.isArray(checkoutOutput?.forEachItems)
+        ? checkoutOutput.forEachItems
+        : Array.isArray(checkoutOutput)
+          ? checkoutOutput
+          : [];
+
+      const result = [];
+      if (!Array.isArray(items) || !Array.isArray(checkouts)) return result;
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (!item?.project_id) continue;
+        const checkout = checkouts[i] ?? {};
+        result.push({
+          project_id: item.project_id,
+          repository: item.repository ?? item.repo ?? '',
+          description: item.description ?? '',
+          path: checkout.path ?? checkout.workspace_path ?? ''
+        });
+      }
+      return result;
+
+steps:
+  # ===========================================================================
+  # Step 1: Checkout documentation (always first)
+  # ===========================================================================
+  checkout-docs:
+    type: git-checkout
+    criticality: internal
+    assume:
+      - "true"
+    repository: "{{ inputs.docs_repo }}"
+    ref: "{{ inputs.docs_ref }}"
+    fetch_depth: 1
+    description: "Documentation"
+
+  # ===========================================================================
+  # Step 2: Route to relevant projects (AI-based)
+  # ===========================================================================
+  route-projects:
+    type: ai
+    criticality: internal
+    depends_on: [checkout-docs]
+    assume:
+      - "true"
+    guarantee: "(output?.projects?.length ?? 0) > 0 || (output?.notes?.length ?? 0) > 0"
+    fail_if: "(output?.projects?.length ?? 0) === 0 && !(output?.notes?.length > 0)"
+    ai:
+      skip_code_context: true
+      prompt_type: general
+      system_prompt: |
+        <role>
+        You are a project routing planner. Given a question, you decide which
+        code repositories need to be queried. You do NOT answer questions
+        directly - you only plan which projects to consult.
+        </role>
+
+        <context_handling>
+        The full conversation context (e.g., Slack thread) may be available in
+        <slack_context>. Use it to understand the real question. If the latest
+        message is a correction, reconstruct the original question from earlier
+        messages. Questions may include appended ticket/page context.
+        </context_handling>
+
+        <architecture>
+        {{ inputs.architecture }}
+        </architecture>
+
+        <docs_context>
+        The documentation has been checked out and is available for reference.
+        Use it to understand feature behavior, configuration options, and
+        cross-component interactions before deciding which code projects to query.
+        Path: {{ outputs['checkout-docs'].path }}
+        </docs_context>
+
+        <available_projects>
+        {% for p in inputs.projects %}
+        - id: {{ p.id }}
+          repo: {{ p.repo }}
+          description: {{ p.description }}
+        {% endfor %}
+        </available_projects>
+    schema: |
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "projects": {
+            "type": "array",
+            "description": "Projects to query for this question",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "project_id": {
+                  "type": "string",
+                  "description": "One of the available project IDs",
+                  "enum": [{% for p in inputs.projects %}"{{ p.id }}"{% unless forloop.last %}, {% endunless %}{% endfor %}]
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "Brief explanation of why this project is relevant"
+                }
+              },
+              "required": ["project_id"]
+            }
+          },
+          "notes": {
+            "type": "string",
+            "description": "Optional planner notes"
+          }
+        },
+        "required": ["projects"]
+      }
+    prompt: |
+      <question>{{ inputs.question }}</question>
+
+      <task>
+      Determine which projects are needed to answer this question.
+      Consider all parts of the stack that the functionality touches, then
+      select the smallest set that covers the behavior.
+
+      Return a "projects" array with:
+      - "project_id": from the available project IDs listed above
+      - "reason" (optional): brief explanation of relevance
+      - If you cannot determine the relevant projects from the context,
+        return an empty "projects" array and include a "notes" string
+        asking for the missing details you need.
+
+      Routing guidelines:
+      - When functionality spans multiple components, include ALL affected projects
+      - It's better to include a small superset than to miss a relevant project
+      - Typical plans contain 1-3 projects, but include more when necessary
+      - Consider how data/config flows between services
+      - Maximum projects: {{ inputs.max_projects }}
+      </task>
+
+      {% if inputs.routing_prompt %}
+      <additional_routing_rules>
+      {{ inputs.routing_prompt }}
+      </additional_routing_rules>
+      {% endif %}
+
+  # ===========================================================================
+  # Step 3: Map routed projects to checkout descriptors
+  # ===========================================================================
+  project-items:
+    type: script
+    criticality: internal
+    depends_on: [route-projects]
+    assume:
+      - "Array.isArray(outputs['route-projects']?.projects)"
+    guarantee: "Array.isArray(output)"
+    schema:
+      type: array
+    content: |
+      // Build a map of project ID -> project info from inputs
+      const projectMap = {};
+      const inputProjects = Array.isArray(inputs?.projects) ? inputs.projects : [];
+      for (let i = 0; i < inputProjects.length; i++) {
+        const p = inputProjects[i];
+        if (p?.id) {
+          projectMap[p.id] = {
+            repo: p.repo,
+            description: p.description ?? p.id
+          };
+        }
+      }
+
+      // Get routed projects from AI
+      const routeOutput = outputs?.['route-projects'];
+      const routedProjects = Array.isArray(routeOutput?.projects) ? routeOutput.projects : [];
+
+      // Map to checkout descriptors
+      const result = [];
+      const maxProjects = inputs?.max_projects ?? 3;
+
+      for (let j = 0; j < routedProjects.length && result.length < maxProjects; j++) {
+        const routed = routedProjects[j];
+        if (!routed?.project_id) continue;
+
+        const info = projectMap[routed.project_id];
+        // Skip unknown project IDs (not in inputs.projects)
+        if (!info?.repo) continue;
+
+        result.push({
+          project_id: routed.project_id,
+          reason: routed.reason ?? '',
+          repository: info.repo,
+          description: info.description
+        });
+      }
+
+      return result;
+    forEach: true
+
+  # ===========================================================================
+  # Step 4: Checkout each selected project
+  # ===========================================================================
+  checkout-projects:
+    type: git-checkout
+    criticality: internal
+    depends_on: [project-items]
+    assume:
+      - "output != null"
+    repository: "{{ outputs['project-items'].repository }}"
+    ref: main
+    fetch_depth: 1
+    description: "{{ outputs['project-items'].description }}"
+
+  # ===========================================================================
+  # Step 5: Explore code across all projects (main AI call)
+  # ===========================================================================
+  explore-code:
+    type: ai
+    criticality: internal
+    depends_on: [route-projects, project-items, checkout-projects]
+    fanout: reduce
+    assume:
+      - "outputs['route-projects']?.projects?.length > 0"
+    ai:
+      skip_code_context: true
+      enableDelegate: true
+      enableExecutePlan: true
+      max_iterations: 40
+      prompt_type: code-explorer
+      allowBash: true
+      bashConfig:
+        allow:
+          # Git read-only commands only (no commit, push, reset, rebase, merge, etc.)
+          - "git:diff:*"
+          - "git:log:*"
+          - "git:show:*"
+          - "git:blame:*"
+          - "git:checkout:*"
+          - "git:branch:*"
+          - "git:tag:*"
+          - "git:fetch:*"
+          - "git:status:*"
+          - "git:rev-parse:*"
+          - "git:ls-files:*"
+          - "git:ls-tree:*"
+          # File operations
+          - "ls:*"
+          - "find:*"
+          - "cat:*"
+          - "head:*"
+          - "tail:*"
+          - "wc:*"
+          - "grep:*"
+          # GitHub CLI read-only operations
+          - "gh:run:*"
+          - "gh:run:list:*"
+          - "gh:run:view:*"
+          - "gh:run:watch:*"
+          - "gh:workflow:*"
+          - "gh:workflow:list:*"
+          - "gh:workflow:view:*"
+          - "gh:pr:*"
+          - "gh:pr:list:*"
+          - "gh:pr:view:*"
+          - "gh:pr:checks:*"
+          - "gh:pr:diff:*"
+          - "gh:issue:*"
+          - "gh:issue:list:*"
+          - "gh:issue:view:*"
+          - "gh:repo:view:*"
+          - "gh:repo:list:*"
+          - "gh:api:*"
+          - "gh:release:list:*"
+          - "gh:release:view:*"
+          # Curl for API calls (read-only)
+          - "curl:-s:*"
+          - "curl:*"
+        timeout: 60000
+      completion_prompt: |
+        Before finalizing your answer, triple-check everything:
+
+        Challenge assumptions:
+        1. Did you INDEPENDENTLY verify the user's claims, or just search for confirmation?
+        2. If the user assumed a root cause, did you verify it's actually correct?
+        3. Could the real issue be something completely different from what was suggested?
+
+        Investigation completeness:
+        4. Did you consider MULTIPLE possible explanations, not just the first one?
+        5. If there were alternative theories, did you investigate each one?
+        6. Have you ruled out other possibilities with evidence, not assumptions?
+
+        Cross-project verification:
+        4. Are there dependencies or interactions between projects you examined?
+        5. Did you verify how data/config flows between components?
+        6. Did you check both the happy path AND error handling paths?
+
+        Reference accuracy:
+        7. Are all code references accurate (file paths, function names, line numbers)?
+        8. Do the docs match what the code actually does?
+
+        CRITICAL: When you identify a configuration variable, you MUST then perform
+        a second search to find the code that consumes that variable. You cannot draw
+        conclusions from a variable's name alone. You must confirm its purpose by
+        analyzing how it is used in the application logic.
+
+        If you found any ambiguity, gaps in your investigation, or unexplored
+        hypotheses - use delegate tool to investigate further before concluding.
+
+        When you finish, ensure your answer includes:
+        - All relevant details grounded in code
+        - If multiple theories were considered, explain which one is correct and WHY
+          (with evidence ruling out alternatives)
+        - A confidence score ("high", "medium", or "low")
+        - If confidence is "medium" or "low", include a clear confidence_reason
+          explaining what evidence is missing or ambiguous
+        - At the END of your answer.text, append a "## References" section with a
+          bulleted list of all code/doc references in this format:
+          - [file.go:42-50](https://github.com/org/repo/blob/main/path/file.go#L42-L50) - brief description
+        - Also populate the references array with structured data for each reference
+    schema:
+      type: object
+      additionalProperties: false
+      properties:
+        answer:
+          type: object
+          additionalProperties: false
+          properties:
+            text:
+              type: string
+              description: |
+                The complete answer with explanations. MUST end with a
+                "## References" section containing clickable GitHub links.
+            summary:
+              type: string
+              description: One-line summary (optional)
+          required: [text]
+        references:
+          type: array
+          description: Code and documentation references (must not be empty)
+          items:
+            type: object
+            properties:
+              project:
+                type: string
+                description: Project ID (e.g., "tyk", "tyk-analytics")
+              file:
+                type: string
+                description: File path relative to repo root
+              lines:
+                type: array
+                description: Line numbers (start and end if range)
+                items: { type: number }
+              url:
+                type: string
+                description: Full GitHub URL with line numbers (e.g., https://github.com/org/repo/blob/main/file.go#L42-L50)
+              snippet:
+                type: string
+                description: Brief description of what this reference shows
+            required: [project, file, url]
+        confidence:
+          type: string
+          enum: [high, medium, low]
+          description: |
+            Confidence in the answer based on evidence quality and investigation coverage.
+            Use "high" only when claims are directly backed by code/doc evidence.
+        confidence_reason:
+          type: string
+          description: |
+            Why confidence is not high (required to be meaningful for medium/low confidence).
+            Leave empty string only when confidence is high.
+      required: [answer, references, confidence, confidence_reason]
+    prompt: |
+      <instructions>
+      You are a code/documentation explorer. Your goal is to answer a code-level
+      question that can span multiple projects, using:
+      - the checked-out code repositories
+      - the checked-out documentation repository
+      - code-explorer tools (search, extract, query, listFiles, searchFiles)
+      - delegate sub-agents when you need to dive deeply into a project
+      - ensure that delegate sub-agents return detailed references with files and line numbers
+
+      IMPORTANT - Handling ambiguity:
+      If the question is ambiguous, unclear, or you need more details to provide
+      a useful answer, DO NOT guess or make assumptions. Instead:
+      - Clearly state what information is missing or unclear
+      - Ask specific clarifying questions
+      - Explain what you could investigate with more context
+
+      Examples of when to ask for clarification:
+      - "Which version/branch are you asking about?"
+      - "Are you asking about the gateway or dashboard implementation?"
+      - "Could you provide the specific error message or log output?"
+      - "Which repository or component is this related to?"
+
+      It's better to ask for clarification than to provide an incorrect or
+      irrelevant answer based on assumptions.
+
+      Git bash commands:
+      You can use git commands for deeper code investigation:
+      - `git diff` to compare branches or commits
+      - `git log` to see commit history and understand changes over time
+      - `git show` to inspect specific commits
+      - `git blame` to understand who changed what and when
+      - `git checkout` to switch branches when comparing implementations
+      - `git branch -a` to list ALL branches (local and remote)
+      - `git fetch --tags` to fetch all tags from remote
+      - `git tag -l` to list all available tags
+
+      IMPORTANT - Fetching remote branches:
+      Repositories are checked out with shallow clone (fetch_depth: 1), so remote
+      branches are NOT available locally by default. Before checking out a branch:
+      1. First fetch the specific branch: `git fetch origin <branch-name>`
+      2. Then checkout: `git checkout <branch-name>` or `git checkout origin/<branch-name>`
+
+      Example for checking out release-5.3:
+      - First: `git fetch origin release-5.3`
+      - Then: `git checkout release-5.3`
+
+      If the branch doesn't exist, try listing available branches:
+      - `git branch -r` to see remote branches
+      - `git ls-remote --heads origin` to list all remote branches
+
+      Use these when you need to understand how code evolved, compare different
+      versions, or investigate recent changes related to the question.
+
+      GitHub CLI (gh) for PR review and GitHub data:
+      You have access to the `gh` CLI tool for GitHub operations:
+      - `gh pr view <number> --repo owner/repo` - View PR details, description, status
+      - `gh pr diff <number> --repo owner/repo` - Get the full diff of a PR
+      - `gh pr checks <number> --repo owner/repo` - View CI/CD check status
+      - `gh pr list --repo owner/repo` - List open PRs
+      - `gh issue view <number> --repo owner/repo` - View issue details
+      - `gh api repos/owner/repo/pulls/<number>/files` - Get list of changed files
+      - `gh api repos/owner/repo/pulls/<number>/comments` - Get PR review comments
+      - `gh run list --repo owner/repo` - List workflow runs
+      - `gh run view <run-id> --repo owner/repo --log` - View workflow run logs
+
+      IMPORTANT - Checking out PR branches for review:
+      When asked to review a PR or investigate PR code, you need to checkout the PR branch:
+      1. GitHub maintains special refs for PRs: `refs/pull/<PR_NUMBER>/head`
+      2. To fetch and checkout a PR:
+         - `git fetch origin pull/<PR_NUMBER>/head:pr-<PR_NUMBER>` - fetch PR to local branch
+         - `git checkout pr-<PR_NUMBER>` - checkout the PR branch
+      3. Example for PR #123:
+         - `git fetch origin pull/123/head:pr-123`
+         - `git checkout pr-123`
+      4. To see what changed vs main/master:
+         - `git diff main...pr-123` or `git diff origin/main...HEAD`
+
+      IMPORTANT bash tool usage rules:
+      - Do NOT use shell operators like && or || or | (pipes)
+      - Do NOT use `cd dir && command`
+      - INSTEAD, use the workingDirectory parameter to specify where to run commands
+      - Each bash call should be a single simple command with workingDirectory set
+
+      Version-specific queries:
+      - When asked about a specific version (e.g., "5.8", "v5.8.3"):
+        1. First run `git fetch --tags` (with workingDirectory set)
+        2. Then run `git tag -l "v5.8*"` to find matching tags
+        3. Checkout to the relevant tag: `git checkout v5.8.10`
+      - Always verify you're on the correct version/branch before investigating code
+
+      Path rules: Always use relative paths (e.g., "gateway/mw_jwt.go"), never absolute
+      paths with /tmp/ or workspace UUIDs.
+
+      High-level behavior:
+      - Use documentation to understand intended behavior, configuration, and
+        cross-component interactions for the feature in question
+      - For each selected project, read the code and relevant docs to answer
+        the question as concretely as possible
+      - When multiple projects are involved, deliberately follow data and control
+        flow across them and explain the connections
+      - Always ground your answer in actual code/docs, not speculation
+      - When you see a dependency - prove it by code
+
+      Critical thinking - DO NOT blindly trust user assumptions:
+      - Users often report real problems but with INCORRECT root cause analysis
+      - The symptom may be real, but the explanation in the question may be wrong
+      - Verify every claim independently - don't just search for what the user expects
+      - If a bug report says "X causes Y", verify BOTH that Y happens AND that X is the cause
+      - Look at the bigger picture - the real issue might be elsewhere entirely
+      - Be unbiased: don't anchor on the user's theory, form your own based on evidence
+
+      Investigation methodology - IMPORTANT:
+      1. Before diving deep, form multiple hypotheses about the answer:
+         - What are the possible explanations or root causes?
+         - Could the behavior be in component A, B, or both?
+         - Is this a configuration issue, code bug, or expected behavior?
+         - Is the user's assumption about the cause actually correct?
+      2. Investigate each hypothesis systematically:
+         - Don't assume your first theory OR the user's theory is correct
+         - If evidence contradicts a hypothesis, note it and move on
+         - Look for edge cases and alternative code paths
+      3. When investigating complex issues:
+         - Check error handling paths, not just happy paths
+         - Look at configuration options that might affect behavior
+         - Consider version differences if relevant
+      4. Cross-reference your findings:
+         - Do the docs match what the code actually does?
+         - Are there any TODOs, FIXMEs, or known issues?
+         - Check git blame/log for recent changes if behavior seems unexpected
+
+      Using delegate tool effectively:
+      - Use delegate when you need DEEP investigation into a specific component
+      - Each delegate call should focus on ONE specific question or hypothesis
+      - Good delegate uses:
+        - "Investigate how JWT validation handles expired tokens in gateway"
+        - "Find all places where rate limit counters are incremented"
+        - "Trace the request flow from API entry to database query"
+      - Bad delegate uses:
+        - "Look at the code" (too vague)
+        - "Find everything about auth" (too broad)
+      - Run multiple delegates in PARALLEL when investigating different hypotheses
+        or different components - don't wait for one to finish before starting another
+      - Always ask delegates to return specific file paths and line numbers
+
+      CRITICAL - Preserve detailed output from tools and delegates:
+      When tools or delegates return detailed data (customer insights, code analysis, etc.):
+      - DO NOT summarize or compress the output
+      - RELAY THE FULL DATA including all names, specifics, and details
+      - If a tool returns 10 items with details, include ALL 10 in your answer
+      - Never say "based on the analysis" without presenting the actual data
+      - Tools already synthesize data - your job is to present it completely
+
+      CRITICAL: Always use `attempt_completion` tool to submit your final answer.
+      This enables validation of your investigation before the response is finalized.
+      </instructions>
+
+      {% if inputs.exploration_prompt %}
+      <additional_instructions>
+      {{ inputs.exploration_prompt }}
+      </additional_instructions>
+      {% endif %}
+
+      <context>
+        <question>
+          {{ inputs.question }}
+        </question>
+
+        <architecture>
+        The following architecture document describes the project topology, routing rules,
+        and important guidelines for working with this codebase. Use it to understand
+        project relationships, debugging procedures, and special instructions.
+
+        {{ inputs.architecture }}
+        </architecture>
+
+        <routing_decision>
+          {{ outputs['route-projects'] | json }}
+        </routing_decision>
+
+        <docs_checkout>
+          <repo>{{ inputs.docs_repo }}</repo>
+          <ref>{{ inputs.docs_ref }}</ref>
+          <path>{{ outputs['checkout-docs'].path }}</path>
+        </docs_checkout>
+
+        {% assign items = outputs.history['project-items'] | last %}
+        {% assign checkouts = outputs.history['checkout-projects'] %}
+        {% if checkouts == nil or checkouts == empty %}
+        {% assign checkouts = outputs['checkout-projects'].forEachItems %}
+        {% endif %}
+        <projects>
+        {% if items and checkouts %}
+        {% for p in items %}
+        {% assign co = checkouts[forloop.index0] %}
+          <project>
+            <id>{{ p.project_id }}</id>
+            <repo>{{ p.repository }}</repo>
+            <path>{{ co.path }}</path>
+            <reason>{{ p.reason | default: 'not provided' }}</reason>
+          </project>
+        {% endfor %}
+        {% endif %}
+        </projects>
+      </context>
+
+      <task>
+      For each project listed in <projects>:
+      - Use code-explorer tools to:
+        - listFiles/searchFiles to understand the structure and find relevant
+          directories and files
+        - search/query/extract to locate and read the core implementation
+        - consult documentation to confirm semantics, configuration options,
+          and cross-project responsibilities
+      - When multiple projects are involved, pay attention to:
+        - how configuration flows between components
+        - how identity, auth, or data flows between services
+        - any shared libraries used by more than one project
+      - Use delegate tools per project when a deeper, focused investigation
+        is needed
+
+      Finally, synthesize everything into a single answer that explains the
+      behavior to an engineer:
+      - Be concrete and code/doc-grounded (mention key components, files, and
+        configuration options when helpful)
+      - Keep the explanation focused and coherent
+      - IMPORTANT: At the END of your answer, include a "## References" section
+        with clickable GitHub links pointing to specific lines
+
+      Return your answer in the schema format with:
+      - answer.text: your complete explanation, ending with a "## References" section like:
+        ```
+        ## References
+        - [mw_jwt.go:142-180](https://github.com/TykTechnologies/tyk/blob/master/gateway/mw_jwt.go#L142-L180) - JWT validation middleware
+        - [jwt.md](https://github.com/TykTechnologies/tyk-docs/blob/main/tyk-docs/content/basic-config-and-security/security/authentication-authorization/jwt.md) - JWT documentation
+        ```
+      - answer.summary: one-line summary (optional)
+      - references: array with structured data for each reference (project, file, url, snippet)
+      - confidence: "high" | "medium" | "low"
+      - confidence_reason: required explanation when confidence is "medium" or "low";
+        use empty string only when confidence is "high"
+      </task>
+
+# =============================================================================
+# Tests
+# =============================================================================
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+
+  cases:
+    - name: basic-code-question
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "How does authentication work?"
+        architecture: |
+          # Architecture
+          ## Projects
+          - gateway: API Gateway
+          - backend: Backend services
+        docs_repo: org/docs
+        projects:
+          - id: gateway
+            repo: org/gateway
+            description: API Gateway
+          - id: backend
+            repo: org/backend
+            description: Backend services
+      mocks:
+        checkout-docs:
+          path: "/tmp/visor/docs"
+          repository: "org/docs"
+          ref: "main"
+        checkout-projects:
+          path: "/tmp/visor/project"
+          repository: "org/gateway"
+          ref: "main"
+        route-projects:
+          projects:
+            - project_id: "gateway"
+              reason: "Gateway handles authentication"
+        explore-code:
+          answer:
+            text: "Authentication is handled in the gateway via JWT middleware."
+            summary: "JWT auth in gateway"
+          references:
+            - project: gateway
+              file: src/auth/jwt.go
+              url: https://github.com/org/gateway/blob/main/src/auth/jwt.go#L42
+          confidence: high
+          confidence_reason: ""
+      expect:
+        calls:
+          - step: checkout-docs
+            exactly: 1
+          - step: route-projects
+            exactly: 1
+          - step: project-items
+            exactly: 1
+          - step: checkout-projects
+            exactly: 1
+          - step: explore-code
+            exactly: 1
+        # Verify workflow inputs are rendered in the route-projects prompt
+        # Note: prompts assertion captures the user prompt only, not system_prompt.
+        # The user prompt contains question; system_prompt contains architecture and projects.
+        prompts:
+          - step: route-projects
+            contains:
+              # Verify question input is rendered (from inputs.question)
+              - "How does authentication work?"
+              # Verify max_projects default is rendered
+              - "Maximum projects:"
+        workflow_output:
+          - path: answer.text
+            equals: "Authentication is handled in the gateway via JWT middleware."
+          - path: confidence
+            equals: "high"
+
+    - name: multi-project-question
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "How does data flow from gateway to backend?"
+        architecture: "# Arch"
+        docs_repo: org/docs
+        projects:
+          - id: gateway
+            repo: org/gateway
+            description: API Gateway
+          - id: backend
+            repo: org/backend
+            description: Backend services
+      mocks:
+        checkout-docs:
+          path: "/tmp/visor/docs"
+          repository: "org/docs"
+          ref: "main"
+        checkout-projects:
+          path: "/tmp/visor/project"
+          repository: "org/example"
+          ref: "main"
+        route-projects:
+          projects:
+            - project_id: "gateway"
+              reason: "Handles incoming requests"
+            - project_id: "backend"
+              reason: "Processes data"
+        explore-code:
+          answer:
+            text: "Data flows via gRPC from gateway to backend."
+          references: []
+          confidence: medium
+          confidence_reason: "References are incomplete for full cross-project verification."
+      expect:
+        calls:
+          - step: checkout-docs
+            exactly: 1
+          - step: route-projects
+            exactly: 1
+          - step: project-items
+            exactly: 1
+          - step: checkout-projects
+            exactly: 2
+          - step: explore-code
+            exactly: 1
+
+    - name: empty-routing-returns-notes
+      strict: false
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Vague question"
+        architecture: "# Arch"
+        docs_repo: org/docs
+        projects:
+          - id: main
+            repo: org/main
+            description: Main app
+      mocks:
+        checkout-docs:
+          path: "/tmp/visor/docs"
+          repository: "org/docs"
+          ref: "main"
+        route-projects:
+          projects: []
+          notes: "I need more context to route this question."
+      expect:
+        calls:
+          - step: route-projects
+            exactly: 1
+        workflow_output:
+          - path: answer.text
+            equals: "I need more context to route this question."
+
+    # =========================================================================
+    # Edge Case: Checkout failure stops downstream checks
+    # When checkout fails (success: false), dependent checks don't run.
+    # =========================================================================
+    - name: checkout-failure-stops-exploration
+      strict: false
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "How does auth work?"
+        architecture: "# Arch"
+        docs_repo: org/docs
+        projects:
+          - id: backend
+            repo: org/backend
+            description: Backend services
+      mocks:
+        checkout-docs:
+          path: "/tmp/visor/docs"
+          repository: "org/docs"
+          ref: "main"
+        route-projects:
+          projects:
+            - project_id: "backend"
+              reason: "Auth is in backend"
+        checkout-projects:
+          # Failure stops downstream checks
+          success: false
+          error: "Repository not found: org/backend"
+      expect:
+        calls:
+          - step: checkout-docs
+            exactly: 1
+          - step: route-projects
+            exactly: 1
+          - step: project-items
+            exactly: 1
+          - step: checkout-projects
+            exactly: 1
+          # explore-code does NOT run because checkout failed
+          - step: explore-code
+            exactly: 0
+
+    # =========================================================================
+    # Edge Case: Malformed AI response (missing required fields)
+    # =========================================================================
+    - name: malformed-routing-response
+      strict: false
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "What is X?"
+        architecture: "# Arch"
+        docs_repo: org/docs
+        projects:
+          - id: app
+            repo: org/app
+            description: Main app
+      mocks:
+        checkout-docs:
+          path: "/tmp/visor/docs"
+          repository: "org/docs"
+          ref: "main"
+        route-projects:
+          # Missing 'projects' field entirely - malformed response
+          notes: "I couldn't determine the projects"
+      expect:
+        calls:
+          - step: route-projects
+            exactly: 1
+          # Should fail because projects array is missing/empty
+
+    # =========================================================================
+    # Edge Case: Unknown project ID in routing (not in input projects)
+    # The script filters out unknown IDs and only processes valid ones.
+    # =========================================================================
+    - name: unknown-project-id-filtered
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "How does caching work?"
+        architecture: "# Arch"
+        docs_repo: org/docs
+        projects:
+          - id: backend
+            repo: org/backend
+            description: Backend services
+      mocks:
+        checkout-docs:
+          path: "/tmp/visor/docs"
+          repository: "org/docs"
+          ref: "main"
+        checkout-projects:
+          path: "/tmp/visor/project"
+          repository: "org/backend"
+          ref: "main"
+        route-projects:
+          projects:
+            # AI returns a project ID that doesn't exist in inputs
+            - project_id: "nonexistent-service"
+              reason: "This doesn't exist"
+            # Plus a valid one
+            - project_id: "backend"
+              reason: "Caching logic"
+        explore-code:
+          answer:
+            text: "Caching is implemented in the backend."
+          references: []
+          confidence: medium
+          confidence_reason: "One routed project was invalid and filtered before exploration."
+      expect:
+        calls:
+          - step: checkout-docs
+            exactly: 1
+          - step: route-projects
+            exactly: 1
+          - step: project-items
+            exactly: 1
+          # Only 1 checkout because nonexistent-service is filtered out
+          - step: checkout-projects
+            exactly: 1
+          - step: explore-code
+            exactly: 1
+        workflow_output:
+          - path: answer.text
+            equals: "Caching is implemented in the backend."
+
+    # =========================================================================
+    # Edge Case: max_projects limit respected
+    # =========================================================================
+    - name: max-projects-limit
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "How does the full stack work?"
+        architecture: "# Arch"
+        docs_repo: org/docs
+        max_projects: 2
+        projects:
+          - id: frontend
+            repo: org/frontend
+            description: Frontend app
+          - id: backend
+            repo: org/backend
+            description: Backend services
+          - id: database
+            repo: org/database
+            description: Database layer
+          - id: cache
+            repo: org/cache
+            description: Cache layer
+      mocks:
+        checkout-docs:
+          path: "/tmp/visor/docs"
+          repository: "org/docs"
+          ref: "main"
+        checkout-projects:
+          path: "/tmp/visor/project"
+          repository: "org/example"
+          ref: "main"
+        route-projects:
+          projects:
+            - project_id: "frontend"
+            - project_id: "backend"
+            - project_id: "database"
+            - project_id: "cache"
+        explore-code:
+          answer:
+            text: "The stack flows from frontend through backend."
+          references: []
+          confidence: medium
+          confidence_reason: "Exploration scope was reduced by max_projects limit."
+      expect:
+        calls:
+          - step: checkout-docs
+            exactly: 1
+          - step: route-projects
+            exactly: 1
+          - step: project-items
+            exactly: 1
+          # Only 2 checkouts due to max_projects: 2
+          - step: checkout-projects
+            exactly: 2
+          - step: explore-code
+            exactly: 1
+
+    # =========================================================================
+    # Edge Case: Empty explore-code response handled gracefully
+    # =========================================================================
+    - name: empty-exploration-response
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "What is feature X?"
+        architecture: "# Arch"
+        docs_repo: org/docs
+        projects:
+          - id: main
+            repo: org/main
+            description: Main app
+      mocks:
+        checkout-docs:
+          path: "/tmp/visor/docs"
+          repository: "org/docs"
+          ref: "main"
+        checkout-projects:
+          path: "/tmp/visor/project"
+          repository: "org/main"
+          ref: "main"
+        route-projects:
+          projects:
+            - project_id: "main"
+        explore-code:
+          # Minimal valid response with empty text
+          answer:
+            text: ""
+          references: []
+          confidence: low
+          confidence_reason: "The final answer text is empty."
+      expect:
+        calls:
+          - step: checkout-docs
+            exactly: 1
+          - step: route-projects
+            exactly: 1
+          - step: project-items
+            exactly: 1
+          - step: checkout-projects
+            exactly: 1
+          - step: explore-code
+            exactly: 1
+        workflow_output:
+          - path: answer.text
+            equals: ""

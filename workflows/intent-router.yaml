@@ -1,0 +1,478 @@
+# =============================================================================
+# intent-router: Reusable intent classification workflow
+# =============================================================================
+#
+# A lightweight routing helper that classifies user intent and rewrites the
+# request into a short question. Intended to be reused by assistant configs.
+#
+# Usage:
+#   imports:
+#     - visor://workflows/intent-router.yaml
+#
+#   checks:
+#     route-intent:
+#       type: workflow
+#       workflow: intent-router
+#       args:
+#         question: "How does auth work?"
+#         intents:
+#           - id: chat
+#             description: general Q&A or small talk
+#
+# =============================================================================
+
+id: intent-router
+name: Intent Router
+description: Classify user intent and rewrite the request as a short question
+version: "1.0.0"
+
+inputs:
+  - name: question
+    required: true
+    description: Primary user message to classify
+    schema:
+      type: string
+
+  - name: intents
+    required: true
+    description: |
+      Array of intent definitions:
+        - id: unique identifier for routing
+        - description: short description of when to use
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id: { type: string }
+          description: { type: string }
+        required: [id, description]
+
+  - name: tags
+    required: false
+    description: |
+      Optional tag definitions to classify capabilities or resources needed:
+        - id: tag identifier
+        - description: when the tag applies
+      NOTE: Consider using 'skills' instead for unified skill-based classification.
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id: { type: string }
+          description: { type: string }
+        required: [id, description]
+
+  - name: skills
+    required: false
+    description: |
+      Unified skill definitions for classification. Each skill bundles:
+        - id: skill identifier (used for classification and activation)
+        - description: when this skill should be activated
+        - requires: (optional) array of other skill IDs to auto-activate
+      When provided, skills are used instead of tags for classification.
+      The classifier will output selected skill IDs in the 'skills' array.
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id: { type: string }
+          description: { type: string }
+          requires: { type: array, items: { type: string } }
+        required: [id, description]
+
+  - name: routing_instructions
+    required: false
+    description: Additional routing rules to append (optional)
+    schema:
+      type: string
+
+outputs:
+  - name: intent
+    description: Selected intent ID
+    value_js: |
+      return outputs?.classify?.intent ?? null;
+
+  - name: topic
+    description: Short question summarizing the request
+    value_js: |
+      return outputs?.classify?.topic ?? null;
+
+  - name: tags
+    description: Selected tag IDs (legacy, use skills instead)
+    value_js: |
+      return outputs?.classify?.tags ?? [];
+
+  - name: skills
+    description: Selected skill IDs (dependencies expanded in assistant workflow)
+    value_js: |
+      // Return raw selected skills - dependencies are expanded in assistant's build-config
+      return outputs?.classify?.skills ?? [];
+
+  - name: raw
+    description: Raw classifier output
+    value_js: |
+      return outputs?.classify ?? null;
+
+  - name: error
+    description: Error message if explicit %intent was invalid (check rationale for ERROR prefix)
+    value_js: |
+      const rationale = outputs?.classify?.rationale ?? '';
+      if (rationale.includes('ERROR:')) {
+        return rationale;
+      }
+      return null;
+
+steps:
+  classify:
+    type: ai
+    criticality: internal
+    reuse_ai_session: false
+    assume:
+      - "true"
+    guarantee: "output?.intent != null"
+    ai:
+      skip_code_context: true
+      skip_slack_context: false
+      disableTools: true
+      allowedTools: []
+      system_prompt: |
+        You are an intent router. Your ONLY job is to:
+        1) pick the best intent, and
+        2) rewrite the request as a SHORT question (1-2 sentences),
+        3) assign relevant tags (if provided).
+        NEVER answer the question or speculate about root causes.
+        Output ONLY JSON that matches the schema.
+    schema: |
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "intent": {
+            "type": "string",
+            "enum": [{% for i in inputs.intents %}"{{ i.id }}"{% unless forloop.last %}, {% endunless %}{% endfor %}]
+          },
+          "topic": {
+            "type": "string",
+            "maxLength": 240,
+            "pattern": "^[^`\\n]*\\?$"
+          },
+          {% if inputs.skills and inputs.skills.size > 0 %}"skills": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [{% for s in inputs.skills %}"{{ s.id }}"{% unless forloop.last %}, {% endunless %}{% endfor %}]
+            },
+            "maxItems": 12
+          }{% else %}"tags": {
+            "type": "array",
+            "items": {
+              "type": "string"{% if inputs.tags and inputs.tags.size > 0 %},
+              "enum": [{% for t in inputs.tags %}"{{ t.id }}"{% unless forloop.last %}, {% endunless %}{% endfor %}]{% endif %}
+            },
+            "maxItems": 12
+          }{% endif %},
+          "rationale": {
+            "type": "string"
+          }
+        },
+        "required": ["intent", "topic"]
+      }
+    prompt: |
+      <role>
+      You are an internal routing assistant. Classify the request and produce a short question.
+      </role>
+
+      Primary message (main signal):
+      {{ inputs.question }}
+
+      <slack_context_instructions>
+      This is an ONGOING DIALOGUE. The full thread history is in <slack_context> inside the <context> block.
+
+      CRITICAL: Treat this as a continuous conversation, not isolated messages.
+      - If there are unfinished tasks or pending work from earlier in the thread, the current message likely relates to them
+      - Short messages like "ok", "do it", "continue", "yes", "what about X?" are follow-ups to previous context
+      - When the user references "it", "this", "that", or "the task", connect it to the most recent relevant topic
+      - If the assistant previously proposed something or was working on something, assume follow-ups relate to that work
+
+      When reconstructing the topic:
+      - Include enough context from the thread so the topic is self-contained
+      - If continuing previous work, mention what work (e.g., "Continue fixing the auth bug discussed earlier?")
+      - Don't just echo the last message if it's a short follow-up - expand it with thread context
+      </slack_context_instructions>
+
+      <intent_options>
+      {% for i in inputs.intents %}
+      <option value="{{ i.id }}">
+      {{ i.description }}
+      </option>
+      {% endfor %}
+      </intent_options>
+
+      {% if inputs.skills and inputs.skills.size > 0 %}
+      <skill_options>
+      Select which skills should be activated for this request.
+      Multiple skills can be selected if needed.
+      {% for s in inputs.skills %}
+      <option value="{{ s.id }}">
+      {{ s.description }}
+      </option>
+      {% endfor %}
+      </skill_options>
+      {% elsif inputs.tags and inputs.tags.size > 0 %}
+      <tag_options>
+      {% for t in inputs.tags %}
+      <option value="{{ t.id }}">
+      {{ t.description }}
+      </option>
+      {% endfor %}
+      </tag_options>
+      {% endif %}
+
+      {% if inputs.routing_instructions %}
+      <additional_routing_rules>
+      {{ inputs.routing_instructions }}
+      </additional_routing_rules>
+      {% endif %}
+
+      <topic_instructions>
+      Always output a short, self-contained question (1-2 sentences).
+      Do NOT answer the question or speculate about root causes.
+      Only include details explicitly stated in the thread or ticket context.
+      Remove any #tag or %intent markers from the topic.
+      </topic_instructions>
+
+      {% if inputs.skills and inputs.skills.size > 0 %}
+      <skill_instructions>
+      Return a "skills" array of zero or more skill IDs that should be activated.
+      Include only skills that clearly apply to the current request.
+      Multiple skills can be selected - each skill provides specific knowledge and/or tools.
+      Use an empty array if no skills apply.
+      </skill_instructions>
+      {% else %}
+      <tag_instructions>
+      If tag options are provided, return a "tags" array of zero or more tag IDs.
+      Include only tags that clearly apply to the current request. Use an empty
+      array if none apply.
+      </tag_instructions>
+      {% endif %}
+
+      <explicit_markers>
+      IMPORTANT: The user may include explicit markers in their message:
+
+      {% if inputs.skills and inputs.skills.size > 0 %}
+      1. **Hash skills (#skill)**: If the message contains #skill_name patterns (e.g., "#jira #engineer"),
+         you MUST include those exact skill IDs in the output skills array (only if they match available skills).
+         Example: "Create a ticket for this bug #jira" → skills should include "jira"
+      {% else %}
+      1. **Hash tags (#tag)**: If the message contains #tag_name patterns (e.g., "#codebase #urgent"),
+         you MUST include those exact tag IDs in the output tags array (only if they match available tags).
+         Example: "How does auth work? #codebase #security" → tags should include "codebase" and "security"
+      {% endif %}
+
+      2. **Percent intent (%intent)**: If the message contains a %intent_name pattern (e.g., "%code_help"),
+         you MUST use that exact intent ID if it matches one of the available intents.
+         Example: "What is this function doing? %code_help" → intent should be "code_help"
+         If the specified %intent does NOT match any available option, include an error note in the
+         rationale field like "ERROR: explicit intent 'xyz' not found" and pick the closest matching intent.
+
+      Always strip the #skill/#tag and %intent markers from the topic output.
+      These explicit markers take precedence over your classification when they match valid options.
+      </explicit_markers>
+
+# =============================================================================
+# Tests
+# =============================================================================
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+
+  cases:
+    - name: basic-intent-routing
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "How does authentication work?"
+        intents:
+          - id: chat
+            description: general Q&A
+          - id: code_help
+            description: questions about code or implementation details
+        tags:
+          - id: codebase
+            description: request needs codebase context
+      mocks:
+        classify:
+          intent: code_help
+          topic: "How does authentication work?"
+          tags: ["codebase"]
+      expect:
+        calls:
+          - step: classify
+            exactly: 1
+        workflow_output:
+          - path: intent
+            equals: "code_help"
+          - path: topic
+            equals: "How does authentication work?"
+          - path: tags
+            equals: ["codebase"]
+
+    - name: explicit-hashtag-markers
+      description: "#tag markers should be automatically included in tags"
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "How does auth work? #codebase #security"
+        intents:
+          - id: chat
+            description: general Q&A
+          - id: code_help
+            description: questions about code or implementation details
+        tags:
+          - id: codebase
+            description: request needs codebase context
+          - id: security
+            description: security-related request
+          - id: urgent
+            description: urgent request
+      mocks:
+        classify:
+          intent: code_help
+          topic: "How does auth work?"
+          tags: ["codebase", "security"]
+      expect:
+        calls:
+          - step: classify
+            exactly: 1
+        workflow_output:
+          - path: intent
+            equals: "code_help"
+          - path: topic
+            equals: "How does auth work?"
+          - path: tags
+            contains: "codebase"
+          - path: tags
+            contains: "security"
+
+    - name: explicit-percent-intent
+      description: "%intent marker should set the intent directly"
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "What is this code doing? %code_help"
+        intents:
+          - id: chat
+            description: general Q&A
+          - id: code_help
+            description: questions about code or implementation details
+      mocks:
+        classify:
+          intent: code_help
+          topic: "What is this code doing?"
+          tags: []
+      expect:
+        calls:
+          - step: classify
+            exactly: 1
+        workflow_output:
+          - path: intent
+            equals: "code_help"
+          - path: topic
+            equals: "What is this code doing?"
+
+    - name: invalid-percent-intent
+      description: "Invalid %intent should return an error in rationale and pick closest intent"
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "How do I deploy? %nonexistent_intent"
+        intents:
+          - id: chat
+            description: general Q&A
+          - id: code_help
+            description: questions about code or implementation details
+      mocks:
+        classify:
+          intent: "chat"
+          topic: "How do I deploy?"
+          tags: []
+          rationale: "ERROR: explicit intent 'nonexistent_intent' not found, using closest match 'chat'"
+      expect:
+        calls:
+          - step: classify
+            exactly: 1
+        workflow_output:
+          - path: intent
+            equals: "chat"
+          - path: error
+            contains: "ERROR:"
+
+    - name: skills-based-classification
+      description: "Skills replace tags for unified classification"
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Get ticket TT-123 and create a PR to fix it"
+        intents:
+          - id: chat
+            description: general Q&A
+          - id: code_help
+            description: questions about code or implementation
+        skills:
+          - id: jira
+            description: request references Jira tickets
+          - id: engineer
+            description: user wants code changes or PR created
+          - id: code-explorer
+            description: needs codebase exploration
+      mocks:
+        classify:
+          intent: code_help
+          topic: "Fix ticket TT-123 and create a PR?"
+          skills: ["jira", "engineer"]
+      expect:
+        calls:
+          - step: classify
+            exactly: 1
+        workflow_output:
+          - path: intent
+            equals: "code_help"
+          - path: skills
+            contains: "jira"
+          - path: skills
+            contains: "engineer"
+
+    - name: skills-no-tags-fallback
+      description: "Skills mode outputs skills, not tags"
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Create a Jira ticket for this bug"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: jira
+            description: request references Jira tickets
+          - id: jira-creation
+            description: user wants to create or modify a Jira ticket
+      mocks:
+        classify:
+          intent: chat
+          topic: "Create a Jira ticket for this bug?"
+          skills: ["jira", "jira-creation"]
+      expect:
+        calls:
+          - step: classify
+            exactly: 1
+        workflow_output:
+          - path: intent
+            equals: "chat"
+          - path: skills
+            contains: "jira"
+          - path: skills
+            contains: "jira-creation"

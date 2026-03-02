@@ -1,0 +1,2141 @@
+# =============================================================================
+# assistant: High-level AI Assistant Workflow
+# =============================================================================
+#
+# A declarative, batteries-included workflow for building AI assistants.
+# Combines intent routing, dynamic tool selection, knowledge embedding,
+# and code exploration into a single configurable workflow.
+#
+# Just declare your:
+#   - Intents (for high-level routing)
+#   - Skills (unified: knowledge + tools with dependencies)
+#
+# The workflow handles all the wiring automatically.
+#
+# Usage with unified skills (recommended):
+#   imports:
+#     - visor://workflows/assistant.yaml
+#
+#   checks:
+#     chat:
+#       type: workflow
+#       workflow: assistant
+#       args:
+#         question: "{{ outputs['ask'].text }}"
+#         intents:
+#           - id: chat
+#             description: general Q&A
+#         skills:
+#           - id: jira
+#             description: needs Jira access
+#             knowledge: "Use jira_get_issue to fetch tickets."
+#             tools:                      # supports multiple tools per skill
+#               jira:                     # tool name is the key
+#                 command: uvx
+#                 args: [mcp-atlassian]
+#           - id: ticketing
+#             description: cross-platform ticketing
+#             tools:
+#               jira:
+#                 command: uvx
+#                 args: [mcp-atlassian]
+#               zendesk:
+#                 command: uvx
+#                 args: [mcp-zendesk]
+#
+# =============================================================================
+
+id: assistant
+name: AI Assistant
+description: |
+  High-level AI assistant workflow with declarative configuration.
+  Handles intent routing, dynamic tools, and knowledge injection automatically.
+version: "1.0.0"
+
+# Note: These imports are relative to this file's location
+# When importing assistant.yaml from a URL, these become relative URLs
+imports:
+  - intent-router.yaml
+  - code-talk.yaml
+
+inputs:
+  # =========================================================================
+  # Core Input
+  # =========================================================================
+  - name: question
+    required: true
+    description: The user's question/message
+    schema:
+      type: string
+
+  - name: history
+    required: false
+    description: Conversation history (array of {role, text})
+    default: []
+    schema:
+      type: array
+
+  # =========================================================================
+  # Intent & Tag Configuration
+  # =========================================================================
+  - name: intents
+    required: true
+    description: |
+      Array of intent definitions for routing:
+        - id: unique identifier
+        - description: when to use this intent
+        - default_skills: (optional) skills to always activate for this intent
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id: { type: string }
+          description: { type: string }
+          default_skills:
+            type: array
+            items: { type: string }
+        required: [id, description]
+
+  - name: tags
+    required: false
+    description: |
+      Array of tag definitions for capability classification:
+        - id: unique identifier
+        - description: when to apply this tag
+    default: []
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id: { type: string }
+          description: { type: string }
+        required: [id, description]
+
+  - name: routing_instructions
+    required: false
+    description: Additional routing rules for the intent classifier
+    default: ""
+    schema:
+      type: string
+
+  # =========================================================================
+  # Knowledge Configuration
+  # =========================================================================
+  - name: knowledge
+    required: false
+    description: |
+      Array of knowledge documents to inject based on tags:
+        - tags: array of tag IDs that trigger this knowledge
+        - content: the knowledge content to inject
+        - intent: (optional) specific intent that triggers this
+    default: []
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          tags:
+            type: array
+            items: { type: string }
+          intent:
+            type: string
+          content:
+            type: string
+        required: [content]
+
+  # =========================================================================
+  # MCP Server Configuration
+  # =========================================================================
+  - name: mcp_servers
+    required: false
+    description: |
+      Array of MCP servers to enable based on tags:
+        - tags: array of tag IDs that trigger this server
+        - intent: (optional) specific intent that triggers this
+        - name: server name (used as key in ai_mcp_servers)
+        - server: MCP server configuration object
+          For external servers: { command, args, env, allowedMethods }
+          For workflow tools: { workflow, inputs }
+          For built-in tools: { tool: 'tool-name' }
+    default: []
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          tags:
+            type: array
+            items: { type: string }
+          intent:
+            type: string
+          name:
+            type: string
+          server:
+            type: object
+        required: [name, server]
+
+  # =========================================================================
+  # Skills Configuration (unified knowledge + tools)
+  # =========================================================================
+  - name: skills
+    required: false
+    description: |
+      Array of skill definitions that bundle knowledge and tools together.
+      Each skill combines related functionality in one place:
+        - id: unique skill identifier
+        - tags: array of tag IDs that trigger this skill
+        - intent: (optional) specific intent that triggers this skill
+        - knowledge: knowledge content to inject when skill is active
+        - tools: (optional) object mapping tool names to configurations
+          Each key is the tool name, value is the config:
+          For external MCP: { command, args, env, allowedMethods }
+          For workflows: { workflow, inputs }
+          For built-in: { tool: 'tool-name' }
+
+      Skills are merged with standalone knowledge[] and mcp_servers[] configs.
+    default: []
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id:
+            type: string
+            description: Unique skill identifier (used for classification and requires)
+          description:
+            type: string
+            description: When this skill should activate (used by classifier)
+          requires:
+            type: array
+            items: { type: string }
+            description: Other skill IDs to auto-activate when this skill is active
+          tags:
+            type: array
+            items: { type: string }
+            description: (Legacy) Tag IDs that trigger this skill
+          intent:
+            type: string
+            description: (Legacy) Specific intent that triggers this skill
+          knowledge:
+            type: string
+            description: Knowledge content to inject when skill is active
+          tools:
+            type: object
+            description: Tools to enable when skill is active (key = tool name)
+            additionalProperties:
+              type: object
+              description: Tool configuration
+              properties:
+                command:
+                  type: string
+                  description: Command to run (for external MCP servers)
+                args:
+                  type: array
+                  items: { type: string }
+                  description: Command arguments
+                env:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: Environment variables (supports ${VAR} syntax)
+                allowedMethods:
+                  type: array
+                  items: { type: string }
+                  description: Restrict to specific MCP methods
+                workflow:
+                  type: string
+                  description: Workflow name (for workflow-based tools)
+                inputs:
+                  type: object
+                  description: Workflow inputs (for workflow-based tools)
+                tool:
+                  type: string
+                  description: Built-in tool name (for built-in tools)
+          allowed_commands:
+            type: array
+            items: { type: string }
+            description: Bash command patterns this skill is allowed to run (e.g., 'git:log:*')
+          disallowed_commands:
+            type: array
+            items: { type: string }
+            description: Bash command patterns this skill should not run (e.g., 'git:push:*')
+          always:
+            type: boolean
+            description: Always activate this skill regardless of classification
+        required: [id]
+
+  # =========================================================================
+  # AI Configuration
+  # =========================================================================
+  - name: system_prompt
+    required: false
+    description: System prompt for the AI (identity, capabilities, and guidelines)
+    default: "You are a helpful AI assistant with access to specialized tools and knowledge."
+    schema:
+      type: string
+
+  - name: max_iterations
+    required: false
+    description: Maximum AI iterations
+    default: 30
+    schema:
+      type: number
+
+  - name: enableDelegate
+    required: false
+    description: Enable the delegate tool for task distribution to subagents
+    default: true
+    schema:
+      type: boolean
+
+  - name: enableTasks
+    required: false
+    description: Enable task management for tracking multi-goal requests
+    default: false
+    schema:
+      type: boolean
+
+  - name: enableExecutePlan
+    required: false
+    description: Enable the execute_plan DSL orchestration tool
+    default: false
+    schema:
+      type: boolean
+
+# =========================================================================
+# Outputs
+# =========================================================================
+outputs:
+  - name: text
+    description: The AI response text
+    value_js: |
+      return outputs?.['generate-response']?.text ?? null;
+
+  - name: intent
+    description: The classified intent
+    value_js: |
+      return outputs?.['route-intent']?.intent ?? null;
+
+  - name: tags
+    description: The classified tags
+    value_js: |
+      return outputs?.['route-intent']?.tags ?? [];
+
+  - name: topic
+    description: The rewritten topic/question
+    value_js: |
+      return outputs?.['route-intent']?.topic ?? null;
+
+# =========================================================================
+# Steps
+# =========================================================================
+steps:
+  # -------------------------------------------------------------------------
+  # Step 1: Route intent and classify skills (or tags for backwards compat)
+  # -------------------------------------------------------------------------
+  route-intent:
+    type: workflow
+    workflow: intent-router
+    criticality: internal
+    assume:
+      - "true"
+    guarantee: "output?.intent != null"
+    args:
+      question: "{{ inputs.question }}"
+      # Use expression syntax to pass arrays directly (not as JSON strings)
+      intents:
+        expression: "inputs.intents"
+      # Pass skills if provided (unified mode), otherwise fall back to tags
+      skills:
+        expression: |
+          // If skills have descriptions, pass them for classification
+          const skills = inputs.skills || [];
+          // Extract id and description for classification
+          return skills.filter(s => s.description).map(s => ({
+            id: s.id,
+            description: s.description,
+            requires: s.requires || []
+          }));
+      tags:
+        expression: "inputs.tags || []"
+      routing_instructions: "{{ inputs.routing_instructions }}"
+
+  # -------------------------------------------------------------------------
+  # Step 2: Build dynamic configuration for the AI step
+  # -------------------------------------------------------------------------
+  build-config:
+    type: script
+    criticality: internal
+    depends_on: [route-intent]
+    assume:
+      - "outputs['route-intent'] != null"
+    schema:
+      type: object
+      properties:
+        mcp_servers:
+          type: object
+        knowledge_content:
+          type: string
+        bash_config:
+          type: object
+          properties:
+            allow:
+              type: array
+              items: { type: string }
+            deny:
+              type: array
+              items: { type: string }
+    content: |
+      const intent = outputs['route-intent']?.intent ?? '';
+      const tags = outputs['route-intent']?.tags ?? [];
+      const question = inputs.question ?? '';
+      const intentConfigs = Array.isArray(inputs.intents) ? inputs.intents : [];
+
+      // Get activated skill IDs from router and expand dependencies
+      const rawSelectedSkills = outputs['route-intent']?.skills ?? [];
+      const skillConfigs = Array.isArray(inputs.skills) ? inputs.skills : [];
+
+      // Build requires map for dependency expansion
+      const requiresMap = {};
+      const allSkillIds = {};
+      for (let i = 0; i < skillConfigs.length; i++) {
+        const skill = skillConfigs[i];
+        if (skill.id) {
+          allSkillIds[skill.id] = true;
+          if (Array.isArray(skill.requires)) {
+            requiresMap[skill.id] = skill.requires;
+          }
+        }
+      }
+
+      // Validate that all requires reference existing skill IDs
+      const unknownDeps = [];
+      for (let i = 0; i < skillConfigs.length; i++) {
+        const skill = skillConfigs[i];
+        if (Array.isArray(skill.requires)) {
+          for (let j = 0; j < skill.requires.length; j++) {
+            const dep = skill.requires[j];
+            if (!allSkillIds[dep]) {
+              unknownDeps.push({ skill: skill.id, unknown: dep });
+            }
+          }
+        }
+      }
+      if (unknownDeps.length > 0) {
+        log("⚠️ Unknown skill dependencies detected:", JSON.stringify(unknownDeps));
+      }
+
+      // Add default skills configured on the selected intent
+      let defaultSkillsForIntent = [];
+      for (let i = 0; i < intentConfigs.length; i++) {
+        const intentConfig = intentConfigs[i];
+        if (intentConfig?.id === intent && Array.isArray(intentConfig.default_skills)) {
+          defaultSkillsForIntent = intentConfig.default_skills;
+          break;
+        }
+      }
+
+      const unknownDefaultSkills = [];
+      for (let i = 0; i < defaultSkillsForIntent.length; i++) {
+        const skillId = defaultSkillsForIntent[i];
+        if (!allSkillIds[skillId]) {
+          unknownDefaultSkills.push({ intent, unknown: skillId });
+        }
+      }
+      if (unknownDefaultSkills.length > 0) {
+        log("⚠️ Unknown intent default_skills detected:", JSON.stringify(unknownDefaultSkills));
+      }
+
+      // Expand selected skills to include their dependencies using array
+      const activatedSkillsArr = Array.isArray(rawSelectedSkills) ? rawSelectedSkills.slice() : [];
+      for (let i = 0; i < defaultSkillsForIntent.length; i++) {
+        const skillId = defaultSkillsForIntent[i];
+        if (activatedSkillsArr.indexOf(skillId) === -1) {
+          activatedSkillsArr.push(skillId);
+        }
+      }
+      // Add always-on skills
+      for (let i = 0; i < skillConfigs.length; i++) {
+        const skill = skillConfigs[i];
+        if (skill.always === true && skill.id && activatedSkillsArr.indexOf(skill.id) === -1) {
+          activatedSkillsArr.push(skill.id);
+        }
+      }
+      let changed = true;
+      while (changed) {
+        changed = false;
+        const currentSkills = activatedSkillsArr.slice();
+        for (let i = 0; i < currentSkills.length; i++) {
+          const skillId = currentSkills[i];
+          const deps = requiresMap[skillId] || [];
+          for (let j = 0; j < deps.length; j++) {
+            const dep = deps[j];
+            if (activatedSkillsArr.indexOf(dep) === -1) {
+              activatedSkillsArr.push(dep);
+              changed = true;
+            }
+          }
+        }
+      }
+
+      const activatedSkills = activatedSkillsArr;
+      const activatedSkillSet = {};
+      for (let i = 0; i < activatedSkills.length; i++) {
+        activatedSkillSet[activatedSkills[i]] = true;
+      }
+
+      // Helper function to check if tags/intent match (for backwards compatibility)
+      function shouldActivateByTagsOrIntent(itemTags, itemIntent) {
+        // Check if any tag matches
+        if (itemTags && itemTags.length > 0) {
+          for (const tag of itemTags) {
+            if (tags.includes(tag)) {
+              return true;
+            }
+          }
+        }
+        // Check if intent matches
+        if (itemIntent && intent === itemIntent) {
+          return true;
+        }
+        return false;
+      }
+
+      // Build MCP servers, knowledge, and bash config from skills + standalone configs
+      const servers = {};
+      const knowledgeParts = [];
+      const bashAllow = [];
+      const bashDeny = [];
+      let bashEnabled = false;
+      let executePlanEnabled = false;
+
+      // =========================================================================
+      // Process skills - check by ID if skills mode, or by tags/intent otherwise
+      // =========================================================================
+      const usingSkillsMode = activatedSkills.length > 0;
+
+      for (const skill of skillConfigs) {
+        let isActive = false;
+
+        if (usingSkillsMode) {
+          // Skills mode: check if this skill ID was selected by the router
+          isActive = activatedSkillSet[skill.id] === true;
+        } else {
+          // Legacy mode: check by tags/intent
+          const skillTags = Array.isArray(skill.tags) ? skill.tags : [];
+          const skillIntent = skill.intent;
+          isActive = shouldActivateByTagsOrIntent(skillTags, skillIntent);
+        }
+
+        if (isActive) {
+          log('[build-config] Activating skill:', skill.id, 'hasTools:', !!skill.tools, 'hasKnowledge:', !!skill.knowledge);
+
+          // Build structured XML block for each active skill
+          const parts = [];
+          parts.push('<skill>');
+          parts.push('  <id>' + (skill.id || '') + '</id>');
+          parts.push('  <description>' + (skill.description || '') + '</description>');
+          if (skill.knowledge) {
+            parts.push('  <knowledge>' + skill.knowledge + '</knowledge>');
+          }
+          if (skill.tools && typeof skill.tools === 'object') {
+            const toolIds = Object.keys(skill.tools);
+            if (toolIds.length > 0) {
+              parts.push('  <tools>' + toolIds.join(', ') + '</tools>');
+            }
+          }
+          parts.push('</skill>');
+          knowledgeParts.push(parts.join('\n'));
+
+          // Add tools if present
+          if (skill.tools && typeof skill.tools === 'object') {
+            const skillTools = skill.tools;
+            const toolNames = Object.keys(skillTools);
+            log('[build-config] Skill', skill.id, 'has tools:', toolNames.join(', '));
+            for (let i = 0; i < toolNames.length; i++) {
+              const toolName = toolNames[i];
+              const toolConfig = skillTools[toolName];
+
+              // Handle built-in Probe tools (not MCP servers)
+              if (toolName === 'bash') {
+                bashEnabled = true;
+                log('[build-config] Bash tool enabled by skill:', skill.id);
+                continue;
+              }
+              if (toolName === 'execute_plan') {
+                executePlanEnabled = true;
+                log('[build-config] execute_plan tool enabled by skill:', skill.id);
+                continue;
+              }
+
+              if (toolConfig) {
+                // If tool already exists, merge allowedMethods/blockedMethods
+                if (servers[toolName]) {
+                  const existing = servers[toolName];
+                  // Merge allowedMethods arrays
+                  if (Array.isArray(toolConfig.allowedMethods)) {
+                    if (!Array.isArray(existing.allowedMethods)) {
+                      existing.allowedMethods = [];
+                    }
+                    for (let j = 0; j < toolConfig.allowedMethods.length; j++) {
+                      const method = toolConfig.allowedMethods[j];
+                      if (existing.allowedMethods.indexOf(method) === -1) {
+                        existing.allowedMethods.push(method);
+                      }
+                    }
+                  }
+                  // Merge blockedMethods arrays
+                  if (Array.isArray(toolConfig.blockedMethods)) {
+                    if (!Array.isArray(existing.blockedMethods)) {
+                      existing.blockedMethods = [];
+                    }
+                    for (let j = 0; j < toolConfig.blockedMethods.length; j++) {
+                      const method = toolConfig.blockedMethods[j];
+                      if (existing.blockedMethods.indexOf(method) === -1) {
+                        existing.blockedMethods.push(method);
+                      }
+                    }
+                  }
+                } else {
+                  servers[toolName] = toolConfig;
+                }
+              }
+            }
+          }
+
+          // Collect bash command patterns from active skills
+          if (Array.isArray(skill.allowed_commands)) {
+            for (let j = 0; j < skill.allowed_commands.length; j++) {
+              if (bashAllow.indexOf(skill.allowed_commands[j]) === -1) {
+                bashAllow.push(skill.allowed_commands[j]);
+              }
+            }
+          }
+          if (Array.isArray(skill.disallowed_commands)) {
+            for (let j = 0; j < skill.disallowed_commands.length; j++) {
+              if (bashDeny.indexOf(skill.disallowed_commands[j]) === -1) {
+                bashDeny.push(skill.disallowed_commands[j]);
+              }
+            }
+          }
+        }
+      }
+
+      // =========================================================================
+      // Process standalone MCP servers (for backwards compatibility)
+      // =========================================================================
+      const mcpConfigs = Array.isArray(inputs.mcp_servers) ? inputs.mcp_servers : [];
+      for (const config of mcpConfigs) {
+        const serverTags = Array.isArray(config.tags) ? config.tags : [];
+        const serverIntent = config.intent;
+        const serverName = config.name;
+        const serverConfig = config.server;
+
+        if (!serverName || !serverConfig) continue;
+
+        // Check if this server should be enabled
+        let shouldEnable = shouldActivateByTagsOrIntent(serverTags, serverIntent);
+
+        // If no tags or intent specified, always enable
+        if (serverTags.length === 0 && !serverIntent) {
+          shouldEnable = true;
+        }
+
+        if (shouldEnable) {
+          servers[serverName] = serverConfig;
+        }
+      }
+
+      // =========================================================================
+      // Process standalone knowledge (for backwards compatibility)
+      // =========================================================================
+      const knowledgeConfigs = Array.isArray(inputs.knowledge) ? inputs.knowledge : [];
+
+      for (const config of knowledgeConfigs) {
+        const knowledgeTags = Array.isArray(config.tags) ? config.tags : [];
+        const knowledgeIntent = config.intent;
+        const content = config.content;
+
+        if (!content) continue;
+
+        let shouldInclude = shouldActivateByTagsOrIntent(knowledgeTags, knowledgeIntent);
+
+        if (shouldInclude) {
+          knowledgeParts.push(content);
+        }
+      }
+
+      // Debug: log what servers are being returned
+      const serverNames = Object.keys(servers);
+      log('[build-config] MCP servers to return:', serverNames.length, 'servers:', serverNames.join(', '));
+      if (serverNames.length > 0) {
+        log('[build-config] First server config:', JSON.stringify(servers[serverNames[0]]).substring(0, 200));
+      }
+
+      return {
+        mcp_servers: servers,
+        knowledge_content: knowledgeParts.join('\n\n'),
+        bash_enabled: bashEnabled,
+        execute_plan_enabled: executePlanEnabled,
+        bash_config: {
+          allow: bashAllow,
+          deny: bashDeny
+        }
+      };
+
+  # -------------------------------------------------------------------------
+  # Step 3: Generate response with dynamic tools and knowledge
+  # -------------------------------------------------------------------------
+  generate-response:
+    type: ai
+    criticality: internal
+    depends_on: [route-intent, build-config]
+    assume:
+      - "outputs['route-intent'] != null"
+      - "outputs['build-config'] != null"
+    guarantee: "(output?.text ?? '').length > 0"
+    ai:
+      max_iterations: "{{ inputs.max_iterations }}"
+      enableDelegate: "{{ inputs.enableDelegate }}"
+      enableTasks: "{{ inputs.enableTasks }}"
+      enableExecutePlan: "{{ inputs.enableExecutePlan }}"
+      skip_code_context: true
+      skip_slack_context: false
+      # Post-completion validation to prevent hallucination of completed actions
+      completion_prompt: |
+        CRITICAL VALIDATION - Before finalizing your response, verify:
+
+        Action verification:
+        1. If you claimed to CREATE something (Jira ticket, PR, file, etc.), did you actually call the tool?
+           - Creating a Jira ticket requires calling mcp__jira__jira_create_issue
+           - Creating a PR requires calling the engineer tool
+           - If you didn't call the tool, DO NOT claim the action was completed
+        2. If you claimed to UPDATE something, did you actually call the update tool?
+        3. If you claimed to SEARCH or FETCH something, did you get actual results?
+
+        Tool output verification:
+        4. Check your tool call history - does it support your claims?
+        5. If a tool returned an error or empty result, acknowledge it honestly
+        6. Never claim success if you only PLANNED to do something but didn't execute it
+
+        If you find discrepancies:
+        - Correct your response to reflect what actually happened
+        - If you couldn't complete an action, explain why and what the user can do
+        - Be honest about failures rather than claiming false success
+      # Wildcard-with-exclusions pattern: allow everything except tools that
+      # the AI tends to misuse instead of skill-specific MCP tools.
+      # ProbeAgent resolves "*" and "!" patterns natively.
+    ai_allowed_tools_js: |
+      // Start with wildcard — allow all tools by default
+      const excluded = ['search', 'query', 'extract', 'listFiles', 'searchFiles', 'delegate'];
+      const bashEnabled = outputs['build-config']?.bash_enabled === true;
+      if (!bashEnabled) {
+        excluded.push('bash');
+      }
+      if (outputs['build-config']?.execute_plan_enabled !== true) {
+        excluded.push('execute_plan');
+      }
+      return ['*', ...excluded.map(t => '!' + t)];
+    ai_mcp_servers_js: |
+      // Return the pre-built MCP servers from build-config
+      return outputs['build-config']?.mcp_servers ?? {};
+    ai_bash_config_js: |
+      return outputs['build-config']?.bash_config ?? {};
+    schema:
+      type: object
+      properties:
+        text:
+          type: string
+          description: The response to the user
+      required: [text]
+    prompt: |
+      {{ inputs.system_prompt }}
+
+      Your capabilities are dynamically enabled based on the user's request.
+      When tools are available, use them to provide accurate, up-to-date information.
+      When knowledge is injected below, incorporate it into your responses.
+
+      {% if inputs.history and inputs.history.size > 0 %}
+      <history>
+      {% for m in inputs.history %}
+      {{ m.role | capitalize }}: {{ m.text }}
+      {% endfor %}
+      </history>
+      {% endif %}
+
+      ## Current Request
+      User: {{ inputs.question }}
+
+      ## Classification
+      Intent: {{ outputs['route-intent'].intent }}
+      {% if outputs['route-intent'].skills and outputs['route-intent'].skills.size > 0 %}
+      Skills: {{ outputs['route-intent'].skills | join: ', ' }}
+      {% endif %}
+      {% if outputs['route-intent'].tags and outputs['route-intent'].tags.size > 0 %}
+      Tags: {{ outputs['route-intent'].tags | join: ', ' }}
+      {% endif %}
+
+      {% if outputs['build-config'].knowledge_content and outputs['build-config'].knowledge_content != '' %}
+      {{ outputs['build-config'].knowledge_content }}
+      {% endif %}
+
+      ## Guidelines
+      - This is an ONGOING DIALOGUE - treat it as a continuous conversation, not isolated messages
+      - If continuing previous work (user says "ok", "do it", "continue", etc.), pick up where you left off
+      - Reference previous context when relevant - don't make the user repeat themselves
+      - Be concise but thorough - avoid unnecessary filler
+      - Provide specific references (file paths, line numbers, URLs) when available
+      - If you're unsure, say so rather than guessing
+      - Use available tools proactively - don't make up information that could be retrieved
+      - When a tool returns an error, explain what happened and suggest alternatives
+      - **CRITICAL: Always use `attempt_completion` tool to submit your final response** - this enables validation of your actions before the response is finalized
+
+      ## CRITICAL: Preserve Tool Output Details
+      When tools return detailed data (lists, analytics, search results):
+      - **DO NOT summarize or compress** the tool output
+      - **RELAY THE FULL DATA** including all names, specifics, and details
+
+      ## CRITICAL: Never Modify URLs from Tool Outputs
+      When a tool returns URLs, **COPY THE URL EXACTLY** as returned - do not modify
+
+      ## CRITICAL: Code Exploration Has Limited Access
+      Code exploration tools (code-talk, code-explorer) are sandboxed to code repositories only.
+      They do NOT have access to external APIs like Jira, Zendesk, GitHub Issues, or Confluence.
+      If a code question references external data (tickets, issues, docs), YOU must fetch that
+      data first using the appropriate tools before delegating to code exploration.
+
+# =============================================================================
+# Tests
+# =============================================================================
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+
+  cases:
+    # =========================================================================
+    # Basic Routing Tests
+    # =========================================================================
+    - name: basic-chat-routing
+      description: Routes simple chat to correct intent
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Hello, how are you?"
+        intents:
+          - id: chat
+            description: general Q&A
+          - id: code_help
+            description: code questions
+        tags: []
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Hello, how are you?"
+          tags: []
+        generate-response:
+          text: "Hello! I'm doing well, how can I help you?"
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        workflow_output:
+          - path: intent
+            equals: "chat"
+          - path: text
+            contains: "Hello"
+
+    - name: code-help-routing
+      description: Routes code questions with codebase tag
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "How does authentication work?"
+        intents:
+          - id: chat
+            description: general Q&A
+          - id: code_help
+            description: code questions
+        tags:
+          - id: codebase
+            description: needs code exploration
+      mocks:
+        route-intent:
+          intent: code_help
+          topic: "How does authentication work?"
+          tags: ["codebase"]
+        generate-response:
+          text: "Authentication is implemented using JWT tokens."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        workflow_output:
+          - path: intent
+            equals: "code_help"
+          - path: tags
+            contains: "codebase"
+
+    # =========================================================================
+    # Knowledge Injection Tests
+    # =========================================================================
+    - name: knowledge-injection-by-tag
+      description: Injects knowledge when tag matches
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "What can you do?"
+        intents:
+          - id: chat
+            description: general Q&A
+        tags:
+          - id: capabilities
+            description: user asks about capabilities
+        knowledge:
+          - tags: ["capabilities"]
+            content: |
+              ## Capabilities
+              I can help with code exploration and task execution.
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "What can you do?"
+          tags: ["capabilities"]
+        generate-response:
+          text: "I can help with code exploration and task execution."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        workflow_output:
+          - path: tags
+            contains: "capabilities"
+
+    - name: knowledge-injection-by-intent
+      description: Injects knowledge when intent matches
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "How does the API work?"
+        intents:
+          - id: chat
+            description: general Q&A
+          - id: code_help
+            description: code questions
+        knowledge:
+          - intent: code_help
+            content: |
+              ## Code Exploration
+              Use the code-explorer tool to search the codebase.
+      mocks:
+        route-intent:
+          intent: code_help
+          topic: "How does the API work?"
+          tags: []
+        generate-response:
+          text: "The API is implemented in the handlers package."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        workflow_output:
+          - path: intent
+            equals: "code_help"
+
+    # =========================================================================
+    # MCP Server Tests
+    # =========================================================================
+    - name: mcp-server-enabled-by-tag
+      description: MCP server is enabled when tag matches
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Get ticket TT-123"
+        intents:
+          - id: chat
+            description: general Q&A
+        tags:
+          - id: jira
+            description: needs Jira access
+        mcp_servers:
+          - tags: ["jira"]
+            name: atlassian
+            server:
+              command: uvx
+              args: ["mcp-atlassian"]
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Get ticket TT-123"
+          tags: ["jira"]
+        generate-response:
+          text: "Here is ticket TT-123."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        workflow_output:
+          - path: tags
+            contains: "jira"
+
+    - name: mcp-server-not-enabled-without-tag
+      description: MCP server is not enabled when tag doesn't match
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Hello"
+        intents:
+          - id: chat
+            description: general Q&A
+        tags:
+          - id: jira
+            description: needs Jira access
+        mcp_servers:
+          - tags: ["jira"]
+            name: atlassian
+            server:
+              command: uvx
+              args: ["mcp-atlassian"]
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Hello"
+          tags: []  # No jira tag
+        generate-response:
+          text: "Hello!"
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        workflow_output:
+          - path: tags
+            equals: []
+
+    # =========================================================================
+    # Unified Skills Tests (with description - skills as classification targets)
+    # =========================================================================
+    - name: unified-skills-classification
+      description: Skills with descriptions are used for direct classification
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Get ticket TT-123"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: jira
+            description: request references Jira tickets
+            knowledge: |
+              ## Jira Tools
+              Use jira_get_issue to fetch tickets.
+            tools:
+              atlassian:
+                command: uvx
+                args: ["mcp-atlassian"]
+          - id: zendesk
+            description: request references Zendesk tickets
+            knowledge: |
+              ## Zendesk Tools
+              Use zendesk tools for support.
+            tools:
+              zendesk:
+                command: uvx
+                args: ["zendesk-mcp"]
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Get ticket TT-123?"
+          skills: ["jira"]
+        generate-response:
+          text: "Here is ticket TT-123."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        workflow_output:
+          - path: intent
+            equals: "chat"
+
+    - name: unified-skills-with-requires
+      description: Skill dependencies are automatically activated
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Create a PR to fix the bug"
+        intents:
+          - id: chat
+            description: general Q&A
+          - id: code_help
+            description: code questions
+        skills:
+          - id: code-explorer
+            description: needs codebase exploration
+            knowledge: |
+              ## Code Explorer
+              Use to search codebase.
+            tools:
+              code-talk:
+                workflow: code-talk
+                inputs: {}
+          - id: engineer
+            description: user wants code changes or PR created
+            requires: [code-explorer]
+            knowledge: |
+              ## Engineer Tool
+              Use to make changes and create PRs.
+            tools:
+              engineer:
+                workflow: engineer
+                inputs: {}
+      mocks:
+        route-intent:
+          intent: code_help
+          topic: "Create a PR to fix the bug?"
+          skills: ["engineer", "code-explorer"]
+        generate-response:
+          text: "Created PR #123."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        workflow_output:
+          - path: intent
+            equals: "code_help"
+
+    - name: intent-default-skills-activated
+      description: default_skills on intent are activated even when router returns no skills
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Find ticket TT-123"
+        intents:
+          - id: chat
+            description: general Q&A
+            default_skills: [jira]
+        skills:
+          - id: jira
+            description: request references Jira tickets
+            knowledge: |
+              ## Jira Tools
+              Use jira_get_issue to fetch ticket details.
+            tools:
+              atlassian:
+                command: uvx
+                args: ["mcp-atlassian"]
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Find ticket TT-123?"
+          skills: []
+        generate-response:
+          text: "Found ticket."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        outputs:
+          - step: build-config
+            path: mcp_servers.atlassian.command
+            equals: "uvx"
+          - step: build-config
+            path: knowledge_content
+            matches: "<id>jira</id>"
+
+    - name: intent-default-skills-expand-requires
+      description: default_skills participate in requires dependency expansion
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Create a PR for auth fix"
+        intents:
+          - id: code_help
+            description: code questions
+            default_skills: [engineer]
+        skills:
+          - id: code-explorer
+            description: needs codebase exploration
+            tools:
+              code-explorer:
+                workflow: code-talk
+                inputs: {}
+          - id: engineer
+            description: user wants code changes or PR created
+            requires: [code-explorer]
+            tools:
+              engineer:
+                workflow: engineer
+                inputs: {}
+      mocks:
+        route-intent:
+          intent: code_help
+          topic: "Create a PR for auth fix?"
+          skills: []
+        generate-response:
+          text: "Created PR."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        outputs:
+          - step: build-config
+            path: mcp_servers.engineer.workflow
+            equals: "engineer"
+          - step: build-config
+            path: mcp_servers.code-explorer.workflow
+            equals: "code-talk"
+
+    - name: always-on-skill-activated
+      description: Skills with always=true are activated even when not selected by router
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Hello, how are you?"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: feedback
+            always: true
+            description: auto-feedback on mistakes
+            requires: [slack]
+            knowledge: |
+              ## Feedback Skill
+              Send feedback to admin when mistakes are detected.
+          - id: slack
+            description: send DMs and search Slack
+            knowledge: |
+              ## Slack Tools
+              Use slack-send-dm to send messages.
+            tools:
+              slack-send-dm:
+                workflow: slack-send-dm
+                inputs: {}
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Greeting"
+          skills: []
+        generate-response:
+          text: "Hello!"
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        outputs:
+          - step: build-config
+            path: knowledge_content
+            matches: "<id>feedback</id>"
+          - step: build-config
+            path: knowledge_content
+            matches: "<id>slack</id>"
+          - step: build-config
+            path: mcp_servers.slack-send-dm.workflow
+            equals: "slack-send-dm"
+
+    - name: circular-dependency-handled
+      description: Circular skill dependencies don't cause infinite loops
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Help me with A"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: skill-a
+            description: skill A functionality
+            requires: [skill-b]
+            knowledge: |
+              ## Skill A
+              This is skill A.
+          - id: skill-b
+            description: skill B functionality
+            requires: [skill-a]
+            knowledge: |
+              ## Skill B
+              This is skill B.
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Help me with A?"
+          skills: ["skill-a"]
+        generate-response:
+          text: "Done with A and B."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+
+    - name: deep-dependency-chain
+      description: Deep skill dependency chains are fully expanded (A → B → C → D)
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Help me with task A"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: skill-a
+            description: top level skill
+            requires: [skill-b]
+            knowledge: "Skill A knowledge"
+          - id: skill-b
+            description: mid level skill
+            requires: [skill-c]
+            knowledge: "Skill B knowledge"
+          - id: skill-c
+            description: lower level skill
+            requires: [skill-d]
+            knowledge: "Skill C knowledge"
+          - id: skill-d
+            description: base level skill
+            knowledge: "Skill D knowledge"
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Help me with task A?"
+          skills: ["skill-a"]
+        generate-response:
+          text: "All skills activated."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+
+    - name: diamond-dependency-pattern
+      description: Diamond dependencies (A → B+C, B → D, C → D) don't duplicate D
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Run skill A"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: skill-a
+            description: top skill requiring B and C
+            requires: [skill-b, skill-c]
+            knowledge: "Skill A"
+          - id: skill-b
+            description: left branch requiring D
+            requires: [skill-d]
+            knowledge: "Skill B"
+          - id: skill-c
+            description: right branch requiring D
+            requires: [skill-d]
+            knowledge: "Skill C"
+          - id: skill-d
+            description: common base skill
+            knowledge: "Skill D"
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Run skill A?"
+          skills: ["skill-a"]
+        generate-response:
+          text: "Diamond pattern handled."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+
+    - name: self-referencing-skill
+      description: Skill that requires itself doesn't cause infinite loop
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Use recursive skill"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: self-skill
+            description: skill that references itself
+            requires: [self-skill]
+            knowledge: "Self-referencing skill"
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Use recursive skill?"
+          skills: ["self-skill"]
+        generate-response:
+          text: "Self-reference handled."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+
+    - name: unknown-dependency-warns
+      description: Unknown skill in requires logs a warning but doesn't fail
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Help me"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: my-skill
+            description: skill with typo in requires
+            requires: [unknown-skill, another-typo]
+            knowledge: "My skill knowledge"
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Help me?"
+          skills: ["my-skill"]
+        generate-response:
+          text: "Done."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+
+    # =========================================================================
+    # Skills Tests (legacy - using tags for activation)
+    # =========================================================================
+    - name: skill-activates-knowledge-and-server
+      description: Skill activates both knowledge and server when tag matches
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Get ticket TT-123"
+        intents:
+          - id: chat
+            description: general Q&A
+        tags:
+          - id: jira
+            description: needs Jira access
+        skills:
+          - id: jira
+            tags: ["jira"]
+            knowledge: |
+              ## Jira Tools
+              Use jira_get_issue to fetch ticket details.
+            tools:
+              atlassian:
+                command: uvx
+                args: ["mcp-atlassian"]
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Get ticket TT-123"
+          tags: ["jira"]
+        generate-response:
+          text: "Here is ticket TT-123."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        workflow_output:
+          - path: tags
+            contains: "jira"
+
+    - name: skill-inactive-when-no-tag-match
+      description: Skill stays inactive when no tags match
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Hello"
+        intents:
+          - id: chat
+            description: general Q&A
+        tags:
+          - id: jira
+            description: needs Jira access
+        skills:
+          - id: jira
+            tags: ["jira"]
+            knowledge: |
+              ## Jira Tools
+              Use jira_get_issue to fetch ticket details.
+            tools:
+              atlassian:
+                command: uvx
+                args: ["mcp-atlassian"]
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Hello"
+          tags: []
+        generate-response:
+          text: "Hello!"
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        workflow_output:
+          - path: tags
+            equals: []
+
+    - name: skill-with-knowledge-only
+      description: Skill can have knowledge without a server
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "What can you do?"
+        intents:
+          - id: chat
+            description: general Q&A
+        tags:
+          - id: capabilities
+            description: user asks about capabilities
+        skills:
+          - id: capabilities
+            tags: ["capabilities"]
+            knowledge: |
+              ## Capabilities
+              I can help with code exploration and Jira.
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "What can you do?"
+          tags: ["capabilities"]
+        generate-response:
+          text: "I can help with code exploration and Jira."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        workflow_output:
+          - path: tags
+            contains: "capabilities"
+
+    # =========================================================================
+    # Combined Tests
+    # =========================================================================
+    - name: full-config-with-all-features
+      description: All features working together using skills
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Create a PR to fix the auth bug in TT-456"
+        system_prompt: |
+          You are an engineering assistant.
+          Be concise and provide code references.
+        intents:
+          - id: chat
+            description: general Q&A
+          - id: code_help
+            description: code questions
+        skills:
+          - id: code-explorer
+            description: needs code exploration
+            tools:
+              code-explorer:
+                workflow: code-talk
+                inputs:
+                  architecture: "# Architecture"
+                  docs_repo: "my-org/docs"
+                  projects:
+                    - id: backend
+                      repo: my-org/backend
+                      description: Backend services
+          - id: engineer
+            description: needs code changes
+            requires: [code-explorer]
+            knowledge: |
+              ## Engineering Guidelines
+              Always explore code first, then make changes.
+            tools:
+              engineer:
+                workflow: engineer
+                inputs: {}
+          - id: jira
+            description: needs Jira access
+            knowledge: |
+              ## Jira Access
+              You can read and update Jira tickets.
+            tools:
+              atlassian:
+                command: uvx
+                args: ["mcp-atlassian"]
+      mocks:
+        route-intent:
+          intent: code_help
+          topic: "Fix auth bug in TT-456"
+          skills: ["code-explorer", "engineer", "jira"]
+        generate-response:
+          text: "Created PR #123 to fix the auth bug."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        workflow_output:
+          - path: intent
+            equals: "code_help"
+          - path: text
+            contains: "PR"
+
+    # =========================================================================
+    # Prompt Content Assertions
+    # =========================================================================
+    - name: prompt-contains-skill-knowledge
+      description: Skill knowledge is injected into prompt when skill activates
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Get ticket TT-123"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: jira
+            description: needs Jira access
+            knowledge: |
+              ## Jira Tools
+              Use jira_get_issue to fetch ticket details.
+            tools:
+              atlassian:
+                command: uvx
+                args: ["mcp-atlassian"]
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Get ticket TT-123"
+          skills: ["jira"]
+        generate-response:
+          text: "Here is ticket TT-123."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        prompts:
+          - step: generate-response
+            contains:
+              - "<skill>"
+              - "<id>jira</id>"
+              - "<description>needs Jira access</description>"
+              - "<knowledge>"
+              - "## Jira Tools"
+              - "jira_get_issue"
+              - "</knowledge>"
+              - "<tools>atlassian</tools>"
+              - "</skill>"
+        outputs:
+          - step: build-config
+            path: knowledge_content
+            matches: "<skill>"
+          - step: build-config
+            path: knowledge_content
+            matches: "<id>jira</id>"
+          - step: build-config
+            path: knowledge_content
+            matches: "Jira Tools"
+
+    - name: prompt-excludes-inactive-skill-knowledge
+      description: Knowledge from inactive skills is NOT in prompt
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Hello there"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: jira
+            description: needs Jira access
+            knowledge: |
+              ## Jira Tools
+              Use jira_get_issue to fetch ticket details.
+            tools:
+              atlassian:
+                command: uvx
+                args: ["mcp-atlassian"]
+          - id: capabilities
+            description: what can you do
+            knowledge: |
+              ## My Capabilities
+              I can help with code and tickets.
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Hello there"
+          skills: []
+        generate-response:
+          text: "Hello!"
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        prompts:
+          - step: generate-response
+            not_contains:
+              - "## Jira Tools"
+              - "## My Capabilities"
+        outputs:
+          - step: build-config
+            path: knowledge_content
+            equals: ""
+
+    - name: prompt-contains-multiple-skill-knowledge
+      description: Multiple activated skills inject their knowledge into prompt
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Get ticket TT-123 and explore the code"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: jira
+            description: needs Jira access
+            knowledge: |
+              ## Jira Tools
+              Use jira_get_issue to fetch ticket details.
+            tools:
+              atlassian:
+                command: uvx
+                args: ["mcp-atlassian"]
+          - id: code-explorer
+            description: needs code exploration
+            knowledge: |
+              ## Code Exploration
+              Use code-explorer tool to search code.
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Get ticket TT-123 and explore the code"
+          skills: ["jira", "code-explorer"]
+        generate-response:
+          text: "Found ticket and code."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        prompts:
+          - step: generate-response
+            contains:
+              - "<id>jira</id>"
+              - "## Jira Tools"
+              - "<id>code-explorer</id>"
+              - "## Code Exploration"
+        outputs:
+          - step: build-config
+            path: knowledge_content
+            matches: "<id>jira</id>"
+          - step: build-config
+            path: knowledge_content
+            matches: "Jira Tools"
+          - step: build-config
+            path: knowledge_content
+            matches: "<id>code-explorer</id>"
+          - step: build-config
+            path: knowledge_content
+            matches: "Code Exploration"
+
+    # =========================================================================
+    # MCP Server Configuration Assertions
+    # =========================================================================
+    - name: mcp-server-added-when-skill-activates
+      description: MCP server is configured when skill with server activates
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Get ticket TT-123"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: jira
+            description: needs Jira access
+            knowledge: "Jira knowledge"
+            tools:
+              atlassian:
+                command: uvx
+                args: ["mcp-atlassian"]
+                env:
+                  JIRA_URL: "https://jira.example.com"
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Get ticket TT-123"
+          skills: ["jira"]
+        generate-response:
+          text: "Here is ticket TT-123."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+        outputs:
+          - step: build-config
+            path: mcp_servers.atlassian.command
+            equals: "uvx"
+          - step: build-config
+            path: mcp_servers.atlassian.args
+            equalsDeep: ["mcp-atlassian"]
+          - step: build-config
+            path: mcp_servers.atlassian.env.JIRA_URL
+            equals: "https://jira.example.com"
+
+    - name: mcp-server-not-added-when-skill-inactive
+      description: MCP server is NOT configured when skill is inactive
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Hello"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: jira
+            description: needs Jira access
+            knowledge: "Jira knowledge"
+            tools:
+              atlassian:
+                command: uvx
+                args: ["mcp-atlassian"]
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Hello"
+          skills: []
+        generate-response:
+          text: "Hello!"
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+        outputs:
+          - step: build-config
+            path: mcp_servers
+            equalsDeep: {}
+
+    - name: multiple-mcp-servers-from-multiple-skills
+      description: Multiple MCP servers configured when multiple skills activate
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Get ticket TT-123 and check Zendesk"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: jira
+            description: needs Jira access
+            tools:
+              atlassian:
+                command: uvx
+                args: ["mcp-atlassian"]
+          - id: zendesk
+            description: needs Zendesk access
+            tools:
+              zendesk-server:
+                command: uvx
+                args: ["mcp-zendesk"]
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Get ticket TT-123 and check Zendesk"
+          skills: ["jira", "zendesk"]
+        generate-response:
+          text: "Found tickets."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+        outputs:
+          - step: build-config
+            path: mcp_servers.atlassian.command
+            equals: "uvx"
+          - step: build-config
+            path: mcp_servers.zendesk-server.command
+            equals: "uvx"
+
+    - name: same-server-name-merges-allowed-methods
+      description: Skills with same server name merge their allowedMethods
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Analyze sprint velocity for TT-123"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: jira
+            description: basic jira access
+            tools:
+              jira:
+                command: uvx
+                args: ["mcp-atlassian"]
+                allowedMethods:
+                  - jira_get_issue
+                  - jira_search
+          - id: jira-ext
+            description: sprint analysis
+            tools:
+              jira:
+                command: uvx
+                args: ["mcp-atlassian"]
+                allowedMethods:
+                  - jira_get_sprint_issues
+                  - jira_get_board_sprints
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Analyze sprint velocity"
+          skills: ["jira", "jira-ext"]
+        generate-response:
+          text: "Sprint analysis complete."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+        outputs:
+          # Only one server named 'jira', not two
+          - step: build-config
+            path: mcp_servers.jira.command
+            equals: "uvx"
+          # Merged allowedMethods from both skills
+          - step: build-config
+            path: mcp_servers.jira.allowedMethods
+            equalsDeep: ["jira_get_issue", "jira_search", "jira_get_sprint_issues", "jira_get_board_sprints"]
+
+    - name: skill-dependency-adds-server-from-required-skill
+      description: Required skill's MCP server is added via dependency expansion
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Create a ticket with jira"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: ticket-creator
+            description: create tickets
+            requires: [jira]
+            knowledge: "Ticket creation guide"
+          - id: jira
+            description: jira access
+            knowledge: "Jira knowledge"
+            tools:
+              atlassian:
+                command: uvx
+                args: ["mcp-atlassian"]
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Create a ticket"
+          skills: ["ticket-creator"]
+        generate-response:
+          text: "Created ticket."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        prompts:
+          - step: generate-response
+            contains:
+              - "<id>ticket-creator</id>"
+              - "Ticket creation guide"
+              - "<id>jira</id>"
+              - "Jira knowledge"
+              - "<tools>atlassian</tools>"
+        outputs:
+          - step: build-config
+            path: mcp_servers.atlassian.command
+            equals: "uvx"
+          - step: build-config
+            path: knowledge_content
+            matches: "<id>ticket-creator</id>"
+          - step: build-config
+            path: knowledge_content
+            matches: "Ticket creation guide"
+          - step: build-config
+            path: knowledge_content
+            matches: "<id>jira</id>"
+          - step: build-config
+            path: knowledge_content
+            matches: "Jira knowledge"
+
+    # =========================================================================
+    # Code Explorer Workflow Tests
+    # =========================================================================
+    - name: code-explorer-skill-adds-code-talk-server
+      description: Skill with code-talk workflow server is added when skill activates
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "How does authentication work?"
+        intents:
+          - id: code_help
+            description: code questions
+        skills:
+          - id: code-explorer
+            description: code exploration
+            knowledge: "Use code-explorer for questions"
+            tools:
+              code-explorer:
+                workflow: code-talk
+                inputs:
+                  architecture: "# My Architecture"
+                  docs_repo: "my-org/docs"
+                  projects:
+                    - id: backend
+                      repo: my-org/backend
+                      description: Backend services
+      mocks:
+        route-intent:
+          intent: code_help
+          topic: "How does authentication work?"
+          skills: ["code-explorer"]
+        generate-response:
+          text: "Auth is implemented in backend."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+        outputs:
+          - step: build-config
+            path: mcp_servers.code-explorer.workflow
+            equals: "code-talk"
+          - step: build-config
+            path: mcp_servers.code-explorer.inputs.architecture
+            equals: "# My Architecture"
+          - step: build-config
+            path: mcp_servers.code-explorer.inputs.docs_repo
+            equals: "my-org/docs"
+
+    - name: code-explorer-server-not-added-when-skill-inactive
+      description: Code explorer server not added when skill is not activated
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Hello"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: code-explorer
+            description: code exploration
+            tools:
+              code-explorer:
+                workflow: code-talk
+                inputs:
+                  architecture: "# My Architecture"
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Hello"
+          skills: []
+        generate-response:
+          text: "Hello!"
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+        outputs:
+          - step: build-config
+            path: mcp_servers
+            equalsDeep: {}
