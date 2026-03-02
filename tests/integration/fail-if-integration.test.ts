@@ -116,6 +116,15 @@ jest.mock('../../src/providers/http-check-provider', () => ({
   })),
 }));
 
+// Skip workspace isolation (avoids real git worktree ops that cause timeouts)
+jest.mock('../../src/state-machine/context/build-engine-context', () => {
+  const actual = jest.requireActual('../../src/state-machine/context/build-engine-context');
+  return {
+    ...actual,
+    initializeWorkspace: jest.fn().mockImplementation(async (ctx: any) => ctx),
+  };
+});
+
 // Mock git analyzer
 jest.mock('../../src/git-repository-analyzer', () => ({
   GitRepositoryAnalyzer: jest.fn().mockImplementation(() => ({

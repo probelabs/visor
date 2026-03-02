@@ -60,6 +60,8 @@ describe('resumeFromSnapshot workspace initialization', () => {
 
     // Set environment variable for workspace base path
     process.env.VISOR_WORKSPACE_PATH = testBasePath;
+    // Re-enable workspace (global setup disables it for speed)
+    delete process.env.VISOR_WORKSPACE_ENABLED;
   });
 
   afterEach(() => {

@@ -42,6 +42,8 @@ describe('Workspace Isolation Integration', () => {
     WorkspaceManager.clearInstances();
     jest.clearAllMocks();
     process.env.VISOR_WORKSPACE_PATH = testBasePath;
+    // Re-enable workspace (global setup disables it for speed)
+    delete process.env.VISOR_WORKSPACE_ENABLED;
   });
 
   afterEach(() => {

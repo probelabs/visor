@@ -53,6 +53,9 @@ beforeEach(() => {
   process.env.MODEL_NAME = 'mock-model';
   // Default E2E-related env for headless runs; do NOT force-run entrypoints for imports
   process.env.VISOR_NOBROWSER = 'true';
+  // Disable workspace/worktree creation by default — tests that exercise
+  // workspace isolation explicitly override this env var.
+  process.env.VISOR_WORKSPACE_ENABLED = 'false';
   // Harden git-related environment: ensure tests cannot target parent repo via hooks
   const gitVars = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_PREFIX', 'GIT_COMMON_DIR'];
   for (const k of gitVars) delete (process.env as NodeJS.ProcessEnv)[k];
