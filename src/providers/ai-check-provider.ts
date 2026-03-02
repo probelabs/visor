@@ -1091,12 +1091,47 @@ export class AICheckProvider extends CheckProvider {
         if (Object.keys(dynamicServers).length > 0) {
           Object.assign(mcpServers, dynamicServers);
         }
+        // Emit telemetry for tool setup diagnostics
+        try {
+          const span = trace.getSpan(otContext.active());
+          if (span) {
+            span.addEvent('tool_setup.mcp_servers_js', {
+              'tool_setup.server_count': Object.keys(dynamicServers).length,
+              'tool_setup.server_names': Object.keys(dynamicServers).join(','),
+              'tool_setup.workflow_entries': Object.entries(dynamicServers)
+                .filter(([, cfg]) => (cfg as any)?.workflow)
+                .map(([name, cfg]) => `${name}→${(cfg as any).workflow}`)
+                .join(','),
+            });
+          }
+        } catch {}
       } catch (error) {
-        logger.error(
-          `[AICheckProvider] Failed to evaluate ai_mcp_servers_js: ${error instanceof Error ? error.message : 'Unknown error'}`
-        );
+        const errMsg = error instanceof Error ? error.message : 'Unknown error';
+        logger.error(`[AICheckProvider] Failed to evaluate ai_mcp_servers_js: ${errMsg}`);
+        // Emit telemetry for the failure
+        try {
+          const span = trace.getSpan(otContext.active());
+          if (span) {
+            span.addEvent('tool_setup.mcp_servers_js_error', {
+              'tool_setup.error': errMsg,
+            });
+          }
+        } catch {}
         // Continue without dynamic servers
       }
+    } else if (mcpServersJsExpr && !_dependencyResults) {
+      // Expression exists but no dependency results — this means the check has no dependencies
+      // or the dependency results map was empty/undefined
+      try {
+        const span = trace.getSpan(otContext.active());
+        if (span) {
+          span.addEvent('tool_setup.mcp_servers_js_skipped', {
+            'tool_setup.reason': 'no_dependency_results',
+            'tool_setup.has_expr': true,
+            'tool_setup.has_deps': false,
+          });
+        }
+      } catch {}
     }
 
     // 5. Resolve environment variable placeholders in MCP server env configs
@@ -1289,6 +1324,33 @@ export class AICheckProvider extends CheckProvider {
         // Load custom tools from global config (supports workflows and custom tools)
         const customTools = this.loadCustomTools(customToolsToLoad, config);
 
+        // Emit telemetry for tool resolution results
+        try {
+          const span = trace.getSpan(otContext.active());
+          if (span) {
+            const requestedNames = customToolsToLoad.map(item =>
+              typeof item === 'string'
+                ? item
+                : `${(item as any).name || (item as any).workflow}(wf:${(item as any).workflow})`
+            );
+            span.addEvent('tool_setup.resolution', {
+              'tool_setup.requested_count': customToolsToLoad.length,
+              'tool_setup.requested_names': requestedNames.join(','),
+              'tool_setup.resolved_count': customTools.size,
+              'tool_setup.resolved_names': Array.from(customTools.keys()).join(','),
+              'tool_setup.missing_count': customToolsToLoad.length - customTools.size,
+            });
+          }
+        } catch {}
+
+        if (customToolsToLoad.length > 0 && customTools.size === 0) {
+          logger.warn(
+            `[AICheckProvider] All ${customToolsToLoad.length} custom tools failed to resolve! ` +
+              `Requested: ${customToolsToLoad.map(item => (typeof item === 'string' ? item : (item as any).workflow)).join(', ')}. ` +
+              `AI will have no workflow tools available.`
+          );
+        }
+
         // Add schedule tool if enabled (via ai_mcp_servers { tool: 'schedule' } or enable_scheduler)
         if (scheduleToolEnabled) {
           const scheduleTool = getScheduleToolDefinition();
@@ -1337,12 +1399,37 @@ export class AICheckProvider extends CheckProvider {
           } as any;
         }
       } catch (error) {
+        const errMsg = error instanceof Error ? error.message : 'Unknown error';
         logger.error(
-          `[AICheckProvider] Failed to start custom tools SSE server '${customToolsServerName}': ${error instanceof Error ? error.message : 'Unknown error'}`
+          `[AICheckProvider] Failed to start custom tools SSE server '${customToolsServerName}': ${errMsg}`
         );
+        // Emit telemetry for SSE server failure
+        try {
+          const span = trace.getSpan(otContext.active());
+          if (span) {
+            span.addEvent('tool_setup.sse_server_error', {
+              'tool_setup.error': errMsg,
+              'tool_setup.server_name': customToolsServerName || '',
+            });
+          }
+        } catch {}
         // Continue without custom tools
       }
     }
+
+    // Emit final tool setup summary telemetry
+    try {
+      const span = trace.getSpan(otContext.active());
+      if (span) {
+        const finalServerNames = Object.keys(mcpServers);
+        span.addEvent('tool_setup.final', {
+          'tool_setup.final_server_count': finalServerNames.length,
+          'tool_setup.final_server_names': finalServerNames.join(','),
+          'tool_setup.has_custom_tools_server': !!customToolsServer,
+          'tool_setup.tools_disabled': !!config.ai?.disableTools,
+        });
+      }
+    } catch {}
 
     // Pass MCP server config directly to AI service (unless tools are disabled)
     if (Object.keys(mcpServers).length > 0 && !config.ai?.disableTools) {
