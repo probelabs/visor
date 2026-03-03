@@ -15,6 +15,7 @@ import { createSlackOutputAdapter } from './slack-output-adapter';
 import { WorkspaceManager } from '../utils/workspace-manager';
 import { MessageTriggerEvaluator, type MatchedTrigger } from '../scheduler/message-trigger';
 import type { SlackMessageTrigger } from '../types/config';
+import { toSlackMessageTrigger } from '../scheduler/store/types';
 
 type SlackSocketConfig = {
   appToken?: string; // xapp- token
@@ -116,25 +117,7 @@ export class SlackSocketRunner {
       if (store.isInitialized()) {
         const triggers = await store.getActiveTriggersAsync();
         for (const t of triggers) {
-          dbTriggers[`db:${t.id}`] = {
-            channels: t.channels,
-            from: t.fromUsers,
-            from_bots: t.fromBots,
-            contains: t.contains,
-            match: t.matchPattern,
-            threads: t.threads,
-            workflow: t.workflow,
-            inputs: t.inputs,
-            output: t.outputContext
-              ? {
-                  type: t.outputContext.type as 'slack' | 'github' | 'webhook' | 'none',
-                  target: t.outputContext.target,
-                  thread_id: t.outputContext.threadId,
-                }
-              : undefined,
-            description: t.description,
-            enabled: t.enabled,
-          };
+          dbTriggers[`db:${t.id}`] = toSlackMessageTrigger(t);
         }
       }
     } catch (err) {

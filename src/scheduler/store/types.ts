@@ -6,6 +6,7 @@
  * - KnexStoreBackend (Enterprise: PostgreSQL/MySQL with distributed locking)
  */
 import type { Schedule, ScheduleLimits } from '../schedule-store';
+import type { SlackMessageTrigger } from '../../types/config';
 
 /**
  * Persisted message trigger for reactive workflow execution.
@@ -29,6 +30,32 @@ export interface MessageTrigger {
   status: 'active' | 'paused' | 'deleted';
   enabled: boolean;
   createdAt: number;
+}
+
+/**
+ * Convert a persisted MessageTrigger (camelCase DB model) to a SlackMessageTrigger
+ * (snake_case config model) used by MessageTriggerEvaluator.
+ */
+export function toSlackMessageTrigger(t: MessageTrigger): SlackMessageTrigger {
+  return {
+    channels: t.channels,
+    from: t.fromUsers,
+    from_bots: t.fromBots,
+    contains: t.contains,
+    match: t.matchPattern,
+    threads: t.threads,
+    workflow: t.workflow,
+    inputs: t.inputs,
+    output: t.outputContext
+      ? {
+          type: t.outputContext.type as 'slack' | 'github' | 'webhook' | 'none',
+          target: t.outputContext.target,
+          thread_id: t.outputContext.threadId,
+        }
+      : undefined,
+    description: t.description,
+    enabled: t.enabled,
+  };
 }
 
 /**

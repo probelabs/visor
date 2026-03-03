@@ -28,6 +28,11 @@ export interface MatchedTrigger {
  * Evaluates incoming Slack messages against configured on_message triggers.
  * All specified filters must pass (AND). Within `contains`, any keyword match suffices (OR).
  * Omitted filters are not checked (match all).
+ *
+ * Instances are **immutable** — regex patterns are compiled once in the constructor.
+ * When triggers change (config reload, DB mutation), callers must create a new
+ * evaluator instance rather than mutating the existing one. SlackSocketRunner
+ * handles this via {@link initMessageTriggersAsync} which rebuilds the evaluator.
  */
 export class MessageTriggerEvaluator {
   private triggers: Map<string, SlackMessageTrigger>;

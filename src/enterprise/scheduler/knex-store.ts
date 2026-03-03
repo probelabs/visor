@@ -67,6 +67,73 @@ function safeJsonParse<T = unknown>(value: string | null): T | undefined {
   }
 }
 
+/**
+ * Database row shape for message_triggers (snake_case)
+ */
+interface MessageTriggerRow {
+  id: string;
+  creator_id: string;
+  creator_context: string | null;
+  creator_name: string | null;
+  description: string | null;
+  channels: string | null; // JSON array
+  from_users: string | null; // JSON array
+  from_bots: boolean | number;
+  contains: string | null; // JSON array
+  match_pattern: string | null;
+  threads: string;
+  workflow: string;
+  inputs: string | null; // JSON
+  output_context: string | null; // JSON
+  status: string;
+  enabled: boolean | number;
+  created_at: number | string;
+}
+
+function fromTriggerRow(row: MessageTriggerRow): MessageTrigger {
+  return {
+    id: row.id,
+    creatorId: row.creator_id,
+    creatorContext: row.creator_context ?? undefined,
+    creatorName: row.creator_name ?? undefined,
+    description: row.description ?? undefined,
+    channels: safeJsonParse<string[]>(row.channels),
+    fromUsers: safeJsonParse<string[]>(row.from_users),
+    fromBots: row.from_bots === true || row.from_bots === 1,
+    contains: safeJsonParse<string[]>(row.contains),
+    matchPattern: row.match_pattern ?? undefined,
+    threads: row.threads as MessageTrigger['threads'],
+    workflow: row.workflow,
+    inputs: safeJsonParse<Record<string, unknown>>(row.inputs),
+    outputContext: safeJsonParse<MessageTrigger['outputContext']>(row.output_context),
+    status: row.status as MessageTrigger['status'],
+    enabled: row.enabled === true || row.enabled === 1,
+    createdAt: toNum(row.created_at)!,
+  };
+}
+
+function toTriggerInsertRow(trigger: MessageTrigger): Record<string, unknown> {
+  return {
+    id: trigger.id,
+    creator_id: trigger.creatorId,
+    creator_context: trigger.creatorContext ?? null,
+    creator_name: trigger.creatorName ?? null,
+    description: trigger.description ?? null,
+    channels: trigger.channels ? JSON.stringify(trigger.channels) : null,
+    from_users: trigger.fromUsers ? JSON.stringify(trigger.fromUsers) : null,
+    from_bots: trigger.fromBots,
+    contains: trigger.contains ? JSON.stringify(trigger.contains) : null,
+    match_pattern: trigger.matchPattern ?? null,
+    threads: trigger.threads,
+    workflow: trigger.workflow,
+    inputs: trigger.inputs ? JSON.stringify(trigger.inputs) : null,
+    output_context: trigger.outputContext ? JSON.stringify(trigger.outputContext) : null,
+    status: trigger.status,
+    enabled: trigger.enabled,
+    created_at: trigger.createdAt,
+  };
+}
+
 function fromDbRow(row: ScheduleRow): Schedule {
   return {
     id: row.id,
@@ -287,6 +354,30 @@ export class KnexStoreBackend implements ScheduleStoreBackend {
         table.text('previous_response');
 
         table.index(['status', 'next_run_at']);
+      });
+    }
+
+    // Create message_triggers table
+    const triggersExist = await knex.schema.hasTable('message_triggers');
+    if (!triggersExist) {
+      await knex.schema.createTable('message_triggers', table => {
+        table.string('id', 36).primary();
+        table.string('creator_id', 255).notNullable().index();
+        table.string('creator_context', 255);
+        table.string('creator_name', 255);
+        table.text('description');
+        table.text('channels'); // JSON array
+        table.text('from_users'); // JSON array
+        table.boolean('from_bots').notNullable().defaultTo(false);
+        table.text('contains'); // JSON array
+        table.text('match_pattern');
+        table.string('threads', 20).notNullable().defaultTo('any');
+        table.string('workflow', 255).notNullable();
+        table.text('inputs'); // JSON
+        table.text('output_context'); // JSON
+        table.string('status', 20).notNullable().defaultTo('active').index();
+        table.boolean('enabled').notNullable().defaultTo(true);
+        table.bigInteger('created_at').notNullable();
       });
     }
 
@@ -550,32 +641,69 @@ export class KnexStoreBackend implements ScheduleStoreBackend {
     // No-op for server-based backends
   }
 
-  // --- Message Trigger CRUD (stubs — full Knex implementation TBD) ---
+  // --- Message Trigger CRUD ---
 
-  async createTrigger(_trigger: Omit<MessageTrigger, 'id' | 'createdAt'>): Promise<MessageTrigger> {
-    throw new Error('[KnexStore] Message triggers not yet implemented for Knex backend');
+  async createTrigger(trigger: Omit<MessageTrigger, 'id' | 'createdAt'>): Promise<MessageTrigger> {
+    const knex = this.getKnex();
+    const newTrigger: MessageTrigger = {
+      ...trigger,
+      id: uuidv4(),
+      createdAt: Date.now(),
+    };
+    await knex('message_triggers').insert(toTriggerInsertRow(newTrigger));
+    logger.info(`[KnexStore] Created trigger ${newTrigger.id} for user ${newTrigger.creatorId}`);
+    return newTrigger;
   }
 
-  async getTrigger(_id: string): Promise<MessageTrigger | undefined> {
-    throw new Error('[KnexStore] Message triggers not yet implemented for Knex backend');
+  async getTrigger(id: string): Promise<MessageTrigger | undefined> {
+    const knex = this.getKnex();
+    const row = await knex('message_triggers').where('id', id).first();
+    return row ? fromTriggerRow(row as MessageTriggerRow) : undefined;
   }
 
   async updateTrigger(
-    _id: string,
-    _patch: Partial<MessageTrigger>
+    id: string,
+    patch: Partial<MessageTrigger>
   ): Promise<MessageTrigger | undefined> {
-    throw new Error('[KnexStore] Message triggers not yet implemented for Knex backend');
+    const knex = this.getKnex();
+    const existing = await knex('message_triggers').where('id', id).first();
+    if (!existing) return undefined;
+
+    const current = fromTriggerRow(existing as MessageTriggerRow);
+    const updated: MessageTrigger = {
+      ...current,
+      ...patch,
+      id: current.id,
+      createdAt: current.createdAt,
+    };
+    const row = toTriggerInsertRow(updated);
+    delete (row as Record<string, unknown>).id;
+
+    await knex('message_triggers').where('id', id).update(row);
+    return updated;
   }
 
-  async deleteTrigger(_id: string): Promise<boolean> {
-    throw new Error('[KnexStore] Message triggers not yet implemented for Knex backend');
+  async deleteTrigger(id: string): Promise<boolean> {
+    const knex = this.getKnex();
+    const deleted = await knex('message_triggers').where('id', id).del();
+    if (deleted > 0) {
+      logger.info(`[KnexStore] Deleted trigger ${id}`);
+      return true;
+    }
+    return false;
   }
 
-  async getTriggersByCreator(_creatorId: string): Promise<MessageTrigger[]> {
-    throw new Error('[KnexStore] Message triggers not yet implemented for Knex backend');
+  async getTriggersByCreator(creatorId: string): Promise<MessageTrigger[]> {
+    const knex = this.getKnex();
+    const rows = await knex('message_triggers').where('creator_id', creatorId);
+    return rows.map((r: MessageTriggerRow) => fromTriggerRow(r));
   }
 
   async getActiveTriggers(): Promise<MessageTrigger[]> {
-    throw new Error('[KnexStore] Message triggers not yet implemented for Knex backend');
+    const knex = this.getKnex();
+    const rows = await knex('message_triggers')
+      .where('status', 'active')
+      .where('enabled', this.driver === 'mssql' ? 1 : true);
+    return rows.map((r: MessageTriggerRow) => fromTriggerRow(r));
   }
 }
