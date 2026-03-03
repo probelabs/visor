@@ -760,7 +760,7 @@ var require_package = __commonJS({
         "@opentelemetry/sdk-node": "^0.203.0",
         "@opentelemetry/sdk-trace-base": "^1.30.1",
         "@opentelemetry/semantic-conventions": "^1.30.1",
-        "@probelabs/probe": "^0.6.0-rc263",
+        "@probelabs/probe": "^0.6.0-rc264",
         "@types/commander": "^2.12.0",
         "@types/uuid": "^10.0.0",
         acorn: "^8.16.0",
@@ -11026,6 +11026,16 @@ var init_workflow_registry = __esm({
        */
       async loadWorkflowContent(source, basePath) {
         const baseIsUrl = basePath?.startsWith("http://") || basePath?.startsWith("https://");
+        if (source.startsWith("visor://") || source.startsWith("visor-ee://")) {
+          const relativePath = source.replace(/^visor(?:-ee)?:\/\//, "");
+          const defaultsDir = path10.resolve(__dirname, "..", "defaults");
+          const filePath2 = path10.resolve(defaultsDir, relativePath);
+          if (!filePath2.startsWith(defaultsDir + path10.sep)) {
+            throw new Error(`Invalid visor:// path: resolved path escapes defaults directory`);
+          }
+          const content2 = await import_fs3.promises.readFile(filePath2, "utf-8");
+          return { content: content2, resolvedSource: filePath2, importBasePath: path10.dirname(filePath2) };
+        }
         if (source.startsWith("http://") || source.startsWith("https://")) {
           const response = await fetch(source);
           if (!response.ok) {
@@ -53346,6 +53356,8 @@ var init_workspace_manager = __esm({
               } catch {
               }
               await this.createMainProjectWorktree(mainProjectPath);
+            } else {
+              await this.refreshWorktreeToUpstream(mainProjectPath);
             }
           } else {
             await this.createMainProjectWorktree(mainProjectPath);
@@ -53541,33 +53553,143 @@ var init_workspace_manager = __esm({
         return cleaned;
       }
       /**
-       * Create worktree for the main project
-       *
-       * visor-disable: architecture - Not using WorktreeManager here because:
-       * 1. WorktreeManager expects remote URLs and clones to bare repos first
-       * 2. This operates on the LOCAL repo we're already in (no cloning needed)
-       * 3. Adding a "local mode" to WorktreeManager would add complexity for minimal benefit
-       * The git commands here are simpler (just rev-parse + worktree add) vs WorktreeManager's
-       * full clone/bare-repo/fetch/worktree pipeline.
+       * visor-disable: architecture - The helpers below (resolveUpstreamRef,
+       * fetchAndResolveUpstream, resetAndCleanWorktree, refreshWorktreeToUpstream)
+       * are NOT duplicates of WorktreeManager's fetchRef/getCommitShaForRef/cleanWorktree.
+       * WorktreeManager operates on BARE repo caches cloned from remote URLs, while
+       * WorkspaceManager operates on the LOCAL working repo the user already has checked out.
+       * The git commands differ (e.g. `fetch origin --prune` vs `fetch origin <ref>:<ref>`)
+       * and sharing code would require adding a "local mode" to WorktreeManager for no benefit.
+       */
+      /**
+       * Resolve the upstream default branch ref.
+       * Tries origin/HEAD (symbolic), then origin/main, then origin/master.
+       * Falls back to local HEAD if no remote is configured.
+       */
+      async resolveUpstreamRef() {
+        const esc = shellEscape(this.originalPath);
+        const symbolicResult = await commandExecutor.execute(
+          `git -C ${esc} symbolic-ref refs/remotes/origin/HEAD 2>/dev/null`,
+          { timeout: 1e4 }
+        );
+        if (symbolicResult.exitCode === 0 && symbolicResult.stdout.trim()) {
+          const ref = symbolicResult.stdout.trim().replace("refs/remotes/", "");
+          logger.debug(`[Workspace] Resolved upstream default branch via origin/HEAD: ${ref}`);
+          return ref;
+        }
+        const mainResult = await commandExecutor.execute(
+          `git -C ${esc} rev-parse --verify origin/main 2>/dev/null`,
+          { timeout: 1e4 }
+        );
+        if (mainResult.exitCode === 0) {
+          logger.debug(`[Workspace] Using origin/main as upstream ref`);
+          return "origin/main";
+        }
+        const masterResult = await commandExecutor.execute(
+          `git -C ${esc} rev-parse --verify origin/master 2>/dev/null`,
+          { timeout: 1e4 }
+        );
+        if (masterResult.exitCode === 0) {
+          logger.debug(`[Workspace] Using origin/master as upstream ref`);
+          return "origin/master";
+        }
+        logger.warn(`[Workspace] No upstream remote found, falling back to local HEAD`);
+        return "HEAD";
+      }
+      /**
+       * Fetch latest from origin, resolve the upstream default branch, and return
+       * both the ref name and the resolved commit SHA.
+       */
+      async fetchAndResolveUpstream() {
+        logger.debug(`[Workspace] Fetching latest from origin`);
+        const fetchResult = await commandExecutor.execute(
+          `git -C ${shellEscape(this.originalPath)} fetch origin --prune 2>&1`,
+          { timeout: 12e4 }
+        );
+        if (fetchResult.exitCode !== 0) {
+          logger.warn(`[Workspace] fetch origin failed (will use cached refs): ${fetchResult.stderr}`);
+        }
+        const upstreamRef = await this.resolveUpstreamRef();
+        const shaResult = await commandExecutor.execute(
+          `git -C ${shellEscape(this.originalPath)} rev-parse ${shellEscape(upstreamRef)}`,
+          { timeout: 1e4 }
+        );
+        if (shaResult.exitCode === 0) {
+          return { upstreamRef, targetSha: shaResult.stdout.trim() };
+        }
+        logger.warn(
+          `[Workspace] Could not resolve ${upstreamRef} (${shaResult.stderr.trim()}), falling back to HEAD`
+        );
+        const headResult = await commandExecutor.execute(
+          `git -C ${shellEscape(this.originalPath)} rev-parse HEAD`,
+          { timeout: 1e4 }
+        );
+        if (headResult.exitCode !== 0) {
+          throw new Error(`Repository has no commits \u2014 cannot create worktree: ${headResult.stderr}`);
+        }
+        return { upstreamRef: "HEAD", targetSha: headResult.stdout.trim() };
+      }
+      /**
+       * Reset a worktree to a specific commit and clean all modifications.
+       */
+      async resetAndCleanWorktree(worktreePath, targetSha) {
+        const escapedPath = shellEscape(worktreePath);
+        const escapedSha = shellEscape(targetSha);
+        const resetResult = await commandExecutor.execute(
+          `git -C ${escapedPath} reset --hard ${escapedSha}`,
+          { timeout: 1e4 }
+        );
+        if (resetResult.exitCode !== 0) {
+          logger.warn(`[Workspace] reset --hard failed: ${resetResult.stderr}`);
+        }
+        const cleanResult = await commandExecutor.execute(`git -C ${escapedPath} clean -fdx`, {
+          timeout: 3e4
+        });
+        if (cleanResult.exitCode !== 0) {
+          logger.warn(`[Workspace] clean -fdx failed: ${cleanResult.stderr}`);
+        }
+      }
+      /**
+       * Refresh an existing worktree to the latest upstream default branch
+       * and ensure it has no modified or untracked files.
+       */
+      async refreshWorktreeToUpstream(worktreePath) {
+        logger.info(`[Workspace] Refreshing worktree to latest upstream: ${worktreePath}`);
+        try {
+          const { upstreamRef, targetSha } = await this.fetchAndResolveUpstream();
+          const checkoutResult = await commandExecutor.execute(
+            `git -C ${shellEscape(worktreePath)} checkout --detach ${shellEscape(targetSha)}`,
+            { timeout: 3e4 }
+          );
+          if (checkoutResult.exitCode !== 0) {
+            logger.warn(
+              `[Workspace] checkout --detach failed (worktree stays at current commit): ${checkoutResult.stderr}`
+            );
+            await this.resetAndCleanWorktree(worktreePath, "HEAD");
+            return;
+          }
+          await this.resetAndCleanWorktree(worktreePath, targetSha);
+          logger.info(`[Workspace] Worktree updated to ${upstreamRef} (${targetSha.slice(0, 8)})`);
+        } catch (error) {
+          logger.warn(`[Workspace] Failed to refresh worktree (continuing with stale state): ${error}`);
+        }
+      }
+      /**
+       * Create worktree for the main project.
+       * See visor-disable comment above resolveUpstreamRef for why this doesn't use WorktreeManager.
        */
       async createMainProjectWorktree(targetPath) {
         logger.debug(`Creating main project worktree: ${targetPath}`);
-        const headResult = await commandExecutor.execute(
-          `git -C ${shellEscape(this.originalPath)} rev-parse HEAD`,
-          {
-            timeout: 1e4
-          }
-        );
-        if (headResult.exitCode !== 0) {
-          throw new Error(`Failed to get HEAD: ${headResult.stderr}`);
-        }
-        const headRef = headResult.stdout.trim();
-        const createCmd = `git -C ${shellEscape(this.originalPath)} worktree add --detach ${shellEscape(targetPath)} ${shellEscape(headRef)}`;
+        const { upstreamRef, targetSha } = await this.fetchAndResolveUpstream();
+        const createCmd = `git -C ${shellEscape(this.originalPath)} worktree add --detach ${shellEscape(targetPath)} ${shellEscape(targetSha)}`;
         const result = await commandExecutor.execute(createCmd, { timeout: 6e4 });
         if (result.exitCode !== 0) {
           throw new Error(`Failed to create main project worktree: ${result.stderr}`);
         }
-        logger.debug(`Created main project worktree at ${targetPath}`);
+        await this.resetAndCleanWorktree(targetPath, targetSha);
+        logger.info(
+          `Created main project worktree at ${targetPath} (${upstreamRef} -> ${targetSha.slice(0, 8)})`
+        );
       }
       /**
        * Remove main project worktree
@@ -54776,6 +54898,7 @@ var init_github_frontend = __esm({
       // Minimum delay between updates (public for testing)
       // Cache of created GitHub comment IDs per group to handle API eventual consistency
       createdCommentGithubIds = /* @__PURE__ */ new Map();
+      _stopped = false;
       start(ctx) {
         const log2 = ctx.logger;
         const bus = ctx.eventBus;
@@ -54920,9 +55043,19 @@ var init_github_frontend = __esm({
           })
         );
       }
-      stop() {
+      async stop() {
+        this._stopped = true;
         for (const s of this.subs) s.unsubscribe();
         this.subs = [];
+        if (this._timer) {
+          clearTimeout(this._timer);
+          this._timer = null;
+        }
+        this._pendingIds.clear();
+        const pending = Array.from(this.updateLocks.values());
+        if (pending.length > 0) {
+          await Promise.allSettled(pending);
+        }
       }
       async buildFullBody(ctx, group) {
         const header = this.renderThreadHeader(ctx, group);
@@ -55000,6 +55133,7 @@ ${end}`);
        */
       async performGroupedCommentUpdate(ctx, comments, group, changedIds) {
         try {
+          if (this._stopped) return;
           if (!ctx.run.repo || !ctx.run.pr) return;
           const config = ctx.config;
           const prCommentEnabled = config?.output?.pr_comment?.enabled !== false;
