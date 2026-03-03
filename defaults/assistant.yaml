@@ -14,7 +14,7 @@
 #
 # Usage with unified skills (recommended):
 #   imports:
-#     - visor://workflows/assistant.yaml
+#     - visor://assistant.yaml
 #
 #   checks:
 #     chat:

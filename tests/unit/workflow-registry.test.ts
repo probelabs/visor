@@ -511,12 +511,12 @@ steps:
 `;
       (fs.promises.readFile as jest.Mock).mockResolvedValue(workflowYaml);
 
-      const results = await registry.import('visor://workflows/assistant.yaml');
+      const results = await registry.import('visor://assistant.yaml');
 
       expect(results).toHaveLength(1);
       expect(results[0].valid).toBe(true);
       expect(fs.promises.readFile).toHaveBeenCalledWith(
-        expect.stringContaining(path.join('workflows', 'assistant.yaml')),
+        expect.stringContaining(path.join('defaults', 'assistant.yaml')),
         'utf-8'
       );
     });
@@ -543,7 +543,7 @@ steps:
 
       expect(results).toHaveLength(1);
       expect(results[0].valid).toBe(false);
-      expect(results[0].errors?.[0].message).toContain('escapes package root');
+      expect(results[0].errors?.[0].message).toContain('escapes defaults directory');
     });
   });
 

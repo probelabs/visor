@@ -7,7 +7,7 @@
 #
 # Usage:
 #   imports:
-#     - visor://workflows/intent-router.yaml
+#     - visor://intent-router.yaml
 #
 #   checks:
 #     route-intent:
