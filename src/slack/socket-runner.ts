@@ -9,9 +9,12 @@ import { RateLimiter, type RateLimitConfig } from './rate-limiter';
 import type { SlackBotConfig } from '../types/bot';
 import { withActiveSpan, getVisorRunAttributes } from '../telemetry/trace-helpers';
 import { Scheduler } from '../scheduler/scheduler';
+import { ScheduleStore } from '../scheduler/schedule-store';
 import { createHash } from 'crypto';
 import { createSlackOutputAdapter } from './slack-output-adapter';
 import { WorkspaceManager } from '../utils/workspace-manager';
+import { MessageTriggerEvaluator, type MatchedTrigger } from '../scheduler/message-trigger';
+import type { SlackMessageTrigger } from '../types/config';
 
 type SlackSocketConfig = {
   appToken?: string; // xapp- token
@@ -51,6 +54,7 @@ export class SlackSocketRunner {
   private adapter?: SlackAdapter;
   private retryCount = 0;
   private genericScheduler?: Scheduler;
+  private messageTriggerEvaluator?: MessageTriggerEvaluator;
 
   constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: SlackSocketConfig) {
     const app = opts.appToken || process.env.SLACK_APP_TOKEN || '';
@@ -71,11 +75,84 @@ export class SlackSocketRunner {
       process.env.VISOR_SLACK_ALLOW_GUESTS === 'true';
     this.engine = engine;
     this.cfg = cfg;
+    this.initMessageTriggersFromConfig();
   }
 
   /** Hot-swap the config used for future requests (does not affect in-flight ones). */
   updateConfig(cfg: VisorConfig): void {
     this.cfg = cfg;
+    this.initMessageTriggersAsync().catch(err => {
+      logger.warn(
+        `[SlackSocket] Failed to reload message triggers: ${err instanceof Error ? err.message : err}`
+      );
+    });
+  }
+
+  /**
+   * Initialize message triggers from config only (sync, used in constructor).
+   * Does not include DB triggers since the store may not be initialized yet.
+   */
+  private initMessageTriggersFromConfig(): void {
+    const triggers = this.cfg.scheduler?.on_message;
+    if (triggers && Object.keys(triggers).length > 0) {
+      this.messageTriggerEvaluator = new MessageTriggerEvaluator(triggers);
+      logger.debug(
+        `[SlackSocket] Message triggers loaded (config only): ${Object.keys(triggers).length} trigger(s)`
+      );
+    } else {
+      this.messageTriggerEvaluator = undefined;
+    }
+  }
+
+  /**
+   * Initialize or rebuild the message trigger evaluator by merging config + DB triggers.
+   */
+  private async initMessageTriggersAsync(): Promise<void> {
+    const configTriggers = this.cfg.scheduler?.on_message || {};
+    const dbTriggers: Record<string, SlackMessageTrigger> = {};
+
+    try {
+      const store = ScheduleStore.getInstance();
+      if (store.isInitialized()) {
+        const triggers = await store.getActiveTriggersAsync();
+        for (const t of triggers) {
+          dbTriggers[`db:${t.id}`] = {
+            channels: t.channels,
+            from: t.fromUsers,
+            from_bots: t.fromBots,
+            contains: t.contains,
+            match: t.matchPattern,
+            threads: t.threads,
+            workflow: t.workflow,
+            inputs: t.inputs,
+            output: t.outputContext
+              ? {
+                  type: t.outputContext.type as 'slack' | 'github' | 'webhook' | 'none',
+                  target: t.outputContext.target,
+                  thread_id: t.outputContext.threadId,
+                }
+              : undefined,
+            description: t.description,
+            enabled: t.enabled,
+          };
+        }
+      }
+    } catch (err) {
+      logger.warn(
+        `[SlackSocket] Failed to load DB triggers (using config only): ${err instanceof Error ? err.message : err}`
+      );
+    }
+
+    const all = { ...configTriggers, ...dbTriggers };
+
+    if (Object.keys(all).length > 0) {
+      this.messageTriggerEvaluator = new MessageTriggerEvaluator(all);
+      logger.debug(
+        `[SlackSocket] Message triggers loaded: ${Object.keys(configTriggers).length} config + ${Object.keys(dbTriggers).length} DB = ${Object.keys(all).length} total`
+      );
+    } else {
+      this.messageTriggerEvaluator = undefined;
+    }
   }
 
   /**
@@ -159,6 +236,18 @@ export class SlackSocketRunner {
 
         await this.genericScheduler.start();
         logger.info('[SlackSocket] Scheduler enabled');
+
+        // Register callback to rebuild triggers when they change via the schedule tool
+        ScheduleStore.setTriggersChangedCallback(() => {
+          this.initMessageTriggersAsync().catch(err => {
+            logger.warn(
+              `[SlackSocket] Failed to reload triggers after change: ${err instanceof Error ? err.message : err}`
+            );
+          });
+        });
+
+        // Now that the store is initialized, load DB triggers too
+        await this.initMessageTriggersAsync();
       }
     } catch (e) {
       logger.warn(`[SlackSocket] Scheduler init failed: ${e instanceof Error ? e.message : e}`);
@@ -332,8 +421,9 @@ export class SlackSocketRunner {
       }
       return;
     }
-    // Ignore bot messages unless explicitly allowed
-    if (subtype === 'bot_message' && !this.allowBotMessages) {
+    // Ignore bot messages unless explicitly allowed OR message triggers are configured
+    // (message triggers have their own from_bots filter per trigger)
+    if (subtype === 'bot_message' && !this.allowBotMessages && !this.messageTriggerEvaluator) {
       if (process.env.VISOR_DEBUG === 'true') {
         logger.debug('[SlackSocket] Dropping bot_message (disabled)');
       }
@@ -370,6 +460,42 @@ export class SlackSocketRunner {
           ` user=${user}`
       );
     } catch {}
+
+    // Evaluate message triggers (before mention gate so non-@mention messages can trigger workflows)
+    if (this.messageTriggerEvaluator) {
+      try {
+        const matches = this.messageTriggerEvaluator.evaluate({
+          channel: String(ev.channel || ''),
+          user: String(ev.user || ''),
+          text: String(ev.text || ''),
+          isBot: subtype === 'bot_message',
+          threadTs: ev.thread_ts ? String(ev.thread_ts) : undefined,
+          ts: String(ev.ts || ev.event_ts || ''),
+        });
+        for (const match of matches) {
+          // Dedup: use trigger-specific key
+          const triggerKey = `trigger:${match.id}:${String(ev.channel || '-')}:${String(ev.ts || ev.event_ts || '-')}`;
+          if (!this.processedKeys.has(triggerKey)) {
+            this.processedKeys.set(triggerKey, Date.now());
+            this.dispatchMessageTrigger(match, env.payload).catch(err => {
+              logger.error(
+                `[SlackSocket] Message trigger dispatch failed (${match.id}): ${err instanceof Error ? err.message : err}`
+              );
+            });
+          }
+        }
+      } catch (err) {
+        logger.warn(
+          `[SlackSocket] Message trigger evaluation error: ${err instanceof Error ? err.message : err}`
+        );
+      }
+    }
+
+    // If this is a bot message that was only allowed through for trigger evaluation,
+    // do not proceed to the mention-based dispatch path
+    if (subtype === 'bot_message' && !this.allowBotMessages) {
+      return;
+    }
 
     // Gating: mentions / DM vs channel
     const channelId = String(ev.channel || '');
@@ -622,6 +748,144 @@ export class SlackSocketRunner {
         `[SlackSocket] Engine execution failed: ${e instanceof Error ? e.message : String(e)}`
       );
     }
+  }
+
+  /**
+   * Dispatch a matched message trigger as an asynchronous workflow execution.
+   */
+  private async dispatchMessageTrigger(match: MatchedTrigger, payload: any): Promise<void> {
+    const { id, trigger } = match;
+    const ev = payload.event || {};
+    const channel = String(ev.channel || '');
+    const ts = String(ev.ts || ev.event_ts || '');
+    const threadTs = ev.thread_ts ? String(ev.thread_ts) : undefined;
+    const user = String(ev.user || 'unknown');
+
+    logger.info(
+      `[SlackSocket] Message trigger '${id}' matched → workflow="${trigger.workflow}" channel=${channel} ts=${ts}`
+    );
+
+    // Verify workflow exists
+    const allChecks = Object.keys(this.cfg.checks || {});
+    if (!allChecks.includes(trigger.workflow)) {
+      logger.error(
+        `[SlackSocket] Message trigger '${id}': workflow "${trigger.workflow}" not found in configuration`
+      );
+      return;
+    }
+
+    // Build conversation context (for thread replies, fetch full thread)
+    let conversationContext: any = undefined;
+    try {
+      const isThreadReply = !!threadTs && threadTs !== ts;
+      if (isThreadReply) {
+        const adapter = this.getSlackAdapter();
+        if (adapter && channel && threadTs) {
+          const cleanedText = String(ev.text || '')
+            .replace(/<@[A-Z0-9]+>/g, '')
+            .trim();
+          conversationContext = await adapter.fetchConversation(channel, threadTs, {
+            ts,
+            user,
+            text: cleanedText || String(ev.text || ''),
+            timestamp: Date.now(),
+            files: Array.isArray(ev.files) ? ev.files : undefined,
+          });
+        }
+      }
+    } catch (err) {
+      logger.warn(
+        `[SlackSocket] Message trigger '${id}': conversation context fetch failed: ${err instanceof Error ? err.message : err}`
+      );
+    }
+
+    // Build synthetic webhook payload
+    const triggerPayload = {
+      ...payload,
+      trigger: {
+        id,
+        type: 'on_message',
+        workflow: trigger.workflow,
+      },
+      ...(conversationContext ? { slack_conversation: conversationContext } : {}),
+    };
+
+    const webhookData = new Map<string, unknown>();
+    webhookData.set(this.endpoint, triggerPayload);
+
+    // Clone config for this run with Slack frontend
+    const cfgForRun: VisorConfig = (() => {
+      try {
+        const cfg = JSON.parse(JSON.stringify(this.cfg));
+        const fronts = Array.isArray(cfg.frontends) ? cfg.frontends : [];
+        if (!fronts.some((f: any) => f && f.name === 'slack')) fronts.push({ name: 'slack' });
+        cfg.frontends = fronts;
+        return cfg;
+      } catch {
+        return this.cfg;
+      }
+    })();
+
+    // Derive stable workspace name from thread identity
+    const wsThreadTs = threadTs || ts;
+    if (channel && wsThreadTs) {
+      const hash = createHash('sha256')
+        .update(`${channel}:${wsThreadTs}`)
+        .digest('hex')
+        .slice(0, 8);
+      const workspaceName = `slack-trigger-${hash}`;
+      if (!(cfgForRun as any).workspace) {
+        (cfgForRun as any).workspace = {};
+      }
+      (cfgForRun as any).workspace.name = workspaceName;
+      (cfgForRun as any).workspace.cleanup_on_exit = false;
+    }
+
+    // Create a dedicated engine instance for this trigger
+    const runEngine = new StateMachineExecutionEngine();
+    await this.ensureClient();
+    try {
+      const parentCtx: any = (this.engine as any).getExecutionContext?.() || {};
+      const prevCtx: any = (runEngine as any).getExecutionContext?.() || {};
+      (runEngine as any).setExecutionContext?.({
+        ...parentCtx,
+        ...prevCtx,
+        slack: this.client || parentCtx.slack,
+        slackClient: this.client || parentCtx.slackClient,
+      });
+    } catch {}
+
+    // Refresh GitHub credentials
+    try {
+      const { refreshGitHubCredentials } = await import('../github-auth');
+      await refreshGitHubCredentials();
+    } catch {}
+
+    await withActiveSpan(
+      'visor.run',
+      {
+        ...getVisorRunAttributes(),
+        'visor.run.source': 'slack_message_trigger',
+        'visor.trigger.id': id,
+        'visor.trigger.workflow': trigger.workflow,
+        'slack.channel_id': channel,
+        'slack.thread_ts': threadTs || ts,
+        'slack.user_id': user,
+      },
+      async () => {
+        await runEngine.executeChecks({
+          checks: [trigger.workflow],
+          showDetails: true,
+          outputFormat: 'json',
+          config: cfgForRun,
+          webhookContext: { webhookData, eventType: 'slack_message' },
+          debug: process.env.VISOR_DEBUG === 'true',
+          inputs: trigger.inputs,
+        } as any);
+      }
+    );
+
+    logger.info(`[SlackSocket] Message trigger '${id}' workflow completed`);
   }
 
   /**

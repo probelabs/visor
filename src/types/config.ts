@@ -228,7 +228,8 @@ export type EventTrigger =
   | 'issue_comment'
   | 'manual'
   | 'schedule'
-  | 'webhook_received';
+  | 'webhook_received'
+  | 'slack_message';
 
 /**
  * Valid output formats
@@ -1295,6 +1296,42 @@ export interface SandboxDefaults {
 }
 
 /**
+ * Slack message trigger for reactive workflow execution
+ * Triggers workflows based on Slack messages matching configured filters
+ */
+export interface SlackMessageTrigger {
+  /** Channel IDs to monitor (supports wildcard suffix, e.g., "CENG*") */
+  channels?: string[];
+  /** Only trigger on messages from these user IDs */
+  from?: string[];
+  /** Allow bot messages to trigger (default: false) */
+  from_bots?: boolean;
+  /** Keyword match - any keyword triggers (case-insensitive OR) */
+  contains?: string[];
+  /** Regex pattern to match against message text */
+  match?: string;
+  /** Thread scope filter (default: 'any') */
+  threads?: 'root_only' | 'thread_only' | 'any';
+  /** Workflow/check ID to execute */
+  workflow: string;
+  /** Optional workflow inputs */
+  inputs?: Record<string, unknown>;
+  /** Output destination configuration */
+  output?: {
+    /** Output type: slack, github, webhook, or none */
+    type: 'slack' | 'github' | 'webhook' | 'none';
+    /** Target (channel name, repo, URL) */
+    target?: string;
+    /** Thread ID for threaded outputs */
+    thread_id?: string;
+  };
+  /** Description for logging/display */
+  description?: string;
+  /** Enable/disable this trigger (default: true) */
+  enabled?: boolean;
+}
+
+/**
  * Static cron job defined in YAML configuration
  * These are always executed by the scheduler daemon
  */
@@ -1431,6 +1468,8 @@ export interface SchedulerConfig {
   permissions?: SchedulerPermissionsConfig;
   /** Static cron jobs defined in configuration (always executed) */
   cron?: Record<string, StaticCronJob>;
+  /** Slack message triggers for reactive workflow execution */
+  on_message?: Record<string, SlackMessageTrigger>;
 }
 
 /**

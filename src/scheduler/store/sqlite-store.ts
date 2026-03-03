@@ -12,7 +12,7 @@ import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../../logger';
 import type { Schedule, ScheduleLimits } from '../schedule-store';
-import type { ScheduleStoreBackend, ScheduleStoreStats } from './types';
+import type { ScheduleStoreBackend, ScheduleStoreStats, MessageTrigger } from './types';
 
 // Type declarations for better-sqlite3 (avoid importing the module at compile time)
 interface BetterSqliteDatabase {
@@ -120,6 +120,73 @@ function fromDbRow(row: ScheduleRow): Schedule {
 }
 
 /**
+ * Database row shape for message triggers
+ */
+interface MessageTriggerRow {
+  id: string;
+  creator_id: string;
+  creator_context: string | null;
+  creator_name: string | null;
+  description: string | null;
+  channels: string | null; // JSON array
+  from_users: string | null; // JSON array
+  from_bots: number; // SQLite boolean: 0/1
+  contains: string | null; // JSON array
+  match_pattern: string | null;
+  threads: string;
+  workflow: string;
+  inputs: string | null; // JSON
+  output_context: string | null; // JSON
+  status: string;
+  enabled: number; // SQLite boolean: 0/1
+  created_at: number;
+}
+
+function toTriggerRow(trigger: MessageTrigger): MessageTriggerRow {
+  return {
+    id: trigger.id,
+    creator_id: trigger.creatorId,
+    creator_context: trigger.creatorContext ?? null,
+    creator_name: trigger.creatorName ?? null,
+    description: trigger.description ?? null,
+    channels: trigger.channels ? JSON.stringify(trigger.channels) : null,
+    from_users: trigger.fromUsers ? JSON.stringify(trigger.fromUsers) : null,
+    from_bots: trigger.fromBots ? 1 : 0,
+    contains: trigger.contains ? JSON.stringify(trigger.contains) : null,
+    match_pattern: trigger.matchPattern ?? null,
+    threads: trigger.threads,
+    workflow: trigger.workflow,
+    inputs: trigger.inputs ? JSON.stringify(trigger.inputs) : null,
+    output_context: trigger.outputContext ? JSON.stringify(trigger.outputContext) : null,
+    status: trigger.status,
+    enabled: trigger.enabled ? 1 : 0,
+    created_at: trigger.createdAt,
+  };
+}
+
+function fromTriggerRow(row: MessageTriggerRow): MessageTrigger {
+  return {
+    id: row.id,
+    creatorId: row.creator_id,
+    creatorContext: row.creator_context ?? undefined,
+    creatorName: row.creator_name ?? undefined,
+    description: row.description ?? undefined,
+    channels: safeJsonParse<string[]>(row.channels),
+    fromUsers: safeJsonParse<string[]>(row.from_users),
+    fromBots: row.from_bots === 1,
+    contains: safeJsonParse<string[]>(row.contains),
+    matchPattern: row.match_pattern ?? undefined,
+    threads: row.threads as MessageTrigger['threads'],
+    workflow: row.workflow,
+    inputs: safeJsonParse<Record<string, unknown>>(row.inputs),
+    outputContext: safeJsonParse<MessageTrigger['outputContext']>(row.output_context),
+    status: row.status as MessageTrigger['status'],
+    enabled: row.enabled === 1,
+    createdAt: row.created_at,
+  };
+}
+
+/**
  * SQLite implementation of ScheduleStoreBackend
  */
 export class SqliteStoreBackend implements ScheduleStoreBackend {
@@ -223,6 +290,32 @@ export class SqliteStoreBackend implements ScheduleStoreBackend {
         acquired_at BIGINT       NOT NULL,
         expires_at  BIGINT       NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS message_triggers (
+        id              VARCHAR(36)  PRIMARY KEY,
+        creator_id      VARCHAR(255) NOT NULL,
+        creator_context VARCHAR(255),
+        creator_name    VARCHAR(255),
+        description     TEXT,
+        channels        TEXT,
+        from_users      TEXT,
+        from_bots       BOOLEAN      NOT NULL DEFAULT 0,
+        contains        TEXT,
+        match_pattern   TEXT,
+        threads         VARCHAR(20)  NOT NULL DEFAULT 'any',
+        workflow        VARCHAR(255) NOT NULL,
+        inputs          TEXT,
+        output_context  TEXT,
+        status          VARCHAR(20)  NOT NULL DEFAULT 'active',
+        enabled         BOOLEAN      NOT NULL DEFAULT 1,
+        created_at      BIGINT       NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_message_triggers_creator
+        ON message_triggers(creator_id);
+
+      CREATE INDEX IF NOT EXISTS idx_message_triggers_status
+        ON message_triggers(status);
     `);
   }
 
@@ -586,5 +679,140 @@ export class SqliteStoreBackend implements ScheduleStoreBackend {
 
   async flush(): Promise<void> {
     // No-op for SQLite — writes are synchronous
+  }
+
+  // --- Message Triggers ---
+
+  async createTrigger(trigger: Omit<MessageTrigger, 'id' | 'createdAt'>): Promise<MessageTrigger> {
+    const db = this.getDb();
+
+    const newTrigger: MessageTrigger = {
+      ...trigger,
+      id: uuidv4(),
+      createdAt: Date.now(),
+    };
+
+    const row = toTriggerRow(newTrigger);
+
+    db.prepare(
+      `INSERT INTO message_triggers (
+        id, creator_id, creator_context, creator_name, description,
+        channels, from_users, from_bots, contains, match_pattern,
+        threads, workflow, inputs, output_context,
+        status, enabled, created_at
+      ) VALUES (
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?
+      )`
+    ).run(
+      row.id,
+      row.creator_id,
+      row.creator_context,
+      row.creator_name,
+      row.description,
+      row.channels,
+      row.from_users,
+      row.from_bots,
+      row.contains,
+      row.match_pattern,
+      row.threads,
+      row.workflow,
+      row.inputs,
+      row.output_context,
+      row.status,
+      row.enabled,
+      row.created_at
+    );
+
+    logger.info(
+      `[SqliteStore] Created message trigger ${newTrigger.id} for user ${newTrigger.creatorId}`
+    );
+
+    return newTrigger;
+  }
+
+  async getTrigger(id: string): Promise<MessageTrigger | undefined> {
+    const db = this.getDb();
+    const row = db.prepare('SELECT * FROM message_triggers WHERE id = ?').get(id) as
+      | MessageTriggerRow
+      | undefined;
+    return row ? fromTriggerRow(row) : undefined;
+  }
+
+  async updateTrigger(
+    id: string,
+    patch: Partial<MessageTrigger>
+  ): Promise<MessageTrigger | undefined> {
+    const db = this.getDb();
+
+    const existing = db.prepare('SELECT * FROM message_triggers WHERE id = ?').get(id) as
+      | MessageTriggerRow
+      | undefined;
+    if (!existing) return undefined;
+
+    const current = fromTriggerRow(existing);
+    const updated: MessageTrigger = {
+      ...current,
+      ...patch,
+      id: current.id,
+      createdAt: current.createdAt,
+    };
+    const row = toTriggerRow(updated);
+
+    db.prepare(
+      `UPDATE message_triggers SET
+        creator_id = ?, creator_context = ?, creator_name = ?, description = ?,
+        channels = ?, from_users = ?, from_bots = ?, contains = ?, match_pattern = ?,
+        threads = ?, workflow = ?, inputs = ?, output_context = ?,
+        status = ?, enabled = ?
+      WHERE id = ?`
+    ).run(
+      row.creator_id,
+      row.creator_context,
+      row.creator_name,
+      row.description,
+      row.channels,
+      row.from_users,
+      row.from_bots,
+      row.contains,
+      row.match_pattern,
+      row.threads,
+      row.workflow,
+      row.inputs,
+      row.output_context,
+      row.status,
+      row.enabled,
+      row.id
+    );
+
+    return updated;
+  }
+
+  async deleteTrigger(id: string): Promise<boolean> {
+    const db = this.getDb();
+    const result = db.prepare('DELETE FROM message_triggers WHERE id = ?').run(id);
+    if (result.changes > 0) {
+      logger.info(`[SqliteStore] Deleted message trigger ${id}`);
+      return true;
+    }
+    return false;
+  }
+
+  async getTriggersByCreator(creatorId: string): Promise<MessageTrigger[]> {
+    const db = this.getDb();
+    const rows = db
+      .prepare('SELECT * FROM message_triggers WHERE creator_id = ?')
+      .all(creatorId) as MessageTriggerRow[];
+    return rows.map(fromTriggerRow);
+  }
+
+  async getActiveTriggers(): Promise<MessageTrigger[]> {
+    const db = this.getDb();
+    const rows = db
+      .prepare("SELECT * FROM message_triggers WHERE status = 'active' AND enabled = 1")
+      .all() as MessageTriggerRow[];
+    return rows.map(fromTriggerRow);
   }
 }

@@ -58,7 +58,15 @@ export class FlowStage {
       fixtureInput?.builtin,
       fixtureInput?.overrides
     );
-    const eventForStage = this.mapEventFromFixtureName(fixtureInput?.builtin);
+    const stageEvent = stage.event as string | undefined;
+    const eventForStage =
+      stageEvent === 'slack_message'
+        ? ('slack_message' as import('../../types/config').EventTrigger)
+        : this.mapEventFromFixtureName(fixtureInput?.builtin);
+    // Override prInfo.eventType when event is explicitly set
+    if (stageEvent && stageEvent !== 'manual') {
+      (prInfo as any).eventType = eventForStage;
+    }
     const stageName = `${this.flowName}#${stage.name || 'stage'}`;
 
     // Stage env overrides
@@ -109,6 +117,49 @@ export class FlowStage {
         },
       },
     } as any);
+
+    // Inject webhook context for slack_message events
+    if (eventForStage === 'slack_message') {
+      const slackMsg = stage.slack_message as
+        | {
+            channel?: string;
+            user?: string;
+            text?: string;
+            ts?: string;
+            thread_ts?: string;
+            is_bot?: boolean;
+          }
+        | undefined;
+      let fxEvent: any = {};
+      try {
+        if (fixtureInput?.builtin && String(fixtureInput.builtin).startsWith('slack.')) {
+          const { FixtureLoader } = require('../fixture-loader');
+          const fx = new FixtureLoader().load(fixtureInput.builtin);
+          fxEvent = (fx?.webhook?.payload as any)?.event || {};
+        }
+      } catch {}
+      const slackEvent: any = {
+        type: 'message',
+        channel: slackMsg?.channel || fxEvent.channel || 'C0TEST',
+        user: slackMsg?.user || fxEvent.user || 'U_TEST',
+        text: slackMsg?.text || fxEvent.text || '',
+        ts: slackMsg?.ts || fxEvent.ts || '1000.001',
+      };
+      if (slackMsg?.thread_ts || fxEvent.thread_ts) {
+        slackEvent.thread_ts = slackMsg?.thread_ts || fxEvent.thread_ts;
+      }
+      if (slackMsg?.is_bot || fxEvent.subtype === 'bot_message') {
+        slackEvent.subtype = 'bot_message';
+      }
+      const webhookPayload = { event: slackEvent };
+      const webhookData = new Map<string, unknown>();
+      webhookData.set('/bots/slack/support', webhookPayload);
+      const ctx: any = (this.engine as any).executionContext || {};
+      this.engine.setExecutionContext({
+        ...ctx,
+        webhookContext: { webhookData, eventType: 'slack_message' },
+      } as any);
+    }
 
     // (debug cleanup) removed stage-debug prints
 

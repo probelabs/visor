@@ -21,6 +21,7 @@ import type {
   StorageConfig,
   HAConfig,
   ServerConnectionConfig,
+  MessageTrigger,
 } from '../../scheduler/store/types';
 
 // Knex types — loaded dynamically to avoid ncc bundling
@@ -547,5 +548,34 @@ export class KnexStoreBackend implements ScheduleStoreBackend {
 
   async flush(): Promise<void> {
     // No-op for server-based backends
+  }
+
+  // --- Message Trigger CRUD (stubs — full Knex implementation TBD) ---
+
+  async createTrigger(_trigger: Omit<MessageTrigger, 'id' | 'createdAt'>): Promise<MessageTrigger> {
+    throw new Error('[KnexStore] Message triggers not yet implemented for Knex backend');
+  }
+
+  async getTrigger(_id: string): Promise<MessageTrigger | undefined> {
+    throw new Error('[KnexStore] Message triggers not yet implemented for Knex backend');
+  }
+
+  async updateTrigger(
+    _id: string,
+    _patch: Partial<MessageTrigger>
+  ): Promise<MessageTrigger | undefined> {
+    throw new Error('[KnexStore] Message triggers not yet implemented for Knex backend');
+  }
+
+  async deleteTrigger(_id: string): Promise<boolean> {
+    throw new Error('[KnexStore] Message triggers not yet implemented for Knex backend');
+  }
+
+  async getTriggersByCreator(_creatorId: string): Promise<MessageTrigger[]> {
+    throw new Error('[KnexStore] Message triggers not yet implemented for Knex backend');
+  }
+
+  async getActiveTriggers(): Promise<MessageTrigger[]> {
+    throw new Error('[KnexStore] Message triggers not yet implemented for Knex backend');
   }
 }

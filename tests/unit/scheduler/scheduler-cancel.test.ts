@@ -142,6 +142,26 @@ class MockBackend implements ScheduleStoreBackend {
   async renewLock() {
     return true;
   }
+
+  // Message trigger stubs (not tested here)
+  async createTrigger(t: any) {
+    return { ...t, id: 'mock-trigger', createdAt: Date.now() };
+  }
+  async getTrigger() {
+    return undefined;
+  }
+  async updateTrigger() {
+    return undefined;
+  }
+  async deleteTrigger() {
+    return false;
+  }
+  async getTriggersByCreator() {
+    return [];
+  }
+  async getActiveTriggers() {
+    return [];
+  }
 }
 
 /**

@@ -7,6 +7,7 @@ import { ScheduleStore, Schedule, ScheduleOutputContext } from './schedule-store
 import { isValidCronExpression, getNextRunTime } from './schedule-parser';
 import { getScheduler } from './scheduler';
 import { logger } from '../logger';
+import type { MessageTrigger } from './store/types';
 
 /**
  * Simple glob-style pattern matching for workflow names
@@ -134,7 +135,16 @@ function checkSchedulePermissions(
 /**
  * Tool action types
  */
-export type ScheduleAction = 'create' | 'list' | 'cancel' | 'pause' | 'resume';
+export type ScheduleAction =
+  | 'create'
+  | 'list'
+  | 'cancel'
+  | 'pause'
+  | 'resume'
+  | 'create_trigger'
+  | 'list_triggers'
+  | 'delete_trigger'
+  | 'update_trigger';
 
 /**
  * Target type for where to send the reminder/output
@@ -171,6 +181,24 @@ export interface ScheduleToolArgs {
 
   // For cancel/pause/resume actions:
   schedule_id?: string;
+
+  // For trigger actions:
+  /** For create_trigger: channel IDs to monitor */
+  trigger_channels?: string[];
+  /** For create_trigger: allow bot messages (default: false) */
+  trigger_from_bots?: boolean;
+  /** For create_trigger: keyword patterns (case-insensitive OR) */
+  trigger_contains?: string[];
+  /** For create_trigger: regex pattern */
+  trigger_match?: string;
+  /** For create_trigger: thread scope (default: 'any') */
+  trigger_threads?: 'root_only' | 'thread_only' | 'any';
+  /** For create_trigger: human-readable description */
+  trigger_description?: string;
+  /** For delete_trigger / update_trigger: trigger ID */
+  trigger_id?: string;
+  /** For update_trigger: enable/disable */
+  trigger_enabled?: boolean;
 }
 
 /**
@@ -352,11 +380,23 @@ export async function handleScheduleAction(
     case 'resume':
       return handlePauseResume(args, context, store, 'active');
 
+    case 'create_trigger':
+      return handleCreateTrigger(args, context, store);
+
+    case 'list_triggers':
+      return handleListTriggers(context, store);
+
+    case 'delete_trigger':
+      return handleDeleteTrigger(args, context, store);
+
+    case 'update_trigger':
+      return handleUpdateTrigger(args, context, store);
+
     default:
       return {
         success: false,
         message: `Unknown action: ${args.action}`,
-        error: `Supported actions: create, list, cancel, pause, resume`,
+        error: `Supported actions: create, list, cancel, pause, resume, create_trigger, list_triggers, delete_trigger, update_trigger`,
       };
   }
 }
@@ -699,6 +739,238 @@ async function handlePauseResume(
   };
 }
 
+// --- Message Trigger Handlers ---
+
+/**
+ * Format a message trigger for display
+ */
+function formatTrigger(trigger: MessageTrigger): string {
+  const channels = trigger.channels?.length ? trigger.channels.join(', ') : 'all';
+  const filters: string[] = [];
+  if (trigger.contains?.length) filters.push(`contains: ${trigger.contains.join(', ')}`);
+  if (trigger.matchPattern) filters.push(`match: /${trigger.matchPattern}/`);
+  if (trigger.fromBots) filters.push('bots: yes');
+  const filterStr = filters.length ? ` [${filters.join('; ')}]` : '';
+  const status = trigger.enabled ? '' : ' (disabled)';
+  return `\`${trigger.id.substring(0, 8)}\` - channels: ${channels} → workflow: "${trigger.workflow}"${filterStr}${status}`;
+}
+
+/**
+ * Handle create_trigger action
+ */
+async function handleCreateTrigger(
+  args: ScheduleToolArgs,
+  context: ScheduleToolContext,
+  store: ScheduleStore
+): Promise<ScheduleToolResult> {
+  // Validate workflow
+  if (!args.workflow) {
+    return {
+      success: false,
+      message: 'Missing workflow',
+      error: 'Please specify the workflow to run when the trigger fires.',
+    };
+  }
+
+  // Validate workflow exists if we have available workflows
+  if (context.availableWorkflows && !context.availableWorkflows.includes(args.workflow)) {
+    return {
+      success: false,
+      message: `Workflow "${args.workflow}" not found`,
+      error: `Available workflows: ${context.availableWorkflows.slice(0, 5).join(', ')}${context.availableWorkflows.length > 5 ? '...' : ''}`,
+    };
+  }
+
+  // Need at least one filter (channels, contains, or match)
+  if (
+    (!args.trigger_channels || args.trigger_channels.length === 0) &&
+    (!args.trigger_contains || args.trigger_contains.length === 0) &&
+    !args.trigger_match
+  ) {
+    return {
+      success: false,
+      message: 'Missing trigger filters',
+      error:
+        'Please specify at least one filter: trigger_channels, trigger_contains, or trigger_match.',
+    };
+  }
+
+  // Check permissions for the workflow
+  const permissionCheck = checkSchedulePermissions(context, args.workflow);
+  if (!permissionCheck.allowed) {
+    return {
+      success: false,
+      message: 'Permission denied',
+      error:
+        permissionCheck.reason || 'You do not have permission to create triggers for this workflow',
+    };
+  }
+
+  try {
+    const trigger = await store.createTriggerAsync({
+      creatorId: context.userId,
+      creatorContext: context.contextType,
+      creatorName: context.userName,
+      description: args.trigger_description,
+      channels: args.trigger_channels,
+      fromBots: args.trigger_from_bots ?? false,
+      contains: args.trigger_contains,
+      matchPattern: args.trigger_match,
+      threads: args.trigger_threads ?? 'any',
+      workflow: args.workflow,
+      inputs: args.workflow_inputs,
+      status: 'active',
+      enabled: true,
+    });
+
+    logger.info(
+      `[ScheduleTool] Created message trigger ${trigger.id} for user ${context.userId}: workflow="${args.workflow}"`
+    );
+
+    return {
+      success: true,
+      message: `**Message trigger created!**
+
+**Workflow**: ${trigger.workflow}
+**Channels**: ${trigger.channels?.join(', ') || 'all'}
+${trigger.contains?.length ? `**Contains**: ${trigger.contains.join(', ')}\n` : ''}${trigger.matchPattern ? `**Pattern**: /${trigger.matchPattern}/\n` : ''}${trigger.description ? `**Description**: ${trigger.description}\n` : ''}
+ID: \`${trigger.id.substring(0, 8)}\``,
+    };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+    logger.warn(`[ScheduleTool] Failed to create trigger: ${errorMsg}`);
+    return {
+      success: false,
+      message: `Failed to create trigger: ${errorMsg}`,
+      error: errorMsg,
+    };
+  }
+}
+
+/**
+ * Handle list_triggers action
+ */
+async function handleListTriggers(
+  context: ScheduleToolContext,
+  store: ScheduleStore
+): Promise<ScheduleToolResult> {
+  const triggers = await store.getTriggersByCreatorAsync(context.userId);
+  const active = triggers.filter(t => t.status !== 'deleted');
+
+  if (active.length === 0) {
+    return {
+      success: true,
+      message: `You don't have any message triggers.
+
+To create one: "watch #channel for messages containing 'error' and run %my-workflow"`,
+    };
+  }
+
+  const lines = active.map((t, i) => `${i + 1}. ${formatTrigger(t)}`);
+
+  return {
+    success: true,
+    message: `**Your message triggers:**
+
+${lines.join('\n')}
+
+To delete: "delete trigger <id>"
+To disable: "disable trigger <id>"`,
+  };
+}
+
+/**
+ * Handle delete_trigger action
+ */
+async function handleDeleteTrigger(
+  args: ScheduleToolArgs,
+  context: ScheduleToolContext,
+  store: ScheduleStore
+): Promise<ScheduleToolResult> {
+  if (!args.trigger_id) {
+    return {
+      success: false,
+      message: 'Missing trigger ID',
+      error: 'Please specify which trigger to delete.',
+    };
+  }
+
+  // Find trigger — check ownership
+  const userTriggers = await store.getTriggersByCreatorAsync(context.userId);
+  let trigger = userTriggers.find(t => t.id === args.trigger_id);
+  if (!trigger) {
+    trigger = userTriggers.find(t => t.id.startsWith(args.trigger_id!));
+  }
+
+  if (!trigger) {
+    return {
+      success: false,
+      message: 'Trigger not found',
+      error: `Could not find trigger with ID "${args.trigger_id}" in your triggers. Use "list my triggers" to see your triggers.`,
+    };
+  }
+
+  await store.deleteTriggerAsync(trigger.id);
+
+  logger.info(`[ScheduleTool] Deleted trigger ${trigger.id} for user ${context.userId}`);
+
+  return {
+    success: true,
+    message: `**Trigger deleted!**
+
+Was: watching for "${trigger.workflow}" ${trigger.channels?.length ? `in ${trigger.channels.join(', ')}` : ''}`,
+  };
+}
+
+/**
+ * Handle update_trigger action (enable/disable)
+ */
+async function handleUpdateTrigger(
+  args: ScheduleToolArgs,
+  context: ScheduleToolContext,
+  store: ScheduleStore
+): Promise<ScheduleToolResult> {
+  if (!args.trigger_id) {
+    return {
+      success: false,
+      message: 'Missing trigger ID',
+      error: 'Please specify which trigger to update.',
+    };
+  }
+
+  // Find trigger — check ownership
+  const userTriggers = await store.getTriggersByCreatorAsync(context.userId);
+  let trigger = userTriggers.find(t => t.id === args.trigger_id);
+  if (!trigger) {
+    trigger = userTriggers.find(t => t.id.startsWith(args.trigger_id!));
+  }
+
+  if (!trigger) {
+    return {
+      success: false,
+      message: 'Trigger not found',
+      error: `Could not find trigger with ID "${args.trigger_id}" in your triggers.`,
+    };
+  }
+
+  const patch: Partial<MessageTrigger> = {};
+  if (args.trigger_enabled !== undefined) {
+    patch.enabled = args.trigger_enabled;
+  }
+
+  await store.updateTriggerAsync(trigger.id, patch);
+  const action = args.trigger_enabled === false ? 'disabled' : 'enabled';
+
+  logger.info(`[ScheduleTool] ${action} trigger ${trigger.id} for user ${context.userId}`);
+
+  return {
+    success: true,
+    message: `**Trigger ${action}!**
+
+"${trigger.workflow}" ${trigger.channels?.length ? `in ${trigger.channels.join(', ')}` : ''}`,
+  };
+}
+
 /**
  * Get the schedule tool definition for registration with AI providers
  *
@@ -726,6 +998,17 @@ ACTIONS:
 - list: Show user's active schedules
 - cancel: Remove a schedule by ID
 - pause/resume: Temporarily disable/enable a schedule
+
+MESSAGE-BASED TRIGGERS:
+In addition to time-based schedules, this tool can create/manage message-based triggers that react to
+Slack messages in specific channels. Use the create_trigger, list_triggers, delete_trigger, and update_trigger
+actions for this. Message triggers fire workflows based on message content, channel, sender, and thread scope.
+
+TRIGGER ACTIONS:
+- create_trigger: Create a new message trigger (requires workflow + at least one filter)
+- list_triggers: Show user's message triggers
+- delete_trigger: Remove a trigger by ID
+- update_trigger: Enable/disable a trigger by ID
 
 FOR CREATE ACTION - Extract these from user's request:
 1. WHAT:
@@ -814,14 +1097,37 @@ User: "list my schedules"
 → { "action": "list" }
 
 User: "cancel schedule abc123"
-→ { "action": "cancel", "schedule_id": "abc123" }`,
+→ { "action": "cancel", "schedule_id": "abc123" }
+
+User: "watch #cicd for messages containing 'failed' and run %handle-cicd"
+→ { "action": "create_trigger", "trigger_channels": ["C0CICD"], "trigger_contains": ["failed"], "workflow": "handle-cicd" }
+
+User: "list my message triggers"
+→ { "action": "list_triggers" }
+
+User: "delete trigger abc123"
+→ { "action": "delete_trigger", "trigger_id": "abc123" }
+
+User: "disable trigger abc123"
+→ { "action": "update_trigger", "trigger_id": "abc123", "trigger_enabled": false }`,
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['create', 'list', 'cancel', 'pause', 'resume'],
-          description: 'What to do: create new, list existing, cancel/pause/resume by ID',
+          enum: [
+            'create',
+            'list',
+            'cancel',
+            'pause',
+            'resume',
+            'create_trigger',
+            'list_triggers',
+            'delete_trigger',
+            'update_trigger',
+          ],
+          description:
+            'What to do: create/list/cancel/pause/resume for time-based schedules; create_trigger/list_triggers/delete_trigger/update_trigger for message-based triggers',
         },
         // WHAT to do
         reminder_text: {
@@ -880,6 +1186,45 @@ User: "cancel schedule abc123"
           type: 'string',
           description:
             'For cancel/pause/resume: the schedule ID to act on (first 8 chars is enough)',
+        },
+        // For message trigger actions
+        trigger_channels: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'For create_trigger: Slack channel IDs to monitor (e.g., ["C0CICD"]). Supports wildcard suffix (e.g., "CENG*").',
+        },
+        trigger_from_bots: {
+          type: 'boolean',
+          description: 'For create_trigger: allow bot messages to trigger (default: false)',
+        },
+        trigger_contains: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'For create_trigger: keywords to match (case-insensitive OR). E.g., ["failed", "error"].',
+        },
+        trigger_match: {
+          type: 'string',
+          description: 'For create_trigger: regex pattern to match against message text.',
+        },
+        trigger_threads: {
+          type: 'string',
+          enum: ['root_only', 'thread_only', 'any'],
+          description: 'For create_trigger: thread scope filter (default: "any").',
+        },
+        trigger_description: {
+          type: 'string',
+          description: 'For create_trigger: human-readable description of the trigger.',
+        },
+        trigger_id: {
+          type: 'string',
+          description:
+            'For delete_trigger/update_trigger: the trigger ID to act on (first 8 chars is enough).',
+        },
+        trigger_enabled: {
+          type: 'boolean',
+          description: 'For update_trigger: set to false to disable, true to enable.',
         },
       },
       required: ['action'],

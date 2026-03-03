@@ -24,11 +24,18 @@ jest.mock('../../../src/scheduler/schedule-store', () => {
     updateAsync: jest.fn(),
     delete: jest.fn(),
     deleteAsync: jest.fn().mockResolvedValue(true),
+    createTriggerAsync: jest.fn(),
+    getTriggerAsync: jest.fn(),
+    updateTriggerAsync: jest.fn(),
+    deleteTriggerAsync: jest.fn().mockResolvedValue(true),
+    getTriggersByCreatorAsync: jest.fn().mockResolvedValue([]),
+    getActiveTriggersAsync: jest.fn().mockResolvedValue([]),
   };
 
   return {
     ScheduleStore: {
       getInstance: jest.fn().mockReturnValue(mockStore),
+      setTriggersChangedCallback: jest.fn(),
     },
   };
 });

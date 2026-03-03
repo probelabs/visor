@@ -11,6 +11,7 @@ import type {
   StorageConfig,
   HAConfig,
   ScheduleStoreStats,
+  MessageTrigger,
 } from './store/types';
 import { createStoreBackend } from './store/index';
 import { migrateJsonToBackend } from './store/json-migrator';
@@ -97,11 +98,20 @@ export interface ScheduleLimits {
  */
 export class ScheduleStore {
   private static instance: ScheduleStore | undefined;
+  private static onTriggersChanged?: () => void;
   private backend: ScheduleStoreBackend | null = null;
   private initialized = false;
   private limits: ScheduleLimits;
   private config: ScheduleStoreConfig;
   private externalBackend: ScheduleStoreBackend | null = null;
+
+  /**
+   * Register a callback to be invoked when message triggers change (create/update/delete).
+   * Used by SlackSocketRunner to rebuild its evaluator.
+   */
+  static setTriggersChangedCallback(cb: () => void): void {
+    ScheduleStore.onTriggersChanged = cb;
+  }
 
   private constructor(
     config?: ScheduleStoreConfig,
@@ -300,6 +310,65 @@ export class ScheduleStore {
       throw new Error('[ScheduleStore] Not initialized. Call initialize() first.');
     }
     return this.backend;
+  }
+
+  // --- Message Trigger Methods ---
+
+  /**
+   * Create a new message trigger
+   */
+  async createTriggerAsync(
+    trigger: Omit<MessageTrigger, 'id' | 'createdAt'>
+  ): Promise<MessageTrigger> {
+    const result = await this.getBackend().createTrigger(trigger);
+    ScheduleStore.onTriggersChanged?.();
+    return result;
+  }
+
+  /**
+   * Get a trigger by ID
+   */
+  async getTriggerAsync(id: string): Promise<MessageTrigger | undefined> {
+    return this.getBackend().getTrigger(id);
+  }
+
+  /**
+   * Update a trigger
+   */
+  async updateTriggerAsync(
+    id: string,
+    patch: Partial<MessageTrigger>
+  ): Promise<MessageTrigger | undefined> {
+    const result = await this.getBackend().updateTrigger(id, patch);
+    if (result) {
+      ScheduleStore.onTriggersChanged?.();
+    }
+    return result;
+  }
+
+  /**
+   * Delete a trigger
+   */
+  async deleteTriggerAsync(id: string): Promise<boolean> {
+    const result = await this.getBackend().deleteTrigger(id);
+    if (result) {
+      ScheduleStore.onTriggersChanged?.();
+    }
+    return result;
+  }
+
+  /**
+   * Get all triggers for a specific creator
+   */
+  async getTriggersByCreatorAsync(creatorId: string): Promise<MessageTrigger[]> {
+    return this.getBackend().getTriggersByCreator(creatorId);
+  }
+
+  /**
+   * Get all active triggers
+   */
+  async getActiveTriggersAsync(): Promise<MessageTrigger[]> {
+    return this.getBackend().getActiveTriggers();
   }
 
   /**
