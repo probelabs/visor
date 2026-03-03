@@ -1,0 +1,68 @@
+# =============================================================================
+# Example: Using code-talk as a Standard Workflow
+# =============================================================================
+#
+# This example shows how to use the code-talk workflow for interactive
+# code exploration in your project.
+#
+# Usage:
+#   visor --config examples/code-talk-workflow.yaml --message "How does auth work?"
+#
+# =============================================================================
+
+version: "1.0"
+
+imports:
+  - visor://code-talk.yaml
+
+checks:
+  # Get the user's question
+  get-question:
+    type: human-input
+    prompt: "What would you like to know about the codebase?"
+    placeholder: "e.g., How does the authentication system work?"
+
+  # Call code-talk with your project configuration
+  explore:
+    type: workflow
+    workflow: code-talk
+    criticality: internal
+    depends_on: [get-question]
+    args:
+      question: "{{ outputs['get-question'].text }}"
+
+      # Customize this for your project
+      architecture: |
+        # Project Architecture
+
+        ## Overview
+        Describe your project architecture here.
+
+        ## Key Components
+        - Component A: Description
+        - Component B: Description
+
+        ## Project IDs
+        | ID | Description |
+        |----|-------------|
+        | `my-project` | Main project codebase |
+
+        ## Key Directories
+        - `src/` - Source code
+        - `tests/` - Test files
+
+      # GitHub repository for docs (optional)
+      docs_repo: your-org/your-repo
+      docs_ref: main
+
+      # Define your projects
+      projects:
+        - id: my-project
+          repo: your-org/your-repo
+          description: |
+            Main project codebase:
+            - src/ - Source code
+            - tests/ - Test files
+
+      # Limit to single project for focused analysis
+      max_projects: 1

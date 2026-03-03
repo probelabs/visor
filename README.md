@@ -27,6 +27,7 @@ Visor is an open-source workflow engine that lets you define multi-step AI pipel
 ## Table of Contents
 
 - [Quick Start](#-quick-start)
+- [AI Assistant Framework](#-ai-assistant-framework)
 - [Runtime Modes](#-runtime-modes)
 - [PR Comment Commands](#-pr-comment-commands)
 - [Core Concepts](#-core-concepts)
@@ -109,6 +110,56 @@ jobs:
 ```
 
 > **Tip:** Pin releases for stability with `@v1`. For bleeding-edge, use `@nightly`.
+
+## 🤖 AI Assistant Framework
+
+Visor ships with a built-in assistant framework — three composable workflows for building AI-powered assistants with skills, tools, and multi-repo code exploration. Import them with a single line:
+
+```yaml
+version: "1.0"
+
+imports:
+  - visor://assistant.yaml
+
+checks:
+  chat:
+    type: workflow
+    workflow: assistant
+    assume: ["true"]
+    args:
+      question: "{{ conversation.current.text }}"
+      system_prompt: "You are a helpful engineering assistant."
+      intents:
+        - id: chat
+          description: general Q&A or small talk
+        - id: code_help
+          description: questions about code or architecture
+          default_skills: [code-explorer]
+      skills:
+        - id: code-explorer
+          description: needs codebase exploration or code search
+          tools:
+            code-talk:
+              workflow: code-talk
+              inputs:
+                projects:
+                  - id: backend
+                    repo: my-org/backend
+                    description: Backend API service
+          allowed_commands: ['git:log:*', 'git:diff:*']
+    on_success:
+      goto: chat
+```
+
+| Workflow | What it does |
+|----------|-------------|
+| **assistant** | Full AI assistant — intent routing, dynamic skill activation, tool orchestration, knowledge injection, bash command control |
+| **code-talk** | Multi-repo code exploration — routes questions to repos, checks out code, explores with tools, returns answers with file references and confidence scoring |
+| **intent-router** | Lightweight intent classification — picks intent, rewrites question, selects skills/tags |
+
+The `visor://` protocol resolves to bundled workflows shipped with the package — no network fetch needed.
+
+Learn more: [docs/assistant-workflows.md](docs/assistant-workflows.md) | Examples: [code-talk-workflow](examples/code-talk-workflow.yaml) · [code-talk-as-tool](examples/code-talk-as-tool.yaml) · [intent-router](examples/intent-router-workflow.yaml)
 
 ## 🖥️ Runtime Modes
 
@@ -655,7 +706,7 @@ Learn more: [docs/enterprise-policy.md](docs/enterprise-policy.md)
 ## 📚 Further Reading
 
 **Guides:**
-[CLI commands](docs/commands.md) · [Configuration](docs/configuration.md) · [AI config](docs/ai-configuration.md) · [Dependencies](docs/dependencies.md) · [forEach propagation](docs/foreach-dependency-propagation.md) · [Failure routing](docs/failure-routing.md) · [Liquid templates](docs/liquid-templates.md) · [Schema-template system](docs/schema-templates.md) · [Fail conditions](docs/fail-if.md) · [Timeouts](docs/timeouts.md) · [Execution limits](docs/limits.md) · [Output formats](docs/output-formats.md) · [Output formatting](docs/output-formatting.md) · [HTTP integration](docs/http.md) · [Scheduler](docs/scheduler.md)
+[Assistant workflows](docs/assistant-workflows.md) · [CLI commands](docs/commands.md) · [Configuration](docs/configuration.md) · [AI config](docs/ai-configuration.md) · [Dependencies](docs/dependencies.md) · [forEach propagation](docs/foreach-dependency-propagation.md) · [Failure routing](docs/failure-routing.md) · [Liquid templates](docs/liquid-templates.md) · [Schema-template system](docs/schema-templates.md) · [Fail conditions](docs/fail-if.md) · [Timeouts](docs/timeouts.md) · [Execution limits](docs/limits.md) · [Output formats](docs/output-formats.md) · [Output formatting](docs/output-formatting.md) · [HTTP integration](docs/http.md) · [Scheduler](docs/scheduler.md)
 
 **Providers:**
 [Command](docs/command-provider.md) · [Script](docs/script.md) · [MCP](docs/mcp-provider.md) · [MCP tools for AI](docs/mcp.md) · [Claude Code](docs/claude-code.md) · [GitHub ops](docs/github-ops.md) · [Custom providers](docs/pluggable.md)

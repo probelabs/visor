@@ -1,0 +1,66 @@
+# =============================================================================
+# Example: Using intent-router for Assistant Routing
+# =============================================================================
+#
+# Usage:
+#   visor --config examples/intent-router-workflow.yaml --message "Summarize this thread"
+#
+# =============================================================================
+
+version: "1.0"
+
+imports:
+  - visor://intent-router.yaml
+
+checks:
+  ask:
+    type: human-input
+    prompt: "What should I do with this message?"
+    placeholder: "e.g., Summarize the thread and list action items"
+
+  route-intent:
+    type: workflow
+    workflow: intent-router
+    criticality: internal
+    depends_on: [ask]
+    args:
+      question: "{{ outputs['ask'].text }}"
+      intents:
+        - id: chat
+          description: general Q&A or small talk
+        - id: thread_summary
+          description: user explicitly asks for a summary of the thread
+        - id: code_help
+          description: questions about code, debugging, or implementation details
+      tags:
+        - id: jira
+          description: request references Jira tickets or needs Jira data
+        - id: confluence
+          description: request references Confluence pages or needs Confluence data
+        - id: codebase
+          description: request needs codebase or implementation details
+      routing_instructions: |
+        Prefer thread_summary when the user asks to summarize or extract action items.
+
+  chat-answer:
+    type: ai
+    depends_on: [route-intent]
+    if: "outputs['route-intent']?.intent === 'chat'"
+    prompt: |
+      Answer the user's question:
+      {{ outputs['route-intent'].topic }}
+
+  summarize-thread:
+    type: ai
+    depends_on: [route-intent]
+    if: "outputs['route-intent']?.intent === 'thread_summary'"
+    prompt: |
+      Summarize the thread and list action items.
+
+  code-help:
+    type: ai
+    depends_on: [route-intent]
+    if: "outputs['route-intent']?.intent === 'code_help'"
+    prompt: |
+      Provide a short technical explanation for:
+      {{ outputs['route-intent'].topic }}
