@@ -423,6 +423,10 @@ export class WorkflowRegistry {
       const relativePath = source.replace(/^visor(?:-ee)?:\/\//, '');
       const packageRoot = path.resolve(__dirname, '..');
       const filePath = path.resolve(packageRoot, relativePath);
+      // Prevent path traversal outside package root
+      if (!filePath.startsWith(packageRoot + path.sep)) {
+        throw new Error(`Invalid visor:// path: resolved path escapes package root`);
+      }
       const content = await fs.readFile(filePath, 'utf-8');
       return { content, resolvedSource: filePath, importBasePath: path.dirname(filePath) };
     }

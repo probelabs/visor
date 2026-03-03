@@ -499,6 +499,54 @@ steps:
     });
   });
 
+  describe('visor:// protocol', () => {
+    it('should resolve visor:// URLs to package root', async () => {
+      const workflowYaml = `
+id: builtin-workflow
+name: Built-in Workflow
+steps:
+  step1:
+    type: ai
+    prompt: Test prompt
+`;
+      (fs.promises.readFile as jest.Mock).mockResolvedValue(workflowYaml);
+
+      const results = await registry.import('visor://workflows/assistant.yaml');
+
+      expect(results).toHaveLength(1);
+      expect(results[0].valid).toBe(true);
+      expect(fs.promises.readFile).toHaveBeenCalledWith(
+        expect.stringContaining(path.join('workflows', 'assistant.yaml')),
+        'utf-8'
+      );
+    });
+
+    it('should resolve visor-ee:// URLs for backward compatibility', async () => {
+      const workflowYaml = `
+id: legacy-workflow
+name: Legacy Workflow
+steps:
+  step1:
+    type: ai
+    prompt: Test prompt
+`;
+      (fs.promises.readFile as jest.Mock).mockResolvedValue(workflowYaml);
+
+      const results = await registry.import('visor-ee://workflows/assistant.yaml');
+
+      expect(results).toHaveLength(1);
+      expect(results[0].valid).toBe(true);
+    });
+
+    it('should reject visor:// paths that escape package root', async () => {
+      const results = await registry.import('visor://../../etc/passwd');
+
+      expect(results).toHaveLength(1);
+      expect(results[0].valid).toBe(false);
+      expect(results[0].errors?.[0].message).toContain('escapes package root');
+    });
+  });
+
   describe('get and metadata', () => {
     it('should track usage statistics', () => {
       const workflow: WorkflowDefinition = {
