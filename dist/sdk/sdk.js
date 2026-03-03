@@ -11026,6 +11026,16 @@ var init_workflow_registry = __esm({
        */
       async loadWorkflowContent(source, basePath) {
         const baseIsUrl = basePath?.startsWith("http://") || basePath?.startsWith("https://");
+        if (source.startsWith("visor://") || source.startsWith("visor-ee://")) {
+          const relativePath = source.replace(/^visor(?:-ee)?:\/\//, "");
+          const defaultsDir = path10.resolve(__dirname, "..", "defaults");
+          const filePath2 = path10.resolve(defaultsDir, relativePath);
+          if (!filePath2.startsWith(defaultsDir + path10.sep)) {
+            throw new Error(`Invalid visor:// path: resolved path escapes defaults directory`);
+          }
+          const content2 = await import_fs3.promises.readFile(filePath2, "utf-8");
+          return { content: content2, resolvedSource: filePath2, importBasePath: path10.dirname(filePath2) };
+        }
         if (source.startsWith("http://") || source.startsWith("https://")) {
           const response = await fetch(source);
           if (!response.ok) {
