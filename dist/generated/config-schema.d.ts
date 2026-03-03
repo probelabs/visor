@@ -875,7 +875,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -891,7 +891,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -1046,7 +1046,7 @@ export declare const configSchema: {
         };
         readonly EventTrigger: {
             readonly type: "string";
-            readonly enum: readonly ["pr_opened", "pr_updated", "pr_closed", "issue_opened", "issue_comment", "manual", "schedule", "webhook_received"];
+            readonly enum: readonly ["pr_opened", "pr_updated", "pr_closed", "issue_opened", "issue_comment", "manual", "schedule", "webhook_received", "slack_message"];
             readonly description: "Valid event triggers for checks";
         };
         readonly AIProviderConfig: {
@@ -1543,7 +1543,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1558,13 +1558,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867>': {
+        readonly 'Partial<interface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };
@@ -2434,6 +2434,10 @@ export declare const configSchema: {
                     readonly $ref: "#/definitions/Record%3Cstring%2CStaticCronJob%3E";
                     readonly description: "Static cron jobs defined in configuration (always executed)";
                 };
+                readonly on_message: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2CSlackMessageTrigger%3E";
+                    readonly description: "Slack message triggers for reactive workflow execution";
+                };
             };
             readonly additionalProperties: false;
             readonly description: "Scheduler configuration for workflow scheduling";
@@ -2678,6 +2682,97 @@ export declare const configSchema: {
             readonly required: readonly ["schedule", "workflow"];
             readonly additionalProperties: false;
             readonly description: "Static cron job defined in YAML configuration These are always executed by the scheduler daemon";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly 'Record<string,SlackMessageTrigger>': {
+            readonly type: "object";
+            readonly additionalProperties: {
+                readonly $ref: "#/definitions/SlackMessageTrigger";
+            };
+        };
+        readonly SlackMessageTrigger: {
+            readonly type: "object";
+            readonly properties: {
+                readonly channels: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Channel IDs to monitor (supports wildcard suffix, e.g., \"CENG*\")";
+                };
+                readonly from: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Only trigger on messages from these user IDs";
+                };
+                readonly from_bots: {
+                    readonly type: "boolean";
+                    readonly description: "Allow bot messages to trigger (default: false)";
+                };
+                readonly contains: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Keyword match - any keyword triggers (case-insensitive OR)";
+                };
+                readonly match: {
+                    readonly type: "string";
+                    readonly description: "Regex pattern to match against message text";
+                };
+                readonly threads: {
+                    readonly type: "string";
+                    readonly enum: readonly ["root_only", "thread_only", "any"];
+                    readonly description: "Thread scope filter (default: 'any')";
+                };
+                readonly workflow: {
+                    readonly type: "string";
+                    readonly description: "Workflow/check ID to execute";
+                };
+                readonly inputs: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    readonly description: "Optional workflow inputs";
+                };
+                readonly output: {
+                    readonly type: "object";
+                    readonly properties: {
+                        readonly type: {
+                            readonly type: "string";
+                            readonly enum: readonly ["slack", "github", "webhook", "none"];
+                            readonly description: "Output type: slack, github, webhook, or none";
+                        };
+                        readonly target: {
+                            readonly type: "string";
+                            readonly description: "Target (channel name, repo, URL)";
+                        };
+                        readonly thread_id: {
+                            readonly type: "string";
+                            readonly description: "Thread ID for threaded outputs";
+                        };
+                    };
+                    readonly required: readonly ["type"];
+                    readonly additionalProperties: false;
+                    readonly description: "Output destination configuration";
+                    readonly patternProperties: {
+                        readonly '^x-': {};
+                    };
+                };
+                readonly description: {
+                    readonly type: "string";
+                    readonly description: "Description for logging/display";
+                };
+                readonly enabled: {
+                    readonly type: "boolean";
+                    readonly description: "Enable/disable this trigger (default: true)";
+                };
+            };
+            readonly required: readonly ["workflow"];
+            readonly additionalProperties: false;
+            readonly description: "Slack message trigger for reactive workflow execution Triggers workflows based on Slack messages matching configured filters";
             readonly patternProperties: {
                 readonly '^x-': {};
             };

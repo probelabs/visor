@@ -13163,7 +13163,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -13179,7 +13179,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -13361,7 +13361,8 @@ var init_config_schema = __esm({
             "issue_comment",
             "manual",
             "schedule",
-            "webhook_received"
+            "webhook_received",
+            "slack_message"
           ],
           description: "Valid event triggers for checks"
         },
@@ -13867,7 +13868,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -13882,13 +13883,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867>>": {
+        "Record<string,Partial<interface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867>": {
+        "Partial<interface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255>": {
           type: "object",
           additionalProperties: false
         },
@@ -14770,6 +14771,10 @@ var init_config_schema = __esm({
             cron: {
               $ref: "#/definitions/Record%3Cstring%2CStaticCronJob%3E",
               description: "Static cron jobs defined in configuration (always executed)"
+            },
+            on_message: {
+              $ref: "#/definitions/Record%3Cstring%2CSlackMessageTrigger%3E",
+              description: "Slack message triggers for reactive workflow execution"
             }
           },
           additionalProperties: false,
@@ -15022,6 +15027,97 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
+        "Record<string,SlackMessageTrigger>": {
+          type: "object",
+          additionalProperties: {
+            $ref: "#/definitions/SlackMessageTrigger"
+          }
+        },
+        SlackMessageTrigger: {
+          type: "object",
+          properties: {
+            channels: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: 'Channel IDs to monitor (supports wildcard suffix, e.g., "CENG*")'
+            },
+            from: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Only trigger on messages from these user IDs"
+            },
+            from_bots: {
+              type: "boolean",
+              description: "Allow bot messages to trigger (default: false)"
+            },
+            contains: {
+              type: "array",
+              items: {
+                type: "string"
+              },
+              description: "Keyword match - any keyword triggers (case-insensitive OR)"
+            },
+            match: {
+              type: "string",
+              description: "Regex pattern to match against message text"
+            },
+            threads: {
+              type: "string",
+              enum: ["root_only", "thread_only", "any"],
+              description: "Thread scope filter (default: 'any')"
+            },
+            workflow: {
+              type: "string",
+              description: "Workflow/check ID to execute"
+            },
+            inputs: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E",
+              description: "Optional workflow inputs"
+            },
+            output: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  enum: ["slack", "github", "webhook", "none"],
+                  description: "Output type: slack, github, webhook, or none"
+                },
+                target: {
+                  type: "string",
+                  description: "Target (channel name, repo, URL)"
+                },
+                thread_id: {
+                  type: "string",
+                  description: "Thread ID for threaded outputs"
+                }
+              },
+              required: ["type"],
+              additionalProperties: false,
+              description: "Output destination configuration",
+              patternProperties: {
+                "^x-": {}
+              }
+            },
+            description: {
+              type: "string",
+              description: "Description for logging/display"
+            },
+            enabled: {
+              type: "boolean",
+              description: "Enable/disable this trigger (default: true)"
+            }
+          },
+          required: ["workflow"],
+          additionalProperties: false,
+          description: "Slack message trigger for reactive workflow execution Triggers workflows based on Slack messages matching configured filters",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
         PolicyConfig: {
           type: "object",
           properties: {
@@ -15163,7 +15259,8 @@ var init_config = __esm({
       "issue_comment",
       "manual",
       "schedule",
-      "webhook_received"
+      "webhook_received",
+      "slack_message"
     ];
     ConfigManager = class {
       validCheckTypes = [
@@ -17730,6 +17827,48 @@ function fromDbRow(row) {
     previousResponse: row.previous_response ?? void 0
   };
 }
+function toTriggerRow(trigger) {
+  return {
+    id: trigger.id,
+    creator_id: trigger.creatorId,
+    creator_context: trigger.creatorContext ?? null,
+    creator_name: trigger.creatorName ?? null,
+    description: trigger.description ?? null,
+    channels: trigger.channels ? JSON.stringify(trigger.channels) : null,
+    from_users: trigger.fromUsers ? JSON.stringify(trigger.fromUsers) : null,
+    from_bots: trigger.fromBots ? 1 : 0,
+    contains: trigger.contains ? JSON.stringify(trigger.contains) : null,
+    match_pattern: trigger.matchPattern ?? null,
+    threads: trigger.threads,
+    workflow: trigger.workflow,
+    inputs: trigger.inputs ? JSON.stringify(trigger.inputs) : null,
+    output_context: trigger.outputContext ? JSON.stringify(trigger.outputContext) : null,
+    status: trigger.status,
+    enabled: trigger.enabled ? 1 : 0,
+    created_at: trigger.createdAt
+  };
+}
+function fromTriggerRow(row) {
+  return {
+    id: row.id,
+    creatorId: row.creator_id,
+    creatorContext: row.creator_context ?? void 0,
+    creatorName: row.creator_name ?? void 0,
+    description: row.description ?? void 0,
+    channels: safeJsonParse(row.channels),
+    fromUsers: safeJsonParse(row.from_users),
+    fromBots: row.from_bots === 1,
+    contains: safeJsonParse(row.contains),
+    matchPattern: row.match_pattern ?? void 0,
+    threads: row.threads,
+    workflow: row.workflow,
+    inputs: safeJsonParse(row.inputs),
+    outputContext: safeJsonParse(row.output_context),
+    status: row.status,
+    enabled: row.enabled === 1,
+    createdAt: row.created_at
+  };
+}
 var import_path5, import_fs4, import_uuid, SqliteStoreBackend;
 var init_sqlite_store = __esm({
   "src/scheduler/store/sqlite-store.ts"() {
@@ -17822,6 +17961,32 @@ var init_sqlite_store = __esm({
         acquired_at BIGINT       NOT NULL,
         expires_at  BIGINT       NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS message_triggers (
+        id              VARCHAR(36)  PRIMARY KEY,
+        creator_id      VARCHAR(255) NOT NULL,
+        creator_context VARCHAR(255),
+        creator_name    VARCHAR(255),
+        description     TEXT,
+        channels        TEXT,
+        from_users      TEXT,
+        from_bots       BOOLEAN      NOT NULL DEFAULT 0,
+        contains        TEXT,
+        match_pattern   TEXT,
+        threads         VARCHAR(20)  NOT NULL DEFAULT 'any',
+        workflow        VARCHAR(255) NOT NULL,
+        inputs          TEXT,
+        output_context  TEXT,
+        status          VARCHAR(20)  NOT NULL DEFAULT 'active',
+        enabled         BOOLEAN      NOT NULL DEFAULT 1,
+        created_at      BIGINT       NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_message_triggers_creator
+        ON message_triggers(creator_id);
+
+      CREATE INDEX IF NOT EXISTS idx_message_triggers_status
+        ON message_triggers(status);
     `);
       }
       // --- Helpers ---
@@ -18103,6 +18268,114 @@ var init_sqlite_store = __esm({
       }
       async flush() {
       }
+      // --- Message Triggers ---
+      async createTrigger(trigger) {
+        const db = this.getDb();
+        const newTrigger = {
+          ...trigger,
+          id: (0, import_uuid.v4)(),
+          createdAt: Date.now()
+        };
+        const row = toTriggerRow(newTrigger);
+        db.prepare(
+          `INSERT INTO message_triggers (
+        id, creator_id, creator_context, creator_name, description,
+        channels, from_users, from_bots, contains, match_pattern,
+        threads, workflow, inputs, output_context,
+        status, enabled, created_at
+      ) VALUES (
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?
+      )`
+        ).run(
+          row.id,
+          row.creator_id,
+          row.creator_context,
+          row.creator_name,
+          row.description,
+          row.channels,
+          row.from_users,
+          row.from_bots,
+          row.contains,
+          row.match_pattern,
+          row.threads,
+          row.workflow,
+          row.inputs,
+          row.output_context,
+          row.status,
+          row.enabled,
+          row.created_at
+        );
+        logger.info(
+          `[SqliteStore] Created message trigger ${newTrigger.id} for user ${newTrigger.creatorId}`
+        );
+        return newTrigger;
+      }
+      async getTrigger(id) {
+        const db = this.getDb();
+        const row = db.prepare("SELECT * FROM message_triggers WHERE id = ?").get(id);
+        return row ? fromTriggerRow(row) : void 0;
+      }
+      async updateTrigger(id, patch) {
+        const db = this.getDb();
+        const existing = db.prepare("SELECT * FROM message_triggers WHERE id = ?").get(id);
+        if (!existing) return void 0;
+        const current = fromTriggerRow(existing);
+        const updated = {
+          ...current,
+          ...patch,
+          id: current.id,
+          createdAt: current.createdAt
+        };
+        const row = toTriggerRow(updated);
+        db.prepare(
+          `UPDATE message_triggers SET
+        creator_id = ?, creator_context = ?, creator_name = ?, description = ?,
+        channels = ?, from_users = ?, from_bots = ?, contains = ?, match_pattern = ?,
+        threads = ?, workflow = ?, inputs = ?, output_context = ?,
+        status = ?, enabled = ?
+      WHERE id = ?`
+        ).run(
+          row.creator_id,
+          row.creator_context,
+          row.creator_name,
+          row.description,
+          row.channels,
+          row.from_users,
+          row.from_bots,
+          row.contains,
+          row.match_pattern,
+          row.threads,
+          row.workflow,
+          row.inputs,
+          row.output_context,
+          row.status,
+          row.enabled,
+          row.id
+        );
+        return updated;
+      }
+      async deleteTrigger(id) {
+        const db = this.getDb();
+        const result = db.prepare("DELETE FROM message_triggers WHERE id = ?").run(id);
+        if (result.changes > 0) {
+          logger.info(`[SqliteStore] Deleted message trigger ${id}`);
+          return true;
+        }
+        return false;
+      }
+      async getTriggersByCreator(creatorId) {
+        const db = this.getDb();
+        const rows = db.prepare("SELECT * FROM message_triggers WHERE creator_id = ?").all(creatorId);
+        return rows.map(fromTriggerRow);
+      }
+      async getActiveTriggers() {
+        const db = this.getDb();
+        const rows = db.prepare("SELECT * FROM message_triggers WHERE status = 'active' AND enabled = 1").all();
+        return rows.map(fromTriggerRow);
+      }
     };
   }
 });
@@ -18222,11 +18495,19 @@ var init_schedule_store = __esm({
     init_json_migrator();
     ScheduleStore = class _ScheduleStore {
       static instance;
+      static onTriggersChanged;
       backend = null;
       initialized = false;
       limits;
       config;
       externalBackend = null;
+      /**
+       * Register a callback to be invoked when message triggers change (create/update/delete).
+       * Used by SlackSocketRunner to rebuild its evaluator.
+       */
+      static setTriggersChangedCallback(cb) {
+        _ScheduleStore.onTriggersChanged = cb;
+      }
       constructor(config, limits, backend) {
         this.config = config || {};
         this.limits = {
@@ -18387,6 +18668,53 @@ var init_schedule_store = __esm({
           throw new Error("[ScheduleStore] Not initialized. Call initialize() first.");
         }
         return this.backend;
+      }
+      // --- Message Trigger Methods ---
+      /**
+       * Create a new message trigger
+       */
+      async createTriggerAsync(trigger) {
+        const result = await this.getBackend().createTrigger(trigger);
+        _ScheduleStore.onTriggersChanged?.();
+        return result;
+      }
+      /**
+       * Get a trigger by ID
+       */
+      async getTriggerAsync(id) {
+        return this.getBackend().getTrigger(id);
+      }
+      /**
+       * Update a trigger
+       */
+      async updateTriggerAsync(id, patch) {
+        const result = await this.getBackend().updateTrigger(id, patch);
+        if (result) {
+          _ScheduleStore.onTriggersChanged?.();
+        }
+        return result;
+      }
+      /**
+       * Delete a trigger
+       */
+      async deleteTriggerAsync(id) {
+        const result = await this.getBackend().deleteTrigger(id);
+        if (result) {
+          _ScheduleStore.onTriggersChanged?.();
+        }
+        return result;
+      }
+      /**
+       * Get all triggers for a specific creator
+       */
+      async getTriggersByCreatorAsync(creatorId) {
+        return this.getBackend().getTriggersByCreator(creatorId);
+      }
+      /**
+       * Get all active triggers
+       */
+      async getActiveTriggersAsync() {
+        return this.getBackend().getActiveTriggers();
       }
       /**
        * Shut down the backend cleanly
@@ -19628,11 +19956,19 @@ async function handleScheduleAction(args, context2) {
       return handlePauseResume(args, context2, store, "paused");
     case "resume":
       return handlePauseResume(args, context2, store, "active");
+    case "create_trigger":
+      return handleCreateTrigger(args, context2, store);
+    case "list_triggers":
+      return handleListTriggers(context2, store);
+    case "delete_trigger":
+      return handleDeleteTrigger(args, context2, store);
+    case "update_trigger":
+      return handleUpdateTrigger(args, context2, store);
     default:
       return {
         success: false,
         message: `Unknown action: ${args.action}`,
-        error: `Supported actions: create, list, cancel, pause, resume`
+        error: `Supported actions: create, list, cancel, pause, resume, create_trigger, list_triggers, delete_trigger, update_trigger`
       };
   }
 }
@@ -19875,6 +20211,172 @@ async function handlePauseResume(args, context2, store, newStatus) {
     schedule: updated
   };
 }
+function formatTrigger(trigger) {
+  const channels = trigger.channels?.length ? trigger.channels.join(", ") : "all";
+  const filters = [];
+  if (trigger.contains?.length) filters.push(`contains: ${trigger.contains.join(", ")}`);
+  if (trigger.matchPattern) filters.push(`match: /${trigger.matchPattern}/`);
+  if (trigger.fromBots) filters.push("bots: yes");
+  const filterStr = filters.length ? ` [${filters.join("; ")}]` : "";
+  const status = trigger.enabled ? "" : " (disabled)";
+  return `\`${trigger.id.substring(0, 8)}\` - channels: ${channels} \u2192 workflow: "${trigger.workflow}"${filterStr}${status}`;
+}
+async function handleCreateTrigger(args, context2, store) {
+  if (!args.workflow) {
+    return {
+      success: false,
+      message: "Missing workflow",
+      error: "Please specify the workflow to run when the trigger fires."
+    };
+  }
+  if (context2.availableWorkflows && !context2.availableWorkflows.includes(args.workflow)) {
+    return {
+      success: false,
+      message: `Workflow "${args.workflow}" not found`,
+      error: `Available workflows: ${context2.availableWorkflows.slice(0, 5).join(", ")}${context2.availableWorkflows.length > 5 ? "..." : ""}`
+    };
+  }
+  if ((!args.trigger_channels || args.trigger_channels.length === 0) && (!args.trigger_contains || args.trigger_contains.length === 0) && !args.trigger_match) {
+    return {
+      success: false,
+      message: "Missing trigger filters",
+      error: "Please specify at least one filter: trigger_channels, trigger_contains, or trigger_match."
+    };
+  }
+  const permissionCheck = checkSchedulePermissions(context2, args.workflow);
+  if (!permissionCheck.allowed) {
+    return {
+      success: false,
+      message: "Permission denied",
+      error: permissionCheck.reason || "You do not have permission to create triggers for this workflow"
+    };
+  }
+  try {
+    const trigger = await store.createTriggerAsync({
+      creatorId: context2.userId,
+      creatorContext: context2.contextType,
+      creatorName: context2.userName,
+      description: args.trigger_description,
+      channels: args.trigger_channels,
+      fromBots: args.trigger_from_bots ?? false,
+      contains: args.trigger_contains,
+      matchPattern: args.trigger_match,
+      threads: args.trigger_threads ?? "any",
+      workflow: args.workflow,
+      inputs: args.workflow_inputs,
+      status: "active",
+      enabled: true
+    });
+    logger.info(
+      `[ScheduleTool] Created message trigger ${trigger.id} for user ${context2.userId}: workflow="${args.workflow}"`
+    );
+    return {
+      success: true,
+      message: `**Message trigger created!**
+
+**Workflow**: ${trigger.workflow}
+**Channels**: ${trigger.channels?.join(", ") || "all"}
+${trigger.contains?.length ? `**Contains**: ${trigger.contains.join(", ")}
+` : ""}${trigger.matchPattern ? `**Pattern**: /${trigger.matchPattern}/
+` : ""}${trigger.description ? `**Description**: ${trigger.description}
+` : ""}
+ID: \`${trigger.id.substring(0, 8)}\``
+    };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : "Unknown error";
+    logger.warn(`[ScheduleTool] Failed to create trigger: ${errorMsg}`);
+    return {
+      success: false,
+      message: `Failed to create trigger: ${errorMsg}`,
+      error: errorMsg
+    };
+  }
+}
+async function handleListTriggers(context2, store) {
+  const triggers = await store.getTriggersByCreatorAsync(context2.userId);
+  const active = triggers.filter((t) => t.status !== "deleted");
+  if (active.length === 0) {
+    return {
+      success: true,
+      message: `You don't have any message triggers.
+
+To create one: "watch #channel for messages containing 'error' and run %my-workflow"`
+    };
+  }
+  const lines = active.map((t, i) => `${i + 1}. ${formatTrigger(t)}`);
+  return {
+    success: true,
+    message: `**Your message triggers:**
+
+${lines.join("\n")}
+
+To delete: "delete trigger <id>"
+To disable: "disable trigger <id>"`
+  };
+}
+async function handleDeleteTrigger(args, context2, store) {
+  if (!args.trigger_id) {
+    return {
+      success: false,
+      message: "Missing trigger ID",
+      error: "Please specify which trigger to delete."
+    };
+  }
+  const userTriggers = await store.getTriggersByCreatorAsync(context2.userId);
+  let trigger = userTriggers.find((t) => t.id === args.trigger_id);
+  if (!trigger) {
+    trigger = userTriggers.find((t) => t.id.startsWith(args.trigger_id));
+  }
+  if (!trigger) {
+    return {
+      success: false,
+      message: "Trigger not found",
+      error: `Could not find trigger with ID "${args.trigger_id}" in your triggers. Use "list my triggers" to see your triggers.`
+    };
+  }
+  await store.deleteTriggerAsync(trigger.id);
+  logger.info(`[ScheduleTool] Deleted trigger ${trigger.id} for user ${context2.userId}`);
+  return {
+    success: true,
+    message: `**Trigger deleted!**
+
+Was: watching for "${trigger.workflow}" ${trigger.channels?.length ? `in ${trigger.channels.join(", ")}` : ""}`
+  };
+}
+async function handleUpdateTrigger(args, context2, store) {
+  if (!args.trigger_id) {
+    return {
+      success: false,
+      message: "Missing trigger ID",
+      error: "Please specify which trigger to update."
+    };
+  }
+  const userTriggers = await store.getTriggersByCreatorAsync(context2.userId);
+  let trigger = userTriggers.find((t) => t.id === args.trigger_id);
+  if (!trigger) {
+    trigger = userTriggers.find((t) => t.id.startsWith(args.trigger_id));
+  }
+  if (!trigger) {
+    return {
+      success: false,
+      message: "Trigger not found",
+      error: `Could not find trigger with ID "${args.trigger_id}" in your triggers.`
+    };
+  }
+  const patch = {};
+  if (args.trigger_enabled !== void 0) {
+    patch.enabled = args.trigger_enabled;
+  }
+  await store.updateTriggerAsync(trigger.id, patch);
+  const action = args.trigger_enabled === false ? "disabled" : "enabled";
+  logger.info(`[ScheduleTool] ${action} trigger ${trigger.id} for user ${context2.userId}`);
+  return {
+    success: true,
+    message: `**Trigger ${action}!**
+
+"${trigger.workflow}" ${trigger.channels?.length ? `in ${trigger.channels.join(", ")}` : ""}`
+  };
+}
 function getScheduleToolDefinition() {
   return {
     name: "schedule",
@@ -19893,6 +20395,17 @@ ACTIONS:
 - list: Show user's active schedules
 - cancel: Remove a schedule by ID
 - pause/resume: Temporarily disable/enable a schedule
+
+MESSAGE-BASED TRIGGERS:
+In addition to time-based schedules, this tool can create/manage message-based triggers that react to
+Slack messages in specific channels. Use the create_trigger, list_triggers, delete_trigger, and update_trigger
+actions for this. Message triggers fire workflows based on message content, channel, sender, and thread scope.
+
+TRIGGER ACTIONS:
+- create_trigger: Create a new message trigger (requires workflow + at least one filter)
+- list_triggers: Show user's message triggers
+- delete_trigger: Remove a trigger by ID
+- update_trigger: Enable/disable a trigger by ID
 
 FOR CREATE ACTION - Extract these from user's request:
 1. WHAT:
@@ -19981,14 +20494,36 @@ User: "list my schedules"
 \u2192 { "action": "list" }
 
 User: "cancel schedule abc123"
-\u2192 { "action": "cancel", "schedule_id": "abc123" }`,
+\u2192 { "action": "cancel", "schedule_id": "abc123" }
+
+User: "watch #cicd for messages containing 'failed' and run %handle-cicd"
+\u2192 { "action": "create_trigger", "trigger_channels": ["C0CICD"], "trigger_contains": ["failed"], "workflow": "handle-cicd" }
+
+User: "list my message triggers"
+\u2192 { "action": "list_triggers" }
+
+User: "delete trigger abc123"
+\u2192 { "action": "delete_trigger", "trigger_id": "abc123" }
+
+User: "disable trigger abc123"
+\u2192 { "action": "update_trigger", "trigger_id": "abc123", "trigger_enabled": false }`,
     inputSchema: {
       type: "object",
       properties: {
         action: {
           type: "string",
-          enum: ["create", "list", "cancel", "pause", "resume"],
-          description: "What to do: create new, list existing, cancel/pause/resume by ID"
+          enum: [
+            "create",
+            "list",
+            "cancel",
+            "pause",
+            "resume",
+            "create_trigger",
+            "list_triggers",
+            "delete_trigger",
+            "update_trigger"
+          ],
+          description: "What to do: create/list/cancel/pause/resume for time-based schedules; create_trigger/list_triggers/delete_trigger/update_trigger for message-based triggers"
         },
         // WHAT to do
         reminder_text: {
@@ -20038,6 +20573,42 @@ User: "cancel schedule abc123"
         schedule_id: {
           type: "string",
           description: "For cancel/pause/resume: the schedule ID to act on (first 8 chars is enough)"
+        },
+        // For message trigger actions
+        trigger_channels: {
+          type: "array",
+          items: { type: "string" },
+          description: 'For create_trigger: Slack channel IDs to monitor (e.g., ["C0CICD"]). Supports wildcard suffix (e.g., "CENG*").'
+        },
+        trigger_from_bots: {
+          type: "boolean",
+          description: "For create_trigger: allow bot messages to trigger (default: false)"
+        },
+        trigger_contains: {
+          type: "array",
+          items: { type: "string" },
+          description: 'For create_trigger: keywords to match (case-insensitive OR). E.g., ["failed", "error"].'
+        },
+        trigger_match: {
+          type: "string",
+          description: "For create_trigger: regex pattern to match against message text."
+        },
+        trigger_threads: {
+          type: "string",
+          enum: ["root_only", "thread_only", "any"],
+          description: 'For create_trigger: thread scope filter (default: "any").'
+        },
+        trigger_description: {
+          type: "string",
+          description: "For create_trigger: human-readable description of the trigger."
+        },
+        trigger_id: {
+          type: "string",
+          description: "For delete_trigger/update_trigger: the trigger ID to act on (first 8 chars is enough)."
+        },
+        trigger_enabled: {
+          type: "boolean",
+          description: "For update_trigger: set to false to disable, true to enable."
         }
       },
       required: ["action"]
