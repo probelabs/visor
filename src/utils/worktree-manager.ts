@@ -404,7 +404,7 @@ export class WorktreeManager {
                 await this.saveMetadata(worktreePath, updatedMetadata);
                 if (options.clean) {
                   logger.debug(`Cleaning updated worktree`);
-                  await this.cleanWorktree(worktreePath);
+                  await this.cleanWorktree(worktreePath, latestCommit);
                 }
                 this.activeWorktrees.set(worktreeId, updatedMetadata);
                 return {
@@ -425,7 +425,7 @@ export class WorktreeManager {
           // Same ref - reuse existing worktree (already up to date or refresh failed)
           if (options.clean) {
             logger.debug(`Cleaning existing worktree`);
-            await this.cleanWorktree(worktreePath);
+            await this.cleanWorktree(worktreePath, metadata.commit);
           }
           this.activeWorktrees.set(worktreeId, metadata);
           return {
@@ -481,7 +481,7 @@ export class WorktreeManager {
 
             if (options.clean) {
               logger.debug(`Cleaning updated worktree`);
-              await this.cleanWorktree(worktreePath);
+              await this.cleanWorktree(worktreePath, newCommit);
             }
 
             this.activeWorktrees.set(worktreeId, updatedMetadata);
@@ -606,16 +606,72 @@ export class WorktreeManager {
   }
 
   /**
-   * Clean worktree (reset and remove untracked files)
+   * Clean worktree (reset and remove untracked files).
+   *
+   * When `expectedCommit` is provided the worktree is first forced back to a
+   * detached HEAD at that commit.  This is essential because AI agents or user
+   * commands may have created local branches inside the worktree, switching
+   * HEAD away from the detached state.  A plain `reset --hard HEAD` would
+   * then reset to the *wrong* commit.  After resetting, any local branches
+   * that were created inside the worktree are deleted so they cannot leak
+   * into future runs or PRs.
    */
-  private async cleanWorktree(worktreePath: string): Promise<void> {
-    // Reset to HEAD
+  private async cleanWorktree(worktreePath: string, expectedCommit?: string): Promise<void> {
+    if (expectedCommit) {
+      // Force-checkout the expected commit in detached HEAD state.
+      // This undoes any branch creation / checkout the AI might have done.
+      const detachCmd = `git -C ${this.escapeShellArg(worktreePath)} checkout --detach ${this.escapeShellArg(expectedCommit)}`;
+      const detachResult = await this.executeGitCommand(detachCmd, { timeout: 30000 });
+      if (detachResult.exitCode !== 0) {
+        // If checkout fails (e.g. merge conflicts), do a hard reset first then retry
+        await this.executeGitCommand(`git -C ${this.escapeShellArg(worktreePath)} reset --hard`, {
+          timeout: 10000,
+        });
+        await this.executeGitCommand(detachCmd, { timeout: 30000 });
+      }
+    }
+
+    // Reset to HEAD (now correctly pointing to expected commit)
     const resetCmd = `git -C ${this.escapeShellArg(worktreePath)} reset --hard HEAD`;
     await this.executeGitCommand(resetCmd);
 
     // Clean untracked files
     const cleanCmd = `git -C ${this.escapeShellArg(worktreePath)} clean -fdx`;
     await this.executeGitCommand(cleanCmd);
+
+    // Delete all local branches to prevent leakage between runs.
+    // Worktrees should always be in detached HEAD state; any local branches
+    // were created by AI agents or user commands and must not persist.
+    await this.deleteLocalBranches(worktreePath);
+  }
+
+  /**
+   * Delete all local branches in a worktree.
+   * Worktrees are always used in detached HEAD state, so any local branches
+   * were unintentionally created and should be cleaned up.
+   */
+  private async deleteLocalBranches(worktreePath: string): Promise<void> {
+    const listCmd = `git -C ${this.escapeShellArg(worktreePath)} branch --list --format='%(refname:short)'`;
+    const listResult = await this.executeGitCommand(listCmd, { timeout: 10000 });
+    if (listResult.exitCode !== 0 || !listResult.stdout.trim()) {
+      return; // No branches or command failed — nothing to clean
+    }
+
+    const branches = listResult.stdout
+      .trim()
+      .split('\n')
+      .map(b => b.trim())
+      .filter(b => b.length > 0);
+
+    for (const branch of branches) {
+      const deleteCmd = `git -C ${this.escapeShellArg(worktreePath)} branch -D ${this.escapeShellArg(branch)}`;
+      const deleteResult = await this.executeGitCommand(deleteCmd, { timeout: 10000 });
+      if (deleteResult.exitCode === 0) {
+        logger.debug(`Deleted local branch '${branch}' from worktree`);
+      } else {
+        logger.warn(`Failed to delete branch '${branch}': ${deleteResult.stderr}`);
+      }
+    }
   }
 
   /**

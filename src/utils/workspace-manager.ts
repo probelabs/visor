@@ -608,6 +608,41 @@ export class WorkspaceManager {
     if (cleanResult.exitCode !== 0) {
       logger.warn(`[Workspace] clean -fdx failed: ${cleanResult.stderr}`);
     }
+
+    // Delete all local branches to prevent leakage between runs.
+    // Worktrees should always be in detached HEAD state; any local branches
+    // were created by AI agents and must not persist.
+    await this.deleteLocalBranches(worktreePath);
+  }
+
+  /**
+   * Delete all local branches in a worktree.
+   */
+  private async deleteLocalBranches(worktreePath: string): Promise<void> {
+    const escapedPath = shellEscape(worktreePath);
+    const listResult = await commandExecutor.execute(
+      `git -C ${escapedPath} branch --list --format='%(refname:short)'`,
+      { timeout: 10000 }
+    );
+    if (listResult.exitCode !== 0 || !listResult.stdout.trim()) {
+      return;
+    }
+
+    const branches = listResult.stdout
+      .trim()
+      .split('\n')
+      .map(b => b.trim())
+      .filter(b => b.length > 0);
+
+    for (const branch of branches) {
+      const deleteResult = await commandExecutor.execute(
+        `git -C ${escapedPath} branch -D ${shellEscape(branch)}`,
+        { timeout: 10000 }
+      );
+      if (deleteResult.exitCode === 0) {
+        logger.debug(`[Workspace] Deleted local branch '${branch}' from worktree`);
+      }
+    }
   }
 
   /**
