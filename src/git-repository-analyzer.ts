@@ -284,13 +284,56 @@ export class GitRepositoryAnalyzer {
   /**
    * Get diff between current branch and base branch (for feature branch analysis)
    */
+  /**
+   * Resolve the base branch ref to a revision that exists locally.
+   * In CI (shallow clones), the local branch may not exist, so we try:
+   *   1. The branch name as-is (e.g. "main")
+   *   2. The remote-tracking ref (e.g. "origin/main")
+   *   3. Fetch from origin then retry
+   */
+  private async resolveBaseBranchRef(baseBranch: string): Promise<string> {
+    // 1. Try the branch name directly
+    try {
+      await this.git.revparse([baseBranch]);
+      return baseBranch;
+    } catch {
+      // Not available locally
+    }
+
+    // 2. Try origin/<baseBranch>
+    const remoteBranch = `origin/${baseBranch}`;
+    try {
+      await this.git.revparse([remoteBranch]);
+      return remoteBranch;
+    } catch {
+      // Not available either
+    }
+
+    // 3. Fetch from origin and retry
+    try {
+      await this.git.fetch(['origin', baseBranch]);
+      // After fetching, origin/<baseBranch> should exist
+      await this.git.revparse([remoteBranch]);
+      return remoteBranch;
+    } catch {
+      // Fetch failed — fall back to the original name and let the caller handle the error
+      return baseBranch;
+    }
+  }
+
   private async getBranchDiff(
     baseBranch: string,
     includeContext: boolean = true
   ): Promise<GitFileChange[]> {
     try {
+      // Resolve the base branch to an available local ref (handles CI shallow clones)
+      const resolvedBase = await this.resolveBaseBranchRef(baseBranch);
+      if (resolvedBase !== baseBranch) {
+        console.error(`📎 Resolved base branch: ${baseBranch} → ${resolvedBase}`);
+      }
+
       // Get the list of changed files between base and current branch
-      const diffSummary = await this.git.diffSummary([baseBranch]);
+      const diffSummary = await this.git.diffSummary([resolvedBase]);
       const changes: GitFileChange[] = [];
 
       if (!diffSummary || !diffSummary.files) {
@@ -328,7 +371,7 @@ export class GitRepositoryAnalyzer {
         let truncated = false;
         if (includeContext && !isBinary) {
           try {
-            const rawPatch = await this.git.diff([baseBranch, '--', file.file]);
+            const rawPatch = await this.git.diff([resolvedBase, '--', file.file]);
             if (rawPatch) {
               const result = this.truncatePatch(rawPatch, file.file);
               patch = result.patch;
