@@ -7192,6 +7192,23 @@ function createProbeTracerAdapter(fallbackTracer) {
         }
       }
     },
+    recordToolResult: (toolName, result, success, durationMs, metadata) => {
+      const resultStr = typeof result === "string" ? result : JSON.stringify(result || "");
+      emitEvent("tool.result", {
+        "tool.name": toolName,
+        "tool.result": resultStr.substring(0, 1e4),
+        "tool.result.length": resultStr.length,
+        "tool.duration_ms": durationMs,
+        "tool.success": success,
+        ...metadata || {}
+      });
+      if (fallback && typeof fallback.recordToolResult === "function") {
+        try {
+          fallback.recordToolResult(toolName, result, success, durationMs, metadata);
+        } catch {
+        }
+      }
+    },
     recordDelegationEvent: (phase, attrs) => {
       emitEvent(`delegation.${phase}`, attrs);
       if (fallback && typeof fallback.recordDelegationEvent === "function") {
@@ -46314,7 +46331,7 @@ var init_worktree_manager = __esm({
                     await this.saveMetadata(worktreePath, updatedMetadata);
                     if (options.clean) {
                       logger.debug(`Cleaning updated worktree`);
-                      await this.cleanWorktree(worktreePath);
+                      await this.cleanWorktree(worktreePath, latestCommit);
                     }
                     this.activeWorktrees.set(worktreeId, updatedMetadata);
                     return {
@@ -46333,7 +46350,7 @@ var init_worktree_manager = __esm({
               }
               if (options.clean) {
                 logger.debug(`Cleaning existing worktree`);
-                await this.cleanWorktree(worktreePath);
+                await this.cleanWorktree(worktreePath, metadata2.commit);
               }
               this.activeWorktrees.set(worktreeId, metadata2);
               return {
@@ -46375,7 +46392,7 @@ var init_worktree_manager = __esm({
                 await this.saveMetadata(worktreePath, updatedMetadata);
                 if (options.clean) {
                   logger.debug(`Cleaning updated worktree`);
-                  await this.cleanWorktree(worktreePath);
+                  await this.cleanWorktree(worktreePath, newCommit);
                 }
                 this.activeWorktrees.set(worktreeId, updatedMetadata);
                 logger.info(`Successfully updated worktree to ${ref} (${newCommit})`);
@@ -46465,13 +46482,54 @@ var init_worktree_manager = __esm({
         return true;
       }
       /**
-       * Clean worktree (reset and remove untracked files)
+       * Clean worktree (reset and remove untracked files).
+       *
+       * When `expectedCommit` is provided the worktree is first forced back to a
+       * detached HEAD at that commit.  This is essential because AI agents or user
+       * commands may have created local branches inside the worktree, switching
+       * HEAD away from the detached state.  A plain `reset --hard HEAD` would
+       * then reset to the *wrong* commit.  After resetting, any local branches
+       * that were created inside the worktree are deleted so they cannot leak
+       * into future runs or PRs.
        */
-      async cleanWorktree(worktreePath) {
+      async cleanWorktree(worktreePath, expectedCommit) {
+        if (expectedCommit) {
+          const detachCmd = `git -C ${this.escapeShellArg(worktreePath)} checkout --detach ${this.escapeShellArg(expectedCommit)}`;
+          const detachResult = await this.executeGitCommand(detachCmd, { timeout: 3e4 });
+          if (detachResult.exitCode !== 0) {
+            await this.executeGitCommand(`git -C ${this.escapeShellArg(worktreePath)} reset --hard`, {
+              timeout: 1e4
+            });
+            await this.executeGitCommand(detachCmd, { timeout: 3e4 });
+          }
+        }
         const resetCmd = `git -C ${this.escapeShellArg(worktreePath)} reset --hard HEAD`;
         await this.executeGitCommand(resetCmd);
         const cleanCmd = `git -C ${this.escapeShellArg(worktreePath)} clean -fdx`;
         await this.executeGitCommand(cleanCmd);
+        await this.deleteLocalBranches(worktreePath);
+      }
+      /**
+       * Delete all local branches in a worktree.
+       * Worktrees are always used in detached HEAD state, so any local branches
+       * were unintentionally created and should be cleaned up.
+       */
+      async deleteLocalBranches(worktreePath) {
+        const listCmd = `git -C ${this.escapeShellArg(worktreePath)} branch --list --format='%(refname:short)'`;
+        const listResult = await this.executeGitCommand(listCmd, { timeout: 1e4 });
+        if (listResult.exitCode !== 0 || !listResult.stdout.trim()) {
+          return;
+        }
+        const branches = listResult.stdout.trim().split("\n").map((b) => b.trim()).filter((b) => b.length > 0);
+        for (const branch of branches) {
+          const deleteCmd = `git -C ${this.escapeShellArg(worktreePath)} branch -D ${this.escapeShellArg(branch)}`;
+          const deleteResult = await this.executeGitCommand(deleteCmd, { timeout: 1e4 });
+          if (deleteResult.exitCode === 0) {
+            logger.debug(`Deleted local branch '${branch}' from worktree`);
+          } else {
+            logger.warn(`Failed to delete branch '${branch}': ${deleteResult.stderr}`);
+          }
+        }
       }
       /**
        * Get commit SHA for a given ref inside a bare repository.
@@ -53022,9 +53080,40 @@ ${file.patch}`).join("\n\n");
       /**
        * Get diff between current branch and base branch (for feature branch analysis)
        */
+      /**
+       * Resolve the base branch ref to a revision that exists locally.
+       * In CI (shallow clones), the local branch may not exist, so we try:
+       *   1. The branch name as-is (e.g. "main")
+       *   2. The remote-tracking ref (e.g. "origin/main")
+       *   3. Fetch from origin then retry
+       */
+      async resolveBaseBranchRef(baseBranch) {
+        try {
+          await this.git.revparse([baseBranch]);
+          return baseBranch;
+        } catch {
+        }
+        const remoteBranch = `origin/${baseBranch}`;
+        try {
+          await this.git.revparse([remoteBranch]);
+          return remoteBranch;
+        } catch {
+        }
+        try {
+          await this.git.fetch(["origin", baseBranch]);
+          await this.git.revparse([remoteBranch]);
+          return remoteBranch;
+        } catch {
+          return baseBranch;
+        }
+      }
       async getBranchDiff(baseBranch, includeContext = true) {
         try {
-          const diffSummary = await this.git.diffSummary([baseBranch]);
+          const resolvedBase = await this.resolveBaseBranchRef(baseBranch);
+          if (resolvedBase !== baseBranch) {
+            console.error(`\u{1F4CE} Resolved base branch: ${baseBranch} \u2192 ${resolvedBase}`);
+          }
+          const diffSummary = await this.git.diffSummary([resolvedBase]);
           const changes = [];
           if (!diffSummary || !diffSummary.files) {
             return [];
@@ -53052,7 +53141,7 @@ ${file.patch}`).join("\n\n");
             let truncated = false;
             if (includeContext && !isBinary) {
               try {
-                const rawPatch = await this.git.diff([baseBranch, "--", file.file]);
+                const rawPatch = await this.git.diff([resolvedBase, "--", file.file]);
                 if (rawPatch) {
                   const result = this.truncatePatch(rawPatch, file.file);
                   patch = result.patch;
@@ -53647,6 +53736,30 @@ var init_workspace_manager = __esm({
         });
         if (cleanResult.exitCode !== 0) {
           logger.warn(`[Workspace] clean -fdx failed: ${cleanResult.stderr}`);
+        }
+        await this.deleteLocalBranches(worktreePath);
+      }
+      /**
+       * Delete all local branches in a worktree.
+       */
+      async deleteLocalBranches(worktreePath) {
+        const escapedPath = shellEscape(worktreePath);
+        const listResult = await commandExecutor.execute(
+          `git -C ${escapedPath} branch --list --format='%(refname:short)'`,
+          { timeout: 1e4 }
+        );
+        if (listResult.exitCode !== 0 || !listResult.stdout.trim()) {
+          return;
+        }
+        const branches = listResult.stdout.trim().split("\n").map((b) => b.trim()).filter((b) => b.length > 0);
+        for (const branch of branches) {
+          const deleteResult = await commandExecutor.execute(
+            `git -C ${escapedPath} branch -D ${shellEscape(branch)}`,
+            { timeout: 1e4 }
+          );
+          if (deleteResult.exitCode === 0) {
+            logger.debug(`[Workspace] Deleted local branch '${branch}' from worktree`);
+          }
         }
       }
       /**
