@@ -69,6 +69,28 @@ function createProbeTracerAdapter(fallbackTracer?: any) {
         } catch {}
       }
     },
+    recordToolResult: (
+      toolName: string,
+      result: unknown,
+      success: boolean,
+      durationMs: number,
+      metadata?: Record<string, unknown>
+    ) => {
+      const resultStr = typeof result === 'string' ? result : JSON.stringify(result || '');
+      emitEvent('tool.result', {
+        'tool.name': toolName,
+        'tool.result': resultStr.substring(0, 10000),
+        'tool.result.length': resultStr.length,
+        'tool.duration_ms': durationMs,
+        'tool.success': success,
+        ...(metadata || {}),
+      });
+      if (fallback && typeof fallback.recordToolResult === 'function') {
+        try {
+          fallback.recordToolResult(toolName, result, success, durationMs, metadata);
+        } catch {}
+      }
+    },
     recordDelegationEvent: (phase: string, attrs?: Record<string, unknown>) => {
       emitEvent(`delegation.${phase}`, attrs);
       if (fallback && typeof fallback.recordDelegationEvent === 'function') {
