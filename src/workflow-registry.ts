@@ -418,6 +418,20 @@ export class WorkflowRegistry {
   ): Promise<{ content: string; resolvedSource: string; importBasePath?: string }> {
     const baseIsUrl = basePath?.startsWith('http://') || basePath?.startsWith('https://');
 
+    // Handle visor:// and visor-ee:// built-in workflow URLs
+    // Resolves to the defaults/ directory shipped with the package
+    if (source.startsWith('visor://') || source.startsWith('visor-ee://')) {
+      const relativePath = source.replace(/^visor(?:-ee)?:\/\//, '');
+      const defaultsDir = path.resolve(__dirname, '..', 'defaults');
+      const filePath = path.resolve(defaultsDir, relativePath);
+      // Prevent path traversal outside defaults directory
+      if (!filePath.startsWith(defaultsDir + path.sep)) {
+        throw new Error(`Invalid visor:// path: resolved path escapes defaults directory`);
+      }
+      const content = await fs.readFile(filePath, 'utf-8');
+      return { content, resolvedSource: filePath, importBasePath: path.dirname(filePath) };
+    }
+
     // Handle URLs
     if (source.startsWith('http://') || source.startsWith('https://')) {
       const response = await fetch(source);
