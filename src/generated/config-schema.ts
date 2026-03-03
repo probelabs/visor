@@ -958,7 +958,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -975,7 +975,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1161,6 +1161,7 @@ export const configSchema = {
         'manual',
         'schedule',
         'webhook_received',
+        'slack_message',
       ],
       description: 'Valid event triggers for checks',
     },
@@ -1676,7 +1677,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1691,14 +1692,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867>>':
+    'Record<string,Partial<interface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-13489-28083-src_types_config.ts-0-53867>': {
+    'Partial<interface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255>': {
       type: 'object',
       additionalProperties: false,
     },
@@ -2592,6 +2593,10 @@ export const configSchema = {
           $ref: '#/definitions/Record%3Cstring%2CStaticCronJob%3E',
           description: 'Static cron jobs defined in configuration (always executed)',
         },
+        on_message: {
+          $ref: '#/definitions/Record%3Cstring%2CSlackMessageTrigger%3E',
+          description: 'Slack message triggers for reactive workflow execution',
+        },
       },
       additionalProperties: false,
       description: 'Scheduler configuration for workflow scheduling',
@@ -2840,6 +2845,98 @@ export const configSchema = {
       additionalProperties: false,
       description:
         'Static cron job defined in YAML configuration These are always executed by the scheduler daemon',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    'Record<string,SlackMessageTrigger>': {
+      type: 'object',
+      additionalProperties: {
+        $ref: '#/definitions/SlackMessageTrigger',
+      },
+    },
+    SlackMessageTrigger: {
+      type: 'object',
+      properties: {
+        channels: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Channel IDs to monitor (supports wildcard suffix, e.g., "CENG*")',
+        },
+        from: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Only trigger on messages from these user IDs',
+        },
+        from_bots: {
+          type: 'boolean',
+          description: 'Allow bot messages to trigger (default: false)',
+        },
+        contains: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Keyword match - any keyword triggers (case-insensitive OR)',
+        },
+        match: {
+          type: 'string',
+          description: 'Regex pattern to match against message text',
+        },
+        threads: {
+          type: 'string',
+          enum: ['root_only', 'thread_only', 'any'],
+          description: "Thread scope filter (default: 'any')",
+        },
+        workflow: {
+          type: 'string',
+          description: 'Workflow/check ID to execute',
+        },
+        inputs: {
+          $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+          description: 'Optional workflow inputs',
+        },
+        output: {
+          type: 'object',
+          properties: {
+            type: {
+              type: 'string',
+              enum: ['slack', 'github', 'webhook', 'none'],
+              description: 'Output type: slack, github, webhook, or none',
+            },
+            target: {
+              type: 'string',
+              description: 'Target (channel name, repo, URL)',
+            },
+            thread_id: {
+              type: 'string',
+              description: 'Thread ID for threaded outputs',
+            },
+          },
+          required: ['type'],
+          additionalProperties: false,
+          description: 'Output destination configuration',
+          patternProperties: {
+            '^x-': {},
+          },
+        },
+        description: {
+          type: 'string',
+          description: 'Description for logging/display',
+        },
+        enabled: {
+          type: 'boolean',
+          description: 'Enable/disable this trigger (default: true)',
+        },
+      },
+      required: ['workflow'],
+      additionalProperties: false,
+      description:
+        'Slack message trigger for reactive workflow execution Triggers workflows based on Slack messages matching configured filters',
       patternProperties: {
         '^x-': {},
       },

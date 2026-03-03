@@ -9,6 +9,7 @@ Visor provides bidirectional Slack integration through Socket Mode, enabling int
 - [Configuration](#configuration)
 - [Features](#features)
 - [Example Workflows](#example-workflows)
+- [Message Triggers](#message-triggers)
 - [Troubleshooting](#troubleshooting)
 - [Related Documentation](#related-documentation)
 
@@ -473,6 +474,53 @@ Log messages include:
 - `[SlackSocket]` - WebSocket connection and event handling
 - `[slack-frontend]` - Message posting and reactions
 - `[prompt-state]` - Human input state management
+
+## Message Triggers
+
+Message triggers allow Visor to react to Slack messages in specific channels without requiring an @mention. This is configured via `scheduler.on_message` and is ideal for monitoring bot notifications (e.g., CI/CD failures, deployment alerts).
+
+### Quick Example
+
+```yaml
+scheduler:
+  on_message:
+    cicd-watcher:
+      channels: ["C0CICD"]
+      from_bots: true
+      contains: ["failed", "error"]
+      workflow: handle-cicd-failure
+
+steps:
+  handle-cicd-failure:
+    type: ai
+    on: [slack_message]
+    prompt: "Analyze this CI/CD failure and suggest a fix."
+```
+
+When a message matching the filters appears in the specified channel, Visor dispatches the configured workflow asynchronously. The workflow receives the full Slack event context including message text, sender, channel, and thread conversation history (for thread replies).
+
+### Key Features
+
+- **No @mention required**: Triggers fire based on message content, channel, user, and thread scope
+- **Bot message support**: Set `from_bots: true` to react to messages from other bots (CI systems, monitoring tools)
+- **Coexists with @mention path**: A message can trigger both a message trigger workflow and the normal @mention-based dispatch
+- **Hot reload**: Trigger configuration is rebuilt on config hot-reload without restarting the bot
+- **Deduplication**: Built-in dedup prevents duplicate workflow dispatches for the same Slack event
+
+### Filter Options
+
+| Filter | Description |
+|--------|-------------|
+| `channels` | Channel IDs (wildcard suffix supported, e.g., `CENG*`) |
+| `from` | Specific user IDs |
+| `from_bots` | Allow bot messages (default: false) |
+| `contains` | Keyword match (case-insensitive, any = match) |
+| `match` | Regex pattern |
+| `threads` | `root_only`, `thread_only`, or `any` (default) |
+
+All specified filters must pass (AND). Within `contains`, any keyword suffices (OR). Omitted filters match everything.
+
+See [Scheduler - Message Triggers](./scheduler.md#message-triggers-on_message) for complete configuration reference.
 
 ## Scheduled Reminders
 

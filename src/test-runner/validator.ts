@@ -143,9 +143,30 @@ const schema: any = {
         },
         event: {
           type: 'string',
-          enum: ['manual', 'pr_opened', 'pr_updated', 'pr_closed', 'issue_opened', 'issue_comment'],
+          enum: [
+            'manual',
+            'pr_opened',
+            'pr_updated',
+            'pr_closed',
+            'issue_opened',
+            'issue_comment',
+            'slack_message',
+          ],
         },
         fixture: { $ref: '#/$defs/fixtureRef' },
+        // Inline Slack message payload for slack_message events
+        slack_message: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            channel: { type: 'string' },
+            user: { type: 'string' },
+            text: { type: 'string' },
+            ts: { type: 'string' },
+            thread_ts: { type: 'string' },
+            is_bot: { type: 'boolean' },
+          },
+        },
         env: {
           type: 'object',
           additionalProperties: { type: 'string' },
@@ -190,9 +211,30 @@ const schema: any = {
         },
         event: {
           type: 'string',
-          enum: ['manual', 'pr_opened', 'pr_updated', 'pr_closed', 'issue_opened', 'issue_comment'],
+          enum: [
+            'manual',
+            'pr_opened',
+            'pr_updated',
+            'pr_closed',
+            'issue_opened',
+            'issue_comment',
+            'slack_message',
+          ],
         },
         fixture: { $ref: '#/$defs/fixtureRef' },
+        // Inline Slack message payload for slack_message events
+        slack_message: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            channel: { type: 'string' },
+            user: { type: 'string' },
+            text: { type: 'string' },
+            ts: { type: 'string' },
+            thread_ts: { type: 'string' },
+            is_bot: { type: 'boolean' },
+          },
+        },
         env: {
           type: 'object',
           additionalProperties: { type: 'string' },

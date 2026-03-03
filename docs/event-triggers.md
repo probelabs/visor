@@ -185,6 +185,29 @@ The complete list of event triggers that can be used in the `on` field:
 | `manual` | Manual CLI invocation |
 | `schedule` | Scheduled execution (cron or workflow_dispatch) |
 | `webhook_received` | HTTP webhook was received (via http_input provider) |
+| `slack_message` | Slack message matched an `on_message` trigger (see [Scheduler - Message Triggers](./scheduler.md#message-triggers-on_message)) |
+
+### Slack Message Trigger Events (`slack_message`)
+
+When a Slack message matches a configured `on_message` trigger (defined in `scheduler.on_message`), the specified workflow is dispatched with event type `slack_message`. This allows reactive workflows based on message content in specific channels, without requiring an @mention.
+
+- **Trigger mapping**: `slack_message`
+- **Source**: `scheduler.on_message` filter match in Slack Socket Mode
+- **Log format**:
+  ```
+  [SlackSocket] Message trigger 'cicd-watcher' matched → workflow="handle-cicd" channel=C0CICD ts=1700.001
+  ```
+
+Steps can filter on this event type:
+```yaml
+steps:
+  handle-cicd-failure:
+    on: [slack_message]   # Only runs when triggered by on_message
+    type: ai
+    prompt: "Analyze the CI/CD failure."
+```
+
+See [Scheduler - Message Triggers](./scheduler.md#message-triggers-on_message) for configuration details.
 
 ## Configuration
 
@@ -241,6 +264,7 @@ The `goto_event` field accepts any valid `EventTrigger` value:
 - `pr_opened`, `pr_updated`, `pr_closed`
 - `issue_opened`, `issue_comment`
 - `manual`, `schedule`, `webhook_received`
+- `slack_message`
 
 For complete documentation on failure routing, retry policies, and loop control, see [Failure Routing](./failure-routing.md).
 
@@ -300,6 +324,7 @@ visor --check security --event pr_updated
 | `--event issue_comment` | Only runs checks with `on: [issue_comment]` | Test comment assistant |
 | `--event manual` | Only runs checks with `on: [manual]` | Test manual-triggered checks |
 | `--event schedule` | Only runs checks with `on: [schedule]` | Test scheduled/cron checks |
+| `--event slack_message` | Only runs checks with `on: [slack_message]` | Test message trigger workflows |
 | `--event all` | Runs all checks (except manual-only) | Default behavior, ignores `on:` filters |
 | (no flag) | Auto-detects based on schema | Smart default |
 

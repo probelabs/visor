@@ -6,6 +6,57 @@
  * - KnexStoreBackend (Enterprise: PostgreSQL/MySQL with distributed locking)
  */
 import type { Schedule, ScheduleLimits } from '../schedule-store';
+import type { SlackMessageTrigger } from '../../types/config';
+
+/**
+ * Persisted message trigger for reactive workflow execution.
+ * Created dynamically via the schedule tool (as opposed to static config triggers).
+ */
+export interface MessageTrigger {
+  id: string;
+  creatorId: string;
+  creatorContext?: string;
+  creatorName?: string;
+  description?: string;
+  channels?: string[];
+  fromUsers?: string[];
+  fromBots: boolean;
+  contains?: string[];
+  matchPattern?: string;
+  threads: 'root_only' | 'thread_only' | 'any';
+  workflow: string;
+  inputs?: Record<string, unknown>;
+  outputContext?: { type: string; target?: string; threadId?: string };
+  status: 'active' | 'paused' | 'deleted';
+  enabled: boolean;
+  createdAt: number;
+}
+
+/**
+ * Convert a persisted MessageTrigger (camelCase DB model) to a SlackMessageTrigger
+ * (snake_case config model) used by MessageTriggerEvaluator.
+ */
+export function toSlackMessageTrigger(t: MessageTrigger): SlackMessageTrigger {
+  return {
+    channels: t.channels,
+    from: t.fromUsers,
+    from_bots: t.fromBots,
+    contains: t.contains,
+    match: t.matchPattern,
+    threads: t.threads,
+    workflow: t.workflow,
+    inputs: t.inputs,
+    output: t.outputContext
+      ? {
+          type: t.outputContext.type as 'slack' | 'github' | 'webhook' | 'none',
+          target: t.outputContext.target,
+          thread_id: t.outputContext.threadId,
+        }
+      : undefined,
+    description: t.description,
+    enabled: t.enabled,
+  };
+}
 
 /**
  * Statistics about the schedule store
@@ -88,6 +139,26 @@ export interface ScheduleStoreBackend {
 
   /** Flush any pending writes (no-op for SQL backends) */
   flush(): Promise<void>;
+
+  // --- Message Triggers ---
+
+  /** Create a new message trigger */
+  createTrigger(trigger: Omit<MessageTrigger, 'id' | 'createdAt'>): Promise<MessageTrigger>;
+
+  /** Get a trigger by ID */
+  getTrigger(id: string): Promise<MessageTrigger | undefined>;
+
+  /** Update a trigger. Returns updated trigger or undefined if not found */
+  updateTrigger(id: string, patch: Partial<MessageTrigger>): Promise<MessageTrigger | undefined>;
+
+  /** Delete a trigger. Returns true if it existed */
+  deleteTrigger(id: string): Promise<boolean>;
+
+  /** Get all triggers for a specific creator */
+  getTriggersByCreator(creatorId: string): Promise<MessageTrigger[]>;
+
+  /** Get all active (enabled, non-deleted) triggers */
+  getActiveTriggers(): Promise<MessageTrigger[]>;
 }
 
 /**

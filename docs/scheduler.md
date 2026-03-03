@@ -63,6 +63,160 @@ scheduler:
         target: "#platform-team"
 ```
 
+## Message Triggers (`on_message`)
+
+Message triggers allow workflows to be executed reactively based on Slack messages, without requiring an @mention. This is useful for monitoring channels (e.g., CI/CD failure notifications) and automatically triggering workflows in response.
+
+### Configuration
+
+Add `on_message` alongside `cron` in the `scheduler` section:
+
+```yaml
+scheduler:
+  enabled: true
+
+  on_message:
+    cicd-watcher:
+      description: "React to CI/CD failure notifications"
+      channels: ["C0CICD"]           # Channel IDs (wildcard suffix supported, e.g., "CENG*")
+      from: ["U123BOT"]              # Optional: only from these user IDs
+      from_bots: true                # Allow bot messages (default: false)
+      contains: ["failed", "error"]  # Any keyword match, case-insensitive (OR)
+      match: "build.*failed"         # Regex pattern (optional)
+      threads: root_only             # root_only | thread_only | any (default: any)
+      workflow: handle-cicd-failure
+      inputs:
+        source: slack
+      output:
+        type: slack
+      enabled: true
+
+    thread-responder:
+      description: "Respond in threads about deployments"
+      channels: ["C0DEPLOY"]
+      threads: thread_only           # Only react to thread replies
+      contains: ["help", "stuck"]
+      workflow: deploy-help
+```
+
+### Filter Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `channels` | string[] | (all) | Channel IDs to monitor. Supports wildcard suffix (e.g., `CENG*`) |
+| `from` | string[] | (all) | Only trigger on messages from these Slack user IDs |
+| `from_bots` | boolean | `false` | Allow bot messages to trigger. When false, bot messages are ignored |
+| `contains` | string[] | (all) | Keyword match — any keyword triggers (case-insensitive, OR logic) |
+| `match` | string | (none) | Regex pattern to match against message text (case-insensitive) |
+| `threads` | string | `any` | Thread scope: `root_only`, `thread_only`, or `any` |
+| `workflow` | string | **(required)** | Workflow/check ID to execute when triggered |
+| `inputs` | object | `{}` | Workflow inputs passed to the execution |
+| `output` | object | (none) | Output destination (`type`, `target`, `thread_id`) |
+| `description` | string | (none) | Description for logging |
+| `enabled` | boolean | `true` | Enable/disable this trigger |
+
+### Filter Logic
+
+- All specified filters must pass (**AND** logic between filters)
+- Within `contains`, any keyword match suffices (**OR** logic)
+- Omitted filters are not checked (they match everything)
+
+### Thread Scope
+
+| Value | Behavior |
+|-------|----------|
+| `root_only` | Only react to root channel messages (no `thread_ts` or `thread_ts === ts`) |
+| `thread_only` | Only react to thread replies (`thread_ts` exists and differs from `ts`) |
+| `any` | React to both root messages and thread replies (default) |
+
+When a triggered message is a thread reply, full thread conversation context is fetched via `SlackAdapter` and passed to the workflow as `slack_conversation`. When the message is a root channel message, only the single message is available.
+
+### Message Flow
+
+```
+Slack WebSocket Event
+  → Parse JSON, ACK
+  → Filter subtypes (edited, etc.)
+  → Filter self-bot messages
+  → Filter guests
+  → Evaluate message triggers ← NEW
+       → For each match: dispatch workflow async
+  → Mention gate (existing @mention path)
+  → Thread/allowlist/dedup gates
+  → Dispatch all checks (existing mention-based path)
+```
+
+Both paths can fire for the same message. A message that matches a trigger AND contains an @mention will dispatch the triggered workflow AND go through the normal mention-based dispatch. Each triggered workflow gets its own engine instance.
+
+### Webhook Context
+
+The triggered workflow receives via `webhookData`:
+
+| Field | Description |
+|-------|-------------|
+| `event.text` | Message text |
+| `event.user` | Sender user ID |
+| `event.channel` | Channel ID |
+| `event.ts` / `event.thread_ts` | Message timestamps |
+| `trigger.id` | Which trigger matched |
+| `trigger.type` | `on_message` |
+| `slack_conversation` | Full thread context (if thread reply) |
+
+The event type is `slack_message`, which can be used in step `on:` filters:
+
+```yaml
+steps:
+  handle-cicd-failure:
+    type: ai
+    on: [slack_message]
+    prompt: "Analyze this CI/CD failure and suggest fixes."
+```
+
+### Deduplication
+
+Each trigger match is deduplicated using the key `trigger:${triggerId}:${channel}:${ts}`. This prevents the same trigger from firing multiple times for duplicate Slack events.
+
+### Hot Reload
+
+Message triggers are rebuilt when configuration is hot-reloaded via `updateConfig()`. Adding, removing, or modifying triggers in `.visor.yaml` takes effect on the next config reload without restarting the bot.
+
+### Example: CI/CD Failure Monitor
+
+```yaml
+scheduler:
+  on_message:
+    cicd-failures:
+      channels: ["C0CICD"]
+      from_bots: true
+      contains: ["failed", "error", "broken"]
+      match: "build.*#\\d+.*(failed|error)"
+      threads: root_only
+      workflow: analyze-failure
+      inputs:
+        notify_team: true
+
+steps:
+  analyze-failure:
+    type: ai
+    on: [slack_message]
+    schema:
+      type: object
+      properties:
+        text:
+          type: string
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+      required: [text, severity]
+    prompt: |
+      A CI/CD failure was detected. Analyze the failure message and provide:
+      1. Root cause analysis
+      2. Suggested fix
+      3. Severity assessment
+
+      Failure message: {{ event.text }}
+```
+
 ## Static Cron Jobs
 
 Static cron jobs are defined in your configuration file and always run regardless of permission settings. They're ideal for recurring organizational tasks:
@@ -398,6 +552,7 @@ src/
 │   ├── schedule-parser.ts        # Natural language parsing utilities
 │   ├── scheduler.ts              # Generic scheduler daemon
 │   ├── schedule-tool.ts          # AI tool for schedule management
+│   ├── message-trigger.ts        # Slack message trigger evaluator
 │   ├── cli-handler.ts            # CLI command handlers
 │   └── store/                    # Storage backends
 │       ├── index.ts              # Backend factory
@@ -418,6 +573,7 @@ src/
 |-----------|---------|
 | `Scheduler` | Main daemon that checks for due schedules and executes them |
 | `ScheduleStore` | Singleton for persisting schedules to JSON |
+| `MessageTriggerEvaluator` | Evaluates Slack messages against `on_message` triggers |
 | `ScheduleOutputAdapter` | Interface for output destinations |
 | `SlackOutputAdapter` | Implements output posting for Slack |
 | `schedule-tool` | AI tool definition and handler |

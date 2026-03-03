@@ -487,7 +487,55 @@ export class VisorTestRunner {
       octokit: recorder as unknown as any,
     } as any);
     // Determine checks to run for this event
-    const eventForCase = this.mapEventFromFixtureName(fixtureInput?.builtin);
+    const caseEvent = (_case as any).event as string | undefined;
+    const eventForCase =
+      caseEvent === 'slack_message'
+        ? ('slack_message' as import('../types/config').EventTrigger)
+        : this.mapEventFromFixtureName(fixtureInput?.builtin);
+    // Override prInfo.eventType when event is explicitly set
+    if (caseEvent && caseEvent !== 'manual') {
+      (prInfo as any).eventType = eventForCase;
+    }
+    // Inject webhook context for slack_message events
+    if (eventForCase === 'slack_message') {
+      const slackMsg = (_case as any).slack_message as
+        | {
+            channel?: string;
+            user?: string;
+            text?: string;
+            ts?: string;
+            thread_ts?: string;
+            is_bot?: boolean;
+          }
+        | undefined;
+      const fx =
+        fixtureInput?.builtin && String(fixtureInput.builtin).startsWith('slack.')
+          ? new (require('./fixture-loader').FixtureLoader)().load(fixtureInput.builtin)
+          : undefined;
+      const fxEvent = (fx?.webhook?.payload as any)?.event || {};
+      // Build Slack event payload — inline slack_message overrides fixture
+      const slackEvent: any = {
+        type: 'message',
+        channel: slackMsg?.channel || fxEvent.channel || 'C0TEST',
+        user: slackMsg?.user || fxEvent.user || 'U_TEST',
+        text: slackMsg?.text || fxEvent.text || '',
+        ts: slackMsg?.ts || fxEvent.ts || '1000.001',
+      };
+      if (slackMsg?.thread_ts || fxEvent.thread_ts) {
+        slackEvent.thread_ts = slackMsg?.thread_ts || fxEvent.thread_ts;
+      }
+      if (slackMsg?.is_bot || fxEvent.subtype === 'bot_message') {
+        slackEvent.subtype = 'bot_message';
+      }
+      const webhookPayload = { event: slackEvent };
+      const webhookData = new Map<string, unknown>();
+      webhookData.set('/bots/slack/support', webhookPayload);
+      const prevCtx: any = (engine as any).executionContext || {};
+      engine.setExecutionContext({
+        ...prevCtx,
+        webhookContext: { webhookData, eventType: 'slack_message' },
+      } as any);
+    }
     const desiredSteps = new Set<string>(
       (expect.calls || []).map(c => c.step).filter(Boolean) as string[]
     );
@@ -1540,6 +1588,7 @@ export class VisorTestRunner {
     if (name.includes('pr_closed')) return 'pr_closed';
     if (name.includes('issue_comment')) return 'issue_comment';
     if (name.includes('issue_open')) return 'issue_opened';
+    if (name.startsWith('slack.message')) return 'slack_message';
     return 'manual';
   }
   // Print warnings when AI or command steps execute without mocks in tests

@@ -6,7 +6,10 @@ export type BuiltinFixtureName =
   | 'gh.issue_comment.visor_help'
   | 'gh.issue_comment.visor_regenerate'
   | 'gh.issue_comment.edited'
-  | 'gh.pr_closed.minimal';
+  | 'gh.pr_closed.minimal'
+  | 'slack.message.simple'
+  | 'slack.message.bot'
+  | 'slack.message.thread';
 
 export interface LoadedFixture {
   name: string;
@@ -123,6 +126,60 @@ export class FixtureLoader {
           name: 'pull_request',
           action: 'closed',
           payload: { pull_request: { number: 1, title: 'feat: add user search' } },
+        },
+      };
+    }
+    // Slack message fixtures
+    if (name === 'slack.message.simple') {
+      return {
+        name,
+        webhook: {
+          name: 'slack_message',
+          payload: {
+            event: {
+              type: 'message',
+              channel: 'C0TEST',
+              user: 'U_USER',
+              text: 'build #42 failed with error',
+              ts: '1000.001',
+            },
+          },
+        },
+      };
+    }
+    if (name === 'slack.message.bot') {
+      return {
+        name,
+        webhook: {
+          name: 'slack_message',
+          payload: {
+            event: {
+              type: 'message',
+              subtype: 'bot_message',
+              channel: 'C0CICD',
+              bot_id: 'B_CI',
+              text: 'deploy to production failed',
+              ts: '1000.002',
+            },
+          },
+        },
+      };
+    }
+    if (name === 'slack.message.thread') {
+      return {
+        name,
+        webhook: {
+          name: 'slack_message',
+          payload: {
+            event: {
+              type: 'message',
+              channel: 'C0TEST',
+              user: 'U_USER',
+              text: 'thread reply with error details',
+              ts: '1000.003',
+              thread_ts: '1000.001',
+            },
+          },
         },
       };
     }
