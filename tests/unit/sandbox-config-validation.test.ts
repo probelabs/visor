@@ -226,6 +226,138 @@ describe('Sandbox Config Validation', () => {
     await expect(writeAndLoad(config)).rejects.toThrow('must be absolute');
   });
 
+  it('should accept valid bind_paths', async () => {
+    const config: VisorConfig = {
+      version: '1.0',
+      sandboxes: {
+        'node-env': {
+          image: 'node:20-alpine',
+          bind_paths: [
+            { host: '/home/user/.gitconfig' },
+            { host: '~/.ssh', container: '/root/.ssh', read_only: true },
+            { host: '/opt/tools', container: '/tools', read_only: false },
+          ],
+        },
+      },
+      sandbox: 'node-env',
+      checks: {
+        lint: { type: 'command', exec: 'echo test' },
+      },
+      output: {
+        pr_comment: { format: 'table', group_by: 'check', collapse: false },
+      },
+    };
+
+    const result = await writeAndLoad(config);
+    expect(result.sandboxes!['node-env'].bind_paths).toHaveLength(3);
+  });
+
+  it('should reject bind_paths with path traversal in host', async () => {
+    const config: VisorConfig = {
+      version: '1.0',
+      sandboxes: {
+        'node-env': {
+          image: 'node:20-alpine',
+          bind_paths: [{ host: '/home/user/../etc/shadow' }],
+        },
+      },
+      checks: {
+        lint: { type: 'command', exec: 'echo test' },
+      },
+      output: {
+        pr_comment: { format: 'table', group_by: 'check', collapse: false },
+      },
+    };
+
+    await expect(writeAndLoad(config)).rejects.toThrow('path traversal');
+  });
+
+  it('should reject bind_paths with non-absolute container path', async () => {
+    const config: VisorConfig = {
+      version: '1.0',
+      sandboxes: {
+        'node-env': {
+          image: 'node:20-alpine',
+          bind_paths: [{ host: '/home/user/.gitconfig', container: 'relative/path' }],
+        },
+      },
+      checks: {
+        lint: { type: 'command', exec: 'echo test' },
+      },
+      output: {
+        pr_comment: { format: 'table', group_by: 'check', collapse: false },
+      },
+    };
+
+    await expect(writeAndLoad(config)).rejects.toThrow('absolute path');
+  });
+
+  it('should accept workdir: "host"', async () => {
+    const config: VisorConfig = {
+      version: '1.0',
+      sandboxes: {
+        'node-env': {
+          image: 'node:20-alpine',
+          workdir: 'host',
+        },
+      },
+      sandbox: 'node-env',
+      checks: {
+        lint: { type: 'command', exec: 'echo test' },
+      },
+      output: {
+        pr_comment: { format: 'table', group_by: 'check', collapse: false },
+      },
+    };
+
+    const result = await writeAndLoad(config);
+    expect(result.sandboxes!['node-env'].workdir).toBe('host');
+  });
+
+  it('should accept visor_path for native engines', async () => {
+    const config: VisorConfig = {
+      version: '1.0',
+      sandboxes: {
+        'bwrap-env': {
+          engine: 'bubblewrap',
+          visor_path: '/custom/visor',
+        },
+      },
+      sandbox: 'bwrap-env',
+      checks: {
+        lint: { type: 'command', exec: 'echo test' },
+      },
+      output: {
+        pr_comment: { format: 'table', group_by: 'check', collapse: false },
+      },
+    };
+
+    const result = await writeAndLoad(config);
+    expect(result.sandboxes!['bwrap-env'].visor_path).toBe('/custom/visor');
+  });
+
+  it('should accept bind_paths for native engines', async () => {
+    const config: VisorConfig = {
+      version: '1.0',
+      sandboxes: {
+        'bwrap-env': {
+          engine: 'bubblewrap',
+          bind_paths: [{ host: '/home/user/.gitconfig' }],
+        },
+      },
+      sandbox: 'bwrap-env',
+      checks: {
+        lint: { type: 'command', exec: 'echo test' },
+      },
+      output: {
+        pr_comment: { format: 'table', group_by: 'check', collapse: false },
+      },
+    };
+
+    const result = await writeAndLoad(config);
+    expect(result.sandboxes!['bwrap-env'].bind_paths).toHaveLength(1);
+  });
+
   it('should accept config without any sandbox (backward compatible)', async () => {
     const config: VisorConfig = {
       version: '1.0',

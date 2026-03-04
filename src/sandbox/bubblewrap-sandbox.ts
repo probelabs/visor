@@ -90,7 +90,8 @@ export class BubblewrapSandbox implements SandboxInstance {
    * Build the bwrap command-line arguments.
    */
   private buildArgs(options: SandboxExecOptions): string[] {
-    const workdir = this.config.workdir || '/workspace';
+    const workdir =
+      this.config.workdir === 'host' ? this.repoPath : this.config.workdir || '/workspace';
     const args: string[] = [];
 
     // Read-only system directories
@@ -129,6 +130,18 @@ export class BubblewrapSandbox implements SandboxInstance {
     // Visor dist mount (read-only) — required for child visor process
     const visorPath = this.config.visor_path || '/opt/visor';
     args.push('--ro-bind', this.visorDistPath, visorPath);
+
+    // Additional bind mounts
+    if (this.config.bind_paths) {
+      for (const bp of this.config.bind_paths) {
+        const hostPath = bp.host.startsWith('~')
+          ? resolve((process.env.HOME || '/root') + bp.host.slice(1))
+          : resolve(bp.host);
+        const containerPath = bp.container || hostPath;
+        const readOnly = bp.read_only !== false; // default true
+        args.push(readOnly ? '--ro-bind' : '--bind', hostPath, containerPath);
+      }
+    }
 
     // Working directory inside sandbox
     args.push('--chdir', workdir);

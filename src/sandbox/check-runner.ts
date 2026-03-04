@@ -99,7 +99,10 @@ export class CheckRunner {
         );
 
         // Set up child trace file relay (skip for read-only sandboxes)
-        const workdir = sandboxConfig.workdir || '/workspace';
+        const workdir =
+          sandboxConfig.workdir === 'host'
+            ? sandboxManager.getRepoPath()
+            : sandboxConfig.workdir || '/workspace';
         let hostTracePath: string | undefined;
         if (!sandboxConfig.read_only) {
           const traceFileName = `.visor-trace-${randomUUID().slice(0, 8)}.ndjson`;
