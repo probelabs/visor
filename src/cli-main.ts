@@ -1380,6 +1380,8 @@ export async function main(): Promise<void> {
       console.log('✅ Slack Socket Mode is running. Press Ctrl+C to exit.');
 
       // Start config file watcher if --watch is enabled
+      let configWatcher: { stop(): void } | undefined;
+      let configWatchStore: { shutdown(): Promise<void> } | undefined;
       if ((options as any).watch) {
         if (!options.configPath) {
           console.error('❌ --watch requires --config <path>');
@@ -1403,23 +1405,31 @@ export async function main(): Promise<void> {
           });
           const watcher = new ConfigWatcher(options.configPath, reloader);
           watcher.start();
+          configWatcher = watcher;
+          configWatchStore = watchStore;
           logger.info('Config watching enabled');
-
-          // Clean up watcher resources on process shutdown, then re-raise
-          // the signal so the default handler (or other listeners) can terminate.
-          const onSignal = (sig: NodeJS.Signals) => {
-            watcher.stop();
-            watchStore.shutdown().catch(() => {});
-            process.removeListener('SIGINT', onSignal);
-            process.removeListener('SIGTERM', onSignal);
-            process.kill(process.pid, sig);
-          };
-          process.on('SIGINT', onSignal);
-          process.on('SIGTERM', onSignal);
         } catch (watchErr: unknown) {
           logger.warn(`Config watch setup failed (Slack mode continues without it): ${watchErr}`);
         }
       }
+
+      // Graceful shutdown: notify active threads before exiting
+      let shuttingDown = false;
+      const onShutdown = async (sig: NodeJS.Signals) => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        logger.info(`[Slack] Received ${sig}, shutting down gracefully…`);
+        if (configWatcher) configWatcher.stop();
+        if (configWatchStore) configWatchStore.shutdown().catch(() => {});
+        await runner.stop();
+        process.exit(0);
+      };
+      process.on('SIGINT', sig => {
+        onShutdown(sig);
+      });
+      process.on('SIGTERM', sig => {
+        onShutdown(sig);
+      });
 
       process.stdin.resume();
       return;
