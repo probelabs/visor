@@ -304,9 +304,9 @@ interface BashConfig {
     /** Array of blocked command patterns (e.g., ['rm -rf', 'sudo']) */
     deny?: string[];
     /** Disable default safe command list (use with caution) */
-    noDefaultAllow?: boolean;
+    disableDefaultAllow?: boolean;
     /** Disable default dangerous command blocklist (use with extreme caution) */
-    noDefaultDeny?: boolean;
+    disableDefaultDeny?: boolean;
     /** Execution timeout in milliseconds */
     timeout?: number;
     /** Default working directory for command execution */
