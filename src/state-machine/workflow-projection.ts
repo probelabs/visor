@@ -75,6 +75,9 @@ export function projectWorkflowToGraph(
         collapse: false,
       },
     },
+    ...(workflow.sandboxes && { sandboxes: workflow.sandboxes }),
+    ...(workflow.sandbox && { sandbox: workflow.sandbox }),
+    ...(workflow.sandbox_defaults && { sandbox_defaults: workflow.sandbox_defaults }),
   };
 
   if ((logger as any).isDebugEnabled?.()) {

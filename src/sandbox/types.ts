@@ -32,6 +32,18 @@ export interface SandboxResourceConfig {
 }
 
 /**
+ * Additional host path to bind-mount into the sandbox
+ */
+export interface SandboxBindPath {
+  /** Host path (supports ~ prefix for home directory) */
+  host: string;
+  /** Container path (defaults to resolved host path) */
+  container?: string;
+  /** Mount as read-only (default: true) */
+  read_only?: boolean;
+}
+
+/**
  * Configuration for a single sandbox environment
  */
 export interface SandboxConfig {
@@ -71,6 +83,9 @@ export interface SandboxConfig {
   // Caching
   /** Cache volume configuration */
   cache?: SandboxCacheConfig;
+
+  /** Additional host paths to bind-mount into the sandbox */
+  bind_paths?: SandboxBindPath[];
 }
 
 /**

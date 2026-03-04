@@ -306,6 +306,135 @@ describe('BubblewrapSandbox', () => {
       expect(opts.timeout).toBe(60000);
       expect(opts.maxBuffer).toBe(10 * 1024 * 1024);
     });
+
+    it('should add --ro-bind for bind_paths with default read_only', async () => {
+      const config: SandboxConfig = {
+        engine: 'bubblewrap',
+        bind_paths: [
+          { host: '/home/user/.gitconfig' },
+          { host: '/home/user/.ssh', read_only: false },
+        ],
+      };
+      const sandbox = new BubblewrapSandbox('test', config, '/repo', '/dist/visor');
+
+      mockExecFile.mockImplementation(
+        (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
+          if (cb) cb(null, { stdout: '', stderr: '' });
+        }
+      );
+
+      await sandbox.exec({
+        command: 'ls',
+        env: {},
+        timeoutMs: 5000,
+        maxBuffer: 1024,
+      });
+
+      const args: string[] = mockExecFile.mock.calls[0][1];
+
+      // First bind_path should be --ro-bind (read_only defaults to true)
+      // Pattern: --ro-bind <host> <container>
+      const gitconfigIdx = args.indexOf('/home/user/.gitconfig');
+      expect(gitconfigIdx).toBeGreaterThan(-1);
+      // host and container are same (no container specified)
+      expect(args[gitconfigIdx + 1]).toBe('/home/user/.gitconfig');
+      expect(args[gitconfigIdx - 1]).toBe('--ro-bind');
+
+      // Second bind_path with read_only: false should use --bind
+      const sshIdx = args.indexOf('/home/user/.ssh');
+      expect(sshIdx).toBeGreaterThan(-1);
+      expect(args[sshIdx + 1]).toBe('/home/user/.ssh');
+      expect(args[sshIdx - 1]).toBe('--bind');
+    });
+
+    it('should expand ~ in bind_paths host path', async () => {
+      const originalHome = process.env.HOME;
+      process.env.HOME = '/home/testuser';
+
+      const config: SandboxConfig = {
+        engine: 'bubblewrap',
+        bind_paths: [{ host: '~/.gitconfig' }],
+      };
+      const sandbox = new BubblewrapSandbox('test', config, '/repo', '/dist/visor');
+
+      mockExecFile.mockImplementation(
+        (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
+          if (cb) cb(null, { stdout: '', stderr: '' });
+        }
+      );
+
+      await sandbox.exec({
+        command: 'ls',
+        env: {},
+        timeoutMs: 5000,
+        maxBuffer: 1024,
+      });
+
+      const args: string[] = mockExecFile.mock.calls[0][1];
+
+      // Should have expanded ~ to /home/testuser
+      expect(args).toContain('/home/testuser/.gitconfig');
+
+      process.env.HOME = originalHome;
+    });
+
+    it('should support bind_paths with custom container path', async () => {
+      const config: SandboxConfig = {
+        engine: 'bubblewrap',
+        bind_paths: [{ host: '/opt/tools', container: '/tools' }],
+      };
+      const sandbox = new BubblewrapSandbox('test', config, '/repo', '/dist/visor');
+
+      mockExecFile.mockImplementation(
+        (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
+          if (cb) cb(null, { stdout: '', stderr: '' });
+        }
+      );
+
+      await sandbox.exec({
+        command: 'ls',
+        env: {},
+        timeoutMs: 5000,
+        maxBuffer: 1024,
+      });
+
+      const args: string[] = mockExecFile.mock.calls[0][1];
+
+      // Should mount /opt/tools at /tools
+      const toolsIdx = args.indexOf('/tools');
+      expect(toolsIdx).toBeGreaterThan(-1);
+      expect(args[toolsIdx - 1]).toBe('/opt/tools');
+    });
+
+    it('should use repo path as workdir when workdir is "host"', async () => {
+      const config: SandboxConfig = { engine: 'bubblewrap', workdir: 'host' };
+      const sandbox = new BubblewrapSandbox('test', config, '/my/repo', '/dist/visor');
+
+      mockExecFile.mockImplementation(
+        (_cmd: string, _args: string[], _opts: unknown, cb?: Function) => {
+          if (cb) cb(null, { stdout: '', stderr: '' });
+        }
+      );
+
+      await sandbox.exec({
+        command: 'ls',
+        env: {},
+        timeoutMs: 5000,
+        maxBuffer: 1024,
+      });
+
+      const args: string[] = mockExecFile.mock.calls[0][1];
+
+      // Should bind repo at its own path: --bind /my/repo /my/repo
+      const repoIdx = args.indexOf('/my/repo');
+      expect(repoIdx).toBeGreaterThan(-1);
+      // Both host and container path should be the repo path
+      expect(args[repoIdx + 1]).toBe('/my/repo');
+
+      // Should chdir to the repo path
+      const chdirIdx = args.indexOf('--chdir');
+      expect(args[chdirIdx + 1]).toBe('/my/repo');
+    });
   });
 
   describe('stop', () => {

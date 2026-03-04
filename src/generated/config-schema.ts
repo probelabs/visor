@@ -2416,6 +2416,13 @@ export const configSchema = {
           $ref: '#/definitions/SandboxCacheConfig',
           description: 'Cache volume configuration',
         },
+        bind_paths: {
+          type: 'array',
+          items: {
+            $ref: '#/definitions/SandboxBindPath',
+          },
+          description: 'Additional host paths to bind-mount into the sandbox',
+        },
       },
       additionalProperties: false,
       description: 'Configuration for a single sandbox environment',
@@ -2471,6 +2478,29 @@ export const configSchema = {
       required: ['paths'],
       additionalProperties: false,
       description: 'Cache configuration for sandbox volumes',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    SandboxBindPath: {
+      type: 'object',
+      properties: {
+        host: {
+          type: 'string',
+          description: 'Host path (supports ~ prefix for home directory)',
+        },
+        container: {
+          type: 'string',
+          description: 'Container path (defaults to resolved host path)',
+        },
+        read_only: {
+          type: 'boolean',
+          description: 'Mount as read-only (default: true)',
+        },
+      },
+      required: ['host'],
+      additionalProperties: false,
+      description: 'Additional host path to bind-mount into the sandbox',
       patternProperties: {
         '^x-': {},
       },

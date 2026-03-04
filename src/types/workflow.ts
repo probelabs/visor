@@ -3,6 +3,8 @@
  */
 
 import { CheckConfig, EventTrigger } from './config';
+import type { SandboxDefaults } from './config';
+import type { SandboxConfig } from '../sandbox/types';
 
 /**
  * JSON Schema type for workflow parameter definitions
@@ -107,6 +109,12 @@ export interface WorkflowDefinition {
   outputs?: WorkflowOutputParam[];
   /** Custom tools definition used by this workflow */
   tools?: Record<string, import('./config').CustomToolDefinition>;
+  /** Named sandbox environment definitions */
+  sandboxes?: Record<string, SandboxConfig>;
+  /** Workspace-level default sandbox name */
+  sandbox?: string;
+  /** Workspace-level sandbox defaults */
+  sandbox_defaults?: SandboxDefaults;
   /** Workflow steps - at root level like regular configs */
   steps: Record<string, WorkflowStep>;
 

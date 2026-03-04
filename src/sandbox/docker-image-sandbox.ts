@@ -6,7 +6,7 @@
 import { promisify } from 'util';
 import { execFile as execFileCb } from 'child_process';
 import { writeFileSync, unlinkSync, mkdtempSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { SandboxConfig, SandboxExecOptions, SandboxExecResult, SandboxInstance } from './types';
@@ -113,7 +113,8 @@ export class DockerImageSandbox implements SandboxInstance {
    */
   async start(): Promise<void> {
     const image = await this.buildImageIfNeeded();
-    const workdir = this.config.workdir || '/workspace';
+    const workdir =
+      this.config.workdir === 'host' ? this.repoPath : this.config.workdir || '/workspace';
     const visorPath = this.config.visor_path || '/opt/visor';
     const readOnlySuffix = this.config.read_only ? ':ro' : '';
 
@@ -147,6 +148,18 @@ export class DockerImageSandbox implements SandboxInstance {
     // Cache volume mounts
     for (const mount of this.cacheVolumeMounts) {
       args.push('-v', mount);
+    }
+
+    // Additional bind mounts
+    if (this.config.bind_paths) {
+      for (const bp of this.config.bind_paths) {
+        const hostPath = bp.host.startsWith('~')
+          ? resolve((process.env.HOME || '/root') + bp.host.slice(1))
+          : resolve(bp.host);
+        const containerPath = bp.container || hostPath;
+        const readOnly = bp.read_only !== false; // default true
+        args.push('-v', `${hostPath}:${containerPath}${readOnly ? ':ro' : ''}`);
+      }
     }
 
     // Image and keep-alive command

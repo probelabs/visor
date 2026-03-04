@@ -165,6 +165,21 @@ export class SeatbeltSandbox implements SandboxInstance {
     const visorDistPath = this.escapePath(this.visorDistPath);
     lines.push(`(allow file-read* (subpath "${visorDistPath}"))`);
 
+    // Additional bind paths
+    if (this.config.bind_paths) {
+      for (const bp of this.config.bind_paths) {
+        const hostPath = bp.host.startsWith('~')
+          ? resolve((process.env.HOME || '/root') + bp.host.slice(1))
+          : resolve(bp.host);
+        // Seatbelt operates on real host paths — container field is ignored
+        const escapedPath = this.escapePath(hostPath);
+        lines.push(`(allow file-read* (subpath "${escapedPath}"))`);
+        if (bp.read_only === false) {
+          lines.push(`(allow file-write* (subpath "${escapedPath}"))`);
+        }
+      }
+    }
+
     // Network access (unless explicitly disabled)
     if (this.config.network !== false) {
       lines.push('(allow network*)');

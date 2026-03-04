@@ -109,6 +109,31 @@ describe('DockerImageSandbox', () => {
       expect(sandbox.config.dockerfile_inline).toContain('FROM node:20');
     });
 
+    it('should support bind_paths configuration', () => {
+      const config: SandboxConfig = {
+        image: 'node:20',
+        bind_paths: [
+          { host: '/home/user/.gitconfig' },
+          { host: '/home/user/.ssh', read_only: false },
+          { host: '/opt/tools', container: '/tools' },
+        ],
+      };
+      sandbox = new DockerImageSandbox('test', config, '/repo', '/visor/dist');
+      expect(sandbox.config.bind_paths).toHaveLength(3);
+      expect(sandbox.config.bind_paths![0].host).toBe('/home/user/.gitconfig');
+      expect(sandbox.config.bind_paths![1].read_only).toBe(false);
+      expect(sandbox.config.bind_paths![2].container).toBe('/tools');
+    });
+
+    it('should support workdir host mode', () => {
+      const config: SandboxConfig = {
+        image: 'node:20',
+        workdir: 'host',
+      };
+      sandbox = new DockerImageSandbox('test', config, '/repo', '/visor/dist');
+      expect(sandbox.config.workdir).toBe('host');
+    });
+
     it('should store cache volume mounts', () => {
       const config: SandboxConfig = { image: 'node:20' };
       const cacheVolumes = ['vol1:/cache/path1', 'vol2:/cache/path2'];

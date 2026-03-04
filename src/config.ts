@@ -1074,7 +1074,6 @@ export class ConfigManager {
         ['compose', config.compose],
         ['service', config.service],
         ['cache', config.cache],
-        ['visor_path', config.visor_path],
         ['resources', config.resources],
       ];
       for (const [field, value] of dockerOnlyFields) {
@@ -1127,22 +1126,6 @@ export class ConfigManager {
         });
       }
 
-      // Validate visor_path
-      if (config.visor_path) {
-        if (!config.visor_path.startsWith('/')) {
-          errors.push({
-            field: `sandboxes.${name}.visor_path`,
-            message: `visor_path '${config.visor_path}' in sandbox '${name}' must be an absolute path (start with /)`,
-          });
-        }
-        if (/\.\./.test(config.visor_path)) {
-          errors.push({
-            field: `sandboxes.${name}.visor_path`,
-            message: `visor_path '${config.visor_path}' in sandbox '${name}' must not contain '..' path traversal`,
-          });
-        }
-      }
-
       // Validate cache paths are absolute and safe
       if (config.cache?.paths) {
         for (const p of config.cache.paths) {
@@ -1176,11 +1159,28 @@ export class ConfigManager {
     }
 
     // Common validations for all engines
-    if (config.workdir) {
+
+    // Validate visor_path
+    if (config.visor_path) {
+      if (!config.visor_path.startsWith('/')) {
+        errors.push({
+          field: `sandboxes.${name}.visor_path`,
+          message: `visor_path '${config.visor_path}' in sandbox '${name}' must be an absolute path (start with /)`,
+        });
+      }
+      if (/\.\./.test(config.visor_path)) {
+        errors.push({
+          field: `sandboxes.${name}.visor_path`,
+          message: `visor_path '${config.visor_path}' in sandbox '${name}' must not contain '..' path traversal`,
+        });
+      }
+    }
+
+    if (config.workdir && config.workdir !== 'host') {
       if (!config.workdir.startsWith('/')) {
         errors.push({
           field: `sandboxes.${name}.workdir`,
-          message: `Workdir '${config.workdir}' in sandbox '${name}' must be an absolute path (start with /)`,
+          message: `Workdir '${config.workdir}' in sandbox '${name}' must be an absolute path (start with /) or the literal "host"`,
         });
       }
       if (/\.\./.test(config.workdir)) {
@@ -1188,6 +1188,39 @@ export class ConfigManager {
           field: `sandboxes.${name}.workdir`,
           message: `Workdir '${config.workdir}' in sandbox '${name}' must not contain '..' path traversal`,
         });
+      }
+    }
+
+    // Validate bind_paths
+    if (config.bind_paths) {
+      for (let i = 0; i < config.bind_paths.length; i++) {
+        const bp = config.bind_paths[i];
+        if (!bp.host) {
+          errors.push({
+            field: `sandboxes.${name}.bind_paths[${i}].host`,
+            message: `bind_paths[${i}] in sandbox '${name}' is missing required 'host' field`,
+          });
+        }
+        if (bp.host && /\.\./.test(bp.host.replace(/^~/, ''))) {
+          errors.push({
+            field: `sandboxes.${name}.bind_paths[${i}].host`,
+            message: `bind_paths[${i}].host '${bp.host}' in sandbox '${name}' must not contain '..' path traversal`,
+          });
+        }
+        if (bp.container) {
+          if (!bp.container.startsWith('/')) {
+            errors.push({
+              field: `sandboxes.${name}.bind_paths[${i}].container`,
+              message: `bind_paths[${i}].container '${bp.container}' in sandbox '${name}' must be an absolute path (start with /)`,
+            });
+          }
+          if (/\.\./.test(bp.container)) {
+            errors.push({
+              field: `sandboxes.${name}.bind_paths[${i}].container`,
+              message: `bind_paths[${i}].container '${bp.container}' in sandbox '${name}' must not contain '..' path traversal`,
+            });
+          }
+        }
       }
     }
   }
