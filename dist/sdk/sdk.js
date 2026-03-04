@@ -10939,6 +10939,12 @@ var init_workflow_registry = __esm({
                 message: "Input parameter schema is recommended"
               });
             }
+            if (input.schema?.type === "array" && !input.schema.items) {
+              warnings.push({
+                path: `inputs[${i}].schema`,
+                message: 'Array schema should define "items" (e.g. items: { type: string }). Some LLM providers (Gemini) reject array schemas without items.'
+              });
+            }
           }
         }
         if (workflow.outputs) {
@@ -20285,17 +20291,11 @@ function formatTrigger(trigger) {
   return `\`${trigger.id.substring(0, 8)}\` - channels: ${channels} \u2192 workflow: "${trigger.workflow}"${filterStr}${status}`;
 }
 async function handleCreateTrigger(args, context2, store) {
-  if (!args.workflow) {
+  const workflow = args.workflow || "default";
+  if (context2.availableWorkflows && !context2.availableWorkflows.includes(workflow)) {
     return {
       success: false,
-      message: "Missing workflow",
-      error: "Please specify the workflow to run when the trigger fires."
-    };
-  }
-  if (context2.availableWorkflows && !context2.availableWorkflows.includes(args.workflow)) {
-    return {
-      success: false,
-      message: `Workflow "${args.workflow}" not found`,
+      message: `Workflow "${workflow}" not found`,
       error: `Available workflows: ${context2.availableWorkflows.slice(0, 5).join(", ")}${context2.availableWorkflows.length > 5 ? "..." : ""}`
     };
   }
@@ -20306,7 +20306,7 @@ async function handleCreateTrigger(args, context2, store) {
       error: "Please specify at least one filter: trigger_channels, trigger_from, trigger_contains, or trigger_match."
     };
   }
-  const permissionCheck = checkSchedulePermissions(context2, args.workflow);
+  const permissionCheck = checkSchedulePermissions(context2, workflow);
   if (!permissionCheck.allowed) {
     return {
       success: false,
@@ -20326,13 +20326,13 @@ async function handleCreateTrigger(args, context2, store) {
       contains: args.trigger_contains,
       matchPattern: args.trigger_match,
       threads: args.trigger_threads ?? "any",
-      workflow: args.workflow,
+      workflow,
       inputs: args.workflow_inputs,
       status: "active",
       enabled: true
     });
     logger.info(
-      `[ScheduleTool] Created message trigger ${trigger.id} for user ${context2.userId}: workflow="${args.workflow}"`
+      `[ScheduleTool] Created message trigger ${trigger.id} for user ${context2.userId}: workflow="${workflow}"`
     );
     return {
       success: true,
@@ -20449,11 +20449,16 @@ function getScheduleToolDefinition() {
 
 YOU (the AI) must extract and structure all scheduling parameters. Do NOT pass natural language time expressions - convert them to cron or ISO timestamps.
 
-CRITICAL WORKFLOW RULE:
+CRITICAL WORKFLOW RULE (for 'create' action only):
 - To schedule a WORKFLOW, the user MUST use a '%' prefix (e.g., "schedule %my-workflow daily").
 - If the '%' prefix is present, extract the word following it as the 'workflow' parameter (without the '%').
 - If the '%' prefix is NOT present, the request is a simple text reminder. The ENTIRE user request (excluding the schedule expression) MUST be placed in the 'reminder_text' parameter.
 - DO NOT guess or infer a workflow name from a user's request without the '%' prefix.
+
+WORKFLOW RULE FOR TRIGGERS (create_trigger action):
+- Triggers ALWAYS require a workflow. The '%' prefix rule does NOT apply to triggers.
+- If the user specifies a workflow name (with or without '%'), use it directly.
+- If the user does NOT specify a workflow name, use "default" as the workflow name.
 
 ACTIONS:
 - create: Schedule a new reminder or workflow
@@ -20467,7 +20472,7 @@ Slack messages in specific channels. Use the create_trigger, list_triggers, dele
 actions for this. Message triggers fire workflows based on message content, channel, sender, and thread scope.
 
 TRIGGER ACTIONS:
-- create_trigger: Create a new message trigger (requires workflow + at least one filter). Supports filtering by user IDs (trigger_from), channels, keywords, regex, and thread scope.
+- create_trigger: Create a new message trigger (requires at least one filter; workflow defaults to "default" if not specified). Supports filtering by user IDs (trigger_from), channels, keywords, regex, and thread scope.
 - list_triggers: Show user's message triggers
 - delete_trigger: Remove a trigger by ID
 - update_trigger: Enable/disable a trigger by ID
@@ -20567,6 +20572,9 @@ User: "watch #cicd for messages containing 'failed' and run %handle-cicd"
 User: "trigger on each of my messages in this channel and run %auto-reply" (user ID is U3P2L4XNE)
 \u2192 { "action": "create_trigger", "trigger_channels": ["C09V810NY6R"], "trigger_from": ["U3P2L4XNE"], "workflow": "auto-reply" }
 
+User: "trigger on each message in this channel" (no workflow specified \u2014 use "default")
+\u2192 { "action": "create_trigger", "trigger_channels": ["C09V810NY6R"], "workflow": "default" }
+
 User: "list my message triggers"
 \u2192 { "action": "list_triggers" }
 
@@ -20600,7 +20608,7 @@ User: "disable trigger abc123"
         },
         workflow: {
           type: "string",
-          description: 'For create: workflow ID to run. ONLY populate this if the user used the % prefix (e.g., "%my-workflow"). Extract the name without the % symbol. If no % prefix, use reminder_text instead.'
+          description: 'For create: workflow ID to run. ONLY populate this if the user used the % prefix (e.g., "%my-workflow"). Extract the name without the % symbol. If no % prefix, use reminder_text instead. For create_trigger: workflow is REQUIRED \u2014 use the workflow name the user specified (% prefix optional), or "default" if not specified.'
         },
         workflow_inputs: {
           type: "object",
@@ -20904,7 +20912,16 @@ async function executeScheduleTool(args, slackContext, slackClient, availableWor
     run_at: args.run_at,
     original_expression: args.original_expression,
     // For cancel/pause/resume
-    schedule_id: args.schedule_id
+    schedule_id: args.schedule_id,
+    // For trigger actions
+    trigger_channels: args.trigger_channels,
+    trigger_from: args.trigger_from,
+    trigger_from_bots: args.trigger_from_bots,
+    trigger_contains: args.trigger_contains,
+    trigger_match: args.trigger_match,
+    trigger_threads: args.trigger_threads,
+    trigger_description: args.trigger_description,
+    trigger_id: args.trigger_id
   };
   if (!toolArgs.target_type && slackContext.channel) {
     if (slackContext.threadTs) {
@@ -21544,7 +21561,16 @@ var init_mcp_custom_sse_server = __esm({
                   run_at: args.run_at,
                   original_expression: args.original_expression,
                   // For cancel/pause/resume
-                  schedule_id: args.schedule_id
+                  schedule_id: args.schedule_id,
+                  // For trigger actions
+                  trigger_channels: args.trigger_channels,
+                  trigger_from: args.trigger_from,
+                  trigger_from_bots: args.trigger_from_bots,
+                  trigger_contains: args.trigger_contains,
+                  trigger_match: args.trigger_match,
+                  trigger_threads: args.trigger_threads,
+                  trigger_description: args.trigger_description,
+                  trigger_id: args.trigger_id
                 };
                 const scheduleResult = await handleScheduleAction(scheduleArgs, scheduleContext);
                 result = scheduleResult.success ? scheduleResult.message : `Error: ${scheduleResult.error}`;
