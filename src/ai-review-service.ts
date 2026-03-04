@@ -1926,7 +1926,13 @@ ${'='.repeat(60)}
         (options as any).enableBash = this.config.allowBash;
       }
       if (this.config.bashConfig !== undefined) {
-        (options as any).bashConfig = this.config.bashConfig;
+        // Map visor field names to probe's expected field names
+        const { noDefaultAllow, noDefaultDeny, ...restBashConfig } = this.config.bashConfig;
+        (options as any).bashConfig = {
+          ...restBashConfig,
+          ...(noDefaultAllow !== undefined && { disableDefaultAllow: noDefaultAllow }),
+          ...(noDefaultDeny !== undefined && { disableDefaultDeny: noDefaultDeny }),
+        };
       }
 
       // Pass completion prompt for post-completion validation/review
