@@ -166,6 +166,15 @@ export async function executeScheduleTool(
     original_expression: args.original_expression as string | undefined,
     // For cancel/pause/resume
     schedule_id: args.schedule_id as string | undefined,
+    // For trigger actions
+    trigger_channels: args.trigger_channels as string[] | undefined,
+    trigger_from: args.trigger_from as string[] | undefined,
+    trigger_from_bots: args.trigger_from_bots as boolean | undefined,
+    trigger_contains: args.trigger_contains as string[] | undefined,
+    trigger_match: args.trigger_match as string | undefined,
+    trigger_threads: args.trigger_threads as 'root_only' | 'thread_only' | 'any' | undefined,
+    trigger_description: args.trigger_description as string | undefined,
+    trigger_id: args.trigger_id as string | undefined,
   };
 
   // If AI didn't provide target, default to current Slack context

@@ -169,17 +169,38 @@ describe('Schedule Tool — Message Trigger Actions', () => {
       );
     });
 
-    it('should fail when workflow is missing', async () => {
+    it('should default workflow to "default" when not specified', async () => {
       const args: ScheduleToolArgs = {
         action: 'create_trigger',
         trigger_channels: ['C0CICD'],
         trigger_contains: ['failed'],
       };
 
+      // With availableWorkflows that don't include "default", it should fail with not found
       const result = await handleScheduleAction(args, makeContext());
 
       expect(result.success).toBe(false);
-      expect(result.message).toContain('Missing workflow');
+      expect(result.message).toContain('"default" not found');
+    });
+
+    it('should succeed with default workflow when it exists', async () => {
+      const args: ScheduleToolArgs = {
+        action: 'create_trigger',
+        trigger_channels: ['C0CICD'],
+        trigger_contains: ['failed'],
+      };
+
+      const context = makeContext({
+        availableWorkflows: ['default', 'handle-cicd'],
+      });
+      const result = await handleScheduleAction(args, context);
+
+      expect(result.success).toBe(true);
+      expect(mockStore.createTriggerAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflow: 'default',
+        })
+      );
     });
 
     it('should fail when workflow does not exist', async () => {
