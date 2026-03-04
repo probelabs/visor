@@ -489,8 +489,8 @@ steps:
       provider: anthropic
       allowBash: true
       bashConfig:
-        noDefaultAllow: true  # Disable default safe command list
-        noDefaultDeny: false  # Keep default dangerous command blocklist
+        disableDefaultAllow: true  # Disable default safe command list
+        disableDefaultDeny: false  # Keep default dangerous command blocklist
         allow: ['specific-command-1', 'specific-command-2']
 ```
 
@@ -499,8 +499,8 @@ steps:
 - **`allowBash`** (boolean): Simple toggle to enable bash command execution. Default: `false`
 - **`allow`** (string[]): Additional permitted command patterns (e.g., `['ls', 'git status']`)
 - **`deny`** (string[]): Additional blocked command patterns (e.g., `['rm -rf', 'sudo']`)
-- **`noDefaultAllow`** (boolean): Disable default safe command list (~235 commands). Default: `false`
-- **`noDefaultDeny`** (boolean): Disable default dangerous command blocklist (~191 patterns). Default: `false`
+- **`disableDefaultAllow`** (boolean): Disable default safe command list (~235 commands). Default: `false`
+- **`disableDefaultDeny`** (boolean): Disable default dangerous command blocklist (~191 patterns). Default: `false`
 - **`timeout`** (number): Execution timeout in milliseconds. Default: varies by ProbeAgent
 - **`workingDirectory`** (string): Base directory for command execution
 

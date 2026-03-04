@@ -958,7 +958,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -975,7 +975,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1407,11 +1407,11 @@ export const configSchema = {
           },
           description: "Array of blocked command patterns (e.g., ['rm -rf', 'sudo'])",
         },
-        noDefaultAllow: {
+        disableDefaultAllow: {
           type: 'boolean',
           description: 'Disable default safe command list (use with caution)',
         },
-        noDefaultDeny: {
+        disableDefaultDeny: {
           type: 'boolean',
           description: 'Disable default dangerous command blocklist (use with extreme caution)',
         },
@@ -1677,7 +1677,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1692,14 +1692,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255>>':
+    'Record<string,Partial<interface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-13509-28103-src_types_config.ts-0-55255>': {
+    'Partial<interface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265>': {
       type: 'object',
       additionalProperties: false,
     },
