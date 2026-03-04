@@ -1,0 +1,31 @@
+version: "2.0"
+
+# Mounting additional host paths into sandboxes with bind_paths
+sandboxes:
+  dev:
+    engine: bubblewrap
+    network: true
+    bind_paths:
+      # Git config — read-only (default)
+      - host: ~/.gitconfig
+      # SSH keys — read-only (default)
+      - host: ~/.ssh
+      # Writable shared cache directory
+      - host: ~/shared-cache
+        container: /cache
+        read_only: false
+
+sandbox: dev
+
+checks:
+  verify-git-config:
+    type: command
+    exec: "git config user.name && git config user.email"
+
+  verify-ssh:
+    type: command
+    exec: "ls ~/.ssh/id_* 2>/dev/null && echo 'SSH keys accessible' || echo 'No SSH keys found'"
+
+  verify-cache-writable:
+    type: command
+    exec: "touch /cache/test-file && echo 'Cache is writable' && rm /cache/test-file"

@@ -56,8 +56,10 @@ These options apply to all engine types:
 | `engine` | `'docker' \| 'bubblewrap' \| 'seatbelt'` | `'docker'` | Sandbox engine backend |
 | `network` | `boolean` | `true` | Enable/disable network access |
 | `read_only` | `boolean` | `false` | Mount repository as read-only |
-| `workdir` | `string` | `'/workspace'` | Working directory inside sandbox (Docker/Bubblewrap only) |
+| `workdir` | `string` | `'/workspace'` | Working directory inside sandbox. Use `"host"` to keep the real repo path. (Docker/Bubblewrap only) |
 | `env_passthrough` | `string[]` | — | Glob patterns for host env vars to forward |
+| `bind_paths` | `SandboxBindPath[]` | — | Additional host paths to mount into sandbox |
+| `visor_path` | `string` | `'/opt/visor'` | Where visor is mounted inside the sandbox |
 
 ### Docker-Only Options
 
@@ -72,9 +74,55 @@ These fields are only valid when `engine` is `'docker'` (or omitted):
 | `service` | `string` | Service name within compose file |
 | `resources` | `object` | Memory/CPU limits (`memory: '512m'`, `cpu: 1.0`) |
 | `cache` | `object` | Cache volume configuration |
-| `visor_path` | `string` | Where visor is mounted inside container |
 
 Using Docker-only fields with `engine: bubblewrap` or `engine: seatbelt` produces a validation error.
+
+### Bind Paths
+
+The `bind_paths` option mounts additional host directories into the sandbox. This works with all three engines.
+
+Each entry is a `SandboxBindPath` object:
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `host` | `string` | Yes | — | Host path to mount (supports `~` for home directory) |
+| `container` | `string` | No | Resolved `host` path | Mount destination inside the sandbox |
+| `read_only` | `boolean` | No | `true` | Mount as read-only |
+
+```yaml
+sandboxes:
+  dev:
+    engine: bubblewrap
+    bind_paths:
+      - host: ~/.gitconfig             # read-only by default
+      - host: ~/.ssh                    # read-only by default
+      - host: /opt/custom-tools        # read-only, same path inside sandbox
+        container: /opt/custom-tools
+      - host: ~/shared-cache           # writable mount
+        container: /cache
+        read_only: false
+```
+
+**Security note:** Host paths are validated — `..` path traversal is rejected, and container paths must be absolute.
+
+### Host Workdir Mode
+
+By default, the repository is mounted at `/workspace` inside Docker and Bubblewrap sandboxes. Setting `workdir: "host"` keeps the real repository path instead.
+
+This is useful when AI agents or tools reference files by their absolute host paths — the paths remain valid inside the sandbox.
+
+```yaml
+sandboxes:
+  agent-sandbox:
+    engine: bubblewrap
+    workdir: "host"
+    bind_paths:
+      - host: ~/.gitconfig
+```
+
+With `workdir: "host"`, if your repo is at `/home/user/projects/myapp`, commands inside the sandbox run from `/home/user/projects/myapp` rather than `/workspace`.
+
+> **Note:** Seatbelt always uses the real repo path regardless of the `workdir` setting.
 
 ---
 
@@ -132,7 +180,7 @@ sandboxes:
 | `/etc/resolv.conf`, `/etc/ssl` | Read-only | DNS and TLS certificates |
 | `/tmp` | Read-write | Fresh tmpfs per execution |
 | `/dev`, `/proc` | Minimal | Virtual filesystems |
-| `~/.ssh`, `~/.aws`, `~/.config` | **Not mounted** | Inaccessible |
+| `~/.ssh`, `~/.aws`, `~/.config` | **Not mounted** | Not mounted by default (use `bind_paths`) |
 
 ### Security Properties
 
@@ -233,8 +281,8 @@ The generated profile follows a deny-by-default model:
 | `/private`, `/var`, `/etc` | Read-only | System config (symlink-resolved) |
 | `/tmp` | Read-write | Temporary files |
 | `~/Documents`, `~/Desktop` | **Denied** | "Operation not permitted" |
-| `~/.ssh`, `~/.aws`, `~/.claude` | **Denied** | "Operation not permitted" |
-| `~/.gitconfig`, `~/.zsh_history` | **Denied** | "Operation not permitted" |
+| `~/.ssh`, `~/.aws`, `~/.claude` | **Denied** | Denied by default (use `bind_paths`) |
+| `~/.gitconfig`, `~/.zsh_history` | **Denied** | Denied by default (use `bind_paths`) |
 
 ### Security Properties
 

@@ -1,0 +1,27 @@
+version: "2.0"
+
+# Host workdir mode: keep the real repository path inside the sandbox.
+# Useful when AI agents or tools reference files by absolute host paths.
+sandboxes:
+  agent:
+    engine: bubblewrap
+    workdir: "host"
+    bind_paths:
+      - host: ~/.gitconfig
+
+sandbox: agent
+
+checks:
+  verify-real-path:
+    type: command
+    # pwd returns the real repo path (e.g. /home/user/projects/myapp)
+    # instead of the default /workspace
+    exec: |
+      echo "Working directory: $(pwd)"
+      echo "Repo files:"
+      ls -1 | head -5
+
+  verify-git:
+    type: command
+    depends_on: [verify-real-path]
+    exec: "git rev-parse --show-toplevel"
