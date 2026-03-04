@@ -96,8 +96,8 @@ steps:
       provider: anthropic
       allowBash: true
       bashConfig:
-        noDefaultAllow: true  # Disable default safe commands
-        noDefaultDeny: false  # Keep dangerous command blocklist
+        disableDefaultAllow: true  # Disable default safe commands
+        disableDefaultDeny: false  # Keep dangerous command blocklist
         allow:
           - 'custom-tool analyze'
           - 'custom-tool report'
