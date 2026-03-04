@@ -1219,6 +1219,15 @@ tests:
         skills:
           - id: code-explorer
             description: needs codebase exploration
+            knowledge: |
+              ## Code Explorer
+              Use the code-talk tool to explore code repositories.
+              The tool returns `confidence` ("high"/"medium"/"low") and `confidence_reason`.
+              - If a call returns confidence "high", trust the answer — do NOT re-call
+                with a rephrased version of the same question
+              - Only call again for a genuinely DIFFERENT aspect of the codebase
+              - If confidence is "medium" or "low", check confidence_reason for what to
+                refine before re-exploring
             tools:
               code-explorer:
                 workflow: code-talk
@@ -2112,7 +2121,15 @@ tests:
         skills:
           - id: code-explorer
             description: code exploration
-            knowledge: "Use code-explorer for questions"
+            knowledge: |
+              ## Code Explorer
+              Use the code-talk tool to explore code repositories.
+              The tool returns `confidence` ("high"/"medium"/"low") and `confidence_reason`.
+              - If a call returns confidence "high", trust the answer — do NOT re-call
+                with a rephrased version of the same question
+              - Only call again for a genuinely DIFFERENT aspect of the codebase
+              - If confidence is "medium" or "low", check confidence_reason for what to
+                refine before re-exploring
             tools:
               code-explorer:
                 workflow: code-talk
@@ -2159,6 +2176,15 @@ tests:
         skills:
           - id: code-explorer
             description: code exploration
+            knowledge: |
+              ## Code Explorer
+              Use the code-talk tool to explore code repositories.
+              The tool returns `confidence` ("high"/"medium"/"low") and `confidence_reason`.
+              - If a call returns confidence "high", trust the answer — do NOT re-call
+                with a rephrased version of the same question
+              - Only call again for a genuinely DIFFERENT aspect of the codebase
+              - If confidence is "medium" or "low", check confidence_reason for what to
+                refine before re-exploring
             tools:
               code-explorer:
                 workflow: code-talk
