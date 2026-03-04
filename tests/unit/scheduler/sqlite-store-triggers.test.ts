@@ -1,7 +1,7 @@
 /**
- * Unit tests for SQLite message trigger CRUD operations
+ * Unit tests for KnexStoreBackend (sqlite) message trigger CRUD operations
  */
-import { SqliteStoreBackend } from '../../../src/scheduler/store/sqlite-store';
+import { KnexStoreBackend } from '../../../src/scheduler/store/knex-store';
 import type { MessageTrigger } from '../../../src/scheduler/store/types';
 import fs from 'fs';
 import path from 'path';
@@ -17,14 +17,17 @@ jest.mock('../../../src/logger', () => ({
   },
 }));
 
-describe('SqliteStoreBackend — Message Triggers', () => {
-  let backend: SqliteStoreBackend;
+describe('KnexStoreBackend (sqlite) — Message Triggers', () => {
+  let backend: KnexStoreBackend;
   let tmpDir: string;
 
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-trigger-test-'));
     const dbPath = path.join(tmpDir, 'test.db');
-    backend = new SqliteStoreBackend(dbPath);
+    backend = new KnexStoreBackend('sqlite', {
+      driver: 'sqlite',
+      connection: { filename: dbPath },
+    });
     await backend.initialize();
   });
 
