@@ -156,6 +156,56 @@ describe('WorkflowRegistry', () => {
       );
     });
 
+    it('should warn on array schema without items', () => {
+      const workflow: WorkflowDefinition = {
+        id: 'test-workflow',
+        name: 'Test Workflow',
+        inputs: [
+          {
+            name: 'projects',
+            schema: { type: 'array' },
+          },
+        ],
+        steps: {
+          step1: {
+            type: 'ai',
+            prompt: 'Test',
+          },
+        },
+      };
+
+      const result = registry.validateWorkflow(workflow);
+      expect(result.warnings).toContainEqual(
+        expect.objectContaining({
+          path: 'inputs[0].schema',
+          message: expect.stringContaining('items'),
+        })
+      );
+    });
+
+    it('should not warn on array schema with items', () => {
+      const workflow: WorkflowDefinition = {
+        id: 'test-workflow',
+        name: 'Test Workflow',
+        inputs: [
+          {
+            name: 'projects',
+            schema: { type: 'array', items: { type: 'string' } },
+          },
+        ],
+        steps: {
+          step1: {
+            type: 'ai',
+            prompt: 'Test',
+          },
+        },
+      };
+
+      const result = registry.validateWorkflow(workflow);
+      const itemsWarnings = (result.warnings ?? []).filter(w => w.message.includes('items'));
+      expect(itemsWarnings).toEqual([]);
+    });
+
     it('should validate output parameters', () => {
       const workflow: WorkflowDefinition = {
         id: 'test-workflow',
