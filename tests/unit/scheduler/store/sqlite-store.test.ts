@@ -1,8 +1,8 @@
 /**
- * Unit tests for SqliteStoreBackend
- * Uses a real in-memory SQLite database for accurate testing
+ * Unit tests for KnexStoreBackend with SQLite driver
+ * Uses a real SQLite database via Knex's better-sqlite3 dialect
  */
-import { SqliteStoreBackend } from '../../../../src/scheduler/store/sqlite-store';
+import { KnexStoreBackend } from '../../../../src/scheduler/store/knex-store';
 import type { Schedule } from '../../../../src/scheduler/schedule-store';
 import type { ScheduleStoreBackend } from '../../../../src/scheduler/store/types';
 import os from 'os';
@@ -36,7 +36,7 @@ function scheduleInput(overrides: Partial<Schedule> = {}) {
   };
 }
 
-describe('SqliteStoreBackend', () => {
+describe('KnexStoreBackend (sqlite)', () => {
   let backend: ScheduleStoreBackend;
   let tmpDir: string;
 
@@ -44,7 +44,10 @@ describe('SqliteStoreBackend', () => {
     // Use a temp directory for each test
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-sqlite-test-'));
     const dbPath = path.join(tmpDir, 'test.db');
-    backend = new SqliteStoreBackend(dbPath);
+    backend = new KnexStoreBackend('sqlite', {
+      driver: 'sqlite',
+      connection: { filename: dbPath },
+    });
     await backend.initialize();
   });
 
@@ -66,6 +69,34 @@ describe('SqliteStoreBackend', () => {
       await backend.initialize();
       const all = await backend.getAll();
       expect(all).toEqual([]);
+    });
+
+    it('should enable WAL journal mode', async () => {
+      // Access the underlying knex instance to verify WAL mode
+      const knex = (backend as any).knex;
+      const result = await knex.raw('PRAGMA journal_mode');
+      // Knex returns an array of row objects for better-sqlite3
+      const mode = Array.isArray(result) ? result[0]?.journal_mode : result?.journal_mode;
+      expect(mode).toBe('wal');
+    });
+
+    it('should create parent directories recursively', async () => {
+      const nestedDir = path.join(tmpDir, 'deep', 'nested', 'dir');
+      const dbPath = path.join(nestedDir, 'test.db');
+      const nested = new KnexStoreBackend('sqlite', {
+        driver: 'sqlite',
+        connection: { filename: dbPath },
+      });
+      await nested.initialize();
+      expect(fs.existsSync(dbPath)).toBe(true);
+      await nested.shutdown();
+    });
+
+    it('should use default path when no filename provided', async () => {
+      // Just verify construction doesn't throw — we don't actually init
+      // because it would create .visor/schedules.db in cwd
+      const noFile = new KnexStoreBackend('sqlite', { driver: 'sqlite' });
+      expect(noFile).toBeDefined();
     });
   });
 
@@ -288,6 +319,52 @@ describe('SqliteStoreBackend', () => {
       expect(results).toHaveLength(1);
       expect(results[0].workflow).toBe('Daily-Report');
     });
+
+    it('should escape % in search term', async () => {
+      await backend.create(scheduleInput({ creatorId: 'user1', workflow: '100%-done' }));
+      await backend.create(scheduleInput({ creatorId: 'user1', workflow: 'other-workflow' }));
+
+      // Searching for literal "%" should not act as SQL wildcard
+      const results = await backend.findByWorkflow('user1', '100%');
+      expect(results).toHaveLength(1);
+      expect(results[0].workflow).toBe('100%-done');
+    });
+
+    it('should escape _ in search term', async () => {
+      await backend.create(scheduleInput({ creatorId: 'user1', workflow: 'my_workflow' }));
+      await backend.create(scheduleInput({ creatorId: 'user1', workflow: 'myXworkflow' }));
+
+      // "_" should not match single character wildcard
+      const results = await backend.findByWorkflow('user1', 'my_');
+      expect(results).toHaveLength(1);
+      expect(results[0].workflow).toBe('my_workflow');
+    });
+
+    it('should escape backslash in search term', async () => {
+      await backend.create(scheduleInput({ creatorId: 'user1', workflow: 'path\\to\\flow' }));
+      await backend.create(scheduleInput({ creatorId: 'user1', workflow: 'pathXtoXflow' }));
+
+      const results = await backend.findByWorkflow('user1', '\\to\\');
+      expect(results).toHaveLength(1);
+      expect(results[0].workflow).toBe('path\\to\\flow');
+    });
+
+    it('should return empty for no matches', async () => {
+      await backend.create(scheduleInput({ creatorId: 'user1', workflow: 'daily-report' }));
+
+      const results = await backend.findByWorkflow('user1', 'nonexistent');
+      expect(results).toEqual([]);
+    });
+
+    it('should only return active schedules', async () => {
+      const s = await backend.create(
+        scheduleInput({ creatorId: 'user1', workflow: 'paused-workflow' })
+      );
+      await backend.update(s.id, { status: 'paused' });
+
+      const results = await backend.findByWorkflow('user1', 'paused');
+      expect(results).toEqual([]);
+    });
   });
 
   describe('getStats', () => {
@@ -305,6 +382,69 @@ describe('SqliteStoreBackend', () => {
       expect(stats.failed).toBe(1);
       expect(stats.recurring).toBe(1);
       expect(stats.oneTime).toBe(2);
+    });
+
+    it('should return all zeros for empty database', async () => {
+      const stats = await backend.getStats();
+      expect(stats.total).toBe(0);
+      expect(stats.active).toBe(0);
+      expect(stats.paused).toBe(0);
+      expect(stats.completed).toBe(0);
+      expect(stats.failed).toBe(0);
+      expect(stats.recurring).toBe(0);
+      expect(stats.oneTime).toBe(0);
+    });
+  });
+
+  describe('importSchedule', () => {
+    it('should import a schedule preserving its original ID', async () => {
+      const schedule: Schedule = {
+        id: 'custom-id-12345',
+        creatorId: 'user1',
+        timezone: 'UTC',
+        schedule: '0 9 * * *',
+        isRecurring: true,
+        originalExpression: 'every day at 9am',
+        workflow: 'imported-workflow',
+        status: 'active',
+        createdAt: 1700000000000,
+        runCount: 10,
+        failureCount: 2,
+      };
+
+      await backend.importSchedule(schedule);
+
+      const retrieved = await backend.get('custom-id-12345');
+      expect(retrieved).toBeDefined();
+      expect(retrieved!.id).toBe('custom-id-12345');
+      expect(retrieved!.workflow).toBe('imported-workflow');
+      expect(retrieved!.runCount).toBe(10);
+    });
+
+    it('should be idempotent (skip existing IDs)', async () => {
+      const schedule: Schedule = {
+        id: 'import-idem-id',
+        creatorId: 'user1',
+        timezone: 'UTC',
+        schedule: '',
+        isRecurring: false,
+        originalExpression: 'in 1 hour',
+        workflow: 'original',
+        status: 'active',
+        createdAt: 1700000000000,
+        runCount: 0,
+        failureCount: 0,
+      };
+
+      await backend.importSchedule(schedule);
+      // Import again with different data — should be skipped
+      await backend.importSchedule({ ...schedule, workflow: 'changed' });
+
+      const retrieved = await backend.get('import-idem-id');
+      expect(retrieved!.workflow).toBe('original');
+
+      const all = await backend.getAll();
+      expect(all.filter(s => s.id === 'import-idem-id')).toHaveLength(1);
     });
   });
 

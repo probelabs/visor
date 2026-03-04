@@ -2,8 +2,9 @@
  * Unit tests for JSON → SQL migration
  */
 import { migrateJsonToBackend } from '../../../../src/scheduler/store/json-migrator';
-import { SqliteStoreBackend } from '../../../../src/scheduler/store/sqlite-store';
+import { KnexStoreBackend } from '../../../../src/scheduler/store/knex-store';
 import type { Schedule } from '../../../../src/scheduler/schedule-store';
+import type { ScheduleStoreBackend } from '../../../../src/scheduler/store/types';
 import os from 'os';
 import path from 'path';
 import fs from 'fs';
@@ -37,13 +38,16 @@ function makeSchedule(overrides: Partial<Schedule> = {}): Schedule {
 }
 
 describe('JSON → SQL Migration', () => {
-  let backend: SqliteStoreBackend;
+  let backend: ScheduleStoreBackend;
   let tmpDir: string;
 
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-migration-test-'));
     const dbPath = path.join(tmpDir, 'test.db');
-    backend = new SqliteStoreBackend(dbPath);
+    backend = new KnexStoreBackend('sqlite', {
+      driver: 'sqlite',
+      connection: { filename: dbPath },
+    });
     await backend.initialize();
   });
 

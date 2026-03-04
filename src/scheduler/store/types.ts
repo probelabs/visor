@@ -1,9 +1,8 @@
 /**
  * Store backend interface for schedule persistence
  *
- * Implementations:
- * - SqliteStoreBackend (OSS default, zero-config)
- * - KnexStoreBackend (Enterprise: PostgreSQL/MySQL with distributed locking)
+ * Implementation:
+ * - KnexStoreBackend (all drivers: SQLite, PostgreSQL, MySQL, MSSQL)
  */
 import type { Schedule, ScheduleLimits } from '../schedule-store';
 import type { SlackMessageTrigger } from '../../types/config';

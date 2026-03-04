@@ -51,18 +51,14 @@ export async function loadEnterprisePolicyEngine(config: PolicyConfig): Promise<
 }
 
 /**
- * Load the enterprise schedule store backend if licensed.
+ * Validate that an enterprise license with 'scheduler-sql' feature is available.
  *
  * @param driver Database driver ('postgresql', 'mysql', or 'mssql')
- * @param storageConfig Storage configuration with connection details
- * @param haConfig Optional HA configuration
  * @throws Error if enterprise license is not available or missing 'scheduler-sql' feature
  */
-export async function loadEnterpriseStoreBackend(
-  driver: 'postgresql' | 'mysql' | 'mssql',
-  storageConfig: StorageConfig,
-  haConfig?: HAConfig
-): Promise<ScheduleStoreBackend> {
+export async function validateEnterpriseSchedulerLicense(
+  driver: 'postgresql' | 'mysql' | 'mssql'
+): Promise<void> {
   const { LicenseValidator } = await import('./license/validator');
   const validator = new LicenseValidator();
   const license = await validator.loadAndValidate();
@@ -81,6 +77,23 @@ export async function loadEnterpriseStoreBackend(
         'Please renew your license.'
     );
   }
+}
+
+/**
+ * Load the enterprise schedule store backend if licensed.
+ *
+ * @deprecated Use validateEnterpriseSchedulerLicense() + KnexStoreBackend directly.
+ * @param driver Database driver ('postgresql', 'mysql', or 'mssql')
+ * @param storageConfig Storage configuration with connection details
+ * @param haConfig Optional HA configuration
+ * @throws Error if enterprise license is not available or missing 'scheduler-sql' feature
+ */
+export async function loadEnterpriseStoreBackend(
+  driver: 'postgresql' | 'mysql' | 'mssql',
+  storageConfig: StorageConfig,
+  haConfig?: HAConfig
+): Promise<ScheduleStoreBackend> {
+  await validateEnterpriseSchedulerLicense(driver);
 
   const { KnexStoreBackend } = await import('./scheduler/knex-store');
   return new KnexStoreBackend(driver, storageConfig, haConfig);

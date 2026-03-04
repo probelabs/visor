@@ -26,18 +26,11 @@ jest.mock('../../../src/enterprise/license/validator', () => ({
   })),
 }));
 
-// Mock the KnexStoreBackend constructor
-const mockKnexBackend = {
-  initialize: jest.fn().mockResolvedValue(undefined),
-  shutdown: jest.fn().mockResolvedValue(undefined),
-};
-
-jest.mock('../../../src/enterprise/scheduler/knex-store', () => ({
-  KnexStoreBackend: jest.fn().mockImplementation(() => mockKnexBackend),
-}));
-
-import { loadEnterpriseStoreBackend } from '../../../src/enterprise/loader';
-import { KnexStoreBackend } from '../../../src/enterprise/scheduler/knex-store';
+import {
+  loadEnterpriseStoreBackend,
+  validateEnterpriseSchedulerLicense,
+} from '../../../src/enterprise/loader';
+import { KnexStoreBackend } from '../../../src/scheduler/store/knex-store';
 import type { StorageConfig } from '../../../src/scheduler/store/types';
 
 const pgConfig: StorageConfig = {
@@ -56,7 +49,45 @@ describe('Enterprise KnexStoreBackend', () => {
     jest.clearAllMocks();
   });
 
-  describe('license gating', () => {
+  describe('license gating (validateEnterpriseSchedulerLicense)', () => {
+    it('should throw when no license is available', async () => {
+      mockLoadAndValidate.mockResolvedValue(null);
+
+      await expect(validateEnterpriseSchedulerLicense('postgresql')).rejects.toThrow(
+        /Enterprise license/
+      );
+    });
+
+    it('should throw when license lacks scheduler-sql feature', async () => {
+      mockLoadAndValidate.mockResolvedValue({ valid: true });
+      mockHasFeature.mockReturnValue(false);
+
+      await expect(validateEnterpriseSchedulerLicense('postgresql')).rejects.toThrow(
+        /scheduler-sql/
+      );
+    });
+
+    it('should resolve when license is valid with feature', async () => {
+      mockLoadAndValidate.mockResolvedValue({ valid: true });
+      mockHasFeature.mockReturnValue(true);
+
+      await expect(validateEnterpriseSchedulerLicense('postgresql')).resolves.not.toThrow();
+    });
+
+    it('should warn during grace period', async () => {
+      mockLoadAndValidate.mockResolvedValue({ valid: true });
+      mockHasFeature.mockReturnValue(true);
+      mockIsInGracePeriod.mockReturnValue(true);
+
+      const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
+      await validateEnterpriseSchedulerLicense('postgresql');
+
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('grace period'));
+      consoleSpy.mockRestore();
+    });
+  });
+
+  describe('license gating (loadEnterpriseStoreBackend — deprecated)', () => {
     it('should throw when no license is available', async () => {
       mockLoadAndValidate.mockResolvedValue(null);
 
@@ -80,6 +111,7 @@ describe('Enterprise KnexStoreBackend', () => {
 
       const backend = await loadEnterpriseStoreBackend('postgresql', pgConfig);
       expect(backend).toBeDefined();
+      expect(backend).toBeInstanceOf(KnexStoreBackend);
     });
 
     it('should warn during grace period', async () => {

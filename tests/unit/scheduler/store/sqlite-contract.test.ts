@@ -1,7 +1,7 @@
 /**
- * Run backend contract tests against the SQLite implementation
+ * Run backend contract tests against the KnexStoreBackend with SQLite driver
  */
-import { SqliteStoreBackend } from '../../../../src/scheduler/store/sqlite-store';
+import { KnexStoreBackend } from '../../../../src/scheduler/store/knex-store';
 import { runBackendContractTests } from './backend-contract';
 import os from 'os';
 import path from 'path';
@@ -17,11 +17,14 @@ jest.mock('../../../../src/logger', () => ({
   },
 }));
 
-describe('SqliteStoreBackend (contract)', () => {
+describe('KnexStoreBackend sqlite (contract)', () => {
   runBackendContractTests(async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-contract-'));
     const dbPath = path.join(tmpDir, 'test.db');
-    const backend = new SqliteStoreBackend(dbPath);
+    const backend = new KnexStoreBackend('sqlite', {
+      driver: 'sqlite',
+      connection: { filename: dbPath },
+    });
     return {
       backend,
       cleanup: async () => {

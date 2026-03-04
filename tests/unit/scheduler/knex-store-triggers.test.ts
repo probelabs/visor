@@ -59,7 +59,7 @@ function createMockKnex(queryBuilders: Record<string, any> = {}) {
 // knex instance via reflection.
 function createBackendWithMockKnex(driver: 'postgresql' | 'mysql' | 'mssql', mockKnex: any) {
   // Import the class directly (constructor doesn't need knex)
-  const { KnexStoreBackend } = require('../../../src/enterprise/scheduler/knex-store');
+  const { KnexStoreBackend } = require('../../../src/scheduler/store/knex-store');
   const backend = new KnexStoreBackend(driver, { driver, connection: {} });
   // Inject mock knex (bypassing initialize)
   (backend as any).knex = mockKnex;
