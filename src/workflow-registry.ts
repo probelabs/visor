@@ -288,6 +288,13 @@ export class WorkflowRegistry {
             message: 'Input parameter schema is recommended',
           });
         }
+        if (input.schema?.type === 'array' && !input.schema.items) {
+          warnings.push({
+            path: `inputs[${i}].schema`,
+            message:
+              'Array schema should define "items" (e.g. items: { type: string }). Some LLM providers (Gemini) reject array schemas without items.',
+          });
+        }
       }
     }
 
