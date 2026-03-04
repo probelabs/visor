@@ -538,13 +538,13 @@ steps:
         6. Have you ruled out other possibilities with evidence, not assumptions?
 
         Cross-project verification:
-        4. Are there dependencies or interactions between projects you examined?
-        5. Did you verify how data/config flows between components?
-        6. Did you check both the happy path AND error handling paths?
+        7. Are there dependencies or interactions between projects you examined?
+        8. Did you verify how data/config flows between components?
+        9. Did you check both the happy path AND error handling paths?
 
         Reference accuracy:
-        7. Are all code references accurate (file paths, function names, line numbers)?
-        8. Do the docs match what the code actually does?
+        10. Are all code references accurate (file paths, function names, line numbers)?
+        11. Do the docs match what the code actually does?
 
         CRITICAL: When you identify a configuration variable, you MUST then perform
         a second search to find the code that consumes that variable. You cannot draw
@@ -554,11 +554,25 @@ steps:
         If you found any ambiguity, gaps in your investigation, or unexplored
         hypotheses - use delegate tool to investigate further before concluding.
 
+        Confidence calibration — be HONEST, not optimistic:
+        - "high" ONLY when you found definitive code evidence that FULLY answers the
+          question, you verified the complete call chain, AND you ruled out alternative
+          explanations with evidence (not assumptions)
+        - "medium" when you found relevant code but could not verify all aspects, when
+          there are alternative explanations you did not fully rule out, or when you
+          traced only part of the execution path
+        - "low" when your answer is based on naming conventions, comments, partial
+          evidence, or inference without direct code confirmation
+        - Do NOT default to "high" — inflated confidence causes the caller to skip
+          needed follow-up investigation, wasting time on redundant re-exploration
+        - If confidence is not "high", the confidence_reason MUST clearly state what
+          evidence is missing or which alternative theories remain unverified
+
         When you finish, ensure your answer includes:
         - All relevant details grounded in code
         - If multiple theories were considered, explain which one is correct and WHY
           (with evidence ruling out alternatives)
-        - A confidence score ("high", "medium", or "low")
+        - A confidence score ("high", "medium", or "low") calibrated per the rules above
         - If confidence is "medium" or "low", include a clear confidence_reason
           explaining what evidence is missing or ambiguous
         - At the END of your answer.text, append a "## References" section with a
