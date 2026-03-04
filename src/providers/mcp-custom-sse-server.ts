@@ -834,7 +834,7 @@ export class CustomToolsSSEServer implements CustomMCPServer {
 
             // Execute generic schedule tool - AI provides structured data
             const scheduleArgs: ScheduleToolArgs = {
-              action: (args.action as 'create' | 'list' | 'cancel' | 'pause' | 'resume') || 'list',
+              action: (args.action as ScheduleToolArgs['action']) || 'list',
               // What to do
               reminder_text: args.reminder_text as string | undefined,
               workflow: args.workflow as string | undefined,
@@ -850,6 +850,19 @@ export class CustomToolsSSEServer implements CustomMCPServer {
               original_expression: args.original_expression as string | undefined,
               // For cancel/pause/resume
               schedule_id: args.schedule_id as string | undefined,
+              // For trigger actions
+              trigger_channels: args.trigger_channels as string[] | undefined,
+              trigger_from: args.trigger_from as string[] | undefined,
+              trigger_from_bots: args.trigger_from_bots as boolean | undefined,
+              trigger_contains: args.trigger_contains as string[] | undefined,
+              trigger_match: args.trigger_match as string | undefined,
+              trigger_threads: args.trigger_threads as
+                | 'root_only'
+                | 'thread_only'
+                | 'any'
+                | undefined,
+              trigger_description: args.trigger_description as string | undefined,
+              trigger_id: args.trigger_id as string | undefined,
             };
             const scheduleResult = await handleScheduleAction(scheduleArgs, scheduleContext);
 
