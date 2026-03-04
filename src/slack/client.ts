@@ -332,6 +332,31 @@ export class SlackClient {
     },
   };
 
+  public readonly views = {
+    publish: async ({
+      user_id,
+      view,
+    }: {
+      user_id: string;
+      view: Record<string, unknown>;
+    }): Promise<{ ok: boolean; error?: string }> => {
+      try {
+        const resp: any = await this.api('views.publish', { user_id, view });
+        if (!resp || resp.ok !== true) {
+          const err = (resp && resp.error) || 'unknown_error';
+          console.warn(`Slack views.publish failed (non-fatal): ${err}`);
+          return { ok: false, error: err };
+        }
+        return { ok: true };
+      } catch (e) {
+        console.warn(
+          `Slack views.publish threw (non-fatal): ${e instanceof Error ? e.message : String(e)}`
+        );
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    },
+  };
+
   getWebClient(): any {
     return {
       conversations: {

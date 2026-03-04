@@ -9,13 +9,13 @@ import { RateLimiter, type RateLimitConfig } from './rate-limiter';
 import type { SlackBotConfig } from '../types/bot';
 import { withActiveSpan, getVisorRunAttributes } from '../telemetry/trace-helpers';
 import { Scheduler } from '../scheduler/scheduler';
-import { ScheduleStore } from '../scheduler/schedule-store';
+import { ScheduleStore, type Schedule } from '../scheduler/schedule-store';
 import { createHash } from 'crypto';
 import { createSlackOutputAdapter } from './slack-output-adapter';
 import { WorkspaceManager } from '../utils/workspace-manager';
 import { MessageTriggerEvaluator, type MatchedTrigger } from '../scheduler/message-trigger';
 import type { SlackMessageTrigger } from '../types/config';
-import { toSlackMessageTrigger } from '../scheduler/store/types';
+import { toSlackMessageTrigger, type MessageTrigger } from '../scheduler/store/types';
 
 type SlackSocketConfig = {
   appToken?: string; // xapp- token
@@ -392,6 +392,12 @@ export class SlackSocketRunner {
     try {
       await this.ensureClient();
     } catch {}
+
+    // Handle app_home_opened — publish Home tab view and return early
+    if (type === 'app_home_opened') {
+      await this.publishAppHome(String(ev.user || ''));
+      return;
+    }
 
     // Ignore edited/changed events to prevent loops (allow file_share — users can share attachments)
     if (
@@ -928,6 +934,187 @@ export class SlackSocketRunner {
     } catch {
       // best effort
     }
+  }
+
+  /**
+   * Publish the App Home tab for the given user.
+   * Shows the user's schedules, message triggers, and available workflows.
+   */
+  private async publishAppHome(userId: string): Promise<void> {
+    if (!userId || !this.client) return;
+    try {
+      const userInfo = await this.fetchUserInfo(userId);
+
+      // Fetch user's schedules and triggers from the store (best-effort)
+      let schedules: Schedule[] = [];
+      let triggers: MessageTrigger[] = [];
+      try {
+        const store = ScheduleStore.getInstance();
+        if (store.isInitialized()) {
+          schedules = await store.getByCreatorAsync(userId);
+          triggers = await store.getTriggersByCreatorAsync(userId);
+        }
+      } catch (err) {
+        logger.warn(
+          `[SlackSocket] Failed to fetch schedules/triggers for Home tab: ${err instanceof Error ? err.message : err}`
+        );
+      }
+
+      // Get available workflows
+      let workflows: { id: string; name: string; description?: string }[] = [];
+      try {
+        const { WorkflowRegistry } = await import('../workflow-registry');
+        const registry = WorkflowRegistry.getInstance();
+        workflows = registry
+          .list()
+          .map(w => ({ id: w.id, name: w.name, description: w.description }));
+      } catch (err) {
+        logger.warn(
+          `[SlackSocket] Failed to fetch workflows for Home tab: ${err instanceof Error ? err.message : err}`
+        );
+      }
+
+      const blocks = this.buildHomeBlocks(userInfo, schedules, triggers, workflows);
+
+      await this.client.views.publish({
+        user_id: userId,
+        view: { type: 'home', blocks },
+      });
+    } catch (err) {
+      logger.error(
+        `[SlackSocket] app_home_opened failed: ${err instanceof Error ? err.message : err}`
+      );
+    }
+  }
+
+  /**
+   * Build Slack Block Kit blocks for the App Home tab.
+   * Exposed as a separate method for testability.
+   */
+  buildHomeBlocks(
+    userInfo: { realName?: string; name?: string } | null,
+    schedules: Schedule[],
+    triggers: MessageTrigger[],
+    workflows: { id: string; name: string; description?: string }[]
+  ): unknown[] {
+    const blocks: unknown[] = [];
+
+    // Header
+    const greeting = userInfo?.realName || userInfo?.name || 'there';
+    blocks.push({
+      type: 'header',
+      text: { type: 'plain_text', text: `Hi, ${greeting}!` },
+    });
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: "Here's an overview of your Visor activity." },
+    });
+    blocks.push({ type: 'divider' });
+
+    // --- Schedules section ---
+    blocks.push({
+      type: 'header',
+      text: { type: 'plain_text', text: 'Your Schedules' },
+    });
+
+    const activeSchedules = schedules.filter(s => s.status === 'active' || s.status === 'paused');
+    if (activeSchedules.length === 0) {
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: '_No active schedules. Message the bot to create one._' },
+      });
+    } else {
+      for (const s of activeSchedules.slice(0, 15)) {
+        const statusIcon = s.status === 'paused' ? ':double_vertical_bar:' : ':clock1:';
+        const desc = s.originalExpression || s.workflow || s.id;
+        const nextRun = s.nextRunAt
+          ? `<!date^${Math.floor(s.nextRunAt / 1000)}^{date_short_pretty} at {time}|${new Date(s.nextRunAt).toISOString()}>`
+          : 'N/A';
+        const recurring = s.isRecurring ? `\`${s.schedule}\`` : 'one-time';
+        blocks.push({
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `${statusIcon} *${desc}*\n${recurring} · Next: ${nextRun} · Status: \`${s.status}\``,
+          },
+        });
+      }
+      if (activeSchedules.length > 15) {
+        blocks.push({
+          type: 'context',
+          elements: [{ type: 'mrkdwn', text: `_…and ${activeSchedules.length - 15} more_` }],
+        });
+      }
+    }
+    blocks.push({ type: 'divider' });
+
+    // --- Triggers section ---
+    blocks.push({
+      type: 'header',
+      text: { type: 'plain_text', text: 'Your Message Triggers' },
+    });
+
+    const activeTriggers = triggers.filter(t => t.status === 'active');
+    if (activeTriggers.length === 0) {
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: '_No active message triggers._' },
+      });
+    } else {
+      for (const t of activeTriggers.slice(0, 10)) {
+        const enabledIcon = t.enabled ? ':large_green_circle:' : ':white_circle:';
+        const desc = t.description || t.workflow;
+        const filters: string[] = [];
+        if (t.channels?.length) filters.push(`channels: ${t.channels.join(', ')}`);
+        if (t.contains?.length) filters.push(`contains: ${t.contains.join(', ')}`);
+        if (t.matchPattern) filters.push(`pattern: \`${t.matchPattern}\``);
+        blocks.push({
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `${enabledIcon} *${desc}*\n${filters.join(' · ') || 'no filters'} → \`${t.workflow}\``,
+          },
+        });
+      }
+      if (activeTriggers.length > 10) {
+        blocks.push({
+          type: 'context',
+          elements: [{ type: 'mrkdwn', text: `_…and ${activeTriggers.length - 10} more_` }],
+        });
+      }
+    }
+    blocks.push({ type: 'divider' });
+
+    // --- Workflows section ---
+    blocks.push({
+      type: 'header',
+      text: { type: 'plain_text', text: 'Available Workflows' },
+    });
+
+    if (workflows.length === 0) {
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: '_No workflows registered._' },
+      });
+    } else {
+      for (const w of workflows.slice(0, 15)) {
+        blocks.push({
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*${w.name || w.id}*${w.description ? `\n${w.description}` : ''}`,
+          },
+        });
+      }
+      if (workflows.length > 15) {
+        blocks.push({
+          type: 'context',
+          elements: [{ type: 'mrkdwn', text: `_…and ${workflows.length - 15} more_` }],
+        });
+      }
+    }
+
+    return blocks;
   }
 
   /**
