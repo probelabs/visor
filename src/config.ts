@@ -1201,7 +1201,7 @@ export class ConfigManager {
             message: `bind_paths[${i}] in sandbox '${name}' is missing required 'host' field`,
           });
         }
-        if (bp.host && /\.\./.test(bp.host.replace(/^~/, ''))) {
+        if (bp.host && /\.\./.test(bp.host)) {
           errors.push({
             field: `sandboxes.${name}.bind_paths[${i}].host`,
             message: `bind_paths[${i}].host '${bp.host}' in sandbox '${name}' must not contain '..' path traversal`,
