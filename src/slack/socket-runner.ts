@@ -56,6 +56,7 @@ export class SlackSocketRunner {
   private retryCount = 0;
   private genericScheduler?: Scheduler;
   private messageTriggerEvaluator?: MessageTriggerEvaluator;
+  private activeThreads = new Set<string>();
 
   constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: SlackSocketConfig) {
     const app = opts.appToken || process.env.SLACK_APP_TOKEN || '';
@@ -637,6 +638,10 @@ export class SlackSocketRunner {
     } catch {}
 
     logger.info('[SlackSocket] Dispatching engine run for Slack event');
+    const trackChannel = String(ev.channel || '');
+    const trackThreadTs = String(ev.thread_ts || ev.ts || ev.event_ts || '');
+    const threadKey =
+      trackChannel && trackThreadTs ? this.trackThread(trackChannel, trackThreadTs) : '';
     try {
       // Rate limiting (optional)
       const userId = String(ev.user || 'unknown');
@@ -730,6 +735,8 @@ export class SlackSocketRunner {
       logger.error(
         `[SlackSocket] Engine execution failed: ${e instanceof Error ? e.message : String(e)}`
       );
+    } finally {
+      if (threadKey) this.untrackThread(threadKey);
     }
   }
 
@@ -744,137 +751,191 @@ export class SlackSocketRunner {
     const threadTs = ev.thread_ts ? String(ev.thread_ts) : undefined;
     const user = String(ev.user || 'unknown');
 
+    const replyTs = threadTs || ts;
+    const threadKey = channel && replyTs ? this.trackThread(channel, replyTs) : '';
+
     logger.info(
       `[SlackSocket] Message trigger '${id}' matched → workflow="${trigger.workflow}" channel=${channel} ts=${ts}`
     );
 
-    // Verify workflow exists
-    const allChecks = Object.keys(this.cfg.checks || {});
-    if (!allChecks.includes(trigger.workflow)) {
-      logger.error(
-        `[SlackSocket] Message trigger '${id}': workflow "${trigger.workflow}" not found in configuration`
-      );
-      return;
-    }
-
-    // Build conversation context (for thread replies, fetch full thread)
-    let conversationContext: any = undefined;
     try {
-      const isThreadReply = !!threadTs && threadTs !== ts;
-      if (isThreadReply) {
-        const adapter = this.getSlackAdapter();
-        if (adapter && channel && threadTs) {
-          const cleanedText = String(ev.text || '')
-            .replace(/<@[A-Z0-9]+>/g, '')
-            .trim();
-          conversationContext = await adapter.fetchConversation(channel, threadTs, {
-            ts,
-            user,
-            text: cleanedText || String(ev.text || ''),
-            timestamp: Date.now(),
-            files: Array.isArray(ev.files) ? ev.files : undefined,
-          });
-        }
+      // Verify workflow exists
+      const allChecks = Object.keys(this.cfg.checks || {});
+      if (!allChecks.includes(trigger.workflow)) {
+        logger.error(
+          `[SlackSocket] Message trigger '${id}': workflow "${trigger.workflow}" not found in configuration`
+        );
+        return;
       }
-    } catch (err) {
-      logger.warn(
-        `[SlackSocket] Message trigger '${id}': conversation context fetch failed: ${err instanceof Error ? err.message : err}`
-      );
-    }
 
-    // Build synthetic webhook payload
-    const triggerPayload = {
-      ...payload,
-      trigger: {
-        id,
-        type: 'on_message',
-        workflow: trigger.workflow,
-      },
-      ...(conversationContext ? { slack_conversation: conversationContext } : {}),
-    };
-
-    const webhookData = new Map<string, unknown>();
-    webhookData.set(this.endpoint, triggerPayload);
-
-    // Clone config for this run with Slack frontend
-    const cfgForRun: VisorConfig = (() => {
+      // Build conversation context (for thread replies, fetch full thread)
+      let conversationContext: any = undefined;
       try {
-        const cfg = JSON.parse(JSON.stringify(this.cfg));
-        const fronts = Array.isArray(cfg.frontends) ? cfg.frontends : [];
-        if (!fronts.some((f: any) => f && f.name === 'slack')) fronts.push({ name: 'slack' });
-        cfg.frontends = fronts;
-        return cfg;
-      } catch {
-        return this.cfg;
+        const isThreadReply = !!threadTs && threadTs !== ts;
+        if (isThreadReply) {
+          const adapter = this.getSlackAdapter();
+          if (adapter && channel && threadTs) {
+            const cleanedText = String(ev.text || '')
+              .replace(/<@[A-Z0-9]+>/g, '')
+              .trim();
+            conversationContext = await adapter.fetchConversation(channel, threadTs, {
+              ts,
+              user,
+              text: cleanedText || String(ev.text || ''),
+              timestamp: Date.now(),
+              files: Array.isArray(ev.files) ? ev.files : undefined,
+            });
+          }
+        }
+      } catch (err) {
+        logger.warn(
+          `[SlackSocket] Message trigger '${id}': conversation context fetch failed: ${err instanceof Error ? err.message : err}`
+        );
       }
-    })();
 
-    // Derive stable workspace name from thread identity
-    const wsThreadTs = threadTs || ts;
-    if (channel && wsThreadTs) {
-      const hash = createHash('sha256')
-        .update(`${channel}:${wsThreadTs}`)
-        .digest('hex')
-        .slice(0, 8);
-      const workspaceName = `slack-trigger-${hash}`;
-      if (!(cfgForRun as any).workspace) {
-        (cfgForRun as any).workspace = {};
+      // Build synthetic webhook payload
+      const triggerPayload = {
+        ...payload,
+        trigger: {
+          id,
+          type: 'on_message',
+          workflow: trigger.workflow,
+        },
+        ...(conversationContext ? { slack_conversation: conversationContext } : {}),
+      };
+
+      const webhookData = new Map<string, unknown>();
+      webhookData.set(this.endpoint, triggerPayload);
+
+      // Clone config for this run with Slack frontend
+      const cfgForRun: VisorConfig = (() => {
+        try {
+          const cfg = JSON.parse(JSON.stringify(this.cfg));
+          const fronts = Array.isArray(cfg.frontends) ? cfg.frontends : [];
+          if (!fronts.some((f: any) => f && f.name === 'slack')) fronts.push({ name: 'slack' });
+          cfg.frontends = fronts;
+          return cfg;
+        } catch {
+          return this.cfg;
+        }
+      })();
+
+      // Derive stable workspace name from thread identity
+      const wsThreadTs = threadTs || ts;
+      if (channel && wsThreadTs) {
+        const hash = createHash('sha256')
+          .update(`${channel}:${wsThreadTs}`)
+          .digest('hex')
+          .slice(0, 8);
+        const workspaceName = `slack-trigger-${hash}`;
+        if (!(cfgForRun as any).workspace) {
+          (cfgForRun as any).workspace = {};
+        }
+        (cfgForRun as any).workspace.name = workspaceName;
+        (cfgForRun as any).workspace.cleanup_on_exit = false;
       }
-      (cfgForRun as any).workspace.name = workspaceName;
-      (cfgForRun as any).workspace.cleanup_on_exit = false;
+
+      // Create a dedicated engine instance for this trigger
+      const runEngine = new StateMachineExecutionEngine();
+      await this.ensureClient();
+      try {
+        const parentCtx: any = (this.engine as any).getExecutionContext?.() || {};
+        const prevCtx: any = (runEngine as any).getExecutionContext?.() || {};
+        (runEngine as any).setExecutionContext?.({
+          ...parentCtx,
+          ...prevCtx,
+          slack: this.client || parentCtx.slack,
+          slackClient: this.client || parentCtx.slackClient,
+        });
+      } catch {}
+
+      // Refresh GitHub credentials
+      try {
+        const { refreshGitHubCredentials } = await import('../github-auth');
+        await refreshGitHubCredentials();
+      } catch {}
+
+      await withActiveSpan(
+        'visor.run',
+        {
+          ...getVisorRunAttributes(),
+          'visor.run.source': 'slack_message_trigger',
+          'visor.trigger.id': id,
+          'visor.trigger.workflow': trigger.workflow,
+          'slack.channel_id': channel,
+          'slack.thread_ts': threadTs || ts,
+          'slack.user_id': user,
+        },
+        async () => {
+          await runEngine.executeChecks({
+            checks: [trigger.workflow],
+            showDetails: true,
+            outputFormat: 'json',
+            config: cfgForRun,
+            webhookContext: { webhookData, eventType: 'slack_message' },
+            debug: process.env.VISOR_DEBUG === 'true',
+            inputs: trigger.inputs,
+          } as any);
+        }
+      );
+
+      logger.info(`[SlackSocket] Message trigger '${id}' workflow completed`);
+    } finally {
+      if (threadKey) this.untrackThread(threadKey);
     }
+  }
 
-    // Create a dedicated engine instance for this trigger
-    const runEngine = new StateMachineExecutionEngine();
-    await this.ensureClient();
+  private trackThread(channel: string, threadTs: string): string {
+    const key = `${channel}:${threadTs}`;
+    this.activeThreads.add(key);
+    return key;
+  }
+
+  private untrackThread(key: string): void {
+    this.activeThreads.delete(key);
+  }
+
+  /**
+   * Send a best-effort shutdown notice to all active Slack threads.
+   * Bounded by timeoutMs so we never block process exit indefinitely.
+   */
+  async notifyActiveThreadsOfShutdown(timeoutMs = 5000): Promise<void> {
+    if (this.activeThreads.size === 0 || !this.client) return;
+
+    const msg =
+      ':warning: The bot was restarted. Your request was interrupted and could not be completed. Please retry by sending your message again.';
+
+    const promises = [...this.activeThreads].map(key => {
+      const [channel, threadTs] = key.split(':');
+      return this.client!.chat.postMessage({ channel, thread_ts: threadTs, text: msg }).catch(
+        err => {
+          logger.warn(
+            `[SlackSocket] Failed to notify thread ${key} of shutdown: ${err instanceof Error ? err.message : err}`
+          );
+        }
+      );
+    });
+
     try {
-      const parentCtx: any = (this.engine as any).getExecutionContext?.() || {};
-      const prevCtx: any = (runEngine as any).getExecutionContext?.() || {};
-      (runEngine as any).setExecutionContext?.({
-        ...parentCtx,
-        ...prevCtx,
-        slack: this.client || parentCtx.slack,
-        slackClient: this.client || parentCtx.slackClient,
-      });
-    } catch {}
-
-    // Refresh GitHub credentials
-    try {
-      const { refreshGitHubCredentials } = await import('../github-auth');
-      await refreshGitHubCredentials();
-    } catch {}
-
-    await withActiveSpan(
-      'visor.run',
-      {
-        ...getVisorRunAttributes(),
-        'visor.run.source': 'slack_message_trigger',
-        'visor.trigger.id': id,
-        'visor.trigger.workflow': trigger.workflow,
-        'slack.channel_id': channel,
-        'slack.thread_ts': threadTs || ts,
-        'slack.user_id': user,
-      },
-      async () => {
-        await runEngine.executeChecks({
-          checks: [trigger.workflow],
-          showDetails: true,
-          outputFormat: 'json',
-          config: cfgForRun,
-          webhookContext: { webhookData, eventType: 'slack_message' },
-          debug: process.env.VISOR_DEBUG === 'true',
-          inputs: trigger.inputs,
-        } as any);
-      }
-    );
-
-    logger.info(`[SlackSocket] Message trigger '${id}' workflow completed`);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        Promise.allSettled(promises),
+        new Promise<void>(resolve => {
+          timer = setTimeout(resolve, timeoutMs);
+        }),
+      ]);
+      if (timer) clearTimeout(timer);
+    } catch {
+      // best effort
+    }
   }
 
   /**
    * Stop the socket runner and clean up resources
    */
   async stop(): Promise<void> {
+    // Notify active threads before tearing down
+    await this.notifyActiveThreadsOfShutdown();
     // Stop background GitHub App token refresh
     try {
       const { stopTokenRefreshTimer } = await import('../github-auth');
