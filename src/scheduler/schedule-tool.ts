@@ -185,6 +185,8 @@ export interface ScheduleToolArgs {
   // For trigger actions:
   /** For create_trigger: channel IDs to monitor */
   trigger_channels?: string[];
+  /** For create_trigger: Slack user IDs to filter by (only trigger for these users) */
+  trigger_from?: string[];
   /** For create_trigger: allow bot messages (default: false) */
   trigger_from_bots?: boolean;
   /** For create_trigger: keyword patterns (case-insensitive OR) */
@@ -781,9 +783,10 @@ async function handleCreateTrigger(
     };
   }
 
-  // Need at least one filter (channels, contains, or match)
+  // Need at least one filter (channels, from, contains, or match)
   if (
     (!args.trigger_channels || args.trigger_channels.length === 0) &&
+    (!args.trigger_from || args.trigger_from.length === 0) &&
     (!args.trigger_contains || args.trigger_contains.length === 0) &&
     !args.trigger_match
   ) {
@@ -791,7 +794,7 @@ async function handleCreateTrigger(
       success: false,
       message: 'Missing trigger filters',
       error:
-        'Please specify at least one filter: trigger_channels, trigger_contains, or trigger_match.',
+        'Please specify at least one filter: trigger_channels, trigger_from, trigger_contains, or trigger_match.',
     };
   }
 
@@ -813,6 +816,7 @@ async function handleCreateTrigger(
       creatorName: context.userName,
       description: args.trigger_description,
       channels: args.trigger_channels,
+      fromUsers: args.trigger_from,
       fromBots: args.trigger_from_bots ?? false,
       contains: args.trigger_contains,
       matchPattern: args.trigger_match,
@@ -833,7 +837,7 @@ async function handleCreateTrigger(
 
 **Workflow**: ${trigger.workflow}
 **Channels**: ${trigger.channels?.join(', ') || 'all'}
-${trigger.contains?.length ? `**Contains**: ${trigger.contains.join(', ')}\n` : ''}${trigger.matchPattern ? `**Pattern**: /${trigger.matchPattern}/\n` : ''}${trigger.description ? `**Description**: ${trigger.description}\n` : ''}
+${trigger.fromUsers?.length ? `**From users**: ${trigger.fromUsers.join(', ')}\n` : ''}${trigger.contains?.length ? `**Contains**: ${trigger.contains.join(', ')}\n` : ''}${trigger.matchPattern ? `**Pattern**: /${trigger.matchPattern}/\n` : ''}${trigger.description ? `**Description**: ${trigger.description}\n` : ''}
 ID: \`${trigger.id.substring(0, 8)}\``,
     };
   } catch (error) {
@@ -1005,7 +1009,7 @@ Slack messages in specific channels. Use the create_trigger, list_triggers, dele
 actions for this. Message triggers fire workflows based on message content, channel, sender, and thread scope.
 
 TRIGGER ACTIONS:
-- create_trigger: Create a new message trigger (requires workflow + at least one filter)
+- create_trigger: Create a new message trigger (requires workflow + at least one filter). Supports filtering by user IDs (trigger_from), channels, keywords, regex, and thread scope.
 - list_triggers: Show user's message triggers
 - delete_trigger: Remove a trigger by ID
 - update_trigger: Enable/disable a trigger by ID
@@ -1102,6 +1106,9 @@ User: "cancel schedule abc123"
 User: "watch #cicd for messages containing 'failed' and run %handle-cicd"
 → { "action": "create_trigger", "trigger_channels": ["C0CICD"], "trigger_contains": ["failed"], "workflow": "handle-cicd" }
 
+User: "trigger on each of my messages in this channel and run %auto-reply" (user ID is U3P2L4XNE)
+→ { "action": "create_trigger", "trigger_channels": ["C09V810NY6R"], "trigger_from": ["U3P2L4XNE"], "workflow": "auto-reply" }
+
 User: "list my message triggers"
 → { "action": "list_triggers" }
 
@@ -1193,6 +1200,12 @@ User: "disable trigger abc123"
           items: { type: 'string' },
           description:
             'For create_trigger: Slack channel IDs to monitor (e.g., ["C0CICD"]). Supports wildcard suffix (e.g., "CENG*").',
+        },
+        trigger_from: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'For create_trigger: Slack user IDs to filter by. Only messages from these users will trigger the workflow. E.g., ["U3P2L4XNE"]. If omitted, messages from any user will trigger.',
         },
         trigger_from_bots: {
           type: 'boolean',
