@@ -26,6 +26,21 @@
 #           - id: chat
 #             description: general Q&A
 #         skills:
+#           - id: code-explorer
+#             description: needs codebase exploration
+#             knowledge: |
+#               ## Code Explorer
+#               Use the code-talk tool to explore code repositories.
+#               The tool returns `confidence` ("high"/"medium"/"low") and `confidence_reason`.
+#               - If a call returns confidence "high", trust the answer — do NOT re-call
+#                 with a rephrased version of the same question
+#               - Only call again for a genuinely DIFFERENT aspect of the codebase
+#               - If confidence is "medium" or "low", check confidence_reason for what to
+#                 refine before re-exploring
+#             tools:
+#               code-talk:
+#                 workflow: code-talk
+#                 inputs: {}
 #           - id: jira
 #             description: needs Jira access
 #             knowledge: "Use jira_get_issue to fetch tickets."
@@ -938,8 +953,14 @@ tests:
         knowledge:
           - intent: code_help
             content: |
-              ## Code Exploration
-              Use the code-explorer tool to search the codebase.
+              ## Code Explorer
+              Use the code-talk tool to explore code repositories.
+              The tool returns `confidence` ("high"/"medium"/"low") and `confidence_reason`.
+              - If a call returns confidence "high", trust the answer — do NOT re-call
+                with a rephrased version of the same question
+              - Only call again for a genuinely DIFFERENT aspect of the codebase
+              - If confidence is "medium" or "low", check confidence_reason for what to
+                refine before re-exploring
       mocks:
         route-intent:
           intent: code_help
@@ -1102,7 +1123,13 @@ tests:
             description: needs codebase exploration
             knowledge: |
               ## Code Explorer
-              Use to search codebase.
+              Use the code-talk tool to explore code repositories.
+              The tool returns `confidence` ("high"/"medium"/"low") and `confidence_reason`.
+              - If a call returns confidence "high", trust the answer — do NOT re-call
+                with a rephrased version of the same question
+              - Only call again for a genuinely DIFFERENT aspect of the codebase
+              - If confidence is "medium" or "low", check confidence_reason for what to
+                refine before re-exploring
             tools:
               code-talk:
                 workflow: code-talk
@@ -1192,6 +1219,15 @@ tests:
         skills:
           - id: code-explorer
             description: needs codebase exploration
+            knowledge: |
+              ## Code Explorer
+              Use the code-talk tool to explore code repositories.
+              The tool returns `confidence` ("high"/"medium"/"low") and `confidence_reason`.
+              - If a call returns confidence "high", trust the answer — do NOT re-call
+                with a rephrased version of the same question
+              - Only call again for a genuinely DIFFERENT aspect of the codebase
+              - If confidence is "medium" or "low", check confidence_reason for what to
+                refine before re-exploring
             tools:
               code-explorer:
                 workflow: code-talk
@@ -1600,6 +1636,15 @@ tests:
         skills:
           - id: code-explorer
             description: needs code exploration
+            knowledge: |
+              ## Code Explorer
+              Use the code-talk tool to explore code repositories.
+              The tool returns `confidence` ("high"/"medium"/"low") and `confidence_reason`.
+              - If a call returns confidence "high", trust the answer — do NOT re-call
+                with a rephrased version of the same question
+              - Only call again for a genuinely DIFFERENT aspect of the codebase
+              - If confidence is "medium" or "low", check confidence_reason for what to
+                refine before re-exploring
             tools:
               code-explorer:
                 workflow: code-talk
@@ -1781,8 +1826,14 @@ tests:
           - id: code-explorer
             description: needs code exploration
             knowledge: |
-              ## Code Exploration
-              Use code-explorer tool to search code.
+              ## Code Explorer
+              Use the code-talk tool to explore code repositories.
+              The tool returns `confidence` ("high"/"medium"/"low") and `confidence_reason`.
+              - If a call returns confidence "high", trust the answer — do NOT re-call
+                with a rephrased version of the same question
+              - Only call again for a genuinely DIFFERENT aspect of the codebase
+              - If confidence is "medium" or "low", check confidence_reason for what to
+                refine before re-exploring
       mocks:
         route-intent:
           intent: chat
@@ -1804,7 +1855,7 @@ tests:
               - "<id>jira</id>"
               - "## Jira Tools"
               - "<id>code-explorer</id>"
-              - "## Code Exploration"
+              - "## Code Explorer"
         outputs:
           - step: build-config
             path: knowledge_content
@@ -1817,7 +1868,7 @@ tests:
             matches: "<id>code-explorer</id>"
           - step: build-config
             path: knowledge_content
-            matches: "Code Exploration"
+            matches: "Code Explorer"
 
     # =========================================================================
     # MCP Server Configuration Assertions
@@ -2070,7 +2121,15 @@ tests:
         skills:
           - id: code-explorer
             description: code exploration
-            knowledge: "Use code-explorer for questions"
+            knowledge: |
+              ## Code Explorer
+              Use the code-talk tool to explore code repositories.
+              The tool returns `confidence` ("high"/"medium"/"low") and `confidence_reason`.
+              - If a call returns confidence "high", trust the answer — do NOT re-call
+                with a rephrased version of the same question
+              - Only call again for a genuinely DIFFERENT aspect of the codebase
+              - If confidence is "medium" or "low", check confidence_reason for what to
+                refine before re-exploring
             tools:
               code-explorer:
                 workflow: code-talk
@@ -2117,6 +2176,15 @@ tests:
         skills:
           - id: code-explorer
             description: code exploration
+            knowledge: |
+              ## Code Explorer
+              Use the code-talk tool to explore code repositories.
+              The tool returns `confidence` ("high"/"medium"/"low") and `confidence_reason`.
+              - If a call returns confidence "high", trust the answer — do NOT re-call
+                with a rephrased version of the same question
+              - Only call again for a genuinely DIFFERENT aspect of the codebase
+              - If confidence is "medium" or "low", check confidence_reason for what to
+                refine before re-exploring
             tools:
               code-explorer:
                 workflow: code-talk
