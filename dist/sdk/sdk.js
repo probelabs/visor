@@ -20236,11 +20236,11 @@ async function handleCreateTrigger(args, context2, store) {
       error: `Available workflows: ${context2.availableWorkflows.slice(0, 5).join(", ")}${context2.availableWorkflows.length > 5 ? "..." : ""}`
     };
   }
-  if ((!args.trigger_channels || args.trigger_channels.length === 0) && (!args.trigger_contains || args.trigger_contains.length === 0) && !args.trigger_match) {
+  if ((!args.trigger_channels || args.trigger_channels.length === 0) && (!args.trigger_from || args.trigger_from.length === 0) && (!args.trigger_contains || args.trigger_contains.length === 0) && !args.trigger_match) {
     return {
       success: false,
       message: "Missing trigger filters",
-      error: "Please specify at least one filter: trigger_channels, trigger_contains, or trigger_match."
+      error: "Please specify at least one filter: trigger_channels, trigger_from, trigger_contains, or trigger_match."
     };
   }
   const permissionCheck = checkSchedulePermissions(context2, args.workflow);
@@ -20258,6 +20258,7 @@ async function handleCreateTrigger(args, context2, store) {
       creatorName: context2.userName,
       description: args.trigger_description,
       channels: args.trigger_channels,
+      fromUsers: args.trigger_from,
       fromBots: args.trigger_from_bots ?? false,
       contains: args.trigger_contains,
       matchPattern: args.trigger_match,
@@ -20276,7 +20277,8 @@ async function handleCreateTrigger(args, context2, store) {
 
 **Workflow**: ${trigger.workflow}
 **Channels**: ${trigger.channels?.join(", ") || "all"}
-${trigger.contains?.length ? `**Contains**: ${trigger.contains.join(", ")}
+${trigger.fromUsers?.length ? `**From users**: ${trigger.fromUsers.join(", ")}
+` : ""}${trigger.contains?.length ? `**Contains**: ${trigger.contains.join(", ")}
 ` : ""}${trigger.matchPattern ? `**Pattern**: /${trigger.matchPattern}/
 ` : ""}${trigger.description ? `**Description**: ${trigger.description}
 ` : ""}
@@ -20402,7 +20404,7 @@ Slack messages in specific channels. Use the create_trigger, list_triggers, dele
 actions for this. Message triggers fire workflows based on message content, channel, sender, and thread scope.
 
 TRIGGER ACTIONS:
-- create_trigger: Create a new message trigger (requires workflow + at least one filter)
+- create_trigger: Create a new message trigger (requires workflow + at least one filter). Supports filtering by user IDs (trigger_from), channels, keywords, regex, and thread scope.
 - list_triggers: Show user's message triggers
 - delete_trigger: Remove a trigger by ID
 - update_trigger: Enable/disable a trigger by ID
@@ -20499,6 +20501,9 @@ User: "cancel schedule abc123"
 User: "watch #cicd for messages containing 'failed' and run %handle-cicd"
 \u2192 { "action": "create_trigger", "trigger_channels": ["C0CICD"], "trigger_contains": ["failed"], "workflow": "handle-cicd" }
 
+User: "trigger on each of my messages in this channel and run %auto-reply" (user ID is U3P2L4XNE)
+\u2192 { "action": "create_trigger", "trigger_channels": ["C09V810NY6R"], "trigger_from": ["U3P2L4XNE"], "workflow": "auto-reply" }
+
 User: "list my message triggers"
 \u2192 { "action": "list_triggers" }
 
@@ -20579,6 +20584,11 @@ User: "disable trigger abc123"
           type: "array",
           items: { type: "string" },
           description: 'For create_trigger: Slack channel IDs to monitor (e.g., ["C0CICD"]). Supports wildcard suffix (e.g., "CENG*").'
+        },
+        trigger_from: {
+          type: "array",
+          items: { type: "string" },
+          description: 'For create_trigger: Slack user IDs to filter by. Only messages from these users will trigger the workflow. E.g., ["U3P2L4XNE"]. If omitted, messages from any user will trigger.'
         },
         trigger_from_bots: {
           type: "boolean",
