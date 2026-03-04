@@ -131,6 +131,17 @@ interface SandboxResourceConfig {
     cpu?: number;
 }
 /**
+ * Additional host path to bind-mount into the sandbox
+ */
+interface SandboxBindPath {
+    /** Host path (supports ~ prefix for home directory) */
+    host: string;
+    /** Container path (defaults to resolved host path) */
+    container?: string;
+    /** Mount as read-only (default: true) */
+    read_only?: boolean;
+}
+/**
  * Configuration for a single sandbox environment
  */
 interface SandboxConfig {
@@ -160,6 +171,8 @@ interface SandboxConfig {
     visor_path?: string;
     /** Cache volume configuration */
     cache?: SandboxCacheConfig;
+    /** Additional host paths to bind-mount into the sandbox */
+    bind_paths?: SandboxBindPath[];
 }
 
 /**

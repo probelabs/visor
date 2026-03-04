@@ -864,11 +864,11 @@ function getTracer() {
 }
 async function withActiveSpan(name, attrs, fn) {
   const tracer = getTracer();
-  return await new Promise((resolve14, reject) => {
+  return await new Promise((resolve15, reject) => {
     const callback = async (span) => {
       try {
         const res = await fn(span);
-        resolve14(res);
+        resolve15(res);
       } catch (err) {
         try {
           if (err instanceof Error) span.recordException(err);
@@ -6039,7 +6039,7 @@ var init_check_runner = __esm({
               sandboxConfig.env_passthrough,
               workspaceDefaults?.env_passthrough
             );
-            const workdir = sandboxConfig.workdir || "/workspace";
+            const workdir = sandboxConfig.workdir === "host" ? sandboxManager.getRepoPath() : sandboxConfig.workdir || "/workspace";
             let hostTracePath;
             if (!sandboxConfig.read_only) {
               const traceFileName = `.visor-trace-${(0, import_crypto.randomUUID)().slice(0, 8)}.ndjson`;
@@ -6972,7 +6972,7 @@ async function renderMermaidToPng(mermaidCode) {
     if (chromiumPath) {
       env.PUPPETEER_EXECUTABLE_PATH = chromiumPath;
     }
-    const result = await new Promise((resolve14) => {
+    const result = await new Promise((resolve15) => {
       const proc = (0, import_child_process.spawn)(
         "npx",
         [
@@ -7002,13 +7002,13 @@ async function renderMermaidToPng(mermaidCode) {
       });
       proc.on("close", (code) => {
         if (code === 0) {
-          resolve14({ success: true });
+          resolve15({ success: true });
         } else {
-          resolve14({ success: false, error: stderr || `Exit code ${code}` });
+          resolve15({ success: false, error: stderr || `Exit code ${code}` });
         }
       });
       proc.on("error", (err) => {
-        resolve14({ success: false, error: err.message });
+        resolve15({ success: false, error: err.message });
       });
     });
     if (!result.success) {
@@ -9236,7 +9236,7 @@ ${"=".repeat(60)}
        * Generate mock response for testing
        */
       async generateMockResponse(_prompt, _checkName, _schema) {
-        await new Promise((resolve14) => setTimeout(resolve14, 500));
+        await new Promise((resolve15) => setTimeout(resolve15, 500));
         const name = (_checkName || "").toLowerCase();
         if (name.includes("extract-facts")) {
           const arr = Array.from({ length: 6 }, (_, i) => ({
@@ -9597,7 +9597,7 @@ var init_command_executor = __esm({
        * Execute command with stdin input
        */
       executeWithStdin(command, options) {
-        return new Promise((resolve14, reject) => {
+        return new Promise((resolve15, reject) => {
           const childProcess = (0, import_child_process2.exec)(
             command,
             {
@@ -9609,7 +9609,7 @@ var init_command_executor = __esm({
               if (error && error.killed && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM")) {
                 reject(new Error(`Command timed out after ${options.timeout || 3e4}ms`));
               } else {
-                resolve14({
+                resolve15({
                   stdout: stdout || "",
                   stderr: stderr || "",
                   exitCode: error ? error.code || 1 : 0
@@ -11514,7 +11514,10 @@ function projectWorkflowToGraph(workflow, workflowInputs, _parentCheckId) {
         group_by: "check",
         collapse: false
       }
-    }
+    },
+    ...workflow.sandboxes && { sandboxes: workflow.sandboxes },
+    ...workflow.sandbox && { sandbox: workflow.sandbox },
+    ...workflow.sandbox_defaults && { sandbox_defaults: workflow.sandbox_defaults }
   };
   if (logger.isDebugEnabled?.()) {
     logger.debug(
@@ -14595,6 +14598,13 @@ var init_config_schema = __esm({
             cache: {
               $ref: "#/definitions/SandboxCacheConfig",
               description: "Cache volume configuration"
+            },
+            bind_paths: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/SandboxBindPath"
+              },
+              description: "Additional host paths to bind-mount into the sandbox"
             }
           },
           additionalProperties: false,
@@ -14651,6 +14661,29 @@ var init_config_schema = __esm({
           required: ["paths"],
           additionalProperties: false,
           description: "Cache configuration for sandbox volumes",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        SandboxBindPath: {
+          type: "object",
+          properties: {
+            host: {
+              type: "string",
+              description: "Host path (supports ~ prefix for home directory)"
+            },
+            container: {
+              type: "string",
+              description: "Container path (defaults to resolved host path)"
+            },
+            read_only: {
+              type: "boolean",
+              description: "Mount as read-only (default: true)"
+            }
+          },
+          required: ["host"],
+          additionalProperties: false,
+          description: "Additional host path to bind-mount into the sandbox",
           patternProperties: {
             "^x-": {}
           }
@@ -16028,7 +16061,6 @@ ${errors}`);
             ["compose", config.compose],
             ["service", config.service],
             ["cache", config.cache],
-            ["visor_path", config.visor_path],
             ["resources", config.resources]
           ];
           for (const [field, value] of dockerOnlyFields) {
@@ -16074,20 +16106,6 @@ ${errors}`);
               message: `Compose file path '${config.compose}' in sandbox '${name}' must not contain '..' path traversal`
             });
           }
-          if (config.visor_path) {
-            if (!config.visor_path.startsWith("/")) {
-              errors.push({
-                field: `sandboxes.${name}.visor_path`,
-                message: `visor_path '${config.visor_path}' in sandbox '${name}' must be an absolute path (start with /)`
-              });
-            }
-            if (/\.\./.test(config.visor_path)) {
-              errors.push({
-                field: `sandboxes.${name}.visor_path`,
-                message: `visor_path '${config.visor_path}' in sandbox '${name}' must not contain '..' path traversal`
-              });
-            }
-          }
           if (config.cache?.paths) {
             for (const p of config.cache.paths) {
               if (!p.startsWith("/")) {
@@ -16116,11 +16134,25 @@ ${errors}`);
             }
           }
         }
-        if (config.workdir) {
+        if (config.visor_path) {
+          if (!config.visor_path.startsWith("/")) {
+            errors.push({
+              field: `sandboxes.${name}.visor_path`,
+              message: `visor_path '${config.visor_path}' in sandbox '${name}' must be an absolute path (start with /)`
+            });
+          }
+          if (/\.\./.test(config.visor_path)) {
+            errors.push({
+              field: `sandboxes.${name}.visor_path`,
+              message: `visor_path '${config.visor_path}' in sandbox '${name}' must not contain '..' path traversal`
+            });
+          }
+        }
+        if (config.workdir && config.workdir !== "host") {
           if (!config.workdir.startsWith("/")) {
             errors.push({
               field: `sandboxes.${name}.workdir`,
-              message: `Workdir '${config.workdir}' in sandbox '${name}' must be an absolute path (start with /)`
+              message: `Workdir '${config.workdir}' in sandbox '${name}' must be an absolute path (start with /) or the literal "host"`
             });
           }
           if (/\.\./.test(config.workdir)) {
@@ -16128,6 +16160,37 @@ ${errors}`);
               field: `sandboxes.${name}.workdir`,
               message: `Workdir '${config.workdir}' in sandbox '${name}' must not contain '..' path traversal`
             });
+          }
+        }
+        if (config.bind_paths) {
+          for (let i = 0; i < config.bind_paths.length; i++) {
+            const bp = config.bind_paths[i];
+            if (!bp.host) {
+              errors.push({
+                field: `sandboxes.${name}.bind_paths[${i}].host`,
+                message: `bind_paths[${i}] in sandbox '${name}' is missing required 'host' field`
+              });
+            }
+            if (bp.host && /\.\./.test(bp.host)) {
+              errors.push({
+                field: `sandboxes.${name}.bind_paths[${i}].host`,
+                message: `bind_paths[${i}].host '${bp.host}' in sandbox '${name}' must not contain '..' path traversal`
+              });
+            }
+            if (bp.container) {
+              if (!bp.container.startsWith("/")) {
+                errors.push({
+                  field: `sandboxes.${name}.bind_paths[${i}].container`,
+                  message: `bind_paths[${i}].container '${bp.container}' in sandbox '${name}' must be an absolute path (start with /)`
+                });
+              }
+              if (/\.\./.test(bp.container)) {
+                errors.push({
+                  field: `sandboxes.${name}.bind_paths[${i}].container`,
+                  message: `bind_paths[${i}].container '${bp.container}' in sandbox '${name}' must not contain '..' path traversal`
+                });
+              }
+            }
           }
         }
       }
@@ -20948,7 +21011,7 @@ var init_mcp_custom_sse_server = __esm({
        * Returns the actual bound port number
        */
       async start() {
-        return new Promise((resolve14, reject) => {
+        return new Promise((resolve15, reject) => {
           try {
             this.server = import_http.default.createServer((req, res) => {
               this.handleRequest(req, res).catch((error) => {
@@ -20982,7 +21045,7 @@ var init_mcp_custom_sse_server = __esm({
                 );
               }
               this.startKeepalive();
-              resolve14(this.port);
+              resolve15(this.port);
             });
           } catch (error) {
             reject(error);
@@ -21045,7 +21108,7 @@ var init_mcp_custom_sse_server = __esm({
             logger.debug(
               `[CustomToolsSSEServer:${this.sessionId}] Grace period before stop: ${waitMs}ms (activeToolCalls=${this.activeToolCalls})`
             );
-            await new Promise((resolve14) => setTimeout(resolve14, waitMs));
+            await new Promise((resolve15) => setTimeout(resolve15, waitMs));
           }
         }
         if (this.activeToolCalls > 0) {
@@ -21054,7 +21117,7 @@ var init_mcp_custom_sse_server = __esm({
             `[CustomToolsSSEServer:${this.sessionId}] Waiting for ${this.activeToolCalls} active tool call(s) before stop`
           );
           while (this.activeToolCalls > 0 && Date.now() - startedAt < effectiveDrainTimeoutMs) {
-            await new Promise((resolve14) => setTimeout(resolve14, 250));
+            await new Promise((resolve15) => setTimeout(resolve15, 250));
           }
           if (this.activeToolCalls > 0) {
             logger.warn(
@@ -21079,21 +21142,21 @@ var init_mcp_custom_sse_server = __esm({
         }
         this.connections.clear();
         if (this.server) {
-          await new Promise((resolve14, reject) => {
+          await new Promise((resolve15, reject) => {
             const timeout = setTimeout(() => {
               if (this.debug) {
                 logger.debug(
                   `[CustomToolsSSEServer:${this.sessionId}] Force closing server after timeout`
                 );
               }
-              this.server?.close(() => resolve14());
+              this.server?.close(() => resolve15());
             }, 5e3);
             this.server.close((error) => {
               clearTimeout(timeout);
               if (error) {
                 reject(error);
               } else {
-                resolve14();
+                resolve15();
               }
             });
           });
@@ -21519,7 +21582,7 @@ var init_mcp_custom_sse_server = __esm({
               logger.warn(
                 `[CustomToolsSSEServer:${this.sessionId}] Tool ${toolName} failed (attempt ${attempt + 1}/${retryCount + 1}): ${errorMsg}. Retrying in ${delay}ms`
               );
-              await new Promise((resolve14) => setTimeout(resolve14, delay));
+              await new Promise((resolve15) => setTimeout(resolve15, delay));
               attempt++;
             }
           }
@@ -30789,8 +30852,8 @@ var require_util2 = __commonJS({
     function createDeferredPromise() {
       let res;
       let rej;
-      const promise = new Promise((resolve14, reject) => {
-        res = resolve14;
+      const promise = new Promise((resolve15, reject) => {
+        res = resolve15;
         rej = reject;
       });
       return { promise, resolve: res, reject: rej };
@@ -32295,8 +32358,8 @@ Content-Type: ${value.type || "application/octet-stream"}\r
                 });
               }
             });
-            const busboyResolve = new Promise((resolve14, reject) => {
-              busboy.on("finish", resolve14);
+            const busboyResolve = new Promise((resolve15, reject) => {
+              busboy.on("finish", resolve15);
               busboy.on("error", (err) => reject(new TypeError(err)));
             });
             if (this.body !== null) for await (const chunk of consumeBody(this[kState].body)) busboy.write(chunk);
@@ -32830,9 +32893,9 @@ var require_dispatcher_base = __commonJS({
       }
       close(callback) {
         if (callback === void 0) {
-          return new Promise((resolve14, reject) => {
+          return new Promise((resolve15, reject) => {
             this.close((err, data) => {
-              return err ? reject(err) : resolve14(data);
+              return err ? reject(err) : resolve15(data);
             });
           });
         }
@@ -32870,12 +32933,12 @@ var require_dispatcher_base = __commonJS({
           err = null;
         }
         if (callback === void 0) {
-          return new Promise((resolve14, reject) => {
+          return new Promise((resolve15, reject) => {
             this.destroy(err, (err2, data) => {
               return err2 ? (
                 /* istanbul ignore next: should never error */
                 reject(err2)
-              ) : resolve14(data);
+              ) : resolve15(data);
             });
           });
         }
@@ -33937,16 +34000,16 @@ var require_client = __commonJS({
         return this[kNeedDrain] < 2;
       }
       async [kClose]() {
-        return new Promise((resolve14) => {
+        return new Promise((resolve15) => {
           if (!this[kSize]) {
-            resolve14(null);
+            resolve15(null);
           } else {
-            this[kClosedResolve] = resolve14;
+            this[kClosedResolve] = resolve15;
           }
         });
       }
       async [kDestroy](err) {
-        return new Promise((resolve14) => {
+        return new Promise((resolve15) => {
           const requests = this[kQueue].splice(this[kPendingIdx]);
           for (let i = 0; i < requests.length; i++) {
             const request = requests[i];
@@ -33957,7 +34020,7 @@ var require_client = __commonJS({
               this[kClosedResolve]();
               this[kClosedResolve] = null;
             }
-            resolve14();
+            resolve15();
           };
           if (this[kHTTP2Session] != null) {
             util.destroy(this[kHTTP2Session], err);
@@ -34537,7 +34600,7 @@ var require_client = __commonJS({
         });
       }
       try {
-        const socket = await new Promise((resolve14, reject) => {
+        const socket = await new Promise((resolve15, reject) => {
           client[kConnector]({
             host,
             hostname,
@@ -34549,7 +34612,7 @@ var require_client = __commonJS({
             if (err) {
               reject(err);
             } else {
-              resolve14(socket2);
+              resolve15(socket2);
             }
           });
         });
@@ -35173,12 +35236,12 @@ upgrade: ${upgrade}\r
           cb();
         }
       }
-      const waitForDrain = () => new Promise((resolve14, reject) => {
+      const waitForDrain = () => new Promise((resolve15, reject) => {
         assert(callback === null);
         if (socket[kError]) {
           reject(socket[kError]);
         } else {
-          callback = resolve14;
+          callback = resolve15;
         }
       });
       if (client[kHTTPConnVersion] === "h2") {
@@ -35524,8 +35587,8 @@ var require_pool_base = __commonJS({
         if (this[kQueue].isEmpty()) {
           return Promise.all(this[kClients].map((c) => c.close()));
         } else {
-          return new Promise((resolve14) => {
-            this[kClosedResolve] = resolve14;
+          return new Promise((resolve15) => {
+            this[kClosedResolve] = resolve15;
           });
         }
       }
@@ -36103,7 +36166,7 @@ var require_readable = __commonJS({
         if (this.closed) {
           return Promise.resolve(null);
         }
-        return new Promise((resolve14, reject) => {
+        return new Promise((resolve15, reject) => {
           const signalListenerCleanup = signal ? util.addAbortListener(signal, () => {
             this.destroy();
           }) : noop;
@@ -36112,7 +36175,7 @@ var require_readable = __commonJS({
             if (signal && signal.aborted) {
               reject(signal.reason || Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
             } else {
-              resolve14(null);
+              resolve15(null);
             }
           }).on("error", noop).on("data", function(chunk) {
             limit -= chunk.length;
@@ -36134,11 +36197,11 @@ var require_readable = __commonJS({
         throw new TypeError("unusable");
       }
       assert(!stream[kConsume]);
-      return new Promise((resolve14, reject) => {
+      return new Promise((resolve15, reject) => {
         stream[kConsume] = {
           type,
           stream,
-          resolve: resolve14,
+          resolve: resolve15,
           reject,
           length: 0,
           body: []
@@ -36173,12 +36236,12 @@ var require_readable = __commonJS({
       }
     }
     function consumeEnd(consume2) {
-      const { type, body, resolve: resolve14, stream, length } = consume2;
+      const { type, body, resolve: resolve15, stream, length } = consume2;
       try {
         if (type === "text") {
-          resolve14(toUSVString(Buffer.concat(body)));
+          resolve15(toUSVString(Buffer.concat(body)));
         } else if (type === "json") {
-          resolve14(JSON.parse(Buffer.concat(body)));
+          resolve15(JSON.parse(Buffer.concat(body)));
         } else if (type === "arrayBuffer") {
           const dst = new Uint8Array(length);
           let pos = 0;
@@ -36186,12 +36249,12 @@ var require_readable = __commonJS({
             dst.set(buf, pos);
             pos += buf.byteLength;
           }
-          resolve14(dst.buffer);
+          resolve15(dst.buffer);
         } else if (type === "blob") {
           if (!Blob2) {
             Blob2 = require("buffer").Blob;
           }
-          resolve14(new Blob2(body, { type: stream[kContentType] }));
+          resolve15(new Blob2(body, { type: stream[kContentType] }));
         }
         consumeFinish(consume2);
       } catch (err) {
@@ -36448,9 +36511,9 @@ var require_api_request = __commonJS({
     };
     function request(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve14, reject) => {
+        return new Promise((resolve15, reject) => {
           request.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve14(data);
+            return err ? reject(err) : resolve15(data);
           });
         });
       }
@@ -36623,9 +36686,9 @@ var require_api_stream = __commonJS({
     };
     function stream(opts, factory, callback) {
       if (callback === void 0) {
-        return new Promise((resolve14, reject) => {
+        return new Promise((resolve15, reject) => {
           stream.call(this, opts, factory, (err, data) => {
-            return err ? reject(err) : resolve14(data);
+            return err ? reject(err) : resolve15(data);
           });
         });
       }
@@ -36906,9 +36969,9 @@ var require_api_upgrade = __commonJS({
     };
     function upgrade(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve14, reject) => {
+        return new Promise((resolve15, reject) => {
           upgrade.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve14(data);
+            return err ? reject(err) : resolve15(data);
           });
         });
       }
@@ -36997,9 +37060,9 @@ var require_api_connect = __commonJS({
     };
     function connect(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve14, reject) => {
+        return new Promise((resolve15, reject) => {
           connect.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve14(data);
+            return err ? reject(err) : resolve15(data);
           });
         });
       }
@@ -40622,7 +40685,7 @@ var require_fetch = __commonJS({
       async function dispatch({ body }) {
         const url = requestCurrentURL(request);
         const agent = fetchParams.controller.dispatcher;
-        return new Promise((resolve14, reject) => agent.dispatch(
+        return new Promise((resolve15, reject) => agent.dispatch(
           {
             path: url.pathname + url.search,
             origin: url.origin,
@@ -40698,7 +40761,7 @@ var require_fetch = __commonJS({
                   }
                 }
               }
-              resolve14({
+              resolve15({
                 status,
                 statusText,
                 headersList: headers[kHeadersList],
@@ -40741,7 +40804,7 @@ var require_fetch = __commonJS({
                 const val = headersList[n + 1].toString("latin1");
                 headers[kHeadersList].append(key, val);
               }
-              resolve14({
+              resolve15({
                 status,
                 statusText: STATUS_CODES[status],
                 headersList: headers[kHeadersList],
@@ -44536,7 +44599,7 @@ var init_mcp_check_provider = __esm({
             logger.warn(
               `MCP ${transportName} failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${error instanceof Error ? error.message : String(error)}`
             );
-            await new Promise((resolve14) => setTimeout(resolve14, delay));
+            await new Promise((resolve15) => setTimeout(resolve15, delay));
             attempt += 1;
           } finally {
             try {
@@ -44818,7 +44881,7 @@ async function acquirePromptLock() {
     activePrompt = true;
     return;
   }
-  await new Promise((resolve14) => waiters.push(resolve14));
+  await new Promise((resolve15) => waiters.push(resolve15));
   activePrompt = true;
 }
 function releasePromptLock() {
@@ -44828,7 +44891,7 @@ function releasePromptLock() {
 }
 async function interactivePrompt(options) {
   await acquirePromptLock();
-  return new Promise((resolve14, reject) => {
+  return new Promise((resolve15, reject) => {
     const dbg = process.env.VISOR_DEBUG === "true";
     try {
       if (dbg) {
@@ -44915,12 +44978,12 @@ async function interactivePrompt(options) {
     };
     const finish = (value) => {
       cleanup();
-      resolve14(value);
+      resolve15(value);
     };
     if (options.timeout && options.timeout > 0) {
       timeoutId = setTimeout(() => {
         cleanup();
-        if (defaultValue !== void 0) return resolve14(defaultValue);
+        if (defaultValue !== void 0) return resolve15(defaultValue);
         return reject(new Error("Input timeout"));
       }, options.timeout);
     }
@@ -45052,7 +45115,7 @@ async function interactivePrompt(options) {
   });
 }
 async function simplePrompt(prompt) {
-  return new Promise((resolve14) => {
+  return new Promise((resolve15) => {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout
@@ -45068,7 +45131,7 @@ async function simplePrompt(prompt) {
     rl.question(`${prompt}
 > `, (answer) => {
       rl.close();
-      resolve14(answer.trim());
+      resolve15(answer.trim());
     });
   });
 }
@@ -45236,7 +45299,7 @@ function isStdinAvailable() {
   return !process.stdin.isTTY;
 }
 async function readStdin(timeout, maxSize = 1024 * 1024) {
-  return new Promise((resolve14, reject) => {
+  return new Promise((resolve15, reject) => {
     let data = "";
     let timeoutId;
     if (timeout) {
@@ -45263,7 +45326,7 @@ async function readStdin(timeout, maxSize = 1024 * 1024) {
     };
     const onEnd = () => {
       cleanup();
-      resolve14(data.trim());
+      resolve15(data.trim());
     };
     const onError = (err) => {
       cleanup();
@@ -52544,7 +52607,7 @@ var init_docker_image_sandbox = __esm({
        */
       async start() {
         const image = await this.buildImageIfNeeded();
-        const workdir = this.config.workdir || "/workspace";
+        const workdir = this.config.workdir === "host" ? this.repoPath : this.config.workdir || "/workspace";
         const visorPath = this.config.visor_path || "/opt/visor";
         const readOnlySuffix = this.config.read_only ? ":ro" : "";
         const args = [
@@ -52571,6 +52634,14 @@ var init_docker_image_sandbox = __esm({
         }
         for (const mount of this.cacheVolumeMounts) {
           args.push("-v", mount);
+        }
+        if (this.config.bind_paths) {
+          for (const bp of this.config.bind_paths) {
+            const hostPath = bp.host.startsWith("~") ? (0, import_path9.resolve)((process.env.HOME || "/root") + bp.host.slice(1)) : (0, import_path9.resolve)(bp.host);
+            const containerPath = bp.container || hostPath;
+            const readOnly = bp.read_only !== false;
+            args.push("-v", `${hostPath}:${containerPath}${readOnly ? ":ro" : ""}`);
+          }
         }
         args.push(image, "sleep", "infinity");
         logger.info(`Starting sandbox container '${this.containerName}'`);
@@ -53024,7 +53095,7 @@ var init_bubblewrap_sandbox = __esm({
        * Build the bwrap command-line arguments.
        */
       buildArgs(options) {
-        const workdir = this.config.workdir || "/workspace";
+        const workdir = this.config.workdir === "host" ? this.repoPath : this.config.workdir || "/workspace";
         const args = [];
         args.push("--ro-bind", "/usr", "/usr");
         args.push("--ro-bind", "/bin", "/bin");
@@ -53051,6 +53122,14 @@ var init_bubblewrap_sandbox = __esm({
         }
         const visorPath = this.config.visor_path || "/opt/visor";
         args.push("--ro-bind", this.visorDistPath, visorPath);
+        if (this.config.bind_paths) {
+          for (const bp of this.config.bind_paths) {
+            const hostPath = bp.host.startsWith("~") ? (0, import_path10.resolve)((process.env.HOME || "/root") + bp.host.slice(1)) : (0, import_path10.resolve)(bp.host);
+            const containerPath = bp.container || hostPath;
+            const readOnly = bp.read_only !== false;
+            args.push(readOnly ? "--ro-bind" : "--bind", hostPath, containerPath);
+          }
+        }
         args.push("--chdir", workdir);
         args.push("--unshare-pid");
         args.push("--new-session");
@@ -53200,6 +53279,16 @@ var init_seatbelt_sandbox = __esm({
         }
         const visorDistPath = this.escapePath(this.visorDistPath);
         lines.push(`(allow file-read* (subpath "${visorDistPath}"))`);
+        if (this.config.bind_paths) {
+          for (const bp of this.config.bind_paths) {
+            const hostPath = bp.host.startsWith("~") ? (0, import_path11.resolve)((process.env.HOME || "/root") + bp.host.slice(1)) : (0, import_path11.resolve)(bp.host);
+            const escapedPath = this.escapePath(hostPath);
+            lines.push(`(allow file-read* (subpath "${escapedPath}"))`);
+            if (bp.read_only === false) {
+              lines.push(`(allow file-write* (subpath "${escapedPath}"))`);
+            }
+          }
+        }
         if (this.config.network !== false) {
           lines.push("(allow network*)");
         }
@@ -53960,8 +54049,8 @@ var init_workspace_manager = __esm({
         );
         if (this.cleanupRequested && this.activeOperations === 0) {
           logger.debug(`[Workspace] All references released, proceeding with deferred cleanup`);
-          for (const resolve14 of this.cleanupResolvers) {
-            resolve14();
+          for (const resolve15 of this.cleanupResolvers) {
+            resolve15();
           }
           this.cleanupResolvers = [];
         }
@@ -54118,19 +54207,19 @@ var init_workspace_manager = __esm({
           );
           this.cleanupRequested = true;
           await Promise.race([
-            new Promise((resolve14) => {
+            new Promise((resolve15) => {
               if (this.activeOperations === 0) {
-                resolve14();
+                resolve15();
               } else {
-                this.cleanupResolvers.push(resolve14);
+                this.cleanupResolvers.push(resolve15);
               }
             }),
-            new Promise((resolve14) => {
+            new Promise((resolve15) => {
               setTimeout(() => {
                 logger.warn(
                   `[Workspace] Cleanup timeout after ${timeout}ms, proceeding anyway (${this.activeOperations} operations still active)`
                 );
-                resolve14();
+                resolve15();
               }, timeout);
             })
           ]);
@@ -55514,8 +55603,8 @@ ${content}
        * Sleep utility
        */
       sleep(ms) {
-        return new Promise((resolve14) => {
-          const t = setTimeout(resolve14, ms);
+        return new Promise((resolve15) => {
+          const t = setTimeout(resolve15, ms);
           if (typeof t.unref === "function") {
             try {
               t.unref();
@@ -55800,8 +55889,8 @@ ${end}`);
       async updateGroupedComment(ctx, comments, group, changedIds) {
         const existingLock = this.updateLocks.get(group);
         let resolveLock;
-        const ourLock = new Promise((resolve14) => {
-          resolveLock = resolve14;
+        const ourLock = new Promise((resolve15) => {
+          resolveLock = resolve15;
         });
         this.updateLocks.set(group, ourLock);
         try {
@@ -56114,7 +56203,7 @@ ${blocks}
        * Sleep utility for enforcing delays
        */
       sleep(ms) {
-        return new Promise((resolve14) => setTimeout(resolve14, ms));
+        return new Promise((resolve15) => setTimeout(resolve15, ms));
       }
     };
   }

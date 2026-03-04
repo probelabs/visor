@@ -2258,6 +2258,13 @@ export declare const configSchema: {
                     readonly $ref: "#/definitions/SandboxCacheConfig";
                     readonly description: "Cache volume configuration";
                 };
+                readonly bind_paths: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly $ref: "#/definitions/SandboxBindPath";
+                    };
+                    readonly description: "Additional host paths to bind-mount into the sandbox";
+                };
             };
             readonly additionalProperties: false;
             readonly description: "Configuration for a single sandbox environment";
@@ -2313,6 +2320,29 @@ export declare const configSchema: {
             readonly required: readonly ["paths"];
             readonly additionalProperties: false;
             readonly description: "Cache configuration for sandbox volumes";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly SandboxBindPath: {
+            readonly type: "object";
+            readonly properties: {
+                readonly host: {
+                    readonly type: "string";
+                    readonly description: "Host path (supports ~ prefix for home directory)";
+                };
+                readonly container: {
+                    readonly type: "string";
+                    readonly description: "Container path (defaults to resolved host path)";
+                };
+                readonly read_only: {
+                    readonly type: "boolean";
+                    readonly description: "Mount as read-only (default: true)";
+                };
+            };
+            readonly required: readonly ["host"];
+            readonly additionalProperties: false;
+            readonly description: "Additional host path to bind-mount into the sandbox";
             readonly patternProperties: {
                 readonly '^x-': {};
             };
