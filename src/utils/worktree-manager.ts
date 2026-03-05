@@ -100,19 +100,20 @@ export class WorktreeManager {
   }
 
   /**
-   * Generate a deterministic worktree ID based on repository and ref.
-   * This allows worktrees to be reused when the same repo+ref is requested again.
+   * Generate a worktree ID based on repository, ref, and session.
+   *
+   * When a sessionId is provided, the ID is scoped to that session so each
+   * agent run gets its own isolated worktree. Steps within the same session
+   * that checkout the same repo+ref will reuse the worktree (efficient).
+   *
+   * Without sessionId, falls back to deterministic repo+ref hashing
+   * (legacy behavior).
    */
-  private generateWorktreeId(repository: string, ref: string): string {
+  private generateWorktreeId(repository: string, ref: string, sessionId?: string): string {
     const sanitizedRepo = repository.replace(/[^a-zA-Z0-9-]/g, '-');
     const sanitizedRef = ref.replace(/[^a-zA-Z0-9-]/g, '-');
-    // Use deterministic hash (no Date.now()) so same repo+ref produces same ID
-    // This enables worktree reuse across multiple calls
-    const hash = crypto
-      .createHash('md5')
-      .update(`${repository}:${ref}`)
-      .digest('hex')
-      .substring(0, 8);
+    const hashInput = sessionId ? `${repository}:${ref}:${sessionId}` : `${repository}:${ref}`;
+    const hash = crypto.createHash('md5').update(hashInput).digest('hex').substring(0, 8);
     return `${sanitizedRepo}-${sanitizedRef}-${hash}`;
   }
 
@@ -336,6 +337,7 @@ export class WorktreeManager {
       workingDirectory?: string;
       clean?: boolean;
       workflowId?: string;
+      sessionId?: string;
       fetchDepth?: number;
       cloneTimeoutMs?: number;
     } = {}
@@ -352,8 +354,8 @@ export class WorktreeManager {
       options.cloneTimeoutMs
     );
 
-    // Generate worktree ID and path
-    const worktreeId = this.generateWorktreeId(repository, ref);
+    // Generate worktree ID and path — scoped by sessionId for cross-run isolation
+    const worktreeId = this.generateWorktreeId(repository, ref, options.sessionId);
     let worktreePath = options.workingDirectory || path.join(this.getWorktreesDir(), worktreeId);
 
     // Validate path if user-provided
