@@ -2173,6 +2173,149 @@ tests:
             path: mcp_servers.code-explorer.inputs.docs_repo
             equals: "my-org/docs"
 
+    - name: code-explorer-default-skill-activates
+      description: Default visor code-explorer skill (from defaults/skills/) activates and configures tools correctly
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "How does auth work?"
+        intents:
+          - id: code_help
+            description: code questions
+        skills:
+          - id: code-explorer
+            description: >
+              request needs codebase exploration, understanding implementation details,
+              code search, or documentation questions. READ-ONLY — cannot modify files,
+              only investigate and answer questions.
+            allowed_commands:
+              - "git:log:*"
+              - "git:show:*"
+              - "git:diff:*"
+            knowledge: |
+              ## Code Explorer
+              Use the code-talk tool to explore code repositories.
+            tools:
+              code-explorer:
+                workflow: code-talk
+                inputs:
+                  architecture: "# Test Architecture"
+                  docs_repo: "test-org/docs"
+                  projects:
+                    - id: backend
+                      repo: test-org/backend
+                      description: Backend services
+      mocks:
+        route-intent:
+          intent: code_help
+          topic: "How does auth work?"
+          skills: ["code-explorer"]
+        generate-response:
+          text: "Auth is done in backend."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+        outputs:
+          - step: build-config
+            path: mcp_servers.code-explorer.workflow
+            equals: "code-talk"
+          - step: build-config
+            path: mcp_servers.code-explorer.inputs.architecture
+            equals: "# Test Architecture"
+          - step: build-config
+            path: mcp_servers.code-explorer.inputs.docs_repo
+            equals: "test-org/docs"
+
+    - name: code-explorer-default-skill-knowledge-in-prompt
+      description: Default code-explorer skill knowledge appears in prompt when activated
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "How does auth work?"
+        intents:
+          - id: code_help
+            description: code questions
+        skills:
+          - id: code-explorer
+            description: code exploration capability
+            knowledge: |
+              ## Code Explorer
+              Use the code-talk tool to explore code repositories.
+              The tool returns `confidence` ("high"/"medium"/"low") and `confidence_reason`.
+              - If confidence "high", trust the answer — do NOT re-call with rephrased question
+            tools:
+              code-explorer:
+                workflow: code-talk
+                inputs:
+                  architecture: "# Arch"
+      mocks:
+        route-intent:
+          intent: code_help
+          topic: "How does auth work?"
+          skills: ["code-explorer"]
+        generate-response:
+          text: "Auth is done in backend."
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+          - step: generate-response
+            exactly: 1
+        outputs:
+          - step: build-config
+            path: knowledge_content
+            matches: "<id>code-explorer</id>"
+          - step: build-config
+            path: knowledge_content
+            matches: "Code Explorer"
+        prompts:
+          - step: generate-response
+            contains:
+              - "Code Explorer"
+              - "confidence"
+
+    - name: code-explorer-default-skill-inactive-no-server
+      description: Default code-explorer skill is not activated when router doesn't select it
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Hello"
+        intents:
+          - id: chat
+            description: general Q&A
+        skills:
+          - id: code-explorer
+            description: code exploration capability
+            knowledge: |
+              ## Code Explorer
+            tools:
+              code-explorer:
+                workflow: code-talk
+                inputs:
+                  architecture: "# Arch"
+      mocks:
+        route-intent:
+          intent: chat
+          topic: "Hello"
+          skills: []
+        generate-response:
+          text: "Hello!"
+      expect:
+        calls:
+          - step: route-intent
+            exactly: 1
+          - step: build-config
+            exactly: 1
+        outputs:
+          - step: build-config
+            path: mcp_servers
+            equalsDeep: {}
+
     - name: code-explorer-server-not-added-when-skill-inactive
       description: Code explorer server not added when skill is not activated
       event: manual

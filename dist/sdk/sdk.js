@@ -760,7 +760,7 @@ var require_package = __commonJS({
         "@opentelemetry/sdk-node": "^0.203.0",
         "@opentelemetry/sdk-trace-base": "^1.30.1",
         "@opentelemetry/semantic-conventions": "^1.30.1",
-        "@probelabs/probe": "^0.6.0-rc274",
+        "@probelabs/probe": "^0.6.0-rc275",
         "@types/commander": "^2.12.0",
         "@types/uuid": "^10.0.0",
         acorn: "^8.16.0",
@@ -17142,24 +17142,113 @@ var init_workflow_check_provider = __esm({
         const parentInputs = config.workflowInputs || {};
         const basePath = config.basePath || config._parentContext?.originalWorkingDirectory || config._parentContext?.workingDirectory || process.cwd();
         const loadConfigLiquid = createExtendedLiquid();
+        const deepMerge = (base, override) => {
+          if (!base || !override || typeof base !== "object" || typeof override !== "object" || Array.isArray(base) || Array.isArray(override)) {
+            return override;
+          }
+          const result = { ...base };
+          for (const key of Object.keys(override)) {
+            if (key in result && typeof result[key] === "object" && result[key] !== null && !Array.isArray(result[key]) && typeof override[key] === "object" && override[key] !== null && !Array.isArray(override[key])) {
+              result[key] = deepMerge(result[key], override[key]);
+            } else {
+              result[key] = override[key];
+            }
+          }
+          return result;
+        };
+        const resolveVisorPath = (filePath) => {
+          if (!filePath.startsWith("visor://") && !filePath.startsWith("visor-ee://")) {
+            return null;
+          }
+          const relativePath = filePath.replace(/^visor(?:-ee)?:\/\//, "");
+          const candidates = [
+            path13.resolve(__dirname, "..", "defaults"),
+            path13.resolve(__dirname, "..", "..", "defaults")
+          ];
+          let defaultsDir;
+          for (const candidate of candidates) {
+            if (require("fs").existsSync(candidate)) {
+              defaultsDir = candidate;
+              break;
+            }
+          }
+          if (!defaultsDir) {
+            throw new Error(`loadConfig: cannot find defaults directory for visor:// paths`);
+          }
+          const resolved = path13.resolve(defaultsDir, relativePath);
+          if (!resolved.startsWith(defaultsDir + path13.sep) && resolved !== defaultsDir) {
+            throw new Error(`loadConfig: visor:// path escapes defaults directory`);
+          }
+          return { resolvedPath: resolved, configDir: path13.dirname(resolved) };
+        };
+        let loadConfigCallDepth = 0;
+        const resolveExpressions = (value, depth) => {
+          if (depth > 10) {
+            throw new Error("loadConfig: maximum expression nesting depth (10) exceeded");
+          }
+          if (Array.isArray(value)) {
+            return value.map((item) => resolveExpressions(item, depth + 1));
+          }
+          if (value && typeof value === "object" && !Array.isArray(value)) {
+            const obj = value;
+            const keys = Object.keys(obj);
+            if (keys.length === 1 && keys[0] === "expression" && typeof obj.expression === "string") {
+              const sandbox = createSecureSandbox();
+              const result2 = compileAndRun(sandbox, obj.expression, templateContext, {
+                injectLog: true,
+                logPrefix: "loadConfig.expression"
+              });
+              return resolveExpressions(result2, depth + 1);
+            }
+            if ("extends" in obj && typeof obj.extends === "string") {
+              const extendsPath = obj.extends;
+              const overrideObj = { ...obj };
+              delete overrideObj.extends;
+              const resolvedOverride = resolveExpressions(overrideObj, depth + 1);
+              const baseConfig = loadConfig2(extendsPath);
+              return deepMerge(baseConfig, resolvedOverride);
+            }
+            const result = {};
+            for (const [k, v] of Object.entries(obj)) {
+              result[k] = resolveExpressions(v, depth + 1);
+            }
+            return result;
+          }
+          return value;
+        };
         const loadConfig2 = (filePath) => {
           try {
-            const normalizedBasePath = path13.normalize(basePath);
-            const resolvedPath = path13.isAbsolute(filePath) ? path13.normalize(filePath) : path13.normalize(path13.resolve(basePath, filePath));
-            const basePathWithSep = normalizedBasePath.endsWith(path13.sep) ? normalizedBasePath : normalizedBasePath + path13.sep;
-            if (!resolvedPath.startsWith(basePathWithSep) && resolvedPath !== normalizedBasePath) {
-              throw new Error(`Path '${filePath}' escapes base directory`);
+            loadConfigCallDepth++;
+            if (loadConfigCallDepth > 10) {
+              throw new Error("maximum loadConfig nesting depth (10) exceeded");
             }
-            const configDir = path13.dirname(resolvedPath);
+            let resolvedPath;
+            let configDir;
+            const visorResolved = resolveVisorPath(filePath);
+            if (visorResolved) {
+              resolvedPath = visorResolved.resolvedPath;
+              configDir = visorResolved.configDir;
+            } else {
+              const normalizedBasePath = path13.normalize(basePath);
+              resolvedPath = path13.isAbsolute(filePath) ? path13.normalize(filePath) : path13.normalize(path13.resolve(basePath, filePath));
+              const basePathWithSep = normalizedBasePath.endsWith(path13.sep) ? normalizedBasePath : normalizedBasePath + path13.sep;
+              if (!resolvedPath.startsWith(basePathWithSep) && resolvedPath !== normalizedBasePath) {
+                throw new Error(`Path '${filePath}' escapes base directory`);
+              }
+              configDir = path13.dirname(resolvedPath);
+            }
             const rawContent = require("fs").readFileSync(resolvedPath, "utf-8");
             const renderedContent = loadConfigLiquid.parseAndRenderSync(rawContent, {
               basePath: configDir
             });
-            return yaml4.load(renderedContent, { schema: yaml4.JSON_SCHEMA });
+            const parsed = yaml4.load(renderedContent, { schema: yaml4.JSON_SCHEMA });
+            return resolveExpressions(parsed, 0);
           } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
             logger.error(`[WorkflowProvider] loadConfig failed for '${filePath}': ${msg}`);
             throw new Error(`loadConfig('${filePath}') failed: ${msg}`);
+          } finally {
+            loadConfigCallDepth--;
           }
         };
         const templateContext = {
