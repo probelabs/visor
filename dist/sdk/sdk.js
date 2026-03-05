@@ -6929,20 +6929,6 @@ var init_comment_metadata = __esm({
 });
 
 // src/slack/markdown.ts
-function extractMermaidDiagrams(text) {
-  const diagrams = [];
-  const regex = /```mermaid\s*\n([\s\S]*?)```/g;
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    diagrams.push({
-      fullMatch: match[0],
-      code: match[1].trim(),
-      startIndex: match.index,
-      endIndex: match.index + match[0].length
-    });
-  }
-  return diagrams;
-}
 async function renderMermaidToPng(mermaidCode) {
   const tmpDir = os.tmpdir();
   const inputFile = path7.join(
@@ -19241,9 +19227,11 @@ var init_scheduler = __esm({
         if (!import_node_cron.default.validate(job.schedule)) {
           throw new Error(`Invalid cron expression: ${job.schedule}`);
         }
-        const allChecks = Object.keys(this.visorConfig.checks || {});
-        if (!allChecks.includes(job.workflow)) {
-          throw new Error(`Workflow "${job.workflow}" not found in configuration`);
+        if (job.workflow !== "default") {
+          const allChecks = Object.keys(this.visorConfig.checks || {});
+          if (!allChecks.includes(job.workflow)) {
+            throw new Error(`Workflow "${job.workflow}" not found in configuration`);
+          }
         }
         const internalId = `__static_cron__:${jobId}`;
         const cronJob = import_node_cron.default.schedule(
@@ -19629,7 +19617,11 @@ var init_scheduler = __esm({
           return { message: "No execution engine configured" };
         }
         const allChecks = Object.keys(this.visorConfig.checks || {});
-        if (!allChecks.includes(schedule.workflow)) {
+        const checksToRun = schedule.workflow === "default" ? allChecks : [schedule.workflow];
+        if (checksToRun.length === 0) {
+          throw new Error("No checks configured");
+        }
+        if (schedule.workflow !== "default" && !allChecks.includes(schedule.workflow)) {
           throw new Error(`Workflow "${schedule.workflow}" not found in configuration`);
         }
         const syntheticPayload = {
@@ -19659,7 +19651,7 @@ var init_scheduler = __esm({
         }
         const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule);
         await runEngine.executeChecks({
-          checks: [schedule.workflow],
+          checks: checksToRun,
           showDetails: true,
           outputFormat: "json",
           config: cfgForRun,
@@ -56972,7 +56964,7 @@ ${message}`;
             );
             return;
           }
-          const diagrams = extractMermaidDiagrams(text);
+          const diagrams = [];
           let processedText = text;
           if (diagrams.length > 0) {
             try {
