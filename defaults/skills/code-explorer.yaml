@@ -1,0 +1,41 @@
+# =============================================================================
+# Default code-explorer skill shipped with visor
+# =============================================================================
+#
+# Provides a ready-to-use code exploration capability. Users only need to
+# provide project-specific config (repos, architecture, routing) via extends:
+#
+#   - extends: "visor://skills/code-explorer.yaml"
+#     tools:
+#       code-explorer:
+#         inputs:
+#           expression: "loadConfig('config/my-projects.yaml')"
+#
+# =============================================================================
+
+id: code-explorer
+description: >
+  request needs codebase exploration, understanding implementation details,
+  code search, or documentation questions. READ-ONLY — cannot modify files,
+  only investigate and answer questions.
+allowed_commands:
+  - "git:log:*"
+  - "git:show:*"
+  - "git:diff:*"
+knowledge: |
+  ## Code Explorer
+  Use the code-talk tool to explore code repositories.
+  The tool returns `confidence` ("high"/"medium"/"low") and `confidence_reason`.
+  - If confidence "high", trust the answer — do NOT re-call with rephrased question
+  - Only call again for a genuinely DIFFERENT aspect of the codebase
+  - If confidence "medium" or "low", check confidence_reason for what to refine
+
+  ## Usage Instructions
+  1. Call the code-explorer tool with the user's question
+  2. Use the answer from the tool result as your response
+  3. Include the references (file paths with URLs) in your answer
+  4. Do NOT generate a generic response - relay what the tool found
+tools:
+  code-explorer:
+    workflow: code-talk
+    inputs: {}
