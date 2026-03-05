@@ -332,30 +332,155 @@ export class WorkflowCheckProvider extends CheckProvider {
     // Create a Liquid engine for loadConfig that supports {% readfile %} with basePath
     const loadConfigLiquid = createExtendedLiquid();
 
+    // Deep merge utility for extends support: objects merge recursively, arrays/primitives override
+    const deepMerge = (base: any, override: any): any => {
+      if (
+        !base ||
+        !override ||
+        typeof base !== 'object' ||
+        typeof override !== 'object' ||
+        Array.isArray(base) ||
+        Array.isArray(override)
+      ) {
+        return override;
+      }
+      const result = { ...base };
+      for (const key of Object.keys(override)) {
+        if (
+          key in result &&
+          typeof result[key] === 'object' &&
+          result[key] !== null &&
+          !Array.isArray(result[key]) &&
+          typeof override[key] === 'object' &&
+          override[key] !== null &&
+          !Array.isArray(override[key])
+        ) {
+          result[key] = deepMerge(result[key], override[key]);
+        } else {
+          result[key] = override[key];
+        }
+      }
+      return result;
+    };
+
+    // Resolve visor:// and visor-ee:// paths to the defaults/ directory shipped with the package
+    // In ncc bundle: __dirname is dist/, defaults/ is sibling → resolve(__dirname, '..', 'defaults')
+    // In source/test: __dirname is src/providers/, defaults/ is two levels up → resolve(__dirname, '..', '..', 'defaults')
+    const resolveVisorPath = (
+      filePath: string
+    ): { resolvedPath: string; configDir: string } | null => {
+      if (!filePath.startsWith('visor://') && !filePath.startsWith('visor-ee://')) {
+        return null;
+      }
+      const relativePath = filePath.replace(/^visor(?:-ee)?:\/\//, '');
+      // Try bundle path first (most common in production), then source path
+      const candidates = [
+        path.resolve(__dirname, '..', 'defaults'),
+        path.resolve(__dirname, '..', '..', 'defaults'),
+      ];
+      let defaultsDir: string | undefined;
+      for (const candidate of candidates) {
+        if (require('fs').existsSync(candidate)) {
+          defaultsDir = candidate;
+          break;
+        }
+      }
+      if (!defaultsDir) {
+        throw new Error(`loadConfig: cannot find defaults directory for visor:// paths`);
+      }
+      const resolved = path.resolve(defaultsDir, relativePath);
+      if (!resolved.startsWith(defaultsDir + path.sep) && resolved !== defaultsDir) {
+        throw new Error(`loadConfig: visor:// path escapes defaults directory`);
+      }
+      return { resolvedPath: resolved, configDir: path.dirname(resolved) };
+    };
+
+    // Shared depth counter for loadConfig calls (tracks total nesting across expression + extends)
+    let loadConfigCallDepth = 0;
+
+    // Recursively resolve { expression: "..." } nodes and extends in parsed config
+    const resolveExpressions = (value: unknown, depth: number): unknown => {
+      if (depth > 10) {
+        throw new Error('loadConfig: maximum expression nesting depth (10) exceeded');
+      }
+      if (Array.isArray(value)) {
+        return value.map(item => resolveExpressions(item, depth + 1));
+      }
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const obj = value as Record<string, unknown>;
+        // Handle { expression: "..." } single-key objects
+        const keys = Object.keys(obj);
+        if (keys.length === 1 && keys[0] === 'expression' && typeof obj.expression === 'string') {
+          const sandbox = createSecureSandbox();
+          const result = compileAndRun(sandbox, obj.expression, templateContext, {
+            injectLog: true,
+            logPrefix: 'loadConfig.expression',
+          });
+          return resolveExpressions(result, depth + 1);
+        }
+        // Handle extends: load base config and deep merge
+        if ('extends' in obj && typeof obj.extends === 'string') {
+          const extendsPath = obj.extends;
+          const overrideObj = { ...obj };
+          delete overrideObj.extends;
+          // Recursively resolve the override object first
+          const resolvedOverride = resolveExpressions(overrideObj, depth + 1);
+          // Load the base config (loadConfig itself handles visor:// and expressions)
+          const baseConfig = loadConfig(extendsPath);
+          return deepMerge(baseConfig, resolvedOverride);
+        }
+        // Recursively walk all values
+        const result: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(obj)) {
+          result[k] = resolveExpressions(v, depth + 1);
+        }
+        return result;
+      }
+      return value;
+    };
+
     // loadConfig helper - synchronously reads, renders Liquid templates, and parses YAML/JSON
     // Usage in expressions: loadConfig('config/intents.yaml')
     // Supports {% readfile "path" %} directives that resolve relative to the config file's directory
+    // Supports visor:// paths for loading framework defaults
+    // Recursively resolves { expression: "..." } nodes and extends fields
     const loadConfig = (filePath: string): unknown => {
       try {
-        // Normalize basePath for security validation
-        const normalizedBasePath = path.normalize(basePath);
-
-        // Resolve path relative to basePath (or use absolute path)
-        const resolvedPath = path.isAbsolute(filePath)
-          ? path.normalize(filePath)
-          : path.normalize(path.resolve(basePath, filePath));
-
-        // Security: Validate that resolved path stays within basePath
-        // This prevents path traversal attacks (e.g., ../../../etc/passwd)
-        const basePathWithSep = normalizedBasePath.endsWith(path.sep)
-          ? normalizedBasePath
-          : normalizedBasePath + path.sep;
-        if (!resolvedPath.startsWith(basePathWithSep) && resolvedPath !== normalizedBasePath) {
-          throw new Error(`Path '${filePath}' escapes base directory`);
+        loadConfigCallDepth++;
+        if (loadConfigCallDepth > 10) {
+          throw new Error('maximum loadConfig nesting depth (10) exceeded');
         }
 
-        // Get the directory of the config file for resolving relative paths in {% readfile %}
-        const configDir = path.dirname(resolvedPath);
+        let resolvedPath: string;
+        let configDir: string;
+
+        // Check for visor:// or visor-ee:// paths
+        const visorResolved = resolveVisorPath(filePath);
+        if (visorResolved) {
+          resolvedPath = visorResolved.resolvedPath;
+          configDir = visorResolved.configDir;
+        } else {
+          // Normalize basePath for security validation
+          const normalizedBasePath = path.normalize(basePath);
+
+          // Resolve path relative to basePath (or use absolute path)
+          resolvedPath = path.isAbsolute(filePath)
+            ? path.normalize(filePath)
+            : path.normalize(path.resolve(basePath, filePath));
+
+          // Security: Validate that resolved path stays within basePath
+          // This prevents path traversal attacks (e.g., ../../../etc/passwd)
+          const basePathWithSep = normalizedBasePath.endsWith(path.sep)
+            ? normalizedBasePath
+            : normalizedBasePath + path.sep;
+          if (!resolvedPath.startsWith(basePathWithSep) && resolvedPath !== normalizedBasePath) {
+            throw new Error(`Path '${filePath}' escapes base directory`);
+          }
+
+          // Get the directory of the config file for resolving relative paths in {% readfile %}
+          configDir = path.dirname(resolvedPath);
+        }
+
         // Use sync read for sandbox expression context (expressions can't be async)
         const rawContent = require('fs').readFileSync(resolvedPath, 'utf-8');
         // Render Liquid templates (e.g., {% readfile "docs/file.md" %}) with basePath context
@@ -365,11 +490,15 @@ export class WorkflowCheckProvider extends CheckProvider {
         });
         // Parse as YAML with JSON_SCHEMA for security (prevents custom type execution)
         // JSON_SCHEMA is safer than DEFAULT but still parses basic types (numbers, booleans, null)
-        return yaml.load(renderedContent, { schema: yaml.JSON_SCHEMA });
+        const parsed = yaml.load(renderedContent, { schema: yaml.JSON_SCHEMA });
+        // Recursively resolve expressions and extends in the parsed result
+        return resolveExpressions(parsed, 0);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         logger.error(`[WorkflowProvider] loadConfig failed for '${filePath}': ${msg}`);
         throw new Error(`loadConfig('${filePath}') failed: ${msg}`);
+      } finally {
+        loadConfigCallDepth--;
       }
     };
 
