@@ -472,4 +472,44 @@ describe('Slack socket message triggers', () => {
     expect(triggerCalls.length).toBe(1);
     expect(mentionCalls.length).toBe(1);
   });
+
+  test('workflow "default" resolves to all checks', async () => {
+    const cfg: VisorConfig = {
+      ...baseCfg,
+      scheduler: {
+        ...baseCfg.scheduler,
+        on_message: {
+          'default-trigger': {
+            channels: ['C0CICD'],
+            from_bots: true,
+            contains: ['failed'],
+            workflow: 'default',
+          },
+        },
+      },
+    } as any;
+    const runner = mkRunner(cfg);
+
+    await (runner as any).handleMessage(
+      JSON.stringify(
+        mkEnv({
+          channel: 'C0CICD',
+          ts: '2000.020',
+          text: 'build failed',
+          subtype: 'bot_message',
+        })
+      )
+    );
+    await new Promise(r => setTimeout(r, 50));
+
+    // "default" should resolve to all checks in the config
+    const allCheckNames = Object.keys(baseCfg.checks || {});
+    const triggerCalls = spy.mock.calls.filter(
+      (call: any[]) =>
+        call[0]?.webhookContext?.eventType === 'slack_message' &&
+        call[0]?.checks?.length === allCheckNames.length
+    );
+    expect(triggerCalls.length).toBe(1);
+    expect(triggerCalls[0][0].checks.sort()).toEqual(allCheckNames.sort());
+  });
 });

@@ -23,7 +23,7 @@ import type { Frontend, FrontendContext } from './host';
 import { SlackClient } from '../slack/client';
 import {
   formatSlackText,
-  extractMermaidDiagrams,
+  type MermaidDiagram,
   renderMermaidToPng,
   replaceMermaidBlocks,
   extractFileSections,
@@ -541,8 +541,10 @@ export class SlackFrontend implements Frontend {
         return;
       }
 
-      // Extract and render mermaid diagrams before posting
-      const diagrams = extractMermaidDiagrams(text);
+      // Mermaid rendering is temporarily disabled — mmdc/puppeteer is too
+      // heavy for the current deployment and frequently times out.
+      // TODO: re-enable once a lighter renderer (e.g. kroki) is available.
+      const diagrams: MermaidDiagram[] = []; // was: extractMermaidDiagrams(text);
       let processedText = text;
 
       if (diagrams.length > 0) {
