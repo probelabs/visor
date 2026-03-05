@@ -185,6 +185,7 @@ export class GitCheckoutProvider extends CheckProvider {
           workingDirectory: resolvedWorkingDirectory,
           clean: checkoutConfig.clean !== false, // Default: true
           workflowId: (context as any)?.workflowId,
+          sessionId: (context as any)?.sessionId || (context as any)?._parentContext?.sessionId,
           fetchDepth: checkoutConfig.fetch_depth,
           cloneTimeoutMs: checkoutConfig.clone_timeout_ms,
         }
