@@ -734,6 +734,15 @@ steps:
         5. If a tool returned an error or empty result, acknowledge it honestly
         6. Never claim success if you only PLANNED to do something but didn't execute it
 
+        Tool usage policy for this validation step:
+        7. Do NOT call code exploration tools (code-talk, search, delegate) unless
+           you found a SPECIFIC factual claim in your response that is unsupported
+           by any tool output in the conversation history above
+        8. If the conversation already contains tool results that answer the question,
+           use those results — do NOT re-explore the same codebase topics
+        9. Only call a tool if you can state exactly which claim needs verification
+           and why existing tool results are insufficient
+
         If you find discrepancies:
         - Correct your response to reflect what actually happened
         - If you couldn't complete an action, explain why and what the user can do
