@@ -765,9 +765,15 @@ export class SlackSocketRunner {
     );
 
     try {
-      // Verify workflow exists
+      // Resolve workflow: "default" means run all checks (same as normal message flow)
       const allChecks = Object.keys(this.cfg.checks || {});
-      if (!allChecks.includes(trigger.workflow)) {
+      const checksToRun = trigger.workflow === 'default' ? allChecks : [trigger.workflow];
+
+      if (checksToRun.length === 0) {
+        logger.error(`[SlackSocket] Message trigger '${id}': no checks configured`);
+        return;
+      }
+      if (trigger.workflow !== 'default' && !allChecks.includes(trigger.workflow)) {
         logger.error(
           `[SlackSocket] Message trigger '${id}': workflow "${trigger.workflow}" not found in configuration`
         );
@@ -874,7 +880,7 @@ export class SlackSocketRunner {
         },
         async () => {
           await runEngine.executeChecks({
-            checks: [trigger.workflow],
+            checks: checksToRun,
             showDetails: true,
             outputFormat: 'json',
             config: cfgForRun,

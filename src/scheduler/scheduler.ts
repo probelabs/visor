@@ -281,10 +281,12 @@ export class Scheduler {
       throw new Error(`Invalid cron expression: ${job.schedule}`);
     }
 
-    // Check if workflow exists
-    const allChecks = Object.keys(this.visorConfig.checks || {});
-    if (!allChecks.includes(job.workflow)) {
-      throw new Error(`Workflow "${job.workflow}" not found in configuration`);
+    // Check if workflow exists ("default" is a special alias for "run all checks")
+    if (job.workflow !== 'default') {
+      const allChecks = Object.keys(this.visorConfig.checks || {});
+      if (!allChecks.includes(job.workflow)) {
+        throw new Error(`Workflow "${job.workflow}" not found in configuration`);
+      }
     }
 
     // Use a special ID prefix to distinguish static jobs from dynamic ones
@@ -795,9 +797,14 @@ export class Scheduler {
       return { message: 'No execution engine configured' };
     }
 
-    // Check if the workflow exists
+    // Resolve workflow: "default" means run all checks
     const allChecks = Object.keys(this.visorConfig.checks || {});
-    if (!allChecks.includes(schedule.workflow)) {
+    const checksToRun = schedule.workflow === 'default' ? allChecks : [schedule.workflow];
+
+    if (checksToRun.length === 0) {
+      throw new Error('No checks configured');
+    }
+    if (schedule.workflow !== 'default' && !allChecks.includes(schedule.workflow)) {
       throw new Error(`Workflow "${schedule.workflow}" not found in configuration`);
     }
 
@@ -836,7 +843,7 @@ export class Scheduler {
 
     // Execute the workflow
     await runEngine.executeChecks({
-      checks: [schedule.workflow],
+      checks: checksToRun,
       showDetails: true,
       outputFormat: 'json',
       config: cfgForRun,
