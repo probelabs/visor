@@ -760,7 +760,7 @@ var require_package = __commonJS({
         "@opentelemetry/sdk-node": "^0.203.0",
         "@opentelemetry/sdk-trace-base": "^1.30.1",
         "@opentelemetry/semantic-conventions": "^1.30.1",
-        "@probelabs/probe": "^0.6.0-rc275",
+        "@probelabs/probe": "^0.6.0-rc276",
         "@types/commander": "^2.12.0",
         "@types/uuid": "^10.0.0",
         acorn: "^8.16.0",
@@ -46880,13 +46880,20 @@ var init_worktree_manager = __esm({
         return path21.join(this.config.base_path, "worktrees");
       }
       /**
-       * Generate a deterministic worktree ID based on repository and ref.
-       * This allows worktrees to be reused when the same repo+ref is requested again.
+       * Generate a worktree ID based on repository, ref, and session.
+       *
+       * When a sessionId is provided, the ID is scoped to that session so each
+       * agent run gets its own isolated worktree. Steps within the same session
+       * that checkout the same repo+ref will reuse the worktree (efficient).
+       *
+       * Without sessionId, falls back to deterministic repo+ref hashing
+       * (legacy behavior).
        */
-      generateWorktreeId(repository, ref) {
+      generateWorktreeId(repository, ref, sessionId) {
         const sanitizedRepo = repository.replace(/[^a-zA-Z0-9-]/g, "-");
         const sanitizedRef = ref.replace(/[^a-zA-Z0-9-]/g, "-");
-        const hash = crypto.createHash("md5").update(`${repository}:${ref}`).digest("hex").substring(0, 8);
+        const hashInput = sessionId ? `${repository}:${ref}:${sessionId}` : `${repository}:${ref}`;
+        const hash = crypto.createHash("md5").update(hashInput).digest("hex").substring(0, 8);
         return `${sanitizedRepo}-${sanitizedRef}-${hash}`;
       }
       /**
@@ -47042,7 +47049,7 @@ var init_worktree_manager = __esm({
           options.fetchDepth,
           options.cloneTimeoutMs
         );
-        const worktreeId = this.generateWorktreeId(repository, ref);
+        const worktreeId = this.generateWorktreeId(repository, ref, options.sessionId);
         let worktreePath = options.workingDirectory || path21.join(this.getWorktreesDir(), worktreeId);
         if (options.workingDirectory) {
           worktreePath = this.validatePath(options.workingDirectory);
@@ -47732,6 +47739,7 @@ var init_git_checkout_provider = __esm({
               clean: checkoutConfig.clean !== false,
               // Default: true
               workflowId: context2?.workflowId,
+              sessionId: context2?.sessionId || context2?._parentContext?.sessionId,
               fetchDepth: checkoutConfig.fetch_depth,
               cloneTimeoutMs: checkoutConfig.clone_timeout_ms
             }
