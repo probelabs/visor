@@ -875,7 +875,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -891,7 +891,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -1139,6 +1139,14 @@ export declare const configSchema: {
                 readonly allowBash: {
                     readonly type: "boolean";
                     readonly description: "Enable bash command execution (shorthand for bashConfig.enabled)";
+                };
+                readonly search_delegate_provider: {
+                    readonly type: "string";
+                    readonly description: "Override provider for search delegate sub-agents (e.g., 'google' for cheaper search)";
+                };
+                readonly search_delegate_model: {
+                    readonly type: "string";
+                    readonly description: "Override model for search delegate sub-agents (e.g., 'gemini-2.0-flash')";
                 };
                 readonly bashConfig: {
                     readonly $ref: "#/definitions/BashConfig";
@@ -1543,7 +1551,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1558,13 +1566,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265>': {
+        readonly 'Partial<interface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };

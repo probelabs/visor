@@ -376,6 +376,10 @@ interface AIProviderConfig {
     disableTools?: boolean;
     /** Enable bash command execution (shorthand for bashConfig.enabled) */
     allowBash?: boolean;
+    /** Override provider for search delegate sub-agents (e.g., 'google' for cheaper search) */
+    search_delegate_provider?: string;
+    /** Override model for search delegate sub-agents (e.g., 'gemini-2.0-flash') */
+    search_delegate_model?: string;
     /** Advanced bash command execution configuration */
     bashConfig?: BashConfig;
     /** Completion prompt for post-completion validation/review (runs after attempt_completion) */
