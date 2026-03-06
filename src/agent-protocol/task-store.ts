@@ -89,6 +89,7 @@ function taskRowToAgentTask(row: TaskRow): AgentTask {
     artifacts: safeJsonParse<AgentArtifact[]>(row.artifacts) ?? [],
     history: safeJsonParse<AgentMessage[]>(row.history) ?? [],
     metadata: safeJsonParse<Record<string, unknown>>(row.request_metadata),
+    workflow_id: row.workflow_id ?? undefined,
   };
 }
 
@@ -133,7 +134,8 @@ export interface TaskStore {
   setRunId(taskId: string, runId: string): void;
 
   // Queue operations (Milestone 4)
-  claimNextSubmitted(workerId: string, staleTimeoutMs?: number): AgentTask | null;
+  claimNextSubmitted(workerId: string): AgentTask | null;
+  reclaimStaleTasks(workerId: string, staleTimeoutMs?: number): AgentTask[];
   releaseClaim(taskId: string): void;
 
   // Cleanup
@@ -267,6 +269,7 @@ export class SqliteTaskStore implements TaskStore {
       artifacts: [],
       history: [],
       metadata: params.requestMetadata,
+      workflow_id: params.workflowId,
     };
   }
 
@@ -385,32 +388,50 @@ export class SqliteTaskStore implements TaskStore {
   // Queue operations
   // -------------------------------------------------------------------------
 
-  claimNextSubmitted(workerId: string, staleTimeoutMs?: number): AgentTask | null {
+  claimNextSubmitted(workerId: string): AgentTask | null {
     const db = this.getDb();
     const now = nowISO();
-    const staleTimeoutSec = Math.floor((staleTimeoutMs ?? 300_000) / 1000);
 
-    // Atomic claim: find oldest unclaimed SUBMITTED task,
-    // or reclaim a stale task whose claim has expired (crashed worker recovery)
+    // Atomic claim: find oldest unclaimed SUBMITTED task only.
+    // Does NOT touch 'working' tasks — those are handled separately by
+    // reclaimStaleTasks() to avoid reclaiming genuinely-running long tasks.
     const row = db
       .prepare(
         `UPDATE agent_tasks
          SET state = 'working', claimed_by = ?, claimed_at = ?, updated_at = ?
          WHERE id = (
            SELECT id FROM agent_tasks
-           WHERE state IN ('submitted', 'working')
-           AND (
-             claimed_by IS NULL
-             OR claimed_at < datetime('now', '-' || ? || ' seconds')
-           )
+           WHERE state = 'submitted'
+           AND claimed_by IS NULL
            ORDER BY created_at ASC
            LIMIT 1
          )
          RETURNING *`
       )
-      .get(workerId, now, now, staleTimeoutSec) as TaskRow | undefined;
+      .get(workerId, now, now) as TaskRow | undefined;
 
     return row ? taskRowToAgentTask(row) : null;
+  }
+
+  reclaimStaleTasks(_workerId: string, staleTimeoutMs?: number): AgentTask[] {
+    const db = this.getDb();
+    const now = nowISO();
+    const staleTimeoutSec = Math.floor((staleTimeoutMs ?? 300_000) / 1000);
+
+    // Reclaim tasks stuck in 'working' state whose claim has expired.
+    // Resets them to 'submitted' so they re-enter the normal claim queue.
+    const rows = db
+      .prepare(
+        `UPDATE agent_tasks
+         SET state = 'submitted', claimed_by = NULL, claimed_at = NULL, updated_at = ?
+         WHERE state = 'working'
+         AND claimed_at IS NOT NULL
+         AND claimed_at < datetime('now', '-' || ? || ' seconds')
+         RETURNING *`
+      )
+      .all(now, staleTimeoutSec) as TaskRow[];
+
+    return rows.map(taskRowToAgentTask);
   }
 
   releaseClaim(taskId: string): void {
@@ -436,7 +457,9 @@ export class SqliteTaskStore implements TaskStore {
       .all(now) as { id: string }[];
 
     if (rows.length > 0) {
-      db.prepare('DELETE FROM agent_tasks WHERE expires_at IS NOT NULL AND expires_at < ?').run(now);
+      db.prepare('DELETE FROM agent_tasks WHERE expires_at IS NOT NULL AND expires_at < ?').run(
+        now
+      );
     }
 
     return rows.map(r => r.id);

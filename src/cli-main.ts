@@ -1337,6 +1337,9 @@ export async function main(): Promise<void> {
     }
 
     // ---- A2A Agent Protocol Server ----
+    let a2aFrontendInstance: { stop(): Promise<void> } | null = null;
+    let sharedEngine: StateMachineExecutionEngine | null = null;
+
     if ((options as any).a2a || config.agent_protocol?.enabled) {
       const { StateMachineExecutionEngine: SMEngine } = await import(
         './state-machine-execution-engine'
@@ -1371,29 +1374,36 @@ export async function main(): Promise<void> {
       const host = agentConfig.host ?? '0.0.0.0';
       console.log(`A2A server running on ${host}:${port}`);
 
-      let shuttingDown = false;
-      const onShutdown = async (sig: NodeJS.Signals) => {
-        if (shuttingDown) return;
-        shuttingDown = true;
-        logger.info(`[A2A] Received ${sig}, shutting down gracefully...`);
-        await frontend.stop();
-        process.exit(0);
-      };
-      process.on('SIGINT', sig => {
-        onShutdown(sig);
-      });
-      process.on('SIGTERM', sig => {
-        onShutdown(sig);
-      });
+      if ((options as any).slack === true) {
+        // Both --a2a and --slack: keep references and fall through to Slack startup
+        a2aFrontendInstance = frontend;
+        sharedEngine = engine;
+      } else {
+        // Standalone --a2a mode: block here with shutdown handlers
+        let shuttingDown = false;
+        const onShutdown = async (sig: NodeJS.Signals) => {
+          if (shuttingDown) return;
+          shuttingDown = true;
+          logger.info(`[A2A] Received ${sig}, shutting down gracefully...`);
+          await frontend.stop();
+          process.exit(0);
+        };
+        process.on('SIGINT', sig => {
+          onShutdown(sig);
+        });
+        process.on('SIGTERM', sig => {
+          onShutdown(sig);
+        });
 
-      process.stdin.resume();
-      return;
+        process.stdin.resume();
+        return;
+      }
     }
 
     // Socket Mode runner: visor --slack [--config file]
     if ((options as any).slack === true) {
       const { SlackSocketRunner } = await import('./slack/socket-runner');
-      const engine = new StateMachineExecutionEngine();
+      const engine = sharedEngine ?? new StateMachineExecutionEngine();
       const slackAny: any = (config as any).slack || {};
       const endpoint = slackAny.endpoint || '/bots/slack/support';
       const mentions = slackAny.mentions || 'direct';
@@ -1477,6 +1487,13 @@ export async function main(): Promise<void> {
         logger.info(`[Slack] Received ${sig}, shutting down gracefully…`);
         if (configWatcher) configWatcher.stop();
         if (configWatchStore) configWatchStore.shutdown().catch(() => {});
+        if (a2aFrontendInstance) {
+          try {
+            await a2aFrontendInstance.stop();
+          } catch {
+            /* ignore */
+          }
+        }
         await runner.stop();
         process.exit(0);
       };

@@ -73,6 +73,7 @@ export interface AgentTask {
   artifacts: AgentArtifact[];
   history: AgentMessage[];
   metadata?: Record<string, unknown>;
+  workflow_id?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -276,6 +277,13 @@ export class InvalidRequestError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'InvalidRequestError';
+  }
+}
+
+export class ParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ParseError';
   }
 }
 

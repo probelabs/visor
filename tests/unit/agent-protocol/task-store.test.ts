@@ -81,6 +81,46 @@ describe('SqliteTaskStore', () => {
       expect(t1.id).not.toBe(t2.id);
     });
 
+    it('should generate unique IDs under concurrent creation', async () => {
+      const promises = Array.from({ length: 20 }, (_, i) =>
+        Promise.resolve(
+          store.createTask({
+            contextId: 'ctx',
+            requestMessage: makeMessage({
+              parts: [{ text: `concurrent ${i}`, media_type: 'text/plain' }],
+            }),
+          })
+        )
+      );
+      const tasks = await Promise.all(promises);
+      const ids = tasks.map(t => t.id);
+      expect(new Set(ids).size).toBe(20);
+    });
+
+    it('should preserve workflow_id through create and get', () => {
+      const msg = makeMessage();
+      const task = store.createTask({
+        contextId: 'ctx-1',
+        requestMessage: msg,
+        workflowId: 'security-review',
+      });
+      expect(task.workflow_id).toBe('security-review');
+
+      const fetched = store.getTask(task.id);
+      expect(fetched).not.toBeNull();
+      expect(fetched!.workflow_id).toBe('security-review');
+    });
+
+    it('should return undefined workflow_id when not set', () => {
+      const msg = makeMessage();
+      const task = store.createTask({ contextId: 'ctx-1', requestMessage: msg });
+      expect(task.workflow_id).toBeUndefined();
+
+      const fetched = store.getTask(task.id);
+      expect(fetched).not.toBeNull();
+      expect(fetched!.workflow_id).toBeUndefined();
+    });
+
     it('should store and retrieve the task', () => {
       const msg = makeMessage();
       const created = store.createTask({ contextId: 'ctx-1', requestMessage: msg });
@@ -403,6 +443,57 @@ describe('SqliteTaskStore', () => {
 
       expect(claim1).not.toBeNull();
       expect(claim2).toBeNull();
+    });
+  });
+
+  describe('reclaimStaleTasks', () => {
+    it('should return empty array when no stale tasks exist', () => {
+      const reclaimed = store.reclaimStaleTasks('worker-1');
+      expect(reclaimed).toEqual([]);
+    });
+
+    it('should not reclaim tasks within timeout', () => {
+      const msg = makeMessage();
+      store.createTask({ contextId: 'ctx', requestMessage: msg });
+      store.claimNextSubmitted('worker-1');
+
+      const reclaimed = store.reclaimStaleTasks('worker-2');
+      expect(reclaimed).toEqual([]);
+    });
+
+    it('should reclaim stale working tasks back to submitted', () => {
+      const msg = makeMessage();
+      const task = store.createTask({ contextId: 'ctx', requestMessage: msg });
+      store.claimNextSubmitted('worker-1');
+
+      // Use <=0 comparison: set claimed_at to the past manually
+      const db = (store as any).getDb();
+      db.prepare(
+        "UPDATE agent_tasks SET claimed_at = datetime('now', '-10 seconds') WHERE id = ?"
+      ).run(task.id);
+
+      const reclaimed = store.reclaimStaleTasks('worker-2', 5000); // 5s timeout
+      expect(reclaimed).toHaveLength(1);
+      expect(reclaimed[0].id).toBe(task.id);
+      expect(reclaimed[0].status.state).toBe('submitted');
+    });
+
+    it('should make reclaimed tasks available for claimNextSubmitted', () => {
+      const msg = makeMessage();
+      const task = store.createTask({ contextId: 'ctx', requestMessage: msg });
+      store.claimNextSubmitted('worker-1');
+
+      // Set claimed_at to the past
+      const db = (store as any).getDb();
+      db.prepare(
+        "UPDATE agent_tasks SET claimed_at = datetime('now', '-10 seconds') WHERE id = ?"
+      ).run(task.id);
+      store.reclaimStaleTasks('worker-2', 5000);
+
+      const claimed = store.claimNextSubmitted('worker-2');
+      expect(claimed).not.toBeNull();
+      expect(claimed!.id).toBe(task.id);
+      expect(claimed!.status.state).toBe('working');
     });
   });
 

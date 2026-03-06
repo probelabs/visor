@@ -145,6 +145,11 @@ export class A2ACheckProvider extends CheckProvider {
     const pollInterval = cfg.poll_interval ?? 2_000;
     const maxTurns = cfg.max_turns ?? 1;
     const blocking = cfg.blocking !== false;
+    const acceptedOutputModes: string[] = (cfg.accepted_output_modes as string[] | undefined) ?? [
+      'text/plain',
+      'text/markdown',
+      'application/json',
+    ];
 
     try {
       // 1. Resolve agent endpoint
@@ -212,7 +217,7 @@ export class A2ACheckProvider extends CheckProvider {
       const sendUrl = `${agentUrl}/message:send`;
       let response = await this.sendMessage(
         sendUrl,
-        { message, configuration: { blocking } },
+        { message, configuration: { blocking, accepted_output_modes: acceptedOutputModes } },
         headers
       );
 
@@ -247,7 +252,7 @@ export class A2ACheckProvider extends CheckProvider {
                   context_id: task.context_id,
                   parts: [{ text: replyText }],
                 },
-                configuration: { blocking },
+                configuration: { blocking, accepted_output_modes: acceptedOutputModes },
               };
               response = await this.sendMessage(sendUrl, followUp, headers);
               if (response.task) {
@@ -314,7 +319,11 @@ export class A2ACheckProvider extends CheckProvider {
           );
 
           // If the transform returns a ReviewSummary-shaped object, use it directly
-          if (transformed && typeof transformed === 'object' && 'issues' in (transformed as object)) {
+          if (
+            transformed &&
+            typeof transformed === 'object' &&
+            'issues' in (transformed as object)
+          ) {
             result = transformed as ReviewSummary;
           } else {
             // Otherwise wrap the transform result as output on the ReviewSummary
@@ -390,6 +399,7 @@ export class A2ACheckProvider extends CheckProvider {
       'message',
       'data',
       'files',
+      'accepted_output_modes',
       'blocking',
       'timeout',
       'poll_interval',

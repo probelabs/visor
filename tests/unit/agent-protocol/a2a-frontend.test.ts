@@ -622,4 +622,180 @@ describe('A2AFrontend', () => {
       expect((res.body as any).error.code).toBe(-32001);
     });
   });
+
+  // -----------------------------------------------------------------------
+  // Follow-up messages
+  // -----------------------------------------------------------------------
+
+  describe('follow-up messages', () => {
+    it('should resume a task in input_required state (blocking)', async () => {
+      // Create a non-blocking task (stays in submitted)
+      const createRes = await httpRequest(
+        port,
+        'POST',
+        '/message:send',
+        makeSendRequest(),
+        authHeaders
+      );
+      const taskId = (createRes.body as any).task.id;
+
+      // Manually transition submitted -> working -> input_required
+      taskStore.updateTaskState(taskId, 'working');
+      taskStore.updateTaskState(taskId, 'input_required', {
+        message_id: crypto.randomUUID(),
+        role: 'agent',
+        parts: [{ text: 'Please provide input' }],
+      });
+
+      // Send follow-up message (blocking)
+      const followUp = makeSendRequest({
+        message: {
+          message_id: crypto.randomUUID(),
+          role: 'user',
+          task_id: taskId,
+          parts: [{ text: 'Here is my input', media_type: 'text/plain' }],
+        },
+        configuration: { blocking: true },
+      });
+      const res = await httpRequest(port, 'POST', '/message:send', followUp, authHeaders);
+      expect(res.status).toBe(200);
+      expect((res.body as any).task.status.state).toBe('completed');
+    });
+
+    it('should reject follow-up to non-existent task', async () => {
+      const followUp = makeSendRequest({
+        message: {
+          message_id: crypto.randomUUID(),
+          role: 'user',
+          task_id: 'nonexistent-task',
+          parts: [{ text: 'Follow up', media_type: 'text/plain' }],
+        },
+      });
+      const res = await httpRequest(port, 'POST', '/message:send', followUp, authHeaders);
+      expect(res.status).toBe(404);
+    });
+
+    it('should reject follow-up to task not in input_required state', async () => {
+      // Create a task (non-blocking, stays in submitted)
+      const createRes = await httpRequest(
+        port,
+        'POST',
+        '/message:send',
+        makeSendRequest(),
+        authHeaders
+      );
+      const taskId = (createRes.body as any).task.id;
+
+      const followUp = makeSendRequest({
+        message: {
+          message_id: crypto.randomUUID(),
+          role: 'user',
+          task_id: taskId,
+          parts: [{ text: 'Follow up', media_type: 'text/plain' }],
+        },
+      });
+      const res = await httpRequest(port, 'POST', '/message:send', followUp, authHeaders);
+      expect(res.status).toBe(409);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // ParseError
+  // -----------------------------------------------------------------------
+
+  describe('parse error', () => {
+    it('should return -32700 for malformed JSON body', async () => {
+      // Send raw malformed JSON
+      const res = await new Promise<{ status: number; body: unknown }>(resolve => {
+        const reqOpts = {
+          hostname: '127.0.0.1',
+          port,
+          path: '/message:send',
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${TEST_TOKEN}`,
+          },
+        };
+        const req = http.request(reqOpts, res => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => {
+            const body = JSON.parse(Buffer.concat(chunks).toString());
+            resolve({ status: res.statusCode!, body });
+          });
+        });
+        req.write('not valid json{{{');
+        req.end();
+      });
+      expect(res.status).toBe(400);
+      expect((res.body as any).error.code).toBe(-32700);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // API key query parameter auth
+  // -----------------------------------------------------------------------
+
+  describe('api_key query parameter auth', () => {
+    let apiFrontend: InstanceType<typeof A2AFrontend>;
+    let apiPort: number;
+    let apiDbPath: string;
+    const API_KEY = 'test-api-key-12345';
+
+    beforeEach(async () => {
+      process.env.TEST_API_KEY = API_KEY;
+      const tmpDir = path.join(__dirname, '../../fixtures/tmp-a2a-frontend');
+      fs.mkdirSync(tmpDir, { recursive: true });
+      apiDbPath = path.join(tmpDir, `test-apikey-${crypto.randomUUID()}.db`);
+
+      const config = makeConfig({
+        auth: { type: 'api_key', key_env: 'TEST_API_KEY' } as any,
+      });
+      apiFrontend = new A2AFrontend(config, new SqliteTaskStore(apiDbPath));
+      await apiFrontend.start(makeFrontendContext());
+      apiPort = apiFrontend.boundPort;
+    });
+
+    afterEach(async () => {
+      await apiFrontend.stop();
+      delete process.env.TEST_API_KEY;
+      try {
+        fs.unlinkSync(apiDbPath);
+        fs.unlinkSync(apiDbPath + '-wal');
+        fs.unlinkSync(apiDbPath + '-shm');
+      } catch {
+        /* ignore */
+      }
+    });
+
+    it('should accept api_key via header', async () => {
+      const res = await httpRequest(apiPort, 'POST', '/message:send', makeSendRequest(), {
+        'x-api-key': API_KEY,
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it('should accept api_key via query parameter', async () => {
+      const res = await httpRequest(
+        apiPort,
+        'POST',
+        `/message:send?api_key=${API_KEY}`,
+        makeSendRequest(),
+        {}
+      );
+      expect(res.status).toBe(200);
+    });
+
+    it('should reject wrong api_key in query parameter', async () => {
+      const res = await httpRequest(
+        apiPort,
+        'POST',
+        '/message:send?api_key=wrong-key',
+        makeSendRequest(),
+        {}
+      );
+      expect(res.status).toBe(401);
+    });
+  });
 });

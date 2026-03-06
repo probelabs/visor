@@ -38,6 +38,7 @@ import {
   InvalidStateTransitionError,
   InvalidRequestError,
   ContextMismatchError,
+  ParseError,
 } from './types';
 import { isTerminalState } from './state-transitions';
 import { TaskStreamManager } from './task-stream-manager';
@@ -46,6 +47,7 @@ import { TaskQueue } from './task-queue';
 import type { TaskExecutor } from './task-queue';
 import type { VisorConfig } from '../types/config';
 import type { CheckExecutionOptions } from '../types/execution';
+import { withActiveSpan } from '../telemetry/trace-helpers';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -60,7 +62,7 @@ function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
         const body = Buffer.concat(chunks).toString('utf8');
         resolve(body ? JSON.parse(body) : {});
       } catch {
-        reject(new InvalidRequestError('Malformed JSON body'));
+        reject(new ParseError('Malformed JSON body'));
       }
     });
     req.on('error', reject);
@@ -115,7 +117,13 @@ function validateAuth(req: http.IncomingMessage, config: AgentProtocolConfig): b
     const headerName = config.auth.header_name ?? 'x-api-key';
     const key = req.headers[headerName.toLowerCase()] as string | undefined;
     const expected = config.auth.key_env ? process.env[config.auth.key_env] : undefined;
-    return timingSafeEqual(key, expected);
+    if (timingSafeEqual(key, expected)) return true;
+
+    // Also check URL query parameters using param_name (default 'api_key')
+    const paramName = config.auth.param_name ?? 'api_key';
+    const url = new URL(req.url || '', 'http://localhost');
+    const queryKey = url.searchParams.get(paramName) ?? undefined;
+    return timingSafeEqual(queryKey, expected);
   }
 
   return false;
@@ -368,13 +376,25 @@ export class A2AFrontend implements ActiveFrontend {
       });
     });
 
-    // Patch agent card URL now that the bound port is known
+    // Patch agent card URLs now that the bound port is known
     if (this.agentCard) {
       const publicUrl = this.config.public_url ?? `http://${host}:${this._boundPort}`;
       if (!this.agentCard.supported_interfaces?.length) {
         this.agentCard.supported_interfaces = [{ url: publicUrl, protocol_binding: 'a2a/v1' }];
       } else {
-        this.agentCard.supported_interfaces[0].url = publicUrl;
+        for (const iface of this.agentCard.supported_interfaces) {
+          // Patch interfaces that need a local URL: a2a/v1 binding, missing URL, placeholder,
+          // localhost/0.0.0.0 addresses, or relative paths
+          if (
+            iface.protocol_binding === 'a2a/v1' ||
+            !iface.url ||
+            !iface.url.startsWith('http') ||
+            iface.url.includes('localhost') ||
+            iface.url.includes('0.0.0.0')
+          ) {
+            iface.url = publicUrl;
+          }
+        }
       }
     }
   }
@@ -482,6 +502,9 @@ export class A2AFrontend implements ActiveFrontend {
 
       sendError(res, 404, 'MethodNotFound', -32601);
     } catch (err) {
+      if (err instanceof ParseError) {
+        return sendError(res, 400, err.message, -32700);
+      }
       if (err instanceof TaskNotFoundError) {
         return sendError(res, 404, err.message, -32001);
       }
@@ -532,45 +555,55 @@ export class A2AFrontend implements ActiveFrontend {
 
     // Determine workflow
     const workflowId = resolveWorkflow(body, this.config);
-
-    // Create task
-    const task = this.taskStore.createTask({
-      contextId,
-      requestMessage: body.message,
-      requestConfig: body.configuration,
-      requestMetadata: body.metadata,
-      workflowId,
-    });
-
-    // Append user message to history
-    this.taskStore.appendHistory(task.id, body.message);
-
     const blocking = body.configuration?.blocking ?? false;
 
-    if (blocking) {
-      // Execute synchronously
-      await this.executeTaskDirectly(task, body.message);
-      let finalTask = this.taskStore.getTask(task.id)!;
+    await withActiveSpan(
+      'agent.task',
+      {
+        'agent.task.context_id': contextId,
+        'agent.task.workflow': workflowId,
+        'agent.task.blocking': blocking,
+        'agent.task.message_id': body.message.message_id ?? '',
+      },
+      async () => {
+        // Create task
+        const task = this.taskStore.createTask({
+          contextId,
+          requestMessage: body.message,
+          requestConfig: body.configuration,
+          requestMetadata: body.metadata,
+          workflowId,
+        });
 
-      // Respect history_length
-      const historyLength = body.configuration?.history_length;
-      if (historyLength !== undefined) {
-        finalTask = {
-          ...finalTask,
-          history: finalTask.history.slice(-historyLength),
-        };
+        // Append user message to history
+        this.taskStore.appendHistory(task.id, body.message);
+
+        if (blocking) {
+          // Execute synchronously
+          await this.executeTaskDirectly(task, body.message);
+          let finalTask = this.taskStore.getTask(task.id)!;
+
+          // Respect history_length
+          const historyLength = body.configuration?.history_length;
+          if (historyLength !== undefined) {
+            finalTask = {
+              ...finalTask,
+              history: finalTask.history.slice(-historyLength),
+            };
+          }
+
+          // Filter accepted_output_modes
+          if (body.configuration?.accepted_output_modes?.length) {
+            finalTask = this.filterOutputModes(finalTask, body.configuration.accepted_output_modes);
+          }
+
+          return sendJson(res, 200, { task: finalTask });
+        }
+
+        // Non-blocking: return task immediately (queue picks it up in Milestone 4)
+        return sendJson(res, 200, { task: this.taskStore.getTask(task.id)! });
       }
-
-      // Filter accepted_output_modes
-      if (body.configuration?.accepted_output_modes?.length) {
-        finalTask = this.filterOutputModes(finalTask, body.configuration.accepted_output_modes);
-      }
-
-      return sendJson(res, 200, { task: finalTask });
-    }
-
-    // Non-blocking: return task immediately (queue picks it up in Milestone 4)
-    return sendJson(res, 200, { task: this.taskStore.getTask(task.id)! });
+    );
   }
 
   private async handleFollowUpMessage(
@@ -593,12 +626,55 @@ export class A2AFrontend implements ActiveFrontend {
       throw new ContextMismatchError(req.message.context_id, task.context_id);
     }
 
-    // Append follow-up
+    // Append follow-up message to history
     this.taskStore.appendHistory(taskId, req.message);
-    this.taskStore.updateTaskState(taskId, 'working');
 
-    // For now, we mark as working. Full resume is in Milestone 4.
-    // In blocking mode, we'd wait for completion here.
+    // Transition task to working state
+    this.taskStore.updateTaskState(taskId, 'working');
+    this.emitStatusEvent(taskId, task.context_id, {
+      state: 'working',
+      timestamp: new Date().toISOString(),
+    });
+
+    // Extract text content from the follow-up message
+    const textContent = req.message.parts
+      .filter(p => p.text != null)
+      .map(p => p.text)
+      .join('\n');
+
+    // Publish HumanInputReceived event on the EventBus so the engine can resume
+    if (this._ctx?.eventBus) {
+      await (this._ctx.eventBus as any).emit({
+        type: 'HumanInputReceived',
+        taskId,
+        message: textContent,
+      });
+    }
+
+    // Re-execute the task with the follow-up message
+    const blocking = req.configuration?.blocking ?? false;
+    if (blocking) {
+      await this.executeTaskDirectly(task, req.message);
+      let finalTask = this.taskStore.getTask(taskId)!;
+
+      // Respect history_length
+      const historyLength = req.configuration?.history_length;
+      if (historyLength !== undefined) {
+        finalTask = {
+          ...finalTask,
+          history: finalTask.history.slice(-historyLength),
+        };
+      }
+
+      return { task: finalTask };
+    }
+
+    // Non-blocking: kick off execution in the background
+    const updatedTask = this.taskStore.getTask(taskId)!;
+    this.executeTaskDirectly(updatedTask, req.message).catch(() => {
+      // Error already handled inside executeTaskDirectly
+    });
+
     return { task: this.taskStore.getTask(taskId)! };
   }
 
@@ -809,11 +885,16 @@ export class A2AFrontend implements ActiveFrontend {
    */
   private async executeTaskDirectly(task: AgentTask, message: AgentMessage): Promise<void> {
     try {
-      this.taskStore.updateTaskState(task.id, 'working');
-      this.emitStatusEvent(task.id, task.context_id, {
-        state: 'working',
-        timestamp: new Date().toISOString(),
-      });
+      // Only transition to working if not already in that state (follow-up messages
+      // already set the state to working before calling this method)
+      const currentTask = this.taskStore.getTask(task.id);
+      if (currentTask && currentTask.status.state !== 'working') {
+        this.taskStore.updateTaskState(task.id, 'working');
+        this.emitStatusEvent(task.id, task.context_id, {
+          state: 'working',
+          timestamp: new Date().toISOString(),
+        });
+      }
 
       if (this._engine && this._visorConfig) {
         // Engine-backed execution
@@ -854,7 +935,7 @@ export class A2AFrontend implements ActiveFrontend {
    * Creates a fresh engine execution per task and converts results to artifacts.
    */
   private async executeTaskViaEngine(task: AgentTask, _message: AgentMessage): Promise<void> {
-    const workflowId = (task.metadata as any)?.workflowId ?? this.config.default_workflow;
+    const workflowId = task.workflow_id ?? this.config.default_workflow;
 
     // Determine which checks to run
     const checks = workflowId ? [workflowId] : ['all'];
@@ -979,17 +1060,22 @@ export class A2AFrontend implements ActiveFrontend {
   private createTaskExecutor(): TaskExecutor {
     return async (
       task: AgentTask
-    ): Promise<{ success: boolean; checkResults?: Record<string, unknown>; error?: string }> => {
+    ): Promise<{
+      success: boolean;
+      checkResults?: Record<string, unknown>;
+      error?: string;
+      stateAlreadySet?: boolean;
+    }> => {
       try {
         // Get the user message from history
         const userMessage = task.history.find(m => m.role === 'user');
         if (!userMessage) return { success: false, error: 'No user message found' };
 
         await this.executeTaskViaEngine(task, userMessage);
-        return { success: true };
+        return { success: true, stateAlreadySet: true };
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-        return { success: false, error: errorMsg };
+        return { success: false, error: errorMsg, stateAlreadySet: true };
       }
     };
   }

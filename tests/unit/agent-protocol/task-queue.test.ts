@@ -170,16 +170,16 @@ describe('TaskQueue', () => {
     expect(queue.isRunning()).toBe(false);
   });
 
-  it('should add artifacts from executor results', async () => {
-    const executor: TaskExecutor = async () => ({
-      success: true,
-      checkResults: {
-        'security-scan': {
-          output: 'No issues found',
-          status: 'passed',
-        },
-      },
-    });
+  it('should skip state transition when executor sets stateAlreadySet', async () => {
+    const executor: TaskExecutor = async task => {
+      // Executor handles its own state transition (like executeTaskViaEngine does)
+      store.updateTaskState(task.id, 'completed', {
+        message_id: 'done',
+        role: 'agent',
+        parts: [{ text: 'Done' }],
+      });
+      return { success: true, stateAlreadySet: true };
+    };
 
     const task = store.createTask({ contextId: 'ctx', requestMessage: makeMessage() });
 
@@ -189,7 +189,6 @@ describe('TaskQueue', () => {
     await queue.stop();
 
     const updated = store.getTask(task.id)!;
-    expect(updated.artifacts.length).toBeGreaterThan(0);
-    expect(updated.artifacts[0].name).toBe('security-scan');
+    expect(updated.status.state).toBe('completed');
   });
 });

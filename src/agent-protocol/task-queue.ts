@@ -8,7 +8,8 @@
 import crypto from 'crypto';
 import { logger } from '../logger';
 import type { TaskStore } from './task-store';
-import type { AgentTask, AgentMessage, AgentArtifact, AgentPart } from './types';
+import type { AgentTask, AgentMessage } from './types';
+import { withActiveSpan } from '../telemetry/trace-helpers';
 
 // ---------------------------------------------------------------------------
 // Queue config
@@ -35,6 +36,8 @@ export type TaskExecutor = (task: AgentTask) => Promise<{
   checkResults?: Record<string, unknown>;
   error?: string;
   summary?: string;
+  /** When true, the executor already set the terminal state — the queue should skip its own transition. */
+  stateAlreadySet?: boolean;
 }>;
 
 // ---------------------------------------------------------------------------
@@ -103,8 +106,11 @@ export class TaskQueue {
     if (!this.running) return;
 
     try {
+      // Reclaim stale tasks from crashed workers back to 'submitted'
+      this.taskStore.reclaimStaleTasks(this.workerId, this.config.staleClaimTimeout);
+
       while (this.activeCount < this.config.maxConcurrent) {
-        const task = this.taskStore.claimNextSubmitted(this.workerId, this.config.staleClaimTimeout);
+        const task = this.taskStore.claimNextSubmitted(this.workerId);
         if (!task) break;
 
         this.activeCount++;
@@ -120,17 +126,25 @@ export class TaskQueue {
   }
 
   private async executeTask(task: AgentTask): Promise<void> {
+    await withActiveSpan(
+      'agent.queue.execute',
+      {
+        'agent.task.id': task.id,
+        'agent.queue.worker_id': this.workerId,
+      },
+      async () => this._executeTaskInner(task)
+    );
+  }
+
+  private async _executeTaskInner(task: AgentTask): Promise<void> {
     try {
       // Task is already in WORKING state from claimNextSubmitted
 
       const result = await this.executor(task);
 
-      // Convert results to artifacts
-      if (result.checkResults) {
-        const artifacts = this.resultToArtifacts(result.checkResults);
-        for (const artifact of artifacts) {
-          this.taskStore.addArtifact(task.id, artifact);
-        }
+      // If the executor already handled the terminal state transition, we're done.
+      if (result.stateAlreadySet) {
+        return;
       }
 
       // Set terminal state
@@ -167,34 +181,5 @@ export class TaskQueue {
         // ignore double-failure
       }
     }
-  }
-
-  private resultToArtifacts(checkResults: Record<string, unknown>): AgentArtifact[] {
-    const artifacts: AgentArtifact[] = [];
-
-    for (const [checkId, checkResult] of Object.entries(checkResults)) {
-      if (!checkResult || typeof checkResult !== 'object') continue;
-      const cr = checkResult as Record<string, unknown>;
-      if (cr.status === 'skipped') continue;
-
-      const parts: AgentPart[] = [];
-
-      if (typeof cr.output === 'string') {
-        parts.push({ text: cr.output, media_type: 'text/markdown' });
-      } else if (typeof cr.output === 'object' && cr.output !== null) {
-        parts.push({ data: cr.output, media_type: 'application/json' });
-      }
-
-      if (parts.length > 0) {
-        artifacts.push({
-          artifact_id: crypto.randomUUID(),
-          name: checkId,
-          description: `Output from check: ${checkId}`,
-          parts,
-        });
-      }
-    }
-
-    return artifacts;
   }
 }
