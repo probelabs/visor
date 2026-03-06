@@ -236,6 +236,10 @@ export interface AIReviewConfig {
   allowBash?: boolean;
   // Advanced bash command execution configuration
   bashConfig?: import('./types/config').BashConfig;
+  // Override provider for search delegate sub-agents
+  search_delegate_provider?: string;
+  // Override model for search delegate sub-agents
+  search_delegate_model?: string;
   // Optional workspace root and allowed folders for ProbeAgent.
   // When provided, these are forwarded to ProbeAgent so tools like search/query
   // operate inside the isolated workspace/projects instead of the Visor repo root.
@@ -1927,6 +1931,14 @@ ${'='.repeat(60)}
       }
       if (this.config.bashConfig !== undefined) {
         (options as any).bashConfig = this.config.bashConfig;
+      }
+
+      // Pass search delegate provider/model overrides to ProbeAgent
+      if (this.config.search_delegate_provider) {
+        (options as any).searchDelegateProvider = this.config.search_delegate_provider;
+      }
+      if (this.config.search_delegate_model) {
+        (options as any).searchDelegateModel = this.config.search_delegate_model;
       }
 
       // Pass completion prompt for post-completion validation/review

@@ -855,6 +855,12 @@ export class AICheckProvider extends CheckProvider {
       if (aiAny.bashConfig !== undefined) {
         aiConfig.bashConfig = aiAny.bashConfig as import('../types/config').BashConfig;
       }
+      if (aiAny.search_delegate_provider !== undefined) {
+        aiConfig.search_delegate_provider = aiAny.search_delegate_provider as string;
+      }
+      if (aiAny.search_delegate_model !== undefined) {
+        aiConfig.search_delegate_model = aiAny.search_delegate_model as string;
+      }
       if (aiAny.completion_prompt !== undefined) {
         aiConfig.completionPrompt = aiAny.completion_prompt as string;
       }
@@ -2317,6 +2323,8 @@ export class AICheckProvider extends CheckProvider {
       'ai.disableTools',
       'ai.allowBash',
       'ai.bashConfig',
+      'ai.search_delegate_provider',
+      'ai.search_delegate_model',
       'ai_model',
       'ai_provider',
       'ai_mcp_servers',
