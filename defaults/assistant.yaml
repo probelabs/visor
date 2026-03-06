@@ -318,6 +318,18 @@ inputs:
     schema:
       type: boolean
 
+  - name: router_model
+    required: false
+    description: Override AI model for intent routing (e.g., gemini-3-flash-preview for cheaper/faster classification)
+    schema:
+      type: string
+
+  - name: router_provider
+    required: false
+    description: Override AI provider for intent routing (google, anthropic, openai)
+    schema:
+      type: string
+
 # =========================================================================
 # Outputs
 # =========================================================================
@@ -375,6 +387,8 @@ steps:
       tags:
         expression: "inputs.tags || []"
       routing_instructions: "{{ inputs.routing_instructions }}"
+      model: "{{ inputs.router_model }}"
+      provider: "{{ inputs.router_provider }}"
 
   # -------------------------------------------------------------------------
   # Step 2: Build dynamic configuration for the AI step

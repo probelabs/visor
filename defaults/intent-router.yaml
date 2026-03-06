@@ -89,6 +89,18 @@ inputs:
     schema:
       type: string
 
+  - name: model
+    required: false
+    description: Override AI model for classification (e.g., gemini-3-flash-preview)
+    schema:
+      type: string
+
+  - name: provider
+    required: false
+    description: Override AI provider for classification (google, anthropic, openai)
+    schema:
+      type: string
+
 outputs:
   - name: intent
     description: Selected intent ID
@@ -134,6 +146,8 @@ steps:
       - "true"
     guarantee: "output?.intent != null"
     ai:
+      model: "{{ inputs.model }}"
+      provider: "{{ inputs.provider }}"
       skip_code_context: true
       skip_slack_context: false
       disableTools: true
