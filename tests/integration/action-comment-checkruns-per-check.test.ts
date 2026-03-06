@@ -48,7 +48,7 @@ describe('GitHub Checks on issue_comment rerun (per check)', () => {
         overview: { type: 'log', message: 'overview ran', on: ['pr_updated'] },
       },
       output: {
-        pr_comment: { format: 'markdown', group_by: 'check' },
+        pr_comment: { enabled: false, format: 'markdown', group_by: 'check' },
         github_checks: { enabled: true },
       },
     } as any;
@@ -82,7 +82,7 @@ describe('GitHub Checks on issue_comment rerun (per check)', () => {
     process.env['INPUT_CONFIG-PATH'] = cfgPath; // use our temp config
     process.env['INPUT_CREATE-CHECK'] = 'true';
     process.env['INPUT_COMMENT-ON-PR'] = 'false'; // skip PR comments in test
-    process.env['INPUT_DEBUG'] = 'true';
+    process.env['INPUT_DEBUG'] = 'false';
 
     // Import run() fresh to pick up env
     const { run } = await import('../../src/index');

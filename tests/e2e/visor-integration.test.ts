@@ -6,13 +6,29 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
 
+// Pre-require modules at top level so Node caches them across tests
+const { ActionCliBridge: ActionCliBridgeImpl } = require('../../src/action-cli-bridge');
+const { EventMapper } = require('../../src/event-mapper');
+const { CommentManager } = require('../../src/github-comments');
+const { parseComment } = require('../../src/commands');
+const { ConfigManager } = require('../../src/config');
+const { PRDetector } = require('../../src/pr-detector');
+
 describe('Visor Integration E2E Tests', () => {
   let mockGithub: MockGithub;
   let act: Act;
   let testRepoPath: string;
 
-  beforeAll(async () => {
-    // Create test config files
+  // MockGithub setup is expensive (~5-6s) and only needed by the "complete PR
+  // review workflow" test whose act.js execution is commented out.  We lazily
+  // initialise it only when `act`/`testRepoPath` are actually required so that
+  // the other 28 tests run without the overhead.
+  let mockGithubReady = false;
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async function ensureMockGithub() {
+    if (mockGithubReady) return;
+
     const testConfig = {
       version: '1.0',
       checks: {
@@ -84,13 +100,14 @@ describe('Visor Integration E2E Tests', () => {
       await mockGithub.setup();
       act = new Act();
       testRepoPath = mockGithub.repo.getPath('test-owner/visor-test') || '';
+      mockGithubReady = true;
     } catch (error) {
       console.log('MockGithub setup failed, using mock tests:', error);
     }
-  });
+  }
 
   afterAll(async () => {
-    if (mockGithub) {
+    if (mockGithubReady && mockGithub) {
       await mockGithub.teardown();
     }
 
@@ -111,8 +128,7 @@ describe('Visor Integration E2E Tests', () => {
       };
 
       // Test that ActionCliBridge detects Visor mode correctly
-      const { ActionCliBridge } = require('../../src/action-cli-bridge');
-      const bridge = new ActionCliBridge('test-token', {
+      const bridge = new ActionCliBridgeImpl('test-token', {
         event_name: 'pull_request',
         repository: { owner: { login: 'test-owner' }, name: 'visor-test' },
       });
@@ -128,8 +144,7 @@ describe('Visor Integration E2E Tests', () => {
         repo: 'visor-test',
       };
 
-      const { ActionCliBridge } = require('../../src/action-cli-bridge');
-      const bridge = new ActionCliBridge('test-token', {
+      const bridge = new ActionCliBridgeImpl('test-token', {
         event_name: 'pull_request',
         repository: { owner: { login: 'test-owner' }, name: 'visor-test' },
       });
@@ -150,8 +165,7 @@ describe('Visor Integration E2E Tests', () => {
         repo: 'visor-test',
       };
 
-      const { ActionCliBridge } = require('../../src/action-cli-bridge');
-      const bridge = new ActionCliBridge('test-token', {
+      const bridge = new ActionCliBridgeImpl('test-token', {
         event_name: 'pull_request',
         repository: { owner: { login: 'test-owner' }, name: 'visor-test' },
       });
@@ -180,7 +194,6 @@ describe('Visor Integration E2E Tests', () => {
         },
       };
 
-      const { EventMapper } = require('../../src/event-mapper');
       const mapper = new EventMapper(config);
 
       const prOpenedEvent = {
@@ -233,7 +246,6 @@ describe('Visor Integration E2E Tests', () => {
         },
       };
 
-      const { EventMapper } = require('../../src/event-mapper');
       const mapper = new EventMapper(config);
 
       const prEvent = {
@@ -293,7 +305,6 @@ describe('Visor Integration E2E Tests', () => {
         },
       };
 
-      const { CommentManager } = require('../../src/github-comments');
       const commentManager = new CommentManager(mockOctokit);
 
       await commentManager.updateOrCreateComment(
@@ -340,7 +351,6 @@ describe('Visor Integration E2E Tests', () => {
         },
       };
 
-      const { CommentManager } = require('../../src/github-comments');
       const commentManager = new CommentManager(mockOctokit);
 
       await commentManager.updateOrCreateComment(
@@ -385,8 +395,7 @@ describe('Visor Integration E2E Tests', () => {
         },
       };
 
-      const { CommentManager } = require('../../src/github-comments');
-      const commentManager = new CommentManager(mockOctokit);
+      const commentManager = new CommentManager(mockOctokit, { maxRetries: 0, baseDelay: 0 });
 
       await expect(
         commentManager.updateOrCreateComment('test-owner', 'visor-test', 123, 'New content', {
@@ -399,8 +408,6 @@ describe('Visor Integration E2E Tests', () => {
 
   describe('Backward Compatibility', () => {
     test('should preserve legacy comment commands', async () => {
-      const { parseComment } = require('../../src/commands');
-
       // Test built-in commands still work
       expect(parseComment('/status')).toEqual({ type: 'status', args: undefined });
       expect(parseComment('/help')).toEqual({ type: 'help', args: undefined });
@@ -478,8 +485,7 @@ describe('Visor Integration E2E Tests', () => {
         },
       };
 
-      const { ActionCliBridge } = require('../../src/action-cli-bridge');
-      const bridge = new ActionCliBridge('test-token', mockContext);
+      const bridge = new ActionCliBridgeImpl('test-token', mockContext);
 
       const cliArgs = bridge.parseGitHubInputsToCliArgs(mockInputs);
 
@@ -500,8 +506,7 @@ describe('Visor Integration E2E Tests', () => {
         },
       };
 
-      const { ActionCliBridge } = require('../../src/action-cli-bridge');
-      const bridge = new ActionCliBridge('test-secret-token', mockContext);
+      const bridge = new ActionCliBridgeImpl('test-secret-token', mockContext);
 
       // Test that authentication token is properly handled
       expect(bridge.shouldUseVisor(mockInputs)).toBe(true);
@@ -516,7 +521,6 @@ describe('Visor Integration E2E Tests', () => {
 
   describe('Error Handling and Resilience', () => {
     test('should handle invalid config gracefully', async () => {
-      const { ConfigManager } = require('../../src/config');
       const configManager = new ConfigManager();
 
       // Test with non-existent config file
@@ -534,7 +538,6 @@ describe('Visor Integration E2E Tests', () => {
         },
       };
 
-      const { CommentManager } = require('../../src/github-comments');
       const commentManager = new CommentManager(mockOctokit);
 
       await expect(commentManager.findVisorComment('owner', 'repo', 123)).rejects.toThrow(
@@ -547,7 +550,7 @@ describe('Visor Integration E2E Tests', () => {
         status: 403,
         response: {
           data: { message: 'API rate limit exceeded' },
-          headers: { 'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 1) },
+          headers: { 'x-ratelimit-reset': String(Math.floor(Date.now() / 1000)) },
         },
       };
 
@@ -562,10 +565,9 @@ describe('Visor Integration E2E Tests', () => {
         },
       };
 
-      const { CommentManager } = require('../../src/github-comments');
       const commentManager = new CommentManager(mockOctokit, {
         maxRetries: 1,
-        baseDelay: 100,
+        baseDelay: 1,
       });
 
       const result = await commentManager.findVisorComment('owner', 'repo', 123);
@@ -580,6 +582,9 @@ describe('Visor Integration E2E Tests', () => {
       // in a real E2E scenario with act.js
 
       try {
+        // MockGithub setup is deferred via ensureMockGithub().
+        // Uncomment the next line when re-enabling the act.js execution below.
+        // await ensureMockGithub();
         if (act && testRepoPath) {
           // Set up environment for Visor mode
           process.env.VISOR_CONFIG_PATH = path.join(testRepoPath, '.visor.yaml');
@@ -622,7 +627,6 @@ describe('Visor Integration E2E Tests', () => {
       };
 
       // Create PRDetector instance
-      const { PRDetector } = require('../../src/pr-detector');
       prDetector = new PRDetector(mockOctokit, true);
     });
 

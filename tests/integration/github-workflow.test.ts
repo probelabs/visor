@@ -68,20 +68,26 @@ jest.mock('../../src/check-execution-engine', () => {
   };
 });
 
-// Mock environment variables
-const originalEnv = process.env;
+// Set environment variables once for all tests (no test relies on different env values)
+const originalGoogleApiKey = process.env.GOOGLE_API_KEY;
+const originalModelName = process.env.MODEL_NAME;
 
-beforeEach(() => {
-  jest.resetModules();
-  process.env = {
-    ...originalEnv,
-    GOOGLE_API_KEY: 'test-api-key',
-    MODEL_NAME: 'gemini-2.0-flash-exp',
-  };
+beforeAll(() => {
+  process.env.GOOGLE_API_KEY = 'test-api-key';
+  process.env.MODEL_NAME = 'gemini-2.0-flash-exp';
 });
 
-afterEach(() => {
-  process.env = originalEnv;
+afterAll(() => {
+  if (originalGoogleApiKey === undefined) {
+    delete process.env.GOOGLE_API_KEY;
+  } else {
+    process.env.GOOGLE_API_KEY = originalGoogleApiKey;
+  }
+  if (originalModelName === undefined) {
+    delete process.env.MODEL_NAME;
+  } else {
+    process.env.MODEL_NAME = originalModelName;
+  }
 });
 
 // Mock Octokit
@@ -496,7 +502,11 @@ describe('GitHub PR Workflow Integration', () => {
 
   describe('Error Handling and Fallbacks', () => {
     test('should handle comment update failures gracefully', async () => {
-      const commentManager = new CommentManager(mockOctokit);
+      const commentManager = new CommentManager(mockOctokit, {
+        maxRetries: 0,
+        baseDelay: 0,
+        maxDelay: 0,
+      });
 
       // Mock comment update failure
       mockOctokit.rest.issues.listComments.mockResolvedValue({ data: [] });

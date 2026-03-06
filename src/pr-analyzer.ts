@@ -61,7 +61,8 @@ export class PRAnalyzer {
   constructor(
     private octokit: Octokit,
     private maxRetries: number = 3,
-    workingDirectory: string = path.resolve(process.cwd())
+    workingDirectory: string = path.resolve(process.cwd()),
+    private baseDelay: number = 1000
   ) {
     this.fileExclusionHelper = new FileExclusionHelper(workingDirectory);
   }
@@ -292,7 +293,7 @@ export class PRAnalyzer {
 
         // Check if this is a retryable error
         if (this.isRetryableError(error)) {
-          const delay = Math.min(1000 * Math.pow(2, attempt), 5000); // Exponential backoff, max 5s
+          const delay = Math.min(this.baseDelay * Math.pow(2, attempt), this.baseDelay * 5); // Exponential backoff
           await new Promise(resolve => setTimeout(resolve, delay));
         } else {
           // Non-retryable error, fail immediately with original error

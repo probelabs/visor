@@ -5,12 +5,12 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 
-describe('CLI Workflow Integration Tests', () => {
-  // Check if compiled version exists for faster test execution
-  const COMPILED_CLI_PATH = path.join(__dirname, '../../dist/index.js');
-  const SOURCE_CLI_PATH = path.join(__dirname, '../../src/index.ts');
-  const useCompiledVersion = fs.existsSync(COMPILED_CLI_PATH);
+// Cache CLI path resolution at module level
+const COMPILED_CLI_PATH = path.join(__dirname, '../../dist/index.js');
+const SOURCE_CLI_PATH = path.join(__dirname, '../../src/index.ts');
+const useCompiledVersion = fs.existsSync(COMPILED_CLI_PATH);
 
+describe('CLI Workflow Integration Tests', () => {
   // Log which version we're using (helpful for debugging CI issues)
   if (useCompiledVersion) {
     console.log('Using compiled CLI for tests (faster)');
@@ -23,6 +23,53 @@ describe('CLI Workflow Integration Tests', () => {
 
   let tempDir: string;
   let originalEnv: NodeJS.ProcessEnv;
+
+  // Pre-built git repo template: created once, copied per-test via fs.cpSync
+  let gitRepoTemplate: string;
+
+  beforeAll(() => {
+    const { execSync } = require('child_process');
+    gitRepoTemplate = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-cli-template-'));
+
+    execSync('git init', { cwd: gitRepoTemplate });
+    execSync('git config user.email "test@example.com"', { cwd: gitRepoTemplate });
+    execSync('git config user.name "Test User"', { cwd: gitRepoTemplate });
+
+    fs.writeFileSync(path.join(gitRepoTemplate, 'README.md'), '# Test Repository\n');
+    execSync('git add .', { cwd: gitRepoTemplate });
+    execSync('git -c core.hooksPath=/dev/null commit -m "Initial commit"', {
+      cwd: gitRepoTemplate,
+    });
+
+    fs.writeFileSync(
+      path.join(gitRepoTemplate, 'test.js'),
+      `
+function test() {
+  // This is a test function
+  var x = "test"; // Should use let/const
+  return x;
+}
+
+module.exports = test;
+`
+    );
+
+    fs.writeFileSync(
+      path.join(gitRepoTemplate, 'security-test.sql'),
+      `
+SELECT * FROM users WHERE id = '\${process.argv[2]}';
+-- This has SQL injection vulnerability
+`
+    );
+  });
+
+  afterAll(() => {
+    try {
+      fs.rmSync(gitRepoTemplate, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
+  });
 
   beforeEach(() => {
     // Save original environment
@@ -131,43 +178,13 @@ describe('CLI Workflow Integration Tests', () => {
   };
 
   /**
-   * Helper function to initialize a git repository in temp directory
+   * Helper function to initialize a git repository in temp directory.
+   * Copies the pre-built template instead of running 6 git commands.
    */
   const initGitRepo = async (dir: string) => {
-    const { execSync } = require('child_process');
-
     try {
-      // Initialize git repo
-      execSync('git init', { cwd: dir });
-      execSync('git config user.email "test@example.com"', { cwd: dir });
-      execSync('git config user.name "Test User"', { cwd: dir });
-
-      // Create initial commit
-      fs.writeFileSync(path.join(dir, 'README.md'), '# Test Repository\n');
-      execSync('git add .', { cwd: dir });
-      execSync('git -c core.hooksPath=/dev/null commit -m "Initial commit"', { cwd: dir });
-
-      // Create some test files with changes
-      fs.writeFileSync(
-        path.join(dir, 'test.js'),
-        `
-function test() {
-  // This is a test function
-  var x = "test"; // Should use let/const
-  return x;
-}
-
-module.exports = test;
-`
-      );
-
-      fs.writeFileSync(
-        path.join(dir, 'security-test.sql'),
-        `
-SELECT * FROM users WHERE id = '${process.argv[2]}';
--- This has SQL injection vulnerability
-`
-      );
+      // Copy the template (including .git) into the test directory
+      fs.cpSync(gitRepoTemplate, dir, { recursive: true });
     } catch (error) {
       console.warn('Failed to initialize git repo:', error);
     }
@@ -274,16 +291,13 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
   });
 
   describe('Non-Git Repository Handling', () => {
-    // These tests run the CLI in a non-git temp directory. The CLI internally
-    // attempts `git diff --stat main` which hangs until its own timeout (~12s),
-    // so we need a longer Jest timeout than the default 10s.
-    const nonGitTimeout = 30000;
-
+    // Non-git detection is fast (~650ms) because simple-git's checkIsRepo()
+    // fails immediately in a non-git directory. Use the standard timeout.
     it(
       'should show error when not in a git repository',
       async () => {
         // Don't initialize git in temp directory
-        const result = await runCLI(['--check', 'security'], { timeout: nonGitTimeout });
+        const result = await runCLI(['--check', 'security']);
 
         expect(result.exitCode).toBe(1);
         // CLI may report "Not a git repository" or "No changes to analyze"
@@ -293,13 +307,13 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
           stderr.includes('Not a git repository') || stderr.includes('No changes to analyze')
         ).toBe(true);
       },
-      nonGitTimeout
+      timeout
     );
 
     it(
       'should handle empty directory gracefully',
       async () => {
-        const result = await runCLI(['--check', 'performance'], { timeout: nonGitTimeout });
+        const result = await runCLI(['--check', 'performance']);
 
         expect(result.exitCode).toBe(1);
         const stderr = result.stderr + result.stdout;
@@ -307,7 +321,7 @@ SELECT * FROM users WHERE id = '${process.argv[2]}';
           stderr.includes('Not a git repository') || stderr.includes('No changes to analyze')
         ).toBe(true);
       },
-      nonGitTimeout
+      timeout
     );
   });
 

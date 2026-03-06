@@ -32,33 +32,49 @@ const DIST_PATH = path.resolve(__dirname, '../../dist');
 const HAS_DIST = fs.existsSync(path.join(DIST_PATH, 'index.js'));
 
 describeIfDocker('Docker Sandbox Integration', () => {
+  let templateDir: string;
   let tmpDir: string;
+  let testUsedDocker: boolean;
+
+  beforeAll(() => {
+    // Create ONE template git repo, reused by all tests via cpSync
+    templateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-sandbox-template-'));
+    execSync('git init', { cwd: templateDir, stdio: 'ignore' });
+    execSync('git config user.email "test@visor.dev"', { cwd: templateDir, stdio: 'ignore' });
+    execSync('git config user.name "Visor Test"', { cwd: templateDir, stdio: 'ignore' });
+    fs.writeFileSync(path.join(templateDir, 'README.md'), '# Test\n');
+    execSync('git add . && git commit -m "init"', { cwd: templateDir, stdio: 'ignore' });
+  });
+
+  afterAll(() => {
+    try {
+      fs.rmSync(templateDir, { recursive: true, force: true });
+    } catch {}
+  });
 
   beforeEach(() => {
+    testUsedDocker = false;
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-sandbox-'));
-
-    // Init a minimal git repo so the engine can detect branch
-    execSync('git init', { cwd: tmpDir, stdio: 'ignore' });
-    execSync('git config user.email "test@visor.dev"', { cwd: tmpDir, stdio: 'ignore' });
-    execSync('git config user.name "Visor Test"', { cwd: tmpDir, stdio: 'ignore' });
-    fs.writeFileSync(path.join(tmpDir, 'README.md'), '# Test\n');
-    execSync('git add . && git commit -m "init"', { cwd: tmpDir, stdio: 'ignore' });
+    // Copy the template git repo instead of running 5 execSync calls
+    fs.cpSync(templateDir, tmpDir, { recursive: true });
   });
 
   afterEach(async () => {
-    // Clean up any leftover visor containers from this test run
-    try {
-      const containers = execSync('docker ps -a --filter "name=visor-" --format "{{.Names}}"', {
-        encoding: 'utf8',
-        timeout: 5000,
-      }).trim();
-      if (containers) {
-        execSync(`docker rm -f ${containers.split('\n').join(' ')}`, {
-          stdio: 'ignore',
-          timeout: 10000,
-        });
-      }
-    } catch {}
+    // Only clean up Docker containers if this test actually created one
+    if (testUsedDocker) {
+      try {
+        const containers = execSync('docker ps -a --filter "name=visor-" --format "{{.Names}}"', {
+          encoding: 'utf8',
+          timeout: 5000,
+        }).trim();
+        if (containers) {
+          execSync(`docker rm -f ${containers.split('\n').join(' ')}`, {
+            stdio: 'ignore',
+            timeout: 10000,
+          });
+        }
+      } catch {}
+    }
 
     // Remove temp dir
     try {
@@ -71,6 +87,7 @@ describeIfDocker('Docker Sandbox Integration', () => {
   // ──────────────────────────────────────────────────────────────
 
   function getSandboxManager(defs: Record<string, any>, repoPath: string, branch = 'main') {
+    testUsedDocker = true;
     const { SandboxManager } = require('../../src/sandbox/sandbox-manager');
     return new SandboxManager(
       defs,
@@ -86,6 +103,7 @@ describeIfDocker('Docker Sandbox Integration', () => {
     visorDistPath: string,
     cacheVolumeMounts: string[] = []
   ) {
+    testUsedDocker = true;
     const { DockerImageSandbox } = require('../../src/sandbox/docker-image-sandbox');
     return new DockerImageSandbox(
       name,
