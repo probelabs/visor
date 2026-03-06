@@ -525,10 +525,16 @@ interface TaskStore {
 
   // --- Queue operations (Milestone 4) ---
   claimNextSubmitted(workerId: string): AgentTask | null;
+    // Only targets: state = 'submitted' AND claimed_by IS NULL.
+    // Does NOT reclaim stale tasks — use reclaimStaleTasks() for that.
+  reclaimStaleTasks(workerId: string, staleTimeoutMs?: number): AgentTask[];
+    // Resets stale working tasks (claimed_by IS NOT NULL AND claimed_at older
+    // than staleTimeoutMs) back to 'submitted' with claimed_by = NULL, so they
+    // become eligible for claimNextSubmitted() again. Returns reclaimed tasks.
   releaseClaim(taskId: string): void;
 
   // --- Cleanup ---
-  deleteExpiredTasks(): number;  // Returns count deleted
+  deleteExpiredTasks(): string[];  // Returns deleted task IDs (used for cascade deletion of push notification configs)
   deleteTask(taskId: string): void;
 }
 ```
@@ -572,7 +578,10 @@ A background sweep runs periodically (default: every hour) to delete expired tas
 // Tasks without expires_at are never auto-deleted
 ```
 
-The `deleteExpiredTasks()` method also cascades to `agent_push_configs` (Milestone 5).
+The `deleteExpiredTasks()` method returns the IDs of deleted tasks (as `string[]`)
+rather than a count. This allows the caller to cascade-delete associated
+`agent_push_configs` rows for the deleted tasks (Milestone 5). Returning IDs
+instead of a count avoids a second query to find which tasks were removed.
 
 #### Implementation Files
 
@@ -695,13 +704,32 @@ hardcoding URLs in the JSON file or inline config.
 > 4. In the callback, read `server.address().port` into `_boundPort`
 > 5. **Now** patch `supported_interfaces[].url` with `public_url ?? http://{host}:{_boundPort}`
 >
+> **Multi-interface URL patching:** The implementation iterates **all**
+> `supported_interfaces` entries (not just `[0]`), patching any interface that
+> matches one of these conditions:
+> - `protocol_binding === 'a2a/v1'`
+> - `url` is missing, empty, or a placeholder
+> - `url` contains `localhost` or `0.0.0.0`
+>
+> This ensures Agent Cards with multiple interfaces (e.g., A2A + future bindings)
+> only patch the relevant entries:
+>
 > ```typescript
 > // In start(), after listen resolves:
 > const addr = this.server!.address();
 > this._boundPort = typeof addr === 'object' && addr ? addr.port : port;
 >
 > const publicUrl = this.config.public_url ?? `http://${host}:${this._boundPort}`;
-> this.agentCard.supported_interfaces[0].url = publicUrl;
+> for (const iface of this.agentCard.supported_interfaces) {
+>   if (
+>     iface.protocol_binding === 'a2a/v1' ||
+>     !iface.url ||
+>     iface.url.includes('localhost') ||
+>     iface.url.includes('0.0.0.0')
+>   ) {
+>     iface.url = publicUrl;
+>   }
+> }
 > ```
 
 If `public_url` is not set, defaults to `http://{host}:{boundPort}`.
@@ -826,8 +854,11 @@ on the configured port. Routes:
 | `/tasks/{id}/pushNotificationConfigs/{cid}` | GET | HandleGetPushConfig | Milestone 5 |
 | `/tasks/{id}/pushNotificationConfigs/{cid}` | DELETE | HandleDeletePushConfig | Milestone 5 |
 
-Routes marked "Milestone 5" return `501 Not Implemented` (or A2A
-`UnsupportedOperationError`) until that milestone is complete.
+Routes marked "Milestone 5" return **HTTP 400** with A2A error code **-32002**
+(`UnsupportedOperation`) when the corresponding capability is disabled in the
+Agent Card. This follows the A2A convention of using `-32002` for unsupported
+operations rather than HTTP 501, keeping error semantics within the A2A error
+code space.
 
 #### Authentication
 
@@ -1345,10 +1376,19 @@ class A2AFrontend implements ActiveFrontend {
       });
     });
 
-    // 5. Patch agent card URL now that bound port is known
+    // 5. Patch agent card URLs now that bound port is known
     if (this.agentCard) {
       const publicUrl = this.config.public_url ?? `http://${host}:${this._boundPort}`;
-      this.agentCard.supported_interfaces[0].url = publicUrl;
+      for (const iface of this.agentCard.supported_interfaces) {
+        if (
+          iface.protocol_binding === 'a2a/v1' ||
+          !iface.url ||
+          iface.url.includes('localhost') ||
+          iface.url.includes('0.0.0.0')
+        ) {
+          iface.url = publicUrl;
+        }
+      }
     }
   }
 
@@ -1375,7 +1415,7 @@ class A2AFrontend implements ActiveFrontend {
         return await this.handleSendMessage(req, res);
       }
       if (url.pathname === '/message:stream' && req.method === 'POST') {
-        return sendError(res, 501, 'UnsupportedOperation', -32002); // Milestone 5
+        return sendError(res, 400, 'UnsupportedOperation', -32002); // Milestone 5
       }
 
       const taskMatch = url.pathname.match(/^\/tasks\/([^/:]+)$/);
@@ -1393,12 +1433,12 @@ class A2AFrontend implements ActiveFrontend {
 
       const subscribeMatch = url.pathname.match(/^\/tasks\/([^/:]+):subscribe$/);
       if (subscribeMatch && req.method === 'GET') {
-        return sendError(res, 501, 'UnsupportedOperation', -32002); // Milestone 5
+        return sendError(res, 400, 'UnsupportedOperation', -32002); // Milestone 5
       }
 
       // Push notification routes -> Milestone 5
       if (url.pathname.includes('/pushNotificationConfigs')) {
-        return sendError(res, 501, 'UnsupportedOperation', -32002);
+        return sendError(res, 400, 'UnsupportedOperation', -32002);
       }
 
       sendError(res, 404, 'MethodNotFound', -32601);
@@ -1435,7 +1475,7 @@ class A2AFrontend implements ActiveFrontend {
 - `history_length` respected in response
 - `accepted_output_modes` filters artifact parts
 - Error responses match A2A format
-- Unsupported routes return 501 (streaming, push)
+- Unsupported routes return HTTP 400 with error code -32002 (streaming, push)
 - Skill routing: metadata.skill_id routes to configured workflow
 - Skill routing: no skill_id routes to default_workflow
 - OTel span created with correct attributes
@@ -1459,7 +1499,7 @@ class A2AFrontend implements ActiveFrontend {
 - [ ] Skill routing (metadata hint + fallback to default workflow)
 - [ ] OTel span integration
 - [ ] Task cleanup sweep
-- [ ] Streaming/push routes return 501 until Milestone 5
+- [ ] Streaming/push routes return HTTP 400 with -32002 (UnsupportedOperation) when capability is disabled
 - [ ] Registered in FrontendsHost (loaded when `agent_protocol.enabled: true`)
 - [ ] CLI flag: `--agent-protocol` enables agent protocol frontend
 - [ ] Integration test: full request/response cycle
@@ -1955,7 +1995,7 @@ class TaskQueue {
         {} as AgentProtocolConfig,
       );
 
-      // 3. Execute via engine
+      // 3. Execute via engine (the executor returns a TaskExecutor result)
       const result = await this.engine.executeChecks({
         workflow: task.workflow_id,
         inputs: input,
@@ -1971,8 +2011,18 @@ class TaskQueue {
         this.taskStore.addArtifact(task.id, artifact);
       }
 
-      // 5. Set terminal state
-      if (result.success) {
+      // 5. Set terminal state — unless the executor already did it
+      //
+      // The TaskExecutor return type includes an optional `stateAlreadySet?: boolean`
+      // flag. When true, the queue skips its own state transition because the
+      // executor (e.g., A2AFrontend.executeViaEngine) has already transitioned
+      // the task to a terminal state internally. This prevents double-transition
+      // errors (InvalidStateTransitionError) and allows executors that handle
+      // complex multi-step state changes (like INPUT_REQUIRED -> WORKING ->
+      // COMPLETED) to own the full lifecycle.
+      if (result.stateAlreadySet) {
+        // Executor handled the state transition — nothing to do
+      } else if (result.success) {
         this.taskStore.updateTaskState(task.id, 'completed');
       } else {
         this.taskStore.updateTaskState(task.id, 'failed', {
@@ -2000,11 +2050,15 @@ class TaskQueue {
 }
 ```
 
-#### Claim Mechanism
+#### Claim Mechanism (Two-Step Pattern)
 
-SQLite-based atomic claim (same pattern as scheduler's `tryAcquireLock`):
+The implementation uses a **two-step pattern** that separates fresh claim from
+stale reclaim. This avoids a single complex query that mixes concerns.
+
+**Step 1: `claimNextSubmitted(workerId)`** — Claims only unclaimed submitted tasks:
 
 ```sql
+-- claimNextSubmitted: only targets state='submitted' AND claimed_by IS NULL
 UPDATE agent_tasks
 SET state = 'working',
     claimed_by = ?,
@@ -2013,27 +2067,53 @@ SET state = 'working',
 WHERE id = (
   SELECT id FROM agent_tasks
   WHERE state = 'submitted'
-  AND (claimed_by IS NULL OR claimed_at < datetime('now', '-' || ? || ' seconds'))
+  AND claimed_by IS NULL
   ORDER BY created_at ASC
   LIMIT 1
 )
 RETURNING *;
 ```
 
-The second `?` is `staleClaimTimeout / 1000`. Tasks claimed more than N seconds ago
-by a worker that hasn't completed them are reclaimed (handles worker crashes).
+**Step 2: `reclaimStaleTasks(workerId, staleTimeoutMs?)`** — Resets stale working
+tasks back to `submitted` so they become eligible for `claimNextSubmitted()` again.
+This handles worker crashes where a task was claimed but never completed:
 
-For enterprise (Knex on PostgreSQL):
 ```sql
+-- reclaimStaleTasks: resets stale working tasks back to submitted
+UPDATE agent_tasks
+SET state = 'submitted',
+    claimed_by = NULL,
+    claimed_at = NULL,
+    updated_at = datetime('now')
+WHERE state = 'working'
+AND claimed_by IS NOT NULL
+AND claimed_at < datetime('now', '-' || ? || ' seconds')
+RETURNING *;
+```
+
+The `?` is `staleTimeoutMs / 1000` (default: 300 seconds / 5 minutes). The
+`TaskQueue` calls `reclaimStaleTasks()` periodically (e.g., every poll cycle)
+before calling `claimNextSubmitted()`, ensuring stale tasks are recycled.
+
+For enterprise (Knex on PostgreSQL), the same two-step pattern applies:
+```sql
+-- Step 1: claimNextSubmitted
 UPDATE agent_tasks SET state = 'working', claimed_by = ?, claimed_at = NOW()
 WHERE id = (
   SELECT id FROM agent_tasks
   WHERE state = 'submitted'
-  AND (claimed_by IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')
+  AND claimed_by IS NULL
   ORDER BY created_at ASC
   LIMIT 1
   FOR UPDATE SKIP LOCKED
 ) RETURNING *;
+
+-- Step 2: reclaimStaleTasks
+UPDATE agent_tasks SET state = 'submitted', claimed_by = NULL, claimed_at = NULL
+WHERE state = 'working'
+AND claimed_by IS NOT NULL
+AND claimed_at < NOW() - INTERVAL '5 minutes'
+RETURNING *;
 ```
 
 #### EventBus Integration (Engine -> Task State)
@@ -2615,11 +2695,15 @@ relevant section above.
 |---|------|-----------|----------------------|
 | 1 | **Agent Card source** | File on disk only (`agent_card: "file.json"`) | Also supports `agent_card_inline` — an `AgentCard` object defined directly in YAML config. File takes precedence if both are set. |
 | 2 | **Frontend interface** | `A2AFrontend implements Frontend` | `A2AFrontend implements ActiveFrontend`. `ActiveFrontend` extends `Frontend` with `setEngine()` and `setVisorConfig()`. `isActiveFrontend()` type guard enables `FrontendsHost.startAll()` to auto-wire engine/config. |
-| 3 | **Agent Card URL patching** | Patched at the top of `start()`, before listen | Deferred to **after** `server.listen()` resolves, because the actual port is only known after the OS assigns it (needed for `port: 0` support). |
+| 3 | **Agent Card URL patching** | Patched at the top of `start()`, before listen; patched `supported_interfaces[0]` only | Deferred to **after** `server.listen()` resolves (needed for `port: 0`). Iterates **all** `supported_interfaces`, patching entries where `protocol_binding === 'a2a/v1'`, URL is missing, or URL contains `localhost`/`0.0.0.0`. |
 | 4 | **`AgentSendMessageResponse`** | Plain union: `{ task } \| { message }` | Discriminated union with `task?: undefined` / `message?: undefined` fields, enabling clean TypeScript narrowing via `if (resp.task)`. |
 | 5 | **Engine unavailable** | Not addressed (assumed engine always present) | Stub execution fallback: when no engine is set, returns a "received and processed" response and transitions the task to `COMPLETED`. Useful for testing the HTTP surface without a full engine. |
 | 6 | **Port discovery** | Assumed fixed port from config | `get boundPort()` accessor on `A2AFrontend` returns the actual OS-assigned port. Internal `_boundPort` is set from `server.address()` after listen. |
 | 7 | **TaskStore database** | Reuse scheduler's `better-sqlite3` database file | Standalone database file at `.visor/agent-tasks.db` (configurable via constructor `filename` parameter). Does not share the scheduler DB connection. |
+| 8 | **`deleteExpiredTasks` return type** | Returns `number` (count of deleted tasks) | Returns `string[]` (deleted task IDs). This enables cascade deletion of `agent_push_configs` rows for the deleted tasks without a second query. |
+| 9 | **Stale claim pattern** | Single SQL query in `claimNextSubmitted` handles both fresh claims and stale reclaims | Two-step pattern: `claimNextSubmitted(workerId)` only targets `state = 'submitted' AND claimed_by IS NULL`. Separate `reclaimStaleTasks(workerId, staleTimeoutMs?)` method resets stale working tasks back to `submitted`. |
+| 10 | **`stateAlreadySet` executor flag** | Not addressed (queue always sets terminal state) | `TaskExecutor` return type includes optional `stateAlreadySet?: boolean`. When true, the queue skips its own state transition, allowing executors that handle transitions internally (e.g., multi-step INPUT_REQUIRED flows) to own the full lifecycle. |
+| 11 | **Disabled capability error response** | HTTP 501 (Not Implemented) for streaming/push when disabled | HTTP **400** with A2A error code **-32002** (`UnsupportedOperation`). Keeps error semantics within the A2A error code space rather than using HTTP-level status codes. |
 
 ---
 

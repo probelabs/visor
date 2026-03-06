@@ -934,11 +934,19 @@ export class A2AFrontend implements ActiveFrontend {
    * Execute a task through the Visor engine.
    * Creates a fresh engine execution per task and converts results to artifacts.
    */
-  private async executeTaskViaEngine(task: AgentTask, _message: AgentMessage): Promise<void> {
+  private async executeTaskViaEngine(task: AgentTask, message: AgentMessage): Promise<void> {
     const workflowId = task.workflow_id ?? this.config.default_workflow;
 
     // Determine which checks to run
     const checks = workflowId ? [workflowId] : ['all'];
+
+    // Convert the A2A message into workflow input variables (question, task, data, files, _agent)
+    const workflowInputs = messageToWorkflowInput(message, task);
+
+    // Merge workflow inputs into the engine's execution context so templates can
+    // access them via {{ inputs.question }}, {{ inputs.task }}, etc.
+    const prevCtx: any = this._engine.getExecutionContext?.() || {};
+    this._engine.setExecutionContext?.({ ...prevCtx, workflowInputs });
 
     // Build execution options
     const execOptions: CheckExecutionOptions = {

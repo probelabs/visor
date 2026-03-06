@@ -798,4 +798,171 @@ describe('A2AFrontend', () => {
       expect(res.status).toBe(401);
     });
   });
+
+  // -----------------------------------------------------------------------
+  // Auth type none
+  // -----------------------------------------------------------------------
+
+  describe('auth type none', () => {
+    let noneFrontend: A2AFrontend;
+    let noneDbPath: string;
+    let nonePort: number;
+
+    beforeEach(async () => {
+      const tmpDir = path.join(__dirname, '../../fixtures/tmp-a2a-frontend');
+      fs.mkdirSync(tmpDir, { recursive: true });
+      noneDbPath = path.join(tmpDir, `test-none-auth-${crypto.randomUUID()}.db`);
+
+      const config = makeConfig({
+        auth: { type: 'none' },
+      });
+      noneFrontend = new A2AFrontend(config, new SqliteTaskStore(noneDbPath));
+      await noneFrontend.start(makeFrontendContext());
+      nonePort = noneFrontend.boundPort;
+    });
+
+    afterEach(async () => {
+      await noneFrontend.stop();
+      try {
+        fs.unlinkSync(noneDbPath);
+        fs.unlinkSync(noneDbPath + '-wal');
+        fs.unlinkSync(noneDbPath + '-shm');
+      } catch {
+        /* ignore */
+      }
+    });
+
+    it('should accept requests without any auth headers', async () => {
+      const res = await httpRequest(nonePort, 'POST', '/message:send', makeSendRequest());
+      expect(res.status).toBe(200);
+      const body = res.body as { task: Record<string, unknown> };
+      expect(body.task).toBeDefined();
+      expect(body.task.id).toBeDefined();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Skill routing via metadata.skill_id
+  // -----------------------------------------------------------------------
+
+  describe('skill routing', () => {
+    let skillFrontend: A2AFrontend;
+    let skillDbPath: string;
+    let skillPort: number;
+    let mockEngine: { executeChecks: jest.Mock };
+
+    beforeEach(async () => {
+      process.env.TEST_A2A_TOKEN = TEST_TOKEN;
+      const tmpDir = path.join(__dirname, '../../fixtures/tmp-a2a-frontend');
+      fs.mkdirSync(tmpDir, { recursive: true });
+      skillDbPath = path.join(tmpDir, `test-skill-${crypto.randomUUID()}.db`);
+
+      const config = makeConfig({
+        skill_routing: { 'security-scan': 'security-review' },
+        default_workflow: 'default-check',
+      });
+      skillFrontend = new A2AFrontend(config, new SqliteTaskStore(skillDbPath));
+
+      mockEngine = {
+        executeChecks: jest.fn().mockResolvedValue({
+          reviewSummary: { issues: [] },
+          checksExecuted: ['security-review'],
+          executionTime: 50,
+          timestamp: new Date().toISOString(),
+          repositoryInfo: {},
+        }),
+      };
+      skillFrontend.setEngine(mockEngine);
+      skillFrontend.setVisorConfig({ checks: { 'security-review': { type: 'ai' } } } as any);
+
+      await skillFrontend.start(makeFrontendContext());
+      skillPort = skillFrontend.boundPort;
+    });
+
+    afterEach(async () => {
+      await skillFrontend.stop();
+      delete process.env.TEST_A2A_TOKEN;
+      try {
+        fs.unlinkSync(skillDbPath);
+        fs.unlinkSync(skillDbPath + '-wal');
+        fs.unlinkSync(skillDbPath + '-shm');
+      } catch {
+        /* ignore */
+      }
+    });
+
+    it('should route to the mapped workflow when metadata.skill_id matches', async () => {
+      const req = makeSendRequest({
+        metadata: { skill_id: 'security-scan' },
+        configuration: { blocking: true },
+      });
+      const res = await httpRequest(skillPort, 'POST', '/message:send', req, authHeaders);
+      expect(res.status).toBe(200);
+      expect(mockEngine.executeChecks).toHaveBeenCalledTimes(1);
+      const callArg = mockEngine.executeChecks.mock.calls[0][0];
+      expect(callArg.checks).toContain('security-review');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Default workflow fallback (no skill_id)
+  // -----------------------------------------------------------------------
+
+  describe('default workflow fallback', () => {
+    let defaultFrontend: A2AFrontend;
+    let defaultDbPath: string;
+    let defaultPort: number;
+    let mockEngine: { executeChecks: jest.Mock };
+
+    beforeEach(async () => {
+      process.env.TEST_A2A_TOKEN = TEST_TOKEN;
+      const tmpDir = path.join(__dirname, '../../fixtures/tmp-a2a-frontend');
+      fs.mkdirSync(tmpDir, { recursive: true });
+      defaultDbPath = path.join(tmpDir, `test-default-wf-${crypto.randomUUID()}.db`);
+
+      const config = makeConfig({
+        skill_routing: { 'security-scan': 'security-review' },
+        default_workflow: 'default-check',
+      });
+      defaultFrontend = new A2AFrontend(config, new SqliteTaskStore(defaultDbPath));
+
+      mockEngine = {
+        executeChecks: jest.fn().mockResolvedValue({
+          reviewSummary: { issues: [] },
+          checksExecuted: ['default-check'],
+          executionTime: 30,
+          timestamp: new Date().toISOString(),
+          repositoryInfo: {},
+        }),
+      };
+      defaultFrontend.setEngine(mockEngine);
+      defaultFrontend.setVisorConfig({ checks: { 'default-check': { type: 'ai' } } } as any);
+
+      await defaultFrontend.start(makeFrontendContext());
+      defaultPort = defaultFrontend.boundPort;
+    });
+
+    afterEach(async () => {
+      await defaultFrontend.stop();
+      delete process.env.TEST_A2A_TOKEN;
+      try {
+        fs.unlinkSync(defaultDbPath);
+        fs.unlinkSync(defaultDbPath + '-wal');
+        fs.unlinkSync(defaultDbPath + '-shm');
+      } catch {
+        /* ignore */
+      }
+    });
+
+    it('should fall back to default_workflow when no skill_id is provided', async () => {
+      const req = makeSendRequest({
+        configuration: { blocking: true },
+      });
+      const res = await httpRequest(defaultPort, 'POST', '/message:send', req, authHeaders);
+      expect(res.status).toBe(200);
+      expect(mockEngine.executeChecks).toHaveBeenCalledTimes(1);
+      const callArg = mockEngine.executeChecks.mock.calls[0][0];
+      expect(callArg.checks).toContain('default-check');
+    });
+  });
 });

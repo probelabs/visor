@@ -435,6 +435,7 @@ export class A2ACheckProvider extends CheckProvider {
       method: 'POST',
       headers,
       body: JSON.stringify(req),
+      signal: AbortSignal.timeout(60_000),
     });
     if (!resp.ok) {
       const body = await resp.text().catch(() => '');
@@ -455,7 +456,7 @@ export class A2ACheckProvider extends CheckProvider {
     headers: Record<string, string>
   ): Promise<AgentTask> {
     const url = `${agentUrl}/tasks/${taskId}`;
-    const resp = await fetch(url, { headers });
+    const resp = await fetch(url, { headers, signal: AbortSignal.timeout(60_000) });
     if (!resp.ok) throw new A2ARequestError(url, resp.status, await resp.text().catch(() => ''));
     return (await resp.json()) as AgentTask;
   }

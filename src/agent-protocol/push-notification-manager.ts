@@ -60,6 +60,8 @@ export class PushNotificationManager {
    */
   initialize(db: DbLike): void {
     this.db = db;
+    // Enable foreign key enforcement (must be set per-connection in SQLite)
+    db.exec('PRAGMA foreign_keys = ON');
     this.migrateSchema();
   }
 
@@ -72,7 +74,8 @@ export class PushNotificationManager {
         token TEXT,
         auth_scheme TEXT,
         auth_credentials TEXT,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
       );
       CREATE INDEX IF NOT EXISTS idx_agent_push_task ON agent_push_configs(task_id);
     `);

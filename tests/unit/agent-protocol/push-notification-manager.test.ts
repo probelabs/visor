@@ -17,6 +17,17 @@ function openDb(): any {
   return new Database(dbPath);
 }
 
+/** Insert a stub agent_tasks row so FK constraints on agent_push_configs are satisfied. */
+function insertTask(database: any, taskId: string): void {
+  const now = new Date().toISOString();
+  database
+    .prepare(
+      `INSERT OR IGNORE INTO agent_tasks (id, context_id, state, created_at, updated_at, request_message)
+       VALUES (?, ?, 'submitted', ?, ?, '{}')`
+    )
+    .run(taskId, 'ctx-test', now, now);
+}
+
 describe('PushNotificationManager', () => {
   let manager: PushNotificationManager;
 
@@ -25,8 +36,32 @@ describe('PushNotificationManager', () => {
     fs.mkdirSync(tmpDir, { recursive: true });
     dbPath = path.join(tmpDir, `test-${crypto.randomUUID()}.db`);
     db = openDb();
+    // Create the agent_tasks table so the FK constraint on agent_push_configs is valid
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_tasks (
+        id TEXT PRIMARY KEY,
+        context_id TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'submitted',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        request_message TEXT NOT NULL,
+        request_config TEXT,
+        request_metadata TEXT,
+        status_message TEXT,
+        artifacts TEXT DEFAULT '[]',
+        history TEXT DEFAULT '[]',
+        workflow_id TEXT,
+        run_id TEXT,
+        claimed_by TEXT,
+        claimed_at TEXT,
+        expires_at TEXT
+      )
+    `);
     manager = new PushNotificationManager();
     manager.initialize(db);
+    // Insert referenced task rows so FK constraints are satisfied
+    insertTask(db, 'task-1');
+    insertTask(db, 'task-2');
   });
 
   afterEach(() => {
