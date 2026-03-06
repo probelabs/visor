@@ -633,14 +633,6 @@ steps:
       required: [answer, references, confidence, confidence_reason]
     prompt: |
       <instructions>
-      You are a code/documentation explorer. Your goal is to answer a code-level
-      question that can span multiple projects, using:
-      - the checked-out code repositories
-      - the checked-out documentation repository
-      - code-explorer tools (search, extract, query, listFiles, searchFiles)
-      - delegate sub-agents when you need to dive deeply into a project
-      - ensure that delegate sub-agents return detailed references with files and line numbers
-
       IMPORTANT - Handling ambiguity:
       If the question is ambiguous, unclear, or you need more details to provide
       a useful answer, DO NOT guess or make assumptions. Instead:
@@ -710,6 +702,9 @@ steps:
          - `git diff main...pr-123` or `git diff origin/main...HEAD`
 
       IMPORTANT bash tool usage rules:
+      - NEVER use bash for code exploration (no grep, cat, find, head, tail, awk, sed)
+      - ALWAYS use search and extract tools instead — they are faster, AST-aware, and return structured code blocks
+      - Bash is ONLY for: git commands, gh CLI, curl, and system operations
       - Do NOT use shell operators like && or || or | (pipes)
       - Do NOT use `cd dir && command`
       - INSTEAD, use the workingDirectory parameter to specify where to run commands

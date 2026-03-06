@@ -8501,7 +8501,7 @@ ${"=".repeat(60)}
           }
           const explicitPromptType = (process.env.VISOR_PROMPT_TYPE || "").trim();
           let systemPrompt = this.config.systemPrompt;
-          if (!systemPrompt && schema !== "code-review") {
+          if (!systemPrompt && schema !== "code-review" && !this.config.promptType) {
             systemPrompt = "You are general assistant, follow user instructions.";
           }
           log(
