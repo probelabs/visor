@@ -57,6 +57,9 @@ export class SlackSocketRunner {
   private genericScheduler?: Scheduler;
   private messageTriggerEvaluator?: MessageTriggerEvaluator;
   private activeThreads = new Set<string>();
+  private heartbeatTimer?: ReturnType<typeof setInterval>;
+  private lastPong = 0;
+  private closing = false; // prevent duplicate reconnects
 
   constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: SlackSocketConfig) {
     const app = opts.appToken || process.env.SLACK_APP_TOKEN || '';
@@ -268,22 +271,101 @@ export class SlackSocketRunner {
   }
 
   private async connect(url: string): Promise<void> {
-    this.ws = new WebSocket(url);
-    this.ws.on('open', () => {
+    // Close previous WebSocket to prevent ghost event handlers
+    this.closeWebSocket();
+
+    const ws = new WebSocket(url);
+    this.ws = ws;
+    this.closing = false;
+
+    ws.on('open', () => {
       this.retryCount = 0; // Reset on successful connection
+      this.lastPong = Date.now();
       logger.info('[SlackSocket] WebSocket connected');
+      this.startHeartbeat();
     });
-    this.ws.on('close', (code, reason) => {
+    ws.on('close', (code, reason) => {
       logger.warn(`[SlackSocket] WebSocket closed: ${code} ${reason}`);
-      setTimeout(() => this.restart().catch(() => {}), 1000);
+      this.stopHeartbeat();
+      // Only reconnect if this is still the active WebSocket
+      if (this.ws === ws && !this.closing) {
+        this.closing = true;
+        setTimeout(() => this.restart(), 1000);
+      }
     });
-    this.ws.on('error', err => {
+    ws.on('error', err => {
       logger.error(`[SlackSocket] WebSocket error: ${err}`);
     });
-    this.ws.on('message', data => this.handleMessage(data.toString()).catch(() => {}));
+    ws.on('pong', () => {
+      this.lastPong = Date.now();
+    });
+    ws.on('message', data => this.handleMessage(data.toString()).catch(() => {}));
+  }
+
+  /**
+   * Close the current WebSocket connection and stop heartbeat.
+   * Safe to call multiple times.
+   */
+  private closeWebSocket(): void {
+    this.stopHeartbeat();
+    if (this.ws) {
+      const old = this.ws;
+      this.ws = undefined;
+      try {
+        // Remove listeners to prevent ghost close/message handlers
+        old.removeAllListeners();
+        old.close();
+      } catch {
+        // best effort
+      }
+    }
+  }
+
+  /**
+   * Start periodic WebSocket ping to detect dead connections.
+   * If no pong is received within 60s, force a reconnect.
+   */
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    const PING_INTERVAL_MS = 30_000; // ping every 30s
+    const PONG_TIMEOUT_MS = 60_000; // dead if no pong for 60s
+
+    this.heartbeatTimer = setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+      // Check if last pong is stale
+      const sincePong = Date.now() - this.lastPong;
+      if (this.lastPong > 0 && sincePong > PONG_TIMEOUT_MS) {
+        logger.warn(
+          `[SlackSocket] No pong received for ${Math.round(sincePong / 1000)}s, forcing reconnect`
+        );
+        this.closeWebSocket();
+        this.closing = true;
+        this.restart();
+        return;
+      }
+
+      try {
+        this.ws.ping();
+      } catch {
+        // ping failed — connection is likely dead
+        logger.warn('[SlackSocket] Ping failed, forcing reconnect');
+        this.closeWebSocket();
+        this.closing = true;
+        this.restart();
+      }
+    }, PING_INTERVAL_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
+    }
   }
 
   private async restart(): Promise<void> {
+    this.closing = false;
     try {
       const url = await this.openConnection();
       await this.connect(url);
@@ -294,7 +376,7 @@ export class SlackSocketRunner {
       logger.error(
         `[SlackSocket] Restart failed (attempt ${this.retryCount}), retrying in ${Math.round(delay / 1000)}s: ${e instanceof Error ? e.message : e}`
       );
-      setTimeout(() => this.restart().catch(() => {}), delay);
+      setTimeout(() => this.restart(), delay);
     }
   }
 
@@ -377,6 +459,18 @@ export class SlackSocketRunner {
     }
     if (env.type === 'hello') return;
     if (env.envelope_id) this.send({ envelope_id: env.envelope_id }); // ack ASAP
+
+    // Handle Slack disconnect events — proactively reconnect before the connection dies
+    if (env.type === 'disconnect') {
+      const reason = env.reason || 'unknown';
+      logger.info(`[SlackSocket] Received disconnect event (reason: ${reason}), reconnecting`);
+      // Slack will close the connection shortly; proactively reconnect now
+      this.closeWebSocket();
+      this.closing = true;
+      this.restart();
+      return;
+    }
+
     if (env.type !== 'events_api' || !env.payload) {
       if (process.env.VISOR_DEBUG === 'true') {
         logger.debug(`[SlackSocket] Dropping non-events payload: type=${String(env.type || '-')}`);
@@ -1147,16 +1241,10 @@ export class SlackSocketRunner {
       }
     }
 
-    // Close WebSocket connection
-    if (this.ws) {
-      try {
-        this.ws.close();
-        this.ws = undefined;
-        logger.info('[SlackSocket] WebSocket closed');
-      } catch {
-        // Best effort
-      }
-    }
+    // Close WebSocket connection and stop heartbeat
+    this.closing = true; // prevent reconnect on close
+    this.closeWebSocket();
+    logger.info('[SlackSocket] WebSocket closed');
   }
 
   /**
