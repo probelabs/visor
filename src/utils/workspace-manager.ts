@@ -261,6 +261,20 @@ export class WorkspaceManager {
       }
     }
 
+    // Scan existing entries in the workspace directory to populate usedNames.
+    // This handles reused workspaces (e.g. Slack threads) where a previous run
+    // left symlinks on disk but the in-memory state was cleared by cleanup().
+    try {
+      const entries = await fsp.readdir(this.workspacePath, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.name !== mainProjectName) {
+          this.usedNames.add(entry.name);
+        }
+      }
+    } catch {
+      // Best-effort — workspace just created, nothing to scan
+    }
+
     // Register cleanup handlers
     this.registerCleanupHandlers();
 
@@ -280,7 +294,7 @@ export class WorkspaceManager {
 
   /**
    * Add a project to the workspace (creates symlink to worktree)
-   * If the same repository + worktreePath combination already exists, returns the existing path.
+   * If the same repository already exists, updates the symlink to the new worktree path.
    */
   async addProject(
     repository: string,
@@ -291,14 +305,27 @@ export class WorkspaceManager {
       throw new Error('Workspace not initialized. Call initialize() first.');
     }
 
-    // Check if this exact project (same repo + worktree path) is already added
-    // This prevents duplicate checkouts when tyk-code-talk is called multiple times
+    // Check if this repository is already added (dedup by repository, not worktree path).
+    // Worktree paths change across sessions (session-scoped hashing) and across
+    // nested workflow invocations (each gets a fresh sessionId), but the workspace
+    // symlink should always point to the latest worktree for a given repo.
     for (const [existingName, existingProject] of this.projects.entries()) {
-      if (
-        existingProject.repository === repository &&
-        existingProject.worktreePath === worktreePath
-      ) {
-        logger.debug(`Reusing existing project: ${existingName} (${repository})`);
+      if (existingProject.repository === repository) {
+        if (existingProject.worktreePath !== worktreePath) {
+          // Worktree path changed (new session/invocation) — update symlink
+          logger.debug(
+            `Updating project symlink: ${existingName} (${repository}) -> ${worktreePath}`
+          );
+          await fsp.rm(existingProject.path, { recursive: true, force: true });
+          try {
+            await fsp.symlink(worktreePath, existingProject.path);
+          } catch (error) {
+            throw new Error(`Failed to update symlink for project ${existingName}: ${error}`);
+          }
+          existingProject.worktreePath = worktreePath;
+        } else {
+          logger.debug(`Reusing existing project: ${existingName} (${repository})`);
+        }
         return existingProject.path;
       }
     }

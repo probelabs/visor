@@ -203,7 +203,7 @@ describe('WorkspaceManager', () => {
       fs.rmSync(worktreePath, { recursive: true, force: true });
     });
 
-    it('handles duplicate project names', async () => {
+    it('handles duplicate project names from different repositories', async () => {
       const { commandExecutor } = require('../../src/utils/command-executor');
       commandExecutor.execute.mockResolvedValue({ exitCode: 1, stdout: '', stderr: '' });
 
@@ -231,6 +231,76 @@ describe('WorkspaceManager', () => {
       fs.rmSync(testOriginalPath, { recursive: true, force: true });
       fs.rmSync(worktreePath1, { recursive: true, force: true });
       fs.rmSync(worktreePath2, { recursive: true, force: true });
+    });
+
+    it('deduplicates by repository when worktree path changes (same session)', async () => {
+      const { commandExecutor } = require('../../src/utils/command-executor');
+      commandExecutor.execute.mockResolvedValue({ exitCode: 1, stdout: '', stderr: '' });
+
+      if (!fs.existsSync(testOriginalPath)) {
+        fs.mkdirSync(testOriginalPath, { recursive: true });
+      }
+
+      const worktreePath1 = '/tmp/test-worktree-session-a';
+      const worktreePath2 = '/tmp/test-worktree-session-b';
+      fs.mkdirSync(worktreePath1, { recursive: true });
+      fs.mkdirSync(worktreePath2, { recursive: true });
+
+      const manager = WorkspaceManager.getInstance(testSessionId, testOriginalPath, {
+        basePath: testBasePath,
+      });
+
+      await manager.initialize();
+
+      // First call: adds project
+      const result1 = await manager.addProject('TykTechnologies/tyk', worktreePath1);
+      expect(result1).toContain('tyk');
+
+      // Second call: same repo, different worktree path (e.g., nested workflow with fresh session)
+      const result2 = await manager.addProject('TykTechnologies/tyk', worktreePath2);
+
+      // Should return same workspace path (no -2 suffix)
+      expect(result2).toBe(result1);
+
+      // Should have only 1 project, not 2
+      expect(manager.listProjects().length).toBe(1);
+
+      // Symlink should now point to the new worktree path
+      const symlinkTarget = fs.readlinkSync(result2);
+      expect(symlinkTarget).toBe(worktreePath2);
+
+      // Cleanup
+      fs.rmSync(testOriginalPath, { recursive: true, force: true });
+      fs.rmSync(worktreePath1, { recursive: true, force: true });
+      fs.rmSync(worktreePath2, { recursive: true, force: true });
+    });
+
+    it('deduplicates by repository and returns existing path when worktree is same', async () => {
+      const { commandExecutor } = require('../../src/utils/command-executor');
+      commandExecutor.execute.mockResolvedValue({ exitCode: 1, stdout: '', stderr: '' });
+
+      if (!fs.existsSync(testOriginalPath)) {
+        fs.mkdirSync(testOriginalPath, { recursive: true });
+      }
+
+      const worktreePath = '/tmp/test-worktree-same';
+      fs.mkdirSync(worktreePath, { recursive: true });
+
+      const manager = WorkspaceManager.getInstance(testSessionId, testOriginalPath, {
+        basePath: testBasePath,
+      });
+
+      await manager.initialize();
+
+      const result1 = await manager.addProject('TykTechnologies/tyk', worktreePath);
+      const result2 = await manager.addProject('TykTechnologies/tyk', worktreePath);
+
+      expect(result2).toBe(result1);
+      expect(manager.listProjects().length).toBe(1);
+
+      // Cleanup
+      fs.rmSync(testOriginalPath, { recursive: true, force: true });
+      fs.rmSync(worktreePath, { recursive: true, force: true });
     });
   });
 
