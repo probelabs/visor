@@ -7,6 +7,7 @@ import { createExtendedLiquid } from '../liquid-extensions';
 import { EnvironmentResolver } from '../utils/env-resolver';
 import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import { buildProviderTemplateContext } from '../utils/template-context';
+import { OAuth2TokenCache, AuthConfig } from '../utils/oauth2-token-cache';
 import Sandbox from '@nyariv/sandboxjs';
 import { logger } from '../logger';
 import * as fs from 'fs';
@@ -48,14 +49,17 @@ export class HttpClientProvider extends CheckProvider {
       return false;
     }
 
-    // Must have URL specified
-    if (typeof cfg.url !== 'string' || !cfg.url) {
+    // Must have either `url` or `base_url` specified
+    const hasUrl = typeof cfg.url === 'string' && cfg.url;
+    const hasBaseUrl = typeof cfg.base_url === 'string' && cfg.base_url;
+
+    if (!hasUrl && !hasBaseUrl) {
       return false;
     }
 
-    // Validate URL format
+    // Validate URL format (check whichever is provided)
     try {
-      new URL(cfg.url as string);
+      new URL((hasUrl ? cfg.url : cfg.base_url) as string);
       return true;
     } catch {
       return false;
@@ -68,13 +72,35 @@ export class HttpClientProvider extends CheckProvider {
     dependencyResults?: Map<string, ReviewSummary>,
     context?: import('./check-provider.interface').ExecutionContext
   ): Promise<ReviewSummary> {
-    const url = config.url as string;
+    const baseUrl = config.base_url as string | undefined;
+    const rawPath = config.path as string | undefined;
+    const pathParams = (config.params as Record<string, string>) || {};
+    const queryParams = (config.query as Record<string, string>) || {};
+    const authConfig = config.auth as AuthConfig | undefined;
+
+    // Build URL: either direct `url` or `base_url` + `path` with param substitution
+    let url: string;
+    if (baseUrl && rawPath) {
+      // Substitute {param} placeholders in path
+      let resolvedPath = rawPath;
+      for (const [key, value] of Object.entries(pathParams)) {
+        resolvedPath = resolvedPath.replace(`{${key}}`, encodeURIComponent(value));
+      }
+      url = `${baseUrl.replace(/\/+$/, '')}/${resolvedPath.replace(/^\/+/, '')}`;
+      // Append query parameters
+      if (Object.keys(queryParams).length > 0) {
+        const qs = new URLSearchParams(queryParams).toString();
+        url += `${url.includes('?') ? '&' : '?'}${qs}`;
+      }
+    } else {
+      url = config.url as string;
+    }
+
     const method = (config.method as string) || 'GET';
     const headers = (config.headers as Record<string, string>) || {};
     const timeout = (config.timeout as number) || 30000;
     const transform = config.transform as string | undefined;
     const transformJs = config.transform_js as string | undefined;
-    const bodyTemplate = config.body as string | undefined;
     const outputFileTemplate = config.output_file as string | undefined;
     const skipIfExists = config.skip_if_exists !== false; // Default true for caching
 
@@ -104,9 +130,13 @@ export class HttpClientProvider extends CheckProvider {
         resolvedUrlForErrors = renderedUrl; // Update after Liquid rendering
       }
 
-      // Prepare request body if provided
+      // Prepare request body — supports both Liquid template strings and JSON objects
       let requestBody: string | undefined;
-      if (bodyTemplate) {
+      const rawBody = config.body;
+      const bodyTemplate = typeof rawBody === 'string' ? rawBody : undefined;
+      if (rawBody && typeof rawBody === 'object') {
+        requestBody = JSON.stringify(rawBody);
+      } else if (bodyTemplate) {
         // First resolve shell-style environment variables
         let resolvedBody = String(EnvironmentResolver.resolveValue(bodyTemplate));
         // Then render Liquid templates if present
@@ -133,6 +163,13 @@ export class HttpClientProvider extends CheckProvider {
               : resolvedValue;
           logger.verbose(`[http_client] ${key}: ${maskedValue}`);
         }
+      }
+
+      // Inject OAuth2 Bearer token if auth config is provided
+      if (authConfig?.type === 'oauth2_client_credentials') {
+        const tokenCache = OAuth2TokenCache.getInstance();
+        const token = await tokenCache.getToken(authConfig);
+        resolvedHeaders['Authorization'] = `Bearer ${token}`;
       }
 
       // Resolve output_file path if specified
@@ -490,6 +527,11 @@ export class HttpClientProvider extends CheckProvider {
     return [
       'type',
       'url',
+      'base_url',
+      'path',
+      'params',
+      'query',
+      'auth',
       'method',
       'headers',
       'body',
