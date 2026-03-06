@@ -60,7 +60,7 @@ function startMockServer(
       resolve({
         server,
         port: addr.port,
-        close: () => new Promise<void>((res) => server.close(() => res())),
+        close: () => new Promise<void>(res => server.close(() => res())),
       });
     });
     server.on('error', reject);
@@ -281,9 +281,7 @@ describe('A2ACheckProvider', () => {
                 id: taskId,
                 status: { state, timestamp: new Date().toISOString() },
                 artifacts:
-                  state === 'completed'
-                    ? [{ artifact_id: 'a1', parts: [{ text: 'Done' }] }]
-                    : [],
+                  state === 'completed' ? [{ artifact_id: 'a1', parts: [{ text: 'Done' }] }] : [],
               })
             )
           );
@@ -807,9 +805,7 @@ describe('A2ACheckProvider', () => {
           res.end(
             JSON.stringify({
               name: 'Test Review Agent',
-              supported_interfaces: [
-                { url: `http://127.0.0.1:${port}` },
-              ],
+              supported_interfaces: [{ url: `http://127.0.0.1:${port}` }],
             })
           );
         } else if (req.url === '/message:send' && req.method === 'POST') {
@@ -872,14 +868,11 @@ describe('A2ACheckProvider', () => {
       });
       mockClose = close;
 
-      await provider.execute(
-        makePRInfo({ title: 'Fix memory leak', number: 99 }),
-        {
-          type: 'a2a',
-          agent_url: `http://127.0.0.1:${port}`,
-          message: 'Review PR #{{ pr.number }}: {{ pr.title }}',
-        } as any
-      );
+      await provider.execute(makePRInfo({ title: 'Fix memory leak', number: 99 }), {
+        type: 'a2a',
+        agent_url: `http://127.0.0.1:${port}`,
+        message: 'Review PR #{{ pr.number }}: {{ pr.title }}',
+      } as any);
 
       const msg = capturedBody.message as Record<string, unknown>;
       const parts = msg.parts as Array<{ text: string }>;
@@ -1216,7 +1209,8 @@ describe('A2ACheckProvider', () => {
         type: 'a2a',
         agent_url: `http://127.0.0.1:${port}`,
         message: 'Review this PR',
-        transform_js: '({ issues: [{ file: "test.ts", line: 1, ruleId: "a2a/custom", message: "transformed", severity: "warning", category: "style" }] })',
+        transform_js:
+          '({ issues: [{ file: "test.ts", line: 1, ruleId: "a2a/custom", message: "transformed", severity: "warning", category: "style" }] })',
       } as any);
 
       expect(result.issues).toHaveLength(1);
@@ -1269,15 +1263,12 @@ describe('A2ACheckProvider', () => {
       });
       mockClose = close;
 
-      const result = await provider.execute(
-        makePRInfo({ title: 'Fix bug #123', number: 55 }),
-        {
-          type: 'a2a',
-          agent_url: `http://127.0.0.1:${port}`,
-          message: 'Review',
-          transform_js: '({ issues: [], title: pr.title, num: pr.number })',
-        } as any
-      );
+      const result = await provider.execute(makePRInfo({ title: 'Fix bug #123', number: 55 }), {
+        type: 'a2a',
+        agent_url: `http://127.0.0.1:${port}`,
+        message: 'Review',
+        transform_js: '({ issues: [], title: pr.title, num: pr.number })',
+      } as any);
 
       expect(result.issues).toEqual([]);
       expect((result as any).title).toBe('Fix bug #123');
@@ -1334,7 +1325,8 @@ describe('A2ACheckProvider', () => {
         type: 'a2a',
         agent_url: `http://127.0.0.1:${port}`,
         message: 'Hello agent',
-        transform_js: '({ issues: [{ file: "msg.ts", line: 1, ruleId: "a2a/msg", message: "from message", severity: "info", category: "style" }] })',
+        transform_js:
+          '({ issues: [{ file: "msg.ts", line: 1, ruleId: "a2a/msg", message: "from message", severity: "info", category: "style" }] })',
       } as any);
 
       expect(result.issues).toHaveLength(1);
