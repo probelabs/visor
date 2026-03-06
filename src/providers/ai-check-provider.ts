@@ -807,7 +807,19 @@ export class AICheckProvider extends CheckProvider {
         aiConfig.apiKey = aiAny.apiKey as string;
       }
       if (aiAny.model !== undefined) {
-        aiConfig.model = aiAny.model as string;
+        let modelVal = String(aiAny.model);
+        if (modelVal.includes('{{')) {
+          try {
+            const rendered = await this.liquidEngine.parseAndRender(modelVal, {
+              inputs: (config as any).workflowInputs || {},
+              env: process.env,
+            });
+            modelVal = rendered.trim();
+          } catch {}
+        }
+        if (modelVal) {
+          aiConfig.model = modelVal;
+        }
       }
       if (aiAny.timeout !== undefined) {
         aiConfig.timeout = aiAny.timeout as number;
@@ -817,12 +829,19 @@ export class AICheckProvider extends CheckProvider {
         aiConfig.maxIterations = Number(raw);
       }
       if (aiAny.provider !== undefined) {
-        aiConfig.provider = aiAny.provider as
-          | 'google'
-          | 'anthropic'
-          | 'openai'
-          | 'bedrock'
-          | 'mock';
+        let providerVal = String(aiAny.provider);
+        if (providerVal.includes('{{')) {
+          try {
+            const rendered = await this.liquidEngine.parseAndRender(providerVal, {
+              inputs: (config as any).workflowInputs || {},
+              env: process.env,
+            });
+            providerVal = rendered.trim();
+          } catch {}
+        }
+        if (providerVal) {
+          aiConfig.provider = providerVal as 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock';
+        }
       }
       if (aiAny.debug !== undefined) {
         aiConfig.debug = aiAny.debug as boolean;
