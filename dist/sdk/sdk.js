@@ -54483,6 +54483,15 @@ var init_workspace_manager = __esm({
             }
           }
         }
+        try {
+          const entries = await fsp2.readdir(this.workspacePath, { withFileTypes: true });
+          for (const entry of entries) {
+            if (entry.name !== mainProjectName) {
+              this.usedNames.add(entry.name);
+            }
+          }
+        } catch {
+        }
         this.registerCleanupHandlers();
         this.mainProjectInfo = {
           sessionId: this.sessionId,
@@ -54497,15 +54506,28 @@ var init_workspace_manager = __esm({
       }
       /**
        * Add a project to the workspace (creates symlink to worktree)
-       * If the same repository + worktreePath combination already exists, returns the existing path.
+       * If the same repository already exists, updates the symlink to the new worktree path.
        */
       async addProject(repository, worktreePath, description) {
         if (!this.initialized) {
           throw new Error("Workspace not initialized. Call initialize() first.");
         }
         for (const [existingName, existingProject] of this.projects.entries()) {
-          if (existingProject.repository === repository && existingProject.worktreePath === worktreePath) {
-            logger.debug(`Reusing existing project: ${existingName} (${repository})`);
+          if (existingProject.repository === repository) {
+            if (existingProject.worktreePath !== worktreePath) {
+              logger.debug(
+                `Updating project symlink: ${existingName} (${repository}) -> ${worktreePath}`
+              );
+              await fsp2.rm(existingProject.path, { recursive: true, force: true });
+              try {
+                await fsp2.symlink(worktreePath, existingProject.path);
+              } catch (error) {
+                throw new Error(`Failed to update symlink for project ${existingName}: ${error}`);
+              }
+              existingProject.worktreePath = worktreePath;
+            } else {
+              logger.debug(`Reusing existing project: ${existingName} (${repository})`);
+            }
             return existingProject.path;
           }
         }
