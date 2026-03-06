@@ -963,6 +963,12 @@ export async function main(): Promise<void> {
       await handlePolicyCheckCommand(filteredArgv);
       return;
     }
+    // Check for tasks subcommand (A2A task monitoring)
+    if (filteredArgv.length > 2 && filteredArgv[2] === 'tasks') {
+      const { handleTasksCommand } = await import('./agent-protocol/tasks-cli-handler');
+      await handleTasksCommand(filteredArgv.slice(3));
+      return;
+    }
     // Check for config subcommand
     if (filteredArgv.length > 2 && filteredArgv[2] === 'config') {
       const { handleConfigCommand } = await import('./config/cli-handler');

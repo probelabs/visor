@@ -962,7 +962,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13834-28428-src_types_config.ts-0-55671%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -979,7 +979,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13834-28428-src_types_config.ts-0-55671%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1082,6 +1082,7 @@ export const configSchema = {
         'human-input',
         'workflow',
         'git-checkout',
+        'a2a',
       ],
       description: 'Valid check types in configuration',
     },
@@ -1690,7 +1691,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13834-28428-src_types_config.ts-0-55671%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1705,14 +1706,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-13834-28428-src_types_config.ts-0-55671>>':
+    'Record<string,Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13834-28428-src_types_config.ts-0-55671%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-13834-28428-src_types_config.ts-0-55671>': {
+    'Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681>': {
       type: 'object',
       additionalProperties: false,
     },

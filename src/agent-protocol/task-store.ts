@@ -109,8 +109,23 @@ export interface CreateTaskParams {
 export interface ListTasksFilter {
   contextId?: string;
   state?: TaskState[];
+  workflowId?: string;
   limit?: number; // default 50, max 200
   offset?: number;
+}
+
+/** Raw task row for queue monitoring — includes claim metadata. */
+export interface TaskQueueRow {
+  id: string;
+  context_id: string;
+  state: TaskState;
+  created_at: string;
+  updated_at: string;
+  claimed_by: string | null;
+  claimed_at: string | null;
+  workflow_id: string | null;
+  run_id: string | null;
+  request_message: string; // first message text (extracted)
 }
 
 export interface ListTasksResult {
@@ -137,6 +152,9 @@ export interface TaskStore {
   claimNextSubmitted(workerId: string): AgentTask | null;
   reclaimStaleTasks(workerId: string, staleTimeoutMs?: number): AgentTask[];
   releaseClaim(taskId: string): void;
+
+  // Queue monitoring (optional — only SqliteTaskStore implements this)
+  listTasksRaw?(filter: ListTasksFilter): { rows: TaskQueueRow[]; total: number };
 
   // Cleanup
   deleteExpiredTasks(): string[];
@@ -281,8 +299,7 @@ export class SqliteTaskStore implements TaskStore {
     return row ? taskRowToAgentTask(row) : null;
   }
 
-  listTasks(filter: ListTasksFilter): ListTasksResult {
-    const db = this.getDb();
+  private buildFilterClause(filter: ListTasksFilter): { where: string; params: unknown[] } {
     const conditions: string[] = [];
     const params: unknown[] = [];
 
@@ -295,16 +312,24 @@ export class SqliteTaskStore implements TaskStore {
       conditions.push(`state IN (${placeholders})`);
       params.push(...filter.state);
     }
+    if (filter.workflowId) {
+      conditions.push('workflow_id = ?');
+      params.push(filter.workflowId);
+    }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    return { where, params };
+  }
 
-    // Get total count
+  listTasks(filter: ListTasksFilter): ListTasksResult {
+    const db = this.getDb();
+    const { where, params } = this.buildFilterClause(filter);
+
     const countRow = db
       .prepare(`SELECT COUNT(*) as total FROM agent_tasks ${where}`)
       .get(...params) as { total: number };
     const total = countRow.total;
 
-    // Get paginated results
     const limit = Math.min(filter.limit ?? 50, 200);
     const offset = filter.offset ?? 0;
     const rows = db
@@ -315,6 +340,46 @@ export class SqliteTaskStore implements TaskStore {
       tasks: rows.map(taskRowToAgentTask),
       total,
     };
+  }
+
+  listTasksRaw(filter: ListTasksFilter): { rows: TaskQueueRow[]; total: number } {
+    const db = this.getDb();
+    const { where, params } = this.buildFilterClause(filter);
+
+    const countRow = db
+      .prepare(`SELECT COUNT(*) as total FROM agent_tasks ${where}`)
+      .get(...params) as { total: number };
+    const total = countRow.total;
+
+    const limit = Math.min(filter.limit ?? 50, 200);
+    const offset = filter.offset ?? 0;
+    const rawRows = db
+      .prepare(`SELECT * FROM agent_tasks ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+      .all(...params, limit, offset) as TaskRow[];
+
+    const rows: TaskQueueRow[] = rawRows.map(r => {
+      let messageText = '';
+      try {
+        const msg = JSON.parse(r.request_message);
+        const parts = msg.parts ?? msg.content?.parts ?? [];
+        const textPart = parts.find((p: any) => p.type === 'text' || typeof p.text === 'string');
+        messageText = textPart?.text ?? '';
+      } catch {}
+      return {
+        id: r.id,
+        context_id: r.context_id,
+        state: r.state as TaskState,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        claimed_by: r.claimed_by,
+        claimed_at: r.claimed_at,
+        workflow_id: r.workflow_id,
+        run_id: r.run_id,
+        request_message: messageText,
+      };
+    });
+
+    return { rows, total };
   }
 
   // -------------------------------------------------------------------------
