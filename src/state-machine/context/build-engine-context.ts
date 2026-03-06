@@ -7,20 +7,7 @@ import { generateHumanId } from '../../utils/human-id';
 import { logger } from '../../logger';
 import type { VisorConfig as VCfg, CheckConfig as CfgCheck } from '../../types/config';
 import { WorkspaceManager } from '../../utils/workspace-manager';
-
-// Lazy-resolve DelegationManager from @probelabs/probe.
-// The class may not be exported in older published versions, so we
-// fall back gracefully to avoid breaking the build.
-let _DelegationManager: (new (opts?: any) => any) | null = null;
-try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const probe = require('@probelabs/probe');
-  if (probe && typeof probe.DelegationManager === 'function') {
-    _DelegationManager = probe.DelegationManager;
-  }
-} catch {
-  // Not available — max_ai_concurrency will be silently ignored
-}
+import { FairConcurrencyLimiter } from '../../utils/fair-concurrency-limiter';
 
 /**
  * Apply minimal criticality defaults in-place.
@@ -113,16 +100,40 @@ export function buildEngineContextForRun(
   const journal = new ExecutionJournal();
   const memory = MemoryStore.getInstance(clonedConfig.memory);
 
-  // Create shared AI concurrency limiter if configured
+  // Create shared AI concurrency limiter if configured.
+  // Uses a global singleton fair limiter: round-robin across sessions so
+  // no single user/task can starve others.
   let sharedConcurrencyLimiter: any = undefined;
-  if (clonedConfig.max_ai_concurrency && _DelegationManager) {
-    sharedConcurrencyLimiter = new _DelegationManager({
-      maxConcurrent: clonedConfig.max_ai_concurrency,
-      maxPerSession: 999, // No per-session limit needed for global AI gating
-    });
-    logger.debug(
-      `[EngineContext] Created shared AI concurrency limiter (max: ${clonedConfig.max_ai_concurrency})`
-    );
+  const sessionId = generateHumanId();
+  if (clonedConfig.max_ai_concurrency) {
+    const fairLimiter = FairConcurrencyLimiter.getInstance(clonedConfig.max_ai_concurrency);
+    // Bind this engine run's session ID into acquire/release so the fair limiter
+    // knows which user/task each call belongs to. Probe calls acquire(null) —
+    // we intercept and inject our session ID.
+    sharedConcurrencyLimiter = {
+      async acquire(parentSessionId: any, _dbg?: boolean, queueTimeout?: number | null) {
+        // Use visor session ID if probe didn't provide one
+        const sid = parentSessionId || sessionId;
+        return fairLimiter.acquire(sid, _dbg, queueTimeout);
+      },
+      release(parentSessionId: any, _dbg?: boolean) {
+        const sid = parentSessionId || sessionId;
+        return fairLimiter.release(sid, _dbg);
+      },
+      tryAcquire(parentSessionId: any) {
+        const sid = parentSessionId || sessionId;
+        return fairLimiter.tryAcquire(sid);
+      },
+      getStats() {
+        return fairLimiter.getStats();
+      },
+      shutdown() {
+        // Don't destroy the singleton — other sessions may still use it
+      },
+      cleanup() {
+        // Don't destroy the singleton — other sessions may still use it
+      },
+    };
   }
 
   return {
@@ -133,7 +144,7 @@ export function buildEngineContextForRun(
     memory,
     workingDirectory,
     originalWorkingDirectory: workingDirectory,
-    sessionId: generateHumanId(),
+    sessionId,
     event: prInfo.eventType,
     debug,
     maxParallelism,
