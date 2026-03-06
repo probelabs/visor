@@ -465,6 +465,8 @@ export class StateMachineExecutionEngine {
           logger,
           // Provide the active (possibly tag-filtered) config so frontends can read groups, etc.
           config: configWithTagFilter,
+          // Explicit visorConfig for ActiveFrontend auto-wiring (engine NOT passed to prevent recursion)
+          visorConfig: configWithTagFilter,
           run: {
             runId: (context as any).sessionId,
             repo: repoObj,
@@ -1315,6 +1317,8 @@ export async function resumeFromSnapshot(
         logger,
         // Provide the active config so frontends can read groups, etc.
         config,
+        // Explicit visorConfig for ActiveFrontend auto-wiring
+        visorConfig: config,
         run: {
           runId: (context as any).sessionId,
           repo: repoObj,

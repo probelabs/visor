@@ -61,6 +61,8 @@ export interface CliOptions {
   githubV2?: boolean;
   /** Enable Slack Socket Mode runner */
   slack?: boolean;
+  /** Enable A2A Agent Protocol server mode */
+  a2a?: boolean;
   /** Enable interactive TUI (chat + logs tabs) */
   tui?: boolean;
   /** Keep workspace folders after execution (for debugging) */

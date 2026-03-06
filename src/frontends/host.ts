@@ -20,12 +20,29 @@ export interface FrontendContext {
   octokit?: any;
   // Optional webhook context (e.g., Slack Events API payload injected by socket runner)
   webhookContext?: { webhookData?: Map<string, unknown>; eventType?: string };
+  // Optional engine reference for frontends that spawn their own execution runs (e.g., A2A)
+  engine?: any;
+  // Optional full VisorConfig for frontends that need access to checks/workflows
+  visorConfig?: any;
 }
 
 export interface Frontend {
   readonly name: string;
   start(ctx: FrontendContext): Promise<void> | void;
   stop(): Promise<void> | void;
+}
+
+/** Frontends that can trigger their own engine executions (e.g., A2A). */
+export interface ActiveFrontend extends Frontend {
+  setEngine(engine: any): void;
+  setVisorConfig(config: any): void;
+}
+
+/** Type guard for ActiveFrontend (duck-typed). */
+export function isActiveFrontend(f: Frontend): f is ActiveFrontend {
+  return (
+    typeof (f as any).setEngine === 'function' && typeof (f as any).setVisorConfig === 'function'
+  );
 }
 
 export interface FrontendSpec {
@@ -59,6 +76,9 @@ export class FrontendsHost {
       } else if (spec.name === 'tui') {
         const { TuiFrontend } = await import('../tui/tui-frontend');
         this.frontends.push(new TuiFrontend(spec.config as any));
+      } else if (spec.name === 'a2a') {
+        const { A2AFrontend } = await import('../agent-protocol/a2a-frontend');
+        this.frontends.push(new A2AFrontend(spec.config as any));
       } else {
         this.log.warn(`[FrontendsHost] Unknown frontend '${spec.name}', skipping`);
       }
@@ -68,7 +88,13 @@ export class FrontendsHost {
   async startAll(ctxFactory: () => FrontendContext): Promise<void> {
     for (const f of this.frontends) {
       try {
-        await f.start(ctxFactory());
+        const ctx = ctxFactory();
+        // Auto-inject engine/config into active frontends
+        if (isActiveFrontend(f)) {
+          if (ctx.engine) f.setEngine(ctx.engine);
+          if (ctx.visorConfig) f.setVisorConfig(ctx.visorConfig);
+        }
+        await f.start(ctx);
         this.log.info(`[FrontendsHost] Started frontend '${f.name}'`);
       } catch (err) {
         this.log.error(`[FrontendsHost] Failed to start '${f.name}':`, err);

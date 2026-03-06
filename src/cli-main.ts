@@ -1130,6 +1130,7 @@ export async function main(): Promise<void> {
       Boolean(process.stderr.isTTY) &&
       !options.debugServer &&
       !options.slack &&
+      !(options as any).a2a &&
       process.env.NODE_ENV !== 'test';
 
     // Create trace file path for TUI mode (used for Traces tab visualization)
@@ -1245,6 +1246,7 @@ export async function main(): Promise<void> {
       if (!process.stdout.isTTY || !process.stderr.isTTY) reasons.push('non-interactive TTY');
       if (options.debugServer) reasons.push('--debug-server');
       if (options.slack) reasons.push('--slack');
+      if ((options as any).a2a) reasons.push('--a2a');
       if (process.env.NODE_ENV === 'test') reasons.push('test mode');
       const suffix = reasons.length > 0 ? ` (${reasons.join(', ')})` : '';
       console.error(`TUI requested but disabled${suffix}.`);
@@ -1332,6 +1334,60 @@ export async function main(): Promise<void> {
       await store.shutdown();
     } catch (err: unknown) {
       logger.debug(`Startup snapshot failed: ${err}`);
+    }
+
+    // ---- A2A Agent Protocol Server ----
+    if ((options as any).a2a || config.agent_protocol?.enabled) {
+      const { StateMachineExecutionEngine: SMEngine } = await import(
+        './state-machine-execution-engine'
+      );
+      const { A2AFrontend } = await import('./agent-protocol/a2a-frontend');
+      const { EventBus } = await import('./event-bus/event-bus');
+
+      const agentConfig = config.agent_protocol;
+      if (!agentConfig) {
+        console.error('Error: agent_protocol configuration is required for --a2a mode');
+        process.exit(1);
+      }
+
+      const engine = new SMEngine();
+      const frontend = new A2AFrontend(agentConfig);
+      frontend.setEngine(engine);
+      frontend.setVisorConfig(config);
+
+      const eventBus = new EventBus();
+      const ctx = {
+        eventBus,
+        logger,
+        config,
+        run: { runId: crypto.randomUUID() },
+        engine,
+        visorConfig: config,
+      };
+
+      await frontend.start(ctx);
+
+      const port = agentConfig.port ?? 9000;
+      const host = agentConfig.host ?? '0.0.0.0';
+      console.log(`A2A server running on ${host}:${port}`);
+
+      let shuttingDown = false;
+      const onShutdown = async (sig: NodeJS.Signals) => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        logger.info(`[A2A] Received ${sig}, shutting down gracefully...`);
+        await frontend.stop();
+        process.exit(0);
+      };
+      process.on('SIGINT', sig => {
+        onShutdown(sig);
+      });
+      process.on('SIGTERM', sig => {
+        onShutdown(sig);
+      });
+
+      process.stdin.resume();
+      return;
     }
 
     // Socket Mode runner: visor --slack [--config file]
