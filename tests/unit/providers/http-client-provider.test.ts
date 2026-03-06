@@ -4,6 +4,7 @@ import { ReviewSummary } from '../../../src/reviewer';
 // eslint-disable-next-line no-restricted-imports -- needed for type in test mock
 import { Liquid } from 'liquidjs';
 import { EnvironmentResolver } from '../../../src/utils/env-resolver';
+import { OAuth2TokenCache } from '../../../src/utils/oauth2-token-cache';
 
 // Mock fetch globally
 const mockFetch = jest.fn();
@@ -399,6 +400,210 @@ describe('HttpClientProvider', () => {
           }),
         })
       );
+    });
+  });
+
+  describe('base_url + path support', () => {
+    it('should build URL from base_url and path', async () => {
+      const config = {
+        type: 'http_client' as const,
+        base_url: 'https://cloud.mongodb.com/api/atlas/v2',
+        path: '/groups',
+        headers: { Accept: 'application/json' },
+      };
+
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: { get: jest.fn().mockReturnValue('application/json') },
+        json: jest.fn().mockResolvedValue({ results: [] }),
+      };
+      mockFetch.mockResolvedValue(mockResponse);
+
+      await provider.execute(mockPRInfo, config, new Map());
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://cloud.mongodb.com/api/atlas/v2/groups',
+        expect.any(Object)
+      );
+    });
+
+    it('should substitute path params', async () => {
+      const config = {
+        type: 'http_client' as const,
+        base_url: 'https://cloud.mongodb.com/api/atlas/v2',
+        path: '/groups/{groupId}/clusters/{clusterName}',
+        params: { groupId: 'abc123', clusterName: 'my-cluster' },
+        headers: {},
+      };
+
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: { get: jest.fn().mockReturnValue('application/json') },
+        json: jest.fn().mockResolvedValue({ name: 'my-cluster' }),
+      };
+      mockFetch.mockResolvedValue(mockResponse);
+
+      await provider.execute(mockPRInfo, config, new Map());
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://cloud.mongodb.com/api/atlas/v2/groups/abc123/clusters/my-cluster',
+        expect.any(Object)
+      );
+    });
+
+    it('should append query parameters', async () => {
+      const config = {
+        type: 'http_client' as const,
+        base_url: 'https://api.example.com/v2',
+        path: '/items',
+        query: { status: 'OPEN', limit: '10' },
+        headers: {},
+      };
+
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: { get: jest.fn().mockReturnValue('application/json') },
+        json: jest.fn().mockResolvedValue({ results: [] }),
+      };
+      mockFetch.mockResolvedValue(mockResponse);
+
+      await provider.execute(mockPRInfo, config, new Map());
+
+      const calledUrl = mockFetch.mock.calls[0][0];
+      expect(calledUrl).toContain('https://api.example.com/v2/items?');
+      expect(calledUrl).toContain('status=OPEN');
+      expect(calledUrl).toContain('limit=10');
+    });
+
+    it('should handle trailing/leading slashes correctly', async () => {
+      const config = {
+        type: 'http_client' as const,
+        base_url: 'https://api.example.com/v2/',
+        path: '/items/',
+        headers: {},
+      };
+
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: { get: jest.fn().mockReturnValue('application/json') },
+        json: jest.fn().mockResolvedValue({}),
+      };
+      mockFetch.mockResolvedValue(mockResponse);
+
+      await provider.execute(mockPRInfo, config, new Map());
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://api.example.com/v2/items/',
+        expect.any(Object)
+      );
+    });
+
+    it('should validate config with base_url instead of url', async () => {
+      const config = {
+        type: 'http_client' as const,
+        base_url: 'https://api.example.com/v2',
+      };
+
+      const isValid = await provider.validateConfig(config);
+      expect(isValid).toBe(true);
+    });
+  });
+
+  describe('OAuth2 auth support', () => {
+    beforeEach(() => {
+      OAuth2TokenCache.resetInstance();
+    });
+
+    it('should inject Bearer token from OAuth2 auth config', async () => {
+      // Mock the OAuth2 token fetch
+      const tokenFetchResponse = {
+        ok: true,
+        json: async () => ({ access_token: 'oauth-token-xyz', expires_in: 3600 }),
+      };
+
+      const apiResponse = {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: { get: jest.fn().mockReturnValue('application/json') },
+        json: jest.fn().mockResolvedValue({ clusters: [] }),
+      };
+
+      // First call = OAuth token, second = API call
+      mockFetch.mockResolvedValueOnce(tokenFetchResponse).mockResolvedValueOnce(apiResponse);
+
+      const config = {
+        type: 'http_client' as const,
+        url: 'https://cloud.mongodb.com/api/atlas/v2/groups',
+        headers: { Accept: 'application/vnd.atlas.2025-03-12+json' },
+        auth: {
+          type: 'oauth2_client_credentials' as const,
+          token_url: 'https://cloud.mongodb.com/api/oauth/token',
+          client_id: 'my-client-id',
+          client_secret: 'my-client-secret',
+        },
+      };
+
+      await provider.execute(mockPRInfo, config, new Map());
+
+      // Verify token was fetched
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      // Verify the API call includes the Bearer token
+      const apiCallHeaders = mockFetch.mock.calls[1][1].headers;
+      expect(apiCallHeaders['Authorization']).toBe('Bearer oauth-token-xyz');
+      expect(apiCallHeaders['Accept']).toBe('application/vnd.atlas.2025-03-12+json');
+    });
+
+    it('should work with base_url + path + auth combined', async () => {
+      const tokenFetchResponse = {
+        ok: true,
+        json: async () => ({ access_token: 'combined-token', expires_in: 3600 }),
+      };
+
+      const apiResponse = {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: { get: jest.fn().mockReturnValue('application/json') },
+        json: jest.fn().mockResolvedValue({ name: 'my-cluster' }),
+      };
+
+      mockFetch.mockResolvedValueOnce(tokenFetchResponse).mockResolvedValueOnce(apiResponse);
+
+      const config = {
+        type: 'http_client' as const,
+        base_url: 'https://cloud.mongodb.com/api/atlas/v2',
+        path: '/groups/{groupId}/clusters',
+        params: { groupId: 'proj-123' },
+        query: { itemsPerPage: '5' },
+        headers: { Accept: 'application/vnd.atlas.2025-03-12+json' },
+        auth: {
+          type: 'oauth2_client_credentials' as const,
+          token_url: 'https://cloud.mongodb.com/api/oauth/token',
+          client_id: 'cid',
+          client_secret: 'csecret',
+        },
+      };
+
+      const result = await provider.execute(mockPRInfo, config, new Map());
+
+      expect(result.issues).toHaveLength(0);
+      // Verify URL was built correctly
+      const calledUrl = mockFetch.mock.calls[1][0];
+      expect(calledUrl).toBe(
+        'https://cloud.mongodb.com/api/atlas/v2/groups/proj-123/clusters?itemsPerPage=5'
+      );
+      // Verify auth header
+      expect(mockFetch.mock.calls[1][1].headers['Authorization']).toBe('Bearer combined-token');
     });
   });
 });
