@@ -958,7 +958,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -975,7 +975,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1260,6 +1260,15 @@ export const configSchema = {
         allowBash: {
           type: 'boolean',
           description: 'Enable bash command execution (shorthand for bashConfig.enabled)',
+        },
+        search_delegate_provider: {
+          type: 'string',
+          description:
+            "Override provider for search delegate sub-agents (e.g., 'google' for cheaper search)",
+        },
+        search_delegate_model: {
+          type: 'string',
+          description: "Override model for search delegate sub-agents (e.g., 'gemini-2.0-flash')",
         },
         bashConfig: {
           $ref: '#/definitions/BashConfig',
@@ -1677,7 +1686,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1692,14 +1701,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265>>':
+    'Record<string,Partial<interface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-13519-28113-src_types_config.ts-0-55265>': {
+    'Partial<interface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512>': {
       type: 'object',
       additionalProperties: false,
     },
