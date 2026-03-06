@@ -45182,7 +45182,27 @@ async function acquirePromptLock() {
     activePrompt = true;
     return;
   }
-  await new Promise((resolve15) => waiters.push(resolve15));
+  console.error(
+    `[human-input] Prompt queued, waiting for active prompt to finish (${waiters.length} already waiting).`
+  );
+  const queuedAt = Date.now();
+  const reminder = setInterval(() => {
+    const waited = Math.round((Date.now() - queuedAt) / 1e3);
+    console.error(
+      `[human-input] Still waiting for prompt lock (${waited}s, ${waiters.length} in queue).`
+    );
+  }, 1e4);
+  try {
+    await new Promise((resolve15) => waiters.push(resolve15));
+  } finally {
+    clearInterval(reminder);
+    const waitedMs = Date.now() - queuedAt;
+    if (waitedMs > 100) {
+      console.error(
+        `[human-input] Prompt lock acquired after ${Math.round(waitedMs / 1e3)}s wait.`
+      );
+    }
+  }
   activePrompt = true;
 }
 function releasePromptLock() {
@@ -50071,7 +50091,29 @@ async function executeCheckGroup(checks, context2, state, maxParallelism, emitEv
     } catch {
     }
     if (pool.length >= maxParallelism) {
-      await Promise.race(pool);
+      const activeCount = pool.filter((p) => !p._settled).length;
+      logger.info(
+        `[LevelDispatch] Check pool full (${activeCount}/${maxParallelism} active). Check "${checkId}" queued, waiting for a slot...`
+      );
+      const queuedAt = Date.now();
+      const reminder = setInterval(() => {
+        const waited = Math.round((Date.now() - queuedAt) / 1e3);
+        const stillActive = pool.filter((p) => !p._settled).length;
+        logger.info(
+          `[LevelDispatch] Check "${checkId}" still queued (${waited}s). ${stillActive}/${maxParallelism} slots busy.`
+        );
+      }, 15e3);
+      try {
+        await Promise.race(pool);
+      } finally {
+        clearInterval(reminder);
+      }
+      const waitedMs = Date.now() - queuedAt;
+      if (waitedMs > 100) {
+        logger.info(
+          `[LevelDispatch] Check "${checkId}" dequeued after ${Math.round(waitedMs / 1e3)}s wait.`
+        );
+      }
       pool.splice(
         0,
         pool.length,
@@ -54859,6 +54901,223 @@ var init_workspace_manager = __esm({
   }
 });
 
+// src/utils/fair-concurrency-limiter.ts
+var FairConcurrencyLimiter;
+var init_fair_concurrency_limiter = __esm({
+  "src/utils/fair-concurrency-limiter.ts"() {
+    "use strict";
+    init_logger();
+    FairConcurrencyLimiter = class _FairConcurrencyLimiter {
+      maxConcurrent;
+      globalActive = 0;
+      // Per-session FIFO queues
+      sessionQueues = /* @__PURE__ */ new Map();
+      // Round-robin order of sessions with waiting entries
+      roundRobinSessions = [];
+      roundRobinIndex = 0;
+      // Per-session active count (for stats)
+      sessionActive = /* @__PURE__ */ new Map();
+      constructor(maxConcurrent) {
+        this.maxConcurrent = maxConcurrent;
+      }
+      static getInstance(maxConcurrent) {
+        const key = /* @__PURE__ */ Symbol.for("visor.fairConcurrencyLimiter");
+        let instance = globalThis[key];
+        if (!instance) {
+          instance = new _FairConcurrencyLimiter(maxConcurrent);
+          globalThis[key] = instance;
+          logger.info(`[FairLimiter] Created global fair concurrency limiter (max: ${maxConcurrent})`);
+        } else if (instance.maxConcurrent !== maxConcurrent) {
+          const old = instance.maxConcurrent;
+          instance.maxConcurrent = maxConcurrent;
+          logger.info(`[FairLimiter] Updated max concurrency: ${old} -> ${maxConcurrent}`);
+          instance._processQueue();
+        }
+        return instance;
+      }
+      /**
+       * Try to acquire a slot immediately (non-blocking).
+       */
+      tryAcquire(sessionId) {
+        if (this.globalActive >= this.maxConcurrent) {
+          return false;
+        }
+        this.globalActive++;
+        const sid = sessionId || "__anonymous__";
+        this.sessionActive.set(sid, (this.sessionActive.get(sid) || 0) + 1);
+        return true;
+      }
+      /**
+       * Acquire a slot, waiting in a fair queue if necessary.
+       * Sessions are served round-robin so no single session can starve others.
+       */
+      async acquire(sessionId, _debug, queueTimeout) {
+        const sid = sessionId || "__anonymous__";
+        if (this.tryAcquire(sid)) {
+          return true;
+        }
+        const totalQueued = this._totalQueued();
+        const sessionsWaiting = this.sessionQueues.size;
+        const sessionQueueLen = this.sessionQueues.get(sid)?.length || 0;
+        logger.info(
+          `[FairLimiter] Slot unavailable (${this.globalActive}/${this.maxConcurrent} active). Session "${sid}" queued (${sessionQueueLen} own + ${totalQueued} total across ${sessionsWaiting} sessions). Waiting...`
+        );
+        const queuedAt = Date.now();
+        const effectiveTimeout = queueTimeout ?? 12e4;
+        return new Promise((resolve15, reject) => {
+          const entry = { resolve: resolve15, reject, queuedAt };
+          entry.reminder = setInterval(() => {
+            const waited = Math.round((Date.now() - queuedAt) / 1e3);
+            const curQueued = this._totalQueued();
+            const curSessions = this._waitingSessions();
+            logger.info(
+              `[FairLimiter] Session "${sid}" still waiting (${waited}s). ${this.globalActive}/${this.maxConcurrent} active, ${curQueued} queued across ${curSessions} sessions.`
+            );
+          }, 15e3);
+          let queue = this.sessionQueues.get(sid);
+          if (!queue) {
+            queue = [];
+            this.sessionQueues.set(sid, queue);
+            this.roundRobinSessions.push(sid);
+          }
+          queue.push(entry);
+          if (effectiveTimeout > 0) {
+            setTimeout(() => {
+              const q = this.sessionQueues.get(sid);
+              if (q) {
+                const idx = q.indexOf(entry);
+                if (idx !== -1) {
+                  q.splice(idx, 1);
+                  if (q.length === 0) {
+                    this.sessionQueues.delete(sid);
+                    this._removeFromRoundRobin(sid);
+                  }
+                  this._clearReminder(entry);
+                  reject(
+                    new Error(
+                      `[FairLimiter] Queue timeout: session "${sid}" waited ${effectiveTimeout}ms for a slot`
+                    )
+                  );
+                }
+              }
+            }, effectiveTimeout);
+          }
+        });
+      }
+      /**
+       * Release a slot and grant the next one fairly (round-robin across sessions).
+       */
+      release(sessionId, _debug) {
+        const sid = sessionId || "__anonymous__";
+        this.globalActive = Math.max(0, this.globalActive - 1);
+        const active = this.sessionActive.get(sid);
+        if (active !== void 0) {
+          if (active <= 1) {
+            this.sessionActive.delete(sid);
+          } else {
+            this.sessionActive.set(sid, active - 1);
+          }
+        }
+        this._processQueue();
+      }
+      /**
+       * Round-robin queue processing: cycle through sessions and grant one slot per session per round.
+       */
+      _processQueue() {
+        const toGrant = [];
+        while (this.globalActive < this.maxConcurrent && this.roundRobinSessions.length > 0) {
+          if (this.roundRobinIndex >= this.roundRobinSessions.length) {
+            this.roundRobinIndex = 0;
+          }
+          const sid = this.roundRobinSessions[this.roundRobinIndex];
+          const queue = this.sessionQueues.get(sid);
+          if (!queue || queue.length === 0) {
+            this.sessionQueues.delete(sid);
+            this.roundRobinSessions.splice(this.roundRobinIndex, 1);
+            continue;
+          }
+          const entry = queue.shift();
+          if (queue.length === 0) {
+            this.sessionQueues.delete(sid);
+            this.roundRobinSessions.splice(this.roundRobinIndex, 1);
+          } else {
+            this.roundRobinIndex++;
+          }
+          this.globalActive++;
+          this.sessionActive.set(sid, (this.sessionActive.get(sid) || 0) + 1);
+          toGrant.push({ entry, sid });
+        }
+        for (const { entry, sid } of toGrant) {
+          this._clearReminder(entry);
+          const waitedMs = Date.now() - entry.queuedAt;
+          if (waitedMs > 100) {
+            logger.info(
+              `[FairLimiter] Session "${sid}" acquired slot after ${Math.round(waitedMs / 1e3)}s wait.`
+            );
+          }
+          setImmediate(() => entry.resolve(true));
+        }
+      }
+      getStats() {
+        const perSession = {};
+        const allSessions = /* @__PURE__ */ new Set([...this.sessionActive.keys(), ...this.sessionQueues.keys()]);
+        for (const sid of allSessions) {
+          perSession[sid] = {
+            active: this.sessionActive.get(sid) || 0,
+            queued: this.sessionQueues.get(sid)?.length || 0
+          };
+        }
+        return {
+          globalActive: this.globalActive,
+          maxConcurrent: this.maxConcurrent,
+          queueSize: this._totalQueued(),
+          waitingSessions: this._waitingSessions(),
+          perSession
+        };
+      }
+      cleanup() {
+        for (const queue of this.sessionQueues.values()) {
+          for (const entry of queue) {
+            this._clearReminder(entry);
+          }
+        }
+        this.sessionQueues.clear();
+        this.roundRobinSessions = [];
+        this.roundRobinIndex = 0;
+        const key = /* @__PURE__ */ Symbol.for("visor.fairConcurrencyLimiter");
+        delete globalThis[key];
+      }
+      shutdown() {
+        this.cleanup();
+      }
+      // -- helpers --
+      _totalQueued() {
+        let n = 0;
+        for (const q of this.sessionQueues.values()) n += q.length;
+        return n;
+      }
+      _waitingSessions() {
+        return this.roundRobinSessions.length;
+      }
+      _removeFromRoundRobin(sid) {
+        const idx = this.roundRobinSessions.indexOf(sid);
+        if (idx !== -1) {
+          this.roundRobinSessions.splice(idx, 1);
+          if (this.roundRobinIndex > idx) {
+            this.roundRobinIndex--;
+          }
+        }
+      }
+      _clearReminder(entry) {
+        if (entry.reminder) {
+          clearInterval(entry.reminder);
+          entry.reminder = void 0;
+        }
+      }
+    };
+  }
+});
+
 // src/state-machine/context/build-engine-context.ts
 var build_engine_context_exports = {};
 __export(build_engine_context_exports, {
@@ -54914,15 +55173,30 @@ function buildEngineContextForRun(workingDirectory, config, prInfo, debug, maxPa
   const journal = new ExecutionJournal();
   const memory = MemoryStore.getInstance(clonedConfig.memory);
   let sharedConcurrencyLimiter = void 0;
-  if (clonedConfig.max_ai_concurrency && _DelegationManager) {
-    sharedConcurrencyLimiter = new _DelegationManager({
-      maxConcurrent: clonedConfig.max_ai_concurrency,
-      maxPerSession: 999
-      // No per-session limit needed for global AI gating
-    });
-    logger.debug(
-      `[EngineContext] Created shared AI concurrency limiter (max: ${clonedConfig.max_ai_concurrency})`
-    );
+  const sessionId = generateHumanId();
+  if (clonedConfig.max_ai_concurrency) {
+    const fairLimiter = FairConcurrencyLimiter.getInstance(clonedConfig.max_ai_concurrency);
+    sharedConcurrencyLimiter = {
+      async acquire(parentSessionId, _dbg, queueTimeout) {
+        const sid = parentSessionId || sessionId;
+        return fairLimiter.acquire(sid, _dbg, queueTimeout);
+      },
+      release(parentSessionId, _dbg) {
+        const sid = parentSessionId || sessionId;
+        return fairLimiter.release(sid, _dbg);
+      },
+      tryAcquire(parentSessionId) {
+        const sid = parentSessionId || sessionId;
+        return fairLimiter.tryAcquire(sid);
+      },
+      getStats() {
+        return fairLimiter.getStats();
+      },
+      shutdown() {
+      },
+      cleanup() {
+      }
+    };
   }
   return {
     mode: "state-machine",
@@ -54932,7 +55206,7 @@ function buildEngineContextForRun(workingDirectory, config, prInfo, debug, maxPa
     memory,
     workingDirectory,
     originalWorkingDirectory: workingDirectory,
-    sessionId: generateHumanId(),
+    sessionId,
     event: prInfo.eventType,
     debug,
     maxParallelism,
@@ -54986,7 +55260,6 @@ async function initializeWorkspace(context2) {
     return context2;
   }
 }
-var _DelegationManager;
 var init_build_engine_context = __esm({
   "src/state-machine/context/build-engine-context.ts"() {
     "use strict";
@@ -54995,14 +55268,7 @@ var init_build_engine_context = __esm({
     init_human_id();
     init_logger();
     init_workspace_manager();
-    _DelegationManager = null;
-    try {
-      const probe = require("@probelabs/probe");
-      if (probe && typeof probe.DelegationManager === "function") {
-        _DelegationManager = probe.DelegationManager;
-      }
-    } catch {
-    }
+    init_fair_concurrency_limiter();
   }
 });
 
@@ -56204,12 +56470,30 @@ ${end}`);
         this.updateLocks.set(group, ourLock);
         try {
           if (existingLock) {
+            logger.info(
+              `[github-frontend] Comment update for group "${group}" queued, waiting for previous update to finish...`
+            );
+            const queuedAt = Date.now();
+            const reminder = setInterval(() => {
+              const waited = Math.round((Date.now() - queuedAt) / 1e3);
+              logger.info(
+                `[github-frontend] Comment update for group "${group}" still queued (${waited}s).`
+              );
+            }, 1e4);
             try {
               await existingLock;
             } catch (error) {
               logger.warn(
                 `[github-frontend] Previous update for group ${group} failed: ${error instanceof Error ? error.message : error}`
               );
+            } finally {
+              clearInterval(reminder);
+              const waitedMs = Date.now() - queuedAt;
+              if (waitedMs > 100) {
+                logger.info(
+                  `[github-frontend] Comment update for group "${group}" dequeued after ${Math.round(waitedMs / 1e3)}s.`
+                );
+              }
             }
           }
           await this.performGroupedCommentUpdate(ctx, comments, group, changedIds);
