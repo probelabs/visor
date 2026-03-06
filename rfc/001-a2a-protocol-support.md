@@ -306,9 +306,27 @@ layer from scheduler) that stores A2A-compatible task records.
 
 #### Database Location
 
-Reuse the existing scheduler database file. The scheduler already uses
-`better-sqlite3` with WAL mode. The `agent_tasks` table lives in the same DB, opened
-via the same connection factory in `scheduler/store/sqlite-store.ts`.
+> **Implementation note:** The current `SqliteTaskStore` implementation uses a
+> **standalone database file** (default: `.visor/agent-tasks.db`) rather than
+> reusing the scheduler's database file. The constructor accepts an optional
+> `filename` parameter:
+>
+> ```typescript
+> export class SqliteTaskStore implements TaskStore {
+>   constructor(filename?: string) {
+>     this.dbPath = filename || '.visor/agent-tasks.db';
+>   }
+> }
+> ```
+>
+> When no filename is provided (e.g., `new SqliteTaskStore()` in the A2A frontend
+> constructor), the store creates its own database file. This was chosen for
+> isolation during initial development. The task store is effectively **in-memory
+> for tests** (where the frontend is instantiated without a persistent path) and
+> **file-backed in production** (where the default path is used).
+>
+> The original plan to share the scheduler's database connection may be revisited
+> in a future iteration.
 
 For enterprise (Knex), the table is added via a migration in
 `enterprise/agent-protocol/knex-task-store.ts` following the same pattern as
@@ -462,9 +480,11 @@ interface AgentSendMessageRequest {
 }
 
 // Protocol-agnostic response: Task OR Message
+// Discriminators (task?: undefined, message?: undefined) enable TypeScript narrowing:
+//   if (resp.task) { /* AgentTask branch */ } else { /* AgentMessage branch */ }
 type AgentSendMessageResponse =
-  | { task: AgentTask }
-  | { message: AgentMessage };
+  | { task: AgentTask; message?: undefined }
+  | { message: AgentMessage; task?: undefined };
 ```
 
 #### TaskStore Interface
@@ -620,15 +640,71 @@ agent_protocol:
   host: "0.0.0.0"
 ```
 
-At startup, the frontend reads the Agent Card file and **patches**
-`supported_interfaces[].url` with the configured `public_url` + path. This avoids
-hardcoding URLs in the JSON file:
+Alternatively, the Agent Card can be defined **inline** in the YAML config using
+`agent_card_inline` instead of pointing to a separate JSON file:
 
-```typescript
-agentCard.supported_interfaces[0].url = `${config.publicUrl}/a2a`;
+```yaml
+agent_protocol:
+  enabled: true
+  protocol: a2a
+  agent_card_inline:
+    name: "ProbeLabs Assistant"
+    description: "AI assistant for code exploration and engineering."
+    version: "1.0.0"
+    provider:
+      organization: "ProbeLabs"
+      url: "https://probelabs.com"
+    supported_interfaces:
+      - url: "__PATCHED_AT_STARTUP__"
+        protocol_binding: "a2a/v1"
+    capabilities:
+      streaming: false
+      push_notifications: false
+    default_input_modes: ["text/plain", "application/json"]
+    default_output_modes: ["text/plain", "text/markdown", "application/json"]
+    skills: []
+  port: 9000
+  host: "0.0.0.0"
 ```
 
-If `public_url` is not set, defaults to `http://{host}:{port}`.
+> **Implementation note:** If both `agent_card` (file path) and `agent_card_inline`
+> are provided, the file path takes precedence. The `agent_card_inline` option is
+> defined as an optional `AgentCard` object on `AgentProtocolConfig`:
+>
+> ```typescript
+> export interface AgentProtocolConfig {
+>   // ...
+>   agent_card?: string;              // path to Agent Card JSON file
+>   agent_card_inline?: AgentCard;    // inline agent card (alternative to file)
+>   // ...
+> }
+> ```
+
+At startup, the frontend reads the Agent Card (from file or inline config) and
+**patches** `supported_interfaces[].url` with the resolved public URL. This avoids
+hardcoding URLs in the JSON file or inline config.
+
+> **Implementation deviation:** URL patching is **deferred to after `server.listen()`
+> resolves**, not done at the start of `start()`. This is necessary to support
+> `port: 0` (OS-assigned port), because the actual bound port is only known after
+> the listen callback fires. The sequence is:
+>
+> 1. Load agent card (from file or inline)
+> 2. Create HTTP server
+> 3. Call `server.listen(port, host, callback)`
+> 4. In the callback, read `server.address().port` into `_boundPort`
+> 5. **Now** patch `supported_interfaces[].url` with `public_url ?? http://{host}:{_boundPort}`
+>
+> ```typescript
+> // In start(), after listen resolves:
+> const addr = this.server!.address();
+> this._boundPort = typeof addr === 'object' && addr ? addr.port : port;
+>
+> const publicUrl = this.config.public_url ?? `http://${host}:${this._boundPort}`;
+> this.agentCard.supported_interfaces[0].url = publicUrl;
+> ```
+
+If `public_url` is not set, defaults to `http://{host}:{boundPort}`.
 
 Example `agent-card.json`:
 
@@ -709,9 +785,10 @@ Note: `capabilities.streaming` and `capabilities.push_notifications` start as
 agent_protocol:
   enabled: true
   protocol: a2a                        # Protocol binding (currently only "a2a")
-  agent_card: "agent-card.json"        # Path to Agent Card file (required for A2A)
+  agent_card: "agent-card.json"        # Path to Agent Card file (one of agent_card or agent_card_inline)
+  # agent_card_inline: { ... }         # Inline Agent Card object (alternative to file)
   public_url: "https://assistant.probelabs.com"  # Public-facing URL for Agent Card
-  port: 9000                           # Agent protocol server port
+  port: 9000                           # Agent protocol server port (use 0 for OS-assigned)
   host: "0.0.0.0"                      # Bind address
   tls:                                 # Optional TLS
     cert: /path/to/cert.pem
@@ -864,6 +941,34 @@ async function handleSendMessage(
   }
 }
 ```
+
+#### Stub Execution Fallback (No Engine)
+
+When no engine is available (e.g., during tests or when the frontend is started
+without an engine wired in), `executeTaskDirectly()` returns a stub response
+instead of throwing. This makes it possible to test the full A2A HTTP surface
+without running the state machine engine:
+
+```typescript
+if (this._engine) {
+  // Execute via engine (normal path)
+  await this.executeViaEngine(task, message);
+} else {
+  // Stub execution (no engine available — e.g., in tests)
+  const agentResponse: AgentMessage = {
+    message_id: crypto.randomUUID(),
+    role: 'agent',
+    parts: [{ text: `Task ${task.id} received and processed.`, media_type: 'text/markdown' }],
+  };
+  this.taskStore.appendHistory(task.id, agentResponse);
+  this.taskStore.updateTaskState(task.id, 'completed', agentResponse);
+}
+```
+
+The stub transitions the task through `SUBMITTED -> WORKING -> COMPLETED` with a
+simple "received and processed" message. This is intentional: it lets integration
+tests verify HTTP routing, auth, task lifecycle, and response format without
+needing a full workflow configuration.
 
 #### Follow-Up Messages (Multi-Turn)
 
@@ -1130,47 +1235,124 @@ const span = tracer.startSpan('agent.task', {
 The span is passed to the engine as part of the execution context, so check spans
 become children of the A2A task span.
 
+#### ActiveFrontend Pattern
+
+The A2A frontend implements the `ActiveFrontend` interface, which extends the base
+`Frontend` with engine/config injection methods. This is necessary because the A2A
+frontend needs to execute workflows, unlike passive frontends that only relay events.
+
+```typescript
+// In src/frontends/host.ts
+
+/** Frontends that can trigger their own engine executions (e.g., A2A). */
+export interface ActiveFrontend extends Frontend {
+  setEngine(engine: any): void;
+  setVisorConfig(config: any): void;
+}
+
+/** Type guard for ActiveFrontend (duck-typed). */
+export function isActiveFrontend(f: Frontend): f is ActiveFrontend {
+  return (
+    typeof (f as any).setEngine === 'function' &&
+    typeof (f as any).setVisorConfig === 'function'
+  );
+}
+```
+
+`FrontendsHost.startAll()` auto-wires active frontends during startup:
+
+```typescript
+async startAll(ctxFactory: () => FrontendContext): Promise<void> {
+  for (const f of this.frontends) {
+    const ctx = ctxFactory();
+    // Auto-inject engine/config into active frontends
+    if (isActiveFrontend(f)) {
+      if (ctx.engine) f.setEngine(ctx.engine);
+      if (ctx.visorConfig) f.setVisorConfig(ctx.visorConfig);
+    }
+    await f.start(ctx);
+  }
+}
+```
+
+This pattern means the A2A frontend does not need to receive the engine through
+the `FrontendContext` constructor or start parameters. Instead, the host detects
+it as an active frontend and injects the engine and config automatically before
+calling `start()`.
+
 #### Frontend Implementation
 
 New file: `src/agent-protocol/a2a-frontend.ts`
 
 ```typescript
-class A2AFrontend implements Frontend {
-  name = 'a2a';
+class A2AFrontend implements ActiveFrontend {
+  readonly name = 'a2a';
 
-  private server: http.Server | https.Server;
+  private server: http.Server | https.Server | null = null;
   private taskStore: TaskStore;
   private agentCard: AgentCard;
   private config: AgentProtocolConfig;
+  private _engine: any = null;
+  private _visorConfig: VisorConfig | null = null;
+  private _boundPort = 0;
+
+  constructor(config: AgentProtocolConfig, taskStore?: TaskStore) {
+    this.config = config;
+    this.taskStore = taskStore ?? new SqliteTaskStore();
+  }
+
+  /** The actual port the server is listening on (useful when config.port is 0). */
+  get boundPort(): number {
+    return this._boundPort;
+  }
+
+  /** Set the execution engine for running workflows. */
+  setEngine(engine: any): void {
+    this._engine = engine;
+  }
+
+  /** Set the full Visor config (needed for check definitions). */
+  setVisorConfig(config: VisorConfig): void {
+    this._visorConfig = config;
+  }
 
   async start(ctx: FrontendContext): Promise<void> {
-    // 1. Load and validate agent card from file
-    this.agentCard = loadAgentCard(this.config.agentCardPath);
-    this.agentCard.supported_interfaces[0].url = `${this.config.publicUrl}`;
+    // 1. Load agent card from file or inline config
+    if (this.config.agent_card) {
+      const raw = fs.readFileSync(this.config.agent_card, 'utf-8');
+      this.agentCard = JSON.parse(raw) as AgentCard;
+    } else if (this.config.agent_card_inline) {
+      this.agentCard = { ...this.config.agent_card_inline };
+    }
 
-    // 2. Initialize TaskStore (reuse DB from scheduler)
-    this.taskStore = new SqliteTaskStore(ctx.dbPath);
+    // NOTE: URL patching deferred until after server.listen() so _boundPort is known
+
+    // 2. Initialize TaskStore
+    this.taskStore = this.taskStore ?? new SqliteTaskStore();
 
     // 3. Create HTTP server with TLS if configured
     this.server = createServer(this.config, this.handleRequest.bind(this));
 
-    // 4. Subscribe to EventBus for engine -> task state mapping
-    ctx.eventBus.on('CheckCompleted', this.onCheckCompleted.bind(this));
-    ctx.eventBus.on('CheckErrored', this.onCheckErrored.bind(this));
-    ctx.eventBus.on('HumanInputRequested', this.onHumanInputRequested.bind(this));
-    ctx.eventBus.on('StateTransition', this.onStateTransition.bind(this));
-    ctx.eventBus.on('Shutdown', this.onShutdown.bind(this));
+    // 4. Listen
+    const port = this.config.port ?? 9000;
+    const host = this.config.host ?? '0.0.0.0';
+    await new Promise<void>(resolve => {
+      this.server!.listen(port, host, () => {
+        const addr = this.server!.address();
+        this._boundPort = typeof addr === 'object' && addr ? addr.port : port;
+        logger.info(`A2A server listening on ${host}:${this._boundPort}`);
+        resolve();
+      });
+    });
 
-    // 5. Start cleanup sweep timer
-    this.startCleanupSweep();
-
-    // 6. Listen
-    await listen(this.server, this.config.port, this.config.host);
-    logger.info(`A2A server listening on ${this.config.host}:${this.config.port}`);
+    // 5. Patch agent card URL now that bound port is known
+    if (this.agentCard) {
+      const publicUrl = this.config.public_url ?? `http://${host}:${this._boundPort}`;
+      this.agentCard.supported_interfaces[0].url = publicUrl;
+    }
   }
 
   async stop(): Promise<void> {
-    this.stopCleanupSweep();
     await closeServer(this.server);
   }
 
@@ -2420,6 +2602,24 @@ management (refresh, rotation) and per-service scoping.
 adopt principles (stateful tasks, agent cards, async-first) through the
 protocol-agnostic foundation, implement A2A first, and extend to other protocols
 and layers as standards mature.
+
+---
+
+## IMPLEMENTATION DEVIATIONS SUMMARY
+
+This section summarizes the key differences between the original RFC design and
+what was actually implemented. Each deviation is also documented inline in the
+relevant section above.
+
+| # | Area | RFC Design | Actual Implementation |
+|---|------|-----------|----------------------|
+| 1 | **Agent Card source** | File on disk only (`agent_card: "file.json"`) | Also supports `agent_card_inline` — an `AgentCard` object defined directly in YAML config. File takes precedence if both are set. |
+| 2 | **Frontend interface** | `A2AFrontend implements Frontend` | `A2AFrontend implements ActiveFrontend`. `ActiveFrontend` extends `Frontend` with `setEngine()` and `setVisorConfig()`. `isActiveFrontend()` type guard enables `FrontendsHost.startAll()` to auto-wire engine/config. |
+| 3 | **Agent Card URL patching** | Patched at the top of `start()`, before listen | Deferred to **after** `server.listen()` resolves, because the actual port is only known after the OS assigns it (needed for `port: 0` support). |
+| 4 | **`AgentSendMessageResponse`** | Plain union: `{ task } \| { message }` | Discriminated union with `task?: undefined` / `message?: undefined` fields, enabling clean TypeScript narrowing via `if (resp.task)`. |
+| 5 | **Engine unavailable** | Not addressed (assumed engine always present) | Stub execution fallback: when no engine is set, returns a "received and processed" response and transitions the task to `COMPLETED`. Useful for testing the HTTP surface without a full engine. |
+| 6 | **Port discovery** | Assumed fixed port from config | `get boundPort()` accessor on `A2AFrontend` returns the actual OS-assigned port. Internal `_boundPort` is set from `server.address()` after listen. |
+| 7 | **TaskStore database** | Reuse scheduler's `better-sqlite3` database file | Standalone database file at `.visor/agent-tasks.db` (configurable via constructor `filename` parameter). Does not share the scheduler DB connection. |
 
 ---
 

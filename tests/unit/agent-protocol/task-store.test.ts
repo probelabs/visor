@@ -443,8 +443,8 @@ describe('SqliteTaskStore', () => {
       // Create task with no expiry
       store.createTask({ contextId: 'ctx', requestMessage: msg });
 
-      const deleted = store.deleteExpiredTasks();
-      expect(deleted).toBe(1);
+      const deletedIds = store.deleteExpiredTasks();
+      expect(deletedIds).toHaveLength(1);
 
       const remaining = store.listTasks({});
       expect(remaining.total).toBe(2);

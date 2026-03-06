@@ -21,10 +21,12 @@
 
 import { CheckProvider, CheckProviderConfig, ExecutionContext } from './check-provider.interface';
 import type { PRInfo } from '../pr-analyzer';
-import type { ReviewSummary } from '../reviewer';
+import type { ReviewSummary, ReviewIssue } from '../reviewer';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { buildProviderTemplateContext } from '../utils/template-context';
 import { logger } from '../logger';
+import Sandbox from '@nyariv/sandboxjs';
+import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import type {
   AgentCard,
   AgentMessage,
@@ -108,6 +110,11 @@ const cardCache = new AgentCardCache();
 
 export class A2ACheckProvider extends CheckProvider {
   private liquid = createExtendedLiquid({ strictVariables: false });
+  private sandbox?: Sandbox;
+
+  private createSecureSandbox(): Sandbox {
+    return createSecureSandbox();
+  }
 
   getName(): string {
     return 'a2a';
@@ -210,74 +217,128 @@ export class A2ACheckProvider extends CheckProvider {
       );
 
       // 5. Direct message response
+      let result: ReviewSummary;
+
       if (response.message) {
-        return this.messageToReviewSummary(response.message);
-      }
+        result = this.messageToReviewSummary(response.message);
+      } else {
+        let task = response.task!;
 
-      let task = response.task!;
+        // 6. Poll loop
+        const deadline = Date.now() + timeout;
+        let turns = 0;
+        let gotMessageResult = false;
 
-      // 6. Poll loop
-      const deadline = Date.now() + timeout;
-      let turns = 0;
+        while (!isTerminalState(task.status.state)) {
+          if (Date.now() > deadline) throw new A2ATimeoutError(task.id, timeout);
 
-      while (!isTerminalState(task.status.state)) {
-        if (Date.now() > deadline) throw new A2ATimeoutError(task.id, timeout);
+          if (task.status.state === 'input_required') {
+            turns++;
+            if (turns > maxTurns) throw new A2AMaxTurnsExceededError(task.id, maxTurns);
 
-        if (task.status.state === 'input_required') {
-          turns++;
-          if (turns > maxTurns) throw new A2AMaxTurnsExceededError(task.id, maxTurns);
-
-          if (cfg.on_input_required) {
-            const ctx = { ...templateCtx, task };
-            const replyText = await this.liquid.parseAndRender(cfg.on_input_required, ctx);
-            const followUp: AgentSendMessageRequest = {
-              message: {
-                message_id: `visor-reply-${Date.now()}`,
-                role: 'user',
-                task_id: task.id,
-                context_id: task.context_id,
-                parts: [{ text: replyText }],
-              },
-              configuration: { blocking },
-            };
-            response = await this.sendMessage(sendUrl, followUp, headers);
-            if (response.task) {
-              task = response.task;
-              continue;
+            if (cfg.on_input_required) {
+              const ctx = { ...templateCtx, task };
+              const replyText = await this.liquid.parseAndRender(cfg.on_input_required, ctx);
+              const followUp: AgentSendMessageRequest = {
+                message: {
+                  message_id: `visor-reply-${Date.now()}`,
+                  role: 'user',
+                  task_id: task.id,
+                  context_id: task.context_id,
+                  parts: [{ text: replyText }],
+                },
+                configuration: { blocking },
+              };
+              response = await this.sendMessage(sendUrl, followUp, headers);
+              if (response.task) {
+                task = response.task;
+                continue;
+              }
+              if (response.message) {
+                result = this.messageToReviewSummary(response.message);
+                gotMessageResult = true;
+                break;
+              }
+            } else {
+              const prompt =
+                task.status.message?.parts
+                  ?.map(p => p.text)
+                  .filter(Boolean)
+                  .join(' ') ?? 'Agent requires input';
+              throw new A2AInputRequiredError(task.id, prompt);
             }
-            if (response.message) {
-              return this.messageToReviewSummary(response.message);
-            }
-          } else {
-            const prompt =
+          }
+
+          if (task.status.state === 'auth_required') throw new A2AAuthRequiredError(task.id);
+
+          await new Promise(r => setTimeout(r, pollInterval));
+          task = await this.getTask(agentUrl, task.id, headers);
+        }
+
+        if (!gotMessageResult) {
+          // 7. Terminal state
+          if (task.status.state === 'failed') {
+            const detail =
               task.status.message?.parts
                 ?.map(p => p.text)
                 .filter(Boolean)
-                .join(' ') ?? 'Agent requires input';
-            throw new A2AInputRequiredError(task.id, prompt);
+                .join(' ') ?? 'Unknown failure';
+            throw new A2ATaskFailedError(task.id, detail);
           }
+          if (task.status.state === 'canceled' || task.status.state === 'rejected') {
+            throw new A2ATaskRejectedError(task.id, task.status.state);
+          }
+
+          result = this.taskToReviewSummary(task);
         }
-
-        if (task.status.state === 'auth_required') throw new A2AAuthRequiredError(task.id);
-
-        await new Promise(r => setTimeout(r, pollInterval));
-        task = await this.getTask(agentUrl, task.id, headers);
       }
 
-      // 7. Terminal state
-      if (task.status.state === 'failed') {
-        const detail =
-          task.status.message?.parts
-            ?.map(p => p.text)
-            .filter(Boolean)
-            .join(' ') ?? 'Unknown failure';
-        throw new A2ATaskFailedError(task.id, detail);
-      }
-      if (task.status.state === 'canceled' || task.status.state === 'rejected') {
-        throw new A2ATaskRejectedError(task.id, task.status.state);
+      // 8. Apply transform_js if configured
+      if (cfg.transform_js) {
+        try {
+          this.sandbox = this.createSecureSandbox();
+
+          const scope: Record<string, unknown> = {
+            output: result!,
+            pr: templateCtx.pr,
+            files: templateCtx.files,
+            outputs: templateCtx.outputs,
+            env: process.env,
+          };
+
+          const transformed = compileAndRun<unknown>(
+            this.sandbox,
+            `return (${cfg.transform_js});`,
+            scope,
+            { injectLog: true, wrapFunction: false, logPrefix: '[a2a:transform_js]' }
+          );
+
+          // If the transform returns a ReviewSummary-shaped object, use it directly
+          if (transformed && typeof transformed === 'object' && 'issues' in (transformed as object)) {
+            result = transformed as ReviewSummary;
+          } else {
+            // Otherwise wrap the transform result as output on the ReviewSummary
+            result = { ...result!, output: transformed } as unknown as ReviewSummary;
+          }
+          logger.verbose('[a2a] Applied transform_js successfully');
+        } catch (error) {
+          logger.error(`[a2a] Failed to apply transform_js: ${error}`);
+          return {
+            issues: [
+              {
+                file: 'a2a',
+                line: 0,
+                ruleId: 'a2a/transform_js_error',
+                message: `Failed to apply JavaScript transform: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                severity: 'error',
+                category: 'logic',
+              },
+            ],
+          };
+        }
       }
 
-      return this.taskToReviewSummary(task);
+      return result!;
     } catch (err) {
       if (
         err instanceof A2ATimeoutError ||
@@ -391,20 +452,103 @@ export class A2ACheckProvider extends CheckProvider {
 
   private taskToReviewSummary(task: AgentTask): ReviewSummary {
     const textParts: string[] = [];
+    const issues: ReviewIssue[] = [];
+
+    // Collect from artifacts
     for (const a of task.artifacts ?? []) {
       for (const p of a.parts ?? []) {
         if (p.text) textParts.push(p.text);
+        if (p.data != null) {
+          this.extractIssuesFromData(p.data, issues);
+        }
       }
     }
+
+    // Collect from status message
     if (task.status.message) {
       for (const p of task.status.message.parts ?? []) {
         if (p.text) textParts.push(p.text);
+        if (p.data != null) {
+          this.extractIssuesFromData(p.data, issues);
+        }
       }
     }
-    return { issues: [] } as ReviewSummary;
+
+    const summary = textParts.join('\n');
+    return { issues, output: summary || undefined } as ReviewSummary & { output?: unknown };
   }
 
-  private messageToReviewSummary(_message: AgentMessage): ReviewSummary {
-    return { issues: [] } as ReviewSummary;
+  private messageToReviewSummary(message: AgentMessage): ReviewSummary {
+    const textParts: string[] = [];
+    const issues: ReviewIssue[] = [];
+
+    for (const p of message.parts ?? []) {
+      if (p.text) textParts.push(p.text);
+      if (p.data != null) {
+        this.extractIssuesFromData(p.data, issues);
+      }
+    }
+
+    const summary = textParts.join('\n');
+    return { issues, output: summary || undefined } as ReviewSummary & { output?: unknown };
+  }
+
+  /**
+   * Extract structured ReviewIssue objects from a data part.
+   * Accepts a single issue object or an array of issue objects.
+   * Each object should have at least a `message` field to be recognized as an issue.
+   */
+  private extractIssuesFromData(data: unknown, issues: ReviewIssue[]): void {
+    const items = Array.isArray(data) ? data : [data];
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      const obj = item as Record<string, unknown>;
+      // Must have at least a message to be considered a structured issue
+      if (typeof obj.message !== 'string') continue;
+
+      const severity = this.normalizeSeverity(obj.severity);
+      const category = this.normalizeCategory(obj.category);
+
+      issues.push({
+        file: typeof obj.file === 'string' ? obj.file : 'a2a',
+        line: typeof obj.line === 'number' ? obj.line : 0,
+        ruleId: typeof obj.ruleId === 'string' ? obj.ruleId : 'a2a/agent-issue',
+        message: obj.message,
+        severity,
+        category,
+        ...(typeof obj.suggestion === 'string' ? { suggestion: obj.suggestion } : {}),
+        ...(typeof obj.replacement === 'string' ? { replacement: obj.replacement } : {}),
+        ...(typeof obj.endLine === 'number' ? { endLine: obj.endLine } : {}),
+      });
+    }
+  }
+
+  private normalizeSeverity(val: unknown): ReviewIssue['severity'] {
+    if (typeof val === 'string') {
+      const lower = val.toLowerCase();
+      if (lower === 'info' || lower === 'warning' || lower === 'error' || lower === 'critical') {
+        return lower;
+      }
+      // Common aliases
+      if (lower === 'warn') return 'warning';
+      if (lower === 'fatal') return 'critical';
+    }
+    return 'warning';
+  }
+
+  private normalizeCategory(val: unknown): ReviewIssue['category'] {
+    if (typeof val === 'string') {
+      const lower = val.toLowerCase();
+      if (
+        lower === 'security' ||
+        lower === 'performance' ||
+        lower === 'style' ||
+        lower === 'logic' ||
+        lower === 'documentation'
+      ) {
+        return lower;
+      }
+    }
+    return 'logic';
   }
 }

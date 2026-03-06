@@ -350,19 +350,15 @@ describe('A2AFrontend', () => {
   // -----------------------------------------------------------------------
 
   describe('streaming routes', () => {
-    it('should reject streaming with empty parts', async () => {
-      const req = {
-        message: {
-          message_id: crypto.randomUUID(),
-          role: 'user',
-          parts: [],
-        },
-      };
+    it('should reject streaming when capability is not enabled', async () => {
+      const req = makeSendRequest();
       const res = await httpRequest(port, 'POST', '/message:stream', req, authHeaders);
       expect(res.status).toBe(400);
+      expect((res.body as any).error.code).toBe(-32002);
+      expect((res.body as any).error.message).toBe('Streaming not supported');
     });
 
-    it('should return 404 for subscribe to unknown task', async () => {
+    it('should reject subscribe when capability is not enabled', async () => {
       const res = await httpRequest(
         port,
         'GET',
@@ -370,12 +366,14 @@ describe('A2AFrontend', () => {
         undefined,
         authHeaders
       );
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(400);
+      expect((res.body as any).error.code).toBe(-32002);
+      expect((res.body as any).error.message).toBe('Streaming not supported');
     });
   });
 
   describe('push notification routes', () => {
-    it('should return 404 for push config on unknown task', async () => {
+    it('should reject push config when capability is not enabled', async () => {
       const res = await httpRequest(
         port,
         'POST',
@@ -383,7 +381,48 @@ describe('A2AFrontend', () => {
         { url: 'http://example.com/hook' },
         authHeaders
       );
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(400);
+      expect((res.body as any).error.code).toBe(-32002);
+      expect((res.body as any).error.message).toBe('Push notifications not supported');
+    });
+
+    it('should reject push config GET when capability is not enabled', async () => {
+      const res = await httpRequest(
+        port,
+        'GET',
+        '/tasks/nonexistent/pushNotificationConfigs',
+        undefined,
+        authHeaders
+      );
+      expect(res.status).toBe(400);
+      expect((res.body as any).error.code).toBe(-32002);
+      expect((res.body as any).error.message).toBe('Push notifications not supported');
+    });
+
+    it('should reject push config detail GET when capability is not enabled', async () => {
+      const res = await httpRequest(
+        port,
+        'GET',
+        '/tasks/nonexistent/pushNotificationConfigs/some-config-id',
+        undefined,
+        authHeaders
+      );
+      expect(res.status).toBe(400);
+      expect((res.body as any).error.code).toBe(-32002);
+      expect((res.body as any).error.message).toBe('Push notifications not supported');
+    });
+
+    it('should reject push config DELETE when capability is not enabled', async () => {
+      const res = await httpRequest(
+        port,
+        'DELETE',
+        '/tasks/nonexistent/pushNotificationConfigs/some-config-id',
+        undefined,
+        authHeaders
+      );
+      expect(res.status).toBe(400);
+      expect((res.body as any).error.code).toBe(-32002);
+      expect((res.body as any).error.message).toBe('Push notifications not supported');
     });
   });
 
@@ -497,6 +536,90 @@ describe('A2AFrontend', () => {
       expect(
         body.task.history.some(m => m.parts?.[0]?.text?.includes('received and processed'))
       ).toBe(true);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Capability enforcement with capabilities enabled
+  // -----------------------------------------------------------------------
+
+  describe('capability enforcement (enabled)', () => {
+    let capFrontend: A2AFrontend;
+    let capDbPath: string;
+    let capPort: number;
+
+    beforeEach(async () => {
+      const tmpDir = path.join(__dirname, '../../fixtures/tmp-a2a-frontend');
+      fs.mkdirSync(tmpDir, { recursive: true });
+      capDbPath = path.join(tmpDir, `test-cap-${crypto.randomUUID()}.db`);
+
+      const config = makeConfig({
+        agent_card_inline: {
+          name: 'Cap Agent',
+          description: 'Agent with capabilities',
+          capabilities: { streaming: true, push_notifications: true },
+          skills: [],
+        } as any,
+      });
+
+      capFrontend = new A2AFrontend(config, new SqliteTaskStore(capDbPath));
+      await capFrontend.start(makeFrontendContext());
+      capPort = capFrontend.boundPort;
+    });
+
+    afterEach(async () => {
+      await capFrontend.stop();
+      try {
+        fs.unlinkSync(capDbPath);
+        fs.unlinkSync(capDbPath + '-wal');
+        fs.unlinkSync(capDbPath + '-shm');
+      } catch {
+        // ignore
+      }
+    });
+
+    it('should allow streaming when capability is enabled', async () => {
+      const req = makeSendRequest();
+      // Streaming returns SSE so we just verify it does not return 400/-32002
+      const res = await httpRequest(capPort, 'POST', '/message:stream', req, authHeaders);
+      // Should NOT be a capability error
+      expect((res.body as any)?.error?.code).not.toBe(-32002);
+    });
+
+    it('should return 404 for subscribe to unknown task when streaming is enabled', async () => {
+      const res = await httpRequest(
+        capPort,
+        'GET',
+        '/tasks/nonexistent:subscribe',
+        undefined,
+        authHeaders
+      );
+      expect(res.status).toBe(404);
+      expect((res.body as any).error.code).toBe(-32001);
+    });
+
+    it('should return 404 for push config on unknown task when push is enabled', async () => {
+      const res = await httpRequest(
+        capPort,
+        'POST',
+        '/tasks/nonexistent/pushNotificationConfigs',
+        { url: 'http://example.com/hook' },
+        authHeaders
+      );
+      expect(res.status).toBe(404);
+      expect((res.body as any).error.code).toBe(-32001);
+    });
+
+    it('should return 404 for push config detail on unknown task when push is enabled', async () => {
+      const res = await httpRequest(
+        capPort,
+        'GET',
+        '/tasks/nonexistent/pushNotificationConfigs/some-id',
+        undefined,
+        authHeaders
+      );
+      expect(res.status).toBe(404);
+      expect((res.body as any).error.code).toBe(-32001);
     });
   });
 });

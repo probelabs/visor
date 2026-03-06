@@ -419,6 +419,9 @@ export class A2AFrontend implements ActiveFrontend {
       }
       // SendStreamingMessage
       if (url.pathname === '/message:stream' && req.method === 'POST') {
+        if (!this.agentCard?.capabilities?.streaming) {
+          return sendError(res, 400, 'Streaming not supported', -32002);
+        }
         return await this.handleSendStreamingMessage(req, res);
       }
 
@@ -442,12 +445,18 @@ export class A2AFrontend implements ActiveFrontend {
       // SubscribeToTask
       const subscribeMatch = url.pathname.match(/^\/tasks\/([^/:]+):subscribe$/);
       if (subscribeMatch && req.method === 'GET') {
+        if (!this.agentCard?.capabilities?.streaming) {
+          return sendError(res, 400, 'Streaming not supported', -32002);
+        }
         return this.handleSubscribeToTask(subscribeMatch[1], res);
       }
 
       // Push notification config routes
       const pushListMatch = url.pathname.match(/^\/tasks\/([^/:]+)\/pushNotificationConfigs$/);
       if (pushListMatch) {
+        if (!this.agentCard?.capabilities?.push_notifications) {
+          return sendError(res, 400, 'Push notifications not supported', -32002);
+        }
         if (req.method === 'POST') {
           return await this.handleCreatePushConfig(pushListMatch[1], req, res);
         }
@@ -460,6 +469,9 @@ export class A2AFrontend implements ActiveFrontend {
         /^\/tasks\/([^/:]+)\/pushNotificationConfigs\/([^/:]+)$/
       );
       if (pushDetailMatch) {
+        if (!this.agentCard?.capabilities?.push_notifications) {
+          return sendError(res, 400, 'Push notifications not supported', -32002);
+        }
         if (req.method === 'GET') {
           return this.handleGetPushConfig(pushDetailMatch[1], pushDetailMatch[2], res);
         }
@@ -1023,9 +1035,13 @@ export class A2AFrontend implements ActiveFrontend {
     // Run every hour
     this.cleanupTimer = setInterval(() => {
       try {
-        const deleted = this.taskStore.deleteExpiredTasks();
-        if (deleted > 0) {
-          logger.info(`[A2A] Cleaned up ${deleted} expired tasks`);
+        const deletedTaskIds = this.taskStore.deleteExpiredTasks();
+        if (deletedTaskIds.length > 0) {
+          // Cascade-delete push notification configs for removed tasks
+          for (const taskId of deletedTaskIds) {
+            this.pushManager.deleteForTask(taskId);
+          }
+          logger.info(`[A2A] Cleaned up ${deletedTaskIds.length} expired tasks`);
         }
       } catch (err) {
         logger.error(

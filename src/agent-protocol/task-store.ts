@@ -133,11 +133,11 @@ export interface TaskStore {
   setRunId(taskId: string, runId: string): void;
 
   // Queue operations (Milestone 4)
-  claimNextSubmitted(workerId: string): AgentTask | null;
+  claimNextSubmitted(workerId: string, staleTimeoutMs?: number): AgentTask | null;
   releaseClaim(taskId: string): void;
 
   // Cleanup
-  deleteExpiredTasks(): number;
+  deleteExpiredTasks(): string[];
   deleteTask(taskId: string): void;
 }
 
@@ -385,25 +385,30 @@ export class SqliteTaskStore implements TaskStore {
   // Queue operations
   // -------------------------------------------------------------------------
 
-  claimNextSubmitted(workerId: string): AgentTask | null {
+  claimNextSubmitted(workerId: string, staleTimeoutMs?: number): AgentTask | null {
     const db = this.getDb();
     const now = nowISO();
+    const staleTimeoutSec = Math.floor((staleTimeoutMs ?? 300_000) / 1000);
 
-    // Atomic claim: find oldest unclaimed SUBMITTED task
+    // Atomic claim: find oldest unclaimed SUBMITTED task,
+    // or reclaim a stale task whose claim has expired (crashed worker recovery)
     const row = db
       .prepare(
         `UPDATE agent_tasks
          SET state = 'working', claimed_by = ?, claimed_at = ?, updated_at = ?
          WHERE id = (
            SELECT id FROM agent_tasks
-           WHERE state = 'submitted'
-           AND claimed_by IS NULL
+           WHERE state IN ('submitted', 'working')
+           AND (
+             claimed_by IS NULL
+             OR claimed_at < datetime('now', '-' || ? || ' seconds')
+           )
            ORDER BY created_at ASC
            LIMIT 1
          )
          RETURNING *`
       )
-      .get(workerId, now, now) as TaskRow | undefined;
+      .get(workerId, now, now, staleTimeoutSec) as TaskRow | undefined;
 
     return row ? taskRowToAgentTask(row) : null;
   }
@@ -421,13 +426,20 @@ export class SqliteTaskStore implements TaskStore {
   // Cleanup
   // -------------------------------------------------------------------------
 
-  deleteExpiredTasks(): number {
+  deleteExpiredTasks(): string[] {
     const db = this.getDb();
     const now = nowISO();
-    const result = db
-      .prepare('DELETE FROM agent_tasks WHERE expires_at IS NOT NULL AND expires_at < ?')
-      .run(now);
-    return result.changes;
+
+    // Collect IDs first so callers can cascade-delete related data (e.g. push configs)
+    const rows = db
+      .prepare('SELECT id FROM agent_tasks WHERE expires_at IS NOT NULL AND expires_at < ?')
+      .all(now) as { id: string }[];
+
+    if (rows.length > 0) {
+      db.prepare('DELETE FROM agent_tasks WHERE expires_at IS NOT NULL AND expires_at < ?').run(now);
+    }
+
+    return rows.map(r => r.id);
   }
 
   deleteTask(taskId: string): void {

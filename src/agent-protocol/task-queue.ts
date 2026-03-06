@@ -104,7 +104,7 @@ export class TaskQueue {
 
     try {
       while (this.activeCount < this.config.maxConcurrent) {
-        const task = this.taskStore.claimNextSubmitted(this.workerId);
+        const task = this.taskStore.claimNextSubmitted(this.workerId, this.config.staleClaimTimeout);
         if (!task) break;
 
         this.activeCount++;
