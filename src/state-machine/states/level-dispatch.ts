@@ -481,7 +481,32 @@ async function executeCheckGroup(
 
     // Wait if pool is full
     if (pool.length >= maxParallelism) {
-      await Promise.race(pool);
+      const activeCount = pool.filter(p => !(p as any)._settled).length;
+      logger.info(
+        `[LevelDispatch] Check pool full (${activeCount}/${maxParallelism} active). ` +
+          `Check "${checkId}" queued, waiting for a slot...`
+      );
+      const queuedAt = Date.now();
+      // Periodic reminder while waiting
+      const reminder = setInterval(() => {
+        const waited = Math.round((Date.now() - queuedAt) / 1000);
+        const stillActive = pool.filter(p => !(p as any)._settled).length;
+        logger.info(
+          `[LevelDispatch] Check "${checkId}" still queued (${waited}s). ` +
+            `${stillActive}/${maxParallelism} slots busy.`
+        );
+      }, 15000);
+      try {
+        await Promise.race(pool);
+      } finally {
+        clearInterval(reminder);
+      }
+      const waitedMs = Date.now() - queuedAt;
+      if (waitedMs > 100) {
+        logger.info(
+          `[LevelDispatch] Check "${checkId}" dequeued after ${Math.round(waitedMs / 1000)}s wait.`
+        );
+      }
       // Remove completed promises
       pool.splice(
         0,

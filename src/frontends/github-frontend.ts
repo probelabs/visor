@@ -303,8 +303,18 @@ ${end}`);
     this.updateLocks.set(group, ourLock);
 
     try {
-      // Wait for the previous lock to complete (if any)
+      // Wait for the previous update to complete (if any)
       if (existingLock) {
+        logger.info(
+          `[github-frontend] Comment update for group "${group}" queued, waiting for previous update to finish...`
+        );
+        const queuedAt = Date.now();
+        const reminder = setInterval(() => {
+          const waited = Math.round((Date.now() - queuedAt) / 1000);
+          logger.info(
+            `[github-frontend] Comment update for group "${group}" still queued (${waited}s).`
+          );
+        }, 10000);
         try {
           await existingLock;
         } catch (error) {
@@ -312,6 +322,14 @@ ${end}`);
             `[github-frontend] Previous update for group ${group} failed: ${error instanceof Error ? error.message : error}`
           );
           // Continue with current update despite previous failure
+        } finally {
+          clearInterval(reminder);
+          const waitedMs = Date.now() - queuedAt;
+          if (waitedMs > 100) {
+            logger.info(
+              `[github-frontend] Comment update for group "${group}" dequeued after ${Math.round(waitedMs / 1000)}s.`
+            );
+          }
         }
       }
 

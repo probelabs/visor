@@ -17,7 +17,27 @@ async function acquirePromptLock(): Promise<void> {
     activePrompt = true;
     return;
   }
-  await new Promise<void>(resolve => waiters.push(resolve));
+  console.error(
+    `[human-input] Prompt queued, waiting for active prompt to finish (${waiters.length} already waiting).`
+  );
+  const queuedAt = Date.now();
+  const reminder = setInterval(() => {
+    const waited = Math.round((Date.now() - queuedAt) / 1000);
+    console.error(
+      `[human-input] Still waiting for prompt lock (${waited}s, ${waiters.length} in queue).`
+    );
+  }, 10000);
+  try {
+    await new Promise<void>(resolve => waiters.push(resolve));
+  } finally {
+    clearInterval(reminder);
+    const waitedMs = Date.now() - queuedAt;
+    if (waitedMs > 100) {
+      console.error(
+        `[human-input] Prompt lock acquired after ${Math.round(waitedMs / 1000)}s wait.`
+      );
+    }
+  }
   activePrompt = true;
 }
 
