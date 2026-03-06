@@ -376,4 +376,32 @@ describe('Sandbox Config Validation', () => {
     expect(result.sandboxes).toBeUndefined();
     expect(result.sandbox).toBeUndefined();
   });
+
+  it('should accept sandboxes defined in standalone workflow files', async () => {
+    // Standalone workflow files have `id` and `steps` instead of `checks`
+    const workflowData = {
+      id: 'test-workflow',
+      name: 'Test Workflow',
+      version: '1.0',
+      sandboxes: {
+        'bwrap-env': {
+          engine: 'bubblewrap',
+          network: true,
+        },
+      },
+      steps: {
+        'my-task': {
+          type: 'command',
+          exec: 'echo hello',
+          sandbox: 'bwrap-env',
+        },
+      },
+    };
+
+    // loadConfigFromObject detects `id` and calls convertWorkflowToConfig
+    const result = await configManager.loadConfigFromObject(workflowData as any);
+    expect(result.sandboxes).toBeDefined();
+    expect(result.sandboxes!['bwrap-env']).toBeDefined();
+    expect(result.checks['my-task'].sandbox).toBe('bwrap-env');
+  });
 });
