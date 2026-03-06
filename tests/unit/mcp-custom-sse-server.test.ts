@@ -4,7 +4,6 @@ import { CustomToolDefinition } from '../../src/types/config';
 import http from 'http';
 
 describe('CustomToolsSSEServer', () => {
-  let server: CustomToolsSSEServer;
   const testSessionId = 'test-session-123';
 
   const testTools = new Map<string, CustomToolDefinition>([
@@ -37,13 +36,15 @@ describe('CustomToolsSSEServer', () => {
     ],
   ]);
 
-  afterEach(async () => {
-    if (server) {
-      await server.stop();
-    }
-  });
-
   describe('Server Lifecycle', () => {
+    let server: CustomToolsSSEServer;
+
+    afterEach(async () => {
+      if (server) {
+        await server.stop();
+      }
+    });
+
     it('should start server and return valid port', async () => {
       server = new CustomToolsSSEServer(testTools, testSessionId, false);
       const port = await server.start();
@@ -101,55 +102,250 @@ describe('CustomToolsSSEServer', () => {
     });
   });
 
-  describe('MCP Protocol - Tools List', () => {
-    it('should return list of available tools', async () => {
-      server = new CustomToolsSSEServer(testTools, testSessionId, false);
-      const port = await server.start();
+  // Shared server for all read-only tests that use testTools
+  describe('with shared server', () => {
+    let sharedServer: CustomToolsSSEServer;
+    let sharedPort: number;
 
-      const response = await sendMCPRequest(port, {
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/list',
+    beforeAll(async () => {
+      sharedServer = new CustomToolsSSEServer(testTools, testSessionId, false);
+      sharedPort = await sharedServer.start();
+    });
+
+    afterAll(async () => {
+      if (sharedServer) {
+        await sharedServer.stop();
+      }
+    });
+
+    describe('MCP Protocol - Tools List', () => {
+      it('should return list of available tools', async () => {
+        const response = await sendMCPRequest(sharedPort, {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/list',
+        });
+
+        expect(response).toMatchObject({
+          jsonrpc: '2.0',
+          id: 1,
+          result: {
+            tools: expect.arrayContaining([
+              expect.objectContaining({
+                name: 'echo-tool',
+                description: 'Echo the input back',
+                inputSchema: expect.any(Object),
+              }),
+              expect.objectContaining({
+                name: 'list-files',
+                description: 'List files in current directory',
+              }),
+            ]),
+          },
+        });
       });
 
-      expect(response).toMatchObject({
-        jsonrpc: '2.0',
-        id: 1,
-        result: {
-          tools: expect.arrayContaining([
-            expect.objectContaining({
-              name: 'echo-tool',
-              description: 'Echo the input back',
-              inputSchema: expect.any(Object),
-            }),
-            expect.objectContaining({
-              name: 'list-files',
-              description: 'List files in current directory',
-            }),
-          ]),
-        },
+      it('should include input schema in tools list', async () => {
+        const response = await sendMCPRequest(sharedPort, {
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'tools/list',
+        });
+
+        const echoTool = response.result.tools.find((t: any) => t.name === 'echo-tool');
+
+        expect(echoTool.inputSchema).toMatchObject({
+          type: 'object',
+          properties: {
+            message: { type: 'string' },
+          },
+          required: ['message'],
+        });
       });
     });
 
-    it('should include input schema in tools list', async () => {
-      server = new CustomToolsSSEServer(testTools, testSessionId, false);
-      const port = await server.start();
+    describe('MCP Protocol - Tool Execution', () => {
+      it('should execute tool and return result', async () => {
+        const response = await sendMCPRequest(sharedPort, {
+          jsonrpc: '2.0',
+          id: 4,
+          method: 'tools/call',
+          params: {
+            name: 'echo-tool',
+            arguments: {
+              message: 'Hello, World!',
+            },
+          },
+        });
 
-      const response = await sendMCPRequest(port, {
-        jsonrpc: '2.0',
-        id: 2,
-        method: 'tools/list',
+        expect(response.jsonrpc).toBe('2.0');
+        expect(response.id).toBe(4);
+        expect(response.result).toBeDefined();
+        expect(response.result.content).toHaveLength(1);
+        expect(response.result.content[0].type).toBe('text');
+        expect(response.result.content[0].text).toContain('Hello, World!');
       });
 
-      const echoTool = response.result.tools.find((t: any) => t.name === 'echo-tool');
+      it('should return error for invalid tool name', async () => {
+        const response = await sendMCPRequest(sharedPort, {
+          jsonrpc: '2.0',
+          id: 5,
+          method: 'tools/call',
+          params: {
+            name: 'non-existent-tool',
+            arguments: {},
+          },
+        });
 
-      expect(echoTool.inputSchema).toMatchObject({
-        type: 'object',
-        properties: {
-          message: { type: 'string' },
-        },
-        required: ['message'],
+        expect(response.error).toBeDefined();
+        expect(response.error.code).toBe(-32603);
+        expect(response.error.message).toMatch(/^Internal error during tool execution: /);
       });
+
+      it('should validate tool input against schema', async () => {
+        // Missing required 'message' field
+        const response = await sendMCPRequest(sharedPort, {
+          jsonrpc: '2.0',
+          id: 6,
+          method: 'tools/call',
+          params: {
+            name: 'echo-tool',
+            arguments: {},
+          },
+        });
+
+        expect(response.error).toBeDefined();
+        expect(response.error.code).toBe(-32603);
+        expect(response.error.message).toMatch(
+          /^Internal error during tool execution: .*validation failed/
+        );
+      });
+    });
+
+    describe('MCP Protocol - Initialize', () => {
+      it('should handle initialize request', async () => {
+        const response = await sendMCPRequest(sharedPort, {
+          jsonrpc: '2.0',
+          id: 8,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: {
+              name: 'test-client',
+              version: '1.0.0',
+            },
+          },
+        });
+
+        expect(response.jsonrpc).toBe('2.0');
+        expect(response.id).toBe(8);
+        expect(response.result).toMatchObject({
+          protocolVersion: '2024-11-05',
+          capabilities: {
+            tools: {},
+          },
+          serverInfo: {
+            name: 'visor-custom-tools',
+            version: '1.0.0',
+          },
+        });
+      });
+    });
+
+    describe('Error Handling', () => {
+      it('should return error for invalid JSON-RPC format', async () => {
+        try {
+          await sendRawRequest(sharedPort, 'invalid json');
+          // If no error was thrown, check that we got some response
+          // (the implementation sends error via SSE)
+        } catch (error) {
+          // Expected to timeout or error since server may not respond to invalid JSON
+          expect(error).toBeDefined();
+        }
+      }, 3000);
+
+      it('should return error for unknown method', async () => {
+        const response = await sendMCPRequest(sharedPort, {
+          jsonrpc: '2.0',
+          id: 9,
+          method: 'unknown/method',
+        });
+
+        expect(response.error).toBeDefined();
+        expect(response.error.code).toBe(-32601);
+        expect(response.error.message).toBe('Method not found');
+      });
+
+      it('should handle 404 for non-SSE endpoints', async () => {
+        await expect(
+          new Promise((resolve, reject) => {
+            const req = http.request(
+              {
+                hostname: 'localhost',
+                port: sharedPort,
+                path: '/invalid',
+                method: 'POST',
+              },
+              res => {
+                expect(res.statusCode).toBe(404);
+                let data = '';
+                res.on('data', chunk => {
+                  data += chunk;
+                });
+                res.on('end', () => {
+                  const body = JSON.parse(data);
+                  expect(body.error).toBe('Not found');
+                  resolve(body);
+                });
+              }
+            );
+            req.on('error', reject);
+            req.end();
+          })
+        ).resolves.toBeDefined();
+      });
+    });
+
+    describe('Concurrent Connections', () => {
+      it('should handle multiple SSE connections', async () => {
+        // Create multiple concurrent connections
+        const requests = [
+          sendMCPRequest(sharedPort, {
+            jsonrpc: '2.0',
+            id: 10,
+            method: 'tools/list',
+          }),
+          sendMCPRequest(sharedPort, {
+            jsonrpc: '2.0',
+            id: 11,
+            method: 'tools/list',
+          }),
+          sendMCPRequest(sharedPort, {
+            jsonrpc: '2.0',
+            id: 12,
+            method: 'tools/list',
+          }),
+        ];
+
+        const responses = await Promise.all(requests);
+
+        responses.forEach((response, index) => {
+          expect(response.id).toBe(10 + index);
+          expect(response.result.tools).toBeDefined();
+        });
+      });
+    });
+  });
+
+  // Tests that need their own server (different tools or state modification)
+  describe('MCP Protocol - Tools List (empty)', () => {
+    let server: CustomToolsSSEServer;
+
+    afterEach(async () => {
+      if (server) {
+        await server.stop();
+      }
     });
 
     it('should return empty tools list when no tools registered', async () => {
@@ -167,70 +363,13 @@ describe('CustomToolsSSEServer', () => {
     });
   });
 
-  describe('MCP Protocol - Tool Execution', () => {
-    it('should execute tool and return result', async () => {
-      server = new CustomToolsSSEServer(testTools, testSessionId, false);
-      const port = await server.start();
+  describe('MCP Protocol - Tool Execution (isolated)', () => {
+    let server: CustomToolsSSEServer;
 
-      const response = await sendMCPRequest(port, {
-        jsonrpc: '2.0',
-        id: 4,
-        method: 'tools/call',
-        params: {
-          name: 'echo-tool',
-          arguments: {
-            message: 'Hello, World!',
-          },
-        },
-      });
-
-      expect(response.jsonrpc).toBe('2.0');
-      expect(response.id).toBe(4);
-      expect(response.result).toBeDefined();
-      expect(response.result.content).toHaveLength(1);
-      expect(response.result.content[0].type).toBe('text');
-      expect(response.result.content[0].text).toContain('Hello, World!');
-    });
-
-    it('should return error for invalid tool name', async () => {
-      server = new CustomToolsSSEServer(testTools, testSessionId, false);
-      const port = await server.start();
-
-      const response = await sendMCPRequest(port, {
-        jsonrpc: '2.0',
-        id: 5,
-        method: 'tools/call',
-        params: {
-          name: 'non-existent-tool',
-          arguments: {},
-        },
-      });
-
-      expect(response.error).toBeDefined();
-      expect(response.error.code).toBe(-32603);
-      expect(response.error.message).toMatch(/^Internal error during tool execution: /);
-    });
-
-    it('should validate tool input against schema', async () => {
-      server = new CustomToolsSSEServer(testTools, testSessionId, false);
-      const port = await server.start();
-
-      // Missing required 'message' field
-      const response = await sendMCPRequest(port, {
-        jsonrpc: '2.0',
-        id: 6,
-        method: 'tools/call',
-        params: {
-          name: 'echo-tool',
-          arguments: {},
-        },
-      });
-
-      expect(response.error).toBeDefined();
-      expect(response.error.code).toBe(-32603);
-      expect(response.error.message).toMatch(
-        /^Internal error during tool execution: .*validation failed/
-      );
+    afterEach(async () => {
+      if (server) {
+        await server.stop();
+      }
     });
 
     it('should handle tool execution timeout', async () => {
@@ -240,7 +379,7 @@ describe('CustomToolsSSEServer', () => {
           {
             name: 'slow-tool',
             description: 'A slow tool',
-            exec: 'sleep 10',
+            exec: 'sleep 0.2',
             timeout: 100, // 100ms timeout
             inputSchema: {
               type: 'object',
@@ -266,7 +405,7 @@ describe('CustomToolsSSEServer', () => {
       expect(response.error).toBeDefined();
       expect(response.error.code).toBe(-32603);
       expect(response.error.message).toMatch(/^Internal error during tool execution: /);
-    }, 15000); // Increase test timeout to 15s
+    }, 3000);
 
     it('should return validation error code for invalid workflow inputs', async () => {
       server = new CustomToolsSSEServer(testTools, testSessionId, false);
@@ -295,136 +434,6 @@ describe('CustomToolsSSEServer', () => {
       expect(response.error.message).toBe(
         'Invalid tool parameters: Invalid workflow inputs: repo: is required, branch: must be a string'
       );
-    });
-  });
-
-  describe('MCP Protocol - Initialize', () => {
-    it('should handle initialize request', async () => {
-      server = new CustomToolsSSEServer(testTools, testSessionId, false);
-      const port = await server.start();
-
-      const response = await sendMCPRequest(port, {
-        jsonrpc: '2.0',
-        id: 8,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2024-11-05',
-          capabilities: {},
-          clientInfo: {
-            name: 'test-client',
-            version: '1.0.0',
-          },
-        },
-      });
-
-      expect(response.jsonrpc).toBe('2.0');
-      expect(response.id).toBe(8);
-      expect(response.result).toMatchObject({
-        protocolVersion: '2024-11-05',
-        capabilities: {
-          tools: {},
-        },
-        serverInfo: {
-          name: 'visor-custom-tools',
-          version: '1.0.0',
-        },
-      });
-    });
-  });
-
-  describe('Error Handling', () => {
-    it('should return error for invalid JSON-RPC format', async () => {
-      server = new CustomToolsSSEServer(testTools, testSessionId, false);
-      const port = await server.start();
-
-      try {
-        await sendRawRequest(port, 'invalid json');
-        // If no error was thrown, check that we got some response
-        // (the implementation sends error via SSE)
-      } catch (error) {
-        // Expected to timeout or error since server may not respond to invalid JSON
-        expect(error).toBeDefined();
-      }
-    }, 10000);
-
-    it('should return error for unknown method', async () => {
-      server = new CustomToolsSSEServer(testTools, testSessionId, false);
-      const port = await server.start();
-
-      const response = await sendMCPRequest(port, {
-        jsonrpc: '2.0',
-        id: 9,
-        method: 'unknown/method',
-      });
-
-      expect(response.error).toBeDefined();
-      expect(response.error.code).toBe(-32601);
-      expect(response.error.message).toBe('Method not found');
-    });
-
-    it('should handle 404 for non-SSE endpoints', async () => {
-      server = new CustomToolsSSEServer(testTools, testSessionId, false);
-      const port = await server.start();
-
-      await expect(
-        new Promise((resolve, reject) => {
-          const req = http.request(
-            {
-              hostname: 'localhost',
-              port,
-              path: '/invalid',
-              method: 'POST',
-            },
-            res => {
-              expect(res.statusCode).toBe(404);
-              let data = '';
-              res.on('data', chunk => {
-                data += chunk;
-              });
-              res.on('end', () => {
-                const body = JSON.parse(data);
-                expect(body.error).toBe('Not found');
-                resolve(body);
-              });
-            }
-          );
-          req.on('error', reject);
-          req.end();
-        })
-      ).resolves.toBeDefined();
-    });
-  });
-
-  describe('Concurrent Connections', () => {
-    it('should handle multiple SSE connections', async () => {
-      server = new CustomToolsSSEServer(testTools, testSessionId, false);
-      const port = await server.start();
-
-      // Create multiple concurrent connections
-      const requests = [
-        sendMCPRequest(port, {
-          jsonrpc: '2.0',
-          id: 10,
-          method: 'tools/list',
-        }),
-        sendMCPRequest(port, {
-          jsonrpc: '2.0',
-          id: 11,
-          method: 'tools/list',
-        }),
-        sendMCPRequest(port, {
-          jsonrpc: '2.0',
-          id: 12,
-          method: 'tools/list',
-        }),
-      ];
-
-      const responses = await Promise.all(requests);
-
-      responses.forEach((response, index) => {
-        expect(response.id).toBe(10 + index);
-        expect(response.result.tools).toBeDefined();
-      });
     });
   });
 });
@@ -470,6 +479,7 @@ async function sendMCPRequest(port: number, message: any): Promise<any> {
             if (eventMatch && eventMatch[1] === 'message' && dataMatch) {
               try {
                 const parsed = JSON.parse(dataMatch[1]);
+                clearTimeout(timeoutHandle);
                 resolve(parsed);
                 req.destroy();
               } catch (_e) {
@@ -480,6 +490,7 @@ async function sendMCPRequest(port: number, message: any): Promise<any> {
         });
 
         res.on('end', () => {
+          clearTimeout(timeoutHandle);
           if (eventData.length > 0) {
             try {
               const parsed = JSON.parse(eventData[eventData.length - 1]);
@@ -494,15 +505,18 @@ async function sendMCPRequest(port: number, message: any): Promise<any> {
       }
     );
 
-    req.on('error', reject);
+    req.on('error', err => {
+      clearTimeout(timeoutHandle);
+      reject(err);
+    });
     req.write(postData);
     req.end();
 
-    // Timeout after 5 seconds
-    setTimeout(() => {
+    // Timeout after 1 second (responses are instant in tests)
+    const timeoutHandle = setTimeout(() => {
       req.destroy();
       reject(new Error('Request timeout'));
-    }, 5000);
+    }, 1000);
   });
 }
 
@@ -530,18 +544,23 @@ async function sendRawRequest(port: number, data: string): Promise<any> {
         });
 
         res.on('end', () => {
+          clearTimeout(timeoutHandle);
           resolve(responseData);
         });
       }
     );
 
-    req.on('error', reject);
+    req.on('error', err => {
+      clearTimeout(timeoutHandle);
+      reject(err);
+    });
     req.write(data);
     req.end();
 
-    setTimeout(() => {
+    // Timeout after 1 second (responses are instant in tests)
+    const timeoutHandle = setTimeout(() => {
       req.destroy();
       reject(new Error('Request timeout'));
-    }, 5000);
+    }, 1000);
   });
 }

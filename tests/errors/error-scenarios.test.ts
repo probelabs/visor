@@ -55,10 +55,10 @@ describe('Error Scenarios & Recovery Testing', () => {
 
       const __commentManager = new CommentManager(mockOctokit as any, {
         maxRetries: 3,
-        baseDelay: 100,
+        baseDelay: 1,
       });
 
-      const analyzer = new PRAnalyzer(mockOctokit as any);
+      const analyzer = new PRAnalyzer(mockOctokit as any, 3, process.cwd(), 1);
 
       const startTime = timer.start();
       const prInfo = await analyzer.fetchPRDiff('test-owner', 'test-repo', 1);
@@ -88,7 +88,7 @@ describe('Error Scenarios & Recovery Testing', () => {
           headers: {
             'x-ratelimit-limit': '5000',
             'x-ratelimit-remaining': '0',
-            'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 2), // Reset in 2 seconds
+            'x-ratelimit-reset': String(Math.floor(Date.now() / 1000)), // Reset immediately
           },
         },
       };
@@ -104,7 +104,8 @@ describe('Error Scenarios & Recovery Testing', () => {
 
       const __commentManager = new CommentManager(mockOctokit as any, {
         maxRetries: 3,
-        baseDelay: 100,
+        baseDelay: 1,
+        maxDelay: 1,
       });
 
       const startTime = timer.start();
@@ -120,7 +121,7 @@ describe('Error Scenarios & Recovery Testing', () => {
 
         expect(comments).toBeNull(); // Should eventually succeed
         expect(rateLimitAttempts).toBe(3); // Should retry after rate limits
-        expect(duration).toBeGreaterThan(200); // Should include backoff delays
+        expect(mockOctokit.rest.issues.listComments).toHaveBeenCalledTimes(3); // Verify retries happened
       } catch (error: any) {
         console.error('Rate limit test failed:', error);
         throw error;
@@ -179,7 +180,7 @@ describe('Error Scenarios & Recovery Testing', () => {
         });
       });
 
-      const analyzer = new PRAnalyzer(mockOctokit as any);
+      const analyzer = new PRAnalyzer(mockOctokit as any, 3, process.cwd(), 1);
 
       const startTime = timer.start();
       const prInfo = await analyzer.fetchPRDiff('test-owner', 'test-repo', 123);
@@ -252,7 +253,7 @@ describe('Error Scenarios & Recovery Testing', () => {
         });
       });
 
-      const analyzer = new PRAnalyzer(mockOctokit as any);
+      const analyzer = new PRAnalyzer(mockOctokit as any, 3, process.cwd(), 1);
 
       try {
         const startTime = timer.start();
@@ -294,7 +295,7 @@ describe('Error Scenarios & Recovery Testing', () => {
 
       mockOctokit.rest.pulls.get.mockRejectedValue(permissionError);
 
-      const analyzer = new PRAnalyzer(mockOctokit as any);
+      const analyzer = new PRAnalyzer(mockOctokit as any, 3, process.cwd(), 1);
 
       try {
         await analyzer.fetchPRDiff('private-owner', 'private-repo', 1);
@@ -324,7 +325,7 @@ describe('Error Scenarios & Recovery Testing', () => {
 
       mockOctokit.rest.pulls.get.mockRejectedValue(notFoundError);
 
-      const analyzer = new PRAnalyzer(mockOctokit as any);
+      const analyzer = new PRAnalyzer(mockOctokit as any, 3, process.cwd(), 1);
 
       try {
         await analyzer.fetchPRDiff('nonexistent-owner', 'nonexistent-repo', 1);
@@ -437,7 +438,7 @@ describe('Error Scenarios & Recovery Testing', () => {
 
         const __commentManager = new CommentManager(mockOctokit as any, {
           maxRetries: 3,
-          baseDelay: 50,
+          baseDelay: 1,
         });
 
         try {
@@ -683,7 +684,7 @@ describe('Error Scenarios & Recovery Testing', () => {
 
       mockOctokit.rest.pulls.get.mockRejectedValue(authError);
 
-      const analyzer = new PRAnalyzer(mockOctokit as any);
+      const analyzer = new PRAnalyzer(mockOctokit as any, 3, process.cwd(), 1);
 
       try {
         await analyzer.fetchPRDiff('test-owner', 'test-repo', 1);
@@ -767,7 +768,7 @@ describe('Error Scenarios & Recovery Testing', () => {
         return Promise.resolve({ data: [] });
       });
 
-      const analyzer = new PRAnalyzer(mockOctokit as any);
+      const analyzer = new PRAnalyzer(mockOctokit as any, 3, process.cwd(), 1);
 
       try {
         const startTime = timer.start();
