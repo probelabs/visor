@@ -1833,7 +1833,7 @@ ${'='.repeat(60)}
       // Derive a default system prompt for non-code-review flows when none is configured.
       // This keeps code-review schema using its specialized prompt template.
       let systemPrompt = this.config.systemPrompt;
-      if (!systemPrompt && schema !== 'code-review') {
+      if (!systemPrompt && schema !== 'code-review' && !this.config.promptType) {
         systemPrompt = 'You are general assistant, follow user instructions.';
       }
 
