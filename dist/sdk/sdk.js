@@ -22407,7 +22407,20 @@ ${preview}`);
             aiConfig.apiKey = aiAny2.apiKey;
           }
           if (aiAny2.model !== void 0) {
-            aiConfig.model = aiAny2.model;
+            let modelVal = String(aiAny2.model);
+            if (modelVal.includes("{{")) {
+              try {
+                const rendered = await this.liquidEngine.parseAndRender(modelVal, {
+                  inputs: config.workflowInputs || {},
+                  env: process.env
+                });
+                modelVal = rendered.trim();
+              } catch {
+              }
+            }
+            if (modelVal) {
+              aiConfig.model = modelVal;
+            }
           }
           if (aiAny2.timeout !== void 0) {
             aiConfig.timeout = aiAny2.timeout;
@@ -22417,7 +22430,20 @@ ${preview}`);
             aiConfig.maxIterations = Number(raw);
           }
           if (aiAny2.provider !== void 0) {
-            aiConfig.provider = aiAny2.provider;
+            let providerVal = String(aiAny2.provider);
+            if (providerVal.includes("{{")) {
+              try {
+                const rendered = await this.liquidEngine.parseAndRender(providerVal, {
+                  inputs: config.workflowInputs || {},
+                  env: process.env
+                });
+                providerVal = rendered.trim();
+              } catch {
+              }
+            }
+            if (providerVal) {
+              aiConfig.provider = providerVal;
+            }
           }
           if (aiAny2.debug !== void 0) {
             aiConfig.debug = aiAny2.debug;
