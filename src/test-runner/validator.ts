@@ -31,6 +31,7 @@ const schema: any = {
     frontends: { type: 'array' },
     workspace: { type: 'object' },
     scheduler: { type: 'object' },
+    agent_protocol: { type: 'object' },
     sandboxes: { type: 'object' },
     sandbox: { type: 'string' },
     // Workflow definition fields (for workflow files with co-located tests)

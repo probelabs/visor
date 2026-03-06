@@ -216,7 +216,8 @@ export type ConfigCheckType =
   | 'mcp'
   | 'human-input'
   | 'workflow'
-  | 'git-checkout';
+  | 'git-checkout'
+  | 'a2a';
 
 /**
  * Valid event triggers for checks

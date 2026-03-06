@@ -138,8 +138,16 @@ export class A2ACheckProvider extends CheckProvider {
     prInfo: PRInfo,
     config: CheckProviderConfig,
     dependencyResults?: Map<string, ReviewSummary>,
-    _context?: ExecutionContext
+    context?: ExecutionContext
   ): Promise<ReviewSummary> {
+    // Test hook: mock output for this step (short-circuit provider)
+    const stepName = (config as any).checkName || 'unknown';
+    const mock = context?.hooks?.mockForStep?.(String(stepName));
+    if (mock !== undefined) {
+      const mockObj = typeof mock === 'object' && mock !== null ? mock : { data: mock };
+      return { issues: [], ...mockObj } as unknown as ReviewSummary;
+    }
+
     const cfg = config as unknown as AgentCheckConfig;
     const timeout = cfg.timeout ?? 300_000;
     const pollInterval = cfg.poll_interval ?? 2_000;
