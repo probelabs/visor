@@ -557,6 +557,12 @@ export class ConfigManager {
     if (workflowData.on) {
       (visorConfig as any).on = workflowData.on;
     }
+    if (workflowData.sandboxes) {
+      visorConfig.sandboxes = workflowData.sandboxes;
+    }
+    if (workflowData.sandbox) {
+      visorConfig.sandbox = workflowData.sandbox;
+    }
 
     logger.debug(
       `Standalone workflow config has ${Object.keys(workflowSteps).length} workflow steps as checks`
