@@ -766,7 +766,7 @@ steps:
       # ProbeAgent resolves "*" and "!" patterns natively.
     ai_allowed_tools_js: |
       // Start with wildcard — allow all tools by default
-      const excluded = ['search', 'query', 'extract', 'listFiles', 'searchFiles', 'delegate'];
+      const excluded = ['search', 'query', 'extract', 'listFiles', 'searchFiles', 'delegate', 'analyze_all'];
       const bashEnabled = outputs['build-config']?.bash_enabled === true;
       if (!bashEnabled) {
         excluded.push('bash');
