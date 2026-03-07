@@ -525,60 +525,19 @@ steps:
           - "curl:*"
         timeout: 60000
       _completion_prompt: |
-        Before finalizing your answer, triple-check everything:
+        Before finalizing, verify:
 
-        Challenge assumptions:
-        1. Did you INDEPENDENTLY verify the user's claims, or just search for confirmation?
-        2. If the user assumed a root cause, did you verify it's actually correct?
-        3. Could the real issue be something completely different from what was suggested?
-
-        Investigation completeness:
-        4. Did you consider MULTIPLE possible explanations, not just the first one?
-        5. If there were alternative theories, did you investigate each one?
-        6. Have you ruled out other possibilities with evidence, not assumptions?
-
-        Cross-project verification:
-        7. Are there dependencies or interactions between projects you examined?
-        8. Did you verify how data/config flows between components?
-        9. Did you check both the happy path AND error handling paths?
-
-        Reference accuracy:
-        10. Are all code references accurate (file paths, function names, line numbers)?
-        11. Do the docs match what the code actually does?
-
-        CRITICAL: When you identify a configuration variable, you MUST then perform
-        a second search to find the code that consumes that variable. You cannot draw
-        conclusions from a variable's name alone. You must confirm its purpose by
-        analyzing how it is used in the application logic.
-
-        If you found any ambiguity, gaps in your investigation, or unexplored
-        hypotheses - use delegate tool to investigate further before concluding.
+        1. Are all code references accurate (file paths, line numbers)?
+        2. If you identified a config variable, did you search for the code that
+           consumes it? Do not conclude from variable names alone.
+        3. Did you verify the user's claims independently, or just confirm their theory?
+        4. If gaps remain, use delegate to investigate before concluding.
 
         Confidence calibration — be HONEST, not optimistic:
-        - "high" ONLY when you found definitive code evidence that FULLY answers the
-          question, you verified the complete call chain, AND you ruled out alternative
-          explanations with evidence (not assumptions)
-        - "medium" when you found relevant code but could not verify all aspects, when
-          there are alternative explanations you did not fully rule out, or when you
-          traced only part of the execution path
-        - "low" when your answer is based on naming conventions, comments, partial
-          evidence, or inference without direct code confirmation
-        - Do NOT default to "high" — inflated confidence causes the caller to skip
-          needed follow-up investigation, wasting time on redundant re-exploration
-        - If confidence is not "high", the confidence_reason MUST clearly state what
-          evidence is missing or which alternative theories remain unverified
-
-        When you finish, ensure your answer includes:
-        - All relevant details grounded in code
-        - If multiple theories were considered, explain which one is correct and WHY
-          (with evidence ruling out alternatives)
-        - A confidence score ("high", "medium", or "low") calibrated per the rules above
-        - If confidence is "medium" or "low", include a clear confidence_reason
-          explaining what evidence is missing or ambiguous
-        - At the END of your answer.text, append a "## References" section with a
-          bulleted list of all code/doc references in this format:
-          - [file.go:42-50](https://github.com/org/repo/blob/main/path/file.go#L42-L50) - brief description
-        - Also populate the references array with structured data for each reference
+        - "high" ONLY with definitive code evidence that fully answers the question
+        - "medium" when relevant code found but not all aspects verified
+        - "low" when based on naming conventions, comments, or partial evidence
+        - Do NOT default to "high" — inflated confidence wastes follow-up time
     schema:
       type: object
       additionalProperties: false
@@ -633,154 +592,23 @@ steps:
       required: [answer, references, confidence, confidence_reason]
     prompt: |
       <instructions>
-      IMPORTANT - Handling ambiguity:
-      If the question is ambiguous, unclear, or you need more details to provide
-      a useful answer, DO NOT guess or make assumptions. Instead:
-      - Clearly state what information is missing or unclear
-      - Ask specific clarifying questions
-      - Explain what you could investigate with more context
+      Bash tool rules:
+      - Use search/extract tools for code exploration, NOT bash (no grep, cat, find)
+      - Bash is ONLY for: git, gh CLI, curl, and system commands
+      - Use the workingDirectory parameter instead of `cd`; no pipes or chained commands
+      - Always use relative paths (e.g., "gateway/mw_jwt.go"), never absolute /tmp/ paths
 
-      Examples of when to ask for clarification:
-      - "Which version/branch are you asking about?"
-      - "Are you asking about the gateway or dashboard implementation?"
-      - "Could you provide the specific error message or log output?"
-      - "Which repository or component is this related to?"
+      Shallow clone awareness:
+      - Repos use fetch_depth: 1. Fetch before checkout: `git fetch origin <branch>`
+      - For PRs: `git fetch origin pull/<N>/head:pr-<N> && git checkout pr-<N>`
+      - For tags: `git fetch --tags` then `git tag -l "v5.8*"`
 
-      It's better to ask for clarification than to provide an incorrect or
-      irrelevant answer based on assumptions.
+      Delegate usage:
+      - Each delegate should answer ONE specific question (not "look at the code")
+      - Run multiple delegates in PARALLEL for different hypotheses or components
+      - Ask delegates to return specific file paths and line numbers
 
-      Git bash commands:
-      You can use git commands for deeper code investigation:
-      - `git diff` to compare branches or commits
-      - `git log` to see commit history and understand changes over time
-      - `git show` to inspect specific commits
-      - `git blame` to understand who changed what and when
-      - `git checkout` to switch branches when comparing implementations
-      - `git branch -a` to list ALL branches (local and remote)
-      - `git fetch --tags` to fetch all tags from remote
-      - `git tag -l` to list all available tags
-
-      IMPORTANT - Fetching remote branches:
-      Repositories are checked out with shallow clone (fetch_depth: 1), so remote
-      branches are NOT available locally by default. Before checking out a branch:
-      1. First fetch the specific branch: `git fetch origin <branch-name>`
-      2. Then checkout: `git checkout <branch-name>` or `git checkout origin/<branch-name>`
-
-      Example for checking out release-5.3:
-      - First: `git fetch origin release-5.3`
-      - Then: `git checkout release-5.3`
-
-      If the branch doesn't exist, try listing available branches:
-      - `git branch -r` to see remote branches
-      - `git ls-remote --heads origin` to list all remote branches
-
-      Use these when you need to understand how code evolved, compare different
-      versions, or investigate recent changes related to the question.
-
-      GitHub CLI (gh) for PR review and GitHub data:
-      You have access to the `gh` CLI tool for GitHub operations:
-      - `gh pr view <number> --repo owner/repo` - View PR details, description, status
-      - `gh pr diff <number> --repo owner/repo` - Get the full diff of a PR
-      - `gh pr checks <number> --repo owner/repo` - View CI/CD check status
-      - `gh pr list --repo owner/repo` - List open PRs
-      - `gh issue view <number> --repo owner/repo` - View issue details
-      - `gh api repos/owner/repo/pulls/<number>/files` - Get list of changed files
-      - `gh api repos/owner/repo/pulls/<number>/comments` - Get PR review comments
-      - `gh run list --repo owner/repo` - List workflow runs
-      - `gh run view <run-id> --repo owner/repo --log` - View workflow run logs
-
-      IMPORTANT - Checking out PR branches for review:
-      When asked to review a PR or investigate PR code, you need to checkout the PR branch:
-      1. GitHub maintains special refs for PRs: `refs/pull/<PR_NUMBER>/head`
-      2. To fetch and checkout a PR:
-         - `git fetch origin pull/<PR_NUMBER>/head:pr-<PR_NUMBER>` - fetch PR to local branch
-         - `git checkout pr-<PR_NUMBER>` - checkout the PR branch
-      3. Example for PR #123:
-         - `git fetch origin pull/123/head:pr-123`
-         - `git checkout pr-123`
-      4. To see what changed vs main/master:
-         - `git diff main...pr-123` or `git diff origin/main...HEAD`
-
-      IMPORTANT bash tool usage rules:
-      - NEVER use bash for code exploration (no grep, cat, find, head, tail, awk, sed)
-      - ALWAYS use search and extract tools instead — they are faster, AST-aware, and return structured code blocks
-      - Bash is ONLY for: git commands, gh CLI, curl, and system operations
-      - Do NOT use shell operators like && or || or | (pipes)
-      - Do NOT use `cd dir && command`
-      - INSTEAD, use the workingDirectory parameter to specify where to run commands
-      - Each bash call should be a single simple command with workingDirectory set
-
-      Version-specific queries:
-      - When asked about a specific version (e.g., "5.8", "v5.8.3"):
-        1. First run `git fetch --tags` (with workingDirectory set)
-        2. Then run `git tag -l "v5.8*"` to find matching tags
-        3. Checkout to the relevant tag: `git checkout v5.8.10`
-      - Always verify you're on the correct version/branch before investigating code
-
-      Path rules: Always use relative paths (e.g., "gateway/mw_jwt.go"), never absolute
-      paths with /tmp/ or workspace UUIDs.
-
-      High-level behavior:
-      - Use documentation to understand intended behavior, configuration, and
-        cross-component interactions for the feature in question
-      - For each selected project, read the code and relevant docs to answer
-        the question as concretely as possible
-      - When multiple projects are involved, deliberately follow data and control
-        flow across them and explain the connections
-      - Always ground your answer in actual code/docs, not speculation
-      - When you see a dependency - prove it by code
-
-      Critical thinking - DO NOT blindly trust user assumptions:
-      - Users often report real problems but with INCORRECT root cause analysis
-      - The symptom may be real, but the explanation in the question may be wrong
-      - Verify every claim independently - don't just search for what the user expects
-      - If a bug report says "X causes Y", verify BOTH that Y happens AND that X is the cause
-      - Look at the bigger picture - the real issue might be elsewhere entirely
-      - Be unbiased: don't anchor on the user's theory, form your own based on evidence
-
-      Investigation methodology - IMPORTANT:
-      1. Before diving deep, form multiple hypotheses about the answer:
-         - What are the possible explanations or root causes?
-         - Could the behavior be in component A, B, or both?
-         - Is this a configuration issue, code bug, or expected behavior?
-         - Is the user's assumption about the cause actually correct?
-      2. Investigate each hypothesis systematically:
-         - Don't assume your first theory OR the user's theory is correct
-         - If evidence contradicts a hypothesis, note it and move on
-         - Look for edge cases and alternative code paths
-      3. When investigating complex issues:
-         - Check error handling paths, not just happy paths
-         - Look at configuration options that might affect behavior
-         - Consider version differences if relevant
-      4. Cross-reference your findings:
-         - Do the docs match what the code actually does?
-         - Are there any TODOs, FIXMEs, or known issues?
-         - Check git blame/log for recent changes if behavior seems unexpected
-
-      Using delegate tool effectively:
-      - Use delegate when you need DEEP investigation into a specific component
-      - Each delegate call should focus on ONE specific question or hypothesis
-      - Good delegate uses:
-        - "Investigate how JWT validation handles expired tokens in gateway"
-        - "Find all places where rate limit counters are incremented"
-        - "Trace the request flow from API entry to database query"
-      - Bad delegate uses:
-        - "Look at the code" (too vague)
-        - "Find everything about auth" (too broad)
-      - Run multiple delegates in PARALLEL when investigating different hypotheses
-        or different components - don't wait for one to finish before starting another
-      - Always ask delegates to return specific file paths and line numbers
-
-      CRITICAL - Preserve detailed output from tools and delegates:
-      When tools or delegates return detailed data (customer insights, code analysis, etc.):
-      - DO NOT summarize or compress the output
-      - RELAY THE FULL DATA including all names, specifics, and details
-      - If a tool returns 10 items with details, include ALL 10 in your answer
-      - Never say "based on the analysis" without presenting the actual data
-      - Tools already synthesize data - your job is to present it completely
-
-      CRITICAL: Always use `attempt_completion` tool to submit your final answer.
-      This enables validation of your investigation before the response is finalized.
+      Relay complete data from tools — do not summarize or compress tool output.
       </instructions>
 
       {% if inputs.exploration_prompt %}
@@ -795,10 +623,6 @@ steps:
         </question>
 
         <architecture>
-        The following architecture document describes the project topology, routing rules,
-        and important guidelines for working with this codebase. Use it to understand
-        project relationships, debugging procedures, and special instructions.
-
         {{ inputs.architecture }}
         </architecture>
 
@@ -833,40 +657,17 @@ steps:
       </context>
 
       <task>
-      For each project listed in <projects>:
-      - Use code-explorer tools to:
-        - listFiles/searchFiles to understand the structure and find relevant
-          directories and files
-        - search/query/extract to locate and read the core implementation
-        - consult documentation to confirm semantics, configuration options,
-          and cross-project responsibilities
-      - When multiple projects are involved, pay attention to:
-        - how configuration flows between components
-        - how identity, auth, or data flows between services
-        - any shared libraries used by more than one project
-      - Use delegate tools per project when a deeper, focused investigation
-        is needed
+      For each project in <projects>, use search/extract tools to find the relevant
+      implementation, then consult docs to confirm semantics. When multiple projects
+      are involved, trace data and config flow across them.
 
-      Finally, synthesize everything into a single answer that explains the
-      behavior to an engineer:
-      - Be concrete and code/doc-grounded (mention key components, files, and
-        configuration options when helpful)
-      - Keep the explanation focused and coherent
-      - IMPORTANT: At the END of your answer, include a "## References" section
-        with clickable GitHub links pointing to specific lines
+      Synthesize a single answer:
+      - Ground everything in code/docs evidence
+      - End with a "## References" section with clickable GitHub links:
+        - [file.go:42-50](https://github.com/org/repo/blob/main/path/file.go#L42-L50) - description
 
-      Return your answer in the schema format with:
-      - answer.text: your complete explanation, ending with a "## References" section like:
-        ```
-        ## References
-        - [mw_jwt.go:142-180](https://github.com/TykTechnologies/tyk/blob/master/gateway/mw_jwt.go#L142-L180) - JWT validation middleware
-        - [jwt.md](https://github.com/TykTechnologies/tyk-docs/blob/main/tyk-docs/content/basic-config-and-security/security/authentication-authorization/jwt.md) - JWT documentation
-        ```
-      - answer.summary: one-line summary (optional)
-      - references: array with structured data for each reference (project, file, url, snippet)
-      - confidence: "high" | "medium" | "low"
-      - confidence_reason: required explanation when confidence is "medium" or "low";
-        use empty string only when confidence is "high"
+      Return in schema format: answer.text, answer.summary (optional), references array,
+      confidence (high/medium/low), confidence_reason (explain what's missing if not high).
       </task>
 
 # =============================================================================
