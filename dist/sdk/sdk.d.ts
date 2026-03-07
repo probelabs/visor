@@ -175,6 +175,74 @@ interface SandboxConfig {
     bind_paths?: SandboxBindPath[];
 }
 
+interface AgentSkill {
+    id: string;
+    name: string;
+    description: string;
+    tags?: string[];
+    examples?: string[];
+    input_modes?: string[];
+    output_modes?: string[];
+}
+interface AgentCapabilities {
+    streaming?: boolean;
+    push_notifications?: boolean;
+    extensions?: string[];
+    extended_agent_card?: boolean;
+}
+interface AgentCard {
+    name: string;
+    description?: string;
+    version?: string;
+    provider?: {
+        organization: string;
+        url?: string;
+    };
+    supported_interfaces?: Array<{
+        url: string;
+        protocol_binding?: string;
+        protocol_version?: string;
+    }>;
+    capabilities?: AgentCapabilities;
+    default_input_modes?: string[];
+    default_output_modes?: string[];
+    security_schemes?: Record<string, unknown>;
+    security_requirements?: unknown[];
+    skills?: AgentSkill[];
+    icon_url?: string;
+}
+interface AgentProtocolAuthConfig {
+    type: 'bearer' | 'api_key' | 'none';
+    token_env?: string;
+    header_name?: string;
+    param_name?: string;
+    key_env?: string;
+}
+interface AgentProtocolQueueConfig {
+    poll_interval?: number;
+    max_concurrent?: number;
+    stale_claim_timeout?: number;
+}
+interface AgentProtocolTlsConfig {
+    cert: string;
+    key: string;
+}
+interface AgentProtocolConfig {
+    enabled: boolean;
+    protocol: string;
+    agent_card?: string;
+    agent_card_inline?: AgentCard;
+    public_url?: string;
+    port?: number;
+    host?: string;
+    tls?: AgentProtocolTlsConfig;
+    auth?: AgentProtocolAuthConfig;
+    default_workflow?: string;
+    skill_routing?: Record<string, string>;
+    task_ttl?: string;
+    queue?: AgentProtocolQueueConfig;
+}
+
 /**
  * Types for Visor configuration system
  */
@@ -232,7 +300,7 @@ interface FailureConditionResult {
 /**
  * Valid check types in configuration
  */
-type ConfigCheckType = 'ai' | 'command' | 'script' | 'http' | 'http_input' | 'http_client' | 'noop' | 'log' | 'memory' | 'github' | 'claude-code' | 'mcp' | 'human-input' | 'workflow' | 'git-checkout';
+type ConfigCheckType = 'ai' | 'command' | 'script' | 'http' | 'http_input' | 'http_client' | 'noop' | 'log' | 'memory' | 'github' | 'claude-code' | 'mcp' | 'human-input' | 'workflow' | 'git-checkout' | 'a2a';
 /**
  * Valid event triggers for checks
  */
@@ -1471,6 +1539,8 @@ interface VisorConfig {
     scheduler?: SchedulerConfig;
     /** Enterprise policy engine configuration */
     policy?: PolicyConfig;
+    /** Agent protocol (A2A) server configuration */
+    agent_protocol?: AgentProtocolConfig;
 }
 /**
  * Workspace isolation configuration

@@ -174,6 +174,10 @@ export declare const configSchema: {
                     readonly $ref: "#/definitions/PolicyConfig";
                     readonly description: "Enterprise policy engine configuration";
                 };
+                readonly agent_protocol: {
+                    readonly $ref: "#/definitions/AgentProtocolConfig";
+                    readonly description: "Agent protocol (A2A) server configuration";
+                };
             };
             readonly required: readonly ["version"];
             readonly patternProperties: {
@@ -875,7 +879,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -891,7 +895,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -975,7 +979,7 @@ export declare const configSchema: {
         };
         readonly ConfigCheckType: {
             readonly type: "string";
-            readonly enum: readonly ["ai", "command", "script", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input", "workflow", "git-checkout"];
+            readonly enum: readonly ["ai", "command", "script", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input", "workflow", "git-checkout", "a2a"];
             readonly description: "Valid check types in configuration";
         };
         readonly 'Record<string,McpServerConfig>': {
@@ -1551,7 +1555,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1566,13 +1570,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512>': {
+        readonly 'Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };
@@ -2912,6 +2916,267 @@ export declare const configSchema: {
                         readonly type: "string";
                     };
                     readonly description: "Slack channel IDs — role only applies when triggered from these channels";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly AgentProtocolConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly enabled: {
+                    readonly type: "boolean";
+                };
+                readonly protocol: {
+                    readonly type: "string";
+                };
+                readonly agent_card: {
+                    readonly type: "string";
+                };
+                readonly agent_card_inline: {
+                    readonly $ref: "#/definitions/AgentCard";
+                };
+                readonly public_url: {
+                    readonly type: "string";
+                };
+                readonly port: {
+                    readonly type: "number";
+                };
+                readonly host: {
+                    readonly type: "string";
+                };
+                readonly tls: {
+                    readonly $ref: "#/definitions/AgentProtocolTlsConfig";
+                };
+                readonly auth: {
+                    readonly $ref: "#/definitions/AgentProtocolAuthConfig";
+                };
+                readonly default_workflow: {
+                    readonly type: "string";
+                };
+                readonly skill_routing: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cstring%3E";
+                };
+                readonly task_ttl: {
+                    readonly type: "string";
+                };
+                readonly queue: {
+                    readonly $ref: "#/definitions/AgentProtocolQueueConfig";
+                };
+            };
+            readonly required: readonly ["enabled", "protocol"];
+            readonly additionalProperties: false;
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly AgentCard: {
+            readonly type: "object";
+            readonly properties: {
+                readonly name: {
+                    readonly type: "string";
+                };
+                readonly description: {
+                    readonly type: "string";
+                };
+                readonly version: {
+                    readonly type: "string";
+                };
+                readonly provider: {
+                    readonly type: "object";
+                    readonly properties: {
+                        readonly organization: {
+                            readonly type: "string";
+                        };
+                        readonly url: {
+                            readonly type: "string";
+                        };
+                    };
+                    readonly required: readonly ["organization"];
+                    readonly additionalProperties: false;
+                    readonly patternProperties: {
+                        readonly '^x-': {};
+                    };
+                };
+                readonly supported_interfaces: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "object";
+                        readonly properties: {
+                            readonly url: {
+                                readonly type: "string";
+                            };
+                            readonly protocol_binding: {
+                                readonly type: "string";
+                            };
+                            readonly protocol_version: {
+                                readonly type: "string";
+                            };
+                        };
+                        readonly required: readonly ["url"];
+                        readonly additionalProperties: false;
+                    };
+                };
+                readonly capabilities: {
+                    readonly $ref: "#/definitions/AgentCapabilities";
+                };
+                readonly default_input_modes: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                };
+                readonly default_output_modes: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                };
+                readonly security_schemes: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                };
+                readonly security_requirements: {
+                    readonly type: "array";
+                    readonly items: {};
+                };
+                readonly skills: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly $ref: "#/definitions/AgentSkill";
+                    };
+                };
+                readonly icon_url: {
+                    readonly type: "string";
+                };
+            };
+            readonly required: readonly ["name"];
+            readonly additionalProperties: false;
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly AgentCapabilities: {
+            readonly type: "object";
+            readonly properties: {
+                readonly streaming: {
+                    readonly type: "boolean";
+                };
+                readonly push_notifications: {
+                    readonly type: "boolean";
+                };
+                readonly extensions: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                };
+                readonly extended_agent_card: {
+                    readonly type: "boolean";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly AgentSkill: {
+            readonly type: "object";
+            readonly properties: {
+                readonly id: {
+                    readonly type: "string";
+                };
+                readonly name: {
+                    readonly type: "string";
+                };
+                readonly description: {
+                    readonly type: "string";
+                };
+                readonly tags: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                };
+                readonly examples: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                };
+                readonly input_modes: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                };
+                readonly output_modes: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                };
+            };
+            readonly required: readonly ["id", "name", "description"];
+            readonly additionalProperties: false;
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly AgentProtocolTlsConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly cert: {
+                    readonly type: "string";
+                };
+                readonly key: {
+                    readonly type: "string";
+                };
+            };
+            readonly required: readonly ["cert", "key"];
+            readonly additionalProperties: false;
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly AgentProtocolAuthConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly type: {
+                    readonly type: "string";
+                    readonly enum: readonly ["bearer", "api_key", "none"];
+                };
+                readonly token_env: {
+                    readonly type: "string";
+                };
+                readonly header_name: {
+                    readonly type: "string";
+                };
+                readonly param_name: {
+                    readonly type: "string";
+                };
+                readonly key_env: {
+                    readonly type: "string";
+                };
+            };
+            readonly required: readonly ["type"];
+            readonly additionalProperties: false;
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly AgentProtocolQueueConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly poll_interval: {
+                    readonly type: "number";
+                };
+                readonly max_concurrent: {
+                    readonly type: "number";
+                };
+                readonly stale_claim_timeout: {
+                    readonly type: "number";
                 };
             };
             readonly additionalProperties: false;

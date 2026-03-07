@@ -760,7 +760,7 @@ var require_package = __commonJS({
         "@opentelemetry/sdk-node": "^0.203.0",
         "@opentelemetry/sdk-trace-base": "^1.30.1",
         "@opentelemetry/semantic-conventions": "^1.30.1",
-        "@probelabs/probe": "^0.6.0-rc283",
+        "@probelabs/probe": "^0.6.0-rc284",
         "@types/commander": "^2.12.0",
         "@types/uuid": "^10.0.0",
         acorn: "^8.16.0",
@@ -945,19 +945,19 @@ function __getOrCreateNdjsonPath() {
   try {
     if (process.env.VISOR_TELEMETRY_SINK && process.env.VISOR_TELEMETRY_SINK !== "file")
       return null;
-    const path27 = require("path");
-    const fs23 = require("fs");
+    const path28 = require("path");
+    const fs25 = require("fs");
     if (process.env.VISOR_FALLBACK_TRACE_FILE) {
       __ndjsonPath = process.env.VISOR_FALLBACK_TRACE_FILE;
-      const dir = path27.dirname(__ndjsonPath);
-      if (!fs23.existsSync(dir)) fs23.mkdirSync(dir, { recursive: true });
+      const dir = path28.dirname(__ndjsonPath);
+      if (!fs25.existsSync(dir)) fs25.mkdirSync(dir, { recursive: true });
       return __ndjsonPath;
     }
-    const outDir = process.env.VISOR_TRACE_DIR || path27.join(process.cwd(), "output", "traces");
-    if (!fs23.existsSync(outDir)) fs23.mkdirSync(outDir, { recursive: true });
+    const outDir = process.env.VISOR_TRACE_DIR || path28.join(process.cwd(), "output", "traces");
+    if (!fs25.existsSync(outDir)) fs25.mkdirSync(outDir, { recursive: true });
     if (!__ndjsonPath) {
       const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      __ndjsonPath = path27.join(outDir, `${ts}.ndjson`);
+      __ndjsonPath = path28.join(outDir, `${ts}.ndjson`);
     }
     return __ndjsonPath;
   } catch {
@@ -966,11 +966,11 @@ function __getOrCreateNdjsonPath() {
 }
 function _appendRunMarker() {
   try {
-    const fs23 = require("fs");
+    const fs25 = require("fs");
     const p = __getOrCreateNdjsonPath();
     if (!p) return;
     const line = { name: "visor.run", attributes: { started: true } };
-    fs23.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
+    fs25.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
   } catch {
   }
 }
@@ -3734,9 +3734,9 @@ function configureLiquidWithExtensions(liquid) {
   });
   liquid.registerFilter("get", (obj, pathExpr) => {
     if (obj == null) return void 0;
-    const path27 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
-    if (!path27) return obj;
-    const parts = path27.split(".");
+    const path28 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
+    if (!path28) return obj;
+    const parts = path28.split(".");
     let cur = obj;
     for (const p of parts) {
       if (cur == null) return void 0;
@@ -3855,9 +3855,9 @@ function configureLiquidWithExtensions(liquid) {
           }
         }
         const defaultRole = typeof rolesCfg.default === "string" && rolesCfg.default.trim() ? rolesCfg.default.trim() : void 0;
-        const getNested = (obj, path27) => {
-          if (!obj || !path27) return void 0;
-          const parts = path27.split(".");
+        const getNested = (obj, path28) => {
+          if (!obj || !path28) return void 0;
+          const parts = path28.split(".");
           let cur = obj;
           for (const p of parts) {
             if (cur == null) return void 0;
@@ -6409,8 +6409,8 @@ var init_dependency_gating = __esm({
 async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs23 = await import("fs/promises");
-    const path27 = await import("path");
+    const fs25 = await import("fs/promises");
+    const path28 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
@@ -6418,24 +6418,24 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
       templateContent = String(checkConfig.template.content);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path27.resolve(process.cwd(), file);
-      templateContent = await fs23.readFile(resolved, "utf-8");
+      const resolved = path28.resolve(process.cwd(), file);
+      templateContent = await fs25.readFile(resolved, "utf-8");
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path27.join(__dirname, "output", sanitized, "template.liquid"),
+          path28.join(__dirname, "output", sanitized, "template.liquid"),
           // bundled: dist/output/
-          path27.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path28.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // source: output/
-          path27.join(process.cwd(), "output", sanitized, "template.liquid"),
+          path28.join(process.cwd(), "output", sanitized, "template.liquid"),
           // fallback: cwd/output/
-          path27.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          path28.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
           // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs23.readFile(p, "utf-8");
+            templateContent = await fs25.readFile(p, "utf-8");
             if (templateContent) break;
           } catch {
           }
@@ -6840,7 +6840,7 @@ async function processDiffWithOutline(diffContent) {
   }
   try {
     const originalProbePath = process.env.PROBE_PATH;
-    const fs23 = require("fs");
+    const fs25 = require("fs");
     const possiblePaths = [
       // Relative to current working directory (most common in production)
       path6.join(process.cwd(), "node_modules/@probelabs/probe/bin/probe-binary"),
@@ -6851,7 +6851,7 @@ async function processDiffWithOutline(diffContent) {
     ];
     let probeBinaryPath;
     for (const candidatePath of possiblePaths) {
-      if (fs23.existsSync(candidatePath)) {
+      if (fs25.existsSync(candidatePath)) {
         probeBinaryPath = candidatePath;
         break;
       }
@@ -8156,8 +8156,8 @@ ${schemaString}`);
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs23 = require("fs");
-              const path27 = require("path");
+              const fs25 = require("fs");
+              const path28 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const provider = this.config.provider || "auto";
               const model = this.config.model || "default";
@@ -8271,20 +8271,20 @@ ${"=".repeat(60)}
 `;
               readableVersion += `${"=".repeat(60)}
 `;
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path27.join(process.cwd(), "debug-artifacts");
-              if (!fs23.existsSync(debugArtifactsDir)) {
-                fs23.mkdirSync(debugArtifactsDir, { recursive: true });
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path28.join(process.cwd(), "debug-artifacts");
+              if (!fs25.existsSync(debugArtifactsDir)) {
+                fs25.mkdirSync(debugArtifactsDir, { recursive: true });
               }
-              const debugFile = path27.join(
+              const debugFile = path28.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.json`
               );
-              fs23.writeFileSync(debugFile, debugJson, "utf-8");
-              const readableFile = path27.join(
+              fs25.writeFileSync(debugFile, debugJson, "utf-8");
+              const readableFile = path28.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.txt`
               );
-              fs23.writeFileSync(readableFile, readableVersion, "utf-8");
+              fs25.writeFileSync(readableFile, readableVersion, "utf-8");
               log(`
 \u{1F4BE} Full debug info saved to:`);
               log(`   JSON: ${debugFile}`);
@@ -8317,8 +8317,8 @@ ${"=".repeat(60)}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs23 = require("fs");
-              const path27 = require("path");
+              const fs25 = require("fs");
+              const path28 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny2 = agent;
               let fullHistory = [];
@@ -8329,8 +8329,8 @@ ${"=".repeat(60)}
               } else if (agentAny2._messages) {
                 fullHistory = agentAny2._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path27.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path27.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path28.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path28.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -8342,7 +8342,7 @@ ${"=".repeat(60)}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs23.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs25.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -8369,7 +8369,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs23.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs25.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -8378,11 +8378,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs23 = require("fs");
-              const path27 = require("path");
+              const fs25 = require("fs");
+              const path28 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path27.join(process.cwd(), "debug-artifacts");
-              const responseFile = path27.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path28.join(process.cwd(), "debug-artifacts");
+              const responseFile = path28.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -8415,7 +8415,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs23.writeFileSync(responseFile, responseContent, "utf-8");
+              fs25.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -8431,9 +8431,9 @@ ${"=".repeat(60)}
                 await agentAny._telemetryConfig.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${agentAny._traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs23 = require("fs");
-                  if (fs23.existsSync(agentAny._traceFilePath)) {
-                    const stats = fs23.statSync(agentAny._traceFilePath);
+                  const fs25 = require("fs");
+                  if (fs25.existsSync(agentAny._traceFilePath)) {
+                    const stats = fs25.statSync(agentAny._traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::${agentAny._traceFilePath} (${stats.size} bytes)`
                     );
@@ -8646,8 +8646,8 @@ ${schemaString}`);
           const model = this.config.model || "default";
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs23 = require("fs");
-              const path27 = require("path");
+              const fs25 = require("fs");
+              const path28 = require("path");
               const os2 = require("os");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const debugData = {
@@ -8721,18 +8721,18 @@ ${"=".repeat(60)}
               readableVersion += `${"=".repeat(60)}
 `;
               const tempDir = os2.tmpdir();
-              const promptFile = path27.join(tempDir, `visor-prompt-${timestamp}.txt`);
-              fs23.writeFileSync(promptFile, prompt, "utf-8");
+              const promptFile = path28.join(tempDir, `visor-prompt-${timestamp}.txt`);
+              fs25.writeFileSync(promptFile, prompt, "utf-8");
               log(`
 \u{1F4BE} Prompt saved to: ${promptFile}`);
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path27.join(process.cwd(), "debug-artifacts");
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path28.join(process.cwd(), "debug-artifacts");
               try {
-                const base = path27.join(
+                const base = path28.join(
                   debugArtifactsDir,
                   `prompt-${_checkName || "unknown"}-${timestamp}`
                 );
-                fs23.writeFileSync(base + ".json", debugJson, "utf-8");
-                fs23.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
+                fs25.writeFileSync(base + ".json", debugJson, "utf-8");
+                fs25.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
                 log(`
 \u{1F4BE} Full debug info saved to directory: ${debugArtifactsDir}`);
               } catch {
@@ -8777,8 +8777,8 @@ $ ${cliCommand}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs23 = require("fs");
-              const path27 = require("path");
+              const fs25 = require("fs");
+              const path28 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny = agent;
               let fullHistory = [];
@@ -8789,8 +8789,8 @@ $ ${cliCommand}
               } else if (agentAny._messages) {
                 fullHistory = agentAny._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path27.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path27.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path28.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path28.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -8802,7 +8802,7 @@ $ ${cliCommand}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs23.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs25.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -8829,7 +8829,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs23.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs25.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -8838,11 +8838,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs23 = require("fs");
-              const path27 = require("path");
+              const fs25 = require("fs");
+              const path28 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path27.join(process.cwd(), "debug-artifacts");
-              const responseFile = path27.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path28.join(process.cwd(), "debug-artifacts");
+              const responseFile = path28.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -8875,7 +8875,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs23.writeFileSync(responseFile, responseContent, "utf-8");
+              fs25.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -8893,9 +8893,9 @@ ${"=".repeat(60)}
                 await telemetry.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs23 = require("fs");
-                  if (fs23.existsSync(traceFilePath)) {
-                    const stats = fs23.statSync(traceFilePath);
+                  const fs25 = require("fs");
+                  if (fs25.existsSync(traceFilePath)) {
+                    const stats = fs25.statSync(traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::OpenTelemetry trace file size: ${stats.size} bytes`
                     );
@@ -8933,8 +8933,8 @@ ${"=".repeat(60)}
        * Load schema content from schema files or inline definitions
        */
       async loadSchemaContent(schema) {
-        const fs23 = require("fs").promises;
-        const path27 = require("path");
+        const fs25 = require("fs").promises;
+        const path28 = require("path");
         if (typeof schema === "object" && schema !== null) {
           log("\u{1F4CB} Using inline schema object from configuration");
           return JSON.stringify(schema);
@@ -8947,14 +8947,14 @@ ${"=".repeat(60)}
           }
         } catch {
         }
-        if ((schema.startsWith("./") || schema.includes(".json")) && !path27.isAbsolute(schema)) {
+        if ((schema.startsWith("./") || schema.includes(".json")) && !path28.isAbsolute(schema)) {
           if (schema.includes("..") || schema.includes("\0")) {
             throw new Error("Invalid schema path: path traversal not allowed");
           }
           try {
-            const schemaPath = path27.resolve(process.cwd(), schema);
+            const schemaPath = path28.resolve(process.cwd(), schema);
             log(`\u{1F4CB} Loading custom schema from file: ${schemaPath}`);
-            const schemaContent = await fs23.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs25.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch (error) {
             throw new Error(
@@ -8968,22 +8968,22 @@ ${"=".repeat(60)}
         }
         const candidatePaths = [
           // GitHub Action bundle location
-          path27.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
+          path28.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
           // Historical fallback when src/output was inadvertently bundled as output1/
-          path27.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
+          path28.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
           // Local dev (repo root)
-          path27.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
+          path28.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
         ];
         for (const schemaPath of candidatePaths) {
           try {
-            const schemaContent = await fs23.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs25.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch {
           }
         }
-        const distPath = path27.join(__dirname, "output", sanitizedSchemaName, "schema.json");
-        const distAltPath = path27.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
-        const cwdPath = path27.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
+        const distPath = path28.join(__dirname, "output", sanitizedSchemaName, "schema.json");
+        const distAltPath = path28.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
+        const cwdPath = path28.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
         throw new Error(
           `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath}, ${distAltPath}, and ${cwdPath}. Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
         );
@@ -12428,6 +12428,10 @@ var init_config_schema = __esm({
             policy: {
               $ref: "#/definitions/PolicyConfig",
               description: "Enterprise policy engine configuration"
+            },
+            agent_protocol: {
+              $ref: "#/definitions/AgentProtocolConfig",
+              description: "Agent protocol (A2A) server configuration"
             }
           },
           required: ["version"],
@@ -13164,7 +13168,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -13180,7 +13184,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -13282,7 +13286,8 @@ var init_config_schema = __esm({
             "mcp",
             "human-input",
             "workflow",
-            "git-checkout"
+            "git-checkout",
+            "a2a"
           ],
           description: "Valid check types in configuration"
         },
@@ -13877,7 +13882,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -13892,13 +13897,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512>>": {
+        "Record<string,Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512>": {
+        "Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681>": {
           type: "object",
           additionalProperties: false
         },
@@ -15263,6 +15268,267 @@ var init_config_schema = __esm({
           patternProperties: {
             "^x-": {}
           }
+        },
+        AgentProtocolConfig: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean"
+            },
+            protocol: {
+              type: "string"
+            },
+            agent_card: {
+              type: "string"
+            },
+            agent_card_inline: {
+              $ref: "#/definitions/AgentCard"
+            },
+            public_url: {
+              type: "string"
+            },
+            port: {
+              type: "number"
+            },
+            host: {
+              type: "string"
+            },
+            tls: {
+              $ref: "#/definitions/AgentProtocolTlsConfig"
+            },
+            auth: {
+              $ref: "#/definitions/AgentProtocolAuthConfig"
+            },
+            default_workflow: {
+              type: "string"
+            },
+            skill_routing: {
+              $ref: "#/definitions/Record%3Cstring%2Cstring%3E"
+            },
+            task_ttl: {
+              type: "string"
+            },
+            queue: {
+              $ref: "#/definitions/AgentProtocolQueueConfig"
+            }
+          },
+          required: ["enabled", "protocol"],
+          additionalProperties: false,
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        AgentCard: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string"
+            },
+            description: {
+              type: "string"
+            },
+            version: {
+              type: "string"
+            },
+            provider: {
+              type: "object",
+              properties: {
+                organization: {
+                  type: "string"
+                },
+                url: {
+                  type: "string"
+                }
+              },
+              required: ["organization"],
+              additionalProperties: false,
+              patternProperties: {
+                "^x-": {}
+              }
+            },
+            supported_interfaces: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  url: {
+                    type: "string"
+                  },
+                  protocol_binding: {
+                    type: "string"
+                  },
+                  protocol_version: {
+                    type: "string"
+                  }
+                },
+                required: ["url"],
+                additionalProperties: false
+              }
+            },
+            capabilities: {
+              $ref: "#/definitions/AgentCapabilities"
+            },
+            default_input_modes: {
+              type: "array",
+              items: {
+                type: "string"
+              }
+            },
+            default_output_modes: {
+              type: "array",
+              items: {
+                type: "string"
+              }
+            },
+            security_schemes: {
+              $ref: "#/definitions/Record%3Cstring%2Cunknown%3E"
+            },
+            security_requirements: {
+              type: "array",
+              items: {}
+            },
+            skills: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/AgentSkill"
+              }
+            },
+            icon_url: {
+              type: "string"
+            }
+          },
+          required: ["name"],
+          additionalProperties: false,
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        AgentCapabilities: {
+          type: "object",
+          properties: {
+            streaming: {
+              type: "boolean"
+            },
+            push_notifications: {
+              type: "boolean"
+            },
+            extensions: {
+              type: "array",
+              items: {
+                type: "string"
+              }
+            },
+            extended_agent_card: {
+              type: "boolean"
+            }
+          },
+          additionalProperties: false,
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        AgentSkill: {
+          type: "object",
+          properties: {
+            id: {
+              type: "string"
+            },
+            name: {
+              type: "string"
+            },
+            description: {
+              type: "string"
+            },
+            tags: {
+              type: "array",
+              items: {
+                type: "string"
+              }
+            },
+            examples: {
+              type: "array",
+              items: {
+                type: "string"
+              }
+            },
+            input_modes: {
+              type: "array",
+              items: {
+                type: "string"
+              }
+            },
+            output_modes: {
+              type: "array",
+              items: {
+                type: "string"
+              }
+            }
+          },
+          required: ["id", "name", "description"],
+          additionalProperties: false,
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        AgentProtocolTlsConfig: {
+          type: "object",
+          properties: {
+            cert: {
+              type: "string"
+            },
+            key: {
+              type: "string"
+            }
+          },
+          required: ["cert", "key"],
+          additionalProperties: false,
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        AgentProtocolAuthConfig: {
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              enum: ["bearer", "api_key", "none"]
+            },
+            token_env: {
+              type: "string"
+            },
+            header_name: {
+              type: "string"
+            },
+            param_name: {
+              type: "string"
+            },
+            key_env: {
+              type: "string"
+            }
+          },
+          required: ["type"],
+          additionalProperties: false,
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        AgentProtocolQueueConfig: {
+          type: "object",
+          properties: {
+            poll_interval: {
+              type: "number"
+            },
+            max_concurrent: {
+              type: "number"
+            },
+            stale_claim_timeout: {
+              type: "number"
+            }
+          },
+          additionalProperties: false,
+          patternProperties: {
+            "^x-": {}
+          }
         }
       }
     };
@@ -15317,7 +15583,8 @@ var init_config = __esm({
         "github",
         "human-input",
         "workflow",
-        "git-checkout"
+        "git-checkout",
+        "a2a"
       ];
       validEventTriggers = [...VALID_EVENT_TRIGGERS];
       validOutputFormats = ["table", "json", "markdown", "sarif"];
@@ -17710,17 +17977,17 @@ var init_workflow_check_provider = __esm({
        * so it can be executed by the state machine as a nested workflow.
        */
       async loadWorkflowFromConfigPath(sourcePath, baseDir) {
-        const path27 = require("path");
-        const fs23 = require("fs");
+        const path28 = require("path");
+        const fs25 = require("fs");
         const yaml5 = require("js-yaml");
-        const resolved = path27.isAbsolute(sourcePath) ? sourcePath : path27.resolve(baseDir, sourcePath);
-        if (!fs23.existsSync(resolved)) {
+        const resolved = path28.isAbsolute(sourcePath) ? sourcePath : path28.resolve(baseDir, sourcePath);
+        if (!fs25.existsSync(resolved)) {
           throw new Error(`Workflow config not found at: ${resolved}`);
         }
-        const rawContent = fs23.readFileSync(resolved, "utf8");
+        const rawContent = fs25.readFileSync(resolved, "utf8");
         const rawData = yaml5.load(rawContent);
         if (rawData.imports && Array.isArray(rawData.imports)) {
-          const configDir = path27.dirname(resolved);
+          const configDir = path28.dirname(resolved);
           for (const source of rawData.imports) {
             const results = await this.registry.import(source, {
               basePath: configDir,
@@ -17750,8 +18017,8 @@ ${errors}`);
         if (!steps || Object.keys(steps).length === 0) {
           throw new Error(`Config '${resolved}' does not contain any steps to execute as a workflow`);
         }
-        const id = path27.basename(resolved).replace(/\.(ya?ml)$/i, "");
-        const name = loaded.name || `Workflow from ${path27.basename(resolved)}`;
+        const id = path28.basename(resolved).replace(/\.(ya?ml)$/i, "");
+        const name = loaded.name || `Workflow from ${path28.basename(resolved)}`;
         const workflowDef = {
           id,
           name,
@@ -22022,9 +22289,9 @@ var init_ai_check_provider = __esm({
           } else {
             resolvedPath = import_path7.default.resolve(process.cwd(), str);
           }
-          const fs23 = require("fs").promises;
+          const fs25 = require("fs").promises;
           try {
-            const stat2 = await fs23.stat(resolvedPath);
+            const stat2 = await fs25.stat(resolvedPath);
             return stat2.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
@@ -28126,14 +28393,14 @@ var require_util = __commonJS({
         }
         const port = url.port != null ? url.port : url.protocol === "https:" ? 443 : 80;
         let origin = url.origin != null ? url.origin : `${url.protocol}//${url.hostname}:${port}`;
-        let path27 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
+        let path28 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
         if (origin.endsWith("/")) {
           origin = origin.substring(0, origin.length - 1);
         }
-        if (path27 && !path27.startsWith("/")) {
-          path27 = `/${path27}`;
+        if (path28 && !path28.startsWith("/")) {
+          path28 = `/${path28}`;
         }
-        url = new URL(origin + path27);
+        url = new URL(origin + path28);
       }
       return url;
     }
@@ -29747,20 +30014,20 @@ var require_parseParams = __commonJS({
 var require_basename = __commonJS({
   "node_modules/@fastify/busboy/lib/utils/basename.js"(exports2, module2) {
     "use strict";
-    module2.exports = function basename4(path27) {
-      if (typeof path27 !== "string") {
+    module2.exports = function basename4(path28) {
+      if (typeof path28 !== "string") {
         return "";
       }
-      for (var i = path27.length - 1; i >= 0; --i) {
-        switch (path27.charCodeAt(i)) {
+      for (var i = path28.length - 1; i >= 0; --i) {
+        switch (path28.charCodeAt(i)) {
           case 47:
           // '/'
           case 92:
-            path27 = path27.slice(i + 1);
-            return path27 === ".." || path27 === "." ? "" : path27;
+            path28 = path28.slice(i + 1);
+            return path28 === ".." || path28 === "." ? "" : path28;
         }
       }
-      return path27 === ".." || path27 === "." ? "" : path27;
+      return path28 === ".." || path28 === "." ? "" : path28;
     };
   }
 });
@@ -30764,11 +31031,11 @@ var require_util2 = __commonJS({
     var assert = require("assert");
     var { isUint8Array } = require("util/types");
     var supportedHashes = [];
-    var crypto2;
+    var crypto6;
     try {
-      crypto2 = require("crypto");
+      crypto6 = require("crypto");
       const possibleRelevantHashes = ["sha256", "sha384", "sha512"];
-      supportedHashes = crypto2.getHashes().filter((hash) => possibleRelevantHashes.includes(hash));
+      supportedHashes = crypto6.getHashes().filter((hash) => possibleRelevantHashes.includes(hash));
     } catch {
     }
     function responseURL(response) {
@@ -31045,7 +31312,7 @@ var require_util2 = __commonJS({
       }
     }
     function bytesMatch(bytes, metadataList) {
-      if (crypto2 === void 0) {
+      if (crypto6 === void 0) {
         return true;
       }
       const parsedMetadata = parseMetadata(metadataList);
@@ -31060,7 +31327,7 @@ var require_util2 = __commonJS({
       for (const item of metadata) {
         const algorithm = item.algo;
         const expectedValue = item.hash;
-        let actualValue = crypto2.createHash(algorithm).update(bytes).digest("base64");
+        let actualValue = crypto6.createHash(algorithm).update(bytes).digest("base64");
         if (actualValue[actualValue.length - 1] === "=") {
           if (actualValue[actualValue.length - 2] === "=") {
             actualValue = actualValue.slice(0, -2);
@@ -32407,8 +32674,8 @@ var require_body = __commonJS({
     var { parseMIMEType, serializeAMimeType } = require_dataURL();
     var random;
     try {
-      const crypto2 = require("crypto");
-      random = (max) => crypto2.randomInt(0, max);
+      const crypto6 = require("crypto");
+      random = (max) => crypto6.randomInt(0, max);
     } catch {
       random = (max) => Math.floor(Math.random(max));
     }
@@ -32791,7 +33058,7 @@ var require_request = __commonJS({
     }
     var Request = class _Request {
       constructor(origin, {
-        path: path27,
+        path: path28,
         method,
         body,
         headers,
@@ -32805,11 +33072,11 @@ var require_request = __commonJS({
         throwOnError,
         expectContinue
       }, handler) {
-        if (typeof path27 !== "string") {
+        if (typeof path28 !== "string") {
           throw new InvalidArgumentError("path must be a string");
-        } else if (path27[0] !== "/" && !(path27.startsWith("http://") || path27.startsWith("https://")) && method !== "CONNECT") {
+        } else if (path28[0] !== "/" && !(path28.startsWith("http://") || path28.startsWith("https://")) && method !== "CONNECT") {
           throw new InvalidArgumentError("path must be an absolute URL or start with a slash");
-        } else if (invalidPathRegex.exec(path27) !== null) {
+        } else if (invalidPathRegex.exec(path28) !== null) {
           throw new InvalidArgumentError("invalid request path");
         }
         if (typeof method !== "string") {
@@ -32872,7 +33139,7 @@ var require_request = __commonJS({
         this.completed = false;
         this.aborted = false;
         this.upgrade = upgrade || null;
-        this.path = query ? util.buildURL(path27, query) : path27;
+        this.path = query ? util.buildURL(path28, query) : path28;
         this.origin = origin;
         this.idempotent = idempotent == null ? method === "HEAD" || method === "GET" : idempotent;
         this.blocking = blocking == null ? false : blocking;
@@ -33880,9 +34147,9 @@ var require_RedirectHandler = __commonJS({
           return this.handler.onHeaders(statusCode, headers, resume, statusText);
         }
         const { origin, pathname, search } = util.parseURL(new URL(this.location, this.opts.origin && new URL(this.opts.path, this.opts.origin)));
-        const path27 = search ? `${pathname}${search}` : pathname;
+        const path28 = search ? `${pathname}${search}` : pathname;
         this.opts.headers = cleanRequestHeaders(this.opts.headers, statusCode === 303, this.opts.origin !== origin);
-        this.opts.path = path27;
+        this.opts.path = path28;
         this.opts.origin = origin;
         this.opts.maxRedirections = 0;
         this.opts.query = null;
@@ -34002,7 +34269,7 @@ var require_client = __commonJS({
     "use strict";
     var assert = require("assert");
     var net = require("net");
-    var http2 = require("http");
+    var http3 = require("http");
     var { pipeline } = require("stream");
     var util = require_util();
     var timers = require_timers();
@@ -34224,7 +34491,7 @@ var require_client = __commonJS({
         this[kConnector] = connect2;
         this[kSocket] = null;
         this[kPipelining] = pipelining != null ? pipelining : 1;
-        this[kMaxHeadersSize] = maxHeaderSize || http2.maxHeaderSize;
+        this[kMaxHeadersSize] = maxHeaderSize || http3.maxHeaderSize;
         this[kKeepAliveDefaultTimeout] = keepAliveTimeout == null ? 4e3 : keepAliveTimeout;
         this[kKeepAliveMaxTimeout] = keepAliveMaxTimeout == null ? 6e5 : keepAliveMaxTimeout;
         this[kKeepAliveTimeoutThreshold] = keepAliveTimeoutThreshold == null ? 1e3 : keepAliveTimeoutThreshold;
@@ -35124,7 +35391,7 @@ var require_client = __commonJS({
         writeH2(client, client[kHTTP2Session], request);
         return;
       }
-      const { body, method, path: path27, host, upgrade, headers, blocking, reset } = request;
+      const { body, method, path: path28, host, upgrade, headers, blocking, reset } = request;
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
         body.read(0);
@@ -35174,7 +35441,7 @@ var require_client = __commonJS({
       if (blocking) {
         socket[kBlocking] = true;
       }
-      let header = `${method} ${path27} HTTP/1.1\r
+      let header = `${method} ${path28} HTTP/1.1\r
 `;
       if (typeof host === "string") {
         header += `host: ${host}\r
@@ -35237,7 +35504,7 @@ upgrade: ${upgrade}\r
       return true;
     }
     function writeH2(client, session, request) {
-      const { body, method, path: path27, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
+      const { body, method, path: path28, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
       let headers;
       if (typeof reqHeaders === "string") headers = Request[kHTTP2CopyHeaders](reqHeaders.trim());
       else headers = reqHeaders;
@@ -35280,7 +35547,7 @@ upgrade: ${upgrade}\r
         });
         return true;
       }
-      headers[HTTP2_HEADER_PATH] = path27;
+      headers[HTTP2_HEADER_PATH] = path28;
       headers[HTTP2_HEADER_SCHEME] = "https";
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
@@ -37523,20 +37790,20 @@ var require_mock_utils = __commonJS({
       }
       return true;
     }
-    function safeUrl(path27) {
-      if (typeof path27 !== "string") {
-        return path27;
+    function safeUrl(path28) {
+      if (typeof path28 !== "string") {
+        return path28;
       }
-      const pathSegments = path27.split("?");
+      const pathSegments = path28.split("?");
       if (pathSegments.length !== 2) {
-        return path27;
+        return path28;
       }
       const qp = new URLSearchParams(pathSegments.pop());
       qp.sort();
       return [...pathSegments, qp.toString()].join("?");
     }
-    function matchKey(mockDispatch2, { path: path27, method, body, headers }) {
-      const pathMatch = matchValue(mockDispatch2.path, path27);
+    function matchKey(mockDispatch2, { path: path28, method, body, headers }) {
+      const pathMatch = matchValue(mockDispatch2.path, path28);
       const methodMatch = matchValue(mockDispatch2.method, method);
       const bodyMatch = typeof mockDispatch2.body !== "undefined" ? matchValue(mockDispatch2.body, body) : true;
       const headersMatch = matchHeaders(mockDispatch2, headers);
@@ -37554,7 +37821,7 @@ var require_mock_utils = __commonJS({
     function getMockDispatch(mockDispatches, key) {
       const basePath = key.query ? buildURL(key.path, key.query) : key.path;
       const resolvedPath = typeof basePath === "string" ? safeUrl(basePath) : basePath;
-      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path27 }) => matchValue(safeUrl(path27), resolvedPath));
+      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path28 }) => matchValue(safeUrl(path28), resolvedPath));
       if (matchedMockDispatches.length === 0) {
         throw new MockNotMatchedError(`Mock dispatch not matched for path '${resolvedPath}'`);
       }
@@ -37591,9 +37858,9 @@ var require_mock_utils = __commonJS({
       }
     }
     function buildKey(opts) {
-      const { path: path27, method, body, headers, query } = opts;
+      const { path: path28, method, body, headers, query } = opts;
       return {
-        path: path27,
+        path: path28,
         method,
         body,
         headers,
@@ -38042,10 +38309,10 @@ var require_pending_interceptors_formatter = __commonJS({
       }
       format(pendingInterceptors) {
         const withPrettyHeaders = pendingInterceptors.map(
-          ({ method, path: path27, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
+          ({ method, path: path28, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
             Method: method,
             Origin: origin,
-            Path: path27,
+            Path: path28,
             "Status code": statusCode,
             Persistent: persist ? "\u2705" : "\u274C",
             Invocations: timesInvoked,
@@ -42666,8 +42933,8 @@ var require_util6 = __commonJS({
         }
       }
     }
-    function validateCookiePath(path27) {
-      for (const char of path27) {
+    function validateCookiePath(path28) {
+      for (const char of path28) {
         const code = char.charCodeAt(0);
         if (code < 33 || char === ";") {
           throw new Error("Invalid cookie path");
@@ -43464,9 +43731,9 @@ var require_connection = __commonJS({
     channels.open = diagnosticsChannel.channel("undici:websocket:open");
     channels.close = diagnosticsChannel.channel("undici:websocket:close");
     channels.socketError = diagnosticsChannel.channel("undici:websocket:socket_error");
-    var crypto2;
+    var crypto6;
     try {
-      crypto2 = require("crypto");
+      crypto6 = require("crypto");
     } catch {
     }
     function establishWebSocketConnection(url, protocols, ws, onEstablish, options) {
@@ -43485,7 +43752,7 @@ var require_connection = __commonJS({
         const headersList = new Headers(options.headers)[kHeadersList];
         request.headersList = headersList;
       }
-      const keyValue = crypto2.randomBytes(16).toString("base64");
+      const keyValue = crypto6.randomBytes(16).toString("base64");
       request.headersList.append("sec-websocket-key", keyValue);
       request.headersList.append("sec-websocket-version", "13");
       for (const protocol of protocols) {
@@ -43514,7 +43781,7 @@ var require_connection = __commonJS({
             return;
           }
           const secWSAccept = response.headersList.get("Sec-WebSocket-Accept");
-          const digest = crypto2.createHash("sha1").update(keyValue + uid).digest("base64");
+          const digest = crypto6.createHash("sha1").update(keyValue + uid).digest("base64");
           if (secWSAccept !== digest) {
             failWebsocketConnection(ws, "Incorrect hash received in Sec-WebSocket-Accept header.");
             return;
@@ -43594,9 +43861,9 @@ var require_frame = __commonJS({
   "node_modules/undici/lib/websocket/frame.js"(exports2, module2) {
     "use strict";
     var { maxUnsigned16Bit } = require_constants5();
-    var crypto2;
+    var crypto6;
     try {
-      crypto2 = require("crypto");
+      crypto6 = require("crypto");
     } catch {
     }
     var WebsocketFrameSend = class {
@@ -43605,7 +43872,7 @@ var require_frame = __commonJS({
        */
       constructor(data) {
         this.frameData = data;
-        this.maskKey = crypto2.randomBytes(4);
+        this.maskKey = crypto6.randomBytes(4);
       }
       createFrame(opcode) {
         const bodyLength = this.frameData?.byteLength ?? 0;
@@ -44347,11 +44614,11 @@ var require_undici = __commonJS({
           if (typeof opts.path !== "string") {
             throw new InvalidArgumentError("invalid opts.path");
           }
-          let path27 = opts.path;
+          let path28 = opts.path;
           if (!opts.path.startsWith("/")) {
-            path27 = `/${path27}`;
+            path28 = `/${path28}`;
           }
-          url = new URL(util.parseOrigin(url).origin + path27);
+          url = new URL(util.parseOrigin(url).origin + path28);
         } else {
           if (!opts) {
             opts = typeof url === "object" ? url : {};
@@ -48096,6 +48363,569 @@ var init_git_checkout_provider = __esm({
   }
 });
 
+// src/agent-protocol/types.ts
+var InvalidStateTransitionError, TaskNotFoundError, ContextMismatchError, InvalidRequestError, ParseError, A2ATimeoutError, A2ARequestError, A2AMaxTurnsExceededError, A2AInputRequiredError, A2AAuthRequiredError, A2ATaskFailedError, A2ATaskRejectedError, AgentCardFetchError, InvalidAgentCardError;
+var init_types = __esm({
+  "src/agent-protocol/types.ts"() {
+    "use strict";
+    InvalidStateTransitionError = class extends Error {
+      constructor(fromState, toState, detail) {
+        super(
+          `Invalid state transition from '${fromState}' to '${toState}'${detail ? `: ${detail}` : ""}`
+        );
+        this.fromState = fromState;
+        this.toState = toState;
+        this.name = "InvalidStateTransitionError";
+      }
+    };
+    TaskNotFoundError = class extends Error {
+      constructor(taskId) {
+        super(`Task not found: ${taskId}`);
+        this.taskId = taskId;
+        this.name = "TaskNotFoundError";
+      }
+    };
+    ContextMismatchError = class extends Error {
+      constructor(providedContextId, existingContextId) {
+        super(
+          `Context ID mismatch: provided '${providedContextId}' but task belongs to '${existingContextId}'`
+        );
+        this.providedContextId = providedContextId;
+        this.existingContextId = existingContextId;
+        this.name = "ContextMismatchError";
+      }
+    };
+    InvalidRequestError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "InvalidRequestError";
+      }
+    };
+    ParseError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "ParseError";
+      }
+    };
+    A2ATimeoutError = class extends Error {
+      constructor(taskId, timeoutMs) {
+        super(`A2A task ${taskId} timed out after ${timeoutMs}ms`);
+        this.taskId = taskId;
+        this.timeoutMs = timeoutMs;
+        this.name = "A2ATimeoutError";
+      }
+    };
+    A2ARequestError = class extends Error {
+      constructor(url, statusCode, body) {
+        super(`A2A request to ${url} failed with status ${statusCode}: ${body}`);
+        this.url = url;
+        this.statusCode = statusCode;
+        this.body = body;
+        this.name = "A2ARequestError";
+      }
+    };
+    A2AMaxTurnsExceededError = class extends Error {
+      constructor(taskId, maxTurns) {
+        super(`A2A task ${taskId} exceeded max turns (${maxTurns})`);
+        this.taskId = taskId;
+        this.maxTurns = maxTurns;
+        this.name = "A2AMaxTurnsExceededError";
+      }
+    };
+    A2AInputRequiredError = class extends Error {
+      constructor(taskId, prompt) {
+        super(`A2A task ${taskId} requires input: ${prompt}`);
+        this.taskId = taskId;
+        this.prompt = prompt;
+        this.name = "A2AInputRequiredError";
+      }
+    };
+    A2AAuthRequiredError = class extends Error {
+      constructor(taskId) {
+        super(`A2A task ${taskId} requires authentication`);
+        this.taskId = taskId;
+        this.name = "A2AAuthRequiredError";
+      }
+    };
+    A2ATaskFailedError = class extends Error {
+      constructor(taskId, detail) {
+        super(`A2A task ${taskId} failed: ${detail}`);
+        this.taskId = taskId;
+        this.detail = detail;
+        this.name = "A2ATaskFailedError";
+      }
+    };
+    A2ATaskRejectedError = class extends Error {
+      constructor(taskId, state) {
+        super(`A2A task ${taskId} was ${state}`);
+        this.taskId = taskId;
+        this.state = state;
+        this.name = "A2ATaskRejectedError";
+      }
+    };
+    AgentCardFetchError = class extends Error {
+      constructor(url, statusCode, statusText) {
+        super(`Failed to fetch Agent Card from ${url}: ${statusCode} ${statusText}`);
+        this.url = url;
+        this.statusCode = statusCode;
+        this.statusText = statusText;
+        this.name = "AgentCardFetchError";
+      }
+    };
+    InvalidAgentCardError = class extends Error {
+      constructor(url, detail) {
+        super(`Invalid Agent Card from ${url}: ${detail}`);
+        this.url = url;
+        this.detail = detail;
+        this.name = "InvalidAgentCardError";
+      }
+    };
+  }
+});
+
+// src/agent-protocol/state-transitions.ts
+function assertValidTransition(from, to) {
+  const allowed = VALID_TRANSITIONS[from];
+  if (!allowed || !allowed.includes(to)) {
+    throw new InvalidStateTransitionError(from, to);
+  }
+}
+function isTerminalState(state) {
+  return TERMINAL_STATES.has(state);
+}
+var VALID_TRANSITIONS, TERMINAL_STATES;
+var init_state_transitions = __esm({
+  "src/agent-protocol/state-transitions.ts"() {
+    "use strict";
+    init_types();
+    VALID_TRANSITIONS = {
+      submitted: ["working", "canceled", "rejected"],
+      working: ["completed", "failed", "canceled", "input_required", "auth_required"],
+      input_required: ["working", "canceled", "failed"],
+      auth_required: ["working", "canceled", "failed"],
+      // Terminal states: no outgoing transitions
+      completed: [],
+      failed: [],
+      canceled: [],
+      rejected: []
+    };
+    TERMINAL_STATES = /* @__PURE__ */ new Set([
+      "completed",
+      "failed",
+      "canceled",
+      "rejected"
+    ]);
+  }
+});
+
+// src/providers/a2a-check-provider.ts
+var AgentCardCache, cardCache, A2ACheckProvider;
+var init_a2a_check_provider = __esm({
+  "src/providers/a2a-check-provider.ts"() {
+    "use strict";
+    init_check_provider_interface();
+    init_liquid_extensions();
+    init_template_context();
+    init_logger();
+    init_sandbox();
+    init_types();
+    init_state_transitions();
+    AgentCardCache = class {
+      cache = /* @__PURE__ */ new Map();
+      ttlMs;
+      constructor(ttlMs = 3e5) {
+        this.ttlMs = ttlMs;
+      }
+      async fetch(url) {
+        const entry = this.cache.get(url);
+        if (entry && Date.now() - entry.fetchedAt < this.ttlMs) {
+          return entry.card;
+        }
+        const resp = await fetch(url);
+        if (!resp.ok) {
+          throw new AgentCardFetchError(url, resp.status, resp.statusText);
+        }
+        let card;
+        try {
+          card = await resp.json();
+        } catch {
+          throw new InvalidAgentCardError(url, "Response is not valid JSON");
+        }
+        if (!card.name || !card.supported_interfaces?.length) {
+          throw new InvalidAgentCardError(url, "Missing required fields (name, supported_interfaces)");
+        }
+        this.cache.set(url, { card, fetchedAt: Date.now() });
+        return card;
+      }
+      invalidate(url) {
+        this.cache.delete(url);
+      }
+      clear() {
+        this.cache.clear();
+      }
+    };
+    cardCache = new AgentCardCache();
+    A2ACheckProvider = class extends CheckProvider {
+      liquid = createExtendedLiquid({ strictVariables: false });
+      sandbox;
+      createSecureSandbox() {
+        return createSecureSandbox();
+      }
+      getName() {
+        return "a2a";
+      }
+      getDescription() {
+        return "Call external A2A-compatible agents and collect their responses";
+      }
+      async validateConfig(config) {
+        if (!config || typeof config !== "object") return false;
+        const c = config;
+        if (c.type !== "a2a") return false;
+        if (!c.agent_card && !c.agent_url || c.agent_card && c.agent_url) return false;
+        if (!c.message || typeof c.message !== "string") return false;
+        return true;
+      }
+      async execute(prInfo, config, dependencyResults, context2) {
+        const stepName = config.checkName || "unknown";
+        const mock = context2?.hooks?.mockForStep?.(String(stepName));
+        if (mock !== void 0) {
+          const mockObj = typeof mock === "object" && mock !== null ? mock : { data: mock };
+          return { issues: [], ...mockObj };
+        }
+        const cfg = config;
+        const timeout = cfg.timeout ?? 3e5;
+        const pollInterval = cfg.poll_interval ?? 2e3;
+        const maxTurns = cfg.max_turns ?? 1;
+        const blocking = cfg.blocking !== false;
+        const acceptedOutputModes = cfg.accepted_output_modes ?? [
+          "text/plain",
+          "text/markdown",
+          "application/json"
+        ];
+        try {
+          let agentUrl;
+          if (cfg.agent_card) {
+            const card = await cardCache.fetch(cfg.agent_card);
+            agentUrl = card.supported_interfaces[0].url;
+          } else {
+            agentUrl = cfg.agent_url;
+          }
+          agentUrl = agentUrl.replace(/\/+$/, "");
+          const headers = { "Content-Type": "application/json" };
+          if (cfg.auth) {
+            const token = cfg.auth.token_env ? process.env[cfg.auth.token_env] : void 0;
+            if (cfg.auth.scheme === "bearer" && token) {
+              headers["Authorization"] = `Bearer ${token}`;
+            } else if (cfg.auth.scheme === "api_key" && token) {
+              headers[cfg.auth.header_name ?? "X-API-Key"] = token;
+            }
+          }
+          const templateCtx = buildProviderTemplateContext(
+            prInfo,
+            dependencyResults,
+            void 0,
+            void 0,
+            void 0,
+            {
+              attachMemoryReadHelpers: false
+            }
+          );
+          const renderedMessage = await this.liquid.parseAndRender(cfg.message, templateCtx);
+          const parts = [{ text: renderedMessage }];
+          if (cfg.data) {
+            for (const [, valueTemplate] of Object.entries(cfg.data)) {
+              const rendered = await this.liquid.parseAndRender(valueTemplate, templateCtx);
+              let dataValue;
+              try {
+                dataValue = JSON.parse(rendered);
+              } catch {
+                dataValue = rendered;
+              }
+              parts.push({ data: dataValue, media_type: "application/json" });
+            }
+          }
+          if (cfg.files) {
+            for (const f of cfg.files) {
+              parts.push({ url: f.url, media_type: f.media_type, filename: f.filename });
+            }
+          }
+          const message = {
+            message_id: `visor-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            role: "user",
+            parts
+          };
+          const sendUrl = `${agentUrl}/message:send`;
+          let response = await this.sendMessage(
+            sendUrl,
+            { message, configuration: { blocking, accepted_output_modes: acceptedOutputModes } },
+            headers
+          );
+          let result;
+          if (response.message) {
+            result = this.messageToReviewSummary(response.message);
+          } else {
+            let task = response.task;
+            const deadline = Date.now() + timeout;
+            let turns = 0;
+            let gotMessageResult = false;
+            while (!isTerminalState(task.status.state)) {
+              if (Date.now() > deadline) throw new A2ATimeoutError(task.id, timeout);
+              if (task.status.state === "input_required") {
+                turns++;
+                if (turns > maxTurns) throw new A2AMaxTurnsExceededError(task.id, maxTurns);
+                if (cfg.on_input_required) {
+                  const ctx = { ...templateCtx, task };
+                  const replyText = await this.liquid.parseAndRender(cfg.on_input_required, ctx);
+                  const followUp = {
+                    message: {
+                      message_id: `visor-reply-${Date.now()}`,
+                      role: "user",
+                      task_id: task.id,
+                      context_id: task.context_id,
+                      parts: [{ text: replyText }]
+                    },
+                    configuration: { blocking, accepted_output_modes: acceptedOutputModes }
+                  };
+                  response = await this.sendMessage(sendUrl, followUp, headers);
+                  if (response.task) {
+                    task = response.task;
+                    continue;
+                  }
+                  if (response.message) {
+                    result = this.messageToReviewSummary(response.message);
+                    gotMessageResult = true;
+                    break;
+                  }
+                } else {
+                  const prompt = task.status.message?.parts?.map((p) => p.text).filter(Boolean).join(" ") ?? "Agent requires input";
+                  throw new A2AInputRequiredError(task.id, prompt);
+                }
+              }
+              if (task.status.state === "auth_required") throw new A2AAuthRequiredError(task.id);
+              await new Promise((r) => setTimeout(r, pollInterval));
+              task = await this.getTask(agentUrl, task.id, headers);
+            }
+            if (!gotMessageResult) {
+              if (task.status.state === "failed") {
+                const detail = task.status.message?.parts?.map((p) => p.text).filter(Boolean).join(" ") ?? "Unknown failure";
+                throw new A2ATaskFailedError(task.id, detail);
+              }
+              if (task.status.state === "canceled" || task.status.state === "rejected") {
+                throw new A2ATaskRejectedError(task.id, task.status.state);
+              }
+              result = this.taskToReviewSummary(task);
+            }
+          }
+          if (cfg.transform_js) {
+            try {
+              this.sandbox = this.createSecureSandbox();
+              const scope = {
+                output: result,
+                pr: templateCtx.pr,
+                files: templateCtx.files,
+                outputs: templateCtx.outputs,
+                env: process.env
+              };
+              const transformed = compileAndRun(
+                this.sandbox,
+                `return (${cfg.transform_js});`,
+                scope,
+                { injectLog: true, wrapFunction: false, logPrefix: "[a2a:transform_js]" }
+              );
+              if (transformed && typeof transformed === "object" && "issues" in transformed) {
+                result = transformed;
+              } else {
+                result = { ...result, output: transformed };
+              }
+              logger.verbose("[a2a] Applied transform_js successfully");
+            } catch (error) {
+              logger.error(`[a2a] Failed to apply transform_js: ${error}`);
+              return {
+                issues: [
+                  {
+                    file: "a2a",
+                    line: 0,
+                    ruleId: "a2a/transform_js_error",
+                    message: `Failed to apply JavaScript transform: ${error instanceof Error ? error.message : "Unknown error"}`,
+                    severity: "error",
+                    category: "logic"
+                  }
+                ]
+              };
+            }
+          }
+          return result;
+        } catch (err) {
+          if (err instanceof A2ATimeoutError || err instanceof A2AMaxTurnsExceededError || err instanceof A2AInputRequiredError || err instanceof A2AAuthRequiredError || err instanceof A2ATaskFailedError || err instanceof A2ATaskRejectedError || err instanceof AgentCardFetchError || err instanceof InvalidAgentCardError || err instanceof A2ARequestError) {
+            return {
+              issues: [
+                {
+                  file: "a2a",
+                  line: 0,
+                  ruleId: "a2a/error",
+                  message: err.message,
+                  severity: "error",
+                  category: "logic"
+                }
+              ]
+            };
+          }
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.error(`[a2a] Unexpected error: ${msg}`);
+          return {
+            issues: [
+              {
+                file: "a2a",
+                line: 0,
+                ruleId: "a2a/error",
+                message: `A2A provider error: ${msg}`,
+                severity: "error",
+                category: "logic"
+              }
+            ]
+          };
+        }
+      }
+      getSupportedConfigKeys() {
+        return [
+          "type",
+          "agent_card",
+          "agent_url",
+          "auth",
+          "message",
+          "data",
+          "files",
+          "accepted_output_modes",
+          "blocking",
+          "timeout",
+          "poll_interval",
+          "max_turns",
+          "on_input_required",
+          "transform_js",
+          "depends_on",
+          "on",
+          "if",
+          "fail_if",
+          "group"
+        ];
+      }
+      async isAvailable() {
+        return true;
+      }
+      getRequirements() {
+        return [];
+      }
+      // -------------------------------------------------------------------------
+      // Private helpers
+      // -------------------------------------------------------------------------
+      async sendMessage(url, req, headers) {
+        const resp = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(req),
+          signal: AbortSignal.timeout(6e4)
+        });
+        if (!resp.ok) {
+          const body = await resp.text().catch(() => "");
+          throw new A2ARequestError(url, resp.status, body);
+        }
+        const data = await resp.json();
+        if (data.task) return { task: data.task };
+        if (data.message) return { message: data.message };
+        if (data.id && data.status)
+          return { task: data };
+        throw new A2ARequestError(url, resp.status, "Response is neither Task nor Message");
+      }
+      async getTask(agentUrl, taskId, headers) {
+        const url = `${agentUrl}/tasks/${taskId}`;
+        const resp = await fetch(url, { headers, signal: AbortSignal.timeout(6e4) });
+        if (!resp.ok) throw new A2ARequestError(url, resp.status, await resp.text().catch(() => ""));
+        return await resp.json();
+      }
+      taskToReviewSummary(task) {
+        const textParts = [];
+        const issues = [];
+        for (const a of task.artifacts ?? []) {
+          for (const p of a.parts ?? []) {
+            if (p.text) textParts.push(p.text);
+            if (p.data != null) {
+              this.extractIssuesFromData(p.data, issues);
+            }
+          }
+        }
+        if (task.status.message) {
+          for (const p of task.status.message.parts ?? []) {
+            if (p.text) textParts.push(p.text);
+            if (p.data != null) {
+              this.extractIssuesFromData(p.data, issues);
+            }
+          }
+        }
+        const summary = textParts.join("\n");
+        return { issues, output: summary || void 0 };
+      }
+      messageToReviewSummary(message) {
+        const textParts = [];
+        const issues = [];
+        for (const p of message.parts ?? []) {
+          if (p.text) textParts.push(p.text);
+          if (p.data != null) {
+            this.extractIssuesFromData(p.data, issues);
+          }
+        }
+        const summary = textParts.join("\n");
+        return { issues, output: summary || void 0 };
+      }
+      /**
+       * Extract structured ReviewIssue objects from a data part.
+       * Accepts a single issue object or an array of issue objects.
+       * Each object should have at least a `message` field to be recognized as an issue.
+       */
+      extractIssuesFromData(data, issues) {
+        const items = Array.isArray(data) ? data : [data];
+        for (const item of items) {
+          if (!item || typeof item !== "object") continue;
+          const obj = item;
+          if (typeof obj.message !== "string") continue;
+          const severity = this.normalizeSeverity(obj.severity);
+          const category = this.normalizeCategory(obj.category);
+          issues.push({
+            file: typeof obj.file === "string" ? obj.file : "a2a",
+            line: typeof obj.line === "number" ? obj.line : 0,
+            ruleId: typeof obj.ruleId === "string" ? obj.ruleId : "a2a/agent-issue",
+            message: obj.message,
+            severity,
+            category,
+            ...typeof obj.suggestion === "string" ? { suggestion: obj.suggestion } : {},
+            ...typeof obj.replacement === "string" ? { replacement: obj.replacement } : {},
+            ...typeof obj.endLine === "number" ? { endLine: obj.endLine } : {}
+          });
+        }
+      }
+      normalizeSeverity(val) {
+        if (typeof val === "string") {
+          const lower = val.toLowerCase();
+          if (lower === "info" || lower === "warning" || lower === "error" || lower === "critical") {
+            return lower;
+          }
+          if (lower === "warn") return "warning";
+          if (lower === "fatal") return "critical";
+        }
+        return "warning";
+      }
+      normalizeCategory(val) {
+        if (typeof val === "string") {
+          const lower = val.toLowerCase();
+          if (lower === "security" || lower === "performance" || lower === "style" || lower === "logic" || lower === "documentation") {
+            return lower;
+          }
+        }
+        return "logic";
+      }
+    };
+  }
+});
+
 // src/providers/check-provider-registry.ts
 var check_provider_registry_exports = {};
 __export(check_provider_registry_exports, {
@@ -48120,6 +48950,7 @@ var init_check_provider_registry = __esm({
     init_script_check_provider();
     init_workflow_check_provider();
     init_git_checkout_provider();
+    init_a2a_check_provider();
     CheckProviderRegistry = class _CheckProviderRegistry {
       providers = /* @__PURE__ */ new Map();
       static instance;
@@ -48153,6 +48984,7 @@ var init_check_provider_registry = __esm({
         this.register(new HumanInputCheckProvider());
         this.register(new WorkflowCheckProvider());
         this.register(new GitCheckoutProvider());
+        this.register(new A2ACheckProvider());
         try {
           this.register(new ClaudeCodeCheckProvider());
         } catch (error) {
@@ -49773,23 +50605,23 @@ __export(renderer_schema_exports, {
 });
 async function loadRendererSchema(name) {
   try {
-    const fs23 = await import("fs/promises");
-    const path27 = await import("path");
+    const fs25 = await import("fs/promises");
+    const path28 = await import("path");
     const sanitized = String(name).replace(/[^a-zA-Z0-9-]/g, "");
     if (!sanitized) return void 0;
     const candidates = [
       // When bundled with ncc, __dirname is dist/ and output/ is at dist/output/
-      path27.join(__dirname, "output", sanitized, "schema.json"),
+      path28.join(__dirname, "output", sanitized, "schema.json"),
       // When running from source, __dirname is src/state-machine/dispatch/ and output/ is at output/
-      path27.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
+      path28.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
       // When running from a checkout with output/ folder copied to CWD
-      path27.join(process.cwd(), "output", sanitized, "schema.json"),
+      path28.join(process.cwd(), "output", sanitized, "schema.json"),
       // Fallback: cwd/dist/output/
-      path27.join(process.cwd(), "dist", "output", sanitized, "schema.json")
+      path28.join(process.cwd(), "dist", "output", sanitized, "schema.json")
     ];
     for (const p of candidates) {
       try {
-        const raw = await fs23.readFile(p, "utf-8");
+        const raw = await fs25.readFile(p, "utf-8");
         return JSON.parse(raw);
       } catch {
       }
@@ -52230,8 +53062,8 @@ function updateStats2(results, state, isForEachIteration = false) {
 async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs23 = await import("fs/promises");
-    const path27 = await import("path");
+    const fs25 = await import("fs/promises");
+    const path28 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" && !schemaRaw.includes("{{") && !schemaRaw.includes("{%") ? schemaRaw : typeof schemaRaw === "object" ? "code-review" : "plain";
     let templateContent;
@@ -52240,27 +53072,27 @@ async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
       logger.debug(`[LevelDispatch] Using inline template for ${checkId}`);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path27.resolve(process.cwd(), file);
-      templateContent = await fs23.readFile(resolved, "utf-8");
+      const resolved = path28.resolve(process.cwd(), file);
+      templateContent = await fs25.readFile(resolved, "utf-8");
       logger.debug(`[LevelDispatch] Using template file for ${checkId}: ${resolved}`);
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path27.join(__dirname, "output", sanitized, "template.liquid"),
+          path28.join(__dirname, "output", sanitized, "template.liquid"),
           // bundled: dist/output/
-          path27.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path28.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // source (from state-machine/states)
-          path27.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
+          path28.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
           // source (alternate)
-          path27.join(process.cwd(), "output", sanitized, "template.liquid"),
+          path28.join(process.cwd(), "output", sanitized, "template.liquid"),
           // fallback: cwd/output/
-          path27.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          path28.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
           // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs23.readFile(p, "utf-8");
+            templateContent = await fs25.readFile(p, "utf-8");
             if (templateContent) {
               logger.debug(`[LevelDispatch] Using schema template for ${checkId}: ${p}`);
               break;
@@ -57986,11 +58818,1596 @@ var init_tui_frontend = __esm({
   }
 });
 
+// src/agent-protocol/task-store.ts
+function safeJsonParse2(value) {
+  if (!value) return void 0;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return void 0;
+  }
+}
+function nowISO() {
+  return (/* @__PURE__ */ new Date()).toISOString();
+}
+function taskRowToAgentTask(row) {
+  return {
+    id: row.id,
+    context_id: row.context_id,
+    status: {
+      state: row.state,
+      message: safeJsonParse2(row.status_message),
+      timestamp: row.updated_at
+    },
+    artifacts: safeJsonParse2(row.artifacts) ?? [],
+    history: safeJsonParse2(row.history) ?? [],
+    metadata: safeJsonParse2(row.request_metadata),
+    workflow_id: row.workflow_id ?? void 0
+  };
+}
+var import_path14, import_fs10, import_crypto5, SqliteTaskStore;
+var init_task_store = __esm({
+  "src/agent-protocol/task-store.ts"() {
+    "use strict";
+    import_path14 = __toESM(require("path"));
+    import_fs10 = __toESM(require("fs"));
+    import_crypto5 = __toESM(require("crypto"));
+    init_logger();
+    init_types();
+    init_state_transitions();
+    SqliteTaskStore = class {
+      db = null;
+      dbPath;
+      constructor(filename) {
+        this.dbPath = filename || ".visor/agent-tasks.db";
+      }
+      async initialize() {
+        const resolvedPath = import_path14.default.resolve(process.cwd(), this.dbPath);
+        const dir = import_path14.default.dirname(resolvedPath);
+        import_fs10.default.mkdirSync(dir, { recursive: true });
+        const { createRequire } = require("module");
+        const runtimeRequire = createRequire(__filename);
+        let Database;
+        try {
+          Database = runtimeRequire("better-sqlite3");
+        } catch (err) {
+          const code = err?.code;
+          if (code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND") {
+            throw new Error(
+              "better-sqlite3 is required for agent protocol task storage. Install it with: npm install better-sqlite3"
+            );
+          }
+          throw err;
+        }
+        this.db = new Database(resolvedPath);
+        this.db.pragma("journal_mode = WAL");
+        this.migrateSchema();
+        logger.info(`[AgentTaskStore] Initialized at ${this.dbPath}`);
+      }
+      async shutdown() {
+        if (this.db) {
+          this.db.close();
+          this.db = null;
+        }
+      }
+      getDb() {
+        if (!this.db) throw new Error("TaskStore not initialized");
+        return this.db;
+      }
+      /** Expose the underlying database for sibling managers (e.g. PushNotificationManager). */
+      getDatabase() {
+        return this.getDb();
+      }
+      migrateSchema() {
+        const db = this.getDb();
+        db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_tasks (
+        id TEXT PRIMARY KEY,
+        context_id TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'submitted',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        request_message TEXT NOT NULL,
+        request_config TEXT,
+        request_metadata TEXT,
+        status_message TEXT,
+        artifacts TEXT DEFAULT '[]',
+        history TEXT DEFAULT '[]',
+        workflow_id TEXT,
+        run_id TEXT,
+        claimed_by TEXT,
+        claimed_at TEXT,
+        expires_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_agent_tasks_context ON agent_tasks(context_id);
+      CREATE INDEX IF NOT EXISTS idx_agent_tasks_state ON agent_tasks(state);
+      CREATE INDEX IF NOT EXISTS idx_agent_tasks_updated ON agent_tasks(updated_at);
+      CREATE INDEX IF NOT EXISTS idx_agent_tasks_claim ON agent_tasks(state, claimed_by, claimed_at);
+      CREATE INDEX IF NOT EXISTS idx_agent_tasks_expires ON agent_tasks(expires_at);
+    `);
+      }
+      // -------------------------------------------------------------------------
+      // CRUD
+      // -------------------------------------------------------------------------
+      createTask(params) {
+        const db = this.getDb();
+        const id = import_crypto5.default.randomUUID();
+        const now = nowISO();
+        const contextId = this.resolveContextId(params.requestMessage, params.contextId);
+        const expiresAt = params.expiresAt ?? null;
+        db.prepare(
+          `INSERT INTO agent_tasks
+        (id, context_id, state, created_at, updated_at,
+         request_message, request_config, request_metadata,
+         workflow_id, expires_at, artifacts, history)
+       VALUES (?, ?, 'submitted', ?, ?,
+         ?, ?, ?,
+         ?, ?, '[]', '[]')`
+        ).run(
+          id,
+          contextId,
+          now,
+          now,
+          JSON.stringify(params.requestMessage),
+          params.requestConfig ? JSON.stringify(params.requestConfig) : null,
+          params.requestMetadata ? JSON.stringify(params.requestMetadata) : null,
+          params.workflowId ?? null,
+          expiresAt
+        );
+        return {
+          id,
+          context_id: contextId,
+          status: { state: "submitted", timestamp: now },
+          artifacts: [],
+          history: [],
+          metadata: params.requestMetadata,
+          workflow_id: params.workflowId
+        };
+      }
+      getTask(taskId) {
+        const db = this.getDb();
+        const row = db.prepare("SELECT * FROM agent_tasks WHERE id = ?").get(taskId);
+        return row ? taskRowToAgentTask(row) : null;
+      }
+      buildFilterClause(filter) {
+        const conditions = [];
+        const params = [];
+        if (filter.contextId) {
+          conditions.push("context_id = ?");
+          params.push(filter.contextId);
+        }
+        if (filter.state && filter.state.length > 0) {
+          const placeholders = filter.state.map(() => "?").join(", ");
+          conditions.push(`state IN (${placeholders})`);
+          params.push(...filter.state);
+        }
+        if (filter.workflowId) {
+          conditions.push("workflow_id = ?");
+          params.push(filter.workflowId);
+        }
+        const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+        return { where, params };
+      }
+      listTasks(filter) {
+        const db = this.getDb();
+        const { where, params } = this.buildFilterClause(filter);
+        const countRow = db.prepare(`SELECT COUNT(*) as total FROM agent_tasks ${where}`).get(...params);
+        const total = countRow.total;
+        const limit = Math.min(filter.limit ?? 50, 200);
+        const offset = filter.offset ?? 0;
+        const rows = db.prepare(`SELECT * FROM agent_tasks ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
+        return {
+          tasks: rows.map(taskRowToAgentTask),
+          total
+        };
+      }
+      listTasksRaw(filter) {
+        const db = this.getDb();
+        const { where, params } = this.buildFilterClause(filter);
+        const countRow = db.prepare(`SELECT COUNT(*) as total FROM agent_tasks ${where}`).get(...params);
+        const total = countRow.total;
+        const limit = Math.min(filter.limit ?? 50, 200);
+        const offset = filter.offset ?? 0;
+        const rawRows = db.prepare(`SELECT * FROM agent_tasks ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
+        const rows = rawRows.map((r) => {
+          let messageText = "";
+          try {
+            const msg = JSON.parse(r.request_message);
+            const parts = msg.parts ?? msg.content?.parts ?? [];
+            const textPart = parts.find((p) => p.type === "text" || typeof p.text === "string");
+            messageText = textPart?.text ?? "";
+          } catch {
+          }
+          return {
+            id: r.id,
+            context_id: r.context_id,
+            state: r.state,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+            claimed_by: r.claimed_by,
+            claimed_at: r.claimed_at,
+            workflow_id: r.workflow_id,
+            run_id: r.run_id,
+            request_message: messageText
+          };
+        });
+        return { rows, total };
+      }
+      // -------------------------------------------------------------------------
+      // State mutations
+      // -------------------------------------------------------------------------
+      updateTaskState(taskId, newState, statusMessage) {
+        const db = this.getDb();
+        const row = db.prepare("SELECT state FROM agent_tasks WHERE id = ?").get(taskId);
+        if (!row) throw new TaskNotFoundError(taskId);
+        assertValidTransition(row.state, newState);
+        const now = nowISO();
+        db.prepare(
+          `UPDATE agent_tasks
+       SET state = ?, updated_at = ?, status_message = ?
+       WHERE id = ?`
+        ).run(newState, now, statusMessage ? JSON.stringify(statusMessage) : null, taskId);
+      }
+      addArtifact(taskId, artifact) {
+        const db = this.getDb();
+        const row = db.prepare("SELECT artifacts FROM agent_tasks WHERE id = ?").get(taskId);
+        if (!row) throw new TaskNotFoundError(taskId);
+        const artifacts = safeJsonParse2(row.artifacts) ?? [];
+        artifacts.push(artifact);
+        db.prepare("UPDATE agent_tasks SET artifacts = ?, updated_at = ? WHERE id = ?").run(
+          JSON.stringify(artifacts),
+          nowISO(),
+          taskId
+        );
+      }
+      appendHistory(taskId, message) {
+        const db = this.getDb();
+        const row = db.prepare("SELECT history FROM agent_tasks WHERE id = ?").get(taskId);
+        if (!row) throw new TaskNotFoundError(taskId);
+        const history = safeJsonParse2(row.history) ?? [];
+        history.push(message);
+        db.prepare("UPDATE agent_tasks SET history = ?, updated_at = ? WHERE id = ?").run(
+          JSON.stringify(history),
+          nowISO(),
+          taskId
+        );
+      }
+      setRunId(taskId, runId) {
+        const db = this.getDb();
+        const result = db.prepare("UPDATE agent_tasks SET run_id = ?, updated_at = ? WHERE id = ?").run(runId, nowISO(), taskId);
+        if (result.changes === 0) throw new TaskNotFoundError(taskId);
+      }
+      // -------------------------------------------------------------------------
+      // Queue operations
+      // -------------------------------------------------------------------------
+      claimNextSubmitted(workerId) {
+        const db = this.getDb();
+        const now = nowISO();
+        const row = db.prepare(
+          `UPDATE agent_tasks
+         SET state = 'working', claimed_by = ?, claimed_at = ?, updated_at = ?
+         WHERE id = (
+           SELECT id FROM agent_tasks
+           WHERE state = 'submitted'
+           AND claimed_by IS NULL
+           ORDER BY created_at ASC
+           LIMIT 1
+         )
+         RETURNING *`
+        ).get(workerId, now, now);
+        return row ? taskRowToAgentTask(row) : null;
+      }
+      reclaimStaleTasks(_workerId, staleTimeoutMs) {
+        const db = this.getDb();
+        const now = nowISO();
+        const staleTimeoutSec = Math.floor((staleTimeoutMs ?? 3e5) / 1e3);
+        const rows = db.prepare(
+          `UPDATE agent_tasks
+         SET state = 'submitted', claimed_by = NULL, claimed_at = NULL, updated_at = ?
+         WHERE state = 'working'
+         AND claimed_at IS NOT NULL
+         AND claimed_at < datetime('now', '-' || ? || ' seconds')
+         RETURNING *`
+        ).all(now, staleTimeoutSec);
+        return rows.map(taskRowToAgentTask);
+      }
+      releaseClaim(taskId) {
+        const db = this.getDb();
+        db.prepare(
+          `UPDATE agent_tasks
+       SET state = 'submitted', claimed_by = NULL, claimed_at = NULL, updated_at = ?
+       WHERE id = ? AND state = 'working'`
+        ).run(nowISO(), taskId);
+      }
+      // -------------------------------------------------------------------------
+      // Cleanup
+      // -------------------------------------------------------------------------
+      deleteExpiredTasks() {
+        const db = this.getDb();
+        const now = nowISO();
+        const rows = db.prepare("SELECT id FROM agent_tasks WHERE expires_at IS NOT NULL AND expires_at < ?").all(now);
+        if (rows.length > 0) {
+          db.prepare("DELETE FROM agent_tasks WHERE expires_at IS NOT NULL AND expires_at < ?").run(
+            now
+          );
+        }
+        return rows.map((r) => r.id);
+      }
+      deleteTask(taskId) {
+        const db = this.getDb();
+        db.prepare("DELETE FROM agent_tasks WHERE id = ?").run(taskId);
+      }
+      // -------------------------------------------------------------------------
+      // Context ID resolution
+      // -------------------------------------------------------------------------
+      resolveContextId(message, providedContextId) {
+        if (message.task_id) {
+          const existingTask = this.getTask(message.task_id);
+          if (existingTask) {
+            if (message.context_id && message.context_id !== existingTask.context_id) {
+              throw new ContextMismatchError(message.context_id, existingTask.context_id);
+            }
+            return existingTask.context_id;
+          }
+        }
+        return message.context_id ?? providedContextId;
+      }
+    };
+  }
+});
+
+// src/agent-protocol/task-stream-manager.ts
+var TaskStreamManager;
+var init_task_stream_manager = __esm({
+  "src/agent-protocol/task-stream-manager.ts"() {
+    "use strict";
+    init_state_transitions();
+    TaskStreamManager = class {
+      subscribers = /* @__PURE__ */ new Map();
+      keepaliveTimers = /* @__PURE__ */ new Map();
+      keepaliveIntervalMs;
+      constructor(keepaliveIntervalMs = 3e4) {
+        this.keepaliveIntervalMs = keepaliveIntervalMs;
+      }
+      /**
+       * Subscribe an HTTP response to SSE events for a task.
+       * Sets SSE headers and registers cleanup on disconnect.
+       */
+      subscribe(taskId, res) {
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive"
+        });
+        if (!this.subscribers.has(taskId)) {
+          this.subscribers.set(taskId, /* @__PURE__ */ new Set());
+        }
+        this.subscribers.get(taskId).add(res);
+        res.on("close", () => {
+          this.removeSubscriber(taskId, res);
+        });
+        const timer = setInterval(() => {
+          if (res.writable) {
+            res.write(": keepalive\n\n");
+          } else {
+            this.removeSubscriber(taskId, res);
+          }
+        }, this.keepaliveIntervalMs);
+        this.keepaliveTimers.set(res, timer);
+      }
+      /**
+       * Emit an event to all subscribers of a task.
+       * If the event is a terminal status update, closes all connections.
+       */
+      emit(taskId, event) {
+        const subs = this.subscribers.get(taskId);
+        if (!subs || subs.size === 0) return;
+        const data = `data: ${JSON.stringify(event)}
+
+`;
+        for (const res of subs) {
+          if (res.writable) {
+            res.write(data);
+          }
+        }
+        if (event.type === "TaskStatusUpdateEvent" && isTerminalState(event.status.state)) {
+          for (const res of subs) {
+            this.clearKeepalive(res);
+            if (res.writable) {
+              res.end();
+            }
+          }
+          this.subscribers.delete(taskId);
+        }
+      }
+      /**
+       * Check if a task has any active subscribers.
+       */
+      hasSubscribers(taskId) {
+        return (this.subscribers.get(taskId)?.size ?? 0) > 0;
+      }
+      /**
+       * Get count of subscribers for a task.
+       */
+      getSubscriberCount(taskId) {
+        return this.subscribers.get(taskId)?.size ?? 0;
+      }
+      /**
+       * Close all connections and clean up.
+       */
+      shutdown() {
+        for (const [, subs] of this.subscribers) {
+          for (const res of subs) {
+            this.clearKeepalive(res);
+            if (res.writable) {
+              res.end();
+            }
+          }
+          subs.clear();
+        }
+        this.subscribers.clear();
+      }
+      removeSubscriber(taskId, res) {
+        this.clearKeepalive(res);
+        const subs = this.subscribers.get(taskId);
+        if (subs) {
+          subs.delete(res);
+          if (subs.size === 0) {
+            this.subscribers.delete(taskId);
+          }
+        }
+      }
+      clearKeepalive(res) {
+        const timer = this.keepaliveTimers.get(res);
+        if (timer) {
+          clearInterval(timer);
+          this.keepaliveTimers.delete(res);
+        }
+      }
+    };
+  }
+});
+
+// src/agent-protocol/push-notification-manager.ts
+var import_crypto6, PushNotificationManager;
+var init_push_notification_manager = __esm({
+  "src/agent-protocol/push-notification-manager.ts"() {
+    "use strict";
+    import_crypto6 = __toESM(require("crypto"));
+    init_logger();
+    PushNotificationManager = class {
+      db = null;
+      maxRetries;
+      baseDelayMs;
+      deliveryTimeoutMs;
+      constructor(options) {
+        this.maxRetries = options?.maxRetries ?? 3;
+        this.baseDelayMs = options?.baseDelayMs ?? 1e3;
+        this.deliveryTimeoutMs = options?.deliveryTimeoutMs ?? 1e4;
+      }
+      /**
+       * Initialize with a database connection. Must be called before any operations.
+       * Creates the push configs table if it doesn't exist.
+       */
+      initialize(db) {
+        this.db = db;
+        db.exec("PRAGMA foreign_keys = ON");
+        this.migrateSchema();
+      }
+      migrateSchema() {
+        this.getDb().exec(`
+      CREATE TABLE IF NOT EXISTS agent_push_configs (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        url TEXT NOT NULL,
+        token TEXT,
+        auth_scheme TEXT,
+        auth_credentials TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_push_task ON agent_push_configs(task_id);
+    `);
+      }
+      getDb() {
+        if (!this.db) throw new Error("PushNotificationManager not initialized");
+        return this.db;
+      }
+      // -------------------------------------------------------------------------
+      // CRUD
+      // -------------------------------------------------------------------------
+      create(config) {
+        const db = this.getDb();
+        const id = config.id ?? import_crypto6.default.randomUUID();
+        const now = (/* @__PURE__ */ new Date()).toISOString();
+        db.prepare(
+          `INSERT INTO agent_push_configs (id, task_id, url, token, auth_scheme, auth_credentials, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+          id,
+          config.task_id,
+          config.url,
+          config.token ?? null,
+          config.auth_scheme ?? null,
+          config.auth_credentials ?? null,
+          now
+        );
+        return { ...config, id };
+      }
+      get(taskId, configId) {
+        const db = this.getDb();
+        const row = db.prepare("SELECT * FROM agent_push_configs WHERE id = ? AND task_id = ?").get(configId, taskId);
+        return row ? this.rowToConfig(row) : null;
+      }
+      list(taskId) {
+        const db = this.getDb();
+        const rows = db.prepare("SELECT * FROM agent_push_configs WHERE task_id = ? ORDER BY created_at ASC").all(taskId);
+        return rows.map((r) => this.rowToConfig(r));
+      }
+      delete(taskId, configId) {
+        const db = this.getDb();
+        const result = db.prepare("DELETE FROM agent_push_configs WHERE id = ? AND task_id = ?").run(configId, taskId);
+        return result.changes > 0;
+      }
+      deleteForTask(taskId) {
+        const db = this.getDb();
+        const result = db.prepare("DELETE FROM agent_push_configs WHERE task_id = ?").run(taskId);
+        return result.changes;
+      }
+      // -------------------------------------------------------------------------
+      // Delivery
+      // -------------------------------------------------------------------------
+      /**
+       * Deliver an event to all push configs registered for a task.
+       * Uses exponential backoff retry for server errors.
+       */
+      async notifyAll(taskId, event) {
+        const configs = this.list(taskId);
+        if (configs.length === 0) return;
+        const deliveries = configs.map((config) => this.deliver(config, event));
+        await Promise.allSettled(deliveries);
+      }
+      async deliver(config, event) {
+        const headers = {
+          "Content-Type": "application/json"
+        };
+        if (config.auth_scheme && config.auth_credentials) {
+          headers["Authorization"] = `${config.auth_scheme} ${config.auth_credentials}`;
+        }
+        const body = JSON.stringify(event);
+        for (let attempt = 0; attempt < this.maxRetries; attempt++) {
+          try {
+            const resp = await fetch(config.url, {
+              method: "POST",
+              headers,
+              body,
+              signal: AbortSignal.timeout(this.deliveryTimeoutMs)
+            });
+            if (resp.ok) return;
+            if (resp.status >= 400 && resp.status < 500) {
+              logger.warn(`Push notification to ${config.url} returned ${resp.status}, not retrying`);
+              return;
+            }
+          } catch (err) {
+            logger.warn(
+              `Push notification delivery attempt ${attempt + 1} failed for ${config.url}: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+          if (attempt < this.maxRetries - 1) {
+            await new Promise((r) => setTimeout(r, this.baseDelayMs * Math.pow(2, attempt)));
+          }
+        }
+        logger.error(
+          `Push notification delivery failed after ${this.maxRetries} attempts for task ${config.task_id} to ${config.url}`
+        );
+      }
+      rowToConfig(row) {
+        return {
+          id: row.id,
+          task_id: row.task_id,
+          url: row.url,
+          token: row.token ?? void 0,
+          auth_scheme: row.auth_scheme ?? void 0,
+          auth_credentials: row.auth_credentials ?? void 0
+        };
+      }
+    };
+  }
+});
+
+// src/agent-protocol/task-queue.ts
+var import_crypto7, DEFAULT_CONFIG, TaskQueue;
+var init_task_queue = __esm({
+  "src/agent-protocol/task-queue.ts"() {
+    "use strict";
+    import_crypto7 = __toESM(require("crypto"));
+    init_logger();
+    init_trace_helpers();
+    DEFAULT_CONFIG = {
+      pollInterval: 1e3,
+      maxConcurrent: 5,
+      staleClaimTimeout: 3e5
+    };
+    TaskQueue = class {
+      constructor(taskStore, executor, _eventBus, config, workerId) {
+        this.taskStore = taskStore;
+        this.executor = executor;
+        this.config = { ...DEFAULT_CONFIG, ...config };
+        this.workerId = workerId ?? import_crypto7.default.randomUUID();
+      }
+      running = false;
+      timer = null;
+      activeCount = 0;
+      config;
+      workerId;
+      start() {
+        this.running = true;
+        this.schedulePoll();
+        logger.info(
+          `Task queue started (worker=${this.workerId}, maxConcurrent=${this.config.maxConcurrent})`
+        );
+      }
+      async stop() {
+        this.running = false;
+        if (this.timer) {
+          clearTimeout(this.timer);
+          this.timer = null;
+        }
+        const shutdownTimeout = 3e4;
+        const start = Date.now();
+        while (this.activeCount > 0 && Date.now() - start < shutdownTimeout) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        if (this.activeCount > 0) {
+          logger.warn(`Task queue stopped with ${this.activeCount} active tasks`);
+        }
+      }
+      getActiveCount() {
+        return this.activeCount;
+      }
+      isRunning() {
+        return this.running;
+      }
+      schedulePoll() {
+        if (!this.running) return;
+        this.timer = setTimeout(() => this.poll(), this.config.pollInterval);
+      }
+      async poll() {
+        if (!this.running) return;
+        try {
+          this.taskStore.reclaimStaleTasks(this.workerId, this.config.staleClaimTimeout);
+          while (this.activeCount < this.config.maxConcurrent) {
+            const task = this.taskStore.claimNextSubmitted(this.workerId);
+            if (!task) break;
+            this.activeCount++;
+            this.executeTask(task).finally(() => {
+              this.activeCount--;
+            });
+          }
+        } catch (err) {
+          logger.error(`Task queue poll error: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        this.schedulePoll();
+      }
+      async executeTask(task) {
+        await withActiveSpan(
+          "agent.queue.execute",
+          {
+            "agent.task.id": task.id,
+            "agent.queue.worker_id": this.workerId
+          },
+          async () => this._executeTaskInner(task)
+        );
+      }
+      async _executeTaskInner(task) {
+        try {
+          const result = await this.executor(task);
+          if (result.stateAlreadySet) {
+            return;
+          }
+          if (result.success) {
+            const completedMsg = {
+              message_id: import_crypto7.default.randomUUID(),
+              role: "agent",
+              parts: [
+                {
+                  text: result.summary ?? "Task completed successfully",
+                  media_type: "text/markdown"
+                }
+              ]
+            };
+            this.taskStore.updateTaskState(task.id, "completed", completedMsg);
+          } else {
+            this.taskStore.updateTaskState(task.id, "failed", {
+              message_id: import_crypto7.default.randomUUID(),
+              role: "agent",
+              parts: [{ text: result.error ?? "Task execution failed" }]
+            });
+          }
+        } catch (err) {
+          logger.error(
+            `Task ${task.id} execution failed: ${err instanceof Error ? err.message : String(err)}`
+          );
+          try {
+            this.taskStore.updateTaskState(task.id, "failed", {
+              message_id: import_crypto7.default.randomUUID(),
+              role: "agent",
+              parts: [{ text: err instanceof Error ? err.message : "Unknown error" }]
+            });
+          } catch {
+          }
+        }
+      }
+    };
+  }
+});
+
+// src/agent-protocol/a2a-frontend.ts
+var a2a_frontend_exports = {};
+__export(a2a_frontend_exports, {
+  A2AFrontend: () => A2AFrontend,
+  messageToWorkflowInput: () => messageToWorkflowInput,
+  resultToArtifacts: () => resultToArtifacts
+});
+function readJsonBody(req) {
+  return new Promise((resolve15, reject) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      try {
+        const body = Buffer.concat(chunks).toString("utf8");
+        resolve15(body ? JSON.parse(body) : {});
+      } catch {
+        reject(new ParseError("Malformed JSON body"));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+function sendJson(res, status, data) {
+  const body = JSON.stringify(data);
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(body)
+  });
+  res.end(body);
+}
+function sendError(res, httpStatus, message, code) {
+  sendJson(res, httpStatus, {
+    error: {
+      code: code ?? -httpStatus,
+      message
+    }
+  });
+}
+function timingSafeEqual(a, b) {
+  if (!a || !b) return false;
+  if (a.length !== b.length) return false;
+  try {
+    return import_crypto8.default.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  } catch {
+    return false;
+  }
+}
+function validateAuth(req, config) {
+  if (!config.auth || config.auth.type === "none") return true;
+  if (config.auth.type === "bearer") {
+    const header = req.headers["authorization"];
+    if (!header || !header.startsWith("Bearer ")) return false;
+    const token = header.slice(7);
+    const expected = config.auth.token_env ? process.env[config.auth.token_env] : void 0;
+    return timingSafeEqual(token, expected);
+  }
+  if (config.auth.type === "api_key") {
+    const headerName = config.auth.header_name ?? "x-api-key";
+    const key = req.headers[headerName.toLowerCase()];
+    const expected = config.auth.key_env ? process.env[config.auth.key_env] : void 0;
+    if (timingSafeEqual(key, expected)) return true;
+    const paramName = config.auth.param_name ?? "api_key";
+    const url = new URL(req.url || "", "http://localhost");
+    const queryKey = url.searchParams.get(paramName) ?? void 0;
+    return timingSafeEqual(queryKey, expected);
+  }
+  return false;
+}
+function resolveWorkflow(req, config) {
+  if (config.skill_routing && Object.keys(config.skill_routing).length > 0) {
+    const requestedSkill = req.metadata?.skill_id;
+    if (requestedSkill && config.skill_routing[requestedSkill]) {
+      return config.skill_routing[requestedSkill];
+    }
+  }
+  return config.default_workflow ?? "assistant";
+}
+function messageToWorkflowInput(message, task) {
+  const textContent = message.parts.filter((p) => p.text != null).map((p) => p.text).join("\n");
+  const dataParts = message.parts.filter((p) => p.data != null);
+  const structuredData = dataParts.length === 1 ? dataParts[0].data : dataParts.length > 1 ? dataParts.map((p) => p.data) : void 0;
+  const fileParts = message.parts.filter((p) => p.url != null || p.raw != null);
+  return {
+    question: textContent,
+    task: textContent,
+    data: structuredData,
+    files: fileParts.length > 0 ? fileParts : void 0,
+    _agent: {
+      task_id: task.id,
+      context_id: task.context_id,
+      message_id: message.message_id,
+      metadata: message.metadata
+    }
+  };
+}
+function resultToArtifacts(checkResults) {
+  const artifacts = [];
+  for (const [checkId, checkResult] of Object.entries(checkResults ?? {})) {
+    if (!checkResult || typeof checkResult !== "object") continue;
+    const cr = checkResult;
+    if (cr.status === "skipped") continue;
+    const parts = [];
+    if (typeof cr.output === "string") {
+      parts.push({ text: cr.output, media_type: "text/markdown" });
+    } else if (typeof cr.output === "object" && cr.output !== null) {
+      const output = cr.output;
+      if ("text" in output && typeof output.text === "string") {
+        parts.push({ text: output.text, media_type: "text/markdown" });
+      }
+      parts.push({ data: cr.output, media_type: "application/json" });
+    }
+    if (Array.isArray(cr.issues) && cr.issues.length > 0) {
+      parts.push({ data: cr.issues, media_type: "application/json" });
+    }
+    if (parts.length > 0) {
+      artifacts.push({
+        artifact_id: import_crypto8.default.randomUUID(),
+        name: checkId,
+        description: `Output from check: ${checkId}`,
+        parts
+      });
+    }
+  }
+  return artifacts;
+}
+var import_http2, import_https, import_fs11, import_crypto8, A2AFrontend;
+var init_a2a_frontend = __esm({
+  "src/agent-protocol/a2a-frontend.ts"() {
+    "use strict";
+    import_http2 = __toESM(require("http"));
+    import_https = __toESM(require("https"));
+    import_fs11 = __toESM(require("fs"));
+    import_crypto8 = __toESM(require("crypto"));
+    init_logger();
+    init_task_store();
+    init_types();
+    init_state_transitions();
+    init_task_stream_manager();
+    init_push_notification_manager();
+    init_task_queue();
+    init_trace_helpers();
+    A2AFrontend = class {
+      name = "a2a";
+      server = null;
+      taskStore;
+      agentCard = null;
+      config;
+      cleanupTimer = null;
+      _ctx = null;
+      streamManager = new TaskStreamManager();
+      pushManager = new PushNotificationManager();
+      _engine = null;
+      // StateMachineExecutionEngine
+      _visorConfig = null;
+      taskQueue = null;
+      _boundPort = 0;
+      constructor(config, taskStore) {
+        this.config = config;
+        this.taskStore = taskStore ?? new SqliteTaskStore();
+      }
+      /** The actual port the server is listening on (useful when config.port is 0). */
+      get boundPort() {
+        return this._boundPort;
+      }
+      /** Set the execution engine for running workflows. */
+      setEngine(engine) {
+        this._engine = engine;
+      }
+      /** Set the full Visor config (needed for check definitions). */
+      setVisorConfig(config) {
+        this._visorConfig = config;
+      }
+      async start(ctx) {
+        this._ctx = ctx;
+        await this.taskStore.initialize();
+        const db = this.taskStore.getDatabase?.();
+        if (db) {
+          this.pushManager.initialize(db);
+        }
+        if (ctx.engine) this._engine = ctx.engine;
+        if (ctx.visorConfig) this._visorConfig = ctx.visorConfig;
+        if (this.config.agent_card) {
+          const cardPath = this.config.agent_card;
+          const raw = import_fs11.default.readFileSync(cardPath, "utf8");
+          this.agentCard = JSON.parse(raw);
+        } else if (this.config.agent_card_inline) {
+          this.agentCard = { ...this.config.agent_card_inline };
+        }
+        const handler = this.handleRequest.bind(this);
+        if (this.config.tls) {
+          const tlsOptions = {
+            cert: import_fs11.default.readFileSync(this.config.tls.cert),
+            key: import_fs11.default.readFileSync(this.config.tls.key)
+          };
+          this.server = import_https.default.createServer(tlsOptions, handler);
+        } else {
+          this.server = import_http2.default.createServer(handler);
+        }
+        ctx.eventBus.on("CheckCompleted", (event) => {
+          const envelope = event?.payload ? event : { payload: event };
+          const taskId = envelope.metadata?.agentTaskId;
+          if (!taskId) return;
+          try {
+            const artifact = this.checkResultToArtifact(envelope.payload);
+            if (artifact) {
+              this.taskStore.addArtifact(taskId, artifact);
+              const task = this.taskStore.getTask(taskId);
+              if (task) {
+                this.emitArtifactEvent(taskId, task.context_id, artifact, false, false);
+              }
+            }
+          } catch {
+          }
+        });
+        ctx.eventBus.on("CheckErrored", (event) => {
+          const envelope = event?.payload ? event : { payload: event };
+          const taskId = envelope.metadata?.agentTaskId;
+          if (!taskId) return;
+          logger.warn(`Agent task ${taskId}: check errored`);
+        });
+        ctx.eventBus.on("HumanInputRequested", (event) => {
+          const envelope = event?.payload ? event : { payload: event };
+          const taskId = envelope.metadata?.agentTaskId;
+          if (!taskId) return;
+          try {
+            const statusMessage = {
+              message_id: import_crypto8.default.randomUUID(),
+              role: "agent",
+              parts: [{ text: envelope.payload?.prompt ?? "Agent requires input" }]
+            };
+            this.taskStore.updateTaskState(taskId, "input_required", statusMessage);
+            const task = this.taskStore.getTask(taskId);
+            if (task) {
+              this.emitStatusEvent(taskId, task.context_id, task.status);
+            }
+          } catch {
+          }
+        });
+        this.startCleanupSweep();
+        if (this._engine && this._visorConfig) {
+          const executor = this.createTaskExecutor();
+          const queueCfg = this.config.queue;
+          this.taskQueue = new TaskQueue(
+            this.taskStore,
+            executor,
+            null,
+            queueCfg ? {
+              pollInterval: queueCfg.poll_interval,
+              maxConcurrent: queueCfg.max_concurrent,
+              staleClaimTimeout: queueCfg.stale_claim_timeout
+            } : void 0
+          );
+          this.taskQueue.start();
+          logger.info("[A2A] TaskQueue started for async task execution");
+        }
+        const port = this.config.port ?? 9e3;
+        const host = this.config.host ?? "0.0.0.0";
+        await new Promise((resolve15) => {
+          this.server.listen(port, host, () => {
+            const addr = this.server.address();
+            this._boundPort = typeof addr === "object" && addr ? addr.port : port;
+            logger.info(`A2A server listening on ${host}:${this._boundPort}`);
+            resolve15();
+          });
+        });
+        if (this.agentCard) {
+          const publicUrl = this.config.public_url ?? `http://${host}:${this._boundPort}`;
+          if (!this.agentCard.supported_interfaces?.length) {
+            this.agentCard.supported_interfaces = [{ url: publicUrl, protocol_binding: "a2a/v1" }];
+          } else {
+            for (const iface of this.agentCard.supported_interfaces) {
+              if (iface.protocol_binding === "a2a/v1" || !iface.url || !iface.url.startsWith("http") || iface.url.includes("localhost") || iface.url.includes("0.0.0.0")) {
+                iface.url = publicUrl;
+              }
+            }
+          }
+        }
+      }
+      async stop() {
+        this.stopCleanupSweep();
+        if (this.taskQueue) {
+          this.taskQueue.stop();
+          this.taskQueue = null;
+        }
+        this.streamManager.shutdown();
+        if (this.server) {
+          await new Promise((resolve15, reject) => {
+            this.server.close((err) => err ? reject(err) : resolve15());
+          });
+          this.server = null;
+        }
+        await this.taskStore.shutdown();
+      }
+      // -------------------------------------------------------------------------
+      // HTTP request dispatcher
+      // -------------------------------------------------------------------------
+      async handleRequest(req, res) {
+        const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+        if (url.pathname === "/.well-known/agent-card.json" && req.method === "GET") {
+          return this.serveAgentCard(res);
+        }
+        if (!validateAuth(req, this.config)) {
+          return sendError(res, 401, "Unauthorized");
+        }
+        try {
+          if (url.pathname === "/message:send" && req.method === "POST") {
+            return await this.handleSendMessage(req, res);
+          }
+          if (url.pathname === "/message:stream" && req.method === "POST") {
+            if (!this.agentCard?.capabilities?.streaming) {
+              return sendError(res, 400, "Streaming not supported", -32002);
+            }
+            return await this.handleSendStreamingMessage(req, res);
+          }
+          const taskMatch = url.pathname.match(/^\/tasks\/([^/:]+)$/);
+          if (taskMatch && req.method === "GET") {
+            return this.handleGetTask(taskMatch[1], res);
+          }
+          if (url.pathname === "/tasks" && req.method === "GET") {
+            return this.handleListTasks(url.searchParams, res);
+          }
+          const cancelMatch = url.pathname.match(/^\/tasks\/([^/:]+):cancel$/);
+          if (cancelMatch && req.method === "POST") {
+            return this.handleCancelTask(cancelMatch[1], res);
+          }
+          const subscribeMatch = url.pathname.match(/^\/tasks\/([^/:]+):subscribe$/);
+          if (subscribeMatch && req.method === "GET") {
+            if (!this.agentCard?.capabilities?.streaming) {
+              return sendError(res, 400, "Streaming not supported", -32002);
+            }
+            return this.handleSubscribeToTask(subscribeMatch[1], res);
+          }
+          const pushListMatch = url.pathname.match(/^\/tasks\/([^/:]+)\/pushNotificationConfigs$/);
+          if (pushListMatch) {
+            if (!this.agentCard?.capabilities?.push_notifications) {
+              return sendError(res, 400, "Push notifications not supported", -32002);
+            }
+            if (req.method === "POST") {
+              return await this.handleCreatePushConfig(pushListMatch[1], req, res);
+            }
+            if (req.method === "GET") {
+              return this.handleListPushConfigs(pushListMatch[1], res);
+            }
+          }
+          const pushDetailMatch = url.pathname.match(
+            /^\/tasks\/([^/:]+)\/pushNotificationConfigs\/([^/:]+)$/
+          );
+          if (pushDetailMatch) {
+            if (!this.agentCard?.capabilities?.push_notifications) {
+              return sendError(res, 400, "Push notifications not supported", -32002);
+            }
+            if (req.method === "GET") {
+              return this.handleGetPushConfig(pushDetailMatch[1], pushDetailMatch[2], res);
+            }
+            if (req.method === "DELETE") {
+              return this.handleDeletePushConfig(pushDetailMatch[1], pushDetailMatch[2], res);
+            }
+          }
+          sendError(res, 404, "MethodNotFound", -32601);
+        } catch (err) {
+          if (err instanceof ParseError) {
+            return sendError(res, 400, err.message, -32700);
+          }
+          if (err instanceof TaskNotFoundError) {
+            return sendError(res, 404, err.message, -32001);
+          }
+          if (err instanceof InvalidStateTransitionError) {
+            return sendError(res, 409, err.message, -32003);
+          }
+          if (err instanceof InvalidRequestError) {
+            return sendError(res, 400, err.message, -32600);
+          }
+          if (err instanceof ContextMismatchError) {
+            return sendError(res, 400, err.message, -32600);
+          }
+          logger.error(`A2A request error: ${err instanceof Error ? err.message : String(err)}`);
+          sendError(res, 500, "Internal error");
+        }
+      }
+      // -------------------------------------------------------------------------
+      // Endpoint handlers
+      // -------------------------------------------------------------------------
+      serveAgentCard(res) {
+        if (!this.agentCard) {
+          return sendError(res, 404, "Agent Card not configured");
+        }
+        sendJson(res, 200, this.agentCard);
+      }
+      async handleSendMessage(req, res) {
+        const body = await readJsonBody(req);
+        if (!body.message?.parts?.length) {
+          throw new InvalidRequestError("Message must contain at least one part");
+        }
+        const existingTaskId = body.message.task_id;
+        if (existingTaskId) {
+          const response = await this.handleFollowUpMessage(existingTaskId, body);
+          return sendJson(res, 200, response);
+        }
+        const contextId = body.message.context_id ?? import_crypto8.default.randomUUID();
+        const workflowId = resolveWorkflow(body, this.config);
+        const blocking = body.configuration?.blocking ?? false;
+        await withActiveSpan(
+          "agent.task",
+          {
+            "agent.task.context_id": contextId,
+            "agent.task.workflow": workflowId,
+            "agent.task.blocking": blocking,
+            "agent.task.message_id": body.message.message_id ?? ""
+          },
+          async () => {
+            const task = this.taskStore.createTask({
+              contextId,
+              requestMessage: body.message,
+              requestConfig: body.configuration,
+              requestMetadata: body.metadata,
+              workflowId
+            });
+            this.taskStore.appendHistory(task.id, body.message);
+            if (blocking) {
+              await this.executeTaskDirectly(task, body.message);
+              let finalTask = this.taskStore.getTask(task.id);
+              const historyLength = body.configuration?.history_length;
+              if (historyLength !== void 0) {
+                finalTask = {
+                  ...finalTask,
+                  history: finalTask.history.slice(-historyLength)
+                };
+              }
+              if (body.configuration?.accepted_output_modes?.length) {
+                finalTask = this.filterOutputModes(finalTask, body.configuration.accepted_output_modes);
+              }
+              return sendJson(res, 200, { task: finalTask });
+            }
+            return sendJson(res, 200, { task: this.taskStore.getTask(task.id) });
+          }
+        );
+      }
+      async handleFollowUpMessage(taskId, req) {
+        const task = this.taskStore.getTask(taskId);
+        if (!task) throw new TaskNotFoundError(taskId);
+        if (task.status.state !== "input_required" && task.status.state !== "auth_required") {
+          throw new InvalidStateTransitionError(
+            task.status.state,
+            "working",
+            "Task is not awaiting input"
+          );
+        }
+        if (req.message.context_id && req.message.context_id !== task.context_id) {
+          throw new ContextMismatchError(req.message.context_id, task.context_id);
+        }
+        this.taskStore.appendHistory(taskId, req.message);
+        this.taskStore.updateTaskState(taskId, "working");
+        this.emitStatusEvent(taskId, task.context_id, {
+          state: "working",
+          timestamp: (/* @__PURE__ */ new Date()).toISOString()
+        });
+        const textContent = req.message.parts.filter((p) => p.text != null).map((p) => p.text).join("\n");
+        if (this._ctx?.eventBus) {
+          await this._ctx.eventBus.emit({
+            type: "HumanInputReceived",
+            taskId,
+            message: textContent
+          });
+        }
+        const blocking = req.configuration?.blocking ?? false;
+        if (blocking) {
+          await this.executeTaskDirectly(task, req.message);
+          let finalTask = this.taskStore.getTask(taskId);
+          const historyLength = req.configuration?.history_length;
+          if (historyLength !== void 0) {
+            finalTask = {
+              ...finalTask,
+              history: finalTask.history.slice(-historyLength)
+            };
+          }
+          return { task: finalTask };
+        }
+        const updatedTask = this.taskStore.getTask(taskId);
+        this.executeTaskDirectly(updatedTask, req.message).catch(() => {
+        });
+        return { task: this.taskStore.getTask(taskId) };
+      }
+      handleGetTask(taskId, res) {
+        const task = this.taskStore.getTask(taskId);
+        if (!task) throw new TaskNotFoundError(taskId);
+        sendJson(res, 200, task);
+      }
+      handleListTasks(params, res) {
+        const contextId = params.get("context_id") ?? void 0;
+        const stateParam = params.get("state");
+        const state = stateParam ? stateParam.split(",") : void 0;
+        const limit = params.has("limit") ? parseInt(params.get("limit"), 10) : void 0;
+        const offset = params.has("offset") ? parseInt(params.get("offset"), 10) : void 0;
+        const result = this.taskStore.listTasks({ contextId, state, limit, offset });
+        sendJson(res, 200, result);
+      }
+      handleCancelTask(taskId, res) {
+        const task = this.taskStore.getTask(taskId);
+        if (!task) throw new TaskNotFoundError(taskId);
+        this.taskStore.updateTaskState(taskId, "canceled");
+        const updated = this.taskStore.getTask(taskId);
+        sendJson(res, 200, updated);
+      }
+      // -------------------------------------------------------------------------
+      // Streaming handlers
+      // -------------------------------------------------------------------------
+      async handleSendStreamingMessage(req, res) {
+        const body = await readJsonBody(req);
+        if (!body.message?.parts?.length) {
+          throw new InvalidRequestError("Message must contain at least one part");
+        }
+        const contextId = body.message.context_id ?? import_crypto8.default.randomUUID();
+        const workflowId = resolveWorkflow(body, this.config);
+        const task = this.taskStore.createTask({
+          contextId,
+          requestMessage: body.message,
+          requestConfig: body.configuration,
+          requestMetadata: body.metadata,
+          workflowId
+        });
+        this.taskStore.appendHistory(task.id, body.message);
+        this.streamManager.subscribe(task.id, res);
+        this.emitStatusEvent(task.id, contextId, task.status);
+        this.executeTaskDirectly(task, body.message).then(() => {
+          const finalTask = this.taskStore.getTask(task.id);
+          if (finalTask) {
+            this.emitStatusEvent(task.id, contextId, finalTask.status);
+          }
+        }).catch(() => {
+        });
+      }
+      handleSubscribeToTask(taskId, res) {
+        const task = this.taskStore.getTask(taskId);
+        if (!task) throw new TaskNotFoundError(taskId);
+        if (isTerminalState(task.status.state)) {
+          res.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive"
+          });
+          const event = {
+            type: "TaskStatusUpdateEvent",
+            task_id: taskId,
+            context_id: task.context_id,
+            status: task.status
+          };
+          res.write(`data: ${JSON.stringify(event)}
+
+`);
+          res.end();
+          return;
+        }
+        this.streamManager.subscribe(taskId, res);
+        this.emitStatusEvent(taskId, task.context_id, task.status);
+      }
+      // -------------------------------------------------------------------------
+      // Push notification handlers
+      // -------------------------------------------------------------------------
+      async handleCreatePushConfig(taskId, req, res) {
+        const task = this.taskStore.getTask(taskId);
+        if (!task) throw new TaskNotFoundError(taskId);
+        const body = await readJsonBody(req);
+        if (!body.url) {
+          throw new InvalidRequestError("Push notification config must include url");
+        }
+        const config = this.pushManager.create({
+          task_id: taskId,
+          url: body.url,
+          token: body.token,
+          auth_scheme: body.auth_scheme,
+          auth_credentials: body.auth_credentials
+        });
+        sendJson(res, 200, config);
+      }
+      handleListPushConfigs(taskId, res) {
+        const task = this.taskStore.getTask(taskId);
+        if (!task) throw new TaskNotFoundError(taskId);
+        const configs = this.pushManager.list(taskId);
+        sendJson(res, 200, { configs });
+      }
+      handleGetPushConfig(taskId, configId, res) {
+        const config = this.pushManager.get(taskId, configId);
+        if (!config) {
+          return sendError(res, 404, "Push notification config not found", -32001);
+        }
+        sendJson(res, 200, config);
+      }
+      handleDeletePushConfig(taskId, configId, res) {
+        const deleted = this.pushManager.delete(taskId, configId);
+        if (!deleted) {
+          return sendError(res, 404, "Push notification config not found", -32001);
+        }
+        sendJson(res, 200, { deleted: true });
+      }
+      // -------------------------------------------------------------------------
+      // Event emission helpers
+      // -------------------------------------------------------------------------
+      /** Emit a task status update to SSE subscribers and push notification targets. */
+      emitStatusEvent(taskId, contextId, status) {
+        const event = {
+          type: "TaskStatusUpdateEvent",
+          task_id: taskId,
+          context_id: contextId,
+          status
+        };
+        this.streamManager.emit(taskId, event);
+        this.pushManager.notifyAll(taskId, event).catch((err) => {
+          logger.error(`Push notification error: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+      /** Emit an artifact update to SSE subscribers and push notification targets. */
+      emitArtifactEvent(taskId, contextId, artifact, append, lastChunk) {
+        const event = {
+          type: "TaskArtifactUpdateEvent",
+          task_id: taskId,
+          context_id: contextId,
+          artifact,
+          append,
+          last_chunk: lastChunk
+        };
+        this.streamManager.emit(taskId, event);
+        this.pushManager.notifyAll(taskId, event).catch((err) => {
+          logger.error(`Push notification error: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+      // -------------------------------------------------------------------------
+      // Execution
+      // -------------------------------------------------------------------------
+      /**
+       * Execute a task, either via the engine (if available) or with a stub response (for tests).
+       */
+      async executeTaskDirectly(task, message) {
+        try {
+          const currentTask = this.taskStore.getTask(task.id);
+          if (currentTask && currentTask.status.state !== "working") {
+            this.taskStore.updateTaskState(task.id, "working");
+            this.emitStatusEvent(task.id, task.context_id, {
+              state: "working",
+              timestamp: (/* @__PURE__ */ new Date()).toISOString()
+            });
+          }
+          if (this._engine && this._visorConfig) {
+            await this.executeTaskViaEngine(task, message);
+          } else {
+            const agentResponse = {
+              message_id: import_crypto8.default.randomUUID(),
+              role: "agent",
+              parts: [{ text: `Task ${task.id} received and processed.`, media_type: "text/markdown" }]
+            };
+            this.taskStore.appendHistory(task.id, agentResponse);
+            this.taskStore.updateTaskState(task.id, "completed", agentResponse);
+          }
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : "Unknown error";
+          logger.error(`[A2A] Task ${task.id} execution failed: ${errorMsg}`);
+          try {
+            const failMessage = {
+              message_id: import_crypto8.default.randomUUID(),
+              role: "agent",
+              parts: [{ text: errorMsg }]
+            };
+            this.taskStore.updateTaskState(task.id, "failed", failMessage);
+            this.emitStatusEvent(task.id, task.context_id, {
+              state: "failed",
+              message: failMessage,
+              timestamp: (/* @__PURE__ */ new Date()).toISOString()
+            });
+          } catch {
+          }
+        }
+      }
+      /**
+       * Execute a task through the Visor engine.
+       * Creates a fresh engine execution per task and converts results to artifacts.
+       */
+      async executeTaskViaEngine(task, message) {
+        const workflowId = task.workflow_id ?? this.config.default_workflow;
+        const checks = workflowId ? [workflowId] : ["all"];
+        const workflowInputs = messageToWorkflowInput(message, task);
+        const prevCtx = this._engine.getExecutionContext?.() || {};
+        this._engine.setExecutionContext?.({ ...prevCtx, workflowInputs });
+        const execOptions = {
+          checks,
+          config: this._visorConfig,
+          timeout: 3e5
+        };
+        const result = await this._engine.executeChecks(execOptions);
+        const groupedResults = result?.executionStatistics?.groupedResults ?? result?.results ?? {};
+        const artifacts = [];
+        if (result?.reviewSummary) {
+          const summaryParts = [];
+          if (result.reviewSummary.issues?.length) {
+            const issueText = result.reviewSummary.issues.map((i) => `- **${i.severity}**: ${i.message} (${i.file}:${i.line})`).join("\n");
+            summaryParts.push({ text: `## Issues Found
+
+${issueText}`, media_type: "text/markdown" });
+            summaryParts.push({ data: result.reviewSummary.issues, media_type: "application/json" });
+          }
+          if (summaryParts.length > 0) {
+            artifacts.push({
+              artifact_id: import_crypto8.default.randomUUID(),
+              name: "review-summary",
+              description: "Review summary with issues found",
+              parts: summaryParts
+            });
+          }
+        }
+        if (groupedResults && typeof groupedResults === "object") {
+          for (const [groupName, groupChecks] of Object.entries(groupedResults)) {
+            if (!Array.isArray(groupChecks)) continue;
+            for (const cr of groupChecks) {
+              const parts = [];
+              if (typeof cr.content === "string" && cr.content.trim()) {
+                parts.push({ text: cr.content, media_type: "text/markdown" });
+              }
+              if (cr.output != null) {
+                parts.push({ data: cr.output, media_type: "application/json" });
+              }
+              if (parts.length > 0) {
+                artifacts.push({
+                  artifact_id: import_crypto8.default.randomUUID(),
+                  name: cr.checkName ?? groupName,
+                  description: `Output from check: ${cr.checkName ?? groupName}`,
+                  parts
+                });
+              }
+            }
+          }
+        }
+        if (artifacts.length === 0) {
+          artifacts.push({
+            artifact_id: import_crypto8.default.randomUUID(),
+            name: "result",
+            description: "Execution result",
+            parts: [
+              {
+                text: `Executed ${checks.join(", ")} checks. ${result?.checksExecuted?.length ?? 0} checks ran.`,
+                media_type: "text/markdown"
+              }
+            ]
+          });
+        }
+        for (let i = 0; i < artifacts.length; i++) {
+          this.taskStore.addArtifact(task.id, artifacts[i]);
+          this.emitArtifactEvent(
+            task.id,
+            task.context_id,
+            artifacts[i],
+            false,
+            i === artifacts.length - 1
+          );
+        }
+        const agentResponse = {
+          message_id: import_crypto8.default.randomUUID(),
+          role: "agent",
+          parts: [
+            {
+              text: `Completed ${artifacts.length} artifact(s) from ${result?.checksExecuted?.length ?? 0} check(s).`,
+              media_type: "text/markdown"
+            }
+          ],
+          metadata: {
+            executionTime: result?.executionTime,
+            checksExecuted: result?.checksExecuted
+          }
+        };
+        this.taskStore.appendHistory(task.id, agentResponse);
+        this.taskStore.updateTaskState(task.id, "completed", agentResponse);
+        this.emitStatusEvent(task.id, task.context_id, {
+          state: "completed",
+          message: agentResponse,
+          timestamp: (/* @__PURE__ */ new Date()).toISOString()
+        });
+      }
+      /**
+       * Create a TaskExecutor callback for the TaskQueue.
+       * The queue handles state transitions (submitted → working), so the executor
+       * focuses on running the engine and converting results.
+       */
+      createTaskExecutor() {
+        return async (task) => {
+          try {
+            const userMessage = task.history.find((m) => m.role === "user");
+            if (!userMessage) return { success: false, error: "No user message found" };
+            await this.executeTaskViaEngine(task, userMessage);
+            return { success: true, stateAlreadySet: true };
+          } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : "Unknown error";
+            return { success: false, error: errorMsg, stateAlreadySet: true };
+          }
+        };
+      }
+      // -------------------------------------------------------------------------
+      // Helpers
+      // -------------------------------------------------------------------------
+      checkResultToArtifact(payload) {
+        if (!payload || typeof payload !== "object") return null;
+        const p = payload;
+        const parts = [];
+        if (typeof p.output === "string") {
+          parts.push({ text: p.output, media_type: "text/markdown" });
+        } else if (typeof p.output === "object" && p.output !== null) {
+          parts.push({ data: p.output, media_type: "application/json" });
+        }
+        if (parts.length === 0) return null;
+        return {
+          artifact_id: import_crypto8.default.randomUUID(),
+          name: p.checkId ?? "check-result",
+          parts
+        };
+      }
+      filterOutputModes(task, acceptedModes) {
+        const filteredArtifacts = task.artifacts.map((a) => ({
+          ...a,
+          parts: a.parts.filter(
+            (p) => acceptedModes.some((mode) => (p.media_type ?? "text/plain").startsWith(mode))
+          )
+        })).filter((a) => a.parts.length > 0);
+        return { ...task, artifacts: filteredArtifacts };
+      }
+      startCleanupSweep() {
+        this.cleanupTimer = setInterval(() => {
+          try {
+            const deletedTaskIds = this.taskStore.deleteExpiredTasks();
+            if (deletedTaskIds.length > 0) {
+              for (const taskId of deletedTaskIds) {
+                this.pushManager.deleteForTask(taskId);
+              }
+              logger.info(`[A2A] Cleaned up ${deletedTaskIds.length} expired tasks`);
+            }
+          } catch (err) {
+            logger.error(
+              `[A2A] Cleanup sweep error: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        }, 36e5);
+      }
+      stopCleanupSweep() {
+        if (this.cleanupTimer) {
+          clearInterval(this.cleanupTimer);
+          this.cleanupTimer = null;
+        }
+      }
+      // -------------------------------------------------------------------------
+      // Public accessors (for testing)
+      // -------------------------------------------------------------------------
+      getTaskStore() {
+        return this.taskStore;
+      }
+      getAgentCard() {
+        return this.agentCard;
+      }
+    };
+  }
+});
+
 // src/frontends/host.ts
 var host_exports = {};
 __export(host_exports, {
-  FrontendsHost: () => FrontendsHost
+  FrontendsHost: () => FrontendsHost,
+  isActiveFrontend: () => isActiveFrontend
 });
+function isActiveFrontend(f) {
+  return typeof f.setEngine === "function" && typeof f.setVisorConfig === "function";
+}
 var FrontendsHost;
 var init_host = __esm({
   "src/frontends/host.ts"() {
@@ -58018,6 +60435,9 @@ var init_host = __esm({
           } else if (spec.name === "tui") {
             const { TuiFrontend: TuiFrontend2 } = await Promise.resolve().then(() => (init_tui_frontend(), tui_frontend_exports));
             this.frontends.push(new TuiFrontend2(spec.config));
+          } else if (spec.name === "a2a") {
+            const { A2AFrontend: A2AFrontend2 } = await Promise.resolve().then(() => (init_a2a_frontend(), a2a_frontend_exports));
+            this.frontends.push(new A2AFrontend2(spec.config));
           } else {
             this.log.warn(`[FrontendsHost] Unknown frontend '${spec.name}', skipping`);
           }
@@ -58026,7 +60446,12 @@ var init_host = __esm({
       async startAll(ctxFactory) {
         for (const f of this.frontends) {
           try {
-            await f.start(ctxFactory());
+            const ctx = ctxFactory();
+            if (isActiveFrontend(f)) {
+              if (ctx.engine) f.setEngine(ctx.engine);
+              if (ctx.visorConfig) f.setVisorConfig(ctx.visorConfig);
+            }
+            await f.start(ctx);
             this.log.info(`[FrontendsHost] Started frontend '${f.name}'`);
           } catch (err) {
             this.log.error(`[FrontendsHost] Failed to start '${f.name}':`, err);
@@ -58110,15 +60535,15 @@ function serializeRunState(state) {
     ])
   };
 }
-var path26, fs22, StateMachineExecutionEngine;
+var path27, fs24, StateMachineExecutionEngine;
 var init_state_machine_execution_engine = __esm({
   "src/state-machine-execution-engine.ts"() {
     "use strict";
     init_runner();
     init_logger();
     init_sandbox_manager();
-    path26 = __toESM(require("path"));
-    fs22 = __toESM(require("fs"));
+    path27 = __toESM(require("path"));
+    fs24 = __toESM(require("fs"));
     StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       workingDirectory;
       executionContext;
@@ -58464,6 +60889,8 @@ var init_state_machine_execution_engine = __esm({
               logger,
               // Provide the active (possibly tag-filtered) config so frontends can read groups, etc.
               config: configWithTagFilter,
+              // Explicit visorConfig for ActiveFrontend auto-wiring (engine NOT passed to prevent recursion)
+              visorConfig: configWithTagFilter,
               run: {
                 runId: context2.sessionId,
                 repo: repoObj,
@@ -58503,9 +60930,9 @@ var init_state_machine_execution_engine = __esm({
                   }
                   const checkId = String(ev?.checkId || "unknown");
                   const threadKey = ev?.threadKey || (channel && threadTs ? `${channel}:${threadTs}` : "session");
-                  const baseDir = process.env.VISOR_SNAPSHOT_DIR || path26.resolve(process.cwd(), ".visor", "snapshots");
-                  fs22.mkdirSync(baseDir, { recursive: true });
-                  const filePath = path26.join(baseDir, `${threadKey}-${checkId}.json`);
+                  const baseDir = process.env.VISOR_SNAPSHOT_DIR || path27.resolve(process.cwd(), ".visor", "snapshots");
+                  fs24.mkdirSync(baseDir, { recursive: true });
+                  const filePath = path27.join(baseDir, `${threadKey}-${checkId}.json`);
                   await this.saveSnapshotToFile(filePath);
                   logger.info(`[Snapshot] Saved run snapshot: ${filePath}`);
                   try {
@@ -58646,7 +61073,7 @@ var init_state_machine_execution_engine = __esm({
        * Does not include secrets. Intended for debugging and future resume support.
        */
       async saveSnapshotToFile(filePath) {
-        const fs23 = await import("fs/promises");
+        const fs25 = await import("fs/promises");
         const ctx = this._lastContext;
         const runner = this._lastRunner;
         if (!ctx || !runner) {
@@ -58666,14 +61093,14 @@ var init_state_machine_execution_engine = __esm({
           journal: entries,
           requestedChecks: ctx.requestedChecks || []
         };
-        await fs23.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+        await fs25.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
       }
       /**
        * Load a snapshot JSON from file and return it. Resume support can build on this.
        */
       async loadSnapshotFromFile(filePath) {
-        const fs23 = await import("fs/promises");
-        const raw = await fs23.readFile(filePath, "utf8");
+        const fs25 = await import("fs/promises");
+        const raw = await fs25.readFile(filePath, "utf8");
         return JSON.parse(raw);
       }
       /**
