@@ -524,7 +524,7 @@ steps:
           - "curl:-s:*"
           - "curl:*"
         timeout: 60000
-      _completion_prompt: |
+      completion_prompt: |
         Before finalizing, verify:
 
         1. Are all code references accurate (file paths, line numbers)?
