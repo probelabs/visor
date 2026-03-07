@@ -34,6 +34,7 @@ export class CLI {
       .description('Visor - AI-powered code review tool')
       .version(this.getVersion())
       .option('--slack', 'Enable Slack Socket Mode runner (uses SLACK_APP_TOKEN)')
+      .option('--a2a', 'Enable A2A Agent Protocol server mode')
       .option(
         '-c, --check <type>',
         'Specify check type (can be used multiple times)',
@@ -135,6 +136,7 @@ export class CLI {
         .description('Visor - AI-powered code review tool')
         .version(this.getVersion())
         .option('--slack', 'Enable Slack Socket Mode runner (uses SLACK_APP_TOKEN)')
+        .option('--a2a', 'Enable A2A Agent Protocol server mode')
         .option(
           '-c, --check <type>',
           'Specify check type (can be used multiple times)',
@@ -276,6 +278,7 @@ export class CLI {
         message: options.message,
         githubV2: false,
         slack: Boolean(options.slack),
+        a2a: Boolean(options.a2a),
         tui: Boolean(options.tui),
         keepWorkspace: Boolean(options.keepWorkspace),
         workspacePath: options.workspacePath,

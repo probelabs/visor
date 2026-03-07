@@ -6,6 +6,7 @@
 import type { ReviewIssue } from '../reviewer';
 import type { PolicyConfig, StepPolicyOverride } from '../policy/types';
 import type { SandboxConfig } from '../sandbox/types';
+import type { AgentProtocolConfig } from '../agent-protocol/types';
 
 // Export Issue type for backward compatibility
 export type Issue = ReviewIssue;
@@ -215,7 +216,8 @@ export type ConfigCheckType =
   | 'mcp'
   | 'human-input'
   | 'workflow'
-  | 'git-checkout';
+  | 'git-checkout'
+  | 'a2a';
 
 /**
  * Valid event triggers for checks
@@ -1553,6 +1555,8 @@ export interface VisorConfig {
   scheduler?: SchedulerConfig;
   /** Enterprise policy engine configuration */
   policy?: PolicyConfig;
+  /** Agent protocol (A2A) server configuration */
+  agent_protocol?: AgentProtocolConfig;
 }
 
 /**

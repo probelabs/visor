@@ -33,7 +33,9 @@ unset GIT_WORK_TREE
 unset GIT_INDEX_FILE
 unset GIT_PREFIX
 
-# Run tests to ensure everything still works
-npm test
+# Run tests to ensure everything still works.
+# Use --workerThreads=false because native bindings (e.g. @swc/core) fail
+# to load inside Node worker threads spawned from git hook processes.
+npx jest --workerThreads=false && npm run test:yaml
 
 echo "✅ Pre-commit checks passed!"

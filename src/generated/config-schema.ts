@@ -187,6 +187,10 @@ export const configSchema = {
           $ref: '#/definitions/PolicyConfig',
           description: 'Enterprise policy engine configuration',
         },
+        agent_protocol: {
+          $ref: '#/definitions/AgentProtocolConfig',
+          description: 'Agent protocol (A2A) server configuration',
+        },
       },
       required: ['version'],
       patternProperties: {
@@ -958,7 +962,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -975,7 +979,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1078,6 +1082,7 @@ export const configSchema = {
         'human-input',
         'workflow',
         'git-checkout',
+        'a2a',
       ],
       description: 'Valid check types in configuration',
     },
@@ -1686,7 +1691,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1701,14 +1706,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512>>':
+    'Record<string,Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-13766-28360-src_types_config.ts-0-55512>': {
+    'Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681>': {
       type: 'object',
       additionalProperties: false,
     },
@@ -3080,6 +3085,267 @@ export const configSchema = {
             type: 'string',
           },
           description: 'Slack channel IDs — role only applies when triggered from these channels',
+        },
+      },
+      additionalProperties: false,
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    AgentProtocolConfig: {
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'boolean',
+        },
+        protocol: {
+          type: 'string',
+        },
+        agent_card: {
+          type: 'string',
+        },
+        agent_card_inline: {
+          $ref: '#/definitions/AgentCard',
+        },
+        public_url: {
+          type: 'string',
+        },
+        port: {
+          type: 'number',
+        },
+        host: {
+          type: 'string',
+        },
+        tls: {
+          $ref: '#/definitions/AgentProtocolTlsConfig',
+        },
+        auth: {
+          $ref: '#/definitions/AgentProtocolAuthConfig',
+        },
+        default_workflow: {
+          type: 'string',
+        },
+        skill_routing: {
+          $ref: '#/definitions/Record%3Cstring%2Cstring%3E',
+        },
+        task_ttl: {
+          type: 'string',
+        },
+        queue: {
+          $ref: '#/definitions/AgentProtocolQueueConfig',
+        },
+      },
+      required: ['enabled', 'protocol'],
+      additionalProperties: false,
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    AgentCard: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+        },
+        description: {
+          type: 'string',
+        },
+        version: {
+          type: 'string',
+        },
+        provider: {
+          type: 'object',
+          properties: {
+            organization: {
+              type: 'string',
+            },
+            url: {
+              type: 'string',
+            },
+          },
+          required: ['organization'],
+          additionalProperties: false,
+          patternProperties: {
+            '^x-': {},
+          },
+        },
+        supported_interfaces: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              url: {
+                type: 'string',
+              },
+              protocol_binding: {
+                type: 'string',
+              },
+              protocol_version: {
+                type: 'string',
+              },
+            },
+            required: ['url'],
+            additionalProperties: false,
+          },
+        },
+        capabilities: {
+          $ref: '#/definitions/AgentCapabilities',
+        },
+        default_input_modes: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+        },
+        default_output_modes: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+        },
+        security_schemes: {
+          $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+        },
+        security_requirements: {
+          type: 'array',
+          items: {},
+        },
+        skills: {
+          type: 'array',
+          items: {
+            $ref: '#/definitions/AgentSkill',
+          },
+        },
+        icon_url: {
+          type: 'string',
+        },
+      },
+      required: ['name'],
+      additionalProperties: false,
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    AgentCapabilities: {
+      type: 'object',
+      properties: {
+        streaming: {
+          type: 'boolean',
+        },
+        push_notifications: {
+          type: 'boolean',
+        },
+        extensions: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+        },
+        extended_agent_card: {
+          type: 'boolean',
+        },
+      },
+      additionalProperties: false,
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    AgentSkill: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+        },
+        name: {
+          type: 'string',
+        },
+        description: {
+          type: 'string',
+        },
+        tags: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+        },
+        examples: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+        },
+        input_modes: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+        },
+        output_modes: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+        },
+      },
+      required: ['id', 'name', 'description'],
+      additionalProperties: false,
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    AgentProtocolTlsConfig: {
+      type: 'object',
+      properties: {
+        cert: {
+          type: 'string',
+        },
+        key: {
+          type: 'string',
+        },
+      },
+      required: ['cert', 'key'],
+      additionalProperties: false,
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    AgentProtocolAuthConfig: {
+      type: 'object',
+      properties: {
+        type: {
+          type: 'string',
+          enum: ['bearer', 'api_key', 'none'],
+        },
+        token_env: {
+          type: 'string',
+        },
+        header_name: {
+          type: 'string',
+        },
+        param_name: {
+          type: 'string',
+        },
+        key_env: {
+          type: 'string',
+        },
+      },
+      required: ['type'],
+      additionalProperties: false,
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    AgentProtocolQueueConfig: {
+      type: 'object',
+      properties: {
+        poll_interval: {
+          type: 'number',
+        },
+        max_concurrent: {
+          type: 'number',
+        },
+        stale_claim_timeout: {
+          type: 'number',
         },
       },
       additionalProperties: false,
