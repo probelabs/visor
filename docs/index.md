@@ -1,6 +1,6 @@
 # Visor Documentation
 
-Visor is an AI-powered workflow orchestration tool for code review, automation, and CI/CD pipelines. It supports multiple AI providers, pluggable check providers, and integrates with GitHub Actions and Slack.
+Visor is an AI-powered workflow orchestration tool for code review, automation, and CI/CD pipelines. It supports multiple AI providers, pluggable check providers, A2A agent interoperability, and integrates with GitHub Actions and Slack.
 
 ---
 
@@ -35,7 +35,7 @@ Visor is an AI-powered workflow orchestration tool for code review, automation, 
 
 ## Providers
 
-Visor supports 15 provider types for different check and workflow operations.
+Visor supports 16 provider types for different check and workflow operations.
 
 ### AI Providers
 
@@ -66,6 +66,12 @@ Visor supports 15 provider types for different check and workflow operations.
 | [Git Checkout](./providers/git-checkout.md) | Checkout code from repositories using git worktrees |
 | [Memory Provider](./memory.md) | Persistent key-value storage for stateful workflows |
 | [Human Input](./human-input-provider.md) | Pause workflows to collect user input via CLI, stdin, or SDK |
+
+### Agent Protocol
+
+| Document | Description |
+|----------|-------------|
+| [A2A Provider](./a2a-provider.md) | Agent-to-Agent protocol: server mode, client provider, task management, and multi-agent composition |
 
 ### Utility Providers
 
@@ -187,6 +193,7 @@ Internal design documents, proposals, and implementation tracking.
 | [on_init Hook](./rfc/on_init-hook.md) | Lifecycle hook for context preprocessing |
 | [Telemetry Tracing](./telemetry-tracing-rfc.md) | OpenTelemetry tracing architecture |
 | [Test Framework](./test-framework-rfc.md) | In-YAML integration test framework design |
+| [A2A Protocol Support](../rfc/001-a2a-protocol-support.md) | Agent-to-Agent protocol for agent interoperability ([docs](./a2a-provider.md)) |
 
 ### Design Documents
 

@@ -27,7 +27,7 @@ This document provides a comprehensive overview of Visor's internal architecture
 
 ## System Overview
 
-Visor is an AI-powered workflow orchestration tool that can run as a GitHub Action, CLI tool, or Slack bot. The system uses a state machine-based execution engine to orchestrate checks (steps) with sophisticated dependency resolution, routing, and error handling.
+Visor is an AI-powered workflow orchestration tool that can run as a GitHub Action, CLI tool, Slack bot, or A2A agent server. The system uses a state machine-based execution engine to orchestrate checks (steps) with sophisticated dependency resolution, routing, and error handling.
 
 ### High-Level Architecture Diagram
 
@@ -36,16 +36,16 @@ Visor is an AI-powered workflow orchestration tool that can run as a GitHub Acti
                                     |   Entry Points   |
                                     +------------------+
                                     |                  |
-                      +-------------+---+----------+---+-------------+
-                      |                 |              |             |
-                      v                 v              v             v
-               +------+------+   +------+------+  +---+---+   +-----+-----+
-               | GitHub      |   |    CLI      |  | Slack |   | HTTP      |
-               | Action      |   | (cli-main)  |  | Socket|   | Webhook   |
-               | (index.ts)  |   |             |  | Mode  |   | Server    |
-               +------+------+   +------+------+  +---+---+   +-----+-----+
-                      |                 |              |             |
-                      +--------+--------+--------------+-------------+
+                +------+------+-----+----+--------+---+----------+
+                |             |          |        |              |
+                v             v          v        v              v
+         +------+------+ +---+----+ +---+---+ +--+-------+ +----+------+
+         | GitHub      | |  CLI   | | Slack | | HTTP     | | A2A       |
+         | Action      | |        | | Socket| | Webhook  | | Agent     |
+         | (index.ts)  | |        | | Mode  | | Server   | | Server    |
+         +------+------+ +---+----+ +---+---+ +--+-------+ +----+------+
+                |             |          |        |              |
+                +------+------+----------+--------+--------------+
                                |
                                v
                     +----------+-----------+
@@ -82,7 +82,7 @@ Visor is an AI-powered workflow orchestration tool that can run as a GitHub Acti
 
 | Component | Description |
 |-----------|-------------|
-| **Entry Points** | GitHub Action, CLI, Slack Socket Mode, HTTP webhooks |
+| **Entry Points** | GitHub Action, CLI, Slack Socket Mode, HTTP webhooks, A2A Agent Protocol |
 | **Configuration Manager** | Loads and validates YAML configuration |
 | **State Machine Engine** | Orchestrates check execution with wave-based scheduling |
 | **Provider Registry** | Registry of pluggable check providers |
@@ -163,6 +163,33 @@ http_server:
     - path: /webhook
       transform: "{{ request.body | json }}"
 ```
+
+### A2A Agent Server (`src/agent-protocol/a2a-frontend.ts`)
+
+The A2A (Agent-to-Agent) entry point exposes Visor workflows as standards-compliant A2A agents:
+
+```bash
+visor --a2a --config .visor.yaml
+```
+
+**Responsibilities:**
+- Serve Agent Card at `/.well-known/agent-card.json` for discovery
+- Accept tasks via `POST /message:send`
+- Route incoming A2A skills to internal workflows via `skill_routing`
+- Manage task lifecycle (submitted → working → completed/failed)
+- Persist tasks in SQLite via `TaskStore`
+- Execute workflows through the state machine engine
+
+**Supported A2A Endpoints:**
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/.well-known/agent-card.json` | No | Agent Card for discovery |
+| `POST` | `/message:send` | Yes | Submit a task |
+| `GET` | `/tasks/{id}` | Yes | Get task status |
+| `GET` | `/tasks` | Yes | List tasks |
+| `POST` | `/tasks/{id}:cancel` | Yes | Cancel a task |
+
+See [A2A Provider](./a2a-provider.md) for complete documentation.
 
 ---
 
@@ -264,6 +291,104 @@ checks:
       run: [aggregation-step]
 ```
 
+### Agent Protocol Layer
+
+The A2A feature introduces a task-based execution layer that sits between external clients and the workflow engine. This is architecturally separate from the step-level state machine — it governs the lifecycle of inbound agent tasks.
+
+```
+External A2A Client
+      │
+      ▼
+┌─────────────────────┐
+│  A2A Frontend       │  HTTP server, auth, Agent Card
+│  (a2a-frontend.ts)  │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐     ┌─────────────────────┐
+│  Task Store         │◄───►│  Task Queue          │
+│  (SQLite)           │     │  (async execution)   │
+└──────────┬──────────┘     └──────────┬──────────┘
+           │                           │
+           ▼                           ▼
+┌──────────────────────────────────────────────────┐
+│  State Machine Execution Engine                  │
+│  (same engine used by CLI, GitHub Action, etc.)  │
+└──────────────────────────────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────┐
+│  Provider Registry → [ai, a2a, command, ...]     │
+└──────────────────────────────────────────────────┘
+```
+
+#### Task Store (`src/agent-protocol/task-store.ts`)
+
+SQLite-backed persistence for A2A tasks:
+
+```sql
+CREATE TABLE agent_tasks (
+  id TEXT PRIMARY KEY,           -- UUID
+  context_id TEXT NOT NULL,      -- Session grouping
+  state TEXT NOT NULL,           -- Task state
+  created_at TEXT NOT NULL,      -- ISO 8601
+  updated_at TEXT NOT NULL,
+  request_message TEXT NOT NULL, -- JSON: original message
+  artifacts TEXT DEFAULT '[]',   -- JSON: AgentArtifact[]
+  history TEXT DEFAULT '[]',     -- JSON: AgentMessage[]
+  workflow_id TEXT,              -- Target workflow
+  run_id TEXT,                   -- Engine run correlation
+  claimed_by TEXT,               -- Worker ID (queue)
+  claimed_at TEXT,               -- Claim timestamp
+  ttl TEXT                       -- Expiration
+);
+```
+
+The store provides CRUD operations with state transition enforcement — invalid transitions (e.g., `completed` → `working`) throw `InvalidStateTransitionError`.
+
+#### Task Queue (`src/agent-protocol/task-queue.ts`)
+
+Manages async task execution with configurable concurrency:
+
+- Polls the database at `poll_interval` for unclaimed `submitted` tasks
+- Claims tasks using a worker ID with `stale_claim_timeout` to recover from crashed workers
+- Feeds tasks to the state machine engine, limited by `max_concurrent`
+- Updates task state and artifacts on completion
+
+#### Task State Machine (`src/agent-protocol/state-transitions.ts`)
+
+Separate from the workflow engine state machine — this governs task lifecycle:
+
+```
+submitted ──→ working ──→ completed (terminal)
+    │            ├──→ failed (terminal)
+    │            ├──→ canceled (terminal)
+    │            ├──→ input_required ──→ working (resumed)
+    │            └──→ auth_required ──→ working (resumed)
+    ├──→ canceled (terminal)
+    └──→ rejected (terminal)
+```
+
+Terminal states: `completed`, `failed`, `canceled`, `rejected`.
+
+#### Agent Card & Discovery
+
+The Agent Card is a JSON document describing the agent's capabilities:
+
+```typescript
+interface AgentCard {
+  name: string;
+  description?: string;
+  version?: string;
+  provider?: { organization: string; url?: string };
+  skills?: AgentSkill[];        // Advertised capabilities
+  supported_interfaces?: Array<{ url: string; protocol_binding?: string }>;
+  capabilities?: { streaming?: boolean; push_notifications?: boolean };
+}
+```
+
+Skills are mapped to internal workflows via `skill_routing` configuration. When a client sends a message with `metadata.skill_id`, the frontend resolves the target workflow and dispatches execution.
+
 ---
 
 ## Provider Architecture
@@ -311,6 +436,7 @@ class CheckProviderRegistry {
 
 | Provider | Type | Description |
 |----------|------|-------------|
+| `a2a` | A2A Agent | Calls external A2A-compatible agents |
 | `ai` | AI-powered | Uses Gemini, Claude, OpenAI, or Bedrock for analysis |
 | `command` | Command | Executes shell commands |
 | `script` | Script | Executes JavaScript in a sandbox |
@@ -507,6 +633,19 @@ checks:
       {% assign data = request.body | json %}
       {{ data.message }}
 ```
+
+### A2A Protocol
+
+External agents and orchestrators send tasks via the A2A protocol:
+
+1. Client fetches Agent Card from `GET /.well-known/agent-card.json`
+2. Client sends `POST /message:send` with `skill_id` in metadata
+3. A2A Frontend authenticates the request (bearer/api_key)
+4. Task created in TaskStore (state: `submitted`)
+5. Skill routing maps `skill_id` → internal workflow name
+6. Engine executes the workflow (same engine as CLI/GitHub Action)
+7. Task updated with artifacts (state: `completed`)
+8. Client receives response (blocking) or polls `GET /tasks/{id}` (async)
 
 ---
 
@@ -1063,6 +1202,7 @@ Currently, Visor does not cache AI responses between runs. For expensive operati
 - [Security](./security.md) - Security overview and best practices
 - [Providers](./providers/) - Provider-specific documentation
 - [Custom Tools](./custom-tools.md) - Creating custom tools
+- [A2A Provider](./a2a-provider.md) - Agent-to-Agent protocol integration
 - [MCP Provider](./mcp-provider.md) - MCP integration details
 - [Command Provider](./command-provider.md) - Shell command execution
 - [HTTP Integration](./http.md) - HTTP server and client features
@@ -1100,6 +1240,7 @@ src/
   providers/
     check-provider.interface.ts  # Provider base class
     check-provider-registry.ts   # Provider registry
+    a2a-check-provider.ts        # A2A agent client provider
     ai-check-provider.ts         # AI provider (Gemini, Claude, OpenAI)
     claude-code-check-provider.ts # Claude Code SDK provider
     command-check-provider.ts    # Shell command provider
@@ -1121,6 +1262,17 @@ src/
   event-bus/
     event-bus.ts              # Event bus for frontends
     types.ts                  # Event envelope types
+
+  agent-protocol/
+    a2a-frontend.ts             # A2A HTTP server and endpoints
+    types.ts                    # Protocol-agnostic types and error classes
+    state-transitions.ts        # Task state machine validation
+    task-store.ts               # SQLite-backed task persistence
+    task-queue.ts               # Async task execution queue
+    task-stream-manager.ts      # SSE streaming support
+    push-notification-manager.ts # Push notification delivery
+    tasks-cli-handler.ts        # CLI: visor tasks
+    index.ts                    # Re-exports
 
   frontends/
     host.ts                   # Frontend manager
@@ -1182,6 +1334,9 @@ interface VisorConfig {
 
   // HTTP server
   http_server?: HttpServerConfig;
+
+  // Agent Protocol (A2A)
+  agent_protocol?: AgentProtocolConfig;
 
   // Workflow imports
   imports?: string[];
@@ -1257,4 +1412,11 @@ Events that flow through the state machine:
 | **Scope** | Hierarchical path for nested workflow execution |
 | **Frontend** | Integration point (GitHub, Slack) |
 | **Routing** | Control flow based on check results |
+| **A2A** | Agent-to-Agent protocol — Google's open standard for agent interoperability |
+| **Agent Card** | JSON metadata describing an agent's capabilities, skills, and endpoints |
+| **Task** | A unit of work in the A2A protocol with lifecycle state (submitted → working → completed) |
+| **Skill** | A named capability advertised in an Agent Card, mapped to a Visor workflow |
+| **Skill Routing** | Configuration mapping A2A skill IDs to internal workflow names |
+| **Task Store** | SQLite-backed persistence layer for A2A tasks |
+| **Task Queue** | Async execution queue for processing A2A tasks with concurrency control |
 | **MCP** | Model Context Protocol - standard for AI tool integration |

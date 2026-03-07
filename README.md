@@ -7,19 +7,20 @@
   [![Node](https://img.shields.io/badge/Node.js-18%2B-green)](https://nodejs.org/)
   [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-  Orchestrate checks, MCP tools, and AI providers with YAML-driven pipelines.
-  Runs as GitHub Action, CLI, Slack bot, or HTTP API.
+  Orchestrate checks, MCP tools, AI providers, and A2A agents with YAML-driven pipelines.
+  Runs as GitHub Action, CLI, Slack bot, HTTP API, or A2A agent server.
 </div>
 
 ---
 
-Visor is an open-source workflow engine that lets you define multi-step AI pipelines in YAML. Wire up shell commands, AI providers, MCP tools, HTTP calls, and custom scripts into dependency-aware DAGs — then run them from your terminal, CI, Slack, or an HTTP endpoint.
+Visor is an open-source workflow engine that lets you define multi-step AI pipelines in YAML. Wire up shell commands, AI providers, MCP tools, A2A agents, HTTP calls, and custom scripts into dependency-aware DAGs — then run them from your terminal, CI, Slack, an HTTP endpoint, or as a standards-compliant A2A agent server.
 
 **What you get out of the box:**
 
 - **YAML-driven pipelines** — define checks, transforms, routing, and AI prompts in a single config file.
-- **4 runtime modes** — CLI, GitHub Action, Slack bot, HTTP server — same config, any surface.
-- **12+ provider types** — `ai`, `command`, `script`, `mcp`, `http`, `claude-code`, `github`, `memory`, `workflow`, and more.
+- **5 runtime modes** — CLI, GitHub Action, Slack bot, HTTP server, A2A agent server — same config, any surface.
+- **15+ provider types** — `ai`, `a2a`, `command`, `script`, `mcp`, `http`, `claude-code`, `github`, `memory`, `workflow`, and more.
+- **Agent interoperability** — A2A protocol support: expose workflows as discoverable agents, or call external A2A agents from your pipelines.
 - **AI orchestration** — multi-provider (Gemini, Claude, OpenAI, Bedrock), session reuse, MCP tool calling, retry & fallback.
 - **Execution engine** — dependency DAGs, parallel waves, forEach fan-out, conditional routing, failure auto-remediation.
 - **Built-in testing** — YAML-native integration tests with fixtures, mocks, and assertions.
@@ -34,6 +35,7 @@ Visor is an open-source workflow engine that lets you define multi-step AI pipel
 - [Provider Types](#-provider-types)
 - [Orchestration](#-orchestration)
 - [AI & MCP](#-ai--mcp)
+- [Agent Protocol (A2A)](#-agent-protocol-a2a)
 - [GitHub Provider](#-github-provider)
 - [Templating & Transforms](#-templating--transforms)
 - [Suppressing Warnings](#-suppressing-warnings)
@@ -163,7 +165,7 @@ Learn more: [docs/assistant-workflows.md](docs/assistant-workflows.md) | Example
 
 ## 🖥️ Runtime Modes
 
-Visor runs the same YAML config across four surfaces:
+Visor runs the same YAML config across five surfaces:
 
 | Mode | How to run | Best for |
 |------|-----------|----------|
@@ -171,6 +173,7 @@ Visor runs the same YAML config across four surfaces:
 | **GitHub Action** | `uses: probelabs/visor@v1` | PR reviews, issue triage, annotations |
 | **Slack bot** | `visor --slack --config .visor.yaml` | Team assistants, ChatOps |
 | **HTTP server** | `http_server: { enabled: true, port: 8080 }` | Webhooks, API integrations |
+| **A2A agent** | `visor --a2a --config .visor.yaml` | Agent interoperability, multi-agent systems |
 
 Additional modes:
 - **TUI** — interactive chat-style terminal UI: `visor --tui`
@@ -185,6 +188,8 @@ visor --analyze-branch-diff                   # PR-style diff analysis
 visor --event pr_updated                      # Simulate GitHub events
 visor --tui --config ./workflow.yaml          # Interactive TUI
 visor --debug-server --debug-port 3456        # Live web debugger
+visor --a2a --config workflow.yaml            # A2A agent server
+visor tasks list --watch                      # Monitor A2A task queue
 visor config snapshots                        # Config version history
 visor validate                                # Validate config
 visor test --progress compact                 # Run integration tests
@@ -227,6 +232,7 @@ Learn more: [docs/commands.md](docs/commands.md)
 | Provider | Description | Example use |
 |----------|------------|------------|
 | `ai` | Multi-provider AI (Gemini, Claude, OpenAI, Bedrock) | Code review, analysis, generation |
+| `a2a` | Call external A2A agents | Agent delegation, multi-agent workflows |
 | `command` | Shell commands with Liquid templating | Run tests, build, lint |
 | `script` | JavaScript in a secure sandbox | Transform data, custom logic |
 | `mcp` | MCP tool execution (stdio/SSE/HTTP) | External tool integration |
@@ -433,6 +439,57 @@ steps:
 ```
 
 Learn more: [docs/claude-code.md](docs/claude-code.md) · [docs/mcp-provider.md](docs/mcp-provider.md) · [docs/advanced-ai.md](docs/advanced-ai.md)
+
+## 🤝 Agent Protocol (A2A)
+
+Visor implements the [A2A (Agent-to-Agent) protocol](https://github.com/google/A2A) for agent interoperability. Every Visor workflow can become a discoverable, standards-compliant agent — and every A2A agent in the ecosystem becomes a callable step in your workflows.
+
+### Server: Expose Workflows as an A2A Agent
+
+```yaml
+agent_protocol:
+  enabled: true
+  protocol: a2a
+  port: 9000
+  agent_card_inline:
+    name: "Code Review Agent"
+    description: "AI-powered code review"
+    skills:
+      - id: security
+        name: Security Review
+        description: Analyze code for vulnerabilities
+  skill_routing:
+    security: security-review
+  default_workflow: general-review
+  auth:
+    type: bearer
+    token_env: AGENT_AUTH_TOKEN
+```
+
+```bash
+visor --a2a --config .visor.yaml    # Start A2A server on port 9000
+visor tasks list --watch            # Monitor task queue
+```
+
+### Client: Call External A2A Agents
+
+```yaml
+steps:
+  compliance-scan:
+    type: a2a
+    agent_url: "http://compliance-agent:9000"
+    message: |
+      Review PR #{{ pr.number }}: {{ pr.title }}
+    blocking: true
+    timeout: 60000
+
+  summarize:
+    type: ai
+    depends_on: [compliance-scan]
+    prompt: "Summarize: {{ outputs['compliance-scan'] | json }}"
+```
+
+Learn more: [docs/a2a-provider.md](docs/a2a-provider.md) · [RFC: A2A Protocol Support](rfc/001-a2a-protocol-support.md) · [Example config](examples/a2a-agent-example.yaml)
 
 ## 🧰 GitHub Provider
 
@@ -709,7 +766,7 @@ Learn more: [docs/enterprise-policy.md](docs/enterprise-policy.md)
 [Assistant workflows](docs/assistant-workflows.md) · [CLI commands](docs/commands.md) · [Configuration](docs/configuration.md) · [AI config](docs/ai-configuration.md) · [Dependencies](docs/dependencies.md) · [forEach propagation](docs/foreach-dependency-propagation.md) · [Failure routing](docs/failure-routing.md) · [Liquid templates](docs/liquid-templates.md) · [Schema-template system](docs/schema-templates.md) · [Fail conditions](docs/fail-if.md) · [Timeouts](docs/timeouts.md) · [Execution limits](docs/limits.md) · [Output formats](docs/output-formats.md) · [Output formatting](docs/output-formatting.md) · [HTTP integration](docs/http.md) · [Scheduler](docs/scheduler.md)
 
 **Providers:**
-[Command](docs/command-provider.md) · [Script](docs/script.md) · [MCP](docs/mcp-provider.md) · [MCP tools for AI](docs/mcp.md) · [Claude Code](docs/claude-code.md) · [GitHub ops](docs/github-ops.md) · [Custom providers](docs/pluggable.md)
+[A2A](docs/a2a-provider.md) · [Command](docs/command-provider.md) · [Script](docs/script.md) · [MCP](docs/mcp-provider.md) · [MCP tools for AI](docs/mcp.md) · [Claude Code](docs/claude-code.md) · [GitHub ops](docs/github-ops.md) · [Custom providers](docs/pluggable.md)
 
 **Operations:**
 [GitHub Action reference](docs/action-reference.md) · [Security](docs/security.md) · [Performance](docs/performance.md) · [Observability](docs/observability.md) · [Debugging](docs/debugging.md) · [Debug visualizer](docs/debug-visualizer.md) · [Troubleshooting](docs/troubleshooting.md) · [Suppressions](docs/suppressions.md) · [GitHub checks](docs/GITHUB_CHECKS.md)
