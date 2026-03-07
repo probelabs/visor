@@ -472,7 +472,7 @@ steps:
     ai:
       skip_code_context: true
       enableDelegate: true
-      enableExecutePlan: true
+      enableExecutePlan: false
       max_iterations: 40
       prompt_type: code-explorer
       allowBash: true
@@ -524,7 +524,7 @@ steps:
           - "curl:-s:*"
           - "curl:*"
         timeout: 60000
-      completion_prompt: |
+      _completion_prompt: |
         Before finalizing your answer, triple-check everything:
 
         Challenge assumptions:
