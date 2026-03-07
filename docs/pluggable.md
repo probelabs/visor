@@ -2,7 +2,7 @@
 
 Visor supports multiple provider types. You can also add custom providers.
 
-**Built-in Providers:** ai, mcp, command, script, http, http_input, http_client, log, memory, noop, github, human-input, workflow, git-checkout, claude-code
+**Built-in Providers:** a2a, ai, mcp, command, script, http, http_input, http_client, log, memory, noop, github, human-input, workflow, git-checkout, claude-code
 
 ### Custom Provider Skeleton (TypeScript)
 
@@ -17,6 +17,21 @@ class CustomCheckProvider {
 ```
 
 ### Built-in Providers
+
+#### A2A Provider (`type: a2a`)
+Call external A2A-compatible agents and collect their responses. Supports agent card discovery, multi-turn conversations, and JavaScript output transforms.
+
+```yaml
+steps:
+  compliance-check:
+    type: a2a
+    agent_url: "http://compliance-agent:9000"
+    message: "Review PR #{{ pr.number }}: {{ pr.title }}"
+    blocking: true
+    timeout: 60000
+```
+
+[Learn more](./a2a-provider.md)
 
 #### AI Provider (`type: ai`)
 Execute AI-powered analysis using Google Gemini, Anthropic Claude, OpenAI, or AWS Bedrock.

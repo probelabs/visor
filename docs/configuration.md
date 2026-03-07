@@ -32,6 +32,7 @@ Visor supports the following check types:
 
 | Type | Description | Documentation |
 |------|-------------|---------------|
+| `a2a` | Call external A2A agents | [A2A Provider](./a2a-provider.md) |
 | `ai` | AI-powered analysis using LLMs | [AI Configuration](./ai-configuration.md) |
 | `claude-code` | Claude Code SDK integration | [Claude Code](./claude-code.md) |
 | `command` | Execute shell commands | [Command Provider](./command-provider.md) |

@@ -113,6 +113,39 @@ visor mcp-server [options]
 - `--mcp-tool-name <name>` - Custom tool name for the MCP server
 - `--mcp-tool-description <desc>` - Custom tool description
 
+#### `visor tasks`
+
+Monitor and manage A2A agent tasks.
+
+```bash
+visor tasks [command] [options]
+```
+
+**Subcommands:**
+- `list` (default) — List tasks with optional filters
+- `stats` — Queue summary statistics
+- `cancel <task-id>` — Cancel a running task
+- `help` — Show usage
+
+**Options:**
+- `--state <state>` — Filter by state: `submitted`, `working`, `completed`, `failed`, `canceled`
+- `--agent <workflow-id>` — Filter by workflow
+- `--limit <n>` — Number of tasks to show (default: 20)
+- `--output <format>` — Output format: `table` (default), `json`, `markdown`
+- `--watch` — Live refresh every 2 seconds
+
+**Examples:**
+```bash
+visor tasks                                  # List all tasks
+visor tasks list --state working             # Show only working tasks
+visor tasks list --agent security-review     # Tasks for a specific workflow
+visor tasks list --output json               # JSON output
+visor tasks list --watch                     # Live monitoring
+visor tasks stats                            # Queue summary
+visor tasks stats --output json              # Stats as JSON
+visor tasks cancel abc123                    # Cancel a task
+```
+
 ### Common CLI Options
 
 #### Check Selection
@@ -174,6 +207,9 @@ See [Tag Filtering](tag-filtering.md) for detailed tag filtering documentation.
 - `--github-installation-id <id>` - GitHub App installation ID, auto-detected if omitted
 
 See [GitHub Authentication](github-auth.md) for setup guide and details.
+
+#### Agent Protocol
+- `--a2a` - Enable A2A Agent Protocol server mode (see [A2A Provider](a2a-provider.md))
 
 #### Other Options
 - `--slack` - Enable Slack Socket Mode runner
