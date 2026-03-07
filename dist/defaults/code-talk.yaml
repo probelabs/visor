@@ -471,7 +471,7 @@ steps:
       - "outputs['route-projects']?.projects?.length > 0"
     ai:
       skip_code_context: true
-      enableDelegate: true
+      enableDelegate: false
       enableExecutePlan: false
       max_iterations: 40
       prompt_type: code-explorer
