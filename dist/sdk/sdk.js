@@ -760,7 +760,7 @@ var require_package = __commonJS({
         "@actions/core": "^1.11.1",
         "@apidevtools/swagger-parser": "^12.1.0",
         "@modelcontextprotocol/sdk": "^1.25.3",
-        "@nyariv/sandboxjs": "github:probelabs/SandboxJS#f1c13b8eee98734a8ea024061eada4aa9a9ff2e9",
+        "@nyariv/sandboxjs": "github:probelabs/SandboxJS#23c4bb611f7d05f3cb8c523917b5f57103e48108",
         "@octokit/action": "^8.0.2",
         "@octokit/auth-app": "^8.1.0",
         "@octokit/core": "^7.0.3",
@@ -10445,6 +10445,9 @@ var init_api_tool_executor = __esm({
 });
 
 // src/providers/custom-tool-executor.ts
+function isInlineWorkflowTool(tool) {
+  return Boolean(tool && tool.type === "workflow");
+}
 var import_ajv, CustomToolExecutor;
 var init_custom_tool_executor = __esm({
   "src/providers/custom-tool-executor.ts"() {
@@ -10482,8 +10485,16 @@ var init_custom_tool_executor = __esm({
           if (!tool.spec) {
             throw new Error(`API tool '${tool.name}' must define 'spec'`);
           }
+        } else if (isInlineWorkflowTool(tool)) {
+          if (!tool.workflow && !tool.steps) {
+            throw new Error(
+              `Workflow tool '${tool.name}' must define 'workflow' (reference) or 'steps' (inline)`
+            );
+          }
         } else if (!tool.exec) {
-          throw new Error(`Tool '${tool.name}' must define 'exec' (or set type: 'api')`);
+          throw new Error(
+            `Tool '${tool.name}' must define 'exec' (or set type: 'api' / type: 'workflow')`
+          );
         }
         this.tools.set(tool.name, tool);
       }
@@ -10554,6 +10565,11 @@ var init_custom_tool_executor = __esm({
         if (tool && isApiToolDefinition(tool)) {
           throw new Error(
             `Tool '${toolName}' is an API bundle. Call one of its generated operations instead.`
+          );
+        }
+        if (tool && isInlineWorkflowTool(tool)) {
+          throw new Error(
+            `Tool '${toolName}' is a workflow tool. It must be executed via WorkflowCheckProvider, not CustomToolExecutor.`
           );
         }
         if (!tool) {
@@ -10642,7 +10658,7 @@ var init_custom_tool_executor = __esm({
       async hasTool(toolName) {
         if (this.tools.has(toolName)) {
           const tool = this.tools.get(toolName);
-          return !isApiToolDefinition(tool);
+          return !isApiToolDefinition(tool) && !isInlineWorkflowTool(tool);
         }
         const apiMappedTool = await this.apiToolRegistry.getMappedTool(toolName, this.tools);
         return Boolean(apiMappedTool);
@@ -10653,7 +10669,7 @@ var init_custom_tool_executor = __esm({
       async getToolNames() {
         const names = [];
         for (const tool of this.tools.values()) {
-          if (!isApiToolDefinition(tool)) {
+          if (!isApiToolDefinition(tool) && !isInlineWorkflowTool(tool)) {
             names.push(tool.name);
           }
         }
@@ -10667,7 +10683,7 @@ var init_custom_tool_executor = __esm({
        * List MCP-compatible tool definitions including API-generated operations
        */
       async listMcpTools() {
-        const directTools = this.getTools().filter((tool) => !isApiToolDefinition(tool)).map((tool) => ({
+        const directTools = this.getTools().filter((tool) => !isApiToolDefinition(tool) && !isInlineWorkflowTool(tool)).map((tool) => ({
           name: tool.name,
           description: tool.description,
           inputSchema: tool.inputSchema
@@ -10707,7 +10723,7 @@ var init_custom_tool_executor = __esm({
        * Convert custom tools to MCP tool format
        */
       toMcpTools() {
-        return Array.from(this.tools.values()).filter((tool) => !isApiToolDefinition(tool)).map((tool) => ({
+        return Array.from(this.tools.values()).filter((tool) => !isApiToolDefinition(tool) && !isInlineWorkflowTool(tool)).map((tool) => ({
           name: tool.name,
           description: tool.description,
           inputSchema: tool.inputSchema,
@@ -11479,6 +11495,28 @@ var init_workflow_executor = __esm({
   }
 });
 
+// src/utils/toolkit-expander.ts
+function expandToolkit(toolkitConfig, overrides) {
+  const tools = toolkitConfig?.tools ?? toolkitConfig;
+  if (!tools || typeof tools !== "object" || Array.isArray(tools)) {
+    throw new Error("Toolkit config does not contain a valid tools section");
+  }
+  const expanded = {};
+  for (const [name, def] of Object.entries(tools)) {
+    if (def && typeof def === "object" && !Array.isArray(def) && overrides && Object.keys(overrides).length > 0) {
+      expanded[name] = { ...def, ...overrides };
+    } else {
+      expanded[name] = def;
+    }
+  }
+  return expanded;
+}
+var init_toolkit_expander = __esm({
+  "src/utils/toolkit-expander.ts"() {
+    "use strict";
+  }
+});
+
 // src/state-machine/workflow-projection.ts
 var workflow_projection_exports = {};
 __export(workflow_projection_exports, {
@@ -11627,6 +11665,11 @@ var init_config_merger = __esm({
           const parentImports = parent.imports || [];
           const childImports = child.imports || [];
           result.imports = [.../* @__PURE__ */ new Set([...parentImports, ...childImports])];
+        }
+        for (const key of Object.keys(child)) {
+          if (!(key in result) && key !== "extends" && key !== "include") {
+            result[key] = this.deepCopy(child[key]);
+          }
         }
         return result;
       }
@@ -12472,7 +12515,7 @@ var init_config_schema = __esm({
           properties: {
             type: {
               type: "string",
-              enum: ["command", "api"],
+              enum: ["command", "api", "workflow"],
               description: "Tool implementation type (defaults to 'command')"
             },
             name: {
@@ -12668,6 +12711,28 @@ var init_config_schema = __esm({
             request_timeout_ms: {
               type: "number",
               description: "Alias for requestTimeoutMs (snake_case)"
+            },
+            workflow: {
+              type: "string",
+              description: "Workflow ID (registry lookup) or file path (for type: 'workflow')"
+            },
+            inputs: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/WorkflowInput"
+              },
+              description: "Inline workflow inputs (for type: 'workflow' with inline steps)"
+            },
+            outputs: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/WorkflowOutput"
+              },
+              description: "Inline workflow outputs (for type: 'workflow' with inline steps)"
+            },
+            steps: {
+              $ref: "#/definitions/Record%3Cstring%2CCheckConfig%3E",
+              description: "Inline workflow steps (for type: 'workflow' with inline definition)"
             }
           },
           required: ["name"],
@@ -13186,7 +13251,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -13202,7 +13267,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -13900,7 +13965,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -13915,13 +13980,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916>>": {
+        "Record<string,Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916>": {
+        "Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400>": {
           type: "object",
           additionalProperties: false
         },
@@ -17238,6 +17303,7 @@ var init_workflow_check_provider = __esm({
     init_workflow_executor();
     init_logger();
     init_sandbox();
+    init_toolkit_expander();
     init_human_id();
     init_liquid_extensions();
     path13 = __toESM(require("path"));
@@ -17513,9 +17579,28 @@ var init_workflow_check_provider = __esm({
               const baseConfig = loadConfig2(extendsPath);
               return deepMerge(baseConfig, resolvedOverride);
             }
+            if ("toolkit" in obj && typeof obj.toolkit === "string") {
+              const toolkitPath = obj.toolkit;
+              const toolkitConfig = loadConfig2(toolkitPath);
+              const overrides = Object.fromEntries(
+                Object.entries(obj).filter(([k]) => k !== "toolkit")
+              );
+              const expanded = expandToolkit(
+                toolkitConfig,
+                Object.keys(overrides).length > 0 ? overrides : void 0
+              );
+              expanded.__toolkitExpanded = true;
+              return expanded;
+            }
             const result = {};
             for (const [k, v] of Object.entries(obj)) {
-              result[k] = resolveExpressions(v, depth + 1);
+              const resolved = resolveExpressions(v, depth + 1);
+              if (resolved && typeof resolved === "object" && !Array.isArray(resolved) && resolved.__toolkitExpanded) {
+                const { __toolkitExpanded, ...tools } = resolved;
+                Object.assign(result, tools);
+              } else {
+                result[k] = resolved;
+              }
             }
             return result;
           }
@@ -21469,6 +21554,8 @@ var init_mcp_custom_sse_server = __esm({
     import_http = __toESM(require("http"));
     import_events = require("events");
     init_workflow_tool_executor();
+    init_custom_tool_executor();
+    init_workflow_registry();
     init_schedule_tool();
     init_schedule_tool_handler();
     CustomToolsSSEServer = class _CustomToolsSSEServer {
@@ -21496,6 +21583,14 @@ var init_mcp_custom_sse_server = __esm({
         const toolsRecord = {};
         const workflowToolNames = [];
         for (const [name, tool] of tools.entries()) {
+          if (isInlineWorkflowTool(tool) && !isWorkflowTool(tool)) {
+            const workflowToolDef = this.convertInlineWorkflowTool(name, tool);
+            if (workflowToolDef) {
+              this.tools.set(name, workflowToolDef);
+            }
+          }
+        }
+        for (const [name, tool] of this.tools.entries()) {
           if (!isWorkflowTool(tool)) {
             toolsRecord[name] = tool;
           } else {
@@ -22150,6 +22245,85 @@ var init_mcp_custom_sse_server = __esm({
             workspace.release();
           }
         }
+      }
+      /**
+       * Convert a type: 'workflow' tool definition into a WorkflowToolDefinition marker.
+       *
+       * For inline workflow tools (with `steps`), registers a synthetic workflow in
+       * WorkflowRegistry so it can be executed via WorkflowCheckProvider.
+       *
+       * For file-referenced workflow tools (with `workflow` field), resolves from
+       * WorkflowRegistry by ID.
+       */
+      convertInlineWorkflowTool(name, tool) {
+        const registry = WorkflowRegistry.getInstance();
+        if (tool.steps) {
+          const workflowId = tool.workflow || `inline-tool-${name}`;
+          const syntheticWorkflow = {
+            id: workflowId,
+            name: tool.name || name,
+            description: tool.description,
+            inputs: tool.inputs?.map((inp) => ({
+              name: inp.name,
+              schema: {
+                type: "string",
+                ...inp.schema
+              },
+              required: inp.required,
+              default: inp.default,
+              description: inp.description
+            })),
+            outputs: tool.outputs?.map((out) => ({
+              name: out.name,
+              description: out.description,
+              value: out.value,
+              value_js: out.value_js
+            })),
+            steps: tool.steps,
+            checks: tool.steps
+          };
+          if (!registry.has(workflowId)) {
+            registry.register(syntheticWorkflow);
+            if (this.debug) {
+              logger.debug(
+                `[CustomToolsSSEServer:${this.sessionId}] Registered inline workflow '${workflowId}' from tool '${name}'`
+              );
+            }
+          }
+          const inputSchema = workflowInputsToJsonSchema(tool.inputs);
+          return {
+            name: tool.name || name,
+            description: tool.description || `Execute ${name} workflow`,
+            inputSchema,
+            exec: "",
+            __isWorkflowTool: true,
+            __workflowId: workflowId
+          };
+        } else if (tool.workflow) {
+          const workflowId = tool.workflow;
+          const workflow = registry.get(workflowId);
+          if (workflow) {
+            return createWorkflowToolDefinition(workflow, void 0, tool.name || name);
+          }
+          const inputSchema = tool.inputs ? workflowInputsToJsonSchema(tool.inputs) : { type: "object", properties: {}, required: [] };
+          if (this.debug) {
+            logger.debug(
+              `[CustomToolsSSEServer:${this.sessionId}] Workflow '${workflowId}' not in registry yet; creating deferred tool '${name}'`
+            );
+          }
+          return {
+            name: tool.name || name,
+            description: tool.description || `Execute ${workflowId} workflow`,
+            inputSchema,
+            exec: "",
+            __isWorkflowTool: true,
+            __workflowId: workflowId
+          };
+        }
+        logger.warn(
+          `[CustomToolsSSEServer:${this.sessionId}] Workflow tool '${name}' has neither 'steps' nor 'workflow' field`
+        );
+        return null;
       }
       getEnvNumber(name, fallback) {
         const raw = process.env[name];
@@ -23778,7 +23952,7 @@ ${processedPrompt}` : processedPrompt;
               continue;
             }
             const cfg = serverConfig;
-            const isValid = cfg.command || cfg.url || cfg.workflow || cfg.tool || Object.keys(cfg).length === 0;
+            const isValid = cfg.command || cfg.url || cfg.workflow || cfg.tool || cfg.type || Object.keys(cfg).length === 0;
             if (!isValid) {
               logger.warn(
                 `[AICheckProvider] ai_mcp_servers_js: server "${serverName}" must have command, url, workflow, or tool`
@@ -44992,6 +45166,20 @@ var init_mcp_check_provider = __esm({
       }
       async execute(prInfo, config, dependencyResults, sessionInfo) {
         const cfg = config;
+        try {
+          const stepName = config.checkName || "unknown";
+          const mock = sessionInfo?.hooks?.mockForStep?.(String(stepName));
+          if (mock !== void 0) {
+            const ms = mock;
+            const issuesArr = Array.isArray(ms?.issues) ? ms.issues : [];
+            const out = ms && typeof ms === "object" && "output" in ms ? ms.output : ms;
+            return {
+              issues: issuesArr,
+              ...out !== void 0 ? { output: out } : {}
+            };
+          }
+        } catch {
+        }
         const policyEngine = sessionInfo?._parentContext?.policyEngine;
         if (policyEngine && cfg.method) {
           try {
@@ -45062,15 +45250,21 @@ var init_mcp_check_provider = __esm({
               };
             }
           } else if (methodArgs && typeof methodArgs === "object") {
-            const renderedArgs = {};
-            for (const [key, value] of Object.entries(methodArgs)) {
-              if (typeof value === "string" && (value.includes("{{") || value.includes("{%"))) {
-                renderedArgs[key] = await this.liquid.parseAndRender(value, templateContext);
-              } else {
-                renderedArgs[key] = value;
+            const renderValue = async (val) => {
+              if (typeof val === "string" && (val.includes("{{") || val.includes("{%"))) {
+                return await this.liquid.parseAndRender(val, templateContext);
+              } else if (val && typeof val === "object" && !Array.isArray(val)) {
+                const rendered = {};
+                for (const [k, v] of Object.entries(val)) {
+                  rendered[k] = await renderValue(v);
+                }
+                return rendered;
+              } else if (Array.isArray(val)) {
+                return Promise.all(val.map((item) => renderValue(item)));
               }
-            }
-            methodArgs = renderedArgs;
+              return val;
+            };
+            methodArgs = await renderValue(methodArgs);
           }
           const result = await this.executeMcpMethod(
             cfg,
@@ -50214,9 +50408,11 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       const skipped = !!(st && st.skipped === true);
       const skipReason = st?.skipReason;
       const skippedDueToEmptyForEach = skipped && skipReason === "forEach_empty";
-      const wasMarkedFailed = !!(failedChecks && failedChecks.has(opt)) && !skippedDueToEmptyForEach;
+      const skippedDueToIfCondition = skipped && skipReason === "if_condition" && cont;
+      const skipIsNonBlocking = skippedDueToEmptyForEach || skippedDueToIfCondition;
+      const wasMarkedFailed = !!(failedChecks && failedChecks.has(opt)) && !skipIsNonBlocking;
       const failedOnly = !!(st && (st.failedRuns || 0) > 0 && (st.successfulRuns || 0) === 0);
-      const satisfied = (!skipped || skippedDueToEmptyForEach) && (!failedOnly && !wasMarkedFailed || cont);
+      const satisfied = (!skipped || skipIsNonBlocking) && (!failedOnly && !wasMarkedFailed || cont);
       if (satisfied) return true;
     }
     return false;
@@ -52177,9 +52373,11 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
       const skipped = !!(st && st.skipped === true);
       const skipReason = st?.skipReason;
       const skippedDueToEmptyForEach = skipped && skipReason === "forEach_empty";
-      const wasMarkedFailed = !!(failedChecks && failedChecks.has(opt)) && !skippedDueToEmptyForEach;
+      const skippedDueToIfCondition = skipped && skipReason === "if_condition" && cont;
+      const skipIsNonBlocking = skippedDueToEmptyForEach || skippedDueToIfCondition;
+      const wasMarkedFailed = !!(failedChecks && failedChecks.has(opt)) && !skipIsNonBlocking;
       const failedOnly = !!(st && (st.failedRuns || 0) > 0 && (st.successfulRuns || 0) === 0);
-      const satisfied = (!skipped || skippedDueToEmptyForEach) && (!failedOnly && !wasMarkedFailed || cont);
+      const satisfied = (!skipped || skipIsNonBlocking) && (!failedOnly && !wasMarkedFailed || cont);
       if (satisfied) return true;
     }
     return false;
