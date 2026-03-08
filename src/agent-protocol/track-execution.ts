@@ -11,6 +11,7 @@
 import crypto from 'crypto';
 import path from 'path';
 import { logger } from '../logger';
+import { trace } from '../telemetry/lazy-otel';
 import { getInstanceId } from '../utils/instance-id';
 import type { TaskStore } from './task-store';
 import type { AgentMessage, AgentTask } from './types';
@@ -54,7 +55,12 @@ export async function trackExecution<T>(
     contextId: crypto.randomUUID(),
     requestMessage,
     workflowId,
-    requestMetadata: { source, ...metadata },
+    requestMetadata: {
+      source,
+      instance_id: getInstanceId(),
+      trace_id: trace.getActiveSpan()?.spanContext().traceId || undefined,
+      ...metadata,
+    },
   });
 
   const instanceId = getInstanceId();

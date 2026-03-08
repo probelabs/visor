@@ -103,10 +103,19 @@ function buildFilter(flags: Record<string, string | boolean>): ListTasksFilter {
 // Table formatting
 // ---------------------------------------------------------------------------
 
+function formatMeta(meta: Record<string, unknown>): string {
+  const parts: string[] = [];
+  if (meta.slack_user) parts.push(`user:${meta.slack_user}`);
+  if (meta.slack_channel) parts.push(`ch:${meta.slack_channel}`);
+  if (meta.trace_id) parts.push(`trace:${String(meta.trace_id).slice(0, 8)}`);
+  if (meta.schedule_id) parts.push(`sched:${meta.schedule_id}`);
+  return parts.join(' ') || '-';
+}
+
 function formatTable(rows: TaskQueueRow[], total: number): string {
   if (rows.length === 0) return 'No tasks found.';
 
-  const header = ['ID', 'Source', 'State', 'Workflow', 'Duration', 'Instance', 'Input'];
+  const header = ['ID', 'Source', 'State', 'Workflow', 'Duration', 'Instance', 'Meta', 'Input'];
   const data = rows.map(r => {
     const duration = isTerminalState(r.state as TaskState)
       ? formatDuration(r.created_at, r.updated_at)
@@ -115,12 +124,13 @@ function formatTable(rows: TaskQueueRow[], total: number): string {
     const instance = r.claimed_by || '-';
     const workflow = r.workflow_id || '-';
     const source = r.source || '-';
+    const meta = formatMeta(r.metadata);
     const input =
       r.request_message.length > 60
         ? r.request_message.slice(0, 57) + '...'
         : r.request_message || '-';
 
-    return [r.id.slice(0, 8), source, r.state, workflow, duration, instance, input];
+    return [r.id.slice(0, 8), source, r.state, workflow, duration, instance, meta, input];
   });
 
   const widths = header.map((h, i) => Math.max(h.length, ...data.map(row => row[i].length)));
@@ -136,7 +146,7 @@ function formatTable(rows: TaskQueueRow[], total: number): string {
 function formatMarkdown(rows: TaskQueueRow[], total: number): string {
   if (rows.length === 0) return 'No tasks found.';
 
-  const header = ['ID', 'Source', 'State', 'Workflow', 'Duration', 'Instance', 'Input'];
+  const header = ['ID', 'Source', 'State', 'Workflow', 'Duration', 'Instance', 'Meta', 'Input'];
   const data = rows.map(r => {
     const duration = isTerminalState(r.state as TaskState)
       ? formatDuration(r.created_at, r.updated_at)
@@ -145,12 +155,13 @@ function formatMarkdown(rows: TaskQueueRow[], total: number): string {
     const instance = r.claimed_by || '-';
     const workflow = r.workflow_id || '-';
     const source = r.source || '-';
+    const meta = formatMeta(r.metadata);
     const input =
       r.request_message.length > 60
         ? r.request_message.slice(0, 57) + '...'
         : r.request_message || '-';
 
-    return [r.id.slice(0, 8), source, r.state, workflow, duration, instance, input];
+    return [r.id.slice(0, 8), source, r.state, workflow, duration, instance, meta, input];
   });
 
   const lines = [
@@ -317,18 +328,78 @@ async function handleCancel(
 }
 
 // ---------------------------------------------------------------------------
+// Subcommand: show
+// ---------------------------------------------------------------------------
+
+async function handleShow(
+  positional: string[],
+  flags: Record<string, string | boolean>
+): Promise<void> {
+  const taskId = positional[0];
+  if (!taskId) {
+    console.error('Usage: visor tasks show <task-id>');
+    process.exitCode = 1;
+    return;
+  }
+
+  const output = typeof flags.output === 'string' ? flags.output : 'table';
+
+  await withTaskStore(async store => {
+    // Try to find by prefix match
+    const { rows } = store.listTasksRaw({ limit: 200 });
+    const match = rows.find(r => r.id.startsWith(taskId));
+    if (!match) {
+      console.error(`Task not found: ${taskId}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    if (output === 'json') {
+      console.log(JSON.stringify(match, null, 2));
+      return;
+    }
+
+    const duration = isTerminalState(match.state as TaskState)
+      ? formatDuration(match.created_at, match.updated_at)
+      : formatDuration(match.claimed_at || match.created_at);
+
+    console.log(`Task: ${match.id}`);
+    console.log(`State:     ${match.state}`);
+    console.log(`Source:    ${match.source}`);
+    console.log(`Workflow:  ${match.workflow_id || '-'}`);
+    console.log(`Instance:  ${match.claimed_by || '-'}`);
+    console.log(`Duration:  ${duration}`);
+    console.log(`Created:   ${match.created_at}`);
+    console.log(`Updated:   ${match.updated_at}`);
+    if (match.run_id) console.log(`Run ID:    ${match.run_id}`);
+    console.log(`Input:     ${match.request_message}`);
+
+    // Show metadata
+    const meta = match.metadata;
+    const metaKeys = Object.keys(meta).filter(k => k !== 'source');
+    if (metaKeys.length > 0) {
+      console.log(`\nMetadata:`);
+      for (const key of metaKeys) {
+        console.log(`  ${key}: ${JSON.stringify(meta[key])}`);
+      }
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Help
 // ---------------------------------------------------------------------------
 
 function printHelp(): void {
   console.log(`
-Visor Tasks - Monitor and manage A2A agent tasks
+Visor Tasks - Monitor and manage agent tasks
 
 USAGE:
   visor tasks [command] [options]
 
 COMMANDS:
   list                            List tasks (default)
+  show <task-id>                  Show task details (supports prefix match)
   stats                           Queue summary statistics
   cancel <task-id>                Cancel a task
   help                            Show this help
@@ -342,6 +413,7 @@ OPTIONS:
 
 EXAMPLES:
   visor tasks                     List all tasks
+  visor tasks show abc123         Show full task details
   visor tasks list --state working   Show only working tasks
   visor tasks list --agent security-review   Show tasks for a specific agent
   visor tasks list --output json  JSON output
@@ -368,6 +440,9 @@ export async function handleTasksCommand(argv: string[]): Promise<void> {
   switch (subcommand) {
     case 'list':
       await handleList(flags);
+      break;
+    case 'show':
+      await handleShow(positional, flags);
       break;
     case 'stats':
       await handleStats(flags);
