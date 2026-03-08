@@ -1,4 +1,5 @@
 import { EventBus } from '../event-bus/event-bus';
+import type { TaskStore } from '../agent-protocol/task-store';
 
 export interface FrontendContext {
   eventBus: EventBus;
@@ -24,6 +25,8 @@ export interface FrontendContext {
   engine?: any;
   // Optional full VisorConfig for frontends that need access to checks/workflows
   visorConfig?: any;
+  // Optional shared task store for cross-frontend execution tracking (when task_tracking is enabled)
+  taskStore?: TaskStore;
 }
 
 export interface Frontend {

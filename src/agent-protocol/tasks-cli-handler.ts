@@ -105,7 +105,7 @@ function buildFilter(flags: Record<string, string | boolean>): ListTasksFilter {
 function formatTable(rows: TaskQueueRow[], total: number): string {
   if (rows.length === 0) return 'No tasks found.';
 
-  const header = ['ID', 'State', 'Agent', 'Duration', 'Worker', 'Input'];
+  const header = ['ID', 'Source', 'State', 'Agent', 'Duration', 'Worker', 'Input'];
   const data = rows.map(r => {
     const duration =
       r.state === 'working' && r.claimed_at
@@ -116,12 +116,13 @@ function formatTable(rows: TaskQueueRow[], total: number): string {
 
     const worker = r.claimed_by ? r.claimed_by.slice(0, 8) : '-';
     const agent = r.workflow_id || '-';
+    const source = r.source || '-';
     const input =
       r.request_message.length > 60
         ? r.request_message.slice(0, 57) + '...'
         : r.request_message || '-';
 
-    return [r.id.slice(0, 8), r.state, agent, duration, worker, input];
+    return [r.id.slice(0, 8), source, r.state, agent, duration, worker, input];
   });
 
   const widths = header.map((h, i) => Math.max(h.length, ...data.map(row => row[i].length)));
@@ -137,7 +138,7 @@ function formatTable(rows: TaskQueueRow[], total: number): string {
 function formatMarkdown(rows: TaskQueueRow[], total: number): string {
   if (rows.length === 0) return 'No tasks found.';
 
-  const header = ['ID', 'State', 'Agent', 'Duration', 'Worker', 'Input'];
+  const header = ['ID', 'Source', 'State', 'Agent', 'Duration', 'Worker', 'Input'];
   const data = rows.map(r => {
     const duration =
       r.state === 'working' && r.claimed_at
@@ -148,12 +149,13 @@ function formatMarkdown(rows: TaskQueueRow[], total: number): string {
 
     const worker = r.claimed_by ? r.claimed_by.slice(0, 8) : '-';
     const agent = r.workflow_id || '-';
+    const source = r.source || '-';
     const input =
       r.request_message.length > 60
         ? r.request_message.slice(0, 57) + '...'
         : r.request_message || '-';
 
-    return [r.id.slice(0, 8), r.state, agent, duration, worker, input];
+    return [r.id.slice(0, 8), source, r.state, agent, duration, worker, input];
   });
 
   const lines = [

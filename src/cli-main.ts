@@ -1342,6 +1342,22 @@ export async function main(): Promise<void> {
       logger.debug(`Startup snapshot failed: ${err}`);
     }
 
+    // ---- Shared Task Store (cross-frontend tracking) ----
+    let sharedTaskStore: import('./agent-protocol/task-store').TaskStore | null = null;
+    const taskTrackingEnabled = options.taskTracking || (config as any).task_tracking === true;
+    if (taskTrackingEnabled) {
+      try {
+        const { SqliteTaskStore } = await import('./agent-protocol/task-store');
+        sharedTaskStore = new SqliteTaskStore();
+        await sharedTaskStore.initialize();
+        logger.info('[TaskTracking] Shared task store initialized');
+      } catch (err: unknown) {
+        logger.warn(
+          `[TaskTracking] Failed to initialize task store: ${err instanceof Error ? err.message : err}`
+        );
+      }
+    }
+
     // ---- A2A Agent Protocol Server ----
     let a2aFrontendInstance: { stop(): Promise<void> } | null = null;
     let sharedEngine: StateMachineExecutionEngine | null = null;
@@ -1360,7 +1376,7 @@ export async function main(): Promise<void> {
       }
 
       const engine = new SMEngine();
-      const frontend = new A2AFrontend(agentConfig);
+      const frontend = new A2AFrontend(agentConfig, sharedTaskStore ?? undefined);
       frontend.setEngine(engine);
       frontend.setVisorConfig(config);
 
@@ -1448,6 +1464,7 @@ export async function main(): Promise<void> {
         threads,
         channel_allowlist: allow,
       });
+      if (sharedTaskStore) runner.setTaskStore(sharedTaskStore);
       await runner.start();
       console.log('✅ Slack Socket Mode is running. Press Ctrl+C to exit.');
 
@@ -1501,6 +1518,11 @@ export async function main(): Promise<void> {
           }
         }
         await runner.stop();
+        if (sharedTaskStore) {
+          try {
+            await sharedTaskStore.shutdown();
+          } catch {}
+        }
         process.exit(0);
       };
       process.on('SIGINT', sig => {
@@ -1928,27 +1950,44 @@ export async function main(): Promise<void> {
           });
 
           // Execute workflow
-          const rerunResult = await withActiveSpan(
-            'visor.run',
-            {
-              ...getVisorRunAttributes(),
-              'visor.run.checks_configured': checksToRun.length,
-              'visor.run.source': 'tui-rerun',
-            },
-            async () =>
-              rerunEngine.executeGroupedChecks(
-                prInfo,
-                checksToRun,
-                options.timeout,
-                config,
-                options.output,
-                options.debug || false,
-                options.maxParallelism,
-                options.failFast,
-                tagFilter,
-                async () => {} // No pause gate for TUI re-runs
-              )
-          );
+          const tuiExecFn = () =>
+            withActiveSpan(
+              'visor.run',
+              {
+                ...getVisorRunAttributes(),
+                'visor.run.checks_configured': checksToRun.length,
+                'visor.run.source': 'tui-rerun',
+              },
+              async () =>
+                rerunEngine.executeGroupedChecks(
+                  prInfo,
+                  checksToRun,
+                  options.timeout,
+                  config,
+                  options.output,
+                  options.debug || false,
+                  options.maxParallelism,
+                  options.failFast,
+                  tagFilter,
+                  async () => {} // No pause gate for TUI re-runs
+                )
+            );
+          let rerunResult: Awaited<ReturnType<typeof tuiExecFn>> | undefined;
+          if (sharedTaskStore) {
+            const { trackExecution } = await import('./agent-protocol/track-execution');
+            const tracked = await trackExecution(
+              {
+                taskStore: sharedTaskStore,
+                source: 'tui',
+                workflowId: checksToRun.join(','),
+                messageText: message,
+              },
+              tuiExecFn
+            );
+            rerunResult = tracked.result;
+          } else {
+            rerunResult = await tuiExecFn();
+          }
 
           // Show any errors and the last result in the chat
           if (rerunResult?.results) {
@@ -2052,23 +2091,40 @@ export async function main(): Promise<void> {
       } catch {}
       process.exit(0);
     } else {
-      executionResult = await withActiveSpan(
-        'visor.run',
-        { ...getVisorRunAttributes(), 'visor.run.checks_configured': checksToRun.length },
-        async () =>
-          engine.executeGroupedChecks(
-            prInfo,
-            checksToRun,
-            options.timeout,
-            config,
-            options.output,
-            options.debug || false,
-            options.maxParallelism,
-            options.failFast,
-            tagFilter,
-            pauseGate
-          )
-      );
+      const cliExecFn = () =>
+        withActiveSpan(
+          'visor.run',
+          { ...getVisorRunAttributes(), 'visor.run.checks_configured': checksToRun.length },
+          async () =>
+            engine.executeGroupedChecks(
+              prInfo,
+              checksToRun,
+              options.timeout,
+              config,
+              options.output,
+              options.debug || false,
+              options.maxParallelism,
+              options.failFast,
+              tagFilter,
+              pauseGate
+            )
+        );
+      if (sharedTaskStore) {
+        const { trackExecution } = await import('./agent-protocol/track-execution');
+        const tracked = await trackExecution(
+          {
+            taskStore: sharedTaskStore,
+            source: 'cli',
+            workflowId: checksToRun.join(','),
+            messageText: options.message || `CLI run: ${checksToRun.join(', ')}`,
+            metadata: { configPath: options.configPath },
+          },
+          cliExecFn
+        );
+        executionResult = tracked.result;
+      } else {
+        executionResult = await cliExecFn();
+      }
     }
 
     // Extract results and statistics from the execution result
@@ -2295,6 +2351,11 @@ export async function main(): Promise<void> {
     }
 
     // Normal exit path (no debug server)
+    if (sharedTaskStore) {
+      try {
+        await sharedTaskStore.shutdown();
+      } catch {}
+    }
     try {
       await flushNdjson();
     } catch {}

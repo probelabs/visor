@@ -32,6 +32,7 @@ export class TuiChatRunner {
   private messageCounter = 0;
   private isRunning = false;
   private currentExecution?: Promise<void>;
+  private taskStore?: import('../agent-protocol/task-store').TaskStore;
 
   constructor(config: TuiChatRunnerConfig) {
     this.cfg = config.config;
@@ -41,6 +42,11 @@ export class TuiChatRunner {
 
     // Set as global state manager
     setChatStateManager(this.stateManager);
+  }
+
+  /** Set shared task store for execution tracking. */
+  setTaskStore(store: import('../agent-protocol/task-store').TaskStore): void {
+    this.taskStore = store;
   }
 
   async start(): Promise<void> {
@@ -216,16 +222,30 @@ export class TuiChatRunner {
       },
       async () => {
         try {
-          await runEngine.executeChecks({
-            checks: allChecks,
-            showDetails: true,
-            outputFormat: 'json',
-            config: cfgForRun,
-            webhookContext: { webhookData, eventType: 'manual' },
-            debug: this.debug,
-            // Pass conversation directly in options for TUI mode
-            conversation: ctx.conversation,
-          } as any);
+          const tuiExecFn = () =>
+            runEngine.executeChecks({
+              checks: allChecks,
+              showDetails: true,
+              outputFormat: 'json',
+              config: cfgForRun,
+              webhookContext: { webhookData, eventType: 'manual' },
+              debug: this.debug,
+              conversation: ctx.conversation,
+            } as any);
+          if (this.taskStore) {
+            const { trackExecution } = await import('../agent-protocol/track-execution');
+            await trackExecution(
+              {
+                taskStore: this.taskStore,
+                source: 'tui',
+                workflowId: allChecks.join(','),
+                messageText: message,
+              },
+              tuiExecFn
+            );
+          } else {
+            await tuiExecFn();
+          }
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           logger.error(`[TuiChatRunner] Workflow execution failed: ${errorMessage}`);

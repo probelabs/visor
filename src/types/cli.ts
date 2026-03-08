@@ -77,6 +77,8 @@ export interface CliOptions {
   workspaceProjectName?: string;
   /** Watch config file for changes and reload automatically */
   watch?: boolean;
+  /** Enable cross-frontend task tracking */
+  taskTracking?: boolean;
   /** GitHub personal access token for API operations */
   githubToken?: string;
   /** GitHub App ID for authentication */

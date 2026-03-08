@@ -60,6 +60,7 @@ export class SlackSocketRunner {
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private lastPong = 0;
   private closing = false; // prevent duplicate reconnects
+  private taskStore?: import('../agent-protocol/task-store').TaskStore;
 
   constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: SlackSocketConfig) {
     const app = opts.appToken || process.env.SLACK_APP_TOKEN || '';
@@ -81,6 +82,11 @@ export class SlackSocketRunner {
     this.engine = engine;
     this.cfg = cfg;
     this.initMessageTriggersFromConfig();
+  }
+
+  /** Set shared task store for execution tracking. */
+  setTaskStore(store: import('../agent-protocol/task-store').TaskStore): void {
+    this.taskStore = store;
   }
 
   /** Hot-swap the config used for future requests (does not affect in-flight ones). */
@@ -211,6 +217,7 @@ export class SlackSocketRunner {
           defaultTimezone: schedulerCfg?.default_timezone,
         });
         this.genericScheduler.setEngine(this.engine);
+        if (this.taskStore) this.genericScheduler.setTaskStore(this.taskStore);
 
         // Pass Slack client to scheduler so it can inject into workflow executions
         this.genericScheduler.setExecutionContext({
@@ -818,14 +825,34 @@ export class SlackSocketRunner {
             }
 
             // Cold run (no snapshot)
-            await runEngine.executeChecks({
-              checks: allChecks,
-              showDetails: true,
-              outputFormat: 'json',
-              config: cfgForRun,
-              webhookContext: { webhookData: map, eventType: 'manual' },
-              debug: process.env.VISOR_DEBUG === 'true',
-            } as any);
+            const execFn = () =>
+              runEngine.executeChecks({
+                checks: allChecks,
+                showDetails: true,
+                outputFormat: 'json',
+                config: cfgForRun,
+                webhookContext: { webhookData: map, eventType: 'manual' },
+                debug: process.env.VISOR_DEBUG === 'true',
+              } as any);
+            if (this.taskStore) {
+              const { trackExecution } = await import('../agent-protocol/track-execution');
+              await trackExecution(
+                {
+                  taskStore: this.taskStore,
+                  source: 'slack',
+                  workflowId: allChecks.join(','),
+                  messageText: String(ev.text || 'Slack message'),
+                  metadata: {
+                    slack_channel: channelId,
+                    slack_thread_ts: threadTs,
+                    slack_user: userId,
+                  },
+                },
+                execFn
+              );
+            } else {
+              await execFn();
+            }
           }
         );
       } finally {
@@ -973,15 +1000,36 @@ export class SlackSocketRunner {
           'slack.user_id': user,
         },
         async () => {
-          await runEngine.executeChecks({
-            checks: checksToRun,
-            showDetails: true,
-            outputFormat: 'json',
-            config: cfgForRun,
-            webhookContext: { webhookData, eventType: 'slack_message' },
-            debug: process.env.VISOR_DEBUG === 'true',
-            inputs: trigger.inputs,
-          } as any);
+          const triggerExecFn = () =>
+            runEngine.executeChecks({
+              checks: checksToRun,
+              showDetails: true,
+              outputFormat: 'json',
+              config: cfgForRun,
+              webhookContext: { webhookData, eventType: 'slack_message' },
+              debug: process.env.VISOR_DEBUG === 'true',
+              inputs: trigger.inputs,
+            } as any);
+          if (this.taskStore) {
+            const { trackExecution } = await import('../agent-protocol/track-execution');
+            await trackExecution(
+              {
+                taskStore: this.taskStore,
+                source: 'slack',
+                workflowId: trigger.workflow || checksToRun.join(','),
+                messageText: String(ev.text || `Trigger: ${id}`),
+                metadata: {
+                  slack_channel: channel,
+                  slack_thread_ts: threadTs || ts,
+                  slack_user: user,
+                  trigger_id: id,
+                },
+              },
+              triggerExecFn
+            );
+          } else {
+            await triggerExecFn();
+          }
         }
       );
 

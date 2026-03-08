@@ -102,6 +102,7 @@ export class Scheduler {
   private outputAdapters: Map<string, ScheduleOutputAdapter> = new Map();
   private executionContext: Record<string, unknown> = {};
   private contextEnricher?: ScheduleContextEnricher;
+  private taskStore?: import('../agent-protocol/task-store').TaskStore;
 
   // HA fields
   private haConfig?: HAConfig;
@@ -130,6 +131,11 @@ export class Scheduler {
    */
   setEngine(engine: StateMachineExecutionEngine): void {
     this.engine = engine;
+  }
+
+  /** Set shared task store for execution tracking. */
+  setTaskStore(store: import('../agent-protocol/task-store').TaskStore): void {
+    this.taskStore = store;
   }
 
   /**
@@ -842,15 +848,31 @@ export class Scheduler {
     const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule);
 
     // Execute the workflow
-    await runEngine.executeChecks({
-      checks: checksToRun,
-      showDetails: true,
-      outputFormat: 'json',
-      config: cfgForRun,
-      webhookContext: { webhookData, eventType: 'schedule' },
-      debug: process.env.VISOR_DEBUG === 'true',
-      inputs: schedule.workflowInputs,
-    } as any);
+    const schedExecFn = () =>
+      runEngine.executeChecks({
+        checks: checksToRun,
+        showDetails: true,
+        outputFormat: 'json',
+        config: cfgForRun,
+        webhookContext: { webhookData, eventType: 'schedule' },
+        debug: process.env.VISOR_DEBUG === 'true',
+        inputs: schedule.workflowInputs,
+      } as any);
+    if (this.taskStore) {
+      const { trackExecution } = await import('../agent-protocol/track-execution');
+      await trackExecution(
+        {
+          taskStore: this.taskStore,
+          source: 'scheduler',
+          workflowId: schedule.workflow,
+          messageText: `Scheduled: ${schedule.workflow} (${schedule.id})`,
+          metadata: { schedule_id: schedule.id, is_recurring: schedule.isRecurring },
+        },
+        schedExecFn
+      );
+    } else {
+      await schedExecFn();
+    }
 
     return { message: 'Workflow completed', workflow: schedule.workflow };
   }
@@ -989,14 +1011,30 @@ Please provide an updated response based on the reminder above. You may referenc
 
     try {
       // Execute ALL checks - let the visor engine route based on config
-      await runEngine.executeChecks({
-        checks: allChecks,
-        showDetails: true,
-        outputFormat: 'json',
-        config: cfgForRun,
-        webhookContext: { webhookData, eventType: 'schedule' },
-        debug: process.env.VISOR_DEBUG === 'true',
-      } as any);
+      const reminderExecFn = () =>
+        runEngine.executeChecks({
+          checks: allChecks,
+          showDetails: true,
+          outputFormat: 'json',
+          config: cfgForRun,
+          webhookContext: { webhookData, eventType: 'schedule' },
+          debug: process.env.VISOR_DEBUG === 'true',
+        } as any);
+      if (this.taskStore) {
+        const { trackExecution } = await import('../agent-protocol/track-execution');
+        await trackExecution(
+          {
+            taskStore: this.taskStore,
+            source: 'scheduler',
+            workflowId: schedule.workflow,
+            messageText: reminderText || `Reminder: ${schedule.id}`,
+            metadata: { schedule_id: schedule.id, is_recurring: schedule.isRecurring },
+          },
+          reminderExecFn
+        );
+      } else {
+        await reminderExecFn();
+      }
 
       // The visor pipeline handles output via frontends (Slack, etc.)
       // We return success - the actual response was posted by the pipeline

@@ -93,6 +93,10 @@ export class CLI {
         '--watch',
         'Watch config file for changes and reload automatically (requires --config)'
       )
+      .option(
+        '--task-tracking',
+        'Enable cross-frontend task tracking (all executions recorded in visor tasks)'
+      )
       .option('--github-token <token>', 'GitHub token for API operations (env: GITHUB_TOKEN)')
       .option('--github-app-id <id>', 'GitHub App ID (env: GITHUB_APP_ID)')
       .option(
@@ -286,6 +290,7 @@ export class CLI {
         workspaceName: options.workspaceName,
         workspaceProjectName: options.workspaceProjectName,
         watch: Boolean(options.watch),
+        taskTracking: Boolean(options.taskTracking),
         githubToken: options.githubToken,
         githubAppId: options.githubAppId,
         githubPrivateKey: options.githubPrivateKey,

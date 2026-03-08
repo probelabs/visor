@@ -126,6 +126,7 @@ export interface TaskQueueRow {
   workflow_id: string | null;
   run_id: string | null;
   request_message: string; // first message text (extracted)
+  source: string; // extracted from request_metadata.source
 }
 
 export interface ListTasksResult {
@@ -365,6 +366,11 @@ export class SqliteTaskStore implements TaskStore {
         const textPart = parts.find((p: any) => p.type === 'text' || typeof p.text === 'string');
         messageText = textPart?.text ?? '';
       } catch {}
+      let source = '-';
+      try {
+        const meta = JSON.parse(r.request_metadata || '{}');
+        source = meta.source || '-';
+      } catch {}
       return {
         id: r.id,
         context_id: r.context_id,
@@ -376,6 +382,7 @@ export class SqliteTaskStore implements TaskStore {
         workflow_id: r.workflow_id,
         run_id: r.run_id,
         request_message: messageText,
+        source,
       };
     });
 
