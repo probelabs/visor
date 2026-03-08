@@ -99,7 +99,7 @@
     "@actions/core": "^1.11.1",
     "@apidevtools/swagger-parser": "^12.1.0",
     "@modelcontextprotocol/sdk": "^1.25.3",
-    "@nyariv/sandboxjs": "github:probelabs/SandboxJS#f1c13b8eee98734a8ea024061eada4aa9a9ff2e9",
+    "@nyariv/sandboxjs": "github:probelabs/SandboxJS#23c4bb611f7d05f3cb8c523917b5f57103e48108",
     "@octokit/action": "^8.0.2",
     "@octokit/auth-app": "^8.1.0",
     "@octokit/core": "^7.0.3",

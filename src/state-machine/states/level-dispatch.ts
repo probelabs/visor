@@ -1947,14 +1947,17 @@ async function executeSingleCheck(
       // forEach_empty is not a failure - it means there was nothing to process, which is valid
       // The dependent step should still run (with empty data from the forEach step)
       const skippedDueToEmptyForEach = skipped && skipReason === 'forEach_empty';
+      // if_condition skips with continue_on_failure should not block dependents
+      // (the step was intentionally skipped, not failed — dependents should proceed)
+      const skippedDueToIfCondition = skipped && skipReason === 'if_condition' && cont;
+      const skipIsNonBlocking = skippedDueToEmptyForEach || skippedDueToIfCondition;
       // Don't treat forEach_empty as a failure even if it's in failedChecks
       // (forEach_empty checks are added to failedChecks for cascading within forEach chains,
       // but should not be treated as failures for non-forEach dependents)
-      const wasMarkedFailed =
-        !!(failedChecks && failedChecks.has(opt)) && !skippedDueToEmptyForEach;
+      const wasMarkedFailed = !!(failedChecks && failedChecks.has(opt)) && !skipIsNonBlocking;
       const failedOnly = !!(st && (st.failedRuns || 0) > 0 && (st.successfulRuns || 0) === 0);
       const satisfied =
-        (!skipped || skippedDueToEmptyForEach) && ((!failedOnly && !wasMarkedFailed) || cont);
+        (!skipped || skipIsNonBlocking) && ((!failedOnly && !wasMarkedFailed) || cont);
       if (satisfied) return true;
     }
     return false;

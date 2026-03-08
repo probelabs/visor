@@ -1,0 +1,18 @@
+tools:
+  echo-api:
+    type: api
+    name: echo-api
+    spec:
+      openapi: 3.0.0
+      info: { title: Echo API, version: 1.0.0 }
+      servers: [{ url: "https://httpbin.org" }]
+      paths:
+        /get:
+          get:
+            operationId: echo_get
+            parameters:
+              - name: message
+                in: query
+                required: false
+                schema: { type: string }
+            responses: { "200": { description: OK } }

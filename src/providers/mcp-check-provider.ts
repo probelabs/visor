@@ -258,6 +258,21 @@ export class McpCheckProvider extends CheckProvider {
   ): Promise<ReviewSummary> {
     const cfg = config as McpCheckConfig;
 
+    // Test hook: mock output for this step (short-circuit provider)
+    try {
+      const stepName = (config as any).checkName || 'unknown';
+      const mock = sessionInfo?.hooks?.mockForStep?.(String(stepName));
+      if (mock !== undefined) {
+        const ms = mock as any;
+        const issuesArr = Array.isArray(ms?.issues) ? (ms.issues as any[]) : [];
+        const out = ms && typeof ms === 'object' && 'output' in ms ? ms.output : ms;
+        return {
+          issues: issuesArr,
+          ...(out !== undefined ? { output: out } : {}),
+        } as ReviewSummary;
+      }
+    } catch {}
+
     // Policy engine: MCP method filtering
     const policyEngine = (sessionInfo as any)?._parentContext?.policyEngine;
     if (policyEngine && cfg.method) {
@@ -333,16 +348,22 @@ export class McpCheckProvider extends CheckProvider {
           };
         }
       } else if (methodArgs && typeof methodArgs === 'object') {
-        // Shallow render string values in methodArgs
-        const renderedArgs: Record<string, unknown> = {};
-        for (const [key, value] of Object.entries(methodArgs)) {
-          if (typeof value === 'string' && (value.includes('{{') || value.includes('{%'))) {
-            renderedArgs[key] = await this.liquid.parseAndRender(value, templateContext);
-          } else {
-            renderedArgs[key] = value;
+        // Recursively render Liquid templates in methodArgs (handles nested objects like requestBody)
+        const renderValue = async (val: unknown): Promise<unknown> => {
+          if (typeof val === 'string' && (val.includes('{{') || val.includes('{%'))) {
+            return await this.liquid.parseAndRender(val, templateContext);
+          } else if (val && typeof val === 'object' && !Array.isArray(val)) {
+            const rendered: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(val)) {
+              rendered[k] = await renderValue(v);
+            }
+            return rendered;
+          } else if (Array.isArray(val)) {
+            return Promise.all(val.map(item => renderValue(item)));
           }
-        }
-        methodArgs = renderedArgs;
+          return val;
+        };
+        methodArgs = (await renderValue(methodArgs)) as Record<string, unknown>;
       }
 
       // Create MCP client and execute method

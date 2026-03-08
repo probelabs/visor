@@ -2,10 +2,13 @@
 
 ## Overview
 
+> **See also:** [Tools & Toolkits Guide](tools-and-toolkits.md) for the complete guide on defining, organizing, and exposing tools — including `type: workflow` tools, shared tools via `extends`, and toolkit references.
+
 This feature allows AI checks to use custom tools defined in your Visor configuration:
 
 - shell/command tools (`exec`)
 - OpenAPI-backed API tool bundles (`type: api`)
+- workflow tools (`type: workflow`) — inline or file-referenced multi-step tools
 
 Custom tools are automatically exposed to AI via ephemeral SSE (Server-Sent Events) MCP (Model Context Protocol) servers that start on-demand and clean up automatically.
 

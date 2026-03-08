@@ -35,6 +35,7 @@ Visor is an open-source workflow engine that lets you define multi-step AI pipel
 - [Provider Types](#-provider-types)
 - [Orchestration](#-orchestration)
 - [AI & MCP](#-ai--mcp)
+- [Tools & Toolkits](#-tools--toolkits)
 - [Agent Protocol (A2A)](#-agent-protocol-a2a)
 - [GitHub Provider](#-github-provider)
 - [Templating & Transforms](#-templating--transforms)
@@ -440,6 +441,47 @@ steps:
 
 Learn more: [docs/claude-code.md](docs/claude-code.md) · [docs/mcp-provider.md](docs/mcp-provider.md) · [docs/advanced-ai.md](docs/advanced-ai.md)
 
+## 🧰 Tools & Toolkits
+
+Define custom tools and expose them to AI agents — from simple commands to API bundles to multi-step workflows.
+
+```yaml
+tools:
+  # Shell command → 1 tool
+  git-status:
+    exec: "git status --porcelain"
+
+  # OpenAPI spec → N tools (one per operationId)
+  slack-api:
+    type: api
+    headers: { Authorization: "Bearer ${SLACK_BOT_TOKEN}" }
+    spec:
+      openapi: 3.0.0
+      servers: [{ url: "https://slack.com/api" }]
+      paths:
+        /chat.postMessage:
+          post: { operationId: chat_postMessage, ... }
+        /users.lookupByEmail:
+          get: { operationId: users_lookupByEmail, ... }
+
+  # Multi-step workflow → 1 tool (inline or file reference)
+  send-dm:
+    type: workflow
+    workflow: workflows/slack/send-dm.yaml
+```
+
+Share tools across workflows with `extends:`, group related tools in toolkit files, and expose them to AI via skills:
+
+```yaml
+# skills.yaml — activate tools based on user intent
+- id: slack
+  tools:
+    slack:
+      toolkit: workflows/slack/tools.yaml    # loads all tools from file
+```
+
+Learn more: [docs/tools-and-toolkits.md](docs/tools-and-toolkits.md) · [docs/ai-custom-tools.md](docs/ai-custom-tools.md)
+
 ## 🤝 Agent Protocol (A2A)
 
 Visor implements the [A2A (Agent-to-Agent) protocol](https://github.com/google/A2A) for agent interoperability. Every Visor workflow can become a discoverable, standards-compliant agent — and every A2A agent in the ecosystem becomes a callable step in your workflows.
@@ -763,7 +805,7 @@ Learn more: [docs/enterprise-policy.md](docs/enterprise-policy.md)
 ## 📚 Further Reading
 
 **Guides:**
-[Assistant workflows](docs/assistant-workflows.md) · [CLI commands](docs/commands.md) · [Configuration](docs/configuration.md) · [AI config](docs/ai-configuration.md) · [Dependencies](docs/dependencies.md) · [forEach propagation](docs/foreach-dependency-propagation.md) · [Failure routing](docs/failure-routing.md) · [Liquid templates](docs/liquid-templates.md) · [Schema-template system](docs/schema-templates.md) · [Fail conditions](docs/fail-if.md) · [Timeouts](docs/timeouts.md) · [Execution limits](docs/limits.md) · [Output formats](docs/output-formats.md) · [Output formatting](docs/output-formatting.md) · [HTTP integration](docs/http.md) · [Scheduler](docs/scheduler.md)
+[Tools & Toolkits](docs/tools-and-toolkits.md) · [Assistant workflows](docs/assistant-workflows.md) · [CLI commands](docs/commands.md) · [Configuration](docs/configuration.md) · [AI config](docs/ai-configuration.md) · [Dependencies](docs/dependencies.md) · [forEach propagation](docs/foreach-dependency-propagation.md) · [Failure routing](docs/failure-routing.md) · [Liquid templates](docs/liquid-templates.md) · [Schema-template system](docs/schema-templates.md) · [Fail conditions](docs/fail-if.md) · [Timeouts](docs/timeouts.md) · [Execution limits](docs/limits.md) · [Output formats](docs/output-formats.md) · [Output formatting](docs/output-formatting.md) · [HTTP integration](docs/http.md) · [Scheduler](docs/scheduler.md)
 
 **Providers:**
 [A2A](docs/a2a-provider.md) · [Command](docs/command-provider.md) · [Script](docs/script.md) · [MCP](docs/mcp-provider.md) · [MCP tools for AI](docs/mcp.md) · [Claude Code](docs/claude-code.md) · [GitHub ops](docs/github-ops.md) · [Custom providers](docs/pluggable.md)

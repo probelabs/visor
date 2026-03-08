@@ -1181,7 +1181,7 @@ export interface VisorHooks {
  */
 export interface CustomToolDefinition {
   /** Tool implementation type (defaults to 'command') */
-  type?: 'command' | 'api';
+  type?: 'command' | 'api' | 'workflow';
   /** Tool name - used to reference the tool in MCP blocks */
   name: string;
   /** Description of what the tool does */
@@ -1251,6 +1251,16 @@ export interface CustomToolDefinition {
   requestTimeoutMs?: number;
   /** Alias for requestTimeoutMs (snake_case) */
   request_timeout_ms?: number;
+
+  // === Workflow tool fields (type: 'workflow') ===
+  /** Workflow ID (registry lookup) or file path (for type: 'workflow') */
+  workflow?: string;
+  /** Inline workflow inputs (for type: 'workflow' with inline steps) */
+  inputs?: WorkflowInput[];
+  /** Inline workflow outputs (for type: 'workflow' with inline steps) */
+  outputs?: WorkflowOutput[];
+  /** Inline workflow steps (for type: 'workflow' with inline definition) */
+  steps?: Record<string, CheckConfig>;
 }
 
 /**

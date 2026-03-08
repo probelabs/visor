@@ -560,6 +560,27 @@ steps:
         if (isActive) {
           log('[build-config] Activating skill:', skill.id, 'hasTools:', !!skill.tools, 'hasKnowledge:', !!skill.knowledge);
 
+          // Normalize skill.tools: support both object format and array-of-strings format
+          // Array format:  tools: ['slack-send-dm', 'slack-search']
+          // Object format: tools: { slack-send-dm: { workflow: slack-send-dm } }
+          // Mixed array:   tools: ['slack-send-dm', { name: 'custom', workflow: 'my-wf' }]
+          let normalizedTools = skill.tools;
+          if (Array.isArray(skill.tools)) {
+            const normalized = {};
+            for (let t = 0; t < skill.tools.length; t++) {
+              const item = skill.tools[t];
+              if (typeof item === 'string') {
+                normalized[item] = { workflow: item };
+              } else if (item && typeof item === 'object') {
+                const name = item.name || item.workflow || item.tool;
+                if (name) {
+                  normalized[name] = item;
+                }
+              }
+            }
+            normalizedTools = normalized;
+          }
+
           // Build structured XML block for each active skill
           const parts = [];
           parts.push('<skill>');
@@ -568,8 +589,8 @@ steps:
           if (skill.knowledge) {
             parts.push('  <knowledge>' + skill.knowledge + '</knowledge>');
           }
-          if (skill.tools && typeof skill.tools === 'object') {
-            const toolIds = Object.keys(skill.tools);
+          if (normalizedTools && typeof normalizedTools === 'object') {
+            const toolIds = Object.keys(normalizedTools);
             if (toolIds.length > 0) {
               parts.push('  <tools>' + toolIds.join(', ') + '</tools>');
             }
@@ -578,8 +599,8 @@ steps:
           knowledgeParts.push(parts.join('\n'));
 
           // Add tools if present
-          if (skill.tools && typeof skill.tools === 'object') {
-            const skillTools = skill.tools;
+          if (normalizedTools && typeof normalizedTools === 'object') {
+            const skillTools = normalizedTools;
             const toolNames = Object.keys(skillTools);
             log('[build-config] Skill', skill.id, 'has tools:', toolNames.join(', '));
             for (let i = 0; i < toolNames.length; i++) {

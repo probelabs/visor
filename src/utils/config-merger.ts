@@ -64,6 +64,14 @@ export class ConfigMerger {
     // Note: extends/include should not be in the final merged config
     // They are only used during the loading process
 
+    // Pass through workflow-specific and other unhandled properties from child
+    // (e.g., id, name, description, inputs, outputs, http_server, memory, etc.)
+    for (const key of Object.keys(child)) {
+      if (!(key in result) && key !== 'extends' && key !== 'include') {
+        (result as any)[key] = this.deepCopy((child as any)[key]);
+      }
+    }
+
     return result;
   }
 
