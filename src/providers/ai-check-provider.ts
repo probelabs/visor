@@ -2061,9 +2061,14 @@ export class AICheckProvider extends CheckProvider {
           continue;
         }
         const cfg = serverConfig as Record<string, unknown>;
-        // Accept: command (stdio), url (sse/http), workflow (workflow tool), tool (custom/built-in), or empty {} (auto-detect)
+        // Accept: command (stdio), url (sse/http), workflow (workflow tool), tool (custom/built-in), type (provider e.g. http_client), or empty {} (auto-detect)
         const isValid =
-          cfg.command || cfg.url || cfg.workflow || cfg.tool || Object.keys(cfg).length === 0;
+          cfg.command ||
+          cfg.url ||
+          cfg.workflow ||
+          cfg.tool ||
+          cfg.type ||
+          Object.keys(cfg).length === 0;
         if (!isValid) {
           logger.warn(
             `[AICheckProvider] ai_mcp_servers_js: server "${serverName}" must have command, url, workflow, or tool`

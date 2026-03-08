@@ -77,7 +77,24 @@ function formatDuration(startISO: string, endISO?: string): string {
   if (mins < 60) return `${mins}m ${remSecs}s`;
   const hours = Math.floor(mins / 60);
   const remMins = mins % 60;
-  return `${hours}h ${remMins}m`;
+  if (hours < 24) return `${hours}h ${remMins}m`;
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return `${days}d ${remHours}h`;
+}
+
+function formatTimeAgo(isoDate: string): string {
+  const ms = Math.max(0, Date.now() - new Date(isoDate).getTime());
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  return `${months}mo ago`;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +123,10 @@ function buildFilter(flags: Record<string, string | boolean>): ListTasksFilter {
     if (!isNaN(n) && n > 0) filter.limit = n;
   }
   filter.limit = filter.limit ?? 20;
+  if (typeof flags.page === 'string') {
+    const p = parseInt(flags.page, 10);
+    if (!isNaN(p) && p > 0) filter.offset = (p - 1) * (filter.limit ?? 20);
+  }
   return filter;
 }
 
@@ -143,11 +164,17 @@ function stateColor(state: string): string {
   }
 }
 
-function formatTable(rows: TaskQueueRow[], total: number): string {
+function formatTable(rows: TaskQueueRow[], total: number, filter?: ListTasksFilter): string {
   if (rows.length === 0) return 'No tasks found.';
 
+  // Adapt Input column truncation to terminal width
+  // Fixed columns take ~100 chars; rest goes to Input
+  const termWidth = process.stdout.columns || 120;
+  const fixedColsWidth = 105; // ID+Source+State+Workflow+Created+Duration+Instance+Meta + borders
+  const inputMaxLen = Math.max(20, Math.min(80, termWidth - fixedColsWidth));
+
   const table = new CliTable3({
-    head: ['ID', 'Source', 'State', 'Workflow', 'Duration', 'Instance', 'Meta', 'Input'],
+    head: ['ID', 'Source', 'State', 'Workflow', 'Created', 'Duration', 'Instance', 'Meta', 'Input'],
     style: {
       head: ['cyan', 'bold'],
       border: ['grey'],
@@ -161,8 +188,8 @@ function formatTable(rows: TaskQueueRow[], total: number): string {
       : formatDuration(r.claimed_at || r.created_at);
 
     const input =
-      r.request_message.length > 60
-        ? r.request_message.slice(0, 57) + '...'
+      r.request_message.length > inputMaxLen
+        ? r.request_message.slice(0, inputMaxLen - 3) + '...'
         : r.request_message || '-';
 
     table.push([
@@ -170,6 +197,7 @@ function formatTable(rows: TaskQueueRow[], total: number): string {
       r.source || '-',
       stateColor(r.state),
       r.workflow_id || '-',
+      formatTimeAgo(r.created_at),
       duration,
       r.claimed_by || '-',
       formatMeta(r.metadata),
@@ -178,14 +206,31 @@ function formatTable(rows: TaskQueueRow[], total: number): string {
   }
 
   let output = table.toString();
-  if (total > rows.length) output += `\n(${total} total, showing ${rows.length})`;
+  // Pagination info
+  const limit = filter?.limit ?? 20;
+  const offset = filter?.offset ?? 0;
+  const page = Math.floor(offset / limit) + 1;
+  const totalPages = Math.ceil(total / limit);
+  if (total > rows.length) {
+    output += `\n(${total} total, page ${page}/${totalPages}, --page N to navigate)`;
+  }
   return output;
 }
 
 function formatMarkdown(rows: TaskQueueRow[], total: number): string {
   if (rows.length === 0) return 'No tasks found.';
 
-  const header = ['ID', 'Source', 'State', 'Workflow', 'Duration', 'Instance', 'Meta', 'Input'];
+  const header = [
+    'ID',
+    'Source',
+    'State',
+    'Workflow',
+    'Created',
+    'Duration',
+    'Instance',
+    'Meta',
+    'Input',
+  ];
   const data = rows.map(r => {
     const duration = isTerminalState(r.state as TaskState)
       ? formatDuration(r.created_at, r.updated_at)
@@ -200,7 +245,17 @@ function formatMarkdown(rows: TaskQueueRow[], total: number): string {
         ? r.request_message.slice(0, 57) + '...'
         : r.request_message || '-';
 
-    return [r.id.slice(0, 8), source, r.state, workflow, duration, instance, meta, input];
+    return [
+      r.id.slice(0, 8),
+      source,
+      r.state,
+      workflow,
+      formatTimeAgo(r.created_at),
+      duration,
+      instance,
+      meta,
+      input,
+    ];
   });
 
   const lines = [
@@ -244,7 +299,7 @@ async function handleList(flags: Record<string, string | boolean>): Promise<void
         console.log(
           `Instance: ${instanceId}${activeOnly ? ' (active tasks only, use --all for history)' : ''}\n`
         );
-        console.log(formatTable(rows, total));
+        console.log(formatTable(rows, total, filter));
       }
     });
   };
@@ -504,7 +559,8 @@ OPTIONS:
   --search <text>                 Search tasks by input text
   --instance <id>                 Filter by visor instance ID
   --agent <workflow-id>           Filter by agent/workflow
-  --limit <n>                     Number of tasks to show (default: 20)
+  --limit <n>                     Number of tasks per page (default: 20)
+  --page <n>                      Page number for pagination
   --output <format>               Output format: table (default), json, markdown
   --watch                         Refresh every 2 seconds
 
