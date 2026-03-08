@@ -19470,7 +19470,12 @@ async function trackExecution(opts, executor) {
     contextId: import_crypto2.default.randomUUID(),
     requestMessage,
     workflowId,
-    requestMetadata: { source, ...metadata }
+    requestMetadata: {
+      source,
+      instance_id: getInstanceId(),
+      trace_id: trace.getActiveSpan()?.spanContext().traceId || void 0,
+      ...metadata
+    }
   });
   const instanceId = getInstanceId();
   taskStore.updateTaskState(task.id, "working");
@@ -19510,6 +19515,7 @@ var init_track_execution = __esm({
     import_crypto2 = __toESM(require("crypto"));
     import_path7 = __toESM(require("path"));
     init_logger();
+    init_lazy_otel();
     init_instance_id();
   }
 });
@@ -59142,9 +59148,10 @@ var init_task_store = __esm({
           } catch {
           }
           let source = "-";
+          let metadata = {};
           try {
-            const meta = JSON.parse(r.request_metadata || "{}");
-            source = meta.source || "-";
+            metadata = JSON.parse(r.request_metadata || "{}");
+            source = metadata.source || "-";
           } catch {
           }
           return {
@@ -59158,7 +59165,8 @@ var init_task_store = __esm({
             workflow_id: r.workflow_id,
             run_id: r.run_id,
             request_message: messageText,
-            source
+            source,
+            metadata
           };
         });
         return { rows, total };
