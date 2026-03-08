@@ -152,6 +152,7 @@ steps:
       skip_slack_context: false
       disableTools: true
       allowedTools: []
+      max_iterations: 1
       system_prompt: |
         You are an intent router. Your ONLY job is to:
         1) pick the best intent, and
