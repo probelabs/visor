@@ -1,4 +1,5 @@
 import { context as otContext, Span, SpanStatusCode, trace, Attributes } from './lazy-otel';
+import { getInstanceId } from '../utils/instance-id';
 
 export function getTracer() {
   return trace.getTracer('visor');
@@ -102,6 +103,7 @@ export function getVisorRunAttributes(): Record<string, string> {
   if (commitFull) {
     attrs['visor.commit.sha'] = commitFull;
   }
+  attrs['visor.instance_id'] = getInstanceId();
   return attrs;
 }
 

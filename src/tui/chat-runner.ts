@@ -33,6 +33,7 @@ export class TuiChatRunner {
   private isRunning = false;
   private currentExecution?: Promise<void>;
   private taskStore?: import('../agent-protocol/task-store').TaskStore;
+  private configPath?: string;
 
   constructor(config: TuiChatRunnerConfig) {
     this.cfg = config.config;
@@ -45,8 +46,9 @@ export class TuiChatRunner {
   }
 
   /** Set shared task store for execution tracking. */
-  setTaskStore(store: import('../agent-protocol/task-store').TaskStore): void {
+  setTaskStore(store: import('../agent-protocol/task-store').TaskStore, configPath?: string): void {
     this.taskStore = store;
+    this.configPath = configPath;
   }
 
   async start(): Promise<void> {
@@ -239,6 +241,7 @@ export class TuiChatRunner {
                 taskStore: this.taskStore,
                 source: 'tui',
                 workflowId: allChecks.join(','),
+                configPath: this.configPath,
                 messageText: message,
               },
               tuiExecFn

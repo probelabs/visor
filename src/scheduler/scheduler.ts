@@ -103,6 +103,7 @@ export class Scheduler {
   private executionContext: Record<string, unknown> = {};
   private contextEnricher?: ScheduleContextEnricher;
   private taskStore?: import('../agent-protocol/task-store').TaskStore;
+  private configPath?: string;
 
   // HA fields
   private haConfig?: HAConfig;
@@ -134,8 +135,9 @@ export class Scheduler {
   }
 
   /** Set shared task store for execution tracking. */
-  setTaskStore(store: import('../agent-protocol/task-store').TaskStore): void {
+  setTaskStore(store: import('../agent-protocol/task-store').TaskStore, configPath?: string): void {
     this.taskStore = store;
+    this.configPath = configPath;
   }
 
   /**
@@ -865,6 +867,7 @@ export class Scheduler {
           taskStore: this.taskStore,
           source: 'scheduler',
           workflowId: schedule.workflow,
+          configPath: this.configPath,
           messageText: `Scheduled: ${schedule.workflow} (${schedule.id})`,
           metadata: { schedule_id: schedule.id, is_recurring: schedule.isRecurring },
         },
@@ -1027,6 +1030,7 @@ Please provide an updated response based on the reminder above. You may referenc
             taskStore: this.taskStore,
             source: 'scheduler',
             workflowId: schedule.workflow,
+            configPath: this.configPath,
             messageText: reminderText || `Reminder: ${schedule.id}`,
             metadata: { schedule_id: schedule.id, is_recurring: schedule.isRecurring },
           },

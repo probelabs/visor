@@ -9,7 +9,9 @@
  */
 
 import crypto from 'crypto';
+import path from 'path';
 import { logger } from '../logger';
+import { getInstanceId } from '../utils/instance-id';
 import type { TaskStore } from './task-store';
 import type { AgentMessage, AgentTask } from './types';
 
@@ -19,6 +21,8 @@ export interface TrackExecutionOptions {
   taskStore: TaskStore;
   source: TaskSource;
   workflowId?: string;
+  /** Config file path — used to prefix workflowId as "config.yaml#workflow" */
+  configPath?: string;
   metadata?: Record<string, unknown>;
   /** Human-readable description of what's being executed */
   messageText: string;
@@ -35,7 +39,10 @@ export async function trackExecution<T>(
   opts: TrackExecutionOptions,
   executor: () => Promise<T>
 ): Promise<{ task: AgentTask; result: T }> {
-  const { taskStore, source, workflowId, metadata, messageText } = opts;
+  const { taskStore, source, configPath, metadata, messageText } = opts;
+  const configName = configPath ? path.basename(configPath, path.extname(configPath)) : undefined;
+  const workflowId =
+    configName && opts.workflowId ? `${configName}#${opts.workflowId}` : opts.workflowId;
 
   const requestMessage: AgentMessage = {
     message_id: crypto.randomUUID(),
@@ -50,9 +57,11 @@ export async function trackExecution<T>(
     requestMetadata: { source, ...metadata },
   });
 
+  const instanceId = getInstanceId();
   taskStore.updateTaskState(task.id, 'working');
+  taskStore.claimTask(task.id, instanceId);
   logger.info(
-    `[TaskTracking] Task ${task.id} started (source=${source}, workflow=${workflowId || '-'})`
+    `[TaskTracking] Task ${task.id} started (source=${source}, workflow=${workflowId || '-'}, instance=${instanceId})`
   );
 
   try {

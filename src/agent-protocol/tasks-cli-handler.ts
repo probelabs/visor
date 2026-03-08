@@ -9,6 +9,7 @@
  *   visor tasks help                       - Show usage
  */
 import { configureLoggerFromCli } from '../logger';
+import { getInstanceId } from '../utils/instance-id';
 import { SqliteTaskStore, type ListTasksFilter, type TaskQueueRow } from './task-store';
 import type { TaskState } from './types';
 import { isValidTaskState, isTerminalState } from './state-transitions';
@@ -105,24 +106,21 @@ function buildFilter(flags: Record<string, string | boolean>): ListTasksFilter {
 function formatTable(rows: TaskQueueRow[], total: number): string {
   if (rows.length === 0) return 'No tasks found.';
 
-  const header = ['ID', 'Source', 'State', 'Agent', 'Duration', 'Worker', 'Input'];
+  const header = ['ID', 'Source', 'State', 'Workflow', 'Duration', 'Instance', 'Input'];
   const data = rows.map(r => {
-    const duration =
-      r.state === 'working' && r.claimed_at
-        ? formatDuration(r.claimed_at)
-        : r.state === 'submitted'
-          ? formatDuration(r.created_at)
-          : formatDuration(r.created_at, r.updated_at);
+    const duration = isTerminalState(r.state as TaskState)
+      ? formatDuration(r.created_at, r.updated_at)
+      : formatDuration(r.claimed_at || r.created_at);
 
-    const worker = r.claimed_by ? r.claimed_by.slice(0, 8) : '-';
-    const agent = r.workflow_id || '-';
+    const instance = r.claimed_by || '-';
+    const workflow = r.workflow_id || '-';
     const source = r.source || '-';
     const input =
       r.request_message.length > 60
         ? r.request_message.slice(0, 57) + '...'
         : r.request_message || '-';
 
-    return [r.id.slice(0, 8), source, r.state, agent, duration, worker, input];
+    return [r.id.slice(0, 8), source, r.state, workflow, duration, instance, input];
   });
 
   const widths = header.map((h, i) => Math.max(h.length, ...data.map(row => row[i].length)));
@@ -138,24 +136,21 @@ function formatTable(rows: TaskQueueRow[], total: number): string {
 function formatMarkdown(rows: TaskQueueRow[], total: number): string {
   if (rows.length === 0) return 'No tasks found.';
 
-  const header = ['ID', 'Source', 'State', 'Agent', 'Duration', 'Worker', 'Input'];
+  const header = ['ID', 'Source', 'State', 'Workflow', 'Duration', 'Instance', 'Input'];
   const data = rows.map(r => {
-    const duration =
-      r.state === 'working' && r.claimed_at
-        ? formatDuration(r.claimed_at)
-        : r.state === 'submitted'
-          ? formatDuration(r.created_at)
-          : formatDuration(r.created_at, r.updated_at);
+    const duration = isTerminalState(r.state as TaskState)
+      ? formatDuration(r.created_at, r.updated_at)
+      : formatDuration(r.claimed_at || r.created_at);
 
-    const worker = r.claimed_by ? r.claimed_by.slice(0, 8) : '-';
-    const agent = r.workflow_id || '-';
+    const instance = r.claimed_by || '-';
+    const workflow = r.workflow_id || '-';
     const source = r.source || '-';
     const input =
       r.request_message.length > 60
         ? r.request_message.slice(0, 57) + '...'
         : r.request_message || '-';
 
-    return [r.id.slice(0, 8), source, r.state, agent, duration, worker, input];
+    return [r.id.slice(0, 8), source, r.state, workflow, duration, instance, input];
   });
 
   const lines = [
@@ -175,15 +170,19 @@ async function handleList(flags: Record<string, string | boolean>): Promise<void
   const filter = buildFilter(flags);
   const output = typeof flags.output === 'string' ? flags.output : 'table';
 
+  const instanceId = getInstanceId();
+
   const render = async () => {
     await withTaskStore(async store => {
       const { rows, total } = store.listTasksRaw(filter);
 
       if (output === 'json') {
-        console.log(JSON.stringify({ tasks: rows, total }, null, 2));
+        console.log(JSON.stringify({ instance_id: instanceId, tasks: rows, total }, null, 2));
       } else if (output === 'markdown') {
+        console.log(`Instance: ${instanceId}\n`);
         console.log(formatMarkdown(rows, total));
       } else {
+        console.log(`Instance: ${instanceId}\n`);
         console.log(formatTable(rows, total));
       }
     });
@@ -192,7 +191,7 @@ async function handleList(flags: Record<string, string | boolean>): Promise<void
   if (flags.watch) {
     const watchRender = async () => {
       process.stdout.write('\x1Bc'); // clear terminal
-      console.log(`visor tasks list (watching, Ctrl+C to exit)\n`);
+      console.log(`visor tasks list (instance: ${instanceId}, watching, Ctrl+C to exit)\n`);
       try {
         await render();
       } catch (err) {

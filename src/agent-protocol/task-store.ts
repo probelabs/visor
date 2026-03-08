@@ -145,6 +145,8 @@ export interface TaskStore {
 
   // State mutations
   updateTaskState(taskId: string, newState: TaskState, statusMessage?: AgentMessage): void;
+  /** Set claimed_by/claimed_at on a task (used by trackExecution to record instance ID). */
+  claimTask(taskId: string, workerId: string): void;
   addArtifact(taskId: string, artifact: AgentArtifact): void;
   appendHistory(taskId: string, message: AgentMessage): void;
   setRunId(taskId: string, runId: string): void;
@@ -409,6 +411,14 @@ export class SqliteTaskStore implements TaskStore {
        SET state = ?, updated_at = ?, status_message = ?
        WHERE id = ?`
     ).run(newState, now, statusMessage ? JSON.stringify(statusMessage) : null, taskId);
+  }
+
+  claimTask(taskId: string, workerId: string): void {
+    const db = this.getDb();
+    const now = nowISO();
+    db.prepare(
+      `UPDATE agent_tasks SET claimed_by = ?, claimed_at = ?, updated_at = ? WHERE id = ?`
+    ).run(workerId, now, now, taskId);
   }
 
   addArtifact(taskId: string, artifact: AgentArtifact): void {

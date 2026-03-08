@@ -61,6 +61,7 @@ export class SlackSocketRunner {
   private lastPong = 0;
   private closing = false; // prevent duplicate reconnects
   private taskStore?: import('../agent-protocol/task-store').TaskStore;
+  private configPath?: string;
 
   constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: SlackSocketConfig) {
     const app = opts.appToken || process.env.SLACK_APP_TOKEN || '';
@@ -85,8 +86,9 @@ export class SlackSocketRunner {
   }
 
   /** Set shared task store for execution tracking. */
-  setTaskStore(store: import('../agent-protocol/task-store').TaskStore): void {
+  setTaskStore(store: import('../agent-protocol/task-store').TaskStore, configPath?: string): void {
     this.taskStore = store;
+    this.configPath = configPath;
   }
 
   /** Hot-swap the config used for future requests (does not affect in-flight ones). */
@@ -217,7 +219,7 @@ export class SlackSocketRunner {
           defaultTimezone: schedulerCfg?.default_timezone,
         });
         this.genericScheduler.setEngine(this.engine);
-        if (this.taskStore) this.genericScheduler.setTaskStore(this.taskStore);
+        if (this.taskStore) this.genericScheduler.setTaskStore(this.taskStore, this.configPath);
 
         // Pass Slack client to scheduler so it can inject into workflow executions
         this.genericScheduler.setExecutionContext({
@@ -841,6 +843,7 @@ export class SlackSocketRunner {
                   taskStore: this.taskStore,
                   source: 'slack',
                   workflowId: allChecks.join(','),
+                  configPath: this.configPath,
                   messageText: String(ev.text || 'Slack message'),
                   metadata: {
                     slack_channel: channelId,
@@ -1017,6 +1020,7 @@ export class SlackSocketRunner {
                 taskStore: this.taskStore,
                 source: 'slack',
                 workflowId: trigger.workflow || checksToRun.join(','),
+                configPath: this.configPath,
                 messageText: String(ev.text || `Trigger: ${id}`),
                 metadata: {
                   slack_channel: channel,

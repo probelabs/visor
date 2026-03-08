@@ -1464,7 +1464,7 @@ export async function main(): Promise<void> {
         threads,
         channel_allowlist: allow,
       });
-      if (sharedTaskStore) runner.setTaskStore(sharedTaskStore);
+      if (sharedTaskStore) runner.setTaskStore(sharedTaskStore, options.configPath);
       await runner.start();
       console.log('✅ Slack Socket Mode is running. Press Ctrl+C to exit.');
 
@@ -1980,6 +1980,7 @@ export async function main(): Promise<void> {
                 taskStore: sharedTaskStore,
                 source: 'tui',
                 workflowId: checksToRun.join(','),
+                configPath: options.configPath,
                 messageText: message,
               },
               tuiExecFn
@@ -2116,8 +2117,8 @@ export async function main(): Promise<void> {
             taskStore: sharedTaskStore,
             source: 'cli',
             workflowId: checksToRun.join(','),
+            configPath: options.configPath,
             messageText: options.message || `CLI run: ${checksToRun.join(', ')}`,
-            metadata: { configPath: options.configPath },
           },
           cliExecFn
         );
