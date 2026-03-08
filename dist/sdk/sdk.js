@@ -9065,13 +9065,10 @@ ${"=".repeat(60)}
                 try {
                   reviewData = JSON.parse(sanitizedResponse.substring(0, pos));
                   const trailing = sanitizedResponse.substring(pos).trim();
-                  if (trailing && reviewData && typeof reviewData === "object" && typeof reviewData.text === "string") {
-                    reviewData.text = reviewData.text + "\n\n" + trailing;
+                  if (trailing) {
                     log(
-                      `\u2705 Recovered JSON and appended ${trailing.length} chars of trailing content to text field`
+                      `\u2705 Recovered JSON by trimming ${trailing.length} chars of trailing content at position ${pos}`
                     );
-                  } else {
-                    log(`\u2705 Recovered JSON by trimming trailing content at position ${pos}`);
                   }
                   if (debugInfo) debugInfo.jsonParseSuccess = true;
                   recovered = true;
