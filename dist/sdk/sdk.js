@@ -7048,28 +7048,27 @@ function replaceMermaidBlocks(text, diagrams, replacement = "_(See diagram above
 }
 function markdownToSlack(text) {
   if (!text || typeof text !== "string") return "";
-  let out = text;
-  out = out.replace(
-    /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
-    (_m, alt, url) => `<${url}|${alt || "image"}>`
-  );
-  out = out.replace(
-    /\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
-    (_m, label, url) => `<${url}|${label}>`
-  );
-  out = out.replace(/\*\*([^*]+)\*\*/g, (_m, inner) => `*${inner}*`);
-  out = out.replace(/__([^_]+)__/g, (_m, inner) => `*${inner}*`);
-  const lines = out.split(/\r?\n/);
+  const lines = text.split(/\r?\n/);
   let inCodeBlock = false;
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trimStart();
+    const trimmed = lines[i].trimStart();
     if (/^```/.test(trimmed)) {
       inCodeBlock = !inCodeBlock;
       continue;
     }
     if (inCodeBlock) continue;
-    const headerMatch = /^(#{1,6})\s+(.+)$/.exec(trimmed);
+    let line = lines[i];
+    line = line.replace(
+      /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
+      (_m, alt, url) => `<${url}|${alt || "image"}>`
+    );
+    line = line.replace(
+      /\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
+      (_m, label, url) => `<${url}|${label}>`
+    );
+    line = line.replace(/\*\*([^*]+)\*\*/g, (_m, inner) => `*${inner}*`);
+    line = line.replace(/__([^_]+)__/g, (_m, inner) => `*${inner}*`);
+    const headerMatch = /^(#{1,6})\s+(.+)$/.exec(line.trimStart());
     if (headerMatch) {
       const [, hashes, headerText] = headerMatch;
       const prevLine = i > 0 ? lines[i - 1].trim() : "";
@@ -7086,10 +7085,11 @@ function markdownToSlack(text) {
     if (bulletMatch) {
       const [, indent, , rest] = bulletMatch;
       lines[i] = `${indent}\u2022 ${rest}`;
+      continue;
     }
+    lines[i] = line;
   }
-  out = lines.join("\n");
-  return out;
+  return lines.join("\n");
 }
 function extractFileSections(text) {
   const sections = [];
@@ -59114,6 +59114,15 @@ var init_task_store = __esm({
           conditions.push("workflow_id = ?");
           params.push(filter.workflowId);
         }
+        if (filter.search) {
+          const escaped = filter.search.replace(/[%_\\]/g, "\\$&");
+          conditions.push("request_message LIKE ? ESCAPE '\\'");
+          params.push(`%${escaped}%`);
+        }
+        if (filter.claimedBy) {
+          conditions.push("claimed_by = ?");
+          params.push(filter.claimedBy);
+        }
         const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
         return { where, params };
       }
@@ -59267,6 +59276,32 @@ var init_task_store = __esm({
       // -------------------------------------------------------------------------
       // Cleanup
       // -------------------------------------------------------------------------
+      failStaleTasks(reason) {
+        const db = this.getDb();
+        const now = nowISO();
+        const msg = reason || "Process terminated while task was running";
+        const statusMessage = JSON.stringify({
+          message_id: import_crypto6.default.randomUUID(),
+          role: "agent",
+          parts: [{ text: msg }]
+        });
+        const result = db.prepare(
+          `UPDATE agent_tasks
+         SET state = 'failed', updated_at = ?, status_message = ?
+         WHERE state = 'working'`
+        ).run(now, statusMessage);
+        return result.changes;
+      }
+      purgeOldTasks(olderThanMs) {
+        const db = this.getDb();
+        const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+        const result = db.prepare(
+          `DELETE FROM agent_tasks
+         WHERE state IN ('completed', 'failed', 'canceled', 'rejected')
+         AND updated_at <= ?`
+        ).run(cutoff);
+        return result.changes;
+      }
       deleteExpiredTasks() {
         const db = this.getDb();
         const now = nowISO();
