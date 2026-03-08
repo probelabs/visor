@@ -8,17 +8,17 @@
   [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
   Orchestrate checks, MCP tools, and AI providers with YAML-driven pipelines.
-  Runs as GitHub Action, CLI, Slack bot, or HTTP API.
+  Runs as GitHub Action, CLI, Slack bot, Telegram bot, or HTTP API.
 </div>
 
 ---
 
-Visor is an open-source workflow engine that lets you define multi-step AI pipelines in YAML. Wire up shell commands, AI providers, MCP tools, HTTP calls, and custom scripts into dependency-aware DAGs — then run them from your terminal, CI, Slack, or an HTTP endpoint.
+Visor is an open-source workflow engine that lets you define multi-step AI pipelines in YAML. Wire up shell commands, AI providers, MCP tools, HTTP calls, and custom scripts into dependency-aware DAGs — then run them from your terminal, CI, Slack, Telegram, Email, WhatsApp, Teams, or an HTTP endpoint.
 
 **What you get out of the box:**
 
 - **YAML-driven pipelines** — define checks, transforms, routing, and AI prompts in a single config file.
-- **4 runtime modes** — CLI, GitHub Action, Slack bot, HTTP server — same config, any surface.
+- **8 runtime modes** — CLI, GitHub Action, Slack bot, Telegram bot, Email, WhatsApp, Teams, HTTP server — same config, any surface.
 - **12+ provider types** — `ai`, `command`, `script`, `mcp`, `http`, `claude-code`, `github`, `memory`, `workflow`, and more.
 - **AI orchestration** — multi-provider (Gemini, Claude, OpenAI, Bedrock), session reuse, MCP tool calling, retry & fallback.
 - **Execution engine** — dependency DAGs, parallel waves, forEach fan-out, conditional routing, failure auto-remediation.
@@ -193,6 +193,7 @@ Visor runs the same YAML config across four surfaces:
 | **CLI** | `visor --check all --output table` | Local dev, CI pipelines |
 | **GitHub Action** | `uses: probelabs/visor@v1` | PR reviews, issue triage, annotations |
 | **Slack bot** | `visor --slack --config .visor.yaml` | Team assistants, ChatOps |
+| **Telegram bot** | `visor --telegram --config .visor.yaml` | Personal assistants, group bots |
 | **HTTP server** | `http_server: { enabled: true, port: 8080 }` | Webhooks, API integrations |
 
 Additional modes:
@@ -608,10 +609,11 @@ extends:
 
 ### Dynamic Config Reloading
 
-Long-running modes (Slack, HTTP) support live config reload:
+Long-running modes (Slack, Telegram, HTTP) support live config reload:
 
 ```bash
-visor --slack --config .visor.yaml --watch    # Auto-reload on file change
+visor --slack --config .visor.yaml --watch       # Auto-reload on file change
+visor --telegram --config .visor.yaml --watch    # Telegram with hot reload
 visor config snapshots                        # List config versions
 visor config diff 1 2                         # Diff two snapshots
 ```

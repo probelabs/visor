@@ -759,6 +759,7 @@ var require_package = __commonJS({
       dependencies: {
         "@actions/core": "^1.11.1",
         "@apidevtools/swagger-parser": "^12.1.0",
+        "@grammyjs/runner": "^2.0.3",
         "@modelcontextprotocol/sdk": "^1.25.3",
         "@nyariv/sandboxjs": "github:probelabs/SandboxJS#23c4bb611f7d05f3cb8c523917b5f57103e48108",
         "@octokit/action": "^8.0.2",
@@ -788,6 +789,7 @@ var require_package = __commonJS({
         commander: "^14.0.0",
         deepmerge: "^4.3.1",
         dotenv: "^17.2.3",
+        grammy: "^1.41.1",
         ignore: "^7.0.5",
         "js-yaml": "^4.1.0",
         "jsonpath-plus": "^10.4.0",
@@ -28260,67 +28262,67 @@ var require_symbols = __commonJS({
   "node_modules/undici/lib/core/symbols.js"(exports2, module2) {
     "use strict";
     module2.exports = {
-      kClose: /* @__PURE__ */ Symbol("close"),
-      kDestroy: /* @__PURE__ */ Symbol("destroy"),
-      kDispatch: /* @__PURE__ */ Symbol("dispatch"),
-      kUrl: /* @__PURE__ */ Symbol("url"),
-      kWriting: /* @__PURE__ */ Symbol("writing"),
-      kResuming: /* @__PURE__ */ Symbol("resuming"),
-      kQueue: /* @__PURE__ */ Symbol("queue"),
-      kConnect: /* @__PURE__ */ Symbol("connect"),
-      kConnecting: /* @__PURE__ */ Symbol("connecting"),
-      kHeadersList: /* @__PURE__ */ Symbol("headers list"),
-      kKeepAliveDefaultTimeout: /* @__PURE__ */ Symbol("default keep alive timeout"),
-      kKeepAliveMaxTimeout: /* @__PURE__ */ Symbol("max keep alive timeout"),
-      kKeepAliveTimeoutThreshold: /* @__PURE__ */ Symbol("keep alive timeout threshold"),
-      kKeepAliveTimeoutValue: /* @__PURE__ */ Symbol("keep alive timeout"),
-      kKeepAlive: /* @__PURE__ */ Symbol("keep alive"),
-      kHeadersTimeout: /* @__PURE__ */ Symbol("headers timeout"),
-      kBodyTimeout: /* @__PURE__ */ Symbol("body timeout"),
-      kServerName: /* @__PURE__ */ Symbol("server name"),
-      kLocalAddress: /* @__PURE__ */ Symbol("local address"),
-      kHost: /* @__PURE__ */ Symbol("host"),
-      kNoRef: /* @__PURE__ */ Symbol("no ref"),
-      kBodyUsed: /* @__PURE__ */ Symbol("used"),
-      kRunning: /* @__PURE__ */ Symbol("running"),
-      kBlocking: /* @__PURE__ */ Symbol("blocking"),
-      kPending: /* @__PURE__ */ Symbol("pending"),
-      kSize: /* @__PURE__ */ Symbol("size"),
-      kBusy: /* @__PURE__ */ Symbol("busy"),
-      kQueued: /* @__PURE__ */ Symbol("queued"),
-      kFree: /* @__PURE__ */ Symbol("free"),
-      kConnected: /* @__PURE__ */ Symbol("connected"),
-      kClosed: /* @__PURE__ */ Symbol("closed"),
-      kNeedDrain: /* @__PURE__ */ Symbol("need drain"),
-      kReset: /* @__PURE__ */ Symbol("reset"),
-      kDestroyed: /* @__PURE__ */ Symbol.for("nodejs.stream.destroyed"),
-      kMaxHeadersSize: /* @__PURE__ */ Symbol("max headers size"),
-      kRunningIdx: /* @__PURE__ */ Symbol("running index"),
-      kPendingIdx: /* @__PURE__ */ Symbol("pending index"),
-      kError: /* @__PURE__ */ Symbol("error"),
-      kClients: /* @__PURE__ */ Symbol("clients"),
-      kClient: /* @__PURE__ */ Symbol("client"),
-      kParser: /* @__PURE__ */ Symbol("parser"),
-      kOnDestroyed: /* @__PURE__ */ Symbol("destroy callbacks"),
-      kPipelining: /* @__PURE__ */ Symbol("pipelining"),
-      kSocket: /* @__PURE__ */ Symbol("socket"),
-      kHostHeader: /* @__PURE__ */ Symbol("host header"),
-      kConnector: /* @__PURE__ */ Symbol("connector"),
-      kStrictContentLength: /* @__PURE__ */ Symbol("strict content length"),
-      kMaxRedirections: /* @__PURE__ */ Symbol("maxRedirections"),
-      kMaxRequests: /* @__PURE__ */ Symbol("maxRequestsPerClient"),
-      kProxy: /* @__PURE__ */ Symbol("proxy agent options"),
-      kCounter: /* @__PURE__ */ Symbol("socket request counter"),
-      kInterceptors: /* @__PURE__ */ Symbol("dispatch interceptors"),
-      kMaxResponseSize: /* @__PURE__ */ Symbol("max response size"),
-      kHTTP2Session: /* @__PURE__ */ Symbol("http2Session"),
-      kHTTP2SessionState: /* @__PURE__ */ Symbol("http2Session state"),
-      kHTTP2BuildRequest: /* @__PURE__ */ Symbol("http2 build request"),
-      kHTTP1BuildRequest: /* @__PURE__ */ Symbol("http1 build request"),
-      kHTTP2CopyHeaders: /* @__PURE__ */ Symbol("http2 copy headers"),
-      kHTTPConnVersion: /* @__PURE__ */ Symbol("http connection version"),
-      kRetryHandlerDefaultRetry: /* @__PURE__ */ Symbol("retry agent default retry"),
-      kConstruct: /* @__PURE__ */ Symbol("constructable")
+      kClose: Symbol("close"),
+      kDestroy: Symbol("destroy"),
+      kDispatch: Symbol("dispatch"),
+      kUrl: Symbol("url"),
+      kWriting: Symbol("writing"),
+      kResuming: Symbol("resuming"),
+      kQueue: Symbol("queue"),
+      kConnect: Symbol("connect"),
+      kConnecting: Symbol("connecting"),
+      kHeadersList: Symbol("headers list"),
+      kKeepAliveDefaultTimeout: Symbol("default keep alive timeout"),
+      kKeepAliveMaxTimeout: Symbol("max keep alive timeout"),
+      kKeepAliveTimeoutThreshold: Symbol("keep alive timeout threshold"),
+      kKeepAliveTimeoutValue: Symbol("keep alive timeout"),
+      kKeepAlive: Symbol("keep alive"),
+      kHeadersTimeout: Symbol("headers timeout"),
+      kBodyTimeout: Symbol("body timeout"),
+      kServerName: Symbol("server name"),
+      kLocalAddress: Symbol("local address"),
+      kHost: Symbol("host"),
+      kNoRef: Symbol("no ref"),
+      kBodyUsed: Symbol("used"),
+      kRunning: Symbol("running"),
+      kBlocking: Symbol("blocking"),
+      kPending: Symbol("pending"),
+      kSize: Symbol("size"),
+      kBusy: Symbol("busy"),
+      kQueued: Symbol("queued"),
+      kFree: Symbol("free"),
+      kConnected: Symbol("connected"),
+      kClosed: Symbol("closed"),
+      kNeedDrain: Symbol("need drain"),
+      kReset: Symbol("reset"),
+      kDestroyed: Symbol.for("nodejs.stream.destroyed"),
+      kMaxHeadersSize: Symbol("max headers size"),
+      kRunningIdx: Symbol("running index"),
+      kPendingIdx: Symbol("pending index"),
+      kError: Symbol("error"),
+      kClients: Symbol("clients"),
+      kClient: Symbol("client"),
+      kParser: Symbol("parser"),
+      kOnDestroyed: Symbol("destroy callbacks"),
+      kPipelining: Symbol("pipelining"),
+      kSocket: Symbol("socket"),
+      kHostHeader: Symbol("host header"),
+      kConnector: Symbol("connector"),
+      kStrictContentLength: Symbol("strict content length"),
+      kMaxRedirections: Symbol("maxRedirections"),
+      kMaxRequests: Symbol("maxRequestsPerClient"),
+      kProxy: Symbol("proxy agent options"),
+      kCounter: Symbol("socket request counter"),
+      kInterceptors: Symbol("dispatch interceptors"),
+      kMaxResponseSize: Symbol("max response size"),
+      kHTTP2Session: Symbol("http2Session"),
+      kHTTP2SessionState: Symbol("http2Session state"),
+      kHTTP2BuildRequest: Symbol("http2 build request"),
+      kHTTP1BuildRequest: Symbol("http1 build request"),
+      kHTTP2CopyHeaders: Symbol("http2 copy headers"),
+      kHTTPConnVersion: Symbol("http connection version"),
+      kRetryHandlerDefaultRetry: Symbol("retry agent default retry"),
+      kConstruct: Symbol("constructable")
     };
   }
 });
@@ -31315,7 +31317,7 @@ var require_constants2 = __commonJS({
 var require_global = __commonJS({
   "node_modules/undici/lib/fetch/global.js"(exports2, module2) {
     "use strict";
-    var globalOrigin = /* @__PURE__ */ Symbol.for("undici.globalOrigin.1");
+    var globalOrigin = Symbol.for("undici.globalOrigin.1");
     function getGlobalOrigin() {
       return globalThis[globalOrigin];
     }
@@ -31967,12 +31969,12 @@ var require_symbols2 = __commonJS({
   "node_modules/undici/lib/fetch/symbols.js"(exports2, module2) {
     "use strict";
     module2.exports = {
-      kUrl: /* @__PURE__ */ Symbol("url"),
-      kHeaders: /* @__PURE__ */ Symbol("headers"),
-      kSignal: /* @__PURE__ */ Symbol("signal"),
-      kState: /* @__PURE__ */ Symbol("state"),
-      kGuard: /* @__PURE__ */ Symbol("guard"),
-      kRealm: /* @__PURE__ */ Symbol("realm")
+      kUrl: Symbol("url"),
+      kHeaders: Symbol("headers"),
+      kSignal: Symbol("signal"),
+      kState: Symbol("state"),
+      kGuard: Symbol("guard"),
+      kRealm: Symbol("realm")
     };
   }
 });
@@ -33366,7 +33368,7 @@ var require_request = __commonJS({
     var tokenRegExp = /^[\^_`a-zA-Z\-0-9!#$%&'*+.|~]+$/;
     var headerCharRegex = /[^\t\x20-\x7e\x80-\xff]/;
     var invalidPathRegex = /[^\u0021-\u00ff]/;
-    var kHandler = /* @__PURE__ */ Symbol("handler");
+    var kHandler = Symbol("handler");
     var channels = {};
     var extractBody;
     try {
@@ -33753,11 +33755,11 @@ var require_dispatcher_base = __commonJS({
       InvalidArgumentError
     } = require_errors();
     var { kDestroy, kClose, kDispatch, kInterceptors } = require_symbols();
-    var kDestroyed = /* @__PURE__ */ Symbol("destroyed");
-    var kClosed = /* @__PURE__ */ Symbol("closed");
-    var kOnDestroyed = /* @__PURE__ */ Symbol("onDestroyed");
-    var kOnClosed = /* @__PURE__ */ Symbol("onClosed");
-    var kInterceptedDispatch = /* @__PURE__ */ Symbol("Intercepted Dispatch");
+    var kDestroyed = Symbol("destroyed");
+    var kClosed = Symbol("closed");
+    var kOnDestroyed = Symbol("onDestroyed");
+    var kOnClosed = Symbol("onClosed");
+    var kInterceptedDispatch = Symbol("Intercepted Dispatch");
     var DispatcherBase = class extends Dispatcher {
       constructor() {
         super();
@@ -34412,7 +34414,7 @@ var require_RedirectHandler = __commonJS({
     var { InvalidArgumentError } = require_errors();
     var EE = require("events");
     var redirectableStatusCodes = [300, 301, 302, 303, 307, 308];
-    var kBody = /* @__PURE__ */ Symbol("body");
+    var kBody = Symbol("body");
     var BodyAsyncIterable = class {
       constructor(body) {
         this[kBody] = body;
@@ -34688,7 +34690,7 @@ var require_client = __commonJS({
     } = http22;
     var h2ExperimentalWarned = false;
     var FastBuffer = Buffer[Symbol.species];
-    var kClosedResolve = /* @__PURE__ */ Symbol("kClosedResolve");
+    var kClosedResolve = Symbol("kClosedResolve");
     var channels = {};
     try {
       const diagnosticsChannel = require("diagnostics_channel");
@@ -36359,7 +36361,7 @@ var require_pool_stats = __commonJS({
   "node_modules/undici/lib/pool-stats.js"(exports2, module2) {
     "use strict";
     var { kFree, kConnected, kPending, kQueued, kRunning, kSize } = require_symbols();
-    var kPool = /* @__PURE__ */ Symbol("pool");
+    var kPool = Symbol("pool");
     var PoolStats = class {
       constructor(pool) {
         this[kPool] = pool;
@@ -36395,18 +36397,18 @@ var require_pool_base = __commonJS({
     var FixedQueue = require_fixed_queue();
     var { kConnected, kSize, kRunning, kPending, kQueued, kBusy, kFree, kUrl, kClose, kDestroy, kDispatch } = require_symbols();
     var PoolStats = require_pool_stats();
-    var kClients = /* @__PURE__ */ Symbol("clients");
-    var kNeedDrain = /* @__PURE__ */ Symbol("needDrain");
-    var kQueue = /* @__PURE__ */ Symbol("queue");
-    var kClosedResolve = /* @__PURE__ */ Symbol("closed resolve");
-    var kOnDrain = /* @__PURE__ */ Symbol("onDrain");
-    var kOnConnect = /* @__PURE__ */ Symbol("onConnect");
-    var kOnDisconnect = /* @__PURE__ */ Symbol("onDisconnect");
-    var kOnConnectionError = /* @__PURE__ */ Symbol("onConnectionError");
-    var kGetDispatcher = /* @__PURE__ */ Symbol("get dispatcher");
-    var kAddClient = /* @__PURE__ */ Symbol("add client");
-    var kRemoveClient = /* @__PURE__ */ Symbol("remove client");
-    var kStats = /* @__PURE__ */ Symbol("stats");
+    var kClients = Symbol("clients");
+    var kNeedDrain = Symbol("needDrain");
+    var kQueue = Symbol("queue");
+    var kClosedResolve = Symbol("closed resolve");
+    var kOnDrain = Symbol("onDrain");
+    var kOnConnect = Symbol("onConnect");
+    var kOnDisconnect = Symbol("onDisconnect");
+    var kOnConnectionError = Symbol("onConnectionError");
+    var kGetDispatcher = Symbol("get dispatcher");
+    var kAddClient = Symbol("add client");
+    var kRemoveClient = Symbol("remove client");
+    var kStats = Symbol("stats");
     var PoolBase = class extends DispatcherBase {
       constructor() {
         super();
@@ -36560,9 +36562,9 @@ var require_pool = __commonJS({
     var util = require_util();
     var { kUrl, kInterceptors } = require_symbols();
     var buildConnector = require_connect();
-    var kOptions = /* @__PURE__ */ Symbol("options");
-    var kConnections = /* @__PURE__ */ Symbol("connections");
-    var kFactory = /* @__PURE__ */ Symbol("factory");
+    var kOptions = Symbol("options");
+    var kConnections = Symbol("connections");
+    var kFactory = Symbol("factory");
     function defaultFactory(origin, opts) {
       return new Client2(origin, opts);
     }
@@ -36651,14 +36653,14 @@ var require_balanced_pool = __commonJS({
     var Pool = require_pool();
     var { kUrl, kInterceptors } = require_symbols();
     var { parseOrigin } = require_util();
-    var kFactory = /* @__PURE__ */ Symbol("factory");
-    var kOptions = /* @__PURE__ */ Symbol("options");
-    var kGreatestCommonDivisor = /* @__PURE__ */ Symbol("kGreatestCommonDivisor");
-    var kCurrentWeight = /* @__PURE__ */ Symbol("kCurrentWeight");
-    var kIndex = /* @__PURE__ */ Symbol("kIndex");
-    var kWeight = /* @__PURE__ */ Symbol("kWeight");
-    var kMaxWeightPerServer = /* @__PURE__ */ Symbol("kMaxWeightPerServer");
-    var kErrorPenalty = /* @__PURE__ */ Symbol("kErrorPenalty");
+    var kFactory = Symbol("factory");
+    var kOptions = Symbol("options");
+    var kGreatestCommonDivisor = Symbol("kGreatestCommonDivisor");
+    var kCurrentWeight = Symbol("kCurrentWeight");
+    var kIndex = Symbol("kIndex");
+    var kWeight = Symbol("kWeight");
+    var kMaxWeightPerServer = Symbol("kMaxWeightPerServer");
+    var kErrorPenalty = Symbol("kErrorPenalty");
     function getGreatestCommonDivisor(a, b) {
       if (b === 0) return a;
       return getGreatestCommonDivisor(b, a % b);
@@ -36821,14 +36823,14 @@ var require_agent = __commonJS({
     var util = require_util();
     var createRedirectInterceptor = require_redirectInterceptor();
     var { WeakRef: WeakRef2, FinalizationRegistry } = require_dispatcher_weakref()();
-    var kOnConnect = /* @__PURE__ */ Symbol("onConnect");
-    var kOnDisconnect = /* @__PURE__ */ Symbol("onDisconnect");
-    var kOnConnectionError = /* @__PURE__ */ Symbol("onConnectionError");
-    var kMaxRedirections = /* @__PURE__ */ Symbol("maxRedirections");
-    var kOnDrain = /* @__PURE__ */ Symbol("onDrain");
-    var kFactory = /* @__PURE__ */ Symbol("factory");
-    var kFinalizer = /* @__PURE__ */ Symbol("finalizer");
-    var kOptions = /* @__PURE__ */ Symbol("options");
+    var kOnConnect = Symbol("onConnect");
+    var kOnDisconnect = Symbol("onDisconnect");
+    var kOnConnectionError = Symbol("onConnectionError");
+    var kMaxRedirections = Symbol("maxRedirections");
+    var kOnDrain = Symbol("onDrain");
+    var kFactory = Symbol("factory");
+    var kFinalizer = Symbol("finalizer");
+    var kOptions = Symbol("options");
     function defaultFactory(origin, opts) {
       return opts && opts.connections === 1 ? new Client2(origin, opts) : new Pool(origin, opts);
     }
@@ -36937,11 +36939,11 @@ var require_readable = __commonJS({
     var util = require_util();
     var { ReadableStreamFrom, toUSVString } = require_util();
     var Blob2;
-    var kConsume = /* @__PURE__ */ Symbol("kConsume");
-    var kReading = /* @__PURE__ */ Symbol("kReading");
-    var kBody = /* @__PURE__ */ Symbol("kBody");
-    var kAbort = /* @__PURE__ */ Symbol("abort");
-    var kContentType = /* @__PURE__ */ Symbol("kContentType");
+    var kConsume = Symbol("kConsume");
+    var kReading = Symbol("kReading");
+    var kBody = Symbol("kBody");
+    var kAbort = Symbol("abort");
+    var kContentType = Symbol("kContentType");
     var noop = () => {
     };
     module2.exports = class BodyReadable extends Readable {
@@ -37229,8 +37231,8 @@ var require_abort_signal = __commonJS({
     "use strict";
     var { addAbortListener } = require_util();
     var { RequestAbortedError } = require_errors();
-    var kListener = /* @__PURE__ */ Symbol("kListener");
-    var kSignal = /* @__PURE__ */ Symbol("kSignal");
+    var kListener = Symbol("kListener");
+    var kSignal = Symbol("kSignal");
     function abort(self) {
       if (self.abort) {
         self.abort();
@@ -37619,7 +37621,7 @@ var require_api_pipeline = __commonJS({
     var { AsyncResource } = require("async_hooks");
     var { addSignal, removeSignal } = require_abort_signal();
     var assert = require("assert");
-    var kResume = /* @__PURE__ */ Symbol("resume");
+    var kResume = Symbol("resume");
     var PipelineRequest = class extends Readable {
       constructor() {
         super({ autoDestroy: true });
@@ -38013,25 +38015,25 @@ var require_mock_symbols = __commonJS({
   "node_modules/undici/lib/mock/mock-symbols.js"(exports2, module2) {
     "use strict";
     module2.exports = {
-      kAgent: /* @__PURE__ */ Symbol("agent"),
-      kOptions: /* @__PURE__ */ Symbol("options"),
-      kFactory: /* @__PURE__ */ Symbol("factory"),
-      kDispatches: /* @__PURE__ */ Symbol("dispatches"),
-      kDispatchKey: /* @__PURE__ */ Symbol("dispatch key"),
-      kDefaultHeaders: /* @__PURE__ */ Symbol("default headers"),
-      kDefaultTrailers: /* @__PURE__ */ Symbol("default trailers"),
-      kContentLength: /* @__PURE__ */ Symbol("content length"),
-      kMockAgent: /* @__PURE__ */ Symbol("mock agent"),
-      kMockAgentSet: /* @__PURE__ */ Symbol("mock agent set"),
-      kMockAgentGet: /* @__PURE__ */ Symbol("mock agent get"),
-      kMockDispatch: /* @__PURE__ */ Symbol("mock dispatch"),
-      kClose: /* @__PURE__ */ Symbol("close"),
-      kOriginalClose: /* @__PURE__ */ Symbol("original agent close"),
-      kOrigin: /* @__PURE__ */ Symbol("origin"),
-      kIsMockActive: /* @__PURE__ */ Symbol("is mock active"),
-      kNetConnect: /* @__PURE__ */ Symbol("net connect"),
-      kGetNetConnect: /* @__PURE__ */ Symbol("get net connect"),
-      kConnected: /* @__PURE__ */ Symbol("connected")
+      kAgent: Symbol("agent"),
+      kOptions: Symbol("options"),
+      kFactory: Symbol("factory"),
+      kDispatches: Symbol("dispatches"),
+      kDispatchKey: Symbol("dispatch key"),
+      kDefaultHeaders: Symbol("default headers"),
+      kDefaultTrailers: Symbol("default trailers"),
+      kContentLength: Symbol("content length"),
+      kMockAgent: Symbol("mock agent"),
+      kMockAgentSet: Symbol("mock agent set"),
+      kMockAgentGet: Symbol("mock agent get"),
+      kMockDispatch: Symbol("mock dispatch"),
+      kClose: Symbol("close"),
+      kOriginalClose: Symbol("original agent close"),
+      kOrigin: Symbol("origin"),
+      kIsMockActive: Symbol("is mock active"),
+      kNetConnect: Symbol("net connect"),
+      kGetNetConnect: Symbol("get net connect"),
+      kConnected: Symbol("connected")
     };
   }
 });
@@ -38803,12 +38805,12 @@ var require_proxy_agent = __commonJS({
     var DispatcherBase = require_dispatcher_base();
     var { InvalidArgumentError, RequestAbortedError } = require_errors();
     var buildConnector = require_connect();
-    var kAgent = /* @__PURE__ */ Symbol("proxy agent");
-    var kClient = /* @__PURE__ */ Symbol("proxy client");
-    var kProxyHeaders = /* @__PURE__ */ Symbol("proxy headers");
-    var kRequestTls = /* @__PURE__ */ Symbol("request tls settings");
-    var kProxyTls = /* @__PURE__ */ Symbol("proxy tls settings");
-    var kConnectEndpoint = /* @__PURE__ */ Symbol("connect endpoint function");
+    var kAgent = Symbol("proxy agent");
+    var kClient = Symbol("proxy client");
+    var kProxyHeaders = Symbol("proxy headers");
+    var kRequestTls = Symbol("request tls settings");
+    var kProxyTls = Symbol("proxy tls settings");
+    var kConnectEndpoint = Symbol("connect endpoint function");
     function defaultProtocolPort(protocol) {
       return protocol === "https:" ? 443 : 80;
     }
@@ -39216,7 +39218,7 @@ var require_RetryHandler = __commonJS({
 var require_global2 = __commonJS({
   "node_modules/undici/lib/global.js"(exports2, module2) {
     "use strict";
-    var globalDispatcher = /* @__PURE__ */ Symbol.for("undici.globalDispatcher.1");
+    var globalDispatcher = Symbol.for("undici.globalDispatcher.1");
     var { InvalidArgumentError } = require_errors();
     var Agent2 = require_agent();
     if (getGlobalDispatcher() === void 0) {
@@ -39291,8 +39293,8 @@ var require_headers = __commonJS({
     var util = require("util");
     var { webidl } = require_webidl();
     var assert = require("assert");
-    var kHeadersMap = /* @__PURE__ */ Symbol("headers map");
-    var kHeadersSortedMap = /* @__PURE__ */ Symbol("headers map sorted");
+    var kHeadersMap = Symbol("headers map");
+    var kHeadersSortedMap = Symbol("headers map sorted");
     function isHTTPWhiteSpaceCharCode(code) {
       return code === 10 || code === 13 || code === 9 || code === 32;
     }
@@ -39619,7 +39621,7 @@ var require_headers = __commonJS({
           callbackFn.apply(thisArg, [value, key, this]);
         }
       }
-      [/* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom")]() {
+      [Symbol.for("nodejs.util.inspect.custom")]() {
         webidl.brandCheck(this, _Headers);
         return this[kHeadersList];
       }
@@ -40079,7 +40081,7 @@ var require_request2 = __commonJS({
     var assert = require("assert");
     var { getMaxListeners, setMaxListeners, getEventListeners, defaultMaxListeners } = require("events");
     var TransformStream = globalThis.TransformStream;
-    var kAbortController = /* @__PURE__ */ Symbol("abortController");
+    var kAbortController = Symbol("abortController");
     var requestFinalizer = new FinalizationRegistry(({ signal, abort }) => {
       signal.removeEventListener("abort", abort);
     });
@@ -41725,12 +41727,12 @@ var require_symbols3 = __commonJS({
   "node_modules/undici/lib/fileapi/symbols.js"(exports2, module2) {
     "use strict";
     module2.exports = {
-      kState: /* @__PURE__ */ Symbol("FileReader state"),
-      kResult: /* @__PURE__ */ Symbol("FileReader result"),
-      kError: /* @__PURE__ */ Symbol("FileReader error"),
-      kLastProgressEventFired: /* @__PURE__ */ Symbol("FileReader last progress event fired timestamp"),
-      kEvents: /* @__PURE__ */ Symbol("FileReader events"),
-      kAborted: /* @__PURE__ */ Symbol("FileReader aborted")
+      kState: Symbol("FileReader state"),
+      kResult: Symbol("FileReader result"),
+      kError: Symbol("FileReader error"),
+      kLastProgressEventFired: Symbol("FileReader last progress event fired timestamp"),
+      kEvents: Symbol("FileReader events"),
+      kAborted: Symbol("FileReader aborted")
     };
   }
 });
@@ -41740,7 +41742,7 @@ var require_progressevent = __commonJS({
   "node_modules/undici/lib/fileapi/progressevent.js"(exports2, module2) {
     "use strict";
     var { webidl } = require_webidl();
-    var kState = /* @__PURE__ */ Symbol("ProgressEvent state");
+    var kState = Symbol("ProgressEvent state");
     var ProgressEvent = class _ProgressEvent extends Event {
       constructor(type, eventInitDict = {}) {
         type = webidl.converters.DOMString(type);
@@ -43690,14 +43692,14 @@ var require_symbols5 = __commonJS({
   "node_modules/undici/lib/websocket/symbols.js"(exports2, module2) {
     "use strict";
     module2.exports = {
-      kWebSocketURL: /* @__PURE__ */ Symbol("url"),
-      kReadyState: /* @__PURE__ */ Symbol("ready state"),
-      kController: /* @__PURE__ */ Symbol("controller"),
-      kResponse: /* @__PURE__ */ Symbol("response"),
-      kBinaryType: /* @__PURE__ */ Symbol("binary type"),
-      kSentClose: /* @__PURE__ */ Symbol("sent close"),
-      kReceivedClose: /* @__PURE__ */ Symbol("received close"),
-      kByteParser: /* @__PURE__ */ Symbol("byte parser")
+      kWebSocketURL: Symbol("url"),
+      kReadyState: Symbol("ready state"),
+      kController: Symbol("controller"),
+      kResponse: Symbol("response"),
+      kBinaryType: Symbol("binary type"),
+      kSentClose: Symbol("sent close"),
+      kReceivedClose: Symbol("received close"),
+      kByteParser: Symbol("byte parser")
     };
   }
 });
@@ -56128,7 +56130,7 @@ var init_fair_concurrency_limiter = __esm({
         this.maxConcurrent = maxConcurrent;
       }
       static getInstance(maxConcurrent) {
-        const key = /* @__PURE__ */ Symbol.for("visor.fairConcurrencyLimiter");
+        const key = Symbol.for("visor.fairConcurrencyLimiter");
         let instance = globalThis[key];
         if (!instance) {
           instance = new _FairConcurrencyLimiter(maxConcurrent);
@@ -56291,7 +56293,7 @@ var init_fair_concurrency_limiter = __esm({
         this.sessionQueues.clear();
         this.roundRobinSessions = [];
         this.roundRobinIndex = 0;
-        const key = /* @__PURE__ */ Symbol.for("visor.fairConcurrencyLimiter");
+        const key = Symbol.for("visor.fairConcurrencyLimiter");
         delete globalThis[key];
       }
       shutdown() {
@@ -59171,6 +59173,532 @@ var init_tui_frontend = __esm({
   }
 });
 
+// src/telegram/markdown.ts
+function escapeHtml(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function markdownToTelegramHtml(text) {
+  if (!text || typeof text !== "string") return "";
+  const lines = text.split(/\r?\n/);
+  const result = [];
+  let inCodeBlock = false;
+  let codeBlockLang = "";
+  let codeLines = [];
+  let inBlockquote = false;
+  let blockquoteLines = [];
+  const flushBlockquote = () => {
+    if (blockquoteLines.length > 0) {
+      result.push(`<blockquote>${blockquoteLines.join("\n")}</blockquote>`);
+      blockquoteLines = [];
+      inBlockquote = false;
+    }
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trimStart();
+    if (/^```/.test(trimmed)) {
+      if (!inCodeBlock) {
+        flushBlockquote();
+        inCodeBlock = true;
+        codeBlockLang = trimmed.slice(3).trim();
+        codeLines = [];
+      } else {
+        const escaped = codeLines.map((l) => escapeHtml(l)).join("\n");
+        if (codeBlockLang && codeBlockLang !== "mermaid") {
+          result.push(`<pre><code class="language-${escapeHtml(codeBlockLang)}">${escaped}</code></pre>`);
+        } else {
+          result.push(`<pre>${escaped}</pre>`);
+        }
+        inCodeBlock = false;
+        codeBlockLang = "";
+        codeLines = [];
+      }
+      continue;
+    }
+    if (inCodeBlock) {
+      codeLines.push(lines[i]);
+      continue;
+    }
+    const bqMatch = /^>\s?(.*)$/.exec(trimmed);
+    if (bqMatch) {
+      inBlockquote = true;
+      blockquoteLines.push(convertInline(bqMatch[1]));
+      continue;
+    } else if (inBlockquote) {
+      flushBlockquote();
+    }
+    let line = lines[i];
+    const headerMatch = /^(#{1,6})\s+(.+)$/.exec(line.trimStart());
+    if (headerMatch) {
+      result.push(`<b>${convertInline(headerMatch[2].trim())}</b>`);
+      continue;
+    }
+    if (/^[-*_]{3,}\s*$/.test(trimmed)) {
+      result.push("\u2014\u2014\u2014");
+      continue;
+    }
+    const bulletMatch = /^(\s*)([-*])\s+(.+)$/.exec(line);
+    if (bulletMatch) {
+      const indent = bulletMatch[1];
+      result.push(`${indent}\u2022 ${convertInline(bulletMatch[3])}`);
+      continue;
+    }
+    const numMatch = /^(\s*)(\d+\.)\s+(.+)$/.exec(line);
+    if (numMatch) {
+      result.push(`${numMatch[1]}${numMatch[2]} ${convertInline(numMatch[3])}`);
+      continue;
+    }
+    result.push(convertInline(line));
+  }
+  if (inCodeBlock && codeLines.length > 0) {
+    const escaped = codeLines.map((l) => escapeHtml(l)).join("\n");
+    result.push(`<pre>${escaped}</pre>`);
+  }
+  flushBlockquote();
+  return result.join("\n");
+}
+function convertInline(line) {
+  const codeSpans = [];
+  let processed = line.replace(/`([^`]+)`/g, (_m, code) => {
+    const idx = codeSpans.length;
+    codeSpans.push(`<code>${escapeHtml(code)}</code>`);
+    return `\0CODE${idx}\0`;
+  });
+  processed = escapeHtml(processed);
+  processed = processed.replace(
+    /!\[([^\]]*)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g,
+    (_m, alt, url) => `<a href="${url}">${alt || "image"}</a>`
+  );
+  processed = processed.replace(
+    /\[([^\]]+)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g,
+    (_m, label, url) => `<a href="${url}">${label}</a>`
+  );
+  processed = processed.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  processed = processed.replace(/__([^_]+)__/g, "<b>$1</b>");
+  processed = processed.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, "<i>$1</i>");
+  processed = processed.replace(/~~([^~]+)~~/g, "<s>$1</s>");
+  processed = processed.replace(/\x00CODE(\d+)\x00/g, (_m, idx) => codeSpans[parseInt(idx)]);
+  return processed;
+}
+function chunkText(text, limit = 4096) {
+  if (text.length <= limit) return [text];
+  const chunks = [];
+  const lines = text.split("\n");
+  let current = "";
+  for (const line of lines) {
+    const candidate = current ? current + "\n" + line : line;
+    if (candidate.length > limit) {
+      if (current) {
+        chunks.push(current);
+        current = line;
+      } else {
+        let remaining = line;
+        while (remaining.length > limit) {
+          chunks.push(remaining.slice(0, limit));
+          remaining = remaining.slice(limit);
+        }
+        current = remaining;
+      }
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+function formatTelegramText(text) {
+  return markdownToTelegramHtml(text);
+}
+var init_markdown2 = __esm({
+  "src/telegram/markdown.ts"() {
+    "use strict";
+  }
+});
+
+// src/telegram/client.ts
+var import_grammy, TelegramClient;
+var init_client2 = __esm({
+  "src/telegram/client.ts"() {
+    "use strict";
+    import_grammy = require("grammy");
+    init_markdown2();
+    TelegramClient = class {
+      bot;
+      _botInfo = null;
+      constructor(botToken) {
+        if (!botToken || typeof botToken !== "string") {
+          throw new Error("TelegramClient: botToken is required");
+        }
+        this.bot = new import_grammy.Bot(botToken);
+      }
+      /** Get the underlying grammy Bot instance (for polling runner) */
+      getBot() {
+        return this.bot;
+      }
+      /** Get the underlying grammy API instance */
+      get api() {
+        return this.bot.api;
+      }
+      /** Initialize bot info (call before using) */
+      async init() {
+        const me = await this.bot.api.getMe();
+        this._botInfo = {
+          id: me.id,
+          is_bot: me.is_bot,
+          first_name: me.first_name,
+          username: me.username
+        };
+        return this._botInfo;
+      }
+      /** Get cached bot info */
+      getBotInfo() {
+        return this._botInfo;
+      }
+      /**
+       * Send a text message with optional HTML parse mode.
+       * Auto-chunks messages exceeding 4096 characters.
+       * Falls back to plain text if HTML parsing fails.
+       */
+      async sendMessage(opts) {
+        try {
+          const { chat_id, text, parse_mode, reply_to_message_id, message_thread_id } = opts;
+          const chunks = chunkText(text, 4096);
+          let firstMessageId;
+          for (let i = 0; i < chunks.length; i++) {
+            const params = {
+              // disable_web_page_preview is deprecated, use link_preview_options
+              link_preview_options: { is_disabled: true }
+            };
+            if (parse_mode) params.parse_mode = parse_mode;
+            if (i === 0 && reply_to_message_id) params.reply_parameters = { message_id: reply_to_message_id };
+            if (message_thread_id) params.message_thread_id = message_thread_id;
+            try {
+              const msg = await this.bot.api.sendMessage(chat_id, chunks[i], params);
+              if (i === 0) firstMessageId = msg.message_id;
+            } catch (err) {
+              if (parse_mode === "HTML" && err?.description?.includes("can't parse entities")) {
+                const plainParams = { ...params };
+                delete plainParams.parse_mode;
+                const msg = await this.bot.api.sendMessage(chat_id, chunks[i], plainParams);
+                if (i === 0) firstMessageId = msg.message_id;
+              } else {
+                throw err;
+              }
+            }
+          }
+          return { ok: true, message_id: firstMessageId };
+        } catch (err) {
+          const errMsg = err?.description || err?.message || String(err);
+          console.warn(`Telegram sendMessage failed (non-fatal): ${errMsg}`);
+          return { ok: false, error: errMsg };
+        }
+      }
+      /**
+       * Send a document/file.
+       */
+      async sendDocument(opts) {
+        try {
+          const { chat_id, document, filename, caption, parse_mode, reply_to_message_id, message_thread_id } = opts;
+          const params = {};
+          if (caption) params.caption = caption.slice(0, 1024);
+          if (parse_mode) params.parse_mode = parse_mode;
+          if (reply_to_message_id) params.reply_parameters = { message_id: reply_to_message_id };
+          if (message_thread_id) params.message_thread_id = message_thread_id;
+          const file = new (await import("grammy")).InputFile(document, filename);
+          const msg = await this.bot.api.sendDocument(chat_id, file, params);
+          return { ok: true, message_id: msg.message_id };
+        } catch (err) {
+          const errMsg = err?.description || err?.message || String(err);
+          console.warn(`Telegram sendDocument failed (non-fatal): ${errMsg}`);
+          return { ok: false, error: errMsg };
+        }
+      }
+      /**
+       * Add an emoji reaction to a message.
+       * Note: Bot must be admin in groups to set reactions.
+       */
+      async setMessageReaction(opts) {
+        try {
+          await this.bot.api.setMessageReaction(opts.chat_id, opts.message_id, [
+            { type: "emoji", emoji: opts.emoji }
+          ]);
+          return true;
+        } catch (err) {
+          console.warn(
+            `Telegram setMessageReaction failed (non-fatal): ${err?.description || err?.message || String(err)}`
+          );
+          return false;
+        }
+      }
+    };
+  }
+});
+
+// src/frontends/telegram-frontend.ts
+var telegram_frontend_exports = {};
+__export(telegram_frontend_exports, {
+  TelegramFrontend: () => TelegramFrontend
+});
+var TelegramFrontend;
+var init_telegram_frontend = __esm({
+  "src/frontends/telegram-frontend.ts"() {
+    "use strict";
+    init_client2();
+    init_markdown2();
+    TelegramFrontend = class {
+      name = "telegram";
+      subs = [];
+      cfg;
+      acked = false;
+      ackRef = null;
+      errorNotified = false;
+      constructor(config) {
+        this.cfg = config || {};
+      }
+      start(ctx) {
+        const bus = ctx.eventBus;
+        try {
+          ctx.logger.info(`[telegram-frontend] started`);
+        } catch {
+        }
+        try {
+          const payload = this.getInboundTelegramPayload(ctx);
+          if (payload) {
+            const ev = payload.event || {};
+            const chatId = String(ev.chat_id || "-");
+            const msgId = String(ev.message_id || "-");
+            ctx.logger.info(
+              `[telegram-frontend] inbound event: chat_id=${chatId} message_id=${msgId}`
+            );
+          }
+        } catch {
+        }
+        this.subs.push(
+          bus.on("CheckCompleted", async (env) => {
+            const ev = env && env.payload || env;
+            await this.maybePostDirectReply(ctx, ev.checkId, ev.result).catch(() => {
+            });
+          })
+        );
+        this.subs.push(
+          bus.on("CheckErrored", async (env) => {
+            const ev = env && env.payload || env;
+            const message = ev?.error?.message || "Execution error";
+            await this.maybePostError(ctx, "Check failed", message, ev?.checkId).catch(() => {
+            });
+          })
+        );
+        this.subs.push(
+          bus.on("StateTransition", async (env) => {
+            const ev = env && env.payload || env;
+            if (ev && (ev.to === "Completed" || ev.to === "Error")) {
+              await this.finalizeReactions(ctx).catch(() => {
+              });
+            }
+          })
+        );
+        this.subs.push(
+          bus.on("Shutdown", async (env) => {
+            const ev = env && env.payload || env;
+            const message = ev?.error?.message || "Fatal error";
+            await this.maybePostError(ctx, "Run failed", message).catch(() => {
+            });
+          })
+        );
+        this.subs.push(
+          bus.on("CheckScheduled", async () => {
+            await this.ensureAcknowledgement(ctx).catch(() => {
+            });
+          })
+        );
+      }
+      stop() {
+        for (const s of this.subs) s.unsubscribe();
+        this.subs = [];
+      }
+      getTelegram(ctx) {
+        const injected = ctx.telegram || ctx.telegramClient;
+        if (injected) return injected;
+        try {
+          const token = this.cfg.botToken || process.env.TELEGRAM_BOT_TOKEN;
+          if (typeof token === "string" && token.trim()) {
+            return new TelegramClient(token.trim());
+          }
+        } catch {
+        }
+        return void 0;
+      }
+      getInboundTelegramPayload(ctx) {
+        try {
+          const endpoint = "/bots/telegram/message";
+          return ctx.webhookContext?.webhookData?.get(endpoint) || null;
+        } catch {
+          return null;
+        }
+      }
+      getInboundTelegramEvent(ctx) {
+        try {
+          const payload = this.getInboundTelegramPayload(ctx);
+          const ev = payload?.event;
+          const chatId = ev?.chat_id;
+          const messageId = ev?.message_id;
+          if (chatId !== void 0 && messageId !== void 0) {
+            return { chatId, messageId };
+          }
+        } catch {
+        }
+        return null;
+      }
+      async ensureAcknowledgement(ctx) {
+        if (this.acked) return;
+        const ref = this.getInboundTelegramEvent(ctx);
+        if (!ref) return;
+        const telegram = this.getTelegram(ctx);
+        if (!telegram) return;
+        try {
+          const payload = this.getInboundTelegramPayload(ctx);
+          const ev = payload?.event;
+          const botInfo = telegram.getBotInfo();
+          if (botInfo && ev?.from?.id === botInfo.id) return;
+        } catch {
+        }
+        await telegram.setMessageReaction({
+          chat_id: ref.chatId,
+          message_id: ref.messageId,
+          emoji: "\u{1F440}"
+        });
+        try {
+          ctx.logger.info(
+            `[telegram-frontend] added ack reaction chat_id=${ref.chatId} message_id=${ref.messageId}`
+          );
+        } catch {
+        }
+        this.acked = true;
+        this.ackRef = ref;
+      }
+      async finalizeReactions(ctx) {
+        if (!this.acked || !this.ackRef) return;
+        const telegram = this.getTelegram(ctx);
+        if (!telegram) return;
+        try {
+          await telegram.setMessageReaction({
+            chat_id: this.ackRef.chatId,
+            message_id: this.ackRef.messageId,
+            emoji: "\u{1F44D}"
+          });
+          try {
+            ctx.logger.info(
+              `[telegram-frontend] finalized reaction chat_id=${this.ackRef.chatId} message_id=${this.ackRef.messageId}`
+            );
+          } catch {
+          }
+        } finally {
+          this.acked = false;
+          this.ackRef = null;
+        }
+      }
+      async maybePostError(ctx, title, message, checkId) {
+        if (this.errorNotified) return;
+        const telegram = this.getTelegram(ctx);
+        if (!telegram) return;
+        const payload = this.getInboundTelegramPayload(ctx);
+        const ev = payload?.event;
+        const chatId = ev?.chat_id;
+        const messageId = ev?.message_id;
+        if (chatId === void 0) return;
+        let text = `\u274C ${title}`;
+        if (checkId) text += `
+Check: ${checkId}`;
+        if (message) text += `
+${message}`;
+        await telegram.sendMessage({
+          chat_id: chatId,
+          text,
+          reply_to_message_id: messageId
+        });
+        this.errorNotified = true;
+      }
+      async maybePostDirectReply(ctx, checkId, result) {
+        try {
+          const cfg = ctx.config || {};
+          const checkCfg = cfg.checks?.[checkId];
+          if (!checkCfg) return;
+          const providerType = checkCfg.type || "";
+          const isAi = providerType === "ai";
+          const isLogChat = providerType === "log" && checkCfg.group === "chat";
+          const isWorkflow = providerType === "workflow";
+          if (!isAi && !isLogChat && !isWorkflow) return;
+          if (checkCfg.criticality === "internal") return;
+          if (isAi) {
+            const schema = checkCfg.schema;
+            if (typeof schema === "string") {
+              const simpleSchemas = ["code-review", "markdown", "text", "plain"];
+              if (!simpleSchemas.includes(schema)) return;
+            }
+          }
+          const telegram = this.getTelegram(ctx);
+          if (!telegram) return;
+          const payload = this.getInboundTelegramPayload(ctx);
+          const ev = payload?.event;
+          const chatId = ev?.chat_id;
+          const messageId = ev?.message_id;
+          if (chatId === void 0) {
+            ctx.logger.warn(
+              `[telegram-frontend] skip posting reply for ${checkId}: missing chat_id`
+            );
+            return;
+          }
+          const out = result?.output;
+          let text;
+          if (out && typeof out.text === "string" && out.text.trim().length > 0) {
+            text = out.text.trim();
+          } else if (isAi && typeof checkCfg.schema === "string") {
+            if (typeof result?.content === "string" && result.content.trim().length > 0) {
+              text = result.content.trim();
+            }
+          } else if (isLogChat && typeof result?.logOutput === "string") {
+            const raw = result.logOutput;
+            if (raw.trim().length > 0) text = raw.trim();
+          }
+          if (out && typeof out._rawOutput === "string" && out._rawOutput.trim().length > 0) {
+            text = (text || "") + "\n\n" + out._rawOutput.trim();
+          }
+          if (!text) {
+            ctx.logger.info(
+              `[telegram-frontend] skip posting reply for ${checkId}: no renderable text`
+            );
+            return;
+          }
+          text = text.replace(/\\n/g, "\n");
+          const formattedText = formatTelegramText(text);
+          const postResult = await telegram.sendMessage({
+            chat_id: chatId,
+            text: formattedText,
+            parse_mode: "HTML",
+            reply_to_message_id: messageId,
+            message_thread_id: ev?.message_thread_id
+          });
+          if (!postResult.ok) {
+            ctx.logger.warn(
+              `[telegram-frontend] failed to post reply for ${checkId}: ${postResult.error}`
+            );
+            return;
+          }
+          ctx.logger.info(
+            `[telegram-frontend] posted reply for ${checkId} to chat_id=${chatId} message_id=${postResult.message_id}`
+          );
+        } catch (err) {
+          try {
+            ctx.logger.warn(
+              `[telegram-frontend] maybePostDirectReply failed for ${checkId}: ${err instanceof Error ? err.message : String(err)}`
+            );
+          } catch {
+          }
+        }
+      }
+    };
+  }
+});
+
 // src/agent-protocol/task-store.ts
 function safeJsonParse2(value) {
   if (!value) return void 0;
@@ -60839,6 +61367,9 @@ var init_host = __esm({
           } else if (spec.name === "tui") {
             const { TuiFrontend: TuiFrontend2 } = await Promise.resolve().then(() => (init_tui_frontend(), tui_frontend_exports));
             this.frontends.push(new TuiFrontend2(spec.config));
+          } else if (spec.name === "telegram") {
+            const { TelegramFrontend: TelegramFrontend2 } = await Promise.resolve().then(() => (init_telegram_frontend(), telegram_frontend_exports));
+            this.frontends.push(new TelegramFrontend2(spec.config));
           } else if (spec.name === "a2a") {
             const { A2AFrontend: A2AFrontend2 } = await Promise.resolve().then(() => (init_a2a_frontend(), a2a_frontend_exports));
             this.frontends.push(new A2AFrontend2(spec.config));

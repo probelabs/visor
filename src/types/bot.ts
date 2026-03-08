@@ -1,6 +1,6 @@
 /** Bot transport types (trimmed for Slack v1) */
 
-export type BotTransportType = 'slack' | string;
+export type BotTransportType = 'slack' | 'telegram' | string;
 
 /** Slack file attachment metadata */
 export interface SlackFileAttachment {
@@ -149,6 +149,19 @@ export interface SlackBotConfig {
   cache_observability?: SlackCacheObservabilityConfig;
   cache_prewarming?: SlackCachePrewarmingConfig;
   rate_limiting?: SlackRateLimitConfig;
+  workflow?: string;
+}
+
+export interface TelegramConfig {
+  /** Bot token from @BotFather (or TELEGRAM_BOT_TOKEN env var) */
+  bot_token?: string;
+  /** Polling timeout in seconds for getUpdates (default: 30) */
+  polling_timeout?: number;
+  /** Chat/group allowlist - numeric chat IDs that the bot responds in */
+  chat_allowlist?: (string | number)[];
+  /** In groups, only respond when @mentioned or replied to (default: true) */
+  require_mention?: boolean;
+  /** Workflow to run when a message is received */
   workflow?: string;
 }
 

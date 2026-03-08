@@ -16,7 +16,7 @@ import { getInstanceId } from '../utils/instance-id';
 import type { TaskStore } from './task-store';
 import type { AgentMessage, AgentTask } from './types';
 
-export type TaskSource = 'cli' | 'slack' | 'a2a' | 'tui' | 'scheduler' | 'webhook';
+export type TaskSource = 'cli' | 'slack' | 'telegram' | 'a2a' | 'tui' | 'scheduler' | 'webhook';
 
 export interface TrackExecutionOptions {
   taskStore: TaskStore;

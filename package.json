@@ -98,6 +98,7 @@
   "dependencies": {
     "@actions/core": "^1.11.1",
     "@apidevtools/swagger-parser": "^12.1.0",
+    "@grammyjs/runner": "^2.0.3",
     "@modelcontextprotocol/sdk": "^1.25.3",
     "@nyariv/sandboxjs": "github:probelabs/SandboxJS#23c4bb611f7d05f3cb8c523917b5f57103e48108",
     "@octokit/action": "^8.0.2",
@@ -127,6 +128,7 @@
     "commander": "^14.0.0",
     "deepmerge": "^4.3.1",
     "dotenv": "^17.2.3",
+    "grammy": "^1.41.1",
     "ignore": "^7.0.5",
     "js-yaml": "^4.1.0",
     "jsonpath-plus": "^10.4.0",
