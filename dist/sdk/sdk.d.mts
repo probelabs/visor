@@ -1541,6 +1541,10 @@ interface VisorConfig {
     policy?: PolicyConfig;
     /** Agent protocol (A2A) server configuration */
     agent_protocol?: AgentProtocolConfig;
+    /** Enable cross-frontend task tracking (default: false).
+     *  When true, all workflow executions (CLI, Slack, TUI, Scheduler) are recorded
+     *  in a shared SQLite TaskStore visible via `visor tasks`. */
+    task_tracking?: boolean;
 }
 /**
  * Workspace isolation configuration

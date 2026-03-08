@@ -12432,6 +12432,10 @@ var init_config_schema = __esm({
             agent_protocol: {
               $ref: "#/definitions/AgentProtocolConfig",
               description: "Agent protocol (A2A) server configuration"
+            },
+            task_tracking: {
+              type: "boolean",
+              description: "Enable cross-frontend task tracking (default: false). When true, all workflow executions (CLI, Slack, TUI, Scheduler) are recorded in a shared SQLite TaskStore visible via `visor tasks`."
             }
           },
           required: ["version"],
@@ -13168,7 +13172,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -13184,7 +13188,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -13882,7 +13886,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -13897,13 +13901,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681>>": {
+        "Record<string,Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681>": {
+        "Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916>": {
           type: "object",
           additionalProperties: false
         },
@@ -19431,6 +19435,62 @@ var init_github_auth = __esm({
   }
 });
 
+// src/agent-protocol/track-execution.ts
+var track_execution_exports = {};
+__export(track_execution_exports, {
+  trackExecution: () => trackExecution
+});
+async function trackExecution(opts, executor) {
+  const { taskStore, source, workflowId, metadata, messageText } = opts;
+  const requestMessage = {
+    message_id: import_crypto2.default.randomUUID(),
+    role: "user",
+    parts: [{ text: messageText }]
+  };
+  const task = taskStore.createTask({
+    contextId: import_crypto2.default.randomUUID(),
+    requestMessage,
+    workflowId,
+    requestMetadata: { source, ...metadata }
+  });
+  taskStore.updateTaskState(task.id, "working");
+  logger.info(
+    `[TaskTracking] Task ${task.id} started (source=${source}, workflow=${workflowId || "-"})`
+  );
+  try {
+    const result = await executor();
+    const completedMsg = {
+      message_id: import_crypto2.default.randomUUID(),
+      role: "agent",
+      parts: [{ text: "Execution completed" }]
+    };
+    taskStore.updateTaskState(task.id, "completed", completedMsg);
+    logger.info(`[TaskTracking] Task ${task.id} completed`);
+    return { task, result };
+  } catch (err) {
+    const errorText = err instanceof Error ? err.message : String(err);
+    const failMessage = {
+      message_id: import_crypto2.default.randomUUID(),
+      role: "agent",
+      parts: [{ text: errorText }]
+    };
+    try {
+      taskStore.updateTaskState(task.id, "failed", failMessage);
+      logger.info(`[TaskTracking] Task ${task.id} failed: ${errorText}`);
+    } catch {
+    }
+    throw err;
+  }
+}
+var import_crypto2;
+var init_track_execution = __esm({
+  "src/agent-protocol/track-execution.ts"() {
+    "use strict";
+    import_crypto2 = __toESM(require("crypto"));
+    init_logger();
+  }
+});
+
 // src/scheduler/scheduler.ts
 function getScheduler(visorConfig, config) {
   if (!schedulerInstance && visorConfig) {
@@ -19460,6 +19520,7 @@ var init_scheduler = __esm({
       outputAdapters = /* @__PURE__ */ new Map();
       executionContext = {};
       contextEnricher;
+      taskStore;
       // HA fields
       haConfig;
       nodeId;
@@ -19484,6 +19545,10 @@ var init_scheduler = __esm({
        */
       setEngine(engine) {
         this.engine = engine;
+      }
+      /** Set shared task store for execution tracking. */
+      setTaskStore(store) {
+        this.taskStore = store;
       }
       /**
        * Set the execution context (e.g., Slack client) for workflow executions
@@ -20026,7 +20091,7 @@ var init_scheduler = __esm({
         } catch {
         }
         const { engine: runEngine, config: cfgForRun } = this.prepareExecution(schedule);
-        await runEngine.executeChecks({
+        const schedExecFn = () => runEngine.executeChecks({
           checks: checksToRun,
           showDetails: true,
           outputFormat: "json",
@@ -20035,6 +20100,21 @@ var init_scheduler = __esm({
           debug: process.env.VISOR_DEBUG === "true",
           inputs: schedule.workflowInputs
         });
+        if (this.taskStore) {
+          const { trackExecution: trackExecution2 } = await Promise.resolve().then(() => (init_track_execution(), track_execution_exports));
+          await trackExecution2(
+            {
+              taskStore: this.taskStore,
+              source: "scheduler",
+              workflowId: schedule.workflow,
+              messageText: `Scheduled: ${schedule.workflow} (${schedule.id})`,
+              metadata: { schedule_id: schedule.id, is_recurring: schedule.isRecurring }
+            },
+            schedExecFn
+          );
+        } else {
+          await schedExecFn();
+        }
         return { message: "Workflow completed", workflow: schedule.workflow };
       }
       /**
@@ -20140,7 +20220,7 @@ Please provide an updated response based on the reminder above. You may referenc
           responseRef
         } = this.prepareExecution(schedule, reminderText);
         try {
-          await runEngine.executeChecks({
+          const reminderExecFn = () => runEngine.executeChecks({
             checks: allChecks,
             showDetails: true,
             outputFormat: "json",
@@ -20148,6 +20228,21 @@ Please provide an updated response based on the reminder above. You may referenc
             webhookContext: { webhookData, eventType: "schedule" },
             debug: process.env.VISOR_DEBUG === "true"
           });
+          if (this.taskStore) {
+            const { trackExecution: trackExecution2 } = await Promise.resolve().then(() => (init_track_execution(), track_execution_exports));
+            await trackExecution2(
+              {
+                taskStore: this.taskStore,
+                source: "scheduler",
+                workflowId: schedule.workflow,
+                messageText: reminderText || `Reminder: ${schedule.id}`,
+                metadata: { schedule_id: schedule.id, is_recurring: schedule.isRecurring }
+              },
+              reminderExecFn
+            );
+          } else {
+            await reminderExecFn();
+          }
           if (schedule.isRecurring && responseRef.captured) {
             await this.store.updateAsync(schedule.id, { previousResponse: responseRef.captured });
             logger.info(
@@ -31031,11 +31126,11 @@ var require_util2 = __commonJS({
     var assert = require("assert");
     var { isUint8Array } = require("util/types");
     var supportedHashes = [];
-    var crypto6;
+    var crypto7;
     try {
-      crypto6 = require("crypto");
+      crypto7 = require("crypto");
       const possibleRelevantHashes = ["sha256", "sha384", "sha512"];
-      supportedHashes = crypto6.getHashes().filter((hash) => possibleRelevantHashes.includes(hash));
+      supportedHashes = crypto7.getHashes().filter((hash) => possibleRelevantHashes.includes(hash));
     } catch {
     }
     function responseURL(response) {
@@ -31312,7 +31407,7 @@ var require_util2 = __commonJS({
       }
     }
     function bytesMatch(bytes, metadataList) {
-      if (crypto6 === void 0) {
+      if (crypto7 === void 0) {
         return true;
       }
       const parsedMetadata = parseMetadata(metadataList);
@@ -31327,7 +31422,7 @@ var require_util2 = __commonJS({
       for (const item of metadata) {
         const algorithm = item.algo;
         const expectedValue = item.hash;
-        let actualValue = crypto6.createHash(algorithm).update(bytes).digest("base64");
+        let actualValue = crypto7.createHash(algorithm).update(bytes).digest("base64");
         if (actualValue[actualValue.length - 1] === "=") {
           if (actualValue[actualValue.length - 2] === "=") {
             actualValue = actualValue.slice(0, -2);
@@ -32674,8 +32769,8 @@ var require_body = __commonJS({
     var { parseMIMEType, serializeAMimeType } = require_dataURL();
     var random;
     try {
-      const crypto6 = require("crypto");
-      random = (max) => crypto6.randomInt(0, max);
+      const crypto7 = require("crypto");
+      random = (max) => crypto7.randomInt(0, max);
     } catch {
       random = (max) => Math.floor(Math.random(max));
     }
@@ -43731,9 +43826,9 @@ var require_connection = __commonJS({
     channels.open = diagnosticsChannel.channel("undici:websocket:open");
     channels.close = diagnosticsChannel.channel("undici:websocket:close");
     channels.socketError = diagnosticsChannel.channel("undici:websocket:socket_error");
-    var crypto6;
+    var crypto7;
     try {
-      crypto6 = require("crypto");
+      crypto7 = require("crypto");
     } catch {
     }
     function establishWebSocketConnection(url, protocols, ws, onEstablish, options) {
@@ -43752,7 +43847,7 @@ var require_connection = __commonJS({
         const headersList = new Headers(options.headers)[kHeadersList];
         request.headersList = headersList;
       }
-      const keyValue = crypto6.randomBytes(16).toString("base64");
+      const keyValue = crypto7.randomBytes(16).toString("base64");
       request.headersList.append("sec-websocket-key", keyValue);
       request.headersList.append("sec-websocket-version", "13");
       for (const protocol of protocols) {
@@ -43781,7 +43876,7 @@ var require_connection = __commonJS({
             return;
           }
           const secWSAccept = response.headersList.get("Sec-WebSocket-Accept");
-          const digest = crypto6.createHash("sha1").update(keyValue + uid).digest("base64");
+          const digest = crypto7.createHash("sha1").update(keyValue + uid).digest("base64");
           if (secWSAccept !== digest) {
             failWebsocketConnection(ws, "Incorrect hash received in Sec-WebSocket-Accept header.");
             return;
@@ -43861,9 +43956,9 @@ var require_frame = __commonJS({
   "node_modules/undici/lib/websocket/frame.js"(exports2, module2) {
     "use strict";
     var { maxUnsigned16Bit } = require_constants5();
-    var crypto6;
+    var crypto7;
     try {
-      crypto6 = require("crypto");
+      crypto7 = require("crypto");
     } catch {
     }
     var WebsocketFrameSend = class {
@@ -43872,7 +43967,7 @@ var require_frame = __commonJS({
        */
       constructor(data) {
         this.frameData = data;
-        this.maskKey = crypto6.randomBytes(4);
+        this.maskKey = crypto7.randomBytes(4);
       }
       createFrame(opcode) {
         const bodyLength = this.frameData?.byteLength ?? 0;
@@ -47286,14 +47381,14 @@ var init_script_check_provider = __esm({
 });
 
 // src/utils/worktree-manager.ts
-var fs18, fsp, path21, crypto, WorktreeManager, worktreeManager;
+var fs18, fsp, path21, crypto2, WorktreeManager, worktreeManager;
 var init_worktree_manager = __esm({
   "src/utils/worktree-manager.ts"() {
     "use strict";
     fs18 = __toESM(require("fs"));
     fsp = __toESM(require("fs/promises"));
     path21 = __toESM(require("path"));
-    crypto = __toESM(require("crypto"));
+    crypto2 = __toESM(require("crypto"));
     init_command_executor();
     init_logger();
     WorktreeManager = class _WorktreeManager {
@@ -47374,7 +47469,7 @@ var init_worktree_manager = __esm({
         const sanitizedRepo = repository.replace(/[^a-zA-Z0-9-]/g, "-");
         const sanitizedRef = ref.replace(/[^a-zA-Z0-9-]/g, "-");
         const hashInput = sessionId ? `${repository}:${ref}:${sessionId}` : `${repository}:${ref}`;
-        const hash = crypto.createHash("md5").update(hashInput).digest("hex").substring(0, 8);
+        const hash = crypto2.createHash("md5").update(hashInput).digest("hex").substring(0, 8);
         return `${sanitizedRepo}-${sanitizedRef}-${hash}`;
       }
       /**
@@ -53699,7 +53794,7 @@ var init_runner = __esm({
 });
 
 // src/sandbox/docker-image-sandbox.ts
-var import_util2, import_child_process3, import_fs5, import_path9, import_os, import_crypto2, execFileAsync, EXEC_MAX_BUFFER, DockerImageSandbox;
+var import_util2, import_child_process3, import_fs5, import_path9, import_os, import_crypto3, execFileAsync, EXEC_MAX_BUFFER, DockerImageSandbox;
 var init_docker_image_sandbox = __esm({
   "src/sandbox/docker-image-sandbox.ts"() {
     "use strict";
@@ -53708,7 +53803,7 @@ var init_docker_image_sandbox = __esm({
     import_fs5 = require("fs");
     import_path9 = require("path");
     import_os = require("os");
-    import_crypto2 = require("crypto");
+    import_crypto3 = require("crypto");
     init_logger();
     init_sandbox_telemetry();
     execFileAsync = (0, import_util2.promisify)(import_child_process3.execFile);
@@ -53726,7 +53821,7 @@ var init_docker_image_sandbox = __esm({
         this.config = config;
         this.repoPath = repoPath;
         this.visorDistPath = visorDistPath;
-        this.containerName = `visor-${name}-${(0, import_crypto2.randomUUID)().slice(0, 8)}`;
+        this.containerName = `visor-${name}-${(0, import_crypto3.randomUUID)().slice(0, 8)}`;
         this.cacheVolumeMounts = cacheVolumeMounts;
       }
       /**
@@ -53891,13 +53986,13 @@ var init_docker_image_sandbox = __esm({
 });
 
 // src/sandbox/docker-compose-sandbox.ts
-var import_util3, import_child_process4, import_crypto3, execFileAsync2, EXEC_MAX_BUFFER2, DockerComposeSandbox;
+var import_util3, import_child_process4, import_crypto4, execFileAsync2, EXEC_MAX_BUFFER2, DockerComposeSandbox;
 var init_docker_compose_sandbox = __esm({
   "src/sandbox/docker-compose-sandbox.ts"() {
     "use strict";
     import_util3 = require("util");
     import_child_process4 = require("child_process");
-    import_crypto3 = require("crypto");
+    import_crypto4 = require("crypto");
     init_logger();
     execFileAsync2 = (0, import_util3.promisify)(import_child_process4.execFile);
     EXEC_MAX_BUFFER2 = 50 * 1024 * 1024;
@@ -53909,7 +54004,7 @@ var init_docker_compose_sandbox = __esm({
       constructor(name, config) {
         this.name = name;
         this.config = config;
-        this.projectName = `visor-${name}-${(0, import_crypto3.randomUUID)().slice(0, 8)}`;
+        this.projectName = `visor-${name}-${(0, import_crypto4.randomUUID)().slice(0, 8)}`;
       }
       /**
        * Start the compose services
@@ -54001,7 +54096,7 @@ var init_docker_compose_sandbox = __esm({
 
 // src/sandbox/cache-volume-manager.ts
 function pathHash(containerPath) {
-  return (0, import_crypto4.createHash)("sha256").update(containerPath).digest("hex").slice(0, 8);
+  return (0, import_crypto5.createHash)("sha256").update(containerPath).digest("hex").slice(0, 8);
 }
 function parseTtl(ttl) {
   let ms = 0;
@@ -54013,13 +54108,13 @@ function parseTtl(ttl) {
   if (minMatch) ms += parseInt(minMatch[1], 10) * 6e4;
   return ms || 6048e5;
 }
-var import_util4, import_child_process5, import_crypto4, execFileAsync3, EXEC_MAX_BUFFER3, CacheVolumeManager;
+var import_util4, import_child_process5, import_crypto5, execFileAsync3, EXEC_MAX_BUFFER3, CacheVolumeManager;
 var init_cache_volume_manager = __esm({
   "src/sandbox/cache-volume-manager.ts"() {
     "use strict";
     import_util4 = require("util");
     import_child_process5 = require("child_process");
-    import_crypto4 = require("crypto");
+    import_crypto5 = require("crypto");
     init_logger();
     execFileAsync3 = (0, import_util4.promisify)(import_child_process5.execFile);
     EXEC_MAX_BUFFER3 = 10 * 1024 * 1024;
@@ -58845,13 +58940,13 @@ function taskRowToAgentTask(row) {
     workflow_id: row.workflow_id ?? void 0
   };
 }
-var import_path14, import_fs10, import_crypto5, SqliteTaskStore;
+var import_path14, import_fs10, import_crypto6, SqliteTaskStore;
 var init_task_store = __esm({
   "src/agent-protocol/task-store.ts"() {
     "use strict";
     import_path14 = __toESM(require("path"));
     import_fs10 = __toESM(require("fs"));
-    import_crypto5 = __toESM(require("crypto"));
+    import_crypto6 = __toESM(require("crypto"));
     init_logger();
     init_types();
     init_state_transitions();
@@ -58932,7 +59027,7 @@ var init_task_store = __esm({
       // -------------------------------------------------------------------------
       createTask(params) {
         const db = this.getDb();
-        const id = import_crypto5.default.randomUUID();
+        const id = import_crypto6.default.randomUUID();
         const now = nowISO();
         const contextId = this.resolveContextId(params.requestMessage, params.contextId);
         const expiresAt = params.expiresAt ?? null;
@@ -59019,6 +59114,12 @@ var init_task_store = __esm({
             messageText = textPart?.text ?? "";
           } catch {
           }
+          let source = "-";
+          try {
+            const meta = JSON.parse(r.request_metadata || "{}");
+            source = meta.source || "-";
+          } catch {
+          }
           return {
             id: r.id,
             context_id: r.context_id,
@@ -59029,7 +59130,8 @@ var init_task_store = __esm({
             claimed_at: r.claimed_at,
             workflow_id: r.workflow_id,
             run_id: r.run_id,
-            request_message: messageText
+            request_message: messageText,
+            source
           };
         });
         return { rows, total };
@@ -59270,11 +59372,11 @@ var init_task_stream_manager = __esm({
 });
 
 // src/agent-protocol/push-notification-manager.ts
-var import_crypto6, PushNotificationManager;
+var import_crypto7, PushNotificationManager;
 var init_push_notification_manager = __esm({
   "src/agent-protocol/push-notification-manager.ts"() {
     "use strict";
-    import_crypto6 = __toESM(require("crypto"));
+    import_crypto7 = __toESM(require("crypto"));
     init_logger();
     PushNotificationManager = class {
       db = null;
@@ -59319,7 +59421,7 @@ var init_push_notification_manager = __esm({
       // -------------------------------------------------------------------------
       create(config) {
         const db = this.getDb();
-        const id = config.id ?? import_crypto6.default.randomUUID();
+        const id = config.id ?? import_crypto7.default.randomUUID();
         const now = (/* @__PURE__ */ new Date()).toISOString();
         db.prepare(
           `INSERT INTO agent_push_configs (id, task_id, url, token, auth_scheme, auth_credentials, created_at)
@@ -59417,11 +59519,11 @@ var init_push_notification_manager = __esm({
 });
 
 // src/agent-protocol/task-queue.ts
-var import_crypto7, DEFAULT_CONFIG, TaskQueue;
+var import_crypto8, DEFAULT_CONFIG, TaskQueue;
 var init_task_queue = __esm({
   "src/agent-protocol/task-queue.ts"() {
     "use strict";
-    import_crypto7 = __toESM(require("crypto"));
+    import_crypto8 = __toESM(require("crypto"));
     init_logger();
     init_trace_helpers();
     DEFAULT_CONFIG = {
@@ -59434,7 +59536,7 @@ var init_task_queue = __esm({
         this.taskStore = taskStore;
         this.executor = executor;
         this.config = { ...DEFAULT_CONFIG, ...config };
-        this.workerId = workerId ?? import_crypto7.default.randomUUID();
+        this.workerId = workerId ?? import_crypto8.default.randomUUID();
       }
       running = false;
       timer = null;
@@ -59508,7 +59610,7 @@ var init_task_queue = __esm({
           }
           if (result.success) {
             const completedMsg = {
-              message_id: import_crypto7.default.randomUUID(),
+              message_id: import_crypto8.default.randomUUID(),
               role: "agent",
               parts: [
                 {
@@ -59520,7 +59622,7 @@ var init_task_queue = __esm({
             this.taskStore.updateTaskState(task.id, "completed", completedMsg);
           } else {
             this.taskStore.updateTaskState(task.id, "failed", {
-              message_id: import_crypto7.default.randomUUID(),
+              message_id: import_crypto8.default.randomUUID(),
               role: "agent",
               parts: [{ text: result.error ?? "Task execution failed" }]
             });
@@ -59531,7 +59633,7 @@ var init_task_queue = __esm({
           );
           try {
             this.taskStore.updateTaskState(task.id, "failed", {
-              message_id: import_crypto7.default.randomUUID(),
+              message_id: import_crypto8.default.randomUUID(),
               role: "agent",
               parts: [{ text: err instanceof Error ? err.message : "Unknown error" }]
             });
@@ -59585,7 +59687,7 @@ function timingSafeEqual(a, b) {
   if (!a || !b) return false;
   if (a.length !== b.length) return false;
   try {
-    return import_crypto8.default.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+    return import_crypto9.default.timingSafeEqual(Buffer.from(a), Buffer.from(b));
   } catch {
     return false;
   }
@@ -59659,7 +59761,7 @@ function resultToArtifacts(checkResults) {
     }
     if (parts.length > 0) {
       artifacts.push({
-        artifact_id: import_crypto8.default.randomUUID(),
+        artifact_id: import_crypto9.default.randomUUID(),
         name: checkId,
         description: `Output from check: ${checkId}`,
         parts
@@ -59668,14 +59770,14 @@ function resultToArtifacts(checkResults) {
   }
   return artifacts;
 }
-var import_http2, import_https, import_fs11, import_crypto8, A2AFrontend;
+var import_http2, import_https, import_fs11, import_crypto9, A2AFrontend;
 var init_a2a_frontend = __esm({
   "src/agent-protocol/a2a-frontend.ts"() {
     "use strict";
     import_http2 = __toESM(require("http"));
     import_https = __toESM(require("https"));
     import_fs11 = __toESM(require("fs"));
-    import_crypto8 = __toESM(require("crypto"));
+    import_crypto9 = __toESM(require("crypto"));
     init_logger();
     init_task_store();
     init_types();
@@ -59769,7 +59871,7 @@ var init_a2a_frontend = __esm({
           if (!taskId) return;
           try {
             const statusMessage = {
-              message_id: import_crypto8.default.randomUUID(),
+              message_id: import_crypto9.default.randomUUID(),
               role: "agent",
               parts: [{ text: envelope.payload?.prompt ?? "Agent requires input" }]
             };
@@ -59941,7 +60043,7 @@ var init_a2a_frontend = __esm({
           const response = await this.handleFollowUpMessage(existingTaskId, body);
           return sendJson(res, 200, response);
         }
-        const contextId = body.message.context_id ?? import_crypto8.default.randomUUID();
+        const contextId = body.message.context_id ?? import_crypto9.default.randomUUID();
         const workflowId = resolveWorkflow(body, this.config);
         const blocking = body.configuration?.blocking ?? false;
         await withActiveSpan(
@@ -60054,7 +60156,7 @@ var init_a2a_frontend = __esm({
         if (!body.message?.parts?.length) {
           throw new InvalidRequestError("Message must contain at least one part");
         }
-        const contextId = body.message.context_id ?? import_crypto8.default.randomUUID();
+        const contextId = body.message.context_id ?? import_crypto9.default.randomUUID();
         const workflowId = resolveWorkflow(body, this.config);
         const task = this.taskStore.createTask({
           contextId,
@@ -60188,7 +60290,7 @@ var init_a2a_frontend = __esm({
             await this.executeTaskViaEngine(task, message);
           } else {
             const agentResponse = {
-              message_id: import_crypto8.default.randomUUID(),
+              message_id: import_crypto9.default.randomUUID(),
               role: "agent",
               parts: [{ text: `Task ${task.id} received and processed.`, media_type: "text/markdown" }]
             };
@@ -60200,7 +60302,7 @@ var init_a2a_frontend = __esm({
           logger.error(`[A2A] Task ${task.id} execution failed: ${errorMsg}`);
           try {
             const failMessage = {
-              message_id: import_crypto8.default.randomUUID(),
+              message_id: import_crypto9.default.randomUUID(),
               role: "agent",
               parts: [{ text: errorMsg }]
             };
@@ -60243,7 +60345,7 @@ ${issueText}`, media_type: "text/markdown" });
           }
           if (summaryParts.length > 0) {
             artifacts.push({
-              artifact_id: import_crypto8.default.randomUUID(),
+              artifact_id: import_crypto9.default.randomUUID(),
               name: "review-summary",
               description: "Review summary with issues found",
               parts: summaryParts
@@ -60263,7 +60365,7 @@ ${issueText}`, media_type: "text/markdown" });
               }
               if (parts.length > 0) {
                 artifacts.push({
-                  artifact_id: import_crypto8.default.randomUUID(),
+                  artifact_id: import_crypto9.default.randomUUID(),
                   name: cr.checkName ?? groupName,
                   description: `Output from check: ${cr.checkName ?? groupName}`,
                   parts
@@ -60274,7 +60376,7 @@ ${issueText}`, media_type: "text/markdown" });
         }
         if (artifacts.length === 0) {
           artifacts.push({
-            artifact_id: import_crypto8.default.randomUUID(),
+            artifact_id: import_crypto9.default.randomUUID(),
             name: "result",
             description: "Execution result",
             parts: [
@@ -60296,7 +60398,7 @@ ${issueText}`, media_type: "text/markdown" });
           );
         }
         const agentResponse = {
-          message_id: import_crypto8.default.randomUUID(),
+          message_id: import_crypto9.default.randomUUID(),
           role: "agent",
           parts: [
             {
@@ -60349,7 +60451,7 @@ ${issueText}`, media_type: "text/markdown" });
         }
         if (parts.length === 0) return null;
         return {
-          artifact_id: import_crypto8.default.randomUUID(),
+          artifact_id: import_crypto9.default.randomUUID(),
           name: p.checkId ?? "check-result",
           parts
         };
