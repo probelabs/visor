@@ -1350,6 +1350,11 @@ export async function main(): Promise<void> {
         const { SqliteTaskStore } = await import('./agent-protocol/task-store');
         sharedTaskStore = new SqliteTaskStore();
         await sharedTaskStore.initialize();
+        // Recover stale tasks from previous crashed runs
+        const recovered = sharedTaskStore.failStaleTasks('Process terminated unexpectedly');
+        if (recovered > 0) {
+          logger.info(`[TaskTracking] Recovered ${recovered} stale working task(s) → failed`);
+        }
         logger.info('[TaskTracking] Shared task store initialized');
       } catch (err: unknown) {
         logger.warn(

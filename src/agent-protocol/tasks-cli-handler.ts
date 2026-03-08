@@ -87,9 +87,18 @@ function buildFilter(flags: Record<string, string | boolean>): ListTasksFilter {
   const filter: ListTasksFilter = {};
   if (typeof flags.state === 'string' && isValidTaskState(flags.state)) {
     filter.state = [flags.state as TaskState];
+  } else if (!flags.all) {
+    // Default: show only active tasks (not completed history)
+    filter.state = ['submitted', 'working', 'input_required', 'auth_required'];
   }
   if (typeof flags.agent === 'string') {
     filter.workflowId = flags.agent;
+  }
+  if (typeof flags.search === 'string') {
+    filter.search = flags.search;
+  }
+  if (typeof flags.instance === 'string') {
+    filter.claimedBy = flags.instance;
   }
   if (typeof flags.limit === 'string') {
     const n = parseInt(flags.limit, 10);
@@ -187,13 +196,24 @@ async function handleList(flags: Record<string, string | boolean>): Promise<void
     await withTaskStore(async store => {
       const { rows, total } = store.listTasksRaw(filter);
 
+      const activeOnly = !flags.all && !flags.state;
       if (output === 'json') {
-        console.log(JSON.stringify({ instance_id: instanceId, tasks: rows, total }, null, 2));
+        console.log(
+          JSON.stringify(
+            { instance_id: instanceId, active_only: activeOnly, tasks: rows, total },
+            null,
+            2
+          )
+        );
       } else if (output === 'markdown') {
-        console.log(`Instance: ${instanceId}\n`);
+        console.log(
+          `Instance: ${instanceId}${activeOnly ? ' (active tasks only, use --all for history)' : ''}\n`
+        );
         console.log(formatMarkdown(rows, total));
       } else {
-        console.log(`Instance: ${instanceId}\n`);
+        console.log(
+          `Instance: ${instanceId}${activeOnly ? ' (active tasks only, use --all for history)' : ''}\n`
+        );
         console.log(formatTable(rows, total));
       }
     });
@@ -387,6 +407,29 @@ async function handleShow(
 }
 
 // ---------------------------------------------------------------------------
+// Subcommand: purge
+// ---------------------------------------------------------------------------
+
+async function handlePurge(flags: Record<string, string | boolean>): Promise<void> {
+  const ageStr = typeof flags.age === 'string' ? flags.age : '7d';
+  const match = ageStr.match(/^(\d+)([hdm])$/);
+  if (!match) {
+    console.error('Invalid --age format. Use e.g. 24h, 7d, 30d');
+    process.exitCode = 1;
+    return;
+  }
+  const value = parseInt(match[1], 10);
+  const unit = match[2];
+  const ms =
+    unit === 'h' ? value * 3600_000 : unit === 'd' ? value * 86400_000 : value * 2592000_000;
+
+  await withTaskStore(async store => {
+    const deleted = store.purgeOldTasks(ms);
+    console.log(`Purged ${deleted} terminal task(s) older than ${ageStr}.`);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Help
 // ---------------------------------------------------------------------------
 
@@ -398,28 +441,33 @@ USAGE:
   visor tasks [command] [options]
 
 COMMANDS:
-  list                            List tasks (default)
+  list                            List active tasks (default)
   show <task-id>                  Show task details (supports prefix match)
   stats                           Queue summary statistics
   cancel <task-id>                Cancel a task
+  purge [--age 7d]                Delete old completed/failed tasks
   help                            Show this help
 
 OPTIONS:
-  --output <format>               Output format: table (default), json, markdown
+  --all                           Show all tasks including completed/failed history
   --state <state>                 Filter by state: submitted, working, completed, failed, canceled
+  --search <text>                 Search tasks by input text
+  --instance <id>                 Filter by visor instance ID
   --agent <workflow-id>           Filter by agent/workflow
   --limit <n>                     Number of tasks to show (default: 20)
+  --output <format>               Output format: table (default), json, markdown
   --watch                         Refresh every 2 seconds
 
 EXAMPLES:
-  visor tasks                     List all tasks
+  visor tasks                     List active tasks only
+  visor tasks --all               List all tasks including history
+  visor tasks --state failed      Show failed tasks
+  visor tasks --search "auth"     Search tasks by text
   visor tasks show abc123         Show full task details
-  visor tasks list --state working   Show only working tasks
-  visor tasks list --agent security-review   Show tasks for a specific agent
-  visor tasks list --output json  JSON output
   visor tasks list --watch        Live monitoring
   visor tasks stats               Show queue statistics
   visor tasks cancel abc123       Cancel a task
+  visor tasks purge --age 30d     Delete tasks older than 30 days
 `);
 }
 
@@ -449,6 +497,9 @@ export async function handleTasksCommand(argv: string[]): Promise<void> {
       break;
     case 'cancel':
       await handleCancel(positional, flags);
+      break;
+    case 'purge':
+      await handlePurge(flags);
       break;
     case 'help':
       printHelp();
