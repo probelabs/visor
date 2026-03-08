@@ -63,4 +63,50 @@ describe('markdownToSlack', () => {
     const out = markdownToSlack(input);
     expect(out).toBe('```\n# This is a comment\n```\n*Real Header*');
   });
+
+  it('preserves bold markdown inside code blocks', () => {
+    const input = '**bold outside**\n```\n**not bold inside**\n```\n**bold again**';
+    const out = markdownToSlack(input);
+    expect(out).toBe('*bold outside*\n```\n**not bold inside**\n```\n*bold again*');
+  });
+
+  it('preserves links inside code blocks', () => {
+    const input = [
+      '[real link](https://example.com)',
+      '```',
+      '[not a link](https://example.com/code)',
+      '```',
+      '[another link](https://example.com/2)',
+    ].join('\n');
+    const out = markdownToSlack(input);
+    expect(out).toBe(
+      [
+        '<https://example.com|real link>',
+        '```',
+        '[not a link](https://example.com/code)',
+        '```',
+        '<https://example.com/2|another link>',
+      ].join('\n')
+    );
+  });
+
+  it('handles references section with links and bullets', () => {
+    const input = [
+      'Here is the answer.',
+      '',
+      '## References',
+      '- [file.go:42-50](https://github.com/org/repo/blob/main/file.go#L42-L50) - JWT middleware',
+      '- [auth.go:10](https://github.com/org/repo/blob/main/auth.go#L10) - Auth handler',
+    ].join('\n');
+    const out = markdownToSlack(input);
+    expect(out).toBe(
+      [
+        'Here is the answer.',
+        '',
+        '*References*',
+        '• <https://github.com/org/repo/blob/main/file.go#L42-L50|file.go:42-50> - JWT middleware',
+        '• <https://github.com/org/repo/blob/main/auth.go#L10|auth.go:10> - Auth handler',
+      ].join('\n')
+    );
+  });
 });

@@ -206,4 +206,97 @@ describe('tasks CLI handler', () => {
       expect(() => store.updateTaskState(task.id, 'canceled')).toThrow();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Default active filter & search
+  // -------------------------------------------------------------------------
+
+  describe('buildFilter default behavior', () => {
+    it('should show only active tasks by default (no --all flag)', () => {
+      // Create tasks in various states
+      const t1 = store.createTask({
+        contextId: 'ctx-1',
+        requestMessage: makeMessage('active task'),
+      });
+      const t2 = store.createTask({
+        contextId: 'ctx-2',
+        requestMessage: makeMessage('completed task'),
+      });
+      store.createTask({ contextId: 'ctx-3', requestMessage: makeMessage('submitted task') });
+
+      store.updateTaskState(t1.id, 'working');
+      store.updateTaskState(t2.id, 'working');
+      store.updateTaskState(t2.id, 'completed');
+
+      // Active filter: submitted + working
+      const activeResult = store.listTasksRaw({
+        state: ['submitted', 'working', 'input_required', 'auth_required'],
+      });
+      expect(activeResult.total).toBe(2); // t1 (working) + t3 (submitted)
+
+      // All tasks
+      const allResult = store.listTasksRaw({});
+      expect(allResult.total).toBe(3);
+    });
+  });
+
+  describe('search filter in listTasksRaw', () => {
+    it('should filter tasks by search text', () => {
+      store.createTask({
+        contextId: 'ctx-1',
+        requestMessage: makeMessage('How does authentication work?'),
+      });
+      store.createTask({
+        contextId: 'ctx-2',
+        requestMessage: makeMessage('Deploy to production'),
+      });
+
+      const result = store.listTasksRaw({ search: 'authentication' });
+      expect(result.total).toBe(1);
+      expect(result.rows[0].request_message).toContain('authentication');
+    });
+
+    it('should return empty for no matches', () => {
+      store.createTask({
+        contextId: 'ctx-1',
+        requestMessage: makeMessage('Hello world'),
+      });
+
+      const result = store.listTasksRaw({ search: 'nonexistent' });
+      expect(result.total).toBe(0);
+    });
+  });
+
+  describe('instance filter in listTasksRaw', () => {
+    it('should filter by claimed_by (instance)', () => {
+      const t1 = store.createTask({ contextId: 'ctx-1', requestMessage: makeMessage('task 1') });
+      store.createTask({ contextId: 'ctx-2', requestMessage: makeMessage('task 2') });
+
+      store.claimNextSubmitted('instance-a');
+      store.claimNextSubmitted('instance-b');
+
+      const result = store.listTasksRaw({ claimedBy: 'instance-a' });
+      expect(result.total).toBe(1);
+      expect(result.rows[0].id).toBe(t1.id);
+    });
+  });
+
+  describe('purge', () => {
+    it('should delete old terminal tasks', () => {
+      const t1 = store.createTask({ contextId: 'ctx-1', requestMessage: makeMessage('old task') });
+      store.updateTaskState(t1.id, 'working');
+      store.updateTaskState(t1.id, 'completed');
+
+      const t2 = store.createTask({
+        contextId: 'ctx-2',
+        requestMessage: makeMessage('active task'),
+      });
+
+      // Purge with 0ms = delete all terminal
+      const count = store.purgeOldTasks(0);
+      expect(count).toBe(1);
+      expect(store.getTask(t1.id)).toBeNull();
+      expect(store.getTask(t2.id)).not.toBeNull();
+    });
+  });
 });

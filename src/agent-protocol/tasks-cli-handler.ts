@@ -8,6 +8,7 @@
  *   visor tasks cancel <task-id>           - Cancel a task
  *   visor tasks help                       - Show usage
  */
+import CliTable3 from 'cli-table3';
 import { configureLoggerFromCli } from '../logger';
 import { getInstanceId } from '../utils/instance-id';
 import { SqliteTaskStore, type ListTasksFilter, type TaskQueueRow } from './task-store';
@@ -87,9 +88,18 @@ function buildFilter(flags: Record<string, string | boolean>): ListTasksFilter {
   const filter: ListTasksFilter = {};
   if (typeof flags.state === 'string' && isValidTaskState(flags.state)) {
     filter.state = [flags.state as TaskState];
+  } else if (!flags.all) {
+    // Default: show only active tasks (not completed history)
+    filter.state = ['submitted', 'working', 'input_required', 'auth_required'];
   }
   if (typeof flags.agent === 'string') {
     filter.workflowId = flags.agent;
+  }
+  if (typeof flags.search === 'string') {
+    filter.search = flags.search;
+  }
+  if (typeof flags.instance === 'string') {
+    filter.claimedBy = flags.instance;
   }
   if (typeof flags.limit === 'string') {
     const n = parseInt(flags.limit, 10);
@@ -112,35 +122,64 @@ function formatMeta(meta: Record<string, unknown>): string {
   return parts.join(' ') || '-';
 }
 
+function stateColor(state: string): string {
+  switch (state) {
+    case 'working':
+      return '\x1b[33m' + state + '\x1b[0m'; // yellow
+    case 'completed':
+      return '\x1b[32m' + state + '\x1b[0m'; // green
+    case 'failed':
+      return '\x1b[31m' + state + '\x1b[0m'; // red
+    case 'canceled':
+    case 'rejected':
+      return '\x1b[90m' + state + '\x1b[0m'; // grey
+    case 'submitted':
+      return '\x1b[36m' + state + '\x1b[0m'; // cyan
+    case 'input_required':
+    case 'auth_required':
+      return '\x1b[35m' + state + '\x1b[0m'; // magenta
+    default:
+      return state;
+  }
+}
+
 function formatTable(rows: TaskQueueRow[], total: number): string {
   if (rows.length === 0) return 'No tasks found.';
 
-  const header = ['ID', 'Source', 'State', 'Workflow', 'Duration', 'Instance', 'Meta', 'Input'];
-  const data = rows.map(r => {
+  const table = new CliTable3({
+    head: ['ID', 'Source', 'State', 'Workflow', 'Duration', 'Instance', 'Meta', 'Input'],
+    style: {
+      head: ['cyan', 'bold'],
+      border: ['grey'],
+    },
+    wordWrap: false,
+  });
+
+  for (const r of rows) {
     const duration = isTerminalState(r.state as TaskState)
       ? formatDuration(r.created_at, r.updated_at)
       : formatDuration(r.claimed_at || r.created_at);
 
-    const instance = r.claimed_by || '-';
-    const workflow = r.workflow_id || '-';
-    const source = r.source || '-';
-    const meta = formatMeta(r.metadata);
     const input =
       r.request_message.length > 60
         ? r.request_message.slice(0, 57) + '...'
         : r.request_message || '-';
 
-    return [r.id.slice(0, 8), source, r.state, workflow, duration, instance, meta, input];
-  });
+    table.push([
+      r.id.slice(0, 8),
+      r.source || '-',
+      stateColor(r.state),
+      r.workflow_id || '-',
+      duration,
+      r.claimed_by || '-',
+      formatMeta(r.metadata),
+      input,
+    ]);
+  }
 
-  const widths = header.map((h, i) => Math.max(h.length, ...data.map(row => row[i].length)));
-
-  const sep = widths.map(w => '-'.repeat(w)).join('  ');
-  const fmt = (row: string[]) => row.map((cell, i) => cell.padEnd(widths[i])).join('  ');
-
-  const lines = [fmt(header), sep, ...data.map(fmt)];
-  if (total > rows.length) lines.push(`\n(${total} total, showing ${rows.length})`);
-  return lines.join('\n');
+  let output = table.toString();
+  if (total > rows.length) output += `\n(${total} total, showing ${rows.length})`;
+  return output;
 }
 
 function formatMarkdown(rows: TaskQueueRow[], total: number): string {
@@ -187,13 +226,24 @@ async function handleList(flags: Record<string, string | boolean>): Promise<void
     await withTaskStore(async store => {
       const { rows, total } = store.listTasksRaw(filter);
 
+      const activeOnly = !flags.all && !flags.state;
       if (output === 'json') {
-        console.log(JSON.stringify({ instance_id: instanceId, tasks: rows, total }, null, 2));
+        console.log(
+          JSON.stringify(
+            { instance_id: instanceId, active_only: activeOnly, tasks: rows, total },
+            null,
+            2
+          )
+        );
       } else if (output === 'markdown') {
-        console.log(`Instance: ${instanceId}\n`);
+        console.log(
+          `Instance: ${instanceId}${activeOnly ? ' (active tasks only, use --all for history)' : ''}\n`
+        );
         console.log(formatMarkdown(rows, total));
       } else {
-        console.log(`Instance: ${instanceId}\n`);
+        console.log(
+          `Instance: ${instanceId}${activeOnly ? ' (active tasks only, use --all for history)' : ''}\n`
+        );
         console.log(formatTable(rows, total));
       }
     });
@@ -275,27 +325,43 @@ async function handleStats(flags: Record<string, string | boolean>): Promise<voi
       return;
     }
 
-    console.log('Task State Summary');
-    console.log('------------------');
+    const stateTable = new CliTable3({
+      head: ['State', 'Count'],
+      style: { head: ['cyan', 'bold'], border: ['grey'] },
+    });
     for (const [state, count] of Object.entries(stateCounts)) {
-      if (count > 0) console.log(`  ${state.padEnd(18)} ${count}`);
+      if (count > 0) stateTable.push([stateColor(state), String(count)]);
     }
+    console.log('Task State Summary');
+    console.log(stateTable.toString());
 
     if (Object.keys(agentCounts).length > 0) {
-      console.log('\nActive Tasks by Agent');
-      console.log('---------------------');
+      const agentTable = new CliTable3({
+        head: ['Workflow', 'Active Tasks'],
+        style: { head: ['cyan', 'bold'], border: ['grey'] },
+      });
       for (const [agent, count] of Object.entries(agentCounts)) {
-        console.log(`  ${agent.padEnd(24)} ${count}`);
+        agentTable.push([agent, String(count)]);
       }
+      console.log('\nActive Tasks by Workflow');
+      console.log(agentTable.toString());
     }
 
-    console.log(`\nActive workers: ${workerSet.size}`);
+    console.log(`\nActive instances: ${workerSet.size}`);
   });
 }
 
 // ---------------------------------------------------------------------------
 // Subcommand: cancel
 // ---------------------------------------------------------------------------
+
+/**
+ * Find a task by full ID or prefix match.
+ */
+function findTaskByPrefix(store: SqliteTaskStore, prefix: string): TaskQueueRow | null {
+  const { rows } = store.listTasksRaw({ limit: 500 });
+  return rows.find(r => r.id === prefix || r.id.startsWith(prefix)) ?? null;
+}
 
 async function handleCancel(
   positional: string[],
@@ -309,21 +375,21 @@ async function handleCancel(
   }
 
   await withTaskStore(async store => {
-    const task = store.getTask(taskId);
-    if (!task) {
+    const match = findTaskByPrefix(store, taskId);
+    if (!match) {
       console.error(`Task not found: ${taskId}`);
       process.exitCode = 1;
       return;
     }
 
-    if (isTerminalState(task.status.state)) {
-      console.error(`Cannot cancel task in '${task.status.state}' state (already terminal)`);
+    if (isTerminalState(match.state as TaskState)) {
+      console.error(`Cannot cancel task in '${match.state}' state (already terminal)`);
       process.exitCode = 1;
       return;
     }
 
-    store.updateTaskState(taskId, 'canceled');
-    console.log(`Task ${taskId.slice(0, 8)} canceled (was: ${task.status.state})`);
+    store.updateTaskState(match.id, 'canceled');
+    console.log(`Task ${match.id.slice(0, 8)} canceled (was: ${match.state})`);
   });
 }
 
@@ -345,9 +411,7 @@ async function handleShow(
   const output = typeof flags.output === 'string' ? flags.output : 'table';
 
   await withTaskStore(async store => {
-    // Try to find by prefix match
-    const { rows } = store.listTasksRaw({ limit: 200 });
-    const match = rows.find(r => r.id.startsWith(taskId));
+    const match = findTaskByPrefix(store, taskId);
     if (!match) {
       console.error(`Task not found: ${taskId}`);
       process.exitCode = 1;
@@ -363,26 +427,55 @@ async function handleShow(
       ? formatDuration(match.created_at, match.updated_at)
       : formatDuration(match.claimed_at || match.created_at);
 
-    console.log(`Task: ${match.id}`);
-    console.log(`State:     ${match.state}`);
-    console.log(`Source:    ${match.source}`);
-    console.log(`Workflow:  ${match.workflow_id || '-'}`);
-    console.log(`Instance:  ${match.claimed_by || '-'}`);
-    console.log(`Duration:  ${duration}`);
-    console.log(`Created:   ${match.created_at}`);
-    console.log(`Updated:   ${match.updated_at}`);
-    if (match.run_id) console.log(`Run ID:    ${match.run_id}`);
-    console.log(`Input:     ${match.request_message}`);
+    const detailTable = new CliTable3({
+      style: { head: ['cyan', 'bold'], border: ['grey'] },
+      wordWrap: false,
+    });
+
+    detailTable.push(
+      { 'Task ID': match.id },
+      { State: stateColor(match.state) },
+      { Source: match.source },
+      { Workflow: match.workflow_id || '-' },
+      { Instance: match.claimed_by || '-' },
+      { Duration: duration },
+      { Created: match.created_at },
+      { Updated: match.updated_at }
+    );
+    if (match.run_id) detailTable.push({ 'Run ID': match.run_id });
+    detailTable.push({ Input: match.request_message });
 
     // Show metadata
     const meta = match.metadata;
     const metaKeys = Object.keys(meta).filter(k => k !== 'source');
-    if (metaKeys.length > 0) {
-      console.log(`\nMetadata:`);
-      for (const key of metaKeys) {
-        console.log(`  ${key}: ${JSON.stringify(meta[key])}`);
-      }
+    for (const key of metaKeys) {
+      detailTable.push({ [key]: String(meta[key]) });
     }
+
+    console.log(detailTable.toString());
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Subcommand: purge
+// ---------------------------------------------------------------------------
+
+async function handlePurge(flags: Record<string, string | boolean>): Promise<void> {
+  const ageStr = typeof flags.age === 'string' ? flags.age : '7d';
+  const match = ageStr.match(/^(\d+)([hdm])$/);
+  if (!match) {
+    console.error('Invalid --age format. Use e.g. 24h, 7d, 30d');
+    process.exitCode = 1;
+    return;
+  }
+  const value = parseInt(match[1], 10);
+  const unit = match[2];
+  const ms =
+    unit === 'h' ? value * 3600_000 : unit === 'd' ? value * 86400_000 : value * 2592000_000;
+
+  await withTaskStore(async store => {
+    const deleted = store.purgeOldTasks(ms);
+    console.log(`Purged ${deleted} terminal task(s) older than ${ageStr}.`);
   });
 }
 
@@ -398,28 +491,33 @@ USAGE:
   visor tasks [command] [options]
 
 COMMANDS:
-  list                            List tasks (default)
+  list                            List active tasks (default)
   show <task-id>                  Show task details (supports prefix match)
   stats                           Queue summary statistics
   cancel <task-id>                Cancel a task
+  purge [--age 7d]                Delete old completed/failed tasks
   help                            Show this help
 
 OPTIONS:
-  --output <format>               Output format: table (default), json, markdown
+  --all                           Show all tasks including completed/failed history
   --state <state>                 Filter by state: submitted, working, completed, failed, canceled
+  --search <text>                 Search tasks by input text
+  --instance <id>                 Filter by visor instance ID
   --agent <workflow-id>           Filter by agent/workflow
   --limit <n>                     Number of tasks to show (default: 20)
+  --output <format>               Output format: table (default), json, markdown
   --watch                         Refresh every 2 seconds
 
 EXAMPLES:
-  visor tasks                     List all tasks
+  visor tasks                     List active tasks only
+  visor tasks --all               List all tasks including history
+  visor tasks --state failed      Show failed tasks
+  visor tasks --search "auth"     Search tasks by text
   visor tasks show abc123         Show full task details
-  visor tasks list --state working   Show only working tasks
-  visor tasks list --agent security-review   Show tasks for a specific agent
-  visor tasks list --output json  JSON output
   visor tasks list --watch        Live monitoring
   visor tasks stats               Show queue statistics
   visor tasks cancel abc123       Cancel a task
+  visor tasks purge --age 30d     Delete tasks older than 30 days
 `);
 }
 
@@ -449,6 +547,9 @@ export async function handleTasksCommand(argv: string[]): Promise<void> {
       break;
     case 'cancel':
       await handleCancel(positional, flags);
+      break;
+    case 'purge':
+      await handlePurge(flags);
       break;
     case 'help':
       printHelp();

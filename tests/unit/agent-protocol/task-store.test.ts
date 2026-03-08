@@ -550,4 +550,154 @@ describe('SqliteTaskStore', () => {
       expect(store.getTask(task.id)).toBeNull();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Crash recovery & cleanup
+  // -------------------------------------------------------------------------
+
+  describe('failStaleTasks', () => {
+    it('should mark all working tasks as failed', () => {
+      const msg = makeMessage();
+      const t1 = store.createTask({ contextId: 'ctx1', requestMessage: msg });
+      const t2 = store.createTask({ contextId: 'ctx2', requestMessage: msg });
+      const t3 = store.createTask({ contextId: 'ctx3', requestMessage: msg });
+
+      // Move t1 and t2 to working, leave t3 as submitted
+      store.updateTaskState(t1.id, 'working');
+      store.updateTaskState(t2.id, 'working');
+
+      const count = store.failStaleTasks('crash recovery');
+      expect(count).toBe(2);
+
+      expect(store.getTask(t1.id)!.status.state).toBe('failed');
+      expect(store.getTask(t2.id)!.status.state).toBe('failed');
+      expect(store.getTask(t3.id)!.status.state).toBe('submitted');
+    });
+
+    it('should return 0 when no working tasks exist', () => {
+      const msg = makeMessage();
+      store.createTask({ contextId: 'ctx', requestMessage: msg });
+      expect(store.failStaleTasks()).toBe(0);
+    });
+
+    it('should set the failure reason in status message', () => {
+      const msg = makeMessage();
+      const task = store.createTask({ contextId: 'ctx', requestMessage: msg });
+      store.updateTaskState(task.id, 'working');
+
+      store.failStaleTasks('Process killed');
+      const updated = store.getTask(task.id)!;
+      expect(updated.status.state).toBe('failed');
+      expect(updated.status.message?.parts?.[0]).toHaveProperty('text', 'Process killed');
+    });
+  });
+
+  describe('purgeOldTasks', () => {
+    it('should delete terminal tasks older than threshold', () => {
+      const msg = makeMessage();
+      const t1 = store.createTask({ contextId: 'ctx1', requestMessage: msg });
+      const t2 = store.createTask({ contextId: 'ctx2', requestMessage: msg });
+
+      store.updateTaskState(t1.id, 'working');
+      store.updateTaskState(t1.id, 'completed');
+      store.updateTaskState(t2.id, 'working');
+      store.updateTaskState(t2.id, 'failed');
+
+      // Purge with 0ms threshold = delete everything terminal
+      const count = store.purgeOldTasks(0);
+      expect(count).toBe(2);
+      expect(store.getTask(t1.id)).toBeNull();
+      expect(store.getTask(t2.id)).toBeNull();
+    });
+
+    it('should not delete active tasks', () => {
+      const msg = makeMessage();
+      const t1 = store.createTask({ contextId: 'ctx1', requestMessage: msg });
+      const t2 = store.createTask({ contextId: 'ctx2', requestMessage: msg });
+
+      store.updateTaskState(t1.id, 'working');
+      // t1 is working, t2 is submitted — both active
+
+      const count = store.purgeOldTasks(0);
+      expect(count).toBe(0);
+      expect(store.getTask(t1.id)).not.toBeNull();
+      expect(store.getTask(t2.id)).not.toBeNull();
+    });
+
+    it('should respect age threshold', () => {
+      const msg = makeMessage();
+      const task = store.createTask({ contextId: 'ctx', requestMessage: msg });
+      store.updateTaskState(task.id, 'working');
+      store.updateTaskState(task.id, 'completed');
+
+      // Purge tasks older than 1 hour — task was just created, so nothing deleted
+      const count = store.purgeOldTasks(3600_000);
+      expect(count).toBe(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Search and filter extensions
+  // -------------------------------------------------------------------------
+
+  describe('search filter', () => {
+    it('should filter tasks by message text', () => {
+      store.createTask({
+        contextId: 'ctx1',
+        requestMessage: makeMessage({ parts: [{ text: 'How does auth work?' }] }),
+      });
+      store.createTask({
+        contextId: 'ctx2',
+        requestMessage: makeMessage({ parts: [{ text: 'Deploy to production' }] }),
+      });
+
+      const result = store.listTasks({ search: 'auth' });
+      expect(result.total).toBe(1);
+    });
+
+    it('should escape SQL wildcards in search', () => {
+      store.createTask({
+        contextId: 'ctx1',
+        requestMessage: makeMessage({ parts: [{ text: 'test 100% done' }] }),
+      });
+      store.createTask({
+        contextId: 'ctx2',
+        requestMessage: makeMessage({ parts: [{ text: 'test something' }] }),
+      });
+
+      // Search for literal "%" — should only match the first task
+      const result = store.listTasks({ search: '100%' });
+      expect(result.total).toBe(1);
+    });
+  });
+
+  describe('claimedBy filter', () => {
+    it('should filter tasks by claimed_by', () => {
+      const msg = makeMessage();
+      const t1 = store.createTask({ contextId: 'ctx1', requestMessage: msg });
+      store.createTask({ contextId: 'ctx2', requestMessage: msg });
+
+      store.claimNextSubmitted('worker-a');
+      store.claimNextSubmitted('worker-b');
+
+      const sqlStore = store as SqliteTaskStore;
+      const result = sqlStore.listTasksRaw({ claimedBy: 'worker-a' });
+      expect(result.total).toBe(1);
+      expect(result.rows[0].id).toBe(t1.id);
+    });
+  });
+
+  describe('claimTask', () => {
+    it('should set claimed_by and claimed_at', () => {
+      const msg = makeMessage();
+      const task = store.createTask({ contextId: 'ctx', requestMessage: msg });
+      store.updateTaskState(task.id, 'working');
+      store.claimTask(task.id, 'my-instance');
+
+      const sqlStore = store as SqliteTaskStore;
+      const { rows } = sqlStore.listTasksRaw({});
+      expect(rows[0].claimed_by).toBe('my-instance');
+      expect(rows[0].claimed_at).toBeTruthy();
+    });
+  });
 });

@@ -110,6 +110,8 @@ export interface ListTasksFilter {
   contextId?: string;
   state?: TaskState[];
   workflowId?: string;
+  search?: string; // text search in request_message
+  claimedBy?: string; // filter by instance/worker
   limit?: number; // default 50, max 200
   offset?: number;
 }
@@ -160,7 +162,11 @@ export interface TaskStore {
   // Queue monitoring (optional — only SqliteTaskStore implements this)
   listTasksRaw?(filter: ListTasksFilter): { rows: TaskQueueRow[]; total: number };
 
-  // Cleanup
+  // Cleanup & recovery
+  /** Mark all 'working' tasks as 'failed' (crash recovery on startup). */
+  failStaleTasks(reason?: string): number;
+  /** Delete completed/failed/canceled tasks older than the given age. */
+  purgeOldTasks(olderThanMs: number): number;
   deleteExpiredTasks(): string[];
   deleteTask(taskId: string): void;
 }
@@ -319,6 +325,16 @@ export class SqliteTaskStore implements TaskStore {
     if (filter.workflowId) {
       conditions.push('workflow_id = ?');
       params.push(filter.workflowId);
+    }
+    if (filter.search) {
+      // Escape SQL LIKE wildcards to prevent wildcard injection
+      const escaped = filter.search.replace(/[%_\\]/g, '\\$&');
+      conditions.push("request_message LIKE ? ESCAPE '\\'");
+      params.push(`%${escaped}%`);
+    }
+    if (filter.claimedBy) {
+      conditions.push('claimed_by = ?');
+      params.push(filter.claimedBy);
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -531,6 +547,38 @@ export class SqliteTaskStore implements TaskStore {
   // -------------------------------------------------------------------------
   // Cleanup
   // -------------------------------------------------------------------------
+
+  failStaleTasks(reason?: string): number {
+    const db = this.getDb();
+    const now = nowISO();
+    const msg = reason || 'Process terminated while task was running';
+    const statusMessage = JSON.stringify({
+      message_id: crypto.randomUUID(),
+      role: 'agent',
+      parts: [{ text: msg }],
+    });
+    const result = db
+      .prepare(
+        `UPDATE agent_tasks
+         SET state = 'failed', updated_at = ?, status_message = ?
+         WHERE state = 'working'`
+      )
+      .run(now, statusMessage);
+    return result.changes;
+  }
+
+  purgeOldTasks(olderThanMs: number): number {
+    const db = this.getDb();
+    const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+    const result = db
+      .prepare(
+        `DELETE FROM agent_tasks
+         WHERE state IN ('completed', 'failed', 'canceled', 'rejected')
+         AND updated_at <= ?`
+      )
+      .run(cutoff);
+    return result.changes;
+  }
 
   deleteExpiredTasks(): string[] {
     const db = this.getDb();
