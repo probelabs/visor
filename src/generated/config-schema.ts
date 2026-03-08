@@ -191,6 +191,11 @@ export const configSchema = {
           $ref: '#/definitions/AgentProtocolConfig',
           description: 'Agent protocol (A2A) server configuration',
         },
+        task_tracking: {
+          type: 'boolean',
+          description:
+            'Enable cross-frontend task tracking (default: false). When true, all workflow executions (CLI, Slack, TUI, Scheduler) are recorded in a shared SQLite TaskStore visible via `visor tasks`.',
+        },
       },
       required: ['version'],
       patternProperties: {
@@ -962,7 +967,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -979,7 +984,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1691,7 +1696,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1706,14 +1711,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681>>':
+    'Record<string,Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55681>': {
+    'Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916>': {
       type: 'object',
       additionalProperties: false,
     },
