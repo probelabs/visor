@@ -327,8 +327,10 @@ export class SqliteTaskStore implements TaskStore {
       params.push(filter.workflowId);
     }
     if (filter.search) {
-      conditions.push('request_message LIKE ?');
-      params.push(`%${filter.search}%`);
+      // Escape SQL LIKE wildcards to prevent wildcard injection
+      const escaped = filter.search.replace(/[%_\\]/g, '\\$&');
+      conditions.push("request_message LIKE ? ESCAPE '\\'");
+      params.push(`%${escaped}%`);
     }
     if (filter.claimedBy) {
       conditions.push('claimed_by = ?');
@@ -572,7 +574,7 @@ export class SqliteTaskStore implements TaskStore {
       .prepare(
         `DELETE FROM agent_tasks
          WHERE state IN ('completed', 'failed', 'canceled', 'rejected')
-         AND updated_at < ?`
+         AND updated_at <= ?`
       )
       .run(cutoff);
     return result.changes;
