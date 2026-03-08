@@ -130,4 +130,44 @@ describe('parseAIResponse RAW_OUTPUT extraction', () => {
     // The text should NOT contain the RAW_OUTPUT delimiters
     expect(result.output.text).not.toContain('<<<RAW_OUTPUT>>>');
   });
+
+  it('should discard echoed JSON schema from trailing content', () => {
+    // Simulates AI echoing the schema definition after its JSON response
+    const json = JSON.stringify({
+      text: 'This ensures the links resolve correctly to the specific API documentation pages.',
+    });
+    const echoedSchema = `\njson\n${JSON.stringify(
+      {
+        type: 'object',
+        properties: { text: { type: 'string', description: 'The response to the user' } },
+        required: ['text'],
+      },
+      null,
+      2
+    )}`;
+    // Concatenate so JSON.parse sees valid JSON followed by trailing schema
+    const response = json + echoedSchema;
+
+    const result = (service as any).parseAIResponse(response, undefined, 'custom');
+
+    // The text field should NOT contain the echoed schema
+    expect(result.output.text).toBe(
+      'This ensures the links resolve correctly to the specific API documentation pages.'
+    );
+    expect(result.output.text).not.toContain('"type": "object"');
+    expect(result.output.text).not.toContain('"properties"');
+  });
+
+  it('should discard all trailing content (not just schemas)', () => {
+    // Trailing content is always discarded — legitimate output goes through
+    // <<<RAW_OUTPUT>>> blocks instead
+    const json = JSON.stringify({ text: 'Main answer here.' });
+    const trailing = '\nSome trailing junk from the model.';
+    const response = json + trailing;
+
+    const result = (service as any).parseAIResponse(response, undefined, 'custom');
+
+    expect(result.output.text).toBe('Main answer here.');
+    expect(result.output.text).not.toContain('trailing junk');
+  });
 });

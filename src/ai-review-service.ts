@@ -2556,21 +2556,15 @@ ${'='.repeat(60)}
             const pos = parseInt(trailingMatch[1], 10);
             try {
               reviewData = JSON.parse(sanitizedResponse.substring(0, pos));
-              // Preserve trailing content (e.g., DSL output buffer from ProbeAgent)
-              // by appending it to the text field if present
+              // Discard trailing content — legitimate ProbeAgent output is
+              // already extracted via <<<RAW_OUTPUT>>> blocks above (line ~2489).
+              // Trailing content here is typically an AI echo of the schema
+              // definition, which should not be appended to the response text.
               const trailing = sanitizedResponse.substring(pos).trim();
-              if (
-                trailing &&
-                reviewData &&
-                typeof reviewData === 'object' &&
-                typeof (reviewData as any).text === 'string'
-              ) {
-                (reviewData as any).text = (reviewData as any).text + '\n\n' + trailing;
+              if (trailing) {
                 log(
-                  `✅ Recovered JSON and appended ${trailing.length} chars of trailing content to text field`
+                  `✅ Recovered JSON by trimming ${trailing.length} chars of trailing content at position ${pos}`
                 );
-              } else {
-                log(`✅ Recovered JSON by trimming trailing content at position ${pos}`);
               }
               if (debugInfo) debugInfo.jsonParseSuccess = true;
               recovered = true;
