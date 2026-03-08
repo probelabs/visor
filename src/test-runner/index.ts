@@ -632,7 +632,8 @@ export class VisorTestRunner {
           const sandbox = createSecureSandbox();
           const scope = { steps, outputs, results };
           computed[outputDef.name] = compileAndRun(sandbox, outputDef.value_js, scope, {
-            injectLog: false,
+            injectLog: true,
+            logPrefix: `workflow.output.${outputDef.name}`,
             wrapFunction: true,
           });
         } else if (outputDef.value) {

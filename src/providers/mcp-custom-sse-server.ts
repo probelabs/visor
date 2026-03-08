@@ -6,9 +6,13 @@ import { EventEmitter } from 'events';
 import {
   isWorkflowTool,
   executeWorkflowAsTool,
+  createWorkflowToolDefinition,
   WorkflowToolDefinition,
   WorkflowToolContext,
+  workflowInputsToJsonSchema,
 } from './workflow-tool-executor';
+import { isInlineWorkflowTool } from './custom-tool-executor';
+import { WorkflowRegistry } from '../workflow-registry';
 import {
   isScheduleTool,
   handleScheduleAction,
@@ -145,7 +149,20 @@ export class CustomToolsSSEServer implements CustomMCPServer {
     // Convert Map to Record for CustomToolExecutor (only for non-workflow tools)
     const toolsRecord: Record<string, CustomToolDefinition> = {};
     const workflowToolNames: string[] = [];
+
+    // First pass: convert type: 'workflow' tools into WorkflowToolDefinition markers
     for (const [name, tool] of tools.entries()) {
+      if (isInlineWorkflowTool(tool) && !isWorkflowTool(tool)) {
+        // This is a type: 'workflow' tool from YAML config -- convert it
+        const workflowToolDef = this.convertInlineWorkflowTool(name, tool);
+        if (workflowToolDef) {
+          this.tools.set(name, workflowToolDef);
+        }
+      }
+    }
+
+    // Second pass: separate workflow tools from regular tools
+    for (const [name, tool] of this.tools.entries()) {
       // Skip workflow tools - they're handled separately
       if (!isWorkflowTool(tool)) {
         toolsRecord[name] = tool;
@@ -973,6 +990,103 @@ export class CustomToolsSSEServer implements CustomMCPServer {
         workspace.release();
       }
     }
+  }
+
+  /**
+   * Convert a type: 'workflow' tool definition into a WorkflowToolDefinition marker.
+   *
+   * For inline workflow tools (with `steps`), registers a synthetic workflow in
+   * WorkflowRegistry so it can be executed via WorkflowCheckProvider.
+   *
+   * For file-referenced workflow tools (with `workflow` field), resolves from
+   * WorkflowRegistry by ID.
+   */
+  private convertInlineWorkflowTool(
+    name: string,
+    tool: CustomToolDefinition
+  ): WorkflowToolDefinition | null {
+    const registry = WorkflowRegistry.getInstance();
+
+    if (tool.steps) {
+      // Inline workflow: register a synthetic workflow in the registry
+      const workflowId = tool.workflow || `inline-tool-${name}`;
+      const syntheticWorkflow = {
+        id: workflowId,
+        name: tool.name || name,
+        description: tool.description,
+        inputs: tool.inputs?.map(inp => ({
+          name: inp.name,
+          schema: {
+            type: 'string' as const,
+            ...inp.schema,
+          } as import('../types/workflow').JsonSchema,
+          required: inp.required,
+          default: inp.default,
+          description: inp.description,
+        })),
+        outputs: tool.outputs?.map(out => ({
+          name: out.name,
+          description: out.description,
+          value: out.value,
+          value_js: out.value_js,
+        })),
+        steps: tool.steps,
+        checks: tool.steps,
+      };
+
+      if (!registry.has(workflowId)) {
+        registry.register(syntheticWorkflow as any);
+        if (this.debug) {
+          logger.debug(
+            `[CustomToolsSSEServer:${this.sessionId}] Registered inline workflow '${workflowId}' from tool '${name}'`
+          );
+        }
+      }
+
+      const inputSchema = workflowInputsToJsonSchema(tool.inputs as any);
+      return {
+        name: tool.name || name,
+        description: tool.description || `Execute ${name} workflow`,
+        inputSchema,
+        exec: '',
+        __isWorkflowTool: true,
+        __workflowId: workflowId,
+      };
+    } else if (tool.workflow) {
+      // File-referenced or registry-referenced workflow
+      const workflowId = tool.workflow;
+      const workflow = registry.get(workflowId);
+
+      if (workflow) {
+        // Build inputSchema from the registered workflow's inputs
+        return createWorkflowToolDefinition(workflow, undefined, tool.name || name);
+      }
+
+      // Workflow not yet in registry -- create a placeholder that will resolve at call time
+      const inputSchema = tool.inputs
+        ? workflowInputsToJsonSchema(tool.inputs as any)
+        : { type: 'object' as const, properties: {}, required: [] as string[] };
+
+      if (this.debug) {
+        logger.debug(
+          `[CustomToolsSSEServer:${this.sessionId}] Workflow '${workflowId}' not in registry yet; creating deferred tool '${name}'`
+        );
+      }
+
+      return {
+        name: tool.name || name,
+        description: tool.description || `Execute ${workflowId} workflow`,
+        inputSchema,
+        exec: '',
+        __isWorkflowTool: true,
+        __workflowId: workflowId,
+      };
+    }
+
+    logger.warn(
+      `[CustomToolsSSEServer:${this.sessionId}] Workflow tool '${name}' has neither 'steps' nor 'workflow' field`
+    );
+    return null;
   }
 
   private getEnvNumber(name: string, fallback: number): number {

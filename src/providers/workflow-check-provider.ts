@@ -10,6 +10,7 @@ import { WorkflowExecutor } from '../workflow-executor';
 import { logger } from '../logger';
 import { WorkflowDefinition, WorkflowExecutionContext } from '../types/workflow';
 import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
+import { expandToolkit } from '../utils/toolkit-expander';
 import { generateHumanId } from '../utils/human-id';
 // eslint-disable-next-line no-restricted-imports -- needed for Liquid type
 import { Liquid } from 'liquidjs';
@@ -429,10 +430,38 @@ export class WorkflowCheckProvider extends CheckProvider {
           const baseConfig = loadConfig(extendsPath);
           return deepMerge(baseConfig, resolvedOverride);
         }
+        // Handle toolkit: load file and expand its tools section
+        if ('toolkit' in obj && typeof obj.toolkit === 'string') {
+          const toolkitPath = obj.toolkit;
+          const toolkitConfig = loadConfig(toolkitPath) as Record<string, unknown>;
+          const overrides = Object.fromEntries(
+            Object.entries(obj).filter(([k]) => k !== 'toolkit')
+          );
+          const expanded = expandToolkit(
+            toolkitConfig,
+            Object.keys(overrides).length > 0 ? overrides : undefined
+          );
+          // Mark for parent-level spreading
+          (expanded as any).__toolkitExpanded = true;
+          return expanded;
+        }
         // Recursively walk all values
         const result: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(obj)) {
-          result[k] = resolveExpressions(v, depth + 1);
+          const resolved = resolveExpressions(v, depth + 1);
+          // If toolkit expansion returned a tools map, spread into parent
+          if (
+            resolved &&
+            typeof resolved === 'object' &&
+            !Array.isArray(resolved) &&
+            (resolved as any).__toolkitExpanded
+          ) {
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const { __toolkitExpanded, ...tools } = resolved as Record<string, unknown>;
+            Object.assign(result, tools);
+          } else {
+            result[k] = resolved;
+          }
         }
         return result;
       }

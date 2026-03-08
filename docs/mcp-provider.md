@@ -4,6 +4,8 @@ The MCP (Model Context Protocol) provider allows you to call MCP tools directly 
 
 ## Overview
 
+> **See also:** [Tools & Toolkits Guide](tools-and-toolkits.md) for the complete guide on defining, organizing, and exposing tools — including `type: api` bundles, `type: workflow` tools, shared tools via `extends`, and toolkit references.
+
 Unlike the AI provider's MCP support (which enhances AI models with additional tools), the standalone MCP provider directly invokes MCP tools and returns their results. This enables you to:
 
 - Call external APIs and services via MCP tools

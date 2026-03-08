@@ -9,6 +9,13 @@ import Ajv from 'ajv';
 import { ApiToolRegistry, executeMappedApiTool, isApiToolDefinition } from './api-tool-executor';
 
 /**
+ * Check if a tool definition is an inline workflow tool (type: 'workflow')
+ */
+export function isInlineWorkflowTool(tool: CustomToolDefinition | undefined): boolean {
+  return Boolean(tool && tool.type === 'workflow');
+}
+
+/**
  * Executes custom tools defined in YAML configuration
  * These tools can be used in MCP blocks as if they were native MCP tools
  */
@@ -41,8 +48,17 @@ export class CustomToolExecutor {
       if (!tool.spec) {
         throw new Error(`API tool '${tool.name}' must define 'spec'`);
       }
+    } else if (isInlineWorkflowTool(tool)) {
+      // Workflow tools don't need exec - they're executed via WorkflowCheckProvider
+      if (!tool.workflow && !tool.steps) {
+        throw new Error(
+          `Workflow tool '${tool.name}' must define 'workflow' (reference) or 'steps' (inline)`
+        );
+      }
     } else if (!tool.exec) {
-      throw new Error(`Tool '${tool.name}' must define 'exec' (or set type: 'api')`);
+      throw new Error(
+        `Tool '${tool.name}' must define 'exec' (or set type: 'api' / type: 'workflow')`
+      );
     }
     this.tools.set(tool.name, tool);
   }
@@ -155,6 +171,11 @@ export class CustomToolExecutor {
         `Tool '${toolName}' is an API bundle. Call one of its generated operations instead.`
       );
     }
+    if (tool && isInlineWorkflowTool(tool)) {
+      throw new Error(
+        `Tool '${toolName}' is a workflow tool. It must be executed via WorkflowCheckProvider, not CustomToolExecutor.`
+      );
+    }
 
     if (!tool) {
       const apiMappedTool = await this.apiToolRegistry.getMappedTool(toolName, this.tools);
@@ -265,7 +286,7 @@ export class CustomToolExecutor {
   async hasTool(toolName: string): Promise<boolean> {
     if (this.tools.has(toolName)) {
       const tool = this.tools.get(toolName);
-      return !isApiToolDefinition(tool);
+      return !isApiToolDefinition(tool) && !isInlineWorkflowTool(tool);
     }
     const apiMappedTool = await this.apiToolRegistry.getMappedTool(toolName, this.tools);
     return Boolean(apiMappedTool);
@@ -277,7 +298,7 @@ export class CustomToolExecutor {
   async getToolNames(): Promise<string[]> {
     const names: string[] = [];
     for (const tool of this.tools.values()) {
-      if (!isApiToolDefinition(tool)) {
+      if (!isApiToolDefinition(tool) && !isInlineWorkflowTool(tool)) {
         names.push(tool.name);
       }
     }
@@ -299,7 +320,7 @@ export class CustomToolExecutor {
     }>
   > {
     const directTools = this.getTools()
-      .filter(tool => !isApiToolDefinition(tool))
+      .filter(tool => !isApiToolDefinition(tool) && !isInlineWorkflowTool(tool))
       .map(tool => ({
         name: tool.name,
         description: tool.description,
@@ -356,7 +377,7 @@ export class CustomToolExecutor {
     handler: (args: Record<string, unknown>) => Promise<unknown>;
   }> {
     return Array.from(this.tools.values())
-      .filter(tool => !isApiToolDefinition(tool))
+      .filter(tool => !isApiToolDefinition(tool) && !isInlineWorkflowTool(tool))
       .map(tool => ({
         name: tool.name,
         description: tool.description,

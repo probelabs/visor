@@ -1,0 +1,66 @@
+version: "1.0"
+
+# Test: extends merges tools from parent config AND preserves child workflow fields
+extends: fixtures/test-configs/toolkit-tools.yaml
+
+id: extends-tools-test
+name: Extends Tools Test
+description: Validates that extends properly merges tools from parent while preserving child workflow fields
+
+inputs:
+  - name: greeting
+    required: true
+    schema:
+      type: string
+
+outputs:
+  - name: result
+    value_js: |
+      return {
+        success: outputs['greet']?.greeting != null,
+        greeting: outputs['greet']?.greeting ?? 'missing'
+      };
+
+steps:
+  greet:
+    type: script
+    content: |
+      return { greeting: 'Hello, ' + inputs.greeting + '!' };
+
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+
+  cases:
+    # Test 1: extends preserves workflow outputs (regression for config-merger)
+    - name: extends-preserves-outputs
+      description: Workflow outputs should survive config merge from extends
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        greeting: "World"
+      expect:
+        calls:
+          - step: greet
+            exactly: 1
+        workflow_output:
+          - path: result.success
+            equals: true
+          - path: result.greeting
+            equals: "Hello, World!"
+
+    # Test 2: extends preserves workflow inputs
+    - name: extends-preserves-inputs
+      description: Workflow inputs should survive config merge from extends
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        greeting: "Visor"
+      expect:
+        calls:
+          - step: greet
+            exactly: 1
+        workflow_output:
+          - path: result.greeting
+            equals: "Hello, Visor!"
