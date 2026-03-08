@@ -206,42 +206,39 @@ export function replaceMermaidBlocks(
 export function markdownToSlack(text: string): string {
   if (!text || typeof text !== 'string') return '';
 
-  let out = text;
-
-  // Images: ![alt](url) → <url|alt>
-  // We intentionally keep only the URL + alt text; Slack will usually unfurl.
-  out = out.replace(
-    /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
-    (_m, alt: string, url: string) => `<${url}|${alt || 'image'}>`
-  );
-
-  // Links: [label](url) → <url|label>
-  out = out.replace(
-    /\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
-    (_m, label: string, url: string) => `<${url}|${label}>`
-  );
-
-  // Bold: **text** or __text__ → *text*
-  out = out.replace(/\*\*([^*]+)\*\*/g, (_m, inner: string) => `*${inner}*`);
-  out = out.replace(/__([^_]+)__/g, (_m, inner: string) => `*${inner}*`);
-
-  // Process lines for headers and bullet lists.
-  // Slack's mrkdwn handles "•" bullets more naturally than raw "-" Markdown.
-  const lines = out.split(/\r?\n/);
+  // Process line-by-line so ALL transformations respect code blocks.
+  const lines = text.split(/\r?\n/);
   let inCodeBlock = false;
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trimStart();
-    // Track fenced code blocks and avoid rewriting inside them
+    const trimmed = lines[i].trimStart();
+
+    // Track fenced code blocks — skip all transformations inside them
     if (/^```/.test(trimmed)) {
       inCodeBlock = !inCodeBlock;
       continue;
     }
     if (inCodeBlock) continue;
 
+    let line = lines[i];
+
+    // Images: ![alt](url) → <url|alt>
+    line = line.replace(
+      /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
+      (_m, alt: string, url: string) => `<${url}|${alt || 'image'}>`
+    );
+
+    // Links: [label](url) → <url|label>
+    line = line.replace(
+      /\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g,
+      (_m, label: string, url: string) => `<${url}|${label}>`
+    );
+
+    // Bold: **text** or __text__ → *text*
+    line = line.replace(/\*\*([^*]+)\*\*/g, (_m, inner: string) => `*${inner}*`);
+    line = line.replace(/__([^_]+)__/g, (_m, inner: string) => `*${inner}*`);
+
     // Headers: # Header → *Header* (Slack doesn't have native headers)
-    // Match 1-6 # at start of line, followed by space and text
-    const headerMatch = /^(#{1,6})\s+(.+)$/.exec(trimmed);
+    const headerMatch = /^(#{1,6})\s+(.+)$/.exec(line.trimStart());
     if (headerMatch) {
       const [, hashes, headerText] = headerMatch;
       // For h1/h2, add extra emphasis with newline before (if not first line
@@ -262,11 +259,13 @@ export function markdownToSlack(text: string): string {
     if (bulletMatch) {
       const [, indent, , rest] = bulletMatch;
       lines[i] = `${indent}• ${rest}`;
+      continue;
     }
-  }
-  out = lines.join('\n');
 
-  return out;
+    lines[i] = line;
+  }
+
+  return lines.join('\n');
 }
 
 /**
