@@ -26,7 +26,7 @@ function makeCtx(
     messageId?: number;
     checks?: Record<string, any>;
     messageThreadId?: number;
-  } = {},
+  } = {}
 ) {
   const chatId = opts.chatId ?? 12345;
   const messageId = opts.messageId ?? 42;

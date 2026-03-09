@@ -19,7 +19,9 @@ jest.mock('imapflow', () => ({
   ImapFlow: class {
     async connect() {}
     async logout() {}
-    async getMailboxLock() { return { release: jest.fn() }; }
+    async getMailboxLock() {
+      return { release: jest.fn() };
+    }
     async *fetch() {}
   },
 }));
@@ -61,14 +63,23 @@ describe('EmailPollingRunner message gating', () => {
     const engine = new StateMachineExecutionEngine();
     const runner = new EmailPollingRunner(engine, baseCfg, {
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     const spy = jest
       .spyOn(StateMachineExecutionEngine.prototype, 'executeChecks')
       .mockResolvedValue({
         results: { default: [] },
-        statistics: { totalChecks: 1, checksByGroup: {}, issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 } },
+        statistics: {
+          totalChecks: 1,
+          checksByGroup: {},
+          issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
+        },
       } as any);
 
     await (runner as any).handleMessage(mkMsg());
@@ -80,7 +91,12 @@ describe('EmailPollingRunner message gating', () => {
     const engine = new StateMachineExecutionEngine();
     const runner = new EmailPollingRunner(engine, baseCfg, {
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     const spy = jest
@@ -96,7 +112,12 @@ describe('EmailPollingRunner message gating', () => {
     const engine = new StateMachineExecutionEngine();
     const runner = new EmailPollingRunner(engine, baseCfg, {
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     const spy = jest
@@ -112,14 +133,23 @@ describe('EmailPollingRunner message gating', () => {
     const engine = new StateMachineExecutionEngine();
     const runner = new EmailPollingRunner(engine, baseCfg, {
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     const spy = jest
       .spyOn(StateMachineExecutionEngine.prototype, 'executeChecks')
       .mockResolvedValue({
         results: { default: [] },
-        statistics: { totalChecks: 1, checksByGroup: {}, issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 } },
+        statistics: {
+          totalChecks: 1,
+          checksByGroup: {},
+          issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
+        },
       } as any);
 
     const msg = mkMsg();
@@ -133,7 +163,12 @@ describe('EmailPollingRunner message gating', () => {
     const engine = new StateMachineExecutionEngine();
     const runner = new EmailPollingRunner(engine, baseCfg, {
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
       allowlist: ['allowed@test.com'],
     });
 
@@ -141,15 +176,23 @@ describe('EmailPollingRunner message gating', () => {
       .spyOn(StateMachineExecutionEngine.prototype, 'executeChecks')
       .mockResolvedValue({
         results: { default: [] },
-        statistics: { totalChecks: 1, checksByGroup: {}, issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 } },
+        statistics: {
+          totalChecks: 1,
+          checksByGroup: {},
+          issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
+        },
       } as any);
 
     // Allowed sender
-    await (runner as any).handleMessage(mkMsg({ messageId: '<a1@test>', from: 'allowed@test.com' }));
+    await (runner as any).handleMessage(
+      mkMsg({ messageId: '<a1@test>', from: 'allowed@test.com' })
+    );
     expect(spy).toHaveBeenCalledTimes(1);
 
     // Not allowed
-    await (runner as any).handleMessage(mkMsg({ messageId: '<a2@test>', from: 'blocked@test.com' }));
+    await (runner as any).handleMessage(
+      mkMsg({ messageId: '<a2@test>', from: 'blocked@test.com' })
+    );
     expect(spy).toHaveBeenCalledTimes(1); // Still 1
 
     spy.mockRestore();
@@ -160,7 +203,12 @@ describe('EmailPollingRunner message gating', () => {
     const engine = new StateMachineExecutionEngine();
     const runner = new EmailPollingRunner(engine, emptyCfg, {
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     const spy = jest
@@ -176,14 +224,23 @@ describe('EmailPollingRunner message gating', () => {
     const engine = new StateMachineExecutionEngine();
     const runner = new EmailPollingRunner(engine, baseCfg, {
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     const spy = jest
       .spyOn(StateMachineExecutionEngine.prototype, 'executeChecks')
       .mockResolvedValue({
         results: { default: [] },
-        statistics: { totalChecks: 1, checksByGroup: {}, issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 } },
+        statistics: {
+          totalChecks: 1,
+          checksByGroup: {},
+          issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
+        },
       } as any);
 
     await (runner as any).handleMessage(mkMsg());
@@ -213,7 +270,14 @@ describe('EmailPollingRunner Resend polling mode', () => {
       ok: true,
       json: async () => ({
         data: [
-          { id: 'e1', from: 'alice@test.com', to: ['bot@test.com'], subject: 'Hello', created_at: '2024-01-01T00:00:00Z', message_id: '<e1@test>' },
+          {
+            id: 'e1',
+            from: 'alice@test.com',
+            to: ['bot@test.com'],
+            subject: 'Hello',
+            created_at: '2024-01-01T00:00:00Z',
+            message_id: '<e1@test>',
+          },
         ],
         has_more: false,
       }),
@@ -241,7 +305,11 @@ describe('EmailPollingRunner Resend polling mode', () => {
       .spyOn(StateMachineExecutionEngine.prototype, 'executeChecks')
       .mockResolvedValue({
         results: { default: [] },
-        statistics: { totalChecks: 1, checksByGroup: {}, issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 } },
+        statistics: {
+          totalChecks: 1,
+          checksByGroup: {},
+          issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
+        },
       } as any);
 
     // Directly call the polling method
@@ -259,7 +327,14 @@ describe('EmailPollingRunner Resend polling mode', () => {
       ok: true,
       json: async () => ({
         data: [
-          { id: 'e5', from: 'alice@test.com', to: ['bot@test.com'], subject: 'Test', created_at: '2024-01-01T00:00:00Z', message_id: '<e5@test>' },
+          {
+            id: 'e5',
+            from: 'alice@test.com',
+            to: ['bot@test.com'],
+            subject: 'Test',
+            created_at: '2024-01-01T00:00:00Z',
+            message_id: '<e5@test>',
+          },
         ],
         has_more: false,
       }),
@@ -282,8 +357,14 @@ describe('EmailPollingRunner Resend polling mode', () => {
       send: { type: 'resend', api_key: 'rk_test', from: 'bot@resend.dev' },
     });
 
-    jest.spyOn(StateMachineExecutionEngine.prototype, 'executeChecks')
-      .mockResolvedValue({ results: { default: [] }, statistics: { totalChecks: 1, checksByGroup: {}, issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 } } } as any);
+    jest.spyOn(StateMachineExecutionEngine.prototype, 'executeChecks').mockResolvedValue({
+      results: { default: [] },
+      statistics: {
+        totalChecks: 1,
+        checksByGroup: {},
+        issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
+      },
+    } as any);
 
     await (runner as any).pollResendOnce();
 
@@ -309,7 +390,14 @@ describe('EmailPollingRunner Resend polling mode', () => {
       ok: true,
       json: async () => ({
         data: [
-          { id: 'e1', from: 'alice@test.com', to: ['bot@test.com'], subject: 'Hello', created_at: '2024-01-01T00:00:00Z', message_id: '<dup@test>' },
+          {
+            id: 'e1',
+            from: 'alice@test.com',
+            to: ['bot@test.com'],
+            subject: 'Hello',
+            created_at: '2024-01-01T00:00:00Z',
+            message_id: '<dup@test>',
+          },
         ],
         has_more: false,
       }),
@@ -334,7 +422,14 @@ describe('EmailPollingRunner Resend polling mode', () => {
 
     const spy = jest
       .spyOn(StateMachineExecutionEngine.prototype, 'executeChecks')
-      .mockResolvedValue({ results: { default: [] }, statistics: { totalChecks: 1, checksByGroup: {}, issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 } } } as any);
+      .mockResolvedValue({
+        results: { default: [] },
+        statistics: {
+          totalChecks: 1,
+          checksByGroup: {},
+          issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
+        },
+      } as any);
 
     await (runner as any).pollResendOnce();
     await (runner as any).pollResendOnce(); // Same email again
@@ -408,7 +503,14 @@ describe('EmailPollingRunner Resend polling mode', () => {
       ok: true,
       json: async () => ({
         data: [
-          { id: 'e_bad', from: 'alice@test.com', to: ['bot@test.com'], subject: 'Test', created_at: '2024-01-01T00:00:00Z', message_id: '<ebad@test>' },
+          {
+            id: 'e_bad',
+            from: 'alice@test.com',
+            to: ['bot@test.com'],
+            subject: 'Test',
+            created_at: '2024-01-01T00:00:00Z',
+            message_id: '<ebad@test>',
+          },
         ],
         has_more: false,
       }),
@@ -439,18 +541,29 @@ describe('EmailPollingRunner HTML-only messages', () => {
     const engine = new StateMachineExecutionEngine();
     const runner = new EmailPollingRunner(engine, baseCfg, {
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     const spy = jest
       .spyOn(StateMachineExecutionEngine.prototype, 'executeChecks')
       .mockResolvedValue({
         results: { default: [] },
-        statistics: { totalChecks: 1, checksByGroup: {}, issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 } },
+        statistics: {
+          totalChecks: 1,
+          checksByGroup: {},
+          issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
+        },
       } as any);
 
     // Message with HTML only (text is empty string)
-    await (runner as any).handleMessage(mkMsg({ messageId: '<html-only@test>', text: '', html: '<p>HTML only email</p>' }));
+    await (runner as any).handleMessage(
+      mkMsg({ messageId: '<html-only@test>', text: '', html: '<p>HTML only email</p>' })
+    );
     expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
   });
@@ -459,7 +572,12 @@ describe('EmailPollingRunner HTML-only messages', () => {
     const engine = new StateMachineExecutionEngine();
     const runner = new EmailPollingRunner(engine, baseCfg, {
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     const spy = jest
@@ -477,7 +595,12 @@ describe('EmailPollingRunner error handling', () => {
     const engine = new StateMachineExecutionEngine();
     const runner = new EmailPollingRunner(engine, baseCfg, {
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     const spy = jest
@@ -494,7 +617,12 @@ describe('EmailPollingRunner error handling', () => {
     const engine = new StateMachineExecutionEngine();
     const runner = new EmailPollingRunner(engine, baseCfg, {
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     const newCfg = { ...baseCfg, checks: { newCheck: { type: 'ai' as any } } } as any;
@@ -506,7 +634,12 @@ describe('EmailPollingRunner error handling', () => {
     const engine = new StateMachineExecutionEngine();
     const runner = new EmailPollingRunner(engine, baseCfg, {
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     await runner.stop();
@@ -517,7 +650,12 @@ describe('EmailPollingRunner error handling', () => {
     const engine = new StateMachineExecutionEngine();
     const runner = new EmailPollingRunner(engine, baseCfg, {
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     const client = runner.getClient();
@@ -529,7 +667,12 @@ describe('EmailPollingRunner error handling', () => {
     const engine = new StateMachineExecutionEngine();
     const runner = new EmailPollingRunner(engine, baseCfg, {
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     const fakeStore = { createTask: jest.fn() } as any;
@@ -544,7 +687,12 @@ describe('EmailPollingRunner allowlist edge cases', () => {
     const engine = new StateMachineExecutionEngine();
     const runner = new EmailPollingRunner(engine, baseCfg, {
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
       allowlist: ['User@Test.COM'],
     });
 
@@ -552,7 +700,11 @@ describe('EmailPollingRunner allowlist edge cases', () => {
       .spyOn(StateMachineExecutionEngine.prototype, 'executeChecks')
       .mockResolvedValue({
         results: { default: [] },
-        statistics: { totalChecks: 1, checksByGroup: {}, issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 } },
+        statistics: {
+          totalChecks: 1,
+          checksByGroup: {},
+          issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
+        },
       } as any);
 
     // From is lowercase but allowlist has mixed case — should match due to normalization
@@ -565,7 +717,12 @@ describe('EmailPollingRunner allowlist edge cases', () => {
     const engine = new StateMachineExecutionEngine();
     const runner = new EmailPollingRunner(engine, baseCfg, {
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
       allowlist: ['alice@test.com'],
     });
 
@@ -573,11 +730,17 @@ describe('EmailPollingRunner allowlist edge cases', () => {
       .spyOn(StateMachineExecutionEngine.prototype, 'executeChecks')
       .mockResolvedValue({
         results: { default: [] },
-        statistics: { totalChecks: 1, checksByGroup: {}, issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 } },
+        statistics: {
+          totalChecks: 1,
+          checksByGroup: {},
+          issuesBySeverity: { critical: 0, error: 0, warning: 0, info: 0 },
+        },
       } as any);
 
     // From includes display name
-    await (runner as any).handleMessage(mkMsg({ messageId: '<display@test>', from: 'Alice Smith <alice@test.com>' }));
+    await (runner as any).handleMessage(
+      mkMsg({ messageId: '<display@test>', from: 'Alice Smith <alice@test.com>' })
+    );
     expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
   });

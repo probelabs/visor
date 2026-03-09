@@ -65,6 +65,10 @@ export interface CliOptions {
   telegram?: boolean;
   /** Enable Email polling runner (IMAP/Resend) */
   email?: boolean;
+  /** Enable WhatsApp webhook runner */
+  whatsapp?: boolean;
+  /** Enable Microsoft Teams webhook runner */
+  teams?: boolean;
   /** Enable A2A Agent Protocol server mode */
   a2a?: boolean;
   /** Enable interactive TUI (chat + logs tabs) */

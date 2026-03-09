@@ -22,7 +22,9 @@ jest.mock('resend', () => ({
 jest.mock('imapflow', () => ({
   ImapFlow: class {
     connectCalled = false;
-    async connect() { this.connectCalled = true; }
+    async connect() {
+      this.connectCalled = true;
+    }
     async logout() {}
     async getMailboxLock() {
       return { release: jest.fn() };
@@ -50,7 +52,12 @@ describe('EmailClient constructor', () => {
   it('creates with SMTP send config', () => {
     const client = new EmailClient({
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
     expect(client.getFromAddress()).toBe('bot@test.com');
   });
@@ -66,10 +73,18 @@ describe('EmailClient constructor', () => {
     const origHost = process.env.EMAIL_IMAP_HOST;
     delete process.env.EMAIL_IMAP_HOST;
     try {
-      expect(() => new EmailClient({
-        receive: { type: 'imap' },
-        send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'a@b.com' },
-      })).toThrow('IMAP host is required');
+      expect(
+        () =>
+          new EmailClient({
+            receive: { type: 'imap' },
+            send: {
+              type: 'smtp',
+              host: 'smtp.test.com',
+              auth: { user: 'u', pass: 'p' },
+              from: 'a@b.com',
+            },
+          })
+      ).toThrow('IMAP host is required');
     } finally {
       if (origHost) process.env.EMAIL_IMAP_HOST = origHost;
     }
@@ -79,9 +94,12 @@ describe('EmailClient constructor', () => {
     const origKey = process.env.RESEND_API_KEY;
     delete process.env.RESEND_API_KEY;
     try {
-      expect(() => new EmailClient({
-        receive: { type: 'resend' },
-      })).toThrow('Resend API key is required');
+      expect(
+        () =>
+          new EmailClient({
+            receive: { type: 'resend' },
+          })
+      ).toThrow('Resend API key is required');
     } finally {
       if (origKey) process.env.RESEND_API_KEY = origKey;
     }
@@ -92,7 +110,12 @@ describe('EmailClient.sendEmail via SMTP', () => {
   it('sends email through nodemailer transport', async () => {
     mockSendMail.mockResolvedValue({ messageId: '<msg1@test>' });
     const client = new EmailClient({
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     const result = await client.sendEmail({
@@ -114,7 +137,12 @@ describe('EmailClient.sendEmail via SMTP', () => {
   it('includes threading headers when provided', async () => {
     mockSendMail.mockResolvedValue({ messageId: '<msg2@test>' });
     const client = new EmailClient({
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     await client.sendEmail({
@@ -133,7 +161,12 @@ describe('EmailClient.sendEmail via SMTP', () => {
   it('returns error on SMTP failure', async () => {
     mockSendMail.mockRejectedValue(new Error('Connection refused'));
     const client = new EmailClient({
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     const result = await client.sendEmail({
@@ -202,7 +235,7 @@ describe('EmailClient.fetchResendEmail', () => {
         headers: {
           'message-id': '<msg1@resend>',
           'in-reply-to': '<parent@test>',
-          'references': '<root@test> <parent@test>',
+          references: '<root@test> <parent@test>',
         },
         created_at: '2024-01-01T00:00:00Z',
       },
@@ -250,8 +283,22 @@ describe('EmailClient.listReceivedEmails', () => {
       ok: true,
       json: async () => ({
         data: [
-          { id: 'e1', from: 'alice@test.com', to: ['bot@test.com'], subject: 'Hello', created_at: '2024-01-01T00:00:00Z', message_id: '<e1@test>' },
-          { id: 'e2', from: 'bob@test.com', to: ['bot@test.com'], subject: 'Hi', created_at: '2024-01-01T01:00:00Z', message_id: '<e2@test>' },
+          {
+            id: 'e1',
+            from: 'alice@test.com',
+            to: ['bot@test.com'],
+            subject: 'Hello',
+            created_at: '2024-01-01T00:00:00Z',
+            message_id: '<e1@test>',
+          },
+          {
+            id: 'e2',
+            from: 'bob@test.com',
+            to: ['bot@test.com'],
+            subject: 'Hi',
+            created_at: '2024-01-01T01:00:00Z',
+            message_id: '<e2@test>',
+          },
         ],
         has_more: true,
       }),
@@ -311,7 +358,12 @@ describe('EmailClient.listReceivedEmails', () => {
 
   it('returns empty when no Resend config', async () => {
     const client = new EmailClient({
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     const result = await client.listReceivedEmails();
@@ -323,7 +375,12 @@ describe('EmailClient IMAP operations', () => {
   it('connects and disconnects IMAP', async () => {
     const client = new EmailClient({
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     // connectImap creates ImapFlow and calls connect
@@ -337,7 +394,12 @@ describe('EmailClient IMAP operations', () => {
   it('fetchNewMessages returns empty when no unseen messages', async () => {
     const client = new EmailClient({
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     await client.connectImap();
@@ -349,7 +411,12 @@ describe('EmailClient IMAP operations', () => {
   it('fetchNewMessages returns empty when not connected', async () => {
     const client = new EmailClient({
       receive: { type: 'imap', host: 'imap.test.com', auth: { user: 'u', pass: 'p' } },
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     // No connectImap — client not ready
@@ -500,7 +567,12 @@ describe('EmailClient.sendEmail edge cases', () => {
   it('sends to array of recipients via SMTP', async () => {
     mockSendMail.mockResolvedValue({ messageId: '<multi@test>' });
     const client = new EmailClient({
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     await client.sendEmail({
@@ -516,7 +588,12 @@ describe('EmailClient.sendEmail edge cases', () => {
   it('includes HTML when provided via SMTP', async () => {
     mockSendMail.mockResolvedValue({ messageId: '<html@test>' });
     const client = new EmailClient({
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     await client.sendEmail({
@@ -549,7 +626,12 @@ describe('EmailClient.sendEmail edge cases', () => {
   it('generates message-id when none provided', async () => {
     mockSendMail.mockResolvedValue({});
     const client = new EmailClient({
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     await client.sendEmail({
@@ -566,7 +648,12 @@ describe('EmailClient.sendEmail edge cases', () => {
   it('reuses SMTP transport on second send', async () => {
     mockSendMail.mockResolvedValue({ messageId: '<reuse@test>' });
     const client = new EmailClient({
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
 
     await client.sendEmail({ to: 'a@test.com', subject: 'First', text: 'Hi' });
@@ -581,7 +668,12 @@ describe('EmailClient.sendEmail edge cases', () => {
 describe('EmailClient constructor edge cases', () => {
   it('creates with send-only config (no receive)', () => {
     const client = new EmailClient({
-      send: { type: 'smtp', host: 'smtp.test.com', auth: { user: 'u', pass: 'p' }, from: 'bot@test.com' },
+      send: {
+        type: 'smtp',
+        host: 'smtp.test.com',
+        auth: { user: 'u', pass: 'p' },
+        from: 'bot@test.com',
+      },
     });
     expect(client.getFromAddress()).toBe('bot@test.com');
     expect(client.getReceiveBackend()).toBe('imap'); // default
@@ -599,9 +691,12 @@ describe('EmailClient constructor edge cases', () => {
     const origKey = process.env.RESEND_API_KEY;
     delete process.env.RESEND_API_KEY;
     try {
-      expect(() => new EmailClient({
-        send: { type: 'resend', from: 'bot@resend.dev' },
-      })).toThrow('Resend API key is required for send');
+      expect(
+        () =>
+          new EmailClient({
+            send: { type: 'resend', from: 'bot@resend.dev' },
+          })
+      ).toThrow('Resend API key is required for send');
     } finally {
       if (origKey) process.env.RESEND_API_KEY = origKey;
     }
@@ -611,9 +706,12 @@ describe('EmailClient constructor edge cases', () => {
     const origHost = process.env.EMAIL_SMTP_HOST;
     delete process.env.EMAIL_SMTP_HOST;
     try {
-      expect(() => new EmailClient({
-        send: { type: 'smtp', auth: { user: 'u', pass: 'p' }, from: 'a@b.com' },
-      })).toThrow('SMTP host is required');
+      expect(
+        () =>
+          new EmailClient({
+            send: { type: 'smtp', auth: { user: 'u', pass: 'p' }, from: 'a@b.com' },
+          })
+      ).toThrow('SMTP host is required');
     } finally {
       if (origHost) process.env.EMAIL_SMTP_HOST = origHost;
     }
@@ -622,8 +720,12 @@ describe('EmailClient constructor edge cases', () => {
 
 describe('EmailClient.listReceivedEmails edge cases', () => {
   let originalFetch: typeof globalThis.fetch;
-  beforeEach(() => { originalFetch = globalThis.fetch; });
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
 
   it('returns empty on network error', async () => {
     globalThis.fetch = jest.fn().mockRejectedValue(new Error('Network error')) as any;

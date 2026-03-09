@@ -57,11 +57,7 @@ export class EmailPollingRunner {
   private resendLastSeenId?: string; // cursor for Resend polling
   private hasWebhookSecret: boolean;
 
-  constructor(
-    engine: StateMachineExecutionEngine,
-    cfg: VisorConfig,
-    opts: EmailPollingConfig,
-  ) {
+  constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: EmailPollingConfig) {
     this.receiveType = (opts.receive?.type as 'imap' | 'resend') || 'imap';
 
     this.client = new EmailClient({
@@ -71,10 +67,8 @@ export class EmailPollingRunner {
     this.adapter = new EmailAdapter(this.client.getFromAddress());
     this.engine = engine;
     this.cfg = cfg;
-    this.senderAllowlist = new Set(
-      (opts.allowlist || []).map((a) => a.toLowerCase().trim()),
-    );
-    this.pollInterval = ((opts.receive?.poll_interval || 30) * 1000);
+    this.senderAllowlist = new Set((opts.allowlist || []).map(a => a.toLowerCase().trim()));
+    this.pollInterval = (opts.receive?.poll_interval || 30) * 1000;
     this.sendConfig = opts.send;
     this.hasWebhookSecret = !!(opts.receive?.webhook_secret || process.env.RESEND_WEBHOOK_SECRET);
   }
@@ -85,10 +79,7 @@ export class EmailPollingRunner {
   }
 
   /** Set shared task store for execution tracking */
-  setTaskStore(
-    store: import('../agent-protocol/task-store').TaskStore,
-    configPath?: string,
-  ): void {
+  setTaskStore(store: import('../agent-protocol/task-store').TaskStore, configPath?: string): void {
     this.taskStore = store;
     this.configPath = configPath;
   }
@@ -103,7 +94,7 @@ export class EmailPollingRunner {
       await this.startImapPolling();
     } else if (this.hasWebhookSecret) {
       logger.info(
-        '[EmailPolling] Resend webhook mode — register POST /webhooks/email/resend on your HTTP server',
+        '[EmailPolling] Resend webhook mode — register POST /webhooks/email/resend on your HTTP server'
       );
       logger.info('[EmailPolling] Call handleResendWebhook() when webhook events arrive');
     } else {
@@ -132,7 +123,7 @@ export class EmailPollingRunner {
       logger.info('[EmailPolling] IMAP connected');
     } catch (err) {
       logger.error(
-        `[EmailPolling] IMAP connection failed: ${err instanceof Error ? err.message : String(err)}`,
+        `[EmailPolling] IMAP connection failed: ${err instanceof Error ? err.message : String(err)}`
       );
       throw err;
     }
@@ -147,7 +138,7 @@ export class EmailPollingRunner {
         await this.pollOnce();
       } catch (err) {
         logger.error(
-          `[EmailPolling] Poll error: ${err instanceof Error ? err.message : String(err)}`,
+          `[EmailPolling] Poll error: ${err instanceof Error ? err.message : String(err)}`
         );
         // Try to reconnect
         try {
@@ -156,7 +147,7 @@ export class EmailPollingRunner {
           logger.info('[EmailPolling] IMAP reconnected');
         } catch (reconnectErr) {
           logger.error(
-            `[EmailPolling] IMAP reconnect failed: ${reconnectErr instanceof Error ? reconnectErr.message : String(reconnectErr)}`,
+            `[EmailPolling] IMAP reconnect failed: ${reconnectErr instanceof Error ? reconnectErr.message : String(reconnectErr)}`
           );
         }
       }
@@ -191,7 +182,7 @@ export class EmailPollingRunner {
         await this.pollResendOnce();
       } catch (err) {
         logger.error(
-          `[EmailPolling] Resend poll error: ${err instanceof Error ? err.message : String(err)}`,
+          `[EmailPolling] Resend poll error: ${err instanceof Error ? err.message : String(err)}`
         );
       }
     }, this.pollInterval);
@@ -235,7 +226,7 @@ export class EmailPollingRunner {
    */
   async handleResendWebhook(
     body: string,
-    headers: Record<string, string>,
+    headers: Record<string, string>
   ): Promise<{ ok: boolean; error?: string }> {
     // Verify signature
     const verified = await this.client.verifyResendWebhook(body, headers);
@@ -344,7 +335,7 @@ export class EmailPollingRunner {
       } catch {}
 
       logger.info(
-        `[EmailPolling] Dispatching engine run for thread ${threadKey} from ${EmailAdapter.extractEmail(msg.from)}`,
+        `[EmailPolling] Dispatching engine run for thread ${threadKey} from ${EmailAdapter.extractEmail(msg.from)}`
       );
 
       const execFn = () =>
@@ -372,14 +363,14 @@ export class EmailPollingRunner {
               email_thread_id: threadKey,
             },
           },
-          execFn,
+          execFn
         );
       } else {
         await execFn();
       }
     } catch (e) {
       logger.error(
-        `[EmailPolling] Engine execution failed: ${e instanceof Error ? e.message : String(e)}`,
+        `[EmailPolling] Engine execution failed: ${e instanceof Error ? e.message : String(e)}`
       );
     }
   }

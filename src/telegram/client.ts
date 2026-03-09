@@ -79,7 +79,8 @@ export class TelegramClient {
           link_preview_options: { is_disabled: true },
         };
         if (parse_mode) params.parse_mode = parse_mode;
-        if (i === 0 && reply_to_message_id) params.reply_parameters = { message_id: reply_to_message_id };
+        if (i === 0 && reply_to_message_id)
+          params.reply_parameters = { message_id: reply_to_message_id };
         if (message_thread_id) params.message_thread_id = message_thread_id;
 
         try {
@@ -87,10 +88,7 @@ export class TelegramClient {
           if (i === 0) firstMessageId = msg.message_id;
         } catch (err: any) {
           // If HTML parse fails, retry without parse_mode
-          if (
-            parse_mode === 'HTML' &&
-            err?.description?.includes("can't parse entities")
-          ) {
+          if (parse_mode === 'HTML' && err?.description?.includes("can't parse entities")) {
             const plainParams = { ...params };
             delete plainParams.parse_mode;
             const msg = await this.bot.api.sendMessage(chat_id, chunks[i], plainParams as any);
@@ -122,7 +120,15 @@ export class TelegramClient {
     message_thread_id?: number;
   }): Promise<TelegramSendResult> {
     try {
-      const { chat_id, document, filename, caption, parse_mode, reply_to_message_id, message_thread_id } = opts;
+      const {
+        chat_id,
+        document,
+        filename,
+        caption,
+        parse_mode,
+        reply_to_message_id,
+        message_thread_id,
+      } = opts;
       const params: Record<string, unknown> = {};
       if (caption) params.caption = caption.slice(0, 1024); // Telegram caption limit
       if (parse_mode) params.parse_mode = parse_mode;
@@ -156,7 +162,7 @@ export class TelegramClient {
     } catch (err: any) {
       // Non-fatal: reactions may fail if bot lacks permissions
       console.warn(
-        `Telegram setMessageReaction failed (non-fatal): ${err?.description || err?.message || String(err)}`,
+        `Telegram setMessageReaction failed (non-fatal): ${err?.description || err?.message || String(err)}`
       );
       return false;
     }

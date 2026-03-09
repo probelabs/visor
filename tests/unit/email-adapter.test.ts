@@ -108,20 +108,24 @@ describe('EmailAdapter thread tracking', () => {
     adapter.buildConversationContext(mkMsg({ messageId: '<root@test>' }));
 
     // Second message references root
-    adapter.buildConversationContext(mkMsg({
-      messageId: '<msg2@test>',
-      inReplyTo: '<root@test>',
-      references: ['<root@test>'],
-      text: 'Reply 1',
-    }));
+    adapter.buildConversationContext(
+      mkMsg({
+        messageId: '<msg2@test>',
+        inReplyTo: '<root@test>',
+        references: ['<root@test>'],
+        text: 'Reply 1',
+      })
+    );
 
     // Third message references chain
-    const ctx3 = adapter.buildConversationContext(mkMsg({
-      messageId: '<msg3@test>',
-      inReplyTo: '<msg2@test>',
-      references: ['<root@test>', '<msg2@test>'],
-      text: 'Reply 2',
-    }));
+    const ctx3 = adapter.buildConversationContext(
+      mkMsg({
+        messageId: '<msg3@test>',
+        inReplyTo: '<msg2@test>',
+        references: ['<root@test>', '<msg2@test>'],
+        text: 'Reply 2',
+      })
+    );
 
     expect(ctx3.messages.length).toBe(3);
     // Thread ID should be based on root message
@@ -144,12 +148,14 @@ describe('EmailAdapter thread tracking', () => {
     const adapter = new EmailAdapter('bot@test.com');
 
     adapter.buildConversationContext(mkMsg({ messageId: '<msg1@test>', from: 'alice@test.com' }));
-    adapter.buildConversationContext(mkMsg({
-      messageId: '<msg2@test>',
-      from: 'bob@test.com',
-      inReplyTo: '<msg1@test>',
-      references: ['<msg1@test>'],
-    }));
+    adapter.buildConversationContext(
+      mkMsg({
+        messageId: '<msg2@test>',
+        from: 'bob@test.com',
+        inReplyTo: '<msg1@test>',
+        references: ['<msg1@test>'],
+      })
+    );
 
     const thread = adapter.getThreadByMessageId('<msg1@test>');
     expect(thread!.participants.has('alice@test.com')).toBe(true);
@@ -159,13 +165,15 @@ describe('EmailAdapter thread tracking', () => {
 
   it('includes email-specific attributes in context', () => {
     const adapter = new EmailAdapter('bot@test.com');
-    const ctx = adapter.buildConversationContext(mkMsg({
-      from: 'user@test.com',
-      to: ['bot@test.com'],
-      cc: ['cc@test.com'],
-      subject: 'Important',
-      inReplyTo: '<parent@test>',
-    }));
+    const ctx = adapter.buildConversationContext(
+      mkMsg({
+        from: 'user@test.com',
+        to: ['bot@test.com'],
+        cc: ['cc@test.com'],
+        subject: 'Important',
+        inReplyTo: '<parent@test>',
+      })
+    );
 
     expect(ctx.attributes.from).toBe('user@test.com');
     expect(ctx.attributes.to).toBe('bot@test.com');
@@ -191,12 +199,14 @@ describe('EmailAdapter thread tracking', () => {
 
   it('tracks CC recipients as participants', () => {
     const adapter = new EmailAdapter('bot@test.com');
-    adapter.buildConversationContext(mkMsg({
-      messageId: '<cc-test@test>',
-      from: 'alice@test.com',
-      to: ['bot@test.com'],
-      cc: ['carol@test.com', 'dave@test.com'],
-    }));
+    adapter.buildConversationContext(
+      mkMsg({
+        messageId: '<cc-test@test>',
+        from: 'alice@test.com',
+        to: ['bot@test.com'],
+        cc: ['carol@test.com', 'dave@test.com'],
+      })
+    );
 
     const thread = adapter.getThreadByMessageId('<cc-test@test>');
     expect(thread!.participants.has('alice@test.com')).toBe(true);
@@ -209,11 +219,13 @@ describe('EmailAdapter thread tracking', () => {
     const adapter = new EmailAdapter('bot@test.com');
 
     // Reply to a message we've never seen
-    const ctx = adapter.buildConversationContext(mkMsg({
-      messageId: '<orphan@test>',
-      inReplyTo: '<unknown-parent@test>',
-      references: ['<unknown-root@test>', '<unknown-parent@test>'],
-    }));
+    const ctx = adapter.buildConversationContext(
+      mkMsg({
+        messageId: '<orphan@test>',
+        inReplyTo: '<unknown-parent@test>',
+        references: ['<unknown-root@test>', '<unknown-parent@test>'],
+      })
+    );
 
     // Should create a new thread (root from References[0])
     expect(ctx.thread.id).toBeTruthy();
@@ -223,10 +235,12 @@ describe('EmailAdapter thread tracking', () => {
 
   it('handles message with empty References array', () => {
     const adapter = new EmailAdapter('bot@test.com');
-    adapter.buildConversationContext(mkMsg({
-      messageId: '<empty-refs@test>',
-      references: [],
-    }));
+    adapter.buildConversationContext(
+      mkMsg({
+        messageId: '<empty-refs@test>',
+        references: [],
+      })
+    );
 
     // Root should be the message itself when References is empty
     const thread = adapter.getThreadByMessageId('<empty-refs@test>');
@@ -235,10 +249,12 @@ describe('EmailAdapter thread tracking', () => {
 
   it('omits cc and in_reply_to attributes when absent', () => {
     const adapter = new EmailAdapter('bot@test.com');
-    const ctx = adapter.buildConversationContext(mkMsg({
-      cc: undefined,
-      inReplyTo: undefined,
-    }));
+    const ctx = adapter.buildConversationContext(
+      mkMsg({
+        cc: undefined,
+        inReplyTo: undefined,
+      })
+    );
 
     expect(ctx.attributes.cc).toBeUndefined();
     expect(ctx.attributes.in_reply_to).toBeUndefined();
@@ -246,10 +262,12 @@ describe('EmailAdapter thread tracking', () => {
 
   it('joins multiple to addresses with comma', () => {
     const adapter = new EmailAdapter('bot@test.com');
-    const ctx = adapter.buildConversationContext(mkMsg({
-      messageId: '<multi-to@test>',
-      to: ['bot@test.com', 'team@test.com'],
-    }));
+    const ctx = adapter.buildConversationContext(
+      mkMsg({
+        messageId: '<multi-to@test>',
+        to: ['bot@test.com', 'team@test.com'],
+      })
+    );
 
     expect(ctx.attributes.to).toBe('bot@test.com, team@test.com');
   });
@@ -268,7 +286,9 @@ describe('EmailAdapter thread tracking', () => {
     const adapter = new EmailAdapter('bot@test.com');
 
     // Create an old thread and a recent thread
-    adapter.buildConversationContext(mkMsg({ messageId: '<old@test>', date: new Date('2020-01-01') }));
+    adapter.buildConversationContext(
+      mkMsg({ messageId: '<old@test>', date: new Date('2020-01-01') })
+    );
     adapter.buildConversationContext(mkMsg({ messageId: '<new@test>', date: new Date() }));
 
     adapter.cleanupOldThreads(1000); // 1 second TTL

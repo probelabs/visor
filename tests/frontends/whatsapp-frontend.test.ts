@@ -1,49 +1,42 @@
-// Email frontend EventBus tests.
+// WhatsApp frontend EventBus tests.
 // Mirrors the pattern from telegram-frontend.test.ts:
-// - Fake EmailClient with jest.fn() API stubs
+// - Fake WhatsAppClient with jest.fn() API stubs
 // - EventBus emission to trigger handlers
-// - Verify correct email send calls with threading headers
+// - Verify correct WhatsApp API calls
 
 import { EventBus } from '../../src/event-bus/event-bus';
-import { EmailFrontend } from '../../src/frontends/email-frontend';
+import { WhatsAppFrontend } from '../../src/frontends/whatsapp-frontend';
 
-function makeFakeEmailClient() {
+function makeFakeWhatsApp() {
   return {
-    sendEmail: jest.fn(async () => ({ ok: true, messageId: '<reply@visor>' })),
-    getFromAddress: jest.fn(() => 'bot@test.com'),
-    getReceiveBackend: jest.fn(() => 'imap'),
+    sendMessage: jest.fn(async () => ({ ok: true, messageId: 'wamid.reply1' })),
+    markAsRead: jest.fn(async () => ({ ok: true })),
+    getPhoneNumberId: jest.fn(() => '15559876543'),
   } as any;
 }
 
 function makeCtx(
   bus: EventBus,
-  emailClient: any,
+  whatsapp: any,
   opts: {
     from?: string;
-    subject?: string;
     messageId?: string;
-    references?: string[];
     checks?: Record<string, any>;
   } = {}
 ) {
-  const from = opts.from ?? 'user@test.com';
-  const subject = opts.subject ?? 'Test Subject';
-  const messageId = opts.messageId ?? '<msg1@test>';
+  const from = opts.from ?? '15551234567';
+  const messageId = opts.messageId ?? 'wamid.msg1';
   const map = new Map<string, unknown>();
-  map.set('/bots/email/message', {
+  map.set('/bots/whatsapp/message', {
     event: {
-      type: 'email_message',
+      type: 'whatsapp_message',
       from,
-      to: ['bot@test.com'],
-      subject,
+      message_id: messageId,
       text: 'Hello bot',
-      messageId,
-      references: opts.references || [],
     },
-    sendConfig: { type: 'smtp' },
   });
 
-  const fe = new EmailFrontend();
+  const fe = new WhatsAppFrontend();
   fe.start({
     eventBus: bus,
     logger: console as any,
@@ -54,20 +47,20 @@ function makeCtx(
     },
     run: { runId: 'r1' },
     webhookContext: { webhookData: map },
-    emailClient,
+    whatsapp,
   } as any);
 
-  // Inject fake email client
-  (fe as any).getEmailClient = () => emailClient;
+  // Inject fake whatsapp client
+  (fe as any).getWhatsApp = () => whatsapp;
 
   return fe;
 }
 
-describe('EmailFrontend (event-bus)', () => {
+describe('WhatsAppFrontend (event-bus)', () => {
   test('sends direct reply for AI checks with simple schemas', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp);
 
     await bus.emit({
       type: 'CheckCompleted',
@@ -76,40 +69,17 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Hello from AI!' } },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
-    const call = emailClient.sendEmail.mock.calls[0][0];
-    expect(call.to).toBe('user@test.com');
+    expect(whatsapp.sendMessage).toHaveBeenCalledTimes(1);
+    const call = whatsapp.sendMessage.mock.calls[0][0];
+    expect(call.to).toBe('15551234567');
     expect(call.text).toContain('Hello from AI!');
-    expect(call.html).toBeTruthy();
-    expect(call.subject).toBe('Re: Test Subject');
-    expect(call.inReplyTo).toBe('<msg1@test>');
-    expect(call.references).toEqual(['<msg1@test>']);
-  });
-
-  test('includes full References chain in replies', async () => {
-    const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient, {
-      messageId: '<msg2@test>',
-      references: ['<root@test>', '<msg1@test>'],
-    });
-
-    await bus.emit({
-      type: 'CheckCompleted',
-      checkId: 'reply',
-      scope: [],
-      result: { issues: [], output: { text: 'Threaded reply' } },
-    });
-
-    const call = emailClient.sendEmail.mock.calls[0][0];
-    expect(call.inReplyTo).toBe('<msg2@test>');
-    expect(call.references).toEqual(['<root@test>', '<msg1@test>', '<msg2@test>']);
+    expect(call.replyToMessageId).toBe('wamid.msg1');
   });
 
   test('does not send for non-AI / structured schema checks', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient, {
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp, {
       checks: {
         jsonRouter: {
           type: 'ai',
@@ -132,13 +102,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'log' } },
     });
 
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(whatsapp.sendMessage).not.toHaveBeenCalled();
   });
 
   test('sends reply for workflow checks with output.text', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient, {
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp, {
       checks: {
         chat: { type: 'workflow', workflow: 'assistant' },
       },
@@ -151,15 +121,15 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Workflow response' } },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
-    const call = emailClient.sendEmail.mock.calls[0][0];
+    expect(whatsapp.sendMessage).toHaveBeenCalledTimes(1);
+    const call = whatsapp.sendMessage.mock.calls[0][0];
     expect(call.text).toContain('Workflow response');
   });
 
-  test('sends error email on CheckErrored', async () => {
+  test('sends error notice on CheckErrored', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp);
 
     await bus.emit({
       type: 'CheckErrored',
@@ -168,19 +138,18 @@ describe('EmailFrontend (event-bus)', () => {
       error: { message: 'AI provider timeout' },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
-    const call = emailClient.sendEmail.mock.calls[0][0];
-    expect(call.to).toBe('user@test.com');
+    expect(whatsapp.sendMessage).toHaveBeenCalledTimes(1);
+    const call = whatsapp.sendMessage.mock.calls[0][0];
+    expect(call.to).toBe('15551234567');
     expect(call.text).toContain('Check failed');
     expect(call.text).toContain('AI provider timeout');
-    // Should still thread the error
-    expect(call.inReplyTo).toBe('<msg1@test>');
+    expect(call.replyToMessageId).toBe('wamid.msg1');
   });
 
   test('does not send duplicate errors', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp);
 
     await bus.emit({
       type: 'CheckErrored',
@@ -195,24 +164,24 @@ describe('EmailFrontend (event-bus)', () => {
       error: { message: 'err2' },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
+    expect(whatsapp.sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  test('skips reply when from address is missing', async () => {
+  test('skips reply when from number is missing', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
+    const whatsapp = makeFakeWhatsApp();
 
     // Empty webhook data (no inbound event)
-    const fe = new EmailFrontend();
+    const fe = new WhatsAppFrontend();
     fe.start({
       eventBus: bus,
       logger: console as any,
       config: { checks: { reply: { type: 'ai', schema: 'text' } } },
       run: { runId: 'r1' },
       webhookContext: { webhookData: new Map() },
-      emailClient,
+      whatsapp,
     } as any);
-    (fe as any).getEmailClient = () => emailClient;
+    (fe as any).getWhatsApp = () => whatsapp;
 
     await bus.emit({
       type: 'CheckCompleted',
@@ -221,13 +190,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Hello!' } },
     });
 
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(whatsapp.sendMessage).not.toHaveBeenCalled();
   });
 
   test('skips internal criticality checks', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient, {
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp, {
       checks: {
         internal: { type: 'ai', schema: 'text', criticality: 'internal' },
       },
@@ -240,13 +209,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Should not be sent' } },
     });
 
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(whatsapp.sendMessage).not.toHaveBeenCalled();
   });
 
   test('stop() unsubscribes all handlers', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    const fe = makeCtx(bus, emailClient);
+    const whatsapp = makeFakeWhatsApp();
+    const fe = makeCtx(bus, whatsapp);
 
     fe.stop();
 
@@ -257,24 +226,23 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'After stop' } },
     });
 
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(whatsapp.sendMessage).not.toHaveBeenCalled();
   });
 
-  test('no-op on CheckScheduled (no email equivalent of reactions)', async () => {
+  test('no-op on CheckScheduled (no WhatsApp equivalent of reactions)', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp);
 
     await bus.emit({ type: 'CheckScheduled', checkId: 'reply', scope: [] });
 
-    // Email has no reaction equivalent — nothing should be called
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(whatsapp.sendMessage).not.toHaveBeenCalled();
   });
 
   test('skips reply when output.text is empty/whitespace', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp);
 
     await bus.emit({
       type: 'CheckCompleted',
@@ -283,13 +251,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: '   ' } },
     });
 
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(whatsapp.sendMessage).not.toHaveBeenCalled();
   });
 
   test('skips reply when output is null', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp);
 
     await bus.emit({
       type: 'CheckCompleted',
@@ -298,13 +266,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: null },
     });
 
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(whatsapp.sendMessage).not.toHaveBeenCalled();
   });
 
   test('skips reply for unknown check ID', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp);
 
     await bus.emit({
       type: 'CheckCompleted',
@@ -313,13 +281,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Should not send' } },
     });
 
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(whatsapp.sendMessage).not.toHaveBeenCalled();
   });
 
   test('normalizes literal \\n escape sequences in output', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp);
 
     await bus.emit({
       type: 'CheckCompleted',
@@ -328,14 +296,14 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'line1\\nline2\\nline3' } },
     });
 
-    const call = emailClient.sendEmail.mock.calls[0][0];
-    expect(call.text).toBe('line1\nline2\nline3');
+    const call = whatsapp.sendMessage.mock.calls[0][0];
+    expect(call.text).toContain('line1\nline2\nline3');
   });
 
   test('appends _rawOutput when present', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp);
 
     await bus.emit({
       type: 'CheckCompleted',
@@ -344,15 +312,15 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Main text', _rawOutput: 'Extra raw content' } },
     });
 
-    const call = emailClient.sendEmail.mock.calls[0][0];
+    const call = whatsapp.sendMessage.mock.calls[0][0];
     expect(call.text).toContain('Main text');
     expect(call.text).toContain('Extra raw content');
   });
 
   test('falls back to content field for AI text schema checks', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp);
 
     await bus.emit({
       type: 'CheckCompleted',
@@ -361,14 +329,14 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], content: 'Content fallback text' },
     });
 
-    const call = emailClient.sendEmail.mock.calls[0][0];
+    const call = whatsapp.sendMessage.mock.calls[0][0];
     expect(call.text).toContain('Content fallback text');
   });
 
   test('sends reply for log checks with group=chat', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient, {
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp, {
       checks: {
         chatLog: { type: 'log', group: 'chat' },
       },
@@ -381,56 +349,52 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], logOutput: 'Chat log message' },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
-    const call = emailClient.sendEmail.mock.calls[0][0];
+    expect(whatsapp.sendMessage).toHaveBeenCalledTimes(1);
+    const call = whatsapp.sendMessage.mock.calls[0][0];
     expect(call.text).toContain('Chat log message');
   });
 
-  test('sends Shutdown error email', async () => {
+  test('sends Shutdown error message', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp);
 
     await bus.emit({
       type: 'Shutdown',
       error: { message: 'Fatal crash' },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
-    const call = emailClient.sendEmail.mock.calls[0][0];
+    expect(whatsapp.sendMessage).toHaveBeenCalledTimes(1);
+    const call = whatsapp.sendMessage.mock.calls[0][0];
     expect(call.text).toContain('Run failed');
     expect(call.text).toContain('Fatal crash');
   });
 
   test('Shutdown error does not send if error already notified', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp);
 
-    // First error
     await bus.emit({
       type: 'CheckErrored',
       checkId: 'reply',
       scope: [],
       error: { message: 'err1' },
     });
-    // Shutdown after
     await bus.emit({
       type: 'Shutdown',
       error: { message: 'Fatal' },
     });
 
-    // Only one email sent (the first error)
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
+    expect(whatsapp.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   test('handles send failure gracefully', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    emailClient.sendEmail.mockResolvedValue({ ok: false, error: 'Connection refused' });
-    makeCtx(bus, emailClient);
+    const whatsapp = makeFakeWhatsApp();
+    whatsapp.sendMessage.mockResolvedValue({ ok: false, error: 'Rate limited' });
+    makeCtx(bus, whatsapp);
 
-    // Should not throw
     await bus.emit({
       type: 'CheckCompleted',
       checkId: 'reply',
@@ -438,13 +402,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Hello!' } },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
+    expect(whatsapp.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   test('skips AI checks with non-simple schemas', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient, {
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp, {
       checks: {
         custom: { type: 'ai', schema: 'custom-format' },
       },
@@ -457,13 +421,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Should not send' } },
     });
 
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(whatsapp.sendMessage).not.toHaveBeenCalled();
   });
 
   test('sends for AI checks with code-review schema', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient, {
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp, {
       checks: {
         review: { type: 'ai', schema: 'code-review' },
       },
@@ -476,13 +440,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Code review result' } },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
+    expect(whatsapp.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   test('sends for AI checks with markdown schema', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient, {
+    const whatsapp = makeFakeWhatsApp();
+    makeCtx(bus, whatsapp, {
       checks: {
         doc: { type: 'ai', schema: 'markdown' },
       },
@@ -495,6 +459,6 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Markdown output' } },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
+    expect(whatsapp.sendMessage).toHaveBeenCalledTimes(1);
   });
 });

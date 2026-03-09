@@ -1,34 +1,27 @@
 /**
- * Email Frontend for Visor workflows.
+ * WhatsApp Frontend for Visor workflows.
  *
  * Mirrors the TelegramFrontend pattern:
- * - Sends AI replies as threaded emails (In-Reply-To, References headers)
- * - Converts Markdown to email HTML format
+ * - Sends AI replies as WhatsApp text messages
+ * - Converts Markdown to WhatsApp format
  * - No reaction equivalent (CheckScheduled is a no-op)
  */
 import type { Frontend, FrontendContext } from './host';
-import { EmailClient, type EmailSendOptions } from '../email/client';
-import { formatEmailText, wrapInEmailTemplate, addRePrefix } from '../email/markdown';
+import { WhatsAppClient } from '../whatsapp/client';
+import { formatWhatsAppText } from '../whatsapp/markdown';
 
-type EmailFrontendConfig = {
-  send?: {
-    type?: string;
-    host?: string;
-    port?: number;
-    auth?: { user?: string; pass?: string };
-    secure?: boolean;
-    from?: string;
-    api_key?: string;
-  };
+type WhatsAppFrontendConfig = {
+  accessToken?: string;
+  phoneNumberId?: string;
 };
 
-export class EmailFrontend implements Frontend {
-  public readonly name = 'email';
+export class WhatsAppFrontend implements Frontend {
+  public readonly name = 'whatsapp';
   private subs: Array<{ unsubscribe(): void }> = [];
-  private cfg: EmailFrontendConfig;
+  private cfg: WhatsAppFrontendConfig;
   private errorNotified: boolean = false;
 
-  constructor(config?: EmailFrontendConfig) {
+  constructor(config?: WhatsAppFrontendConfig) {
     this.cfg = config || {};
   }
 
@@ -36,10 +29,10 @@ export class EmailFrontend implements Frontend {
     const bus = ctx.eventBus;
 
     try {
-      ctx.logger.info(`[email-frontend] started`);
+      ctx.logger.info(`[whatsapp-frontend] started`);
     } catch {}
 
-    // CheckCompleted: send reply email
+    // CheckCompleted: post AI replies
     this.subs.push(
       bus.on('CheckCompleted', async (env: any) => {
         const ev = (env && env.payload) || env;
@@ -47,7 +40,7 @@ export class EmailFrontend implements Frontend {
       })
     );
 
-    // CheckErrored: send error email
+    // CheckErrored: post error notice
     this.subs.push(
       bus.on('CheckErrored', async (env: any) => {
         const ev = (env && env.payload) || env;
@@ -56,7 +49,7 @@ export class EmailFrontend implements Frontend {
       })
     );
 
-    // Shutdown: send fatal error email
+    // Shutdown: post error
     this.subs.push(
       bus.on('Shutdown', async (env: any) => {
         const ev = (env && env.payload) || env;
@@ -65,8 +58,8 @@ export class EmailFrontend implements Frontend {
       })
     );
 
-    // CheckScheduled: no-op for email (no reaction equivalent)
-    // StateTransition: no-op for email
+    // CheckScheduled: no-op (WhatsApp has no reaction equivalent)
+    // StateTransition: no-op
   }
 
   stop(): void {
@@ -74,28 +67,32 @@ export class EmailFrontend implements Frontend {
     this.subs = [];
   }
 
-  private getEmailClient(ctx: FrontendContext): EmailClient | undefined {
+  private getWhatsApp(ctx: FrontendContext): WhatsAppClient | undefined {
     // Prefer injected client (for tests or shared runner context)
-    const injected = (ctx as any).emailClient;
+    const injected = (ctx as any).whatsapp || (ctx as any).whatsappClient;
     if (injected) return injected;
-    // Lazy-create from config
+    // Lazy-create from env or frontend config
     try {
-      const emailConfig = (ctx as any).webhookContext?.webhookData?.get('/bots/email/message');
-      const sendCfg = this.cfg.send || (emailConfig as any)?.sendConfig;
-      if (sendCfg || process.env.EMAIL_SMTP_HOST || process.env.RESEND_API_KEY) {
-        return new EmailClient({
-          send: sendCfg || {
-            type: process.env.RESEND_API_KEY ? 'resend' : 'smtp',
-          },
+      const token = this.cfg.accessToken || process.env.WHATSAPP_ACCESS_TOKEN;
+      const phoneId = this.cfg.phoneNumberId || process.env.WHATSAPP_PHONE_NUMBER_ID;
+      if (
+        typeof token === 'string' &&
+        token.trim() &&
+        typeof phoneId === 'string' &&
+        phoneId.trim()
+      ) {
+        return new WhatsAppClient({
+          accessToken: token.trim(),
+          phoneNumberId: phoneId.trim(),
         });
       }
     } catch {}
     return undefined;
   }
 
-  private getInboundEmailPayload(ctx: FrontendContext): any | null {
+  private getInboundWhatsAppPayload(ctx: FrontendContext): any | null {
     try {
-      const endpoint = '/bots/email/message';
+      const endpoint = '/bots/whatsapp/message';
       return (ctx as any).webhookContext?.webhookData?.get(endpoint) || null;
     } catch {
       return null;
@@ -109,30 +106,22 @@ export class EmailFrontend implements Frontend {
     checkId?: string
   ): Promise<void> {
     if (this.errorNotified) return;
-    const client = this.getEmailClient(ctx);
-    if (!client) return;
-    const payload = this.getInboundEmailPayload(ctx);
+    const whatsapp = this.getWhatsApp(ctx);
+    if (!whatsapp) return;
+    const payload = this.getInboundWhatsAppPayload(ctx);
     const ev: any = payload?.event;
-    if (!ev?.from) return;
+    const from = ev?.from;
+    if (!from) return;
 
     let text = `${title}`;
     if (checkId) text += `\nCheck: ${checkId}`;
     if (message) text += `\n${message}`;
 
-    const sendOpts: EmailSendOptions = {
-      to: ev.from,
-      subject: ev.subject ? addRePrefix(ev.subject) : `Visor: ${title}`,
+    await whatsapp.sendMessage({
+      to: from,
       text,
-      html: wrapInEmailTemplate(`<p><strong>${title}</strong></p><p>${message}</p>`),
-    };
-
-    // Thread the reply
-    if (ev.messageId) {
-      sendOpts.inReplyTo = ev.messageId;
-      sendOpts.references = ev.references ? [...ev.references, ev.messageId] : [ev.messageId];
-    }
-
-    await client.sendEmail(sendOpts);
+      replyToMessageId: ev?.message_id,
+    });
     this.errorNotified = true;
   }
 
@@ -162,17 +151,20 @@ export class EmailFrontend implements Frontend {
         }
       }
 
-      const client = this.getEmailClient(ctx);
-      if (!client) return;
+      const whatsapp = this.getWhatsApp(ctx);
+      if (!whatsapp) return;
 
-      const payload = this.getInboundEmailPayload(ctx);
+      const payload = this.getInboundWhatsAppPayload(ctx);
       const ev: any = payload?.event;
-      if (!ev?.from) {
-        ctx.logger.warn(`[email-frontend] skip posting reply for ${checkId}: missing from address`);
+      const from = ev?.from;
+      if (!from) {
+        ctx.logger.warn(
+          `[whatsapp-frontend] skip posting reply for ${checkId}: missing from number`
+        );
         return;
       }
 
-      // Extract text (same logic as TelegramFrontend/SlackFrontend)
+      // Extract text (same logic as Telegram/Email/Slack frontends)
       const out: any = (result as any)?.output;
       let text: string | undefined;
       if (out && typeof out.text === 'string' && out.text.trim().length > 0) {
@@ -195,42 +187,35 @@ export class EmailFrontend implements Frontend {
       }
 
       if (!text) {
-        ctx.logger.info(`[email-frontend] skip posting reply for ${checkId}: no renderable text`);
+        ctx.logger.info(
+          `[whatsapp-frontend] skip posting reply for ${checkId}: no renderable text`
+        );
         return;
       }
 
       // Normalize literal \n escape sequences
       text = text.replace(/\\n/g, '\n');
 
-      const htmlBody = formatEmailText(text);
-      const sendOpts: EmailSendOptions = {
-        to: ev.from,
-        subject: ev.subject ? addRePrefix(ev.subject) : `Re: Visor response`,
-        text,
-        html: wrapInEmailTemplate(htmlBody),
-      };
+      const formattedText = formatWhatsAppText(text);
+      const postResult = await whatsapp.sendMessage({
+        to: from,
+        text: formattedText,
+        replyToMessageId: ev?.message_id,
+      });
 
-      // Thread the reply
-      if (ev.messageId) {
-        sendOpts.inReplyTo = ev.messageId;
-        sendOpts.references = ev.references ? [...ev.references, ev.messageId] : [ev.messageId];
-      }
-
-      const sendResult = await client.sendEmail(sendOpts);
-
-      if (!sendResult.ok) {
+      if (!postResult.ok) {
         ctx.logger.warn(
-          `[email-frontend] failed to send reply for ${checkId}: ${sendResult.error}`
+          `[whatsapp-frontend] failed to post reply for ${checkId}: ${postResult.error}`
         );
         return;
       }
       ctx.logger.info(
-        `[email-frontend] sent reply for ${checkId} to ${ev.from} (messageId=${sendResult.messageId})`
+        `[whatsapp-frontend] posted reply for ${checkId} to ${from} (messageId=${postResult.messageId})`
       );
     } catch (err) {
       try {
         ctx.logger.warn(
-          `[email-frontend] maybePostDirectReply failed for ${checkId}: ${
+          `[whatsapp-frontend] maybePostDirectReply failed for ${checkId}: ${
             err instanceof Error ? err.message : String(err)
           }`
         );

@@ -84,10 +84,12 @@ describe('TelegramPollingRunner message gating', () => {
         },
       } as any);
 
-    await (runner as any).handleMessage(mkMsg({
-      chat: { id: 100, type: 'private', title: undefined, username: undefined },
-      text: 'Hello from DM',
-    }));
+    await (runner as any).handleMessage(
+      mkMsg({
+        chat: { id: 100, type: 'private', title: undefined, username: undefined },
+        text: 'Hello from DM',
+      })
+    );
 
     expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
@@ -114,19 +116,23 @@ describe('TelegramPollingRunner message gating', () => {
       } as any);
 
     // Plain message in group — should be ignored
-    await (runner as any).handleMessage(mkMsg({
-      message_id: 10,
-      chat: { id: -200, type: 'group', title: 'Test Group', username: undefined },
-      text: 'Hello everyone',
-    }));
+    await (runner as any).handleMessage(
+      mkMsg({
+        message_id: 10,
+        chat: { id: -200, type: 'group', title: 'Test Group', username: undefined },
+        text: 'Hello everyone',
+      })
+    );
     expect(spy).not.toHaveBeenCalled();
 
     // Message with @mention — should be accepted
-    await (runner as any).handleMessage(mkMsg({
-      message_id: 11,
-      chat: { id: -200, type: 'group', title: 'Test Group', username: undefined },
-      text: '@test_bot what is the weather?',
-    }));
+    await (runner as any).handleMessage(
+      mkMsg({
+        message_id: 11,
+        chat: { id: -200, type: 'group', title: 'Test Group', username: undefined },
+        text: '@test_bot what is the weather?',
+      })
+    );
     expect(spy).toHaveBeenCalledTimes(1);
 
     spy.mockRestore();
@@ -152,11 +158,13 @@ describe('TelegramPollingRunner message gating', () => {
         },
       } as any);
 
-    await (runner as any).handleMessage(mkMsg({
-      message_id: 20,
-      chat: { id: -200, type: 'group', title: 'Test Group', username: undefined },
-      text: 'Hello without mention',
-    }));
+    await (runner as any).handleMessage(
+      mkMsg({
+        message_id: 20,
+        chat: { id: -200, type: 'group', title: 'Test Group', username: undefined },
+        text: 'Hello without mention',
+      })
+    );
 
     expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
@@ -183,18 +191,20 @@ describe('TelegramPollingRunner message gating', () => {
       } as any);
 
     // Reply to bot message in supergroup
-    await (runner as any).handleMessage(mkMsg({
-      message_id: 30,
-      chat: { id: -300, type: 'supergroup', title: 'Super Group', username: undefined },
-      text: 'Replying to you',
-      reply_to_message: {
-        message_id: 29,
-        from: { id: 999, is_bot: true, first_name: 'TestBot', username: 'test_bot' },
+    await (runner as any).handleMessage(
+      mkMsg({
+        message_id: 30,
         chat: { id: -300, type: 'supergroup', title: 'Super Group', username: undefined },
-        date: 1000,
-        text: 'Bot said something',
-      },
-    }));
+        text: 'Replying to you',
+        reply_to_message: {
+          message_id: 29,
+          from: { id: 999, is_bot: true, first_name: 'TestBot', username: 'test_bot' },
+          chat: { id: -300, type: 'supergroup', title: 'Super Group', username: undefined },
+          date: 1000,
+          text: 'Bot said something',
+        },
+      })
+    );
 
     expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
@@ -220,12 +230,14 @@ describe('TelegramPollingRunner message gating', () => {
         },
       } as any);
 
-    await (runner as any).handleMessage(mkMsg({
-      message_id: 40,
-      chat: { id: -400, type: 'channel', title: 'Test Channel', username: 'test_channel' },
-      text: 'Channel post',
-      from: undefined, // Channel posts have no "from"
-    }));
+    await (runner as any).handleMessage(
+      mkMsg({
+        message_id: 40,
+        chat: { id: -400, type: 'channel', title: 'Test Channel', username: 'test_channel' },
+        text: 'Channel post',
+        from: undefined, // Channel posts have no "from"
+      })
+    );
 
     expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
@@ -243,11 +255,13 @@ describe('TelegramPollingRunner message gating', () => {
       .spyOn(StateMachineExecutionEngine.prototype, 'executeChecks')
       .mockResolvedValue({} as any);
 
-    await (runner as any).handleMessage(mkMsg({
-      message_id: 50,
-      text: undefined,
-      caption: undefined,
-    }));
+    await (runner as any).handleMessage(
+      mkMsg({
+        message_id: 50,
+        text: undefined,
+        caption: undefined,
+      })
+    );
 
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
@@ -266,11 +280,13 @@ describe('TelegramPollingRunner message gating', () => {
       .mockResolvedValue({} as any);
 
     // Message from the bot itself (id=999 matches botInfo.id)
-    await (runner as any).handleMessage(mkMsg({
-      message_id: 60,
-      from: { id: 999, is_bot: true, first_name: 'TestBot', username: 'test_bot' },
-      text: 'Bot echo',
-    }));
+    await (runner as any).handleMessage(
+      mkMsg({
+        message_id: 60,
+        from: { id: 999, is_bot: true, first_name: 'TestBot', username: 'test_bot' },
+        text: 'Bot echo',
+      })
+    );
 
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
@@ -297,19 +313,23 @@ describe('TelegramPollingRunner message gating', () => {
       } as any);
 
     // Allowed chat
-    await (runner as any).handleMessage(mkMsg({
-      message_id: 70,
-      chat: { id: 100, type: 'private', title: undefined, username: undefined },
-      text: 'Allowed',
-    }));
+    await (runner as any).handleMessage(
+      mkMsg({
+        message_id: 70,
+        chat: { id: 100, type: 'private', title: undefined, username: undefined },
+        text: 'Allowed',
+      })
+    );
     expect(spy).toHaveBeenCalledTimes(1);
 
     // Not in allowlist
-    await (runner as any).handleMessage(mkMsg({
-      message_id: 71,
-      chat: { id: 999, type: 'private', title: undefined, username: undefined },
-      text: 'Blocked',
-    }));
+    await (runner as any).handleMessage(
+      mkMsg({
+        message_id: 71,
+        chat: { id: 999, type: 'private', title: undefined, username: undefined },
+        text: 'Blocked',
+      })
+    );
     expect(spy).toHaveBeenCalledTimes(1); // Still 1
 
     spy.mockRestore();

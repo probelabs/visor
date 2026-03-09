@@ -121,7 +121,8 @@ export class EmailClient {
       if (!apiKey) throw new Error('Resend API key is required for receive');
       this.resendConfig = {
         apiKey,
-        webhookSecret: (r as any).webhook_secret || r.webhookSecret || process.env.RESEND_WEBHOOK_SECRET,
+        webhookSecret:
+          (r as any).webhook_secret || r.webhookSecret || process.env.RESEND_WEBHOOK_SECRET,
       };
     }
 
@@ -200,8 +201,7 @@ export class EmailClient {
       for await (const msg of this.imapClient.fetch({ seen: false }, { source: true, uid: true })) {
         const parsed = await simpleParser(msg.source);
         const messageId = parsed.messageId || `<${randomUUID()}@visor>`;
-        const inReplyTo =
-          typeof parsed.inReplyTo === 'string' ? parsed.inReplyTo : undefined;
+        const inReplyTo = typeof parsed.inReplyTo === 'string' ? parsed.inReplyTo : undefined;
         const references = parsed.references
           ? Array.isArray(parsed.references)
             ? parsed.references
@@ -304,10 +304,18 @@ export class EmailClient {
    * Uses GET /emails/receiving with cursor-based pagination.
    * Returns email summaries (call fetchResendEmail for full content).
    */
-  async listReceivedEmails(opts?: {
-    limit?: number;
-    after?: string;
-  }): Promise<{ emails: Array<{ id: string; from: string; to: string[]; subject: string; created_at: string; message_id?: string }>; hasMore: boolean; lastId?: string }> {
+  async listReceivedEmails(opts?: { limit?: number; after?: string }): Promise<{
+    emails: Array<{
+      id: string;
+      from: string;
+      to: string[];
+      subject: string;
+      created_at: string;
+      message_id?: string;
+    }>;
+    hasMore: boolean;
+    lastId?: string;
+  }> {
     if (!this.resendConfig?.apiKey) {
       return { emails: [], hasMore: false };
     }
@@ -321,13 +329,15 @@ export class EmailClient {
 
       const resp = await fetch(url, {
         headers: {
-          'Authorization': `Bearer ${this.resendConfig.apiKey}`,
+          Authorization: `Bearer ${this.resendConfig.apiKey}`,
           'Content-Type': 'application/json',
         },
       });
 
       if (!resp.ok) {
-        console.warn(`[EmailClient] Resend list received failed: ${resp.status} ${resp.statusText}`);
+        console.warn(
+          `[EmailClient] Resend list received failed: ${resp.status} ${resp.statusText}`
+        );
         return { emails: [], hasMore: false };
       }
 
@@ -337,7 +347,7 @@ export class EmailClient {
         id: e.id,
         from: typeof e.from === 'string' ? e.from : e.from?.email || '',
         to: Array.isArray(e.to)
-          ? e.to.map((t: any) => typeof t === 'string' ? t : t?.email || '')
+          ? e.to.map((t: any) => (typeof t === 'string' ? t : t?.email || ''))
           : [],
         subject: e.subject || '',
         created_at: e.created_at || '',

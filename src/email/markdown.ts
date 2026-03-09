@@ -34,12 +34,12 @@ export function markdownToEmailHtml(text: string): string {
   let codeLines: string[] = [];
   let inBlockquote = false;
   let blockquoteLines: string[] = [];
-  let listStack: ('ul' | 'ol')[] = [];
+  const listStack: ('ul' | 'ol')[] = [];
 
   const flushBlockquote = () => {
     if (blockquoteLines.length > 0) {
       result.push(
-        `<blockquote style="border-left:3px solid #ccc;margin:8px 0;padding:4px 12px;color:#555;">${blockquoteLines.join('<br>')}</blockquote>`,
+        `<blockquote style="border-left:3px solid #ccc;margin:8px 0;padding:4px 12px;color:#555;">${blockquoteLines.join('<br>')}</blockquote>`
       );
       blockquoteLines = [];
       inBlockquote = false;
@@ -65,10 +65,10 @@ export function markdownToEmailHtml(text: string): string {
         codeBlockLang = trimmed.slice(3).trim();
         codeLines = [];
       } else {
-        const escaped = codeLines.map((l) => escapeHtml(l)).join('\n');
+        const escaped = codeLines.map(l => escapeHtml(l)).join('\n');
         const langAttr = codeBlockLang ? ` class="language-${escapeHtml(codeBlockLang)}"` : '';
         result.push(
-          `<pre style="background:#f4f4f4;padding:12px;border-radius:4px;overflow-x:auto;font-size:13px;"><code${langAttr}>${escaped}</code></pre>`,
+          `<pre style="background:#f4f4f4;padding:12px;border-radius:4px;overflow-x:auto;font-size:13px;"><code${langAttr}>${escaped}</code></pre>`
         );
         inCodeBlock = false;
         codeBlockLang = '';
@@ -119,7 +119,7 @@ export function markdownToEmailHtml(text: string): string {
     // Close any open list if we hit a non-list line
     if (listStack.length > 0) flushList();
 
-    let line = lines[i];
+    const line = lines[i];
 
     // Headers: # Header → <h1>...</h1> etc.
     const headerMatch = /^(#{1,6})\s+(.+)$/.exec(line.trimStart());
@@ -134,7 +134,7 @@ export function markdownToEmailHtml(text: string): string {
         6: '13px',
       };
       result.push(
-        `<h${level} style="font-size:${sizes[level]};margin:16px 0 8px 0;">${convertInline(headerMatch[2].trim())}</h${level}>`,
+        `<h${level} style="font-size:${sizes[level]};margin:16px 0 8px 0;">${convertInline(headerMatch[2].trim())}</h${level}>`
       );
       continue;
     }
@@ -157,9 +157,9 @@ export function markdownToEmailHtml(text: string): string {
 
   // Close any unclosed code block
   if (inCodeBlock && codeLines.length > 0) {
-    const escaped = codeLines.map((l) => escapeHtml(l)).join('\n');
+    const escaped = codeLines.map(l => escapeHtml(l)).join('\n');
     result.push(
-      `<pre style="background:#f4f4f4;padding:12px;border-radius:4px;overflow-x:auto;font-size:13px;"><code>${escaped}</code></pre>`,
+      `<pre style="background:#f4f4f4;padding:12px;border-radius:4px;overflow-x:auto;font-size:13px;"><code>${escaped}</code></pre>`
     );
   }
   flushBlockquote();
@@ -178,7 +178,7 @@ function convertInline(line: string): string {
   let processed = line.replace(/`([^`]+)`/g, (_m, code: string) => {
     const idx = codeSpans.length;
     codeSpans.push(
-      `<code style="background:#f0f0f0;padding:1px 4px;border-radius:3px;font-size:13px;">${escapeHtml(code)}</code>`,
+      `<code style="background:#f0f0f0;padding:1px 4px;border-radius:3px;font-size:13px;">${escapeHtml(code)}</code>`
     );
     return `\x00CODE${idx}\x00`;
   });
@@ -190,14 +190,13 @@ function convertInline(line: string): string {
   processed = processed.replace(
     /!\[([^\]]*)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g,
     (_m, alt: string, url: string) =>
-      `<img src="${url}" alt="${alt || 'image'}" style="max-width:100%;">`,
+      `<img src="${url}" alt="${alt || 'image'}" style="max-width:100%;">`
   );
 
   // Links: [label](url) → <a href="url">label</a>
   processed = processed.replace(
     /\[([^\]]+)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g,
-    (_m, label: string, url: string) =>
-      `<a href="${url}" style="color:#0066cc;">${label}</a>`,
+    (_m, label: string, url: string) => `<a href="${url}" style="color:#0066cc;">${label}</a>`
   );
 
   // Bold: **text** or __text__
@@ -213,7 +212,7 @@ function convertInline(line: string): string {
   // Restore code spans
   processed = processed.replace(
     /\x00CODE(\d+)\x00/g,
-    (_m, idx: string) => codeSpans[parseInt(idx)],
+    (_m, idx: string) => codeSpans[parseInt(idx)]
   );
 
   return processed;
@@ -242,7 +241,7 @@ export function formatEmailQuote(text: string): string {
   if (!text) return '';
   return text
     .split(/\r?\n/)
-    .map((l) => `> ${l}`)
+    .map(l => `> ${l}`)
     .join('\n');
 }
 

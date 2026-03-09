@@ -1,34 +1,29 @@
 /**
- * Email Frontend for Visor workflows.
+ * Microsoft Teams Frontend for Visor workflows.
  *
- * Mirrors the TelegramFrontend pattern:
- * - Sends AI replies as threaded emails (In-Reply-To, References headers)
- * - Converts Markdown to email HTML format
+ * Mirrors the WhatsAppFrontend pattern:
+ * - Sends AI replies as Teams text messages
+ * - Uses standard Markdown (Teams renders it natively)
  * - No reaction equivalent (CheckScheduled is a no-op)
  */
 import type { Frontend, FrontendContext } from './host';
-import { EmailClient, type EmailSendOptions } from '../email/client';
-import { formatEmailText, wrapInEmailTemplate, addRePrefix } from '../email/markdown';
+import { TeamsClient } from '../teams/client';
+import { formatTeamsText } from '../teams/markdown';
+import type { ConversationReference } from 'botbuilder';
 
-type EmailFrontendConfig = {
-  send?: {
-    type?: string;
-    host?: string;
-    port?: number;
-    auth?: { user?: string; pass?: string };
-    secure?: boolean;
-    from?: string;
-    api_key?: string;
-  };
+type TeamsFrontendConfig = {
+  appId?: string;
+  appPassword?: string;
+  tenantId?: string;
 };
 
-export class EmailFrontend implements Frontend {
-  public readonly name = 'email';
+export class TeamsFrontend implements Frontend {
+  public readonly name = 'teams';
   private subs: Array<{ unsubscribe(): void }> = [];
-  private cfg: EmailFrontendConfig;
+  private cfg: TeamsFrontendConfig;
   private errorNotified: boolean = false;
 
-  constructor(config?: EmailFrontendConfig) {
+  constructor(config?: TeamsFrontendConfig) {
     this.cfg = config || {};
   }
 
@@ -36,10 +31,10 @@ export class EmailFrontend implements Frontend {
     const bus = ctx.eventBus;
 
     try {
-      ctx.logger.info(`[email-frontend] started`);
+      ctx.logger.info(`[teams-frontend] started`);
     } catch {}
 
-    // CheckCompleted: send reply email
+    // CheckCompleted: post AI replies
     this.subs.push(
       bus.on('CheckCompleted', async (env: any) => {
         const ev = (env && env.payload) || env;
@@ -47,7 +42,7 @@ export class EmailFrontend implements Frontend {
       })
     );
 
-    // CheckErrored: send error email
+    // CheckErrored: post error notice
     this.subs.push(
       bus.on('CheckErrored', async (env: any) => {
         const ev = (env && env.payload) || env;
@@ -56,7 +51,7 @@ export class EmailFrontend implements Frontend {
       })
     );
 
-    // Shutdown: send fatal error email
+    // Shutdown: post error
     this.subs.push(
       bus.on('Shutdown', async (env: any) => {
         const ev = (env && env.payload) || env;
@@ -65,8 +60,8 @@ export class EmailFrontend implements Frontend {
       })
     );
 
-    // CheckScheduled: no-op for email (no reaction equivalent)
-    // StateTransition: no-op for email
+    // CheckScheduled: no-op (Teams has no reaction equivalent for text messages)
+    // StateTransition: no-op
   }
 
   stop(): void {
@@ -74,28 +69,33 @@ export class EmailFrontend implements Frontend {
     this.subs = [];
   }
 
-  private getEmailClient(ctx: FrontendContext): EmailClient | undefined {
+  private getTeams(ctx: FrontendContext): TeamsClient | undefined {
     // Prefer injected client (for tests or shared runner context)
-    const injected = (ctx as any).emailClient;
+    const injected = (ctx as any).teams || (ctx as any).teamsClient;
     if (injected) return injected;
-    // Lazy-create from config
+    // Lazy-create from env or frontend config
     try {
-      const emailConfig = (ctx as any).webhookContext?.webhookData?.get('/bots/email/message');
-      const sendCfg = this.cfg.send || (emailConfig as any)?.sendConfig;
-      if (sendCfg || process.env.EMAIL_SMTP_HOST || process.env.RESEND_API_KEY) {
-        return new EmailClient({
-          send: sendCfg || {
-            type: process.env.RESEND_API_KEY ? 'resend' : 'smtp',
-          },
+      const appId = this.cfg.appId || process.env.TEAMS_APP_ID;
+      const appPassword = this.cfg.appPassword || process.env.TEAMS_APP_PASSWORD;
+      if (
+        typeof appId === 'string' &&
+        appId.trim() &&
+        typeof appPassword === 'string' &&
+        appPassword.trim()
+      ) {
+        return new TeamsClient({
+          appId: appId.trim(),
+          appPassword: appPassword.trim(),
+          tenantId: this.cfg.tenantId || process.env.TEAMS_TENANT_ID,
         });
       }
     } catch {}
     return undefined;
   }
 
-  private getInboundEmailPayload(ctx: FrontendContext): any | null {
+  private getInboundTeamsPayload(ctx: FrontendContext): any | null {
     try {
-      const endpoint = '/bots/email/message';
+      const endpoint = '/bots/teams/message';
       return (ctx as any).webhookContext?.webhookData?.get(endpoint) || null;
     } catch {
       return null;
@@ -106,33 +106,26 @@ export class EmailFrontend implements Frontend {
     ctx: FrontendContext,
     title: string,
     message: string,
-    checkId?: string
+    _checkId?: string
   ): Promise<void> {
     if (this.errorNotified) return;
-    const client = this.getEmailClient(ctx);
-    if (!client) return;
-    const payload = this.getInboundEmailPayload(ctx);
+    const teams = this.getTeams(ctx);
+    if (!teams) return;
+    const payload = this.getInboundTeamsPayload(ctx);
+    const conversationRef: ConversationReference | undefined =
+      payload?.teams_conversation_reference;
+    if (!conversationRef) return;
     const ev: any = payload?.event;
-    if (!ev?.from) return;
 
     let text = `${title}`;
-    if (checkId) text += `\nCheck: ${checkId}`;
+    if (_checkId) text += `\nCheck: ${_checkId}`;
     if (message) text += `\n${message}`;
 
-    const sendOpts: EmailSendOptions = {
-      to: ev.from,
-      subject: ev.subject ? addRePrefix(ev.subject) : `Visor: ${title}`,
+    await teams.sendMessage({
+      conversationReference: conversationRef,
       text,
-      html: wrapInEmailTemplate(`<p><strong>${title}</strong></p><p>${message}</p>`),
-    };
-
-    // Thread the reply
-    if (ev.messageId) {
-      sendOpts.inReplyTo = ev.messageId;
-      sendOpts.references = ev.references ? [...ev.references, ev.messageId] : [ev.messageId];
-    }
-
-    await client.sendEmail(sendOpts);
+      replyToActivityId: ev?.activity_id,
+    });
     this.errorNotified = true;
   }
 
@@ -162,17 +155,21 @@ export class EmailFrontend implements Frontend {
         }
       }
 
-      const client = this.getEmailClient(ctx);
-      if (!client) return;
+      const teams = this.getTeams(ctx);
+      if (!teams) return;
 
-      const payload = this.getInboundEmailPayload(ctx);
-      const ev: any = payload?.event;
-      if (!ev?.from) {
-        ctx.logger.warn(`[email-frontend] skip posting reply for ${checkId}: missing from address`);
+      const payload = this.getInboundTeamsPayload(ctx);
+      const conversationRef: ConversationReference | undefined =
+        payload?.teams_conversation_reference;
+      if (!conversationRef) {
+        ctx.logger.warn(
+          `[teams-frontend] skip posting reply for ${checkId}: missing conversation reference`
+        );
         return;
       }
+      const ev: any = payload?.event;
 
-      // Extract text (same logic as TelegramFrontend/SlackFrontend)
+      // Extract text (same logic as WhatsApp/Telegram/Email/Slack frontends)
       const out: any = (result as any)?.output;
       let text: string | undefined;
       if (out && typeof out.text === 'string' && out.text.trim().length > 0) {
@@ -195,42 +192,33 @@ export class EmailFrontend implements Frontend {
       }
 
       if (!text) {
-        ctx.logger.info(`[email-frontend] skip posting reply for ${checkId}: no renderable text`);
+        ctx.logger.info(`[teams-frontend] skip posting reply for ${checkId}: no renderable text`);
         return;
       }
 
       // Normalize literal \n escape sequences
       text = text.replace(/\\n/g, '\n');
 
-      const htmlBody = formatEmailText(text);
-      const sendOpts: EmailSendOptions = {
-        to: ev.from,
-        subject: ev.subject ? addRePrefix(ev.subject) : `Re: Visor response`,
-        text,
-        html: wrapInEmailTemplate(htmlBody),
-      };
+      const formattedText = formatTeamsText(text);
+      const postResult = await teams.sendMessage({
+        conversationReference: conversationRef,
+        text: formattedText,
+        replyToActivityId: ev?.activity_id,
+      });
 
-      // Thread the reply
-      if (ev.messageId) {
-        sendOpts.inReplyTo = ev.messageId;
-        sendOpts.references = ev.references ? [...ev.references, ev.messageId] : [ev.messageId];
-      }
-
-      const sendResult = await client.sendEmail(sendOpts);
-
-      if (!sendResult.ok) {
+      if (!postResult.ok) {
         ctx.logger.warn(
-          `[email-frontend] failed to send reply for ${checkId}: ${sendResult.error}`
+          `[teams-frontend] failed to post reply for ${checkId}: ${postResult.error}`
         );
         return;
       }
       ctx.logger.info(
-        `[email-frontend] sent reply for ${checkId} to ${ev.from} (messageId=${sendResult.messageId})`
+        `[teams-frontend] posted reply for ${checkId} (activityId=${postResult.activityId})`
       );
     } catch (err) {
       try {
         ctx.logger.warn(
-          `[email-frontend] maybePostDirectReply failed for ${checkId}: ${
+          `[teams-frontend] maybePostDirectReply failed for ${checkId}: ${
             err instanceof Error ? err.message : String(err)
           }`
         );

@@ -56,7 +56,9 @@ export function markdownToTelegramHtml(text: string): string {
         // Close code block
         const escaped = codeLines.map(l => escapeHtml(l)).join('\n');
         if (codeBlockLang && codeBlockLang !== 'mermaid') {
-          result.push(`<pre><code class="language-${escapeHtml(codeBlockLang)}">${escaped}</code></pre>`);
+          result.push(
+            `<pre><code class="language-${escapeHtml(codeBlockLang)}">${escaped}</code></pre>`
+          );
         } else {
           result.push(`<pre>${escaped}</pre>`);
         }
@@ -81,7 +83,7 @@ export function markdownToTelegramHtml(text: string): string {
       flushBlockquote();
     }
 
-    let line = lines[i];
+    const line = lines[i];
 
     // Headers: # Header → <b>Header</b>
     const headerMatch = /^(#{1,6})\s+(.+)$/.exec(line.trimStart());
@@ -144,13 +146,13 @@ function convertInline(line: string): string {
   // Images: ![alt](url) → (just show as link)
   processed = processed.replace(
     /!\[([^\]]*)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g,
-    (_m, alt: string, url: string) => `<a href="${url}">${alt || 'image'}</a>`,
+    (_m, alt: string, url: string) => `<a href="${url}">${alt || 'image'}</a>`
   );
 
   // Links: [label](url) → <a href="url">label</a>
   processed = processed.replace(
     /\[([^\]]+)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g,
-    (_m, label: string, url: string) => `<a href="${url}">${label}</a>`,
+    (_m, label: string, url: string) => `<a href="${url}">${label}</a>`
   );
 
   // Bold: **text** or __text__ → <b>text</b>
@@ -164,7 +166,10 @@ function convertInline(line: string): string {
   processed = processed.replace(/~~([^~]+)~~/g, '<s>$1</s>');
 
   // Restore code spans
-  processed = processed.replace(/\x00CODE(\d+)\x00/g, (_m, idx: string) => codeSpans[parseInt(idx)]);
+  processed = processed.replace(
+    /\x00CODE(\d+)\x00/g,
+    (_m, idx: string) => codeSpans[parseInt(idx)]
+  );
 
   return processed;
 }

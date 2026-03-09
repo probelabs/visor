@@ -54,13 +54,13 @@ describe('markdownToTelegramHtml', () => {
 
   it('converts links to <a href>', () => {
     expect(markdownToTelegramHtml('[docs](https://example.com)')).toBe(
-      '<a href="https://example.com">docs</a>',
+      '<a href="https://example.com">docs</a>'
     );
   });
 
   it('converts images to <a href>', () => {
     expect(markdownToTelegramHtml('![logo](https://example.com/img.png)')).toBe(
-      '<a href="https://example.com/img.png">logo</a>',
+      '<a href="https://example.com/img.png">logo</a>'
     );
   });
 

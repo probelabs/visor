@@ -1,0 +1,18 @@
+version: "1"
+
+whatsapp:
+  # phone_allowlist:         # Uncomment to limit to specific numbers
+  #   - "15551234567"
+
+checks:
+  respond:
+    type: ai
+    schema: text
+    on:
+      - whatsapp_message
+      - manual
+    prompt: |
+      You are a helpful assistant running inside Visor.
+      Respond concisely to the user's message.
+
+      User message: {{ webhook.event.text }}

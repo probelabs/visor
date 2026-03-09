@@ -1,0 +1,18 @@
+version: "1"
+
+teams:
+  # user_allowlist:           # Uncomment to limit to specific AAD user IDs
+  #   - "user-aad-object-id"
+
+checks:
+  respond:
+    type: ai
+    schema: text
+    on:
+      - teams_message
+      - manual
+    prompt: |
+      You are a helpful assistant running inside Visor.
+      Respond concisely to the user's message.
+
+      User message: {{ webhook.event.text }}

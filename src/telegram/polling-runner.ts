@@ -34,11 +34,7 @@ export class TelegramPollingRunner {
   private taskStore?: import('../agent-protocol/task-store').TaskStore;
   private configPath?: string;
 
-  constructor(
-    engine: StateMachineExecutionEngine,
-    cfg: VisorConfig,
-    opts: TelegramPollingConfig,
-  ) {
+  constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: TelegramPollingConfig) {
     const token = opts.botToken || process.env.TELEGRAM_BOT_TOKEN || '';
     if (!token) throw new Error('TELEGRAM_BOT_TOKEN is required');
 
@@ -56,10 +52,7 @@ export class TelegramPollingRunner {
   }
 
   /** Set shared task store for execution tracking */
-  setTaskStore(
-    store: import('../agent-protocol/task-store').TaskStore,
-    configPath?: string,
-  ): void {
+  setTaskStore(store: import('../agent-protocol/task-store').TaskStore, configPath?: string): void {
     this.taskStore = store;
     this.configPath = configPath;
   }
@@ -78,19 +71,21 @@ export class TelegramPollingRunner {
     const bot = this.client.getBot();
 
     // Register message handler
-    bot.on(['message', 'channel_post'], async (ctx) => {
+    bot.on(['message', 'channel_post'], async ctx => {
       const msg = ctx.message || ctx.channelPost;
       if (!msg) return;
 
       // Build TelegramMessageInfo from grammy context
       const msgInfo: TelegramMessageInfo = {
         message_id: msg.message_id,
-        from: msg.from ? {
-          id: msg.from.id,
-          is_bot: msg.from.is_bot,
-          first_name: msg.from.first_name,
-          username: msg.from.username,
-        } : undefined,
+        from: msg.from
+          ? {
+              id: msg.from.id,
+              is_bot: msg.from.is_bot,
+              first_name: msg.from.first_name,
+              username: msg.from.username,
+            }
+          : undefined,
         chat: {
           id: msg.chat.id,
           type: msg.chat.type as TelegramMessageInfo['chat']['type'],
@@ -100,13 +95,15 @@ export class TelegramPollingRunner {
         date: msg.date,
         text: (msg as any).text,
         caption: (msg as any).caption,
-        reply_to_message: (msg as any).reply_to_message ? {
-          message_id: (msg as any).reply_to_message.message_id,
-          from: (msg as any).reply_to_message.from,
-          chat: (msg as any).reply_to_message.chat,
-          date: (msg as any).reply_to_message.date,
-          text: (msg as any).reply_to_message.text,
-        } : undefined,
+        reply_to_message: (msg as any).reply_to_message
+          ? {
+              message_id: (msg as any).reply_to_message.message_id,
+              from: (msg as any).reply_to_message.from,
+              chat: (msg as any).reply_to_message.chat,
+              date: (msg as any).reply_to_message.date,
+              text: (msg as any).reply_to_message.text,
+            }
+          : undefined,
         message_thread_id: (msg as any).message_thread_id,
       };
 
@@ -114,7 +111,7 @@ export class TelegramPollingRunner {
     });
 
     // Error handler
-    bot.catch((err) => {
+    bot.catch(err => {
       logger.error(`[TelegramPolling] Bot error: ${err.message || String(err)}`);
     });
 
@@ -213,7 +210,7 @@ export class TelegramPollingRunner {
       } catch {}
 
       logger.info(
-        `[TelegramPolling] Dispatching engine run for chat ${msg.chat.id} (${msg.chat.type})`,
+        `[TelegramPolling] Dispatching engine run for chat ${msg.chat.id} (${msg.chat.type})`
       );
 
       const execFn = () =>
@@ -241,14 +238,14 @@ export class TelegramPollingRunner {
               telegram_user: msg.from ? String(msg.from.id) : 'unknown',
             },
           },
-          execFn,
+          execFn
         );
       } else {
         await execFn();
       }
     } catch (e) {
       logger.error(
-        `[TelegramPolling] Engine execution failed: ${e instanceof Error ? e.message : String(e)}`,
+        `[TelegramPolling] Engine execution failed: ${e instanceof Error ? e.message : String(e)}`
       );
     } finally {
       if (chatTrackKey) this.untrackChat(chatTrackKey);

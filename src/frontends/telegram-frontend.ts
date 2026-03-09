@@ -41,9 +41,7 @@ export class TelegramFrontend implements Frontend {
         const ev: any = payload.event || {};
         const chatId = String(ev.chat_id || '-');
         const msgId = String(ev.message_id || '-');
-        ctx.logger.info(
-          `[telegram-frontend] inbound event: chat_id=${chatId} message_id=${msgId}`,
-        );
+        ctx.logger.info(`[telegram-frontend] inbound event: chat_id=${chatId} message_id=${msgId}`);
       }
     } catch {}
 
@@ -52,7 +50,7 @@ export class TelegramFrontend implements Frontend {
       bus.on('CheckCompleted', async (env: any) => {
         const ev = (env && env.payload) || env;
         await this.maybePostDirectReply(ctx, ev.checkId, ev.result).catch(() => {});
-      }),
+      })
     );
 
     // CheckErrored: post error notice
@@ -61,7 +59,7 @@ export class TelegramFrontend implements Frontend {
         const ev = (env && env.payload) || env;
         const message = ev?.error?.message || 'Execution error';
         await this.maybePostError(ctx, 'Check failed', message, ev?.checkId).catch(() => {});
-      }),
+      })
     );
 
     // StateTransition: finalize reactions on terminal state
@@ -71,7 +69,7 @@ export class TelegramFrontend implements Frontend {
         if (ev && (ev.to === 'Completed' || ev.to === 'Error')) {
           await this.finalizeReactions(ctx).catch(() => {});
         }
-      }),
+      })
     );
 
     // Shutdown: post error
@@ -80,14 +78,14 @@ export class TelegramFrontend implements Frontend {
         const ev = (env && env.payload) || env;
         const message = ev?.error?.message || 'Fatal error';
         await this.maybePostError(ctx, 'Run failed', message).catch(() => {});
-      }),
+      })
     );
 
     // CheckScheduled: add acknowledgement reaction
     this.subs.push(
       bus.on('CheckScheduled', async () => {
         await this.ensureAcknowledgement(ctx).catch(() => {});
-      }),
+      })
     );
   }
 
@@ -119,7 +117,9 @@ export class TelegramFrontend implements Frontend {
     }
   }
 
-  private getInboundTelegramEvent(ctx: FrontendContext): { chatId: number | string; messageId: number } | null {
+  private getInboundTelegramEvent(
+    ctx: FrontendContext
+  ): { chatId: number | string; messageId: number } | null {
     try {
       const payload = this.getInboundTelegramPayload(ctx);
       const ev: any = payload?.event;
@@ -154,7 +154,7 @@ export class TelegramFrontend implements Frontend {
     });
     try {
       ctx.logger.info(
-        `[telegram-frontend] added ack reaction chat_id=${ref.chatId} message_id=${ref.messageId}`,
+        `[telegram-frontend] added ack reaction chat_id=${ref.chatId} message_id=${ref.messageId}`
       );
     } catch {}
     this.acked = true;
@@ -173,7 +173,7 @@ export class TelegramFrontend implements Frontend {
       });
       try {
         ctx.logger.info(
-          `[telegram-frontend] finalized reaction chat_id=${this.ackRef.chatId} message_id=${this.ackRef.messageId}`,
+          `[telegram-frontend] finalized reaction chat_id=${this.ackRef.chatId} message_id=${this.ackRef.messageId}`
         );
       } catch {}
     } finally {
@@ -186,7 +186,7 @@ export class TelegramFrontend implements Frontend {
     ctx: FrontendContext,
     title: string,
     message: string,
-    checkId?: string,
+    checkId?: string
   ): Promise<void> {
     if (this.errorNotified) return;
     const telegram = this.getTelegram(ctx);
@@ -212,7 +212,7 @@ export class TelegramFrontend implements Frontend {
   private async maybePostDirectReply(
     ctx: FrontendContext,
     checkId: string,
-    result: { output?: any; content?: string },
+    result: { output?: any; content?: string }
   ): Promise<void> {
     try {
       const cfg: any = ctx.config || {};
@@ -243,9 +243,7 @@ export class TelegramFrontend implements Frontend {
       const chatId = ev?.chat_id;
       const messageId = ev?.message_id;
       if (chatId === undefined) {
-        ctx.logger.warn(
-          `[telegram-frontend] skip posting reply for ${checkId}: missing chat_id`,
-        );
+        ctx.logger.warn(`[telegram-frontend] skip posting reply for ${checkId}: missing chat_id`);
         return;
       }
 
@@ -255,7 +253,10 @@ export class TelegramFrontend implements Frontend {
       if (out && typeof out.text === 'string' && out.text.trim().length > 0) {
         text = out.text.trim();
       } else if (isAi && typeof checkCfg.schema === 'string') {
-        if (typeof (result as any)?.content === 'string' && (result as any).content.trim().length > 0) {
+        if (
+          typeof (result as any)?.content === 'string' &&
+          (result as any).content.trim().length > 0
+        ) {
           text = (result as any).content.trim();
         }
       } else if (isLogChat && typeof (result as any)?.logOutput === 'string') {
@@ -270,7 +271,7 @@ export class TelegramFrontend implements Frontend {
 
       if (!text) {
         ctx.logger.info(
-          `[telegram-frontend] skip posting reply for ${checkId}: no renderable text`,
+          `[telegram-frontend] skip posting reply for ${checkId}: no renderable text`
         );
         return;
       }
@@ -289,19 +290,19 @@ export class TelegramFrontend implements Frontend {
 
       if (!postResult.ok) {
         ctx.logger.warn(
-          `[telegram-frontend] failed to post reply for ${checkId}: ${postResult.error}`,
+          `[telegram-frontend] failed to post reply for ${checkId}: ${postResult.error}`
         );
         return;
       }
       ctx.logger.info(
-        `[telegram-frontend] posted reply for ${checkId} to chat_id=${chatId} message_id=${postResult.message_id}`,
+        `[telegram-frontend] posted reply for ${checkId} to chat_id=${chatId} message_id=${postResult.message_id}`
       );
     } catch (err) {
       try {
         ctx.logger.warn(
           `[telegram-frontend] maybePostDirectReply failed for ${checkId}: ${
             err instanceof Error ? err.message : String(err)
-          }`,
+          }`
         );
       } catch {}
     }

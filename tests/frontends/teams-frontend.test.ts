@@ -1,49 +1,77 @@
-// Email frontend EventBus tests.
-// Mirrors the pattern from telegram-frontend.test.ts:
-// - Fake EmailClient with jest.fn() API stubs
+// Teams frontend EventBus tests.
+// Mirrors the pattern from whatsapp-frontend.test.ts:
+// - Fake TeamsClient with jest.fn() API stubs
 // - EventBus emission to trigger handlers
-// - Verify correct email send calls with threading headers
+// - Verify correct Teams API calls
+
+jest.mock('botbuilder', () => {
+  return {
+    CloudAdapter: jest.fn().mockImplementation(() => ({
+      continueConversationAsync: jest.fn(),
+      onTurnError: null,
+      process: jest.fn(),
+    })),
+    ConfigurationBotFrameworkAuthentication: jest.fn(),
+    TurnContext: {
+      getConversationReference: jest.fn(),
+    },
+    MessageFactory: {
+      text: jest.fn(t => ({ type: 'message', text: t })),
+    },
+    ActivityTypes: { Message: 'message' },
+  };
+});
 
 import { EventBus } from '../../src/event-bus/event-bus';
-import { EmailFrontend } from '../../src/frontends/email-frontend';
+import { TeamsFrontend } from '../../src/frontends/teams-frontend';
 
-function makeFakeEmailClient() {
+function makeFakeTeams() {
   return {
-    sendEmail: jest.fn(async () => ({ ok: true, messageId: '<reply@visor>' })),
-    getFromAddress: jest.fn(() => 'bot@test.com'),
-    getReceiveBackend: jest.fn(() => 'imap'),
+    sendMessage: jest.fn(async () => ({ ok: true, activityId: 'act.reply1' })),
+    getAdapter: jest.fn(() => ({})),
+    getAppId: jest.fn(() => 'test-app-id'),
   } as any;
 }
 
+const fakeConversationRef = {
+  activityId: 'act.msg1',
+  bot: { id: 'bot-id', name: 'Bot' },
+  channelId: 'msteams',
+  conversation: { id: 'conv-1' },
+  serviceUrl: 'https://smba.trafficmanager.net/teams/',
+};
+
 function makeCtx(
   bus: EventBus,
-  emailClient: any,
+  teams: any,
   opts: {
-    from?: string;
-    subject?: string;
-    messageId?: string;
-    references?: string[];
+    conversationId?: string;
+    activityId?: string;
     checks?: Record<string, any>;
   } = {}
 ) {
-  const from = opts.from ?? 'user@test.com';
-  const subject = opts.subject ?? 'Test Subject';
-  const messageId = opts.messageId ?? '<msg1@test>';
+  const activityId = opts.activityId ?? 'act.msg1';
   const map = new Map<string, unknown>();
-  map.set('/bots/email/message', {
+  map.set('/bots/teams/message', {
     event: {
-      type: 'email_message',
-      from,
-      to: ['bot@test.com'],
-      subject,
+      type: 'teams_message',
+      conversation_id: opts.conversationId ?? 'conv-1',
+      activity_id: activityId,
       text: 'Hello bot',
-      messageId,
-      references: opts.references || [],
+      from_id: 'user-1',
+      from_name: 'Test User',
     },
-    sendConfig: { type: 'smtp' },
+    teams_conversation: {
+      transport: 'teams',
+      thread: { id: 'conv-1' },
+      messages: [],
+      current: { role: 'user', text: 'Hello bot', timestamp: '2024-01-01T00:00:00.000Z' },
+      attributes: {},
+    },
+    teams_conversation_reference: fakeConversationRef,
   });
 
-  const fe = new EmailFrontend();
+  const fe = new TeamsFrontend();
   fe.start({
     eventBus: bus,
     logger: console as any,
@@ -54,20 +82,21 @@ function makeCtx(
     },
     run: { runId: 'r1' },
     webhookContext: { webhookData: map },
-    emailClient,
+    teams,
+    teamsClient: teams,
   } as any);
 
-  // Inject fake email client
-  (fe as any).getEmailClient = () => emailClient;
+  // Inject fake teams client
+  (fe as any).getTeams = () => teams;
 
   return fe;
 }
 
-describe('EmailFrontend (event-bus)', () => {
+describe('TeamsFrontend (event-bus)', () => {
   test('sends direct reply for AI checks with simple schemas', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams);
 
     await bus.emit({
       type: 'CheckCompleted',
@@ -76,40 +105,17 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Hello from AI!' } },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
-    const call = emailClient.sendEmail.mock.calls[0][0];
-    expect(call.to).toBe('user@test.com');
+    expect(teams.sendMessage).toHaveBeenCalledTimes(1);
+    const call = teams.sendMessage.mock.calls[0][0];
+    expect(call.conversationReference).toEqual(fakeConversationRef);
     expect(call.text).toContain('Hello from AI!');
-    expect(call.html).toBeTruthy();
-    expect(call.subject).toBe('Re: Test Subject');
-    expect(call.inReplyTo).toBe('<msg1@test>');
-    expect(call.references).toEqual(['<msg1@test>']);
-  });
-
-  test('includes full References chain in replies', async () => {
-    const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient, {
-      messageId: '<msg2@test>',
-      references: ['<root@test>', '<msg1@test>'],
-    });
-
-    await bus.emit({
-      type: 'CheckCompleted',
-      checkId: 'reply',
-      scope: [],
-      result: { issues: [], output: { text: 'Threaded reply' } },
-    });
-
-    const call = emailClient.sendEmail.mock.calls[0][0];
-    expect(call.inReplyTo).toBe('<msg2@test>');
-    expect(call.references).toEqual(['<root@test>', '<msg1@test>', '<msg2@test>']);
+    expect(call.replyToActivityId).toBe('act.msg1');
   });
 
   test('does not send for non-AI / structured schema checks', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient, {
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams, {
       checks: {
         jsonRouter: {
           type: 'ai',
@@ -132,13 +138,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'log' } },
     });
 
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(teams.sendMessage).not.toHaveBeenCalled();
   });
 
   test('sends reply for workflow checks with output.text', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient, {
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams, {
       checks: {
         chat: { type: 'workflow', workflow: 'assistant' },
       },
@@ -151,15 +157,15 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Workflow response' } },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
-    const call = emailClient.sendEmail.mock.calls[0][0];
+    expect(teams.sendMessage).toHaveBeenCalledTimes(1);
+    const call = teams.sendMessage.mock.calls[0][0];
     expect(call.text).toContain('Workflow response');
   });
 
-  test('sends error email on CheckErrored', async () => {
+  test('sends error notice on CheckErrored', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams);
 
     await bus.emit({
       type: 'CheckErrored',
@@ -168,19 +174,18 @@ describe('EmailFrontend (event-bus)', () => {
       error: { message: 'AI provider timeout' },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
-    const call = emailClient.sendEmail.mock.calls[0][0];
-    expect(call.to).toBe('user@test.com');
+    expect(teams.sendMessage).toHaveBeenCalledTimes(1);
+    const call = teams.sendMessage.mock.calls[0][0];
+    expect(call.conversationReference).toEqual(fakeConversationRef);
     expect(call.text).toContain('Check failed');
     expect(call.text).toContain('AI provider timeout');
-    // Should still thread the error
-    expect(call.inReplyTo).toBe('<msg1@test>');
+    expect(call.replyToActivityId).toBe('act.msg1');
   });
 
   test('does not send duplicate errors', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams);
 
     await bus.emit({
       type: 'CheckErrored',
@@ -195,24 +200,25 @@ describe('EmailFrontend (event-bus)', () => {
       error: { message: 'err2' },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
+    expect(teams.sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  test('skips reply when from address is missing', async () => {
+  test('skips reply when conversation reference is missing', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
+    const teams = makeFakeTeams();
 
     // Empty webhook data (no inbound event)
-    const fe = new EmailFrontend();
+    const fe = new TeamsFrontend();
     fe.start({
       eventBus: bus,
       logger: console as any,
       config: { checks: { reply: { type: 'ai', schema: 'text' } } },
       run: { runId: 'r1' },
       webhookContext: { webhookData: new Map() },
-      emailClient,
+      teams,
+      teamsClient: teams,
     } as any);
-    (fe as any).getEmailClient = () => emailClient;
+    (fe as any).getTeams = () => teams;
 
     await bus.emit({
       type: 'CheckCompleted',
@@ -221,13 +227,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Hello!' } },
     });
 
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(teams.sendMessage).not.toHaveBeenCalled();
   });
 
   test('skips internal criticality checks', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient, {
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams, {
       checks: {
         internal: { type: 'ai', schema: 'text', criticality: 'internal' },
       },
@@ -240,13 +246,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Should not be sent' } },
     });
 
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(teams.sendMessage).not.toHaveBeenCalled();
   });
 
   test('stop() unsubscribes all handlers', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    const fe = makeCtx(bus, emailClient);
+    const teams = makeFakeTeams();
+    const fe = makeCtx(bus, teams);
 
     fe.stop();
 
@@ -257,24 +263,23 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'After stop' } },
     });
 
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(teams.sendMessage).not.toHaveBeenCalled();
   });
 
-  test('no-op on CheckScheduled (no email equivalent of reactions)', async () => {
+  test('no-op on CheckScheduled (no Teams equivalent of reactions)', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams);
 
     await bus.emit({ type: 'CheckScheduled', checkId: 'reply', scope: [] });
 
-    // Email has no reaction equivalent — nothing should be called
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(teams.sendMessage).not.toHaveBeenCalled();
   });
 
   test('skips reply when output.text is empty/whitespace', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams);
 
     await bus.emit({
       type: 'CheckCompleted',
@@ -283,13 +288,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: '   ' } },
     });
 
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(teams.sendMessage).not.toHaveBeenCalled();
   });
 
   test('skips reply when output is null', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams);
 
     await bus.emit({
       type: 'CheckCompleted',
@@ -298,13 +303,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: null },
     });
 
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(teams.sendMessage).not.toHaveBeenCalled();
   });
 
   test('skips reply for unknown check ID', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams);
 
     await bus.emit({
       type: 'CheckCompleted',
@@ -313,13 +318,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Should not send' } },
     });
 
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(teams.sendMessage).not.toHaveBeenCalled();
   });
 
   test('normalizes literal \\n escape sequences in output', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams);
 
     await bus.emit({
       type: 'CheckCompleted',
@@ -328,14 +333,14 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'line1\\nline2\\nline3' } },
     });
 
-    const call = emailClient.sendEmail.mock.calls[0][0];
-    expect(call.text).toBe('line1\nline2\nline3');
+    const call = teams.sendMessage.mock.calls[0][0];
+    expect(call.text).toContain('line1\nline2\nline3');
   });
 
   test('appends _rawOutput when present', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams);
 
     await bus.emit({
       type: 'CheckCompleted',
@@ -344,15 +349,15 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Main text', _rawOutput: 'Extra raw content' } },
     });
 
-    const call = emailClient.sendEmail.mock.calls[0][0];
+    const call = teams.sendMessage.mock.calls[0][0];
     expect(call.text).toContain('Main text');
     expect(call.text).toContain('Extra raw content');
   });
 
   test('falls back to content field for AI text schema checks', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams);
 
     await bus.emit({
       type: 'CheckCompleted',
@@ -361,14 +366,14 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], content: 'Content fallback text' },
     });
 
-    const call = emailClient.sendEmail.mock.calls[0][0];
+    const call = teams.sendMessage.mock.calls[0][0];
     expect(call.text).toContain('Content fallback text');
   });
 
   test('sends reply for log checks with group=chat', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient, {
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams, {
       checks: {
         chatLog: { type: 'log', group: 'chat' },
       },
@@ -381,56 +386,52 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], logOutput: 'Chat log message' },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
-    const call = emailClient.sendEmail.mock.calls[0][0];
+    expect(teams.sendMessage).toHaveBeenCalledTimes(1);
+    const call = teams.sendMessage.mock.calls[0][0];
     expect(call.text).toContain('Chat log message');
   });
 
-  test('sends Shutdown error email', async () => {
+  test('sends Shutdown error message', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams);
 
     await bus.emit({
       type: 'Shutdown',
       error: { message: 'Fatal crash' },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
-    const call = emailClient.sendEmail.mock.calls[0][0];
+    expect(teams.sendMessage).toHaveBeenCalledTimes(1);
+    const call = teams.sendMessage.mock.calls[0][0];
     expect(call.text).toContain('Run failed');
     expect(call.text).toContain('Fatal crash');
   });
 
   test('Shutdown error does not send if error already notified', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient);
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams);
 
-    // First error
     await bus.emit({
       type: 'CheckErrored',
       checkId: 'reply',
       scope: [],
       error: { message: 'err1' },
     });
-    // Shutdown after
     await bus.emit({
       type: 'Shutdown',
       error: { message: 'Fatal' },
     });
 
-    // Only one email sent (the first error)
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
+    expect(teams.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   test('handles send failure gracefully', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    emailClient.sendEmail.mockResolvedValue({ ok: false, error: 'Connection refused' });
-    makeCtx(bus, emailClient);
+    const teams = makeFakeTeams();
+    teams.sendMessage.mockResolvedValue({ ok: false, error: 'Rate limited' });
+    makeCtx(bus, teams);
 
-    // Should not throw
     await bus.emit({
       type: 'CheckCompleted',
       checkId: 'reply',
@@ -438,13 +439,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Hello!' } },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
+    expect(teams.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   test('skips AI checks with non-simple schemas', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient, {
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams, {
       checks: {
         custom: { type: 'ai', schema: 'custom-format' },
       },
@@ -457,13 +458,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Should not send' } },
     });
 
-    expect(emailClient.sendEmail).not.toHaveBeenCalled();
+    expect(teams.sendMessage).not.toHaveBeenCalled();
   });
 
   test('sends for AI checks with code-review schema', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient, {
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams, {
       checks: {
         review: { type: 'ai', schema: 'code-review' },
       },
@@ -476,13 +477,13 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Code review result' } },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
+    expect(teams.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   test('sends for AI checks with markdown schema', async () => {
     const bus = new EventBus();
-    const emailClient = makeFakeEmailClient();
-    makeCtx(bus, emailClient, {
+    const teams = makeFakeTeams();
+    makeCtx(bus, teams, {
       checks: {
         doc: { type: 'ai', schema: 'markdown' },
       },
@@ -495,6 +496,6 @@ describe('EmailFrontend (event-bus)', () => {
       result: { issues: [], output: { text: 'Markdown output' } },
     });
 
-    expect(emailClient.sendEmail).toHaveBeenCalledTimes(1);
+    expect(teams.sendMessage).toHaveBeenCalledTimes(1);
   });
 });

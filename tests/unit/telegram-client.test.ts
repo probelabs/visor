@@ -19,7 +19,10 @@ jest.mock('grammy', () => ({
     }
   },
   InputFile: class {
-    constructor(public data: any, public filename?: string) {}
+    constructor(
+      public data: any,
+      public filename?: string
+    ) {}
   },
 }));
 

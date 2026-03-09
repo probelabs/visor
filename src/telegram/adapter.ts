@@ -9,7 +9,12 @@ import type { ConversationContext, NormalizedMessage } from '../types/bot';
 export interface TelegramMessageInfo {
   message_id: number;
   from?: { id: number; is_bot: boolean; first_name: string; username?: string };
-  chat: { id: number; type: 'private' | 'group' | 'supergroup' | 'channel'; title?: string; username?: string };
+  chat: {
+    id: number;
+    type: 'private' | 'group' | 'supergroup' | 'channel';
+    title?: string;
+    username?: string;
+  };
   date: number;
   text?: string;
   caption?: string;
@@ -68,9 +73,7 @@ export class TelegramAdapter {
   /** Build ConversationContext from a Telegram message */
   buildConversationContext(msg: TelegramMessageInfo): ConversationContext {
     const chatId = String(msg.chat.id);
-    const threadId = msg.message_thread_id
-      ? `${chatId}:${msg.message_thread_id}`
-      : chatId;
+    const threadId = msg.message_thread_id ? `${chatId}:${msg.message_thread_id}` : chatId;
 
     const current = this.normalizeMessage(msg);
 
@@ -85,9 +88,7 @@ export class TelegramAdapter {
       transport: 'telegram',
       thread: {
         id: threadId,
-        url: msg.chat.username
-          ? `https://t.me/${msg.chat.username}/${msg.message_id}`
-          : undefined,
+        url: msg.chat.username ? `https://t.me/${msg.chat.username}/${msg.message_id}` : undefined,
       },
       messages: [current],
       current,

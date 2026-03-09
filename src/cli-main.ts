@@ -1514,6 +1514,8 @@ export async function main(): Promise<void> {
       !options.debugServer &&
       !options.slack &&
       !(options as any).telegram &&
+      !(options as any).whatsapp &&
+      !(options as any).teams &&
       !(options as any).a2a &&
       process.env.NODE_ENV !== 'test';
 
@@ -1632,6 +1634,8 @@ export async function main(): Promise<void> {
       if (options.slack) reasons.push('--slack');
       if ((options as any).telegram) reasons.push('--telegram');
       if ((options as any).email) reasons.push('--email');
+      if ((options as any).whatsapp) reasons.push('--whatsapp');
+      if ((options as any).teams) reasons.push('--teams');
       if ((options as any).a2a) reasons.push('--a2a');
       if (process.env.NODE_ENV === 'test') reasons.push('test mode');
       const suffix = reasons.length > 0 ? ` (${reasons.join(', ')})` : '';
@@ -1992,7 +1996,9 @@ export async function main(): Promise<void> {
           configWatchStore = watchStore;
           logger.info('Config watching enabled');
         } catch (watchErr: unknown) {
-          logger.warn(`Config watch setup failed (Telegram mode continues without it): ${watchErr}`);
+          logger.warn(
+            `Config watch setup failed (Telegram mode continues without it): ${watchErr}`
+          );
         }
       }
 
@@ -2104,6 +2110,220 @@ export async function main(): Promise<void> {
         if (shuttingDown) return;
         shuttingDown = true;
         logger.info(`[Email] Received ${sig}, shutting down gracefully…`);
+        if (configWatcher) configWatcher.stop();
+        if (configWatchStore) configWatchStore.shutdown().catch(() => {});
+        await runner.stop();
+        if (sharedTaskStore) {
+          try {
+            await sharedTaskStore.shutdown();
+          } catch {}
+        }
+        process.exit(0);
+      };
+      process.on('SIGINT', sig => {
+        onShutdown(sig);
+      });
+      process.on('SIGTERM', sig => {
+        onShutdown(sig);
+      });
+
+      process.stdin.resume();
+      return;
+    }
+
+    // WhatsApp webhook runner: visor --whatsapp [--config file]
+    if ((options as any).whatsapp === true) {
+      const { WhatsAppWebhookRunner } = await import('./whatsapp/webhook-runner');
+      const engine = sharedEngine ?? new StateMachineExecutionEngine();
+      const waAny: any = (config as any).whatsapp || {};
+
+      // Initialize telemetry for WhatsApp mode
+      if ((config as any)?.telemetry) {
+        const t = (config as any).telemetry as {
+          enabled?: boolean;
+          sink?: 'otlp' | 'file' | 'console';
+          file?: { dir?: string; ndjson?: boolean };
+          tracing?: { auto_instrumentations?: boolean; trace_report?: { enabled?: boolean } };
+        };
+        await initTelemetry({
+          enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true' || !!t?.enabled,
+          sink:
+            (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || t?.sink || 'file',
+          file: { dir: process.env.VISOR_TRACE_DIR || t?.file?.dir, ndjson: !!t?.file?.ndjson },
+          autoInstrument: !!t?.tracing?.auto_instrumentations,
+          traceReport: !!t?.tracing?.trace_report?.enabled,
+        });
+      } else {
+        await initTelemetry({
+          enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true',
+          sink: (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || 'file',
+          file: { dir: process.env.VISOR_TRACE_DIR },
+        });
+      }
+
+      const runner = new WhatsAppWebhookRunner(engine, config, {
+        accessToken: waAny.access_token || process.env.WHATSAPP_ACCESS_TOKEN,
+        phoneNumberId: waAny.phone_number_id || process.env.WHATSAPP_PHONE_NUMBER_ID,
+        appSecret: waAny.app_secret || process.env.WHATSAPP_APP_SECRET,
+        verifyToken: waAny.verify_token || process.env.WHATSAPP_VERIFY_TOKEN,
+        apiVersion: waAny.api_version || 'v21.0',
+        port: waAny.port || parseInt(process.env.WHATSAPP_WEBHOOK_PORT || '8443'),
+        host: waAny.host || '0.0.0.0',
+        phoneAllowlist: waAny.phone_allowlist,
+        workflow: waAny.workflow,
+      });
+      if (sharedTaskStore) runner.setTaskStore(sharedTaskStore, options.configPath);
+      await runner.start();
+      const port = waAny.port || parseInt(process.env.WHATSAPP_WEBHOOK_PORT || '8443');
+      console.log(`✅ WhatsApp webhook server running on port ${port}. Press Ctrl+C to exit.`);
+
+      // Config watcher (same pattern as Telegram/Email)
+      let configWatcher: { stop(): void } | undefined;
+      let configWatchStore: { shutdown(): Promise<void> } | undefined;
+      if ((options as any).watch) {
+        if (!options.configPath) {
+          console.error('❌ --watch requires --config <path>');
+          process.exit(1);
+        }
+        try {
+          const { ConfigSnapshotStore } = await import('./config/config-snapshot-store');
+          const { ConfigReloader } = await import('./config/config-reloader');
+          const { ConfigWatcher } = await import('./config/config-watcher');
+          const watchStore = new ConfigSnapshotStore();
+          await watchStore.initialize();
+          const reloader = new ConfigReloader({
+            configPath: options.configPath,
+            configManager,
+            snapshotStore: watchStore,
+            onSwap: newConfig => {
+              config = newConfig;
+              runner.updateConfig(newConfig);
+              logger.info('[Watch] Config updated');
+            },
+          });
+          const watcher = new ConfigWatcher(options.configPath, reloader);
+          watcher.start();
+          configWatcher = watcher;
+          configWatchStore = watchStore;
+          logger.info('Config watching enabled');
+        } catch (watchErr: unknown) {
+          logger.warn(
+            `Config watch setup failed (WhatsApp mode continues without it): ${watchErr}`
+          );
+        }
+      }
+
+      // Graceful shutdown
+      let shuttingDown = false;
+      const onShutdown = async (sig: NodeJS.Signals) => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        logger.info(`[WhatsApp] Received ${sig}, shutting down gracefully…`);
+        if (configWatcher) configWatcher.stop();
+        if (configWatchStore) configWatchStore.shutdown().catch(() => {});
+        await runner.stop();
+        if (sharedTaskStore) {
+          try {
+            await sharedTaskStore.shutdown();
+          } catch {}
+        }
+        process.exit(0);
+      };
+      process.on('SIGINT', sig => {
+        onShutdown(sig);
+      });
+      process.on('SIGTERM', sig => {
+        onShutdown(sig);
+      });
+
+      process.stdin.resume();
+      return;
+    }
+
+    // ── Microsoft Teams webhook runner ──────────────────────────────
+    if ((options as any).teams === true) {
+      const { TeamsWebhookRunner } = await import('./teams/webhook-runner');
+      const engine = sharedEngine ?? new StateMachineExecutionEngine();
+      const teamsAny: any = (config as any).teams || {};
+
+      // Initialize telemetry for Teams mode
+      if ((config as any)?.telemetry) {
+        const t = (config as any).telemetry as {
+          enabled?: boolean;
+          sink?: 'otlp' | 'file' | 'console';
+          file?: { dir?: string; ndjson?: boolean };
+          tracing?: { auto_instrumentations?: boolean; trace_report?: { enabled?: boolean } };
+        };
+        await initTelemetry({
+          enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true' || !!t?.enabled,
+          sink:
+            (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || t?.sink || 'file',
+          file: { dir: process.env.VISOR_TRACE_DIR || t?.file?.dir, ndjson: !!t?.file?.ndjson },
+          autoInstrument: !!t?.tracing?.auto_instrumentations,
+          traceReport: !!t?.tracing?.trace_report?.enabled,
+        });
+      } else {
+        await initTelemetry({
+          enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true',
+          sink: (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || 'file',
+          file: { dir: process.env.VISOR_TRACE_DIR },
+        });
+      }
+
+      const runner = new TeamsWebhookRunner(engine, config, {
+        appId: teamsAny.app_id || process.env.TEAMS_APP_ID,
+        appPassword: teamsAny.app_password || process.env.TEAMS_APP_PASSWORD,
+        tenantId: teamsAny.tenant_id || process.env.TEAMS_TENANT_ID,
+        port: teamsAny.port || parseInt(process.env.TEAMS_WEBHOOK_PORT || '3978'),
+        host: teamsAny.host || '0.0.0.0',
+        userAllowlist: teamsAny.user_allowlist,
+        workflow: teamsAny.workflow,
+      });
+      if (sharedTaskStore) runner.setTaskStore(sharedTaskStore, options.configPath);
+      await runner.start();
+      const port = teamsAny.port || parseInt(process.env.TEAMS_WEBHOOK_PORT || '3978');
+      console.log(`✅ Teams webhook server running on port ${port}. Press Ctrl+C to exit.`);
+
+      // Config watcher (same pattern as WhatsApp/Telegram/Email)
+      let configWatcher: { stop(): void } | undefined;
+      let configWatchStore: { shutdown(): Promise<void> } | undefined;
+      if ((options as any).watch) {
+        if (!options.configPath) {
+          console.error('❌ --watch requires --config <path>');
+          process.exit(1);
+        }
+        try {
+          const { ConfigSnapshotStore } = await import('./config/config-snapshot-store');
+          const { ConfigReloader } = await import('./config/config-reloader');
+          const { ConfigWatcher } = await import('./config/config-watcher');
+          const watchStore = new ConfigSnapshotStore();
+          await watchStore.initialize();
+          const reloader = new ConfigReloader({
+            configPath: options.configPath,
+            configManager,
+            snapshotStore: watchStore,
+            onSwap: newConfig => {
+              config = newConfig;
+              runner.updateConfig(newConfig);
+              logger.info('[Watch] Config updated');
+            },
+          });
+          const watcher = new ConfigWatcher(options.configPath, reloader);
+          watcher.start();
+          configWatcher = watcher;
+          configWatchStore = watchStore;
+          logger.info('Config watching enabled');
+        } catch (watchErr: unknown) {
+          logger.warn(`Config watch setup failed (Teams mode continues without it): ${watchErr}`);
+        }
+      }
+
+      // Graceful shutdown
+      let shuttingDown = false;
+      const onShutdown = async (sig: NodeJS.Signals) => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        logger.info(`[Teams] Received ${sig}, shutting down gracefully…`);
         if (configWatcher) configWatcher.stop();
         if (configWatchStore) configWatchStore.shutdown().catch(() => {});
         await runner.stop();
