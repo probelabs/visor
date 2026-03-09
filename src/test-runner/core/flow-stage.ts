@@ -41,7 +41,8 @@ export class FlowStage {
     private readonly defaultIncludeTags?: string[],
     private readonly defaultExcludeTags?: string[],
     private readonly defaultFrontends?: any[],
-    private readonly noMocks?: boolean
+    private readonly noMocks?: boolean,
+    private readonly judgeConfig?: Record<string, unknown>
   ) {}
 
   async run(
@@ -637,7 +638,12 @@ export class FlowStage {
       if (Array.isArray((expect as any).llm_judge) && (expect as any).llm_judge.length > 0) {
         try {
           const { evaluateLlmJudgeExpectations } = await import('../evaluators');
-          const judgeErrors = await evaluateLlmJudgeExpectations(expect, stageHist);
+          const judgeErrors = await evaluateLlmJudgeExpectations(
+            expect,
+            stageHist,
+            undefined,
+            this.judgeConfig as any
+          );
           errors.push(...judgeErrors);
         } catch (e) {
           errors.push(`LLM judge error: ${e instanceof Error ? e.message : e}`);

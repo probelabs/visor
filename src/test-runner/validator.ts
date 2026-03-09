@@ -89,6 +89,16 @@ const schema: any = {
               type: 'object',
               additionalProperties: { $ref: '#/$defs/expectBlock' },
             },
+            llm_judge: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                model: { type: 'string' },
+                provider: { type: 'string' },
+                apiKey: { type: 'string' },
+                baseURL: { type: 'string' },
+              },
+            },
           },
         },
         fixtures: { type: 'array' },

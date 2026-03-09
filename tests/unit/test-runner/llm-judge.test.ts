@@ -1,23 +1,16 @@
 import { evaluateLlmJudge } from '../../../src/test-runner/llm-judge';
 import type { LlmJudgeExpectation } from '../../../src/test-runner/llm-judge';
 
-// Mock the 'ai' module's generateObject
-jest.mock('ai', () => ({
-  generateObject: jest.fn(),
-}));
+// Mock ProbeAgent
+const mockAnswer = jest.fn();
+const mockInitialize = jest.fn();
 
-// Mock the AI SDK providers
-jest.mock('@ai-sdk/google', () => ({
-  createGoogleGenerativeAI: jest.fn(() => jest.fn(() => 'mock-model')),
+jest.mock('@probelabs/probe', () => ({
+  ProbeAgent: jest.fn().mockImplementation(() => ({
+    answer: mockAnswer,
+    initialize: mockInitialize,
+  })),
 }));
-jest.mock('@ai-sdk/openai', () => ({
-  createOpenAI: jest.fn(() => jest.fn(() => 'mock-model')),
-}));
-jest.mock('@ai-sdk/anthropic', () => ({
-  createAnthropic: jest.fn(() => jest.fn(() => 'mock-model')),
-}));
-
-const { generateObject } = require('ai') as { generateObject: jest.Mock };
 
 describe('LLM Judge', () => {
   beforeEach(() => {
@@ -26,9 +19,9 @@ describe('LLM Judge', () => {
 
   describe('evaluateLlmJudge', () => {
     it('should pass when LLM returns pass=true', async () => {
-      generateObject.mockResolvedValueOnce({
-        object: { pass: true, reason: 'Output meets criteria' },
-      });
+      mockAnswer.mockResolvedValueOnce(
+        JSON.stringify({ pass: true, reason: 'Output meets criteria' })
+      );
 
       const expectation: LlmJudgeExpectation = {
         prompt: 'Does the output contain a greeting?',
@@ -39,9 +32,9 @@ describe('LLM Judge', () => {
     });
 
     it('should fail when LLM returns pass=false', async () => {
-      generateObject.mockResolvedValueOnce({
-        object: { pass: false, reason: 'No greeting found' },
-      });
+      mockAnswer.mockResolvedValueOnce(
+        JSON.stringify({ pass: false, reason: 'No greeting found' })
+      );
 
       const expectation: LlmJudgeExpectation = {
         prompt: 'Does the output contain a greeting?',
@@ -53,14 +46,14 @@ describe('LLM Judge', () => {
     });
 
     it('should check custom assert fields', async () => {
-      generateObject.mockResolvedValueOnce({
-        object: {
+      mockAnswer.mockResolvedValueOnce(
+        JSON.stringify({
           pass: true,
           reason: 'OK',
           sentiment: 'positive',
           topics: ['greeting', 'weather'],
-        },
-      });
+        })
+      );
 
       const expectation: LlmJudgeExpectation = {
         prompt: 'Analyze the output',
@@ -82,13 +75,13 @@ describe('LLM Judge', () => {
     });
 
     it('should fail when custom assert field does not match', async () => {
-      generateObject.mockResolvedValueOnce({
-        object: {
+      mockAnswer.mockResolvedValueOnce(
+        JSON.stringify({
           pass: true,
           reason: 'OK',
           sentiment: 'negative',
-        },
-      });
+        })
+      );
 
       const expectation: LlmJudgeExpectation = {
         prompt: 'Analyze sentiment',
@@ -109,7 +102,7 @@ describe('LLM Judge', () => {
     });
 
     it('should handle LLM API errors gracefully', async () => {
-      generateObject.mockRejectedValueOnce(new Error('API rate limit'));
+      mockAnswer.mockRejectedValueOnce(new Error('API rate limit'));
 
       const expectation: LlmJudgeExpectation = {
         prompt: 'Evaluate this',
@@ -121,9 +114,7 @@ describe('LLM Judge', () => {
     });
 
     it('should handle string output', async () => {
-      generateObject.mockResolvedValueOnce({
-        object: { pass: true, reason: 'Valid' },
-      });
+      mockAnswer.mockResolvedValueOnce(JSON.stringify({ pass: true, reason: 'Valid' }));
 
       const expectation: LlmJudgeExpectation = {
         prompt: 'Is this a valid response?',
@@ -131,22 +122,22 @@ describe('LLM Judge', () => {
 
       const { errors } = await evaluateLlmJudge(expectation, 'plain string output');
       expect(errors).toHaveLength(0);
-      // Verify generateObject was called with the string directly
-      expect(generateObject).toHaveBeenCalledWith(
-        expect.objectContaining({
-          prompt: expect.stringContaining('plain string output'),
-        })
+      // Verify ProbeAgent.answer was called with the string in the prompt
+      expect(mockAnswer).toHaveBeenCalledWith(
+        expect.stringContaining('plain string output'),
+        undefined,
+        expect.objectContaining({ schema: expect.any(String) })
       );
     });
 
     it('should fail assert on missing array item', async () => {
-      generateObject.mockResolvedValueOnce({
-        object: {
+      mockAnswer.mockResolvedValueOnce(
+        JSON.stringify({
           pass: true,
           reason: 'OK',
           tags: ['api', 'backend'],
-        },
-      });
+        })
+      );
 
       const expectation: LlmJudgeExpectation = {
         prompt: 'Extract tags',
@@ -166,13 +157,13 @@ describe('LLM Judge', () => {
     });
 
     it('should check boolean assert fields', async () => {
-      generateObject.mockResolvedValueOnce({
-        object: {
+      mockAnswer.mockResolvedValueOnce(
+        JSON.stringify({
           pass: true,
           reason: 'OK',
           has_code_references: false,
-        },
-      });
+        })
+      );
 
       const expectation: LlmJudgeExpectation = {
         prompt: 'Does the response include code references?',
@@ -190,15 +181,50 @@ describe('LLM Judge', () => {
       expect(errors).toHaveLength(1);
       expect(errors[0]).toContain('has_code_references');
     });
+
+    it('should handle JSON wrapped in markdown code blocks', async () => {
+      mockAnswer.mockResolvedValueOnce('```json\n{"pass": true, "reason": "Looks good"}\n```');
+
+      const expectation: LlmJudgeExpectation = {
+        prompt: 'Evaluate this',
+      };
+
+      const { errors } = await evaluateLlmJudge(expectation, 'test output');
+      expect(errors).toHaveLength(0);
+    });
+
+    it('should pass schema as JSON string to ProbeAgent', async () => {
+      mockAnswer.mockResolvedValueOnce(JSON.stringify({ pass: true, reason: 'OK' }));
+
+      const expectation: LlmJudgeExpectation = {
+        prompt: 'Evaluate this',
+      };
+
+      await evaluateLlmJudge(expectation, 'test');
+
+      // Verify schema was passed as JSON string
+      expect(mockAnswer).toHaveBeenCalledWith(
+        expect.any(String),
+        undefined,
+        expect.objectContaining({
+          schema: expect.stringContaining('"pass"'),
+        })
+      );
+
+      // Verify the schema is valid JSON
+      const schemaArg = mockAnswer.mock.calls[0][2].schema;
+      const parsed = JSON.parse(schemaArg);
+      expect(parsed.type).toBe('object');
+      expect(parsed.properties.pass.type).toBe('boolean');
+      expect(parsed.properties.reason.type).toBe('string');
+    });
   });
 });
 
 describe('evaluateLlmJudgeExpectations', () => {
   // This tests the integration function that resolves step/workflow outputs
   it('should resolve step output by name', async () => {
-    generateObject.mockResolvedValueOnce({
-      object: { pass: true, reason: 'OK' },
-    });
+    mockAnswer.mockResolvedValueOnce(JSON.stringify({ pass: true, reason: 'OK' }));
 
     const { evaluateLlmJudgeExpectations } = require('../../../src/test-runner/evaluators');
     const errors = await evaluateLlmJudgeExpectations(

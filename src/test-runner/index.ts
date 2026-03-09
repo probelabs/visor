@@ -1557,7 +1557,8 @@ export class VisorTestRunner {
           defaultIncludeTags,
           defaultExcludeTags,
           (suiteDefaults.frontends || undefined) as any[],
-          noMocks
+          noMocks,
+          suiteDefaults.llm_judge || undefined
         );
         const outcome = await stageRunner.run(stage, flowCase, strict);
         const expect = (stage as any).expect || {};

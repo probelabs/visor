@@ -2,11 +2,9 @@
  * LLM-as-Judge evaluator for YAML test framework.
  *
  * Sends step/workflow outputs to an LLM for semantic evaluation.
- * Supports simple pass/fail verdicts and structured extraction schemas.
+ * Uses ProbeAgent (same as the rest of Visor) for model routing and structured output.
  */
 
-import { generateObject } from 'ai';
-import { z } from 'zod';
 import { logger } from '../logger';
 
 // ---------------------------------------------------------------------------
@@ -65,99 +63,52 @@ export interface LlmJudgeConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Model creation
+// JSON Schema building (for ProbeAgent structured output)
 // ---------------------------------------------------------------------------
 
-function resolveModelId(explicit?: string): string {
-  return explicit || process.env.VISOR_JUDGE_MODEL || 'gemini-2.0-flash';
+function buildVerdictJsonSchema(): Record<string, unknown> {
+  return {
+    type: 'object',
+    properties: {
+      pass: { type: 'boolean', description: 'Whether the output meets the criteria' },
+      reason: { type: 'string', description: 'Brief explanation of the verdict' },
+    },
+    required: ['pass', 'reason'],
+  };
 }
 
-function createModel(modelId: string, config?: LlmJudgeConfig) {
-  // Determine provider from model name prefix or explicit config
-  const provider =
-    config?.provider ||
-    (modelId.startsWith('gpt') || modelId.startsWith('o1') || modelId.startsWith('o3')
-      ? 'openai'
-      : modelId.startsWith('claude')
-        ? 'anthropic'
-        : 'google');
+function buildCustomJsonSchema(def: LlmJudgeCustomSchema): Record<string, unknown> {
+  const properties: Record<string, unknown> = {};
+  const required: string[] = [];
 
-  if (provider === 'openai') {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { createOpenAI } = require('@ai-sdk/openai');
-    const openai = createOpenAI({
-      apiKey: config?.apiKey || process.env.OPENAI_API_KEY,
-      ...(config?.baseURL ? { baseURL: config.baseURL } : {}),
-    });
-    return openai(modelId);
-  }
-
-  if (provider === 'anthropic') {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { createAnthropic } = require('@ai-sdk/anthropic');
-    const anthropic = createAnthropic({
-      apiKey: config?.apiKey || process.env.ANTHROPIC_API_KEY,
-      ...(config?.baseURL ? { baseURL: config.baseURL } : {}),
-    });
-    return anthropic(modelId);
-  }
-
-  // Default: Google
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { createGoogleGenerativeAI } = require('@ai-sdk/google');
-  const google = createGoogleGenerativeAI({
-    apiKey:
-      config?.apiKey || process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GEMINI_API_KEY,
-    ...(config?.baseURL ? { baseURL: config.baseURL } : {}),
-  });
-  return google(modelId);
-}
-
-// ---------------------------------------------------------------------------
-// Schema building
-// ---------------------------------------------------------------------------
-
-function buildVerdictSchema() {
-  return z.object({
-    pass: z.boolean().describe('Whether the output meets the criteria'),
-    reason: z.string().describe('Brief explanation of the verdict'),
-  });
-}
-
-function buildCustomSchema(def: LlmJudgeCustomSchema) {
-  const shape: Record<string, z.ZodTypeAny> = {};
   for (const [key, prop] of Object.entries(def.properties)) {
-    let field: z.ZodTypeAny;
-    switch (prop.type) {
-      case 'boolean':
-        field = z.boolean();
-        break;
-      case 'number':
-        field = z.number();
-        break;
-      case 'array':
-        field = z.array(z.string());
-        break;
-      case 'string':
-      default:
-        if (prop.enum) {
-          field = z.enum(prop.enum.map(String) as [string, ...string[]]);
-        } else {
-          field = z.string();
-        }
-        break;
+    const propSchema: Record<string, unknown> = { type: prop.type };
+    if (prop.description) propSchema.description = prop.description;
+    if (prop.enum) propSchema.enum = prop.enum;
+    if (prop.type === 'array') {
+      propSchema.items = prop.items || { type: 'string' };
     }
-    if (prop.description) field = field.describe(prop.description);
-    // Make optional unless in required list
-    if (!def.required?.includes(key)) {
-      field = field.optional();
+    properties[key] = propSchema;
+    if (def.required?.includes(key)) {
+      required.push(key);
     }
-    shape[key] = field;
   }
+
   // Always include pass and reason for verdict
-  if (!shape.pass) shape.pass = z.boolean().describe('Whether the output meets the criteria');
-  if (!shape.reason) shape.reason = z.string().describe('Brief explanation of the verdict');
-  return z.object(shape);
+  if (!properties.pass) {
+    properties.pass = { type: 'boolean', description: 'Whether the output meets the criteria' };
+  }
+  if (!properties.reason) {
+    properties.reason = { type: 'string', description: 'Brief explanation of the verdict' };
+  }
+  if (!required.includes('pass')) required.push('pass');
+  if (!required.includes('reason')) required.push('reason');
+
+  return {
+    type: 'object',
+    properties,
+    required,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -170,12 +121,12 @@ export async function evaluateLlmJudge(
   config?: LlmJudgeConfig
 ): Promise<{ errors: string[]; result?: Record<string, unknown> }> {
   const errors: string[] = [];
-  const modelId = resolveModelId(expectation.model || config?.model);
   const outputStr = typeof output === 'string' ? output : JSON.stringify(output, null, 2);
 
-  // Build the system + user message
+  // Build the prompt
   const systemPrompt = `You are a test evaluator. Analyze the given output and provide a structured verdict.
-Be strict but fair. Focus on the semantic content, not formatting.`;
+Be strict but fair. Focus on the semantic content, not formatting.
+You MUST respond with valid JSON matching the provided schema.`;
 
   const userPrompt = `## Evaluation Criteria
 ${expectation.prompt}
@@ -184,21 +135,65 @@ ${expectation.prompt}
 ${outputStr}`;
 
   try {
-    const model = createModel(modelId, config);
-    const schema =
+    // Build JSON schema for structured output
+    const jsonSchema =
       !expectation.schema || expectation.schema === 'verdict'
-        ? buildVerdictSchema()
-        : buildCustomSchema(expectation.schema);
+        ? buildVerdictJsonSchema()
+        : buildCustomJsonSchema(expectation.schema);
 
-    const { object } = await generateObject({
-      model,
-      schema,
-      system: systemPrompt,
-      prompt: userPrompt,
-      temperature: 0,
-    });
+    // Use ProbeAgent for the LLM call — same as the rest of Visor
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { ProbeAgent } = require('@probelabs/probe');
 
-    const result = object as Record<string, unknown>;
+    const model = expectation.model || config?.model || process.env.VISOR_JUDGE_MODEL;
+    const provider = config?.provider;
+
+    const agentOptions: Record<string, unknown> = {
+      sessionId: `visor-llm-judge-${Date.now()}`,
+      systemPrompt,
+      maxIterations: 1, // Judge doesn't need tools, single-shot
+      disableTools: true, // No tool use for judging
+    };
+
+    if (model) agentOptions.model = model;
+    if (provider) agentOptions.provider = provider;
+    if (config?.apiKey) {
+      // Set API key in environment for ProbeAgent
+      const envKey =
+        provider === 'openai'
+          ? 'OPENAI_API_KEY'
+          : provider === 'anthropic'
+            ? 'ANTHROPIC_API_KEY'
+            : 'GOOGLE_API_KEY';
+      process.env[envKey] = config.apiKey;
+    }
+
+    const agent = new ProbeAgent(agentOptions);
+    if (typeof agent.initialize === 'function') {
+      await agent.initialize();
+    }
+
+    const schemaStr = JSON.stringify(jsonSchema);
+    const response = await agent.answer(userPrompt, undefined, { schema: schemaStr });
+
+    // Parse the JSON response from ProbeAgent
+    let result: Record<string, unknown>;
+    try {
+      // ProbeAgent may return the JSON wrapped in markdown code blocks
+      const cleaned = response
+        .replace(/^```(?:json)?\s*\n?/m, '')
+        .replace(/\n?```\s*$/m, '')
+        .trim();
+      result = JSON.parse(cleaned);
+    } catch {
+      // Try to extract JSON from the response
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        result = JSON.parse(jsonMatch[0]);
+      } else {
+        throw new Error(`Failed to parse LLM judge response as JSON: ${response.slice(0, 200)}`);
+      }
+    }
 
     // Check pass/fail verdict
     if (result.pass === false) {
