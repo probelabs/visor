@@ -31,6 +31,10 @@ export interface OutputsExpectation {
   equals?: unknown;
   equalsDeep?: unknown;
   matches?: string; // regex
+  gt?: number; // greater than
+  gte?: number; // greater than or equal
+  lt?: number; // less than
+  lte?: number; // less than or equal
   where?: {
     path: string;
     equals?: unknown;

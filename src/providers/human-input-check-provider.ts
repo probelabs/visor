@@ -349,6 +349,18 @@ export class HumanInputCheckProvider extends CheckProvider {
         return s;
       }
     } catch {}
+
+    // If the test runner signals that the mock for this step is exhausted
+    // (goto loop re-entered a human-input step after consuming its mock),
+    // throw an awaiting error to cleanly terminate the pipeline loop.
+    try {
+      if (context?.hooks?.isMockExhausted?.(checkName)) {
+        throw this.buildAwaitingError(checkName, 'Mock exhausted — loop terminated');
+      }
+    } catch (e) {
+      if (e && (e as any).issues) throw e;
+    }
+
     const prompt = (config.prompt as string) || 'Please provide input:';
     const placeholder = (config.placeholder as string | undefined) || 'Enter your response...';
     const allowEmpty = (config.allow_empty as boolean | undefined) ?? false;

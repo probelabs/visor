@@ -312,6 +312,29 @@ export function evaluateWorkflowOutputs(
         errors.push(`Workflow output ${path} missing elements (unordered)`);
       }
     }
+    // Numeric comparison operators
+    if (o.gt !== undefined) {
+      if (typeof v !== 'number')
+        errors.push(`Workflow output ${path} expected number for gt but got ${typeof v}`);
+      else if (!(v > o.gt)) errors.push(`Workflow output ${path} expected > ${o.gt} but got ${v}`);
+    }
+    if (o.gte !== undefined) {
+      if (typeof v !== 'number')
+        errors.push(`Workflow output ${path} expected number for gte but got ${typeof v}`);
+      else if (!(v >= o.gte))
+        errors.push(`Workflow output ${path} expected >= ${o.gte} but got ${v}`);
+    }
+    if (o.lt !== undefined) {
+      if (typeof v !== 'number')
+        errors.push(`Workflow output ${path} expected number for lt but got ${typeof v}`);
+      else if (!(v < o.lt)) errors.push(`Workflow output ${path} expected < ${o.lt} but got ${v}`);
+    }
+    if (o.lte !== undefined) {
+      if (typeof v !== 'number')
+        errors.push(`Workflow output ${path} expected number for lte but got ${typeof v}`);
+      else if (!(v <= o.lte))
+        errors.push(`Workflow output ${path} expected <= ${o.lte} but got ${v}`);
+    }
   }
 }
 
@@ -382,6 +405,31 @@ export function evaluateOutputs(
         errors.push(`Output ${o.step}.${o.path} not an array for contains_unordered`);
       else if (!containsUnordered(v as unknown[], o.contains_unordered))
         errors.push(`Output ${o.step}.${o.path} missing elements (unordered)`);
+    }
+    // Numeric comparison operators
+    if (o.gt !== undefined) {
+      if (typeof v !== 'number')
+        errors.push(`Output ${o.step}.${o.path} expected number for gt but got ${typeof v}`);
+      else if (!(v > o.gt))
+        errors.push(`Output ${o.step}.${o.path} expected > ${o.gt} but got ${v}`);
+    }
+    if (o.gte !== undefined) {
+      if (typeof v !== 'number')
+        errors.push(`Output ${o.step}.${o.path} expected number for gte but got ${typeof v}`);
+      else if (!(v >= o.gte))
+        errors.push(`Output ${o.step}.${o.path} expected >= ${o.gte} but got ${v}`);
+    }
+    if (o.lt !== undefined) {
+      if (typeof v !== 'number')
+        errors.push(`Output ${o.step}.${o.path} expected number for lt but got ${typeof v}`);
+      else if (!(v < o.lt))
+        errors.push(`Output ${o.step}.${o.path} expected < ${o.lt} but got ${v}`);
+    }
+    if (o.lte !== undefined) {
+      if (typeof v !== 'number')
+        errors.push(`Output ${o.step}.${o.path} expected number for lte but got ${typeof v}`);
+      else if (!(v <= o.lte))
+        errors.push(`Output ${o.step}.${o.path} expected <= ${o.lte} but got ${v}`);
     }
   }
 }

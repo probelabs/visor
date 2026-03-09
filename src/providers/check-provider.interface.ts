@@ -65,6 +65,8 @@ export interface ExecutionContext {
     onHumanInput?: (request: HumanInputRequest) => Promise<string>;
     onPromptCaptured?: (info: { step: string; provider: string; prompt: string }) => void;
     mockForStep?: (step: string) => unknown | undefined;
+    /** Returns true if the mock for a step has been consumed (for loop termination) */
+    isMockExhausted?: (step: string) => boolean;
     /** Called when a check completes - useful for streaming TUI updates */
     onCheckComplete?: (info: {
       checkId: string;

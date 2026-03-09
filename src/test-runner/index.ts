@@ -474,6 +474,8 @@ export class VisorTestRunner {
           if (noMockSteps.size > 0 && noMockSteps.has(step)) return undefined;
           return mockMgr.get(step);
         },
+        // Signal to human-input provider that a mock is exhausted (goto loop re-entry)
+        isMockExhausted: (step: string) => mockMgr.has(step) && mockMgr.isExhausted(step),
         // Ensure human-input never blocks tests: prefer case mock, then default value
         onHumanInput: async (req: { checkId: string; default?: string }) => {
           if (noMocks) return (req.default ?? '').toString();
