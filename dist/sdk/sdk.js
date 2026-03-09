@@ -416,11 +416,24 @@ function configureLoggerFromCli(options) {
   } catch {
   }
 }
-var Logger, logger;
+var OTEL_SEVERITY, Logger, logger;
 var init_logger = __esm({
   "src/logger.ts"() {
     "use strict";
     init_lazy_otel();
+    OTEL_SEVERITY = {
+      silent: 0,
+      error: 17,
+      // ERROR
+      warn: 13,
+      // WARN
+      info: 9,
+      // INFO
+      verbose: 5,
+      // DEBUG
+      debug: 5
+      // DEBUG
+    };
     Logger = class {
       level = "info";
       isJsonLike = false;
@@ -431,6 +444,8 @@ var init_logger = __esm({
       sinkPassthrough = true;
       sinkErrorMode = "throw";
       sinkErrorHandler;
+      otelLogger = null;
+      otelLoggerAttempted = false;
       configure(opts = {}) {
         let lvl = "info";
         if (opts.debug || process.env.VISOR_DEBUG === "true") {
@@ -478,10 +493,38 @@ var init_logger = __esm({
           return "";
         }
       }
+      emitOtelLog(msg, level) {
+        try {
+          if (!this.otelLoggerAttempted) {
+            this.otelLoggerAttempted = true;
+            try {
+              const { logs } = (function(name) {
+                return require(name);
+              })("@opentelemetry/api-logs");
+              this.otelLogger = logs.getLogger("visor");
+            } catch {
+            }
+          }
+          if (!this.otelLogger) return;
+          const span = trace.getSpan(context.active()) || trace.getActiveSpan();
+          const spanCtx = span?.spanContext?.();
+          this.otelLogger.emit({
+            severityNumber: OTEL_SEVERITY[level] || 9,
+            severityText: level.toUpperCase(),
+            body: msg,
+            attributes: {
+              "visor.logger": true,
+              ...spanCtx?.traceId ? { trace_id: spanCtx.traceId, span_id: spanCtx.spanId } : {}
+            }
+          });
+        } catch {
+        }
+      }
       write(msg, level) {
         const suffix = this.getTraceSuffix(msg);
         const decoratedMsg = suffix ? `${msg}${suffix}` : msg;
         const lvl = level || "info";
+        this.emitOtelLog(msg, lvl);
         if (this.sink) {
           try {
             this.sink(decoratedMsg, lvl);
@@ -767,11 +810,15 @@ var require_package = __commonJS({
         "@octokit/core": "^7.0.3",
         "@octokit/rest": "^22.0.0",
         "@opentelemetry/api": "^1.9.0",
+        "@opentelemetry/api-logs": "^0.203.0",
         "@opentelemetry/core": "^1.30.1",
+        "@opentelemetry/exporter-logs-otlp-http": "^0.203.0",
+        "@opentelemetry/exporter-metrics-otlp-http": "^0.203.0",
         "@opentelemetry/exporter-trace-otlp-grpc": "^0.203.0",
         "@opentelemetry/exporter-trace-otlp-http": "^0.203.0",
         "@opentelemetry/instrumentation": "^0.203.0",
         "@opentelemetry/resources": "^1.30.1",
+        "@opentelemetry/sdk-logs": "^0.203.0",
         "@opentelemetry/sdk-metrics": "^1.30.1",
         "@opentelemetry/sdk-node": "^0.203.0",
         "@opentelemetry/sdk-trace-base": "^1.30.1",
@@ -872,6 +919,219 @@ var require_package = __commonJS({
   }
 });
 
+// src/telemetry/metrics.ts
+var metrics_exports = {};
+__export(metrics_exports, {
+  addDiagramBlock: () => addDiagramBlock,
+  addFailIfTriggered: () => addFailIfTriggered,
+  addIssues: () => addIssues,
+  decActiveCheck: () => decActiveCheck,
+  getRunAiCalls: () => getRunAiCalls,
+  getTestMetricsSnapshot: () => getTestMetricsSnapshot,
+  incActiveCheck: () => incActiveCheck,
+  recordAiCall: () => recordAiCall,
+  recordCheckDuration: () => recordCheckDuration,
+  recordForEachDuration: () => recordForEachDuration,
+  recordProviderDuration: () => recordProviderDuration,
+  recordRunAiCalls: () => recordRunAiCalls,
+  recordRunDuration: () => recordRunDuration,
+  recordRunStart: () => recordRunStart,
+  resetRunAiCalls: () => resetRunAiCalls,
+  resetTestMetricsSnapshot: () => resetTestMetricsSnapshot
+});
+function ensureInstruments() {
+  if (initialized) return;
+  try {
+    checkDurationHist = meter.createHistogram("visor.check.duration_ms", {
+      description: "Duration of a check execution in milliseconds",
+      unit: "ms"
+    });
+    providerDurationHist = meter.createHistogram("visor.provider.duration_ms", {
+      description: "Duration of provider execution in milliseconds",
+      unit: "ms"
+    });
+    foreachDurationHist = meter.createHistogram("visor.foreach.item.duration_ms", {
+      description: "Duration of a forEach item execution in milliseconds",
+      unit: "ms"
+    });
+    issuesCounter = meter.createCounter("visor.check.issues", {
+      description: "Number of issues produced by checks",
+      unit: "1"
+    });
+    activeChecks = meter.createUpDownCounter("visor.run.active_checks", {
+      description: "Number of checks actively running",
+      unit: "1"
+    });
+    failIfCounter = meter.createCounter("visor.fail_if.triggered", {
+      description: "Number of times fail_if condition triggered",
+      unit: "1"
+    });
+    diagramBlocks = meter.createCounter("visor.diagram.blocks", {
+      description: "Number of Mermaid diagram blocks emitted",
+      unit: "1"
+    });
+    runCounter = meter.createCounter("visor.run.total", {
+      description: "Total number of visor runs (workflow executions)",
+      unit: "1"
+    });
+    runDurationHist = meter.createHistogram("visor.run.duration_ms", {
+      description: "Duration of a complete visor run in milliseconds",
+      unit: "ms"
+    });
+    aiCallCounter = meter.createCounter("visor.ai_call.total", {
+      description: "Total number of AI provider calls",
+      unit: "1"
+    });
+    runAiCallsHist = meter.createHistogram("visor.run.ai_calls", {
+      description: "Number of AI calls per visor run",
+      unit: "1"
+    });
+    initialized = true;
+  } catch {
+  }
+}
+function recordCheckDuration(check, durationMs, group) {
+  ensureInstruments();
+  try {
+    checkDurationHist?.record(durationMs, {
+      "visor.check.id": check,
+      "visor.check.group": group || "default"
+    });
+  } catch {
+  }
+}
+function recordProviderDuration(check, providerType, durationMs) {
+  ensureInstruments();
+  try {
+    providerDurationHist?.record(durationMs, {
+      "visor.check.id": check,
+      "visor.provider.type": providerType
+    });
+  } catch {
+  }
+}
+function recordForEachDuration(check, index, total, durationMs) {
+  ensureInstruments();
+  try {
+    foreachDurationHist?.record(durationMs, {
+      "visor.check.id": check,
+      "visor.foreach.index": index,
+      "visor.foreach.total": total
+    });
+  } catch {
+  }
+}
+function addIssues(check, severity, count = 1) {
+  ensureInstruments();
+  try {
+    issuesCounter?.add(count, {
+      "visor.check.id": check,
+      severity
+    });
+  } catch {
+  }
+}
+function incActiveCheck(check) {
+  ensureInstruments();
+  try {
+    activeChecks?.add(1, { "visor.check.id": check });
+  } catch {
+  }
+}
+function decActiveCheck(check) {
+  ensureInstruments();
+  try {
+    activeChecks?.add(-1, { "visor.check.id": check });
+  } catch {
+  }
+}
+function addFailIfTriggered(check, scope) {
+  ensureInstruments();
+  try {
+    failIfCounter?.add(1, { "visor.check.id": check, scope });
+  } catch {
+  }
+  if (TEST_ENABLED) TEST_SNAPSHOT.fail_if_triggered++;
+}
+function addDiagramBlock(origin) {
+  ensureInstruments();
+  try {
+    diagramBlocks?.add(1, { origin });
+  } catch {
+  }
+}
+function recordRunStart(attrs) {
+  ensureInstruments();
+  try {
+    const labels = {};
+    if (attrs.source) labels["visor.run.source"] = attrs.source;
+    if (attrs.userId) labels["visor.run.user_id"] = attrs.userId;
+    if (attrs.userName) labels["visor.run.user_name"] = attrs.userName;
+    if (attrs.workflowId) labels["visor.run.workflow"] = attrs.workflowId;
+    if (attrs.instanceId) labels["visor.instance_id"] = attrs.instanceId;
+    runCounter?.add(1, labels);
+  } catch {
+  }
+}
+function recordRunDuration(durationMs, attrs) {
+  ensureInstruments();
+  try {
+    const labels = {};
+    if (attrs.source) labels["visor.run.source"] = attrs.source;
+    if (attrs.userId) labels["visor.run.user_id"] = attrs.userId;
+    if (attrs.workflowId) labels["visor.run.workflow"] = attrs.workflowId;
+    if (attrs.success !== void 0) labels["visor.run.success"] = attrs.success;
+    runDurationHist?.record(durationMs, labels);
+  } catch {
+  }
+}
+function recordAiCall(attrs) {
+  ensureInstruments();
+  _currentRunAiCalls++;
+  try {
+    const labels = {};
+    if (attrs.checkId) labels["visor.check.id"] = attrs.checkId;
+    if (attrs.model) labels["visor.ai.model"] = attrs.model;
+    if (attrs.source) labels["visor.run.source"] = attrs.source;
+    aiCallCounter?.add(1, labels);
+  } catch {
+  }
+}
+function resetRunAiCalls() {
+  _currentRunAiCalls = 0;
+}
+function recordRunAiCalls(attrs) {
+  ensureInstruments();
+  try {
+    const labels = {};
+    if (attrs.source) labels["visor.run.source"] = attrs.source;
+    if (attrs.workflowId) labels["visor.run.workflow"] = attrs.workflowId;
+    runAiCallsHist?.record(_currentRunAiCalls, labels);
+  } catch {
+  }
+}
+function getRunAiCalls() {
+  return _currentRunAiCalls;
+}
+function getTestMetricsSnapshot() {
+  return { ...TEST_SNAPSHOT };
+}
+function resetTestMetricsSnapshot() {
+  Object.keys(TEST_SNAPSHOT).forEach((k) => TEST_SNAPSHOT[k] = 0);
+}
+var initialized, meter, TEST_ENABLED, TEST_SNAPSHOT, checkDurationHist, providerDurationHist, foreachDurationHist, issuesCounter, activeChecks, failIfCounter, diagramBlocks, runCounter, runDurationHist, aiCallCounter, runAiCallsHist, _currentRunAiCalls;
+var init_metrics = __esm({
+  "src/telemetry/metrics.ts"() {
+    "use strict";
+    init_lazy_otel();
+    initialized = false;
+    meter = metrics.getMeter("visor");
+    TEST_ENABLED = process.env.VISOR_TEST_METRICS === "true";
+    TEST_SNAPSHOT = { fail_if_triggered: 0 };
+    _currentRunAiCalls = 0;
+  }
+});
+
 // src/telemetry/trace-helpers.ts
 var trace_helpers_exports = {};
 __export(trace_helpers_exports, {
@@ -882,7 +1142,8 @@ __export(trace_helpers_exports, {
   getVisorRunAttributes: () => getVisorRunAttributes,
   setSpanAttributes: () => setSpanAttributes,
   setSpanError: () => setSpanError,
-  withActiveSpan: () => withActiveSpan
+  withActiveSpan: () => withActiveSpan,
+  withVisorRun: () => withVisorRun
 });
 function getTracer() {
   return trace.getTracer("visor");
@@ -966,6 +1227,53 @@ function getVisorRunAttributes() {
   }
   attrs["visor.instance_id"] = getInstanceId();
   return attrs;
+}
+async function withVisorRun(attrs, runMeta, fn) {
+  const {
+    recordRunStart: recordRunStart2,
+    recordRunDuration: recordRunDuration2,
+    resetRunAiCalls: resetRunAiCalls2,
+    recordRunAiCalls: recordRunAiCalls2,
+    getRunAiCalls: getRunAiCalls2
+  } = (init_metrics(), __toCommonJS(metrics_exports));
+  const instanceId = getInstanceId();
+  recordRunStart2({
+    source: runMeta.source,
+    userId: runMeta.userId,
+    userName: runMeta.userName,
+    workflowId: runMeta.workflowId,
+    instanceId
+  });
+  resetRunAiCalls2();
+  const startMs = Date.now();
+  let success = true;
+  try {
+    return await withActiveSpan("visor.run", attrs, async (span) => {
+      try {
+        return await fn(span);
+      } finally {
+        try {
+          span.setAttribute("visor.run.ai_calls", getRunAiCalls2());
+          span.setAttribute("visor.run.duration_ms", Date.now() - startMs);
+        } catch {
+        }
+      }
+    });
+  } catch (err) {
+    success = false;
+    throw err;
+  } finally {
+    recordRunAiCalls2({
+      source: runMeta.source,
+      workflowId: runMeta.workflowId
+    });
+    recordRunDuration2(Date.now() - startMs, {
+      source: runMeta.source,
+      userId: runMeta.userId,
+      workflowId: runMeta.workflowId,
+      success
+    });
+  }
 }
 function __getOrCreateNdjsonPath() {
   try {
@@ -1980,143 +2288,6 @@ var init_wave_planning = __esm({
     "use strict";
     init_logger();
     init_dependency_resolver();
-  }
-});
-
-// src/telemetry/metrics.ts
-var metrics_exports = {};
-__export(metrics_exports, {
-  addDiagramBlock: () => addDiagramBlock,
-  addFailIfTriggered: () => addFailIfTriggered,
-  addIssues: () => addIssues,
-  decActiveCheck: () => decActiveCheck,
-  getTestMetricsSnapshot: () => getTestMetricsSnapshot,
-  incActiveCheck: () => incActiveCheck,
-  recordCheckDuration: () => recordCheckDuration,
-  recordForEachDuration: () => recordForEachDuration,
-  recordProviderDuration: () => recordProviderDuration,
-  resetTestMetricsSnapshot: () => resetTestMetricsSnapshot
-});
-function ensureInstruments() {
-  if (initialized) return;
-  try {
-    checkDurationHist = meter.createHistogram("visor.check.duration_ms", {
-      description: "Duration of a check execution in milliseconds",
-      unit: "ms"
-    });
-    providerDurationHist = meter.createHistogram("visor.provider.duration_ms", {
-      description: "Duration of provider execution in milliseconds",
-      unit: "ms"
-    });
-    foreachDurationHist = meter.createHistogram("visor.foreach.item.duration_ms", {
-      description: "Duration of a forEach item execution in milliseconds",
-      unit: "ms"
-    });
-    issuesCounter = meter.createCounter("visor.check.issues", {
-      description: "Number of issues produced by checks",
-      unit: "1"
-    });
-    activeChecks = meter.createUpDownCounter("visor.run.active_checks", {
-      description: "Number of checks actively running",
-      unit: "1"
-    });
-    failIfCounter = meter.createCounter("visor.fail_if.triggered", {
-      description: "Number of times fail_if condition triggered",
-      unit: "1"
-    });
-    diagramBlocks = meter.createCounter("visor.diagram.blocks", {
-      description: "Number of Mermaid diagram blocks emitted",
-      unit: "1"
-    });
-    initialized = true;
-  } catch {
-  }
-}
-function recordCheckDuration(check, durationMs, group) {
-  ensureInstruments();
-  try {
-    checkDurationHist?.record(durationMs, {
-      "visor.check.id": check,
-      "visor.check.group": group || "default"
-    });
-  } catch {
-  }
-}
-function recordProviderDuration(check, providerType, durationMs) {
-  ensureInstruments();
-  try {
-    providerDurationHist?.record(durationMs, {
-      "visor.check.id": check,
-      "visor.provider.type": providerType
-    });
-  } catch {
-  }
-}
-function recordForEachDuration(check, index, total, durationMs) {
-  ensureInstruments();
-  try {
-    foreachDurationHist?.record(durationMs, {
-      "visor.check.id": check,
-      "visor.foreach.index": index,
-      "visor.foreach.total": total
-    });
-  } catch {
-  }
-}
-function addIssues(check, severity, count = 1) {
-  ensureInstruments();
-  try {
-    issuesCounter?.add(count, {
-      "visor.check.id": check,
-      severity
-    });
-  } catch {
-  }
-}
-function incActiveCheck(check) {
-  ensureInstruments();
-  try {
-    activeChecks?.add(1, { "visor.check.id": check });
-  } catch {
-  }
-}
-function decActiveCheck(check) {
-  ensureInstruments();
-  try {
-    activeChecks?.add(-1, { "visor.check.id": check });
-  } catch {
-  }
-}
-function addFailIfTriggered(check, scope) {
-  ensureInstruments();
-  try {
-    failIfCounter?.add(1, { "visor.check.id": check, scope });
-  } catch {
-  }
-  if (TEST_ENABLED) TEST_SNAPSHOT.fail_if_triggered++;
-}
-function addDiagramBlock(origin) {
-  ensureInstruments();
-  try {
-    diagramBlocks?.add(1, { origin });
-  } catch {
-  }
-}
-function getTestMetricsSnapshot() {
-  return { ...TEST_SNAPSHOT };
-}
-function resetTestMetricsSnapshot() {
-  Object.keys(TEST_SNAPSHOT).forEach((k) => TEST_SNAPSHOT[k] = 0);
-}
-var initialized, meter, TEST_ENABLED, TEST_SNAPSHOT, checkDurationHist, providerDurationHist, foreachDurationHist, issuesCounter, activeChecks, failIfCounter, diagramBlocks;
-var init_metrics = __esm({
-  "src/telemetry/metrics.ts"() {
-    "use strict";
-    init_lazy_otel();
-    initialized = false;
-    meter = metrics.getMeter("visor");
-    TEST_ENABLED = process.env.VISOR_TEST_METRICS === "true";
-    TEST_SNAPSHOT = { fail_if_triggered: 0 };
   }
 });
 
@@ -8340,6 +8511,11 @@ ${"=".repeat(60)}
           } else {
             response = schemaOptions ? await agent.answer(prompt, void 0, schemaOptions) : await agent.answer(prompt);
           }
+          try {
+            const { recordAiCall: recordAiCall2 } = (init_metrics(), __toCommonJS(metrics_exports));
+            recordAiCall2({ checkId: _checkName, model: this.config.model || "default" });
+          } catch {
+          }
           log("\u2705 ProbeAgent session reuse completed successfully");
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
@@ -8799,6 +8975,11 @@ $ ${cliCommand}
             );
           } else {
             response = schemaOptions ? await agent.answer(prompt, void 0, schemaOptions) : await agent.answer(prompt);
+          }
+          try {
+            const { recordAiCall: recordAiCall2 } = (init_metrics(), __toCommonJS(metrics_exports));
+            recordAiCall2({ checkId: _checkName, model: this.config.model || "default" });
+          } catch {
           }
           log("\u2705 ProbeAgent completed successfully");
           log(`\u{1F4E4} Response length: ${response.length} characters`);
