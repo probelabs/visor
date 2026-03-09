@@ -1,37 +1,84 @@
-# Dashboards for Visor Telemetry
+# Grafana Dashboards for Visor
 
-This folder contains example Grafana dashboards to visualize Visor traces and metrics exported via OpenTelemetry (Tempo + Prometheus).
+Pre-built Grafana dashboards for visualizing Visor telemetry data exported via OpenTelemetry.
 
-## What's Included
+## Dashboards
 
-- **grafana-visor-overview.json** - Run/Check overview dashboard with:
-  - Check duration histogram (95th percentile)
-  - Issues by severity rate panel
-- **grafana-visor-diagrams.json** - Diagram telemetry dashboard with:
-  - Diagram blocks by origin (content vs issue)
+### Visor Overview (`grafana-visor-overview.json`)
+
+The main dashboard with five sections:
+
+**Runs & Users** — Top-level stats and trends:
+- Total runs, unique users, avg duration, success rate
+- AI call totals and avg AI calls per run
+- Runs over time by source (CLI/Slack/TUI)
+- Run duration percentiles (P50/P95/P99)
+- Tables: runs by user, runs by workflow
+
+**Check Performance** — Per-check metrics:
+- Check duration P95 by check ID
+- Issues by severity over time
+- Top 10 slowest checks (bar gauge)
+- Issues distribution by check (pie chart)
+
+**AI Provider** — AI usage analytics:
+- AI calls over time by model
+- AI calls per run distribution (P50/P95)
+- AI calls by check (table)
+- AI calls by model (pie chart)
+
+**Failure Conditions** — Health signals:
+- fail_if trigger rate by check and scope
+- Active concurrent checks (live gauge)
+- Diagram blocks emitted
+
+**Traces** — Recent `visor.run` traces from Tempo with drill-down
+
+### Visor Diagrams (`grafana-visor-diagrams.json`)
+
+Lightweight dashboard for Mermaid diagram block telemetry.
 
 ## Setup
 
-1. Deploy Grafana + Tempo + Prometheus (or Grafana Cloud).
-2. Configure your OTel Collector to receive OTLP traces/metrics and forward to Tempo/Prometheus.
-3. Enable telemetry in Visor CI:
-   ```bash
-   export VISOR_TELEMETRY_ENABLED=true
-   export VISOR_TELEMETRY_SINK=otlp
-   export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://collector.example.com/v1/traces
-   export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <token>"
-   ```
-4. Import the JSON dashboards into Grafana.
-5. Update the data source UIDs in each dashboard to match your Tempo and Prometheus data sources (replace `PROM_DS` with your Prometheus data source UID).
+### With Grafana LGTM (recommended for local dev)
 
-## Notes
+```bash
+docker run -d --name grafana-otel \
+  -p 3000:3000 -p 4317:4317 -p 4318:4318 \
+  -v grafana-otel-data:/data \
+  grafana/otel-lgtm:latest
+```
 
-- Spans appear in Tempo's Explore/Trace view (service.name=visor).
-- Metrics are emitted when the OTLP metrics exporter is configured.
-- The dashboards use placeholder data source UIDs (`PROM_DS`) that need to be updated after import.
+Grafana is at `http://localhost:3000` (admin/admin). Data sources are pre-configured.
+
+### Import the Dashboard
+
+1. Open Grafana → Dashboards → Import
+2. Upload `grafana-visor-overview.json`
+3. Select your Prometheus and Tempo data sources when prompted
+4. Click Import
+
+### With standalone Grafana
+
+Update the data source UIDs in the JSON:
+- Replace `${DS_PROMETHEUS}` references with your Prometheus data source UID
+- Replace `${DS_TEMPO}` references with your Tempo data source UID
+
+### Enable Visor Telemetry
+
+```bash
+export VISOR_TELEMETRY_ENABLED=true
+export VISOR_TELEMETRY_SINK=otlp
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+```
+
+## Template Variables
+
+The overview dashboard includes filter variables:
+- **Source** — Filter by run source (`cli`, `slack`, `tui`)
+- **Workflow** — Filter by workflow/check combination
 
 ## Related Documentation
 
-- [Telemetry Setup Guide](../telemetry-setup.md) - Complete setup instructions for enabling telemetry
-- [Telemetry RFC](../telemetry-tracing-rfc.md) - Design rationale and architecture details
-
+- [Telemetry Reference](../telemetry-reference.md) — Complete list of all spans, metrics, and events
+- [Telemetry Setup Guide](../telemetry-setup.md) — How to enable and configure telemetry
