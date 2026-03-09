@@ -1,69 +1,74 @@
 import { metrics } from './lazy-otel';
 
 let initialized = false;
-const meter = metrics.getMeter('visor');
+// Lazy meter: acquired inside ensureInstruments() so that the MeterProvider
+// registered by NodeSDK (in initTelemetry) is available.  Acquiring at
+// module-load time would return a no-op meter because the SDK hasn't started.
+function getMeter() {
+  return metrics.getMeter('visor');
+}
 
 // Test helpers (enabled with VISOR_TEST_METRICS=true)
 const TEST_ENABLED = process.env.VISOR_TEST_METRICS === 'true';
 const TEST_SNAPSHOT: { [k: string]: number } = { fail_if_triggered: 0 };
 
 // Instruments (lazily created when first used)
-let checkDurationHist: ReturnType<typeof meter.createHistogram> | undefined;
-let providerDurationHist: ReturnType<typeof meter.createHistogram> | undefined;
-let foreachDurationHist: ReturnType<typeof meter.createHistogram> | undefined;
-let issuesCounter: ReturnType<typeof meter.createCounter> | undefined;
-let activeChecks: ReturnType<typeof meter.createUpDownCounter> | undefined;
-let failIfCounter: ReturnType<typeof meter.createCounter> | undefined;
-let diagramBlocks: ReturnType<typeof meter.createCounter> | undefined;
-let runCounter: ReturnType<typeof meter.createCounter> | undefined;
-let runDurationHist: ReturnType<typeof meter.createHistogram> | undefined;
-let aiCallCounter: ReturnType<typeof meter.createCounter> | undefined;
-let runAiCallsHist: ReturnType<typeof meter.createHistogram> | undefined;
+let checkDurationHist: any;
+let providerDurationHist: any;
+let foreachDurationHist: any;
+let issuesCounter: any;
+let activeChecks: any;
+let failIfCounter: any;
+let diagramBlocks: any;
+let runCounter: any;
+let runDurationHist: any;
+let aiCallCounter: any;
+let runAiCallsHist: any;
 
 function ensureInstruments() {
   if (initialized) return;
   try {
-    checkDurationHist = meter.createHistogram('visor.check.duration_ms', {
+    checkDurationHist = getMeter().createHistogram('visor.check.duration_ms', {
       description: 'Duration of a check execution in milliseconds',
       unit: 'ms',
     });
-    providerDurationHist = meter.createHistogram('visor.provider.duration_ms', {
+    providerDurationHist = getMeter().createHistogram('visor.provider.duration_ms', {
       description: 'Duration of provider execution in milliseconds',
       unit: 'ms',
     });
-    foreachDurationHist = meter.createHistogram('visor.foreach.item.duration_ms', {
+    foreachDurationHist = getMeter().createHistogram('visor.foreach.item.duration_ms', {
       description: 'Duration of a forEach item execution in milliseconds',
       unit: 'ms',
     });
-    issuesCounter = meter.createCounter('visor.check.issues', {
+    issuesCounter = getMeter().createCounter('visor.check.issues', {
       description: 'Number of issues produced by checks',
       unit: '1',
     });
-    activeChecks = meter.createUpDownCounter('visor.run.active_checks', {
+    activeChecks = getMeter().createUpDownCounter('visor.run.active_checks', {
       description: 'Number of checks actively running',
       unit: '1',
     });
-    failIfCounter = meter.createCounter('visor.fail_if.triggered', {
+    failIfCounter = getMeter().createCounter('visor.fail_if.triggered', {
       description: 'Number of times fail_if condition triggered',
       unit: '1',
     });
-    diagramBlocks = meter.createCounter('visor.diagram.blocks', {
+    diagramBlocks = getMeter().createCounter('visor.diagram.blocks', {
       description: 'Number of Mermaid diagram blocks emitted',
       unit: '1',
     });
-    runCounter = meter.createCounter('visor.run.total', {
+    runCounter = getMeter().createCounter('visor.run.total', {
       description: 'Total number of visor runs (workflow executions)',
       unit: '1',
     });
-    runDurationHist = meter.createHistogram('visor.run.duration_ms', {
+    runDurationHist = getMeter().createHistogram('visor.run.duration_ms', {
       description: 'Duration of a complete visor run in milliseconds',
       unit: 'ms',
     });
-    aiCallCounter = meter.createCounter('visor.ai_call.total', {
+    aiCallCounter = getMeter().createCounter('visor.ai_call.total', {
       description: 'Total number of AI provider calls',
       unit: '1',
     });
-    runAiCallsHist = meter.createHistogram('visor.run.ai_calls', {
+    runAiCallsHist = getMeter().createHistogram('visor.run.ai_calls', {
       description: 'Number of AI calls per visor run',
       unit: '1',
     });
