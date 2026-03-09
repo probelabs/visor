@@ -17082,7 +17082,11 @@ ${errors}`);
                   "sandboxes",
                   "sandbox",
                   "sandbox_defaults",
-                  "policy"
+                  "policy",
+                  // Workflow metadata fields used when configs are imported as reusable workflows
+                  "id",
+                  "name",
+                  "description"
                 ]);
                 if (topLevel && allowedTopLevelKeys.has(addl)) {
                   continue;
@@ -17093,9 +17097,33 @@ ${errors}`);
                 if (!topLevel && addl === "sandbox" && pathStr.match(/^(checks|steps)\.[^.]+$/)) {
                   continue;
                 }
+                let hint = "";
+                if (topLevel) {
+                  if (addl === "ai") {
+                    hint = " Use 'ai_provider' and 'ai_model' at the top level for global defaults, or configure 'ai:' inside each step.";
+                  }
+                } else {
+                  const isCheckLevel = /^(checks|steps)\.[^.]+$/.test(pathStr);
+                  if (isCheckLevel) {
+                    const checkName = pathStr.split(".")[1];
+                    const checksObj = config.checks || config.steps || {};
+                    const checkType = checksObj[checkName]?.type || "ai";
+                    if (addl === "system_prompt" || addl === "custom_prompt") {
+                      hint = ` Did you mean to put this inside the step's 'ai:' block, or use 'ai_${addl}' at the step level?`;
+                    } else if (addl === "provider") {
+                      hint = " Did you mean 'ai_provider' or to put this inside the step's 'ai:' block?";
+                    } else if (addl === "model") {
+                      hint = " Did you mean 'ai_model' or to put this inside the step's 'ai:' block?";
+                    } else if (addl === "parseJson" && checkType === "command") {
+                      hint = " Command steps auto-parse JSON output when valid. Use an ai custom tool definition for parseJson.";
+                    } else if (addl === "max_tool_calls" || addl === "maxToolCalls") {
+                      hint = " Use 'ai_max_iterations' at the step level or 'maxIterations' inside the 'ai:' block.";
+                    }
+                  }
+                }
                 warnings.push({
                   field: fullField || "config",
-                  message: topLevel ? `Unknown top-level key '${addl}' will be ignored.` : `Unknown key '${addl}' will be ignored`
+                  message: topLevel ? `Unknown top-level key '${addl}' will be ignored.${hint}` : `Unknown key '${addl}' will be ignored.${hint}`
                 });
               } else {
                 logger.debug(`Ajv note [${pathStr || "config"}]: ${msg}`);
