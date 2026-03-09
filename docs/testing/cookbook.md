@@ -240,7 +240,76 @@ Also see end-to-end example suites:
 - `examples/api-tools-ai-example.yaml` (embedded tests)
 - `examples/api-tools-inline-overlay-example.yaml` (embedded tests)
 
-## 10) LLM-as-judge: semantic response evaluation
+## 10) Multi-turn conversation with cross-turn assertions
+
+Simulate a multi-message conversation and assert on each response — including looking back at earlier turns from a later stage.
+
+```yaml
+- name: multi-turn-support-conversation
+  flow:
+    - name: user-reports-issue
+      event: manual
+      fixture: local.minimal
+      routing: { max_loops: 0 }
+      execution_context:
+        conversation:
+          transport: slack
+          thread: { id: "support-thread" }
+          messages:
+            - { role: user, text: "My API is returning 502 errors" }
+          current: { role: user, text: "My API is returning 502 errors" }
+      mocks:
+        chat[]:
+          - text: "A 502 error typically means the upstream service is unreachable. Can you check if your backend is running and the target URL in your API definition is correct?"
+          - intent: chat
+      expect:
+        calls:
+          - step: chat
+            exactly: 1
+        llm_judge:
+          - step: chat
+            path: text
+            prompt: Does the response acknowledge the 502 error and suggest diagnostic steps?
+
+    - name: user-provides-details
+      event: manual
+      fixture: local.minimal
+      routing: { max_loops: 0 }
+      execution_context:
+        conversation:
+          transport: slack
+          thread: { id: "support-thread" }
+          messages:
+            - { role: user, text: "My API is returning 502 errors" }
+            - { role: assistant, text: "A 502 error typically means the upstream service is unreachable..." }
+            - { role: user, text: "The backend is running. I checked with curl and it works directly." }
+          current: { role: user, text: "The backend is running. I checked with curl and it works directly." }
+      mocks:
+        chat[]:
+          - text: "If curl works directly but Tyk returns 502, check: 1) The `target_url` in your API definition matches what curl uses 2) Tyk can resolve the hostname (DNS) 3) Any TLS certificate issues between Tyk and the upstream."
+          - intent: chat
+      expect:
+        calls:
+          - step: chat
+            exactly: 1
+        llm_judge:
+          # Assert current response narrows down based on user's info
+          - step: chat
+            index: last
+            path: text
+            prompt: |
+              The user said curl works directly but Tyk gives 502.
+              Does the response narrow down Tyk-specific causes (not repeat generic advice)?
+          # Verify first response was appropriately general (before details were known)
+          - step: chat
+            index: first
+            path: text
+            prompt: |
+              This was the first response before the user provided details.
+              Was it appropriately exploratory (asking for info) rather than jumping to conclusions?
+```
+
+## 11) LLM-as-judge: semantic evaluation
 
 Use `llm_judge` to evaluate whether AI responses meet semantic criteria that can't be expressed with regex or exact matching.
 

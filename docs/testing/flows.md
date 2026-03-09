@@ -129,6 +129,118 @@ flow:
     # ...
 ```
 
+## Multi-turn conversation testing
+
+Flows are ideal for simulating multi-message conversations. Each stage provides a new `execution_context.conversation` with accumulated message history, and the engine's output history carries across stages — so you can assert on any prior response using `index`.
+
+```yaml
+- name: multi-turn-conversation
+  flow:
+    # Turn 1
+    - name: intro-question
+      event: manual
+      fixture: local.minimal
+      routing: { max_loops: 0 }
+      execution_context:
+        conversation:
+          transport: slack
+          thread: { id: "test-thread" }
+          messages:
+            - { role: user, text: "What is Tyk?" }
+          current: { role: user, text: "What is Tyk?" }
+      mocks:
+        chat[]:
+          - text: "Tyk is an open-source API gateway..."
+          - intent: chat
+      expect:
+        calls:
+          - step: chat
+            exactly: 1
+        llm_judge:
+          - step: chat
+            path: text
+            prompt: Is this a clear introduction to Tyk?
+
+    # Turn 2
+    - name: follow-up
+      event: manual
+      fixture: local.minimal
+      routing: { max_loops: 0 }
+      execution_context:
+        conversation:
+          transport: slack
+          thread: { id: "test-thread" }
+          messages:
+            - { role: user, text: "What is Tyk?" }
+            - { role: assistant, text: "Tyk is an open-source API gateway..." }
+            - { role: user, text: "How does rate limiting work?" }
+          current: { role: user, text: "How does rate limiting work?" }
+      mocks:
+        chat[]:
+          - text: "Rate limiting uses Redis-based distributed counters..."
+          - intent: chat
+      expect:
+        calls:
+          - step: chat
+            exactly: 1
+        llm_judge:
+          # Assert on this turn's response
+          - step: chat
+            index: last
+            path: text
+            prompt: Does this explain rate limiting with technical details?
+          # Look back at turn 1 from this stage
+          - step: chat
+            index: 0
+            path: text
+            prompt: Was the first response a good intro (not too detailed)?
+
+    # Turn 3 — assert across all prior turns
+    - name: deep-dive
+      event: manual
+      fixture: local.minimal
+      routing: { max_loops: 0 }
+      execution_context:
+        conversation:
+          transport: slack
+          thread: { id: "test-thread" }
+          messages:
+            - { role: user, text: "What is Tyk?" }
+            - { role: assistant, text: "Tyk is an open-source API gateway..." }
+            - { role: user, text: "How does rate limiting work?" }
+            - { role: assistant, text: "Rate limiting uses Redis..." }
+            - { role: user, text: "Show me the config" }
+          current: { role: user, text: "Show me the config" }
+      mocks:
+        chat[]:
+          - text: "Configure rate limits with `rate` and `per` fields..."
+          - intent: chat
+      expect:
+        calls:
+          - step: chat
+            exactly: 1
+        llm_judge:
+          # Assert on each turn by index (0-based)
+          - step: chat
+            index: 0
+            path: text
+            prompt: Was turn 1 a good general introduction?
+          - step: chat
+            index: 1
+            path: text
+            prompt: Did turn 2 explain rate limiting mechanisms?
+          - step: chat
+            index: 2
+            path: text
+            prompt: Does turn 3 include concrete config examples?
+```
+
+Key points:
+- **`index: 0`, `1`, `2`** — selects the Nth output from the step's history (0-based)
+- **`index: first`** / **`index: last`** — aliases for first and most recent
+- Output history accumulates across flow stages because the engine instance is shared
+- Each stage builds on the prior conversation by adding messages to `execution_context.conversation.messages`
+
 ## Debugging flows
 
 - Set `VISOR_DEBUG=true` to print stage headers, selected checks, and internal debug lines from the engine.
