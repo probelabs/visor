@@ -134,7 +134,7 @@ services:
       # Telemetry
       VISOR_TELEMETRY_ENABLED: "true"
       VISOR_TELEMETRY_SINK: "otlp"
-      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://grafana-otel:4318/v1/traces"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://grafana-otel:4318"
     volumes:
       - visor-data:/app/.visor
       - ./config/.visor.yaml:/app/.visor.yaml:ro

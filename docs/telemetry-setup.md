@@ -47,7 +47,7 @@ visor --config ./.visor.yaml
 # OTLP sink with Grafana LGTM (or any OTLP-compatible backend)
 VISOR_TELEMETRY_ENABLED=true \
 VISOR_TELEMETRY_SINK=otlp \
-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
 visor --config ./.visor.yaml
 
 # With static HTML trace report
@@ -72,7 +72,7 @@ docker run -d --name grafana-otel \
 # Run Visor with OTLP telemetry
 VISOR_TELEMETRY_ENABLED=true \
 VISOR_TELEMETRY_SINK=otlp \
-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
 visor --config .visor.yaml
 
 # Open Grafana at http://localhost:3000 (admin/admin)
@@ -136,7 +136,7 @@ For real-time streaming of traces, metrics, and logs to a collector:
 ```bash
 export VISOR_TELEMETRY_ENABLED=true
 export VISOR_TELEMETRY_SINK=otlp
-export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://collector.example.com/v1/traces
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.com
 # Optional: authentication headers
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer your-token"
 ```
@@ -231,7 +231,7 @@ Example workflow step:
   run: |
     export VISOR_TELEMETRY_ENABLED=true
     export VISOR_TELEMETRY_SINK=otlp
-    export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=${{ secrets.OTEL_ENDPOINT }}
+    export OTEL_EXPORTER_OTLP_ENDPOINT=${{ secrets.OTEL_ENDPOINT }}
     export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${{ secrets.OTEL_TOKEN }}"
     npx -y @probelabs/visor@latest --config ./.visor.yaml --output json
 ```

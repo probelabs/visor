@@ -119,7 +119,7 @@ Open http://localhost:3456 to view the visual debugger. You can:
 # Full tracing with Grafana LGTM (or any OTLP-compatible backend)
 VISOR_TELEMETRY_ENABLED=true \
 VISOR_TELEMETRY_SINK=otlp \
-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
 ./dist/index.js --config .visor.yaml --debug
 ```
 
@@ -794,7 +794,7 @@ docker run -d --name grafana-otel \
 # Run Visor with tracing enabled
 VISOR_TELEMETRY_ENABLED=true \
 VISOR_TELEMETRY_SINK=otlp \
-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
 visor --config .visor.yaml
 
 # View traces, logs, and metrics at http://localhost:3000
