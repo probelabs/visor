@@ -31,7 +31,7 @@ Visor is an open-source workflow engine that lets you define multi-step AI pipel
 | **Code review on PRs** | [Guide: Code Review Pipeline](docs/guides/build-code-review.md) | [quick-start-tags.yaml](examples/quick-start-tags.yaml) |
 | **AI agent with tools** | [Guide: AI Agent](docs/guides/build-ai-agent.md) | [ai-custom-tools-simple.yaml](examples/ai-custom-tools-simple.yaml) |
 | **Multi-step automation** | [Workflow Creation Guide](docs/workflow-creation-guide.md) | [enhanced-config.yaml](examples/enhanced-config.yaml) |
-| **Chat assistant / Slack bot** | [Assistant Workflows](docs/assistant-workflows.md) | [code-talk-workflow.yaml](examples/code-talk-workflow.yaml) |
+| **Chat assistant / Bot** | [Bot Integrations](docs/bot-integrations.md) | [teams-assistant.yaml](examples/teams-assistant.yaml) |
 | **Run shell commands + AI** | [Command Provider](docs/command-provider.md) | [ai-with-bash.yaml](examples/ai-with-bash.yaml) |
 | **Connect MCP tools** | [MCP Provider](docs/mcp-provider.md) | [mcp-provider-example.yaml](examples/mcp-provider-example.yaml) |
 
@@ -186,7 +186,7 @@ Learn more: [docs/assistant-workflows.md](docs/assistant-workflows.md) | Example
 
 ## 🖥️ Runtime Modes
 
-Visor runs the same YAML config across four surfaces:
+Visor runs the same YAML config across multiple surfaces:
 
 | Mode | How to run | Best for |
 |------|-----------|----------|
@@ -195,7 +195,11 @@ Visor runs the same YAML config across four surfaces:
 | **Slack bot** | `visor --slack --config .visor.yaml` | Team assistants, ChatOps |
 | **Telegram bot** | `visor --telegram --config .visor.yaml` | Personal assistants, group bots |
 | **Email bot** | `visor --email --config .visor.yaml` | Email assistants, threaded conversations |
+| **WhatsApp bot** | `visor --whatsapp --config .visor.yaml` | WhatsApp assistants, customer support |
+| **Teams bot** | `visor --teams --config .visor.yaml` | Enterprise assistants, team ChatOps |
 | **HTTP server** | `http_server: { enabled: true, port: 8080 }` | Webhooks, API integrations |
+
+See [Bot Integrations](docs/bot-integrations.md) for a comparison of all bot transports.
 
 Additional modes:
 - **TUI** — interactive chat-style terminal UI: `visor --tui`
@@ -776,7 +780,7 @@ Learn more: [docs/enterprise-policy.md](docs/enterprise-policy.md)
 [A2A](docs/a2a-provider.md) · [Command](docs/command-provider.md) · [Script](docs/script.md) · [MCP](docs/mcp-provider.md) · [MCP tools for AI](docs/mcp.md) · [Claude Code](docs/claude-code.md) · [AI custom tools](docs/ai-custom-tools.md) · [AI custom tools usage](docs/ai-custom-tools-usage.md) · [Custom tools](docs/custom-tools.md) · [GitHub ops](docs/github-ops.md) · [Git checkout](docs/providers/git-checkout.md) · [HTTP integration](docs/http.md) · [Memory](docs/memory.md) · [Human input](docs/human-input-provider.md) · [Custom providers](docs/pluggable.md)
 
 **Operations:**
-[Security](docs/security.md) · [Performance](docs/performance.md) · [Observability](docs/observability.md) · [Debugging](docs/debugging.md) · [Debug visualizer](docs/debug-visualizer.md) · [Telemetry setup](docs/telemetry-setup.md) · [Dashboards](docs/dashboards/README.md) · [Troubleshooting](docs/troubleshooting.md) · [Suppressions](docs/suppressions.md) · [GitHub checks](docs/GITHUB_CHECKS.md) · [Slack integration](docs/slack-integration.md) · [Scheduler](docs/scheduler.md) · [Sandbox engines](docs/sandbox-engines.md)
+[Security](docs/security.md) · [Performance](docs/performance.md) · [Observability](docs/observability.md) · [Debugging](docs/debugging.md) · [Debug visualizer](docs/debug-visualizer.md) · [Telemetry setup](docs/telemetry-setup.md) · [Dashboards](docs/dashboards/README.md) · [Troubleshooting](docs/troubleshooting.md) · [Suppressions](docs/suppressions.md) · [GitHub checks](docs/GITHUB_CHECKS.md) · [Bot integrations](docs/bot-integrations.md) · [Slack](docs/slack-integration.md) · [Telegram](docs/telegram-integration.md) · [Email](docs/email-integration.md) · [WhatsApp](docs/whatsapp-integration.md) · [Teams](docs/teams-integration.md) · [Scheduler](docs/scheduler.md) · [Sandbox engines](docs/sandbox-engines.md)
 
 **Testing:**
 [Getting started](docs/testing/getting-started.md) · [DSL reference](docs/testing/dsl-reference.md) · [Flows](docs/testing/flows.md) · [Fixtures & mocks](docs/testing/fixtures-and-mocks.md) · [Assertions](docs/testing/assertions.md) · [Cookbook](docs/testing/cookbook.md) · [CLI & reporters](docs/testing/cli.md) · [CI integration](docs/testing/ci.md) · [Troubleshooting](docs/testing/troubleshooting.md)
