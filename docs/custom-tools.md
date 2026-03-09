@@ -319,7 +319,7 @@ tools:
       X-Api-Version: "2026-01"
       Authorization: "Bearer ${PETSTORE_BEARER_TOKEN}"
       X-Tenant-Id: "${PETSTORE_TENANT_ID}"
-    apiKey: "${{ env.PETSTORE_API_KEY }}"
+    apiKey: "${PETSTORE_API_KEY}"
 
   profiles-api:
     type: api
@@ -355,7 +355,7 @@ Behavior:
 - Security schemes from OpenAPI are applied at call time using `apiKey` / `securityCredentials`.
 - `whitelist`/`blacklist` supports glob patterns for `operationId` and `METHOD:/path`.
 - Overlay behavior matches `api-to-mcp`: action-based overlays (`actions[].target/update/remove`) plus deep-merge overlays when `actions` is omitted.
-- `headers` values can reference environment variables (for example, `${PETSTORE_BEARER_TOKEN}` or `${{ env.PETSTORE_BEARER_TOKEN }}`).
+- `headers` values can reference environment variables using the format `${VARIABLE_NAME}` (for example, `${PETSTORE_BEARER_TOKEN}`).
 
 This works with `ai_custom_tools`, `ai_mcp_servers.<name>.tools`, and `transport: custom` MCP execution.
 

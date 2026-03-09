@@ -796,6 +796,7 @@ async function executeCheckWithForEachItems(
         ...checkConfig,
         eventContext: (context.prInfo as any)?.eventContext || {},
         __outputHistory: outputHistory,
+        __globalTools: context.config.tools || {},
         // Propagate workflow inputs for template access via {{ inputs.* }}
         workflowInputs,
         ai: {
@@ -2243,6 +2244,7 @@ async function executeSingleCheck(
       eventContext: (context.prInfo as any)?.eventContext || {},
       // Expose history and checks metadata for template helpers
       __outputHistory: outputHistory,
+      __globalTools: context.config.tools || {},
       checksMeta,
       // Propagate workflow inputs for template access via {{ inputs.* }}
       workflowInputs,
