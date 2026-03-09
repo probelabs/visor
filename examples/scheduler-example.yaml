@@ -93,7 +93,7 @@ checks:
   # Health check workflow
   health-check:
     type: command
-    command: "echo 'Health check passed at $(date)'"
+    exec: "echo 'Health check passed at $(date)'"
 
   # Monthly audit workflow
   monthly-audit:
@@ -110,7 +110,7 @@ checks:
   # Status workflow that can be dynamically scheduled
   status-quick:
     type: command
-    command: "echo 'Quick status: All systems operational'"
+    exec: "echo 'Quick status: All systems operational'"
 
   # Summary workflow that can be dynamically scheduled
   summary-daily:

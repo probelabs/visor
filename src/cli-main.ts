@@ -300,6 +300,378 @@ async function handleDumpPolicyInput(checkId: string, argv: string[]): Promise<v
 }
 
 /**
+ * Handle the init subcommand — scaffold a starter .visor.yaml with inline docs
+ *
+ * Usage:
+ *   visor init                  # interactive template selection
+ *   visor init code-review      # code review pipeline
+ *   visor init agent            # AI agent with tools
+ *   visor init automation       # multi-step automation pipeline
+ *   visor init assistant        # chat assistant / Slack bot
+ */
+async function handleInitCommand(argv: string[]): Promise<void> {
+  const configFile = '.visor.yaml';
+  const targetPath = path.resolve(process.cwd(), configFile);
+
+  if (fs.existsSync(targetPath)) {
+    console.error(
+      `\n⚠️  ${configFile} already exists. Remove it first or use a different directory.\n`
+    );
+    process.exit(1);
+  }
+
+  // Detect AI provider from environment
+  let detectedProvider = '';
+  let detectedEnvVar = '';
+  if (process.env.GOOGLE_API_KEY) {
+    detectedProvider = 'google';
+    detectedEnvVar = 'GOOGLE_API_KEY';
+  } else if (process.env.ANTHROPIC_API_KEY) {
+    detectedProvider = 'anthropic';
+    detectedEnvVar = 'ANTHROPIC_API_KEY';
+  } else if (process.env.OPENAI_API_KEY) {
+    detectedProvider = 'openai';
+    detectedEnvVar = 'OPENAI_API_KEY';
+  }
+
+  const providerLine = detectedProvider
+    ? `ai_provider: ${detectedProvider}   # auto-detected from ${detectedEnvVar}`
+    : `# ai_provider: google            # set globally here, or per-step under ai:`;
+  const modelLine = detectedProvider
+    ? `# ai_model: <model-name>         # optional: override the default model`
+    : `# ai_model: gemini-2.5-flash     # optional: set a global default model`;
+
+  // Parse template type from argv
+  const templateArg = argv.slice(3).find(a => !a.startsWith('-'));
+  const validTemplates = ['code-review', 'agent', 'automation', 'assistant'];
+
+  if (templateArg && !validTemplates.includes(templateArg)) {
+    console.error(`\n❌ Unknown template: "${templateArg}"\n`);
+    console.error(`Available templates:`);
+    console.error(`  visor init code-review   Code review pipeline for PRs`);
+    console.error(`  visor init agent         AI agent with tools and bash`);
+    console.error(`  visor init automation    Multi-step automation pipeline`);
+    console.error(`  visor init assistant     Chat assistant / Slack bot\n`);
+    process.exit(1);
+  }
+
+  // If no template specified, show picker
+  let templateType = templateArg;
+  if (!templateType) {
+    console.log(`\n📋 Choose a template:\n`);
+    console.log(`  1) code-review   AI-powered code review on PRs`);
+    console.log(`  2) agent         AI agent with shell tools and MCP`);
+    console.log(`  3) automation    Multi-step command + AI pipeline`);
+    console.log(`  4) assistant     Chat assistant / Slack bot\n`);
+
+    const readline = await import('readline');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await new Promise<string>(resolve => {
+      rl.question('  Pick a number (1-4) or name [default: code-review]: ', resolve);
+    });
+    rl.close();
+
+    const trimmed = answer.trim();
+    const byNumber: Record<string, string> = {
+      '1': 'code-review',
+      '2': 'agent',
+      '3': 'automation',
+      '4': 'assistant',
+    };
+    templateType =
+      byNumber[trimmed] || (validTemplates.includes(trimmed) ? trimmed : 'code-review');
+  }
+
+  const header = `# Visor workflow configuration
+# Docs:     https://github.com/probelabs/visor/blob/main/docs/configuration.md
+# Examples: https://github.com/probelabs/visor/tree/main/examples
+# AI setup: https://github.com/probelabs/visor/blob/main/docs/ai-configuration.md
+
+version: "1.0"
+
+# ── Global AI defaults (apply to all 'type: ai' steps) ──────────────
+# Set provider/model here, or override per-step with ai_provider/ai_model
+# or inside the step's ai: block.
+${providerLine}
+${modelLine}
+`;
+
+  const templates: Record<string, { body: string; guide: string }> = {
+    'code-review': {
+      guide: 'https://github.com/probelabs/visor/blob/main/docs/guides/build-code-review.md',
+      body: `
+# ── Code Review Pipeline ─────────────────────────────────────────────
+# Guide: https://github.com/probelabs/visor/blob/main/docs/guides/build-code-review.md
+
+steps:
+  # Security-focused AI review
+  security:
+    type: ai
+    prompt: "Find security vulnerabilities in the changed code."
+    ai:
+      system_prompt: "You are a security expert. Focus on OWASP Top 10, injection flaws, and auth issues."
+    tags: [security, fast]
+    on: [pr_opened, pr_updated]
+
+  # Style and quality review
+  style:
+    type: ai
+    prompt: "Check code style, naming conventions, and readability."
+    tags: [style, fast]
+    on: [pr_opened, pr_updated]
+
+  # Run linter (replace with your actual linter)
+  lint:
+    type: command
+    exec: echo '{"status":"ok","files_checked":0}'
+    # exec: npx eslint --format json src/    # uncomment for real usage
+    tags: [lint, fast]
+
+  # Run tests (replace with your actual test command)
+  tests:
+    type: command
+    exec: echo '{"passed":true,"total":0}'
+    # exec: npm test -- --json              # uncomment for real usage
+    tags: [test]
+
+  # Summarize all findings
+  summary:
+    type: ai
+    prompt: |
+      Summarize the code review results:
+      - Security: {{ outputs["security"] | json }}
+      - Style: {{ outputs["style"] | json }}
+      - Lint: {{ outputs["lint"] | json }}
+      - Tests: {{ outputs["tests"] | json }}
+    depends_on: [security, style, lint, tests]
+    tags: [summary]
+
+# ── Deploy as GitHub Action ──────────────────────────────────────────
+# Create .github/workflows/visor.yml:
+#
+#   name: Visor
+#   on:
+#     pull_request: { types: [opened, synchronize] }
+#   permissions: { contents: read, pull-requests: write, checks: write }
+#   jobs:
+#     review:
+#       runs-on: ubuntu-latest
+#       steps:
+#         - uses: actions/checkout@v4
+#         - uses: probelabs/visor@v1
+#           env:
+#             GOOGLE_API_KEY: \${{ secrets.GOOGLE_API_KEY }}
+`,
+    },
+    agent: {
+      guide: 'https://github.com/probelabs/visor/blob/main/docs/guides/build-ai-agent.md',
+      body: `
+# ── AI Agent with Tools ──────────────────────────────────────────────
+# Guide: https://github.com/probelabs/visor/blob/main/docs/guides/build-ai-agent.md
+
+# Define tools the AI can call
+tools:
+  search-code:
+    name: search-code
+    description: "Search for patterns in the codebase"
+    exec: "grep -rn '{{ args.pattern }}' --include='*.ts' --include='*.js' --include='*.py' . || true"
+    inputSchema:
+      type: object
+      properties:
+        pattern:
+          type: string
+          description: "Search pattern (regex supported)"
+      required: [pattern]
+
+  list-files:
+    name: list-files
+    description: "List files matching a glob pattern"
+    exec: "find . -name '{{ args.pattern }}' -type f | head -50"
+    inputSchema:
+      type: object
+      properties:
+        pattern:
+          type: string
+          description: "Glob pattern (e.g., '*.ts')"
+      required: [pattern]
+
+  read-file:
+    name: read-file
+    description: "Read the contents of a file"
+    exec: "cat '{{ args.path }}'"
+    inputSchema:
+      type: object
+      properties:
+        path:
+          type: string
+          description: "Path to the file"
+      required: [path]
+
+steps:
+  agent:
+    type: ai
+    prompt: "Explore the codebase and answer: What does this project do? What are its main components?"
+    ai:
+      system_prompt: |
+        You are a senior software engineer. Use the provided tools to explore
+        the codebase. Always verify your assumptions by reading actual code.
+        Be concise and cite file paths in your response.
+      max_iterations: 20
+    ai_custom_tools: [search-code, list-files, read-file]
+    enable_bash: true       # also allow direct shell commands
+    tags: [agent]
+
+# ── Run it ───────────────────────────────────────────────────────────
+#   visor                                    # run with default prompt
+#   visor --tui                              # interactive chat mode
+#   visor --message "How does auth work?"    # ask a specific question
+`,
+    },
+    automation: {
+      guide: 'https://github.com/probelabs/visor/blob/main/docs/workflow-creation-guide.md',
+      body: `
+# ── Multi-step Automation Pipeline ───────────────────────────────────
+# Guide: https://github.com/probelabs/visor/blob/main/docs/workflow-creation-guide.md
+
+steps:
+  # Step 1: Gather data (runs first, no dependencies)
+  gather-info:
+    type: command
+    exec: |
+      echo '{"node_version":"'$(node --version)'","git_branch":"'$(git branch --show-current 2>/dev/null || echo "none")'","files":'$(find . -name "*.ts" -o -name "*.js" | head -20 | jq -R -s 'split("\\n") | map(select(length > 0))')'}'
+    tags: [fast]
+
+  # Step 2: Analyze with AI (depends on gather-info)
+  analyze:
+    type: ai
+    prompt: |
+      Analyze this project based on the gathered info:
+      {{ outputs["gather-info"] | json }}
+
+      Provide:
+      1. Project type and tech stack
+      2. Suggested improvements
+      3. Any issues you notice
+    depends_on: [gather-info]
+    ai:
+      system_prompt: "You are a project analyst. Be concise and actionable."
+    tags: [analysis]
+
+  # Step 3: Run a validation command (parallel with analyze)
+  validate:
+    type: command
+    exec: echo '{"valid":true,"checks_passed":["syntax","structure"]}'
+    # exec: npm run lint 2>&1 || true        # uncomment for real usage
+    depends_on: [gather-info]
+    tags: [fast]
+
+  # Step 4: Generate report (waits for both analyze and validate)
+  report:
+    type: ai
+    prompt: |
+      Generate a brief project health report:
+
+      Analysis: {{ outputs["analyze"] | json }}
+      Validation: {{ outputs["validate"] | json }}
+    depends_on: [analyze, validate]
+    tags: [report]
+
+# ── Conditional failure ──────────────────────────────────────────────
+# Uncomment to fail if validation finds issues:
+#   validate:
+#     fail_if: "output.valid === false"
+#
+# ── Routing ──────────────────────────────────────────────────────────
+# Uncomment for auto-retry on failure:
+#   validate:
+#     on_fail:
+#       run: [fix-step]
+#       goto: validate
+#       retry: { max: 2 }
+`,
+    },
+    assistant: {
+      guide: 'https://github.com/probelabs/visor/blob/main/docs/assistant-workflows.md',
+      body: `
+# ── Chat Assistant ───────────────────────────────────────────────────
+# Guide: https://github.com/probelabs/visor/blob/main/docs/assistant-workflows.md
+
+imports:
+  - visor://assistant.yaml
+
+steps:
+  # Prompt the user for input
+  ask:
+    type: human-input
+    prompt: "How can I help you?"
+    placeholder: "Ask me anything..."
+
+  # Run the assistant workflow
+  chat:
+    type: workflow
+    workflow: assistant
+    criticality: internal
+    depends_on: [ask]
+    assume:
+      - "outputs['ask']?.text != null"
+    args:
+      question: "{{ outputs['ask'].text }}"
+      system_prompt: "You are a helpful engineering assistant. Be concise and cite sources."
+      intents:
+        - id: chat
+          description: general Q&A or small talk
+        - id: code_help
+          description: questions about code, debugging, or architecture
+          default_skills: [code-explorer]
+      skills:
+        - id: code-explorer
+          description: needs codebase exploration or code search
+          tools:
+            code-talk:
+              workflow: code-talk
+              inputs:
+                projects:
+                  - id: this-project
+                    repo: .
+                    description: The current project
+          allowed_commands: ['git:log:*', 'git:diff:*']
+    on_success:
+      goto: ask       # loop back for the next question
+
+# ── Run it ───────────────────────────────────────────────────────────
+#   visor --tui                              # interactive chat mode
+#   visor --message "What does this project do?"
+#
+# ── Slack bot ────────────────────────────────────────────────────────
+#   SLACK_BOT_TOKEN=xoxb-... SLACK_APP_TOKEN=xapp-... visor --slack
+`,
+    },
+  };
+
+  const chosen = templates[templateType!];
+  const template = header + chosen.body;
+
+  fs.writeFileSync(targetPath, template, 'utf8');
+
+  console.log(`\n✅ Created ${configFile} (template: ${templateType})\n`);
+  if (detectedProvider) {
+    console.log(`   AI provider: ${detectedProvider} (from ${detectedEnvVar})`);
+  } else {
+    console.log(`   No AI provider detected. Set one of these environment variables:`);
+    console.log(`     GOOGLE_API_KEY=...      (Google Gemini)`);
+    console.log(`     ANTHROPIC_API_KEY=...   (Anthropic Claude)`);
+    console.log(`     OPENAI_API_KEY=...      (OpenAI GPT)`);
+  }
+  console.log(`\n   Guide: ${chosen.guide}`);
+  console.log(`\n   Next steps:`);
+  console.log(`     visor validate          # verify your config`);
+  console.log(`     visor                   # run all steps`);
+  console.log(`     visor --debug           # run with debug output\n`);
+
+  process.exit(0);
+}
+
+/**
  * Handle the validate subcommand
  */
 async function handleValidateCommand(argv: string[], configManager: ConfigManager): Promise<void> {
@@ -920,6 +1292,11 @@ export async function main(): Promise<void> {
       } catch {}
     } catch {}
 
+    // Check for init subcommand
+    if (filteredArgv.length > 2 && filteredArgv[2] === 'init') {
+      await handleInitCommand(filteredArgv);
+      return;
+    }
     // Check for validate subcommand (aliases: validate, lint)
     if (filteredArgv.length > 2 && ['validate', 'lint'].includes(filteredArgv[2])) {
       const configManager = new ConfigManager();

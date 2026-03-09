@@ -38,7 +38,9 @@ steps:
     type: command
     exec: ./deploy.sh staging
     criticality: external
-    assume: "deployment approved"
+    assume:
+      - "true"
+    guarantee: "output != null"
     policy:
       require: [developer, admin]
       deny: [external]
@@ -47,7 +49,9 @@ steps:
     type: command
     exec: ./deploy.sh production
     criticality: external
-    assume: "production deployment approved"
+    assume:
+      - "true"
+    guarantee: "output != null"
     policy:
       require: admin
       rule: visor/deploy/production

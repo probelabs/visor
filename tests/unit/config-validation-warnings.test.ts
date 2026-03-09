@@ -98,6 +98,70 @@ checks:
 
   // Domain-specific 'npx without args' warning removed; relying solely on Ajv
 
+  it('suggests ai_provider/ai_model when top-level ai: block is used', async () => {
+    const yaml = `
+version: "1.0"
+checks:
+  mycheck:
+    type: ai
+    prompt: "ok"
+ai:
+  provider: google
+  model: gemini-2.5-flash
+`;
+    const cm = new ConfigManager();
+    await cm.loadConfig(writeConfig(yaml));
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Use 'ai_provider' and 'ai_model' at the top level")
+    );
+  });
+
+  it('suggests ai: block when system_prompt is at check level', async () => {
+    const yaml = `
+version: "1.0"
+checks:
+  mycheck:
+    type: ai
+    prompt: "ok"
+    system_prompt: "You are helpful."
+`;
+    const cm = new ConfigManager();
+    await cm.loadConfig(writeConfig(yaml));
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("inside the step's 'ai:' block")
+    );
+  });
+
+  it('explains parseJson on command steps', async () => {
+    const yaml = `
+version: "1.0"
+checks:
+  mycheck:
+    type: command
+    exec: "echo hi"
+    parseJson: true
+`;
+    const cm = new ConfigManager();
+    await cm.loadConfig(writeConfig(yaml));
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Command steps auto-parse JSON output')
+    );
+  });
+
+  it('suggests ai_model when model is at check level', async () => {
+    const yaml = `
+version: "1.0"
+checks:
+  mycheck:
+    type: ai
+    prompt: "ok"
+    model: "gpt-4"
+`;
+    const cm = new ConfigManager();
+    await cm.loadConfig(writeConfig(yaml));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("Did you mean 'ai_model'"));
+  });
+
   it('warns on unknown keys inside ai object', async () => {
     const yaml = `
 version: "1.0"
