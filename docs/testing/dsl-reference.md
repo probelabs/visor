@@ -29,6 +29,16 @@ tests:
     tags: "local,fast"         # or [local, fast]
     exclude_tags: "experimental,slow"  # or [experimental, slow]
 
+  hooks:                        # (optional) lifecycle hooks
+    before_all:
+      exec: <shell-command>     # runs once before all cases
+    after_all:
+      exec: <shell-command>     # runs once after all cases (always)
+    before_each:
+      exec: <shell-command>     # runs before each case
+    after_each:
+      exec: <shell-command>     # runs after each case (always)
+
   fixtures: []                  # (optional) suite-level custom fixtures
 
   cases:
@@ -36,6 +46,13 @@ tests:
       description: <markdown>
       skip: false|true
       ai_include_code_context: false  # per-case override
+
+      hooks:                       # (optional) per-case lifecycle hooks
+        before:
+          exec: <shell-command>  # runs before this case
+        after:
+          exec: <shell-command>  # runs after this case (always)
+          timeout: 10000         # optional timeout in ms
 
       # Single-event case
       event: pr_opened | pr_updated | pr_closed | issue_opened | issue_comment | manual
@@ -84,6 +101,82 @@ tests:
           github_recorder:       # per-stage recorder overrides
             error_code: 500
 ```
+
+## Lifecycle Hooks
+
+Hooks let you run shell commands at key points in the test lifecycle — useful for seeding databases, starting servers, or cleaning up test data.
+
+### Suite-level hooks
+
+Defined under `tests.hooks`:
+
+```yaml
+tests:
+  hooks:
+    before_all:
+      exec: npx tsx test-data/seed-db.ts
+    after_all:
+      exec: npx tsx test-data/clean-db.ts
+    before_each:
+      exec: npx tsx test-data/reset-state.ts
+    after_each:
+      exec: npx tsx test-data/cleanup-case.ts
+  cases: [...]
+```
+
+| Hook | When | Runs |
+|------|------|------|
+| `before_all` | Once before any case | If it fails, all cases are skipped |
+| `after_all` | Once after all cases | Always runs (like `finally`) |
+| `before_each` | Before every case | If it fails, that case is skipped |
+| `after_each` | After every case | Always runs (like `finally`) |
+
+### Case-level hooks
+
+Defined under `case.hooks`:
+
+```yaml
+cases:
+  - name: update-settlement
+    hooks:
+      before:
+        exec: npx tsx test-data/seed-db.ts --case update-settlement
+      after:
+        exec: npx tsx test-data/seed-db.ts --clean
+        timeout: 10000   # optional, default 30000ms
+    event: manual
+    mocks: { ... }
+```
+
+| Hook | When | Runs |
+|------|------|------|
+| `before` | Before this specific case (after `before_each`) | If it fails, the case is skipped |
+| `after` | After this specific case (before `after_each`) | Always runs (like `finally`) |
+
+### Hook properties
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `exec` | string | yes | Shell command to run |
+| `timeout` | number | no | Timeout in ms (default: 30000) |
+
+### Execution order
+
+For each case, hooks run in this order:
+
+1. `before_each` (suite)
+2. `before` (case)
+3. *test execution*
+4. `after` (case)
+5. `after_each` (suite)
+
+Hooks inherit all environment variables from the parent process, so seed scripts can use the same `DB_PATH`, API keys, etc. that your checks use.
+
+### Error handling
+
+- If `before_all` fails → all cases are skipped and reported as failed
+- If `before_each` or `before` fails → that case is skipped and reported as failed
+- `after`, `after_each`, and `after_all` always run, even if the test or a prior hook failed
 
 ## Fixtures
 
