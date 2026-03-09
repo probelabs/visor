@@ -1,33 +1,453 @@
 {
-  "__inputs": [],
-  "title": "Visor Overview",
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus data source for Visor metrics",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    },
+    {
+      "name": "DS_TEMPO",
+      "label": "Tempo",
+      "description": "Tempo data source for Visor traces",
+      "type": "datasource",
+      "pluginId": "tempo",
+      "pluginName": "Tempo"
+    }
+  ],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus" },
+    { "type": "datasource", "id": "tempo", "name": "Tempo" }
+  ],
+  "title": "Visor — Overview",
+  "uid": "visor-overview",
+  "description": "Visor workflow execution overview: runs, users, AI calls, check performance, and issues.",
+  "tags": ["visor", "otel", "observability"],
   "timezone": "browser",
+  "editable": true,
+  "version": 2,
+  "time": { "from": "now-24h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "source",
+        "label": "Source",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(visor_run_total, visor_run_source)",
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" },
+        "refresh": 2,
+        "multi": true
+      },
+      {
+        "name": "workflow",
+        "label": "Workflow",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(visor_run_total, visor_run_workflow)",
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" },
+        "refresh": 2,
+        "multi": true
+      }
+    ]
+  },
   "panels": [
     {
-      "type": "timeseries",
-      "title": "Check Duration (ms)",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "PROM_DS" },
-          "expr": "histogram_quantile(0.95, sum(rate(visor_check_duration_ms_bucket[5m])) by (le))"
-        }
-      ],
-      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+      "type": "row",
+      "title": "Runs & Users",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
     },
     {
       "type": "stat",
-      "title": "Issues by Severity (rate)",
+      "title": "Total Runs",
+      "description": "Total workflow executions in the selected time range",
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "PROM_DS" },
-          "expr": "sum(rate(visor_check_issues_total[5m])) by (severity)"
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(increase(visor_run_total{visor_run_source=~\"$source\", visor_run_workflow=~\"$workflow\"}[$__range]))",
+          "legendFormat": "Runs"
         }
       ],
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{ "color": "blue", "value": null }] } } },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 }
+    },
+    {
+      "type": "stat",
+      "title": "Unique Users",
+      "description": "Distinct user IDs that triggered runs",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "count(count by (visor_run_user_id) (visor_run_total{visor_run_source=~\"$source\", visor_run_user_id!=\"\"}))",
+          "legendFormat": "Users"
+        }
+      ],
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{ "color": "green", "value": null }] } } },
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 }
+    },
+    {
+      "type": "stat",
+      "title": "Avg Run Duration",
+      "description": "Average workflow execution time",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(increase(visor_run_duration_ms_sum{visor_run_source=~\"$source\"}[$__range])) / sum(increase(visor_run_duration_ms_count{visor_run_source=~\"$source\"}[$__range]))",
+          "legendFormat": "Avg"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms", "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 60000 }, { "color": "red", "value": 300000 }] } } },
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 }
+    },
+    {
+      "type": "stat",
+      "title": "Success Rate",
+      "description": "Percentage of runs that completed successfully",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(increase(visor_run_duration_ms_count{visor_run_success=\"true\", visor_run_source=~\"$source\"}[$__range])) / sum(increase(visor_run_duration_ms_count{visor_run_source=~\"$source\"}[$__range])) * 100",
+          "legendFormat": "Success %"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 80 }, { "color": "green", "value": 95 }] } } },
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 }
+    },
+    {
+      "type": "stat",
+      "title": "Total AI Calls",
+      "description": "Total AI provider invocations",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(increase(visor_ai_call_total{visor_run_source=~\"$source\"}[$__range]))",
+          "legendFormat": "AI Calls"
+        }
+      ],
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{ "color": "purple", "value": null }] } } },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 }
+    },
+    {
+      "type": "stat",
+      "title": "Avg AI Calls / Run",
+      "description": "Average number of AI calls per workflow run",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(increase(visor_run_ai_calls_sum{visor_run_source=~\"$source\"}[$__range])) / sum(increase(visor_run_ai_calls_count{visor_run_source=~\"$source\"}[$__range]))",
+          "legendFormat": "Avg AI/Run"
+        }
+      ],
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{ "color": "purple", "value": null }] } } },
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Runs Over Time",
+      "description": "Run count over time, broken down by source",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (visor_run_source) (increase(visor_run_total{visor_run_source=~\"$source\", visor_run_workflow=~\"$workflow\"}[5m]))",
+          "legendFormat": "{{visor_run_source}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 50, "stacking": { "mode": "normal" } } } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Run Duration (P50 / P95 / P99)",
+      "description": "Run duration percentiles over time",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.50, sum(rate(visor_run_duration_ms_bucket{visor_run_source=~\"$source\"}[5m])) by (le))",
+          "legendFormat": "P50"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum(rate(visor_run_duration_ms_bucket{visor_run_source=~\"$source\"}[5m])) by (le))",
+          "legendFormat": "P95"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.99, sum(rate(visor_run_duration_ms_bucket{visor_run_source=~\"$source\"}[5m])) by (le))",
+          "legendFormat": "P99"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "fillOpacity": 10 } } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 }
+    },
+    {
+      "type": "table",
+      "title": "Runs by User",
+      "description": "Run counts and average duration per user",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (visor_run_user_id, visor_run_user_name) (increase(visor_run_total{visor_run_source=~\"$source\", visor_run_user_id!=\"\"}[$__range]))",
+          "legendFormat": "",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "visor_run_user_name" }, "properties": [{ "id": "displayName", "value": "User" }] },
+          { "matcher": { "id": "byName", "options": "visor_run_user_id" }, "properties": [{ "id": "displayName", "value": "User ID" }] },
+          { "matcher": { "id": "byName", "options": "Value" }, "properties": [{ "id": "displayName", "value": "Runs" }] }
+        ]
+      },
+      "options": { "sortBy": [{ "displayName": "Runs", "desc": true }] },
+      "transformations": [{ "id": "organize", "options": { "excludeByName": { "Time": true } } }],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 }
+    },
+    {
+      "type": "table",
+      "title": "Runs by Workflow",
+      "description": "Run counts per workflow/check combination",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (visor_run_workflow) (increase(visor_run_total{visor_run_source=~\"$source\", visor_run_workflow=~\"$workflow\", visor_run_workflow!=\"\"}[$__range]))",
+          "legendFormat": "",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "visor_run_workflow" }, "properties": [{ "id": "displayName", "value": "Workflow" }] },
+          { "matcher": { "id": "byName", "options": "Value" }, "properties": [{ "id": "displayName", "value": "Runs" }] }
+        ]
+      },
+      "options": { "sortBy": [{ "displayName": "Runs", "desc": true }] },
+      "transformations": [{ "id": "organize", "options": { "excludeByName": { "Time": true } } }],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 }
+    },
+    {
+      "type": "row",
+      "title": "Check Performance",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "Check Duration by Check (P95)",
+      "description": "95th percentile check execution time per check ID",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum(rate(visor_check_duration_ms_bucket[5m])) by (le, visor_check_id))",
+          "legendFormat": "{{visor_check_id}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "fillOpacity": 10 } } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Issues by Severity",
+      "description": "Rate of issues produced, broken down by severity",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (severity) (increase(visor_check_issues_total[5m]))",
+          "legendFormat": "{{severity}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 50, "stacking": { "mode": "normal" } } } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 }
+    },
+    {
+      "type": "bargauge",
+      "title": "Slowest Checks (Avg Duration)",
+      "description": "Average execution time per check, sorted by slowest",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "topk(10, sum by (visor_check_id) (increase(visor_check_duration_ms_sum[$__range])) / sum by (visor_check_id) (increase(visor_check_duration_ms_count[$__range])))",
+          "legendFormat": "{{visor_check_id}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms", "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 30000 }, { "color": "red", "value": 120000 }] } } },
+      "options": { "orientation": "horizontal", "displayMode": "gradient" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 30 }
+    },
+    {
+      "type": "piechart",
+      "title": "Issues by Check",
+      "description": "Distribution of issues across checks",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (visor_check_id) (increase(visor_check_issues_total[$__range]))",
+          "legendFormat": "{{visor_check_id}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 30 }
+    },
+    {
+      "type": "row",
+      "title": "AI Provider",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 38 },
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "AI Calls Over Time",
+      "description": "AI provider call rate, broken down by model",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (visor_ai_model) (increase(visor_ai_call_total{visor_run_source=~\"$source\"}[5m]))",
+          "legendFormat": "{{visor_ai_model}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 50, "stacking": { "mode": "normal" } } } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 39 }
+    },
+    {
+      "type": "timeseries",
+      "title": "AI Calls per Run (Distribution)",
+      "description": "P50 and P95 of AI calls per run",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.50, sum(rate(visor_run_ai_calls_bucket{visor_run_source=~\"$source\"}[5m])) by (le))",
+          "legendFormat": "P50"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum(rate(visor_run_ai_calls_bucket{visor_run_source=~\"$source\"}[5m])) by (le))",
+          "legendFormat": "P95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 10 } } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 39 }
+    },
+    {
+      "type": "table",
+      "title": "AI Calls by Check",
+      "description": "Which checks trigger the most AI calls",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "topk(20, sum by (visor_check_id) (increase(visor_ai_call_total[$__range])))",
+          "legendFormat": "",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "visor_check_id" }, "properties": [{ "id": "displayName", "value": "Check" }] },
+          { "matcher": { "id": "byName", "options": "Value" }, "properties": [{ "id": "displayName", "value": "AI Calls" }] }
+        ]
+      },
+      "options": { "sortBy": [{ "displayName": "AI Calls", "desc": true }] },
+      "transformations": [{ "id": "organize", "options": { "excludeByName": { "Time": true } } }],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 47 }
+    },
+    {
+      "type": "piechart",
+      "title": "AI Calls by Model",
+      "description": "Distribution of AI calls across models",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (visor_ai_model) (increase(visor_ai_call_total[$__range]))",
+          "legendFormat": "{{visor_ai_model}}"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 47 }
+    },
+    {
+      "type": "row",
+      "title": "Failure Conditions",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 55 },
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "fail_if Triggered",
+      "description": "Rate of fail_if conditions being triggered",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum by (visor_check_id, scope) (increase(visor_fail_if_triggered_total[5m]))",
+          "legendFormat": "{{visor_check_id}} ({{scope}})"
+        }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 50 } } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 56 }
+    },
+    {
+      "type": "stat",
+      "title": "Active Checks (Now)",
+      "description": "Currently running checks",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(visor_run_active_checks)",
+          "legendFormat": "Active"
+        }
+      ],
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{ "color": "blue", "value": null }, { "color": "yellow", "value": 10 }, { "color": "red", "value": 50 }] } } },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 56 }
+    },
+    {
+      "type": "stat",
+      "title": "Diagram Blocks",
+      "description": "Total Mermaid diagram blocks emitted",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(increase(visor_diagram_blocks_total[$__range]))",
+          "legendFormat": "Blocks"
+        }
+      ],
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{ "color": "blue", "value": null }] } } },
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 56 }
+    },
+    {
+      "type": "row",
+      "title": "Traces",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 64 },
+      "collapsed": false
+    },
+    {
+      "type": "traces",
+      "title": "Recent Traces",
+      "description": "Recent visor.run traces from Tempo",
+      "targets": [
+        {
+          "datasource": { "type": "tempo", "uid": "${DS_TEMPO}" },
+          "queryType": "traceqlSearch",
+          "filters": [
+            { "id": "service-name", "tag": "service.name", "operator": "=", "value": ["visor"], "scope": "resource" },
+            { "id": "span-name", "tag": "name", "operator": "=", "value": ["visor.run"], "scope": "span" }
+          ],
+          "limit": 20
+        }
+      ],
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 65 }
     }
-  ],
-  "version": 1,
-  "editable": true
+  ]
 }
-

@@ -262,6 +262,8 @@ For file-based tracing in CI (useful for artifact upload):
 
 ## Related Documentation
 
+- [Telemetry Reference](./telemetry-reference.md) — Complete reference of all spans, metrics, and events
+- [Grafana Dashboards](./dashboards/) — Pre-built dashboards for Visor telemetry
 - [Debugging Guide](./debugging.md) — Comprehensive debugging techniques
 - [Debug Visualizer](./debug-visualizer.md) — Live execution visualization with `--debug-server`
 - [Telemetry RFC](./telemetry-tracing-rfc.md) — Design rationale and architecture
