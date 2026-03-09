@@ -116,10 +116,10 @@ Open http://localhost:3456 to view the visual debugger. You can:
 # Debug server + Debug mode (full visibility)
 ./dist/index.js --config .visor.yaml --debug-server --debug
 
-# Full tracing with Jaeger
+# Full tracing with Grafana LGTM (or any OTLP-compatible backend)
 VISOR_TELEMETRY_ENABLED=true \
 VISOR_TELEMETRY_SINK=otlp \
-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
 ./dist/index.js --config .visor.yaml --debug
 ```
 
@@ -778,22 +778,27 @@ Visor supports OpenTelemetry tracing for deep execution visibility. Enable traci
 - **Routing decisions**: `visor.routing` events with `trigger`, `action`, `source`, `target`, `scope`, `goto_event`
 - **Wave visibility**: `engine.state.level_dispatch` includes `level_size` and `level_checks_preview`
 
-### Quick Start with Jaeger
+### Quick Start with Grafana LGTM
+
+The recommended local observability stack is [Grafana LGTM](https://github.com/grafana/docker-otel-lgtm) — a single Docker container bundling Grafana, Tempo (traces), Loki (logs), Prometheus (metrics), and an OpenTelemetry Collector:
 
 ```bash
-# Start Jaeger locally
-docker run -d --name jaeger \
-  -p 16686:16686 \
+# Start Grafana LGTM locally (traces + logs + metrics in one container)
+docker run -d --name grafana-otel \
+  -p 3000:3000 \
+  -p 4317:4317 \
   -p 4318:4318 \
-  jaegertracing/all-in-one:latest
+  -v grafana-otel-data:/data \
+  grafana/otel-lgtm:latest
 
 # Run Visor with tracing enabled
 VISOR_TELEMETRY_ENABLED=true \
 VISOR_TELEMETRY_SINK=otlp \
-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
 visor --config .visor.yaml
 
-# View traces at http://localhost:16686
+# View traces, logs, and metrics at http://localhost:3000
+# Default credentials: admin / admin
 ```
 
 For complete tracing setup and configuration, see [Telemetry Setup](./telemetry-setup.md).

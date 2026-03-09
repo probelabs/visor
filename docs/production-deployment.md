@@ -134,7 +134,7 @@ services:
       # Telemetry
       VISOR_TELEMETRY_ENABLED: "true"
       VISOR_TELEMETRY_SINK: "otlp"
-      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://jaeger:4318/v1/traces"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://grafana-otel:4318"
     volumes:
       - visor-data:/app/.visor
       - ./config/.visor.yaml:/app/.visor.yaml:ro
@@ -157,15 +157,19 @@ services:
       timeout: 5s
       retries: 5
 
-  jaeger:
-    image: jaegertracing/all-in-one:latest
+  grafana-otel:
+    image: grafana/otel-lgtm:latest
     ports:
-      - "16686:16686"   # UI
+      - "3000:3000"     # Grafana UI (traces + logs + metrics)
+      - "4317:4317"     # OTLP gRPC
       - "4318:4318"     # OTLP HTTP
+    volumes:
+      - grafana-otel-data:/data
 
 volumes:
   visor-data:
   pgdata:
+  grafana-otel-data:
 ```
 
 Start with:

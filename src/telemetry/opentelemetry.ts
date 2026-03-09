@@ -27,6 +27,7 @@ export interface TelemetryInitOptions {
 
 let sdk: NodeSDKType | null = null;
 let patched = false;
+let loggerProvider: any = null;
 
 /**
  * Reset telemetry state (for testing only).
@@ -95,11 +96,12 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
         const { OTLPTraceExporter } = (function (name: string) {
           return require(name);
         })('@opentelemetry/exporter-trace-otlp-http');
+        // Only pass `url` for signal-specific endpoints; the SDK natively reads
+        // OTEL_EXPORTER_OTLP_ENDPOINT and appends /v1/traces automatically.
+        const traceUrl =
+          opts.otlp?.endpoint || process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT || undefined;
         const exporter = new OTLPTraceExporter({
-          url:
-            opts.otlp?.endpoint ||
-            process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ||
-            process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+          ...(traceUrl ? { url: traceUrl } : {}),
           headers: opts.otlp?.headers || process.env.OTEL_EXPORTER_OTLP_HEADERS,
         });
         processors.push(new BatchSpanProcessor(exporter, batchParams()));
@@ -157,10 +159,9 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
         const { PeriodicExportingMetricReader } = (function (name: string) {
           return require(name);
         })('@opentelemetry/sdk-metrics');
+        const metricsUrl = process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT || undefined;
         const mExporter = new OTLPMetricExporter({
-          url:
-            process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT ||
-            process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+          ...(metricsUrl ? { url: metricsUrl } : {}),
           headers: process.env.OTEL_EXPORTER_OTLP_HEADERS,
         });
         metricReader = new PeriodicExportingMetricReader({
@@ -170,6 +171,36 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
         });
       } catch {
         // Metrics exporter not available; continue without metrics
+      }
+    }
+
+    // Configure OTel Logs exporter when using 'otlp' sink
+    if (sink === 'otlp') {
+      try {
+        const { LoggerProvider, BatchLogRecordProcessor } = (function (name: string) {
+          return require(name);
+        })('@opentelemetry/sdk-logs');
+        const { OTLPLogExporter } = (function (name: string) {
+          return require(name);
+        })('@opentelemetry/exporter-logs-otlp-http');
+        const { logs: logsApi } = (function (name: string) {
+          return require(name);
+        })('@opentelemetry/api-logs');
+        const logsUrl = process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT || undefined;
+        const logExporter = new OTLPLogExporter({
+          ...(logsUrl ? { url: logsUrl } : {}),
+          headers: process.env.OTEL_EXPORTER_OTLP_HEADERS,
+        });
+        const logProcessor = new BatchLogRecordProcessor(logExporter);
+        const lp = new LoggerProvider({ resource });
+        // v0.203+ removed addLogRecordProcessor from public API;
+        // register via internal shared state and global API
+        lp._sharedState.registeredLogRecordProcessors.push(logProcessor);
+        lp._sharedState.activeProcessor = logProcessor;
+        logsApi.setGlobalLoggerProvider(lp);
+        loggerProvider = lp;
+      } catch {
+        // Logs exporter not available; continue without OTel logs
       }
     }
 
@@ -274,6 +305,14 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
   }
 }
 
+/**
+ * Returns the OTel LoggerProvider if logs export is enabled, or null.
+ * Used by the Visor logger to bridge log records to the OTel pipeline.
+ */
+export function getOtelLoggerProvider(): any {
+  return loggerProvider;
+}
+
 export async function shutdownTelemetry(): Promise<void> {
   if (!sdk) return;
   try {
@@ -281,6 +320,12 @@ export async function shutdownTelemetry(): Promise<void> {
       const { flushNdjson } = require('./fallback-ndjson');
       await flushNdjson();
     } catch {}
+    if (loggerProvider) {
+      try {
+        await loggerProvider.shutdown();
+      } catch {}
+      loggerProvider = null;
+    }
     await sdk.shutdown();
   } catch {
     // ignore

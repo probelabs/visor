@@ -107,6 +107,67 @@ export function getVisorRunAttributes(): Record<string, string> {
   return attrs;
 }
 
+/**
+ * Wraps a visor.run span with automatic run metrics (counter + duration histogram).
+ * Use this instead of raw `withActiveSpan('visor.run', ...)` to get metrics for free.
+ */
+export async function withVisorRun<T>(
+  attrs: Record<string, unknown>,
+  runMeta: {
+    source?: string;
+    userId?: string;
+    userName?: string;
+    workflowId?: string;
+  },
+  fn: (span: Span) => Promise<T>
+): Promise<T> {
+  const {
+    recordRunStart,
+    recordRunDuration,
+    resetRunAiCalls,
+    recordRunAiCalls,
+    getRunAiCalls,
+  } = require('./metrics');
+  const instanceId = getInstanceId();
+  recordRunStart({
+    source: runMeta.source,
+    userId: runMeta.userId,
+    userName: runMeta.userName,
+    workflowId: runMeta.workflowId,
+    instanceId,
+  });
+  resetRunAiCalls();
+  const startMs = Date.now();
+  let success = true;
+  try {
+    return await withActiveSpan('visor.run', attrs, async span => {
+      try {
+        return await fn(span);
+      } finally {
+        // Record AI call count as span attribute for trace visibility
+        try {
+          span.setAttribute('visor.run.ai_calls', getRunAiCalls());
+          span.setAttribute('visor.run.duration_ms', Date.now() - startMs);
+        } catch {}
+      }
+    });
+  } catch (err) {
+    success = false;
+    throw err;
+  } finally {
+    recordRunAiCalls({
+      source: runMeta.source,
+      workflowId: runMeta.workflowId,
+    });
+    recordRunDuration(Date.now() - startMs, {
+      source: runMeta.source,
+      userId: runMeta.userId,
+      workflowId: runMeta.workflowId,
+      success,
+    });
+  }
+}
+
 // Internal helper for tests: write a minimal run marker to NDJSON when using file sink
 let __ndjsonPath: string | null = null;
 export function __getOrCreateNdjsonPath(): string | null {

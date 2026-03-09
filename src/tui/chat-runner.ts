@@ -12,7 +12,7 @@ import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
 import { ChatTUI } from './chat-tui';
 import { ChatStateManager, setChatStateManager } from './chat-state';
 import { TuiFrontend } from './tui-frontend';
-import { withActiveSpan, getVisorRunAttributes } from '../telemetry/trace-helpers';
+import { withVisorRun, getVisorRunAttributes } from '../telemetry/trace-helpers';
 
 export interface TuiChatRunnerConfig {
   engine?: StateMachineExecutionEngine;
@@ -215,13 +215,13 @@ export class TuiChatRunner {
 
     logger.info(`[TuiChatRunner] Executing workflow for message: ${messageId}`);
 
-    this.currentExecution = withActiveSpan(
-      'visor.run',
+    this.currentExecution = withVisorRun(
       {
         ...getVisorRunAttributes(),
         'visor.run.source': 'tui',
         'tui.message_id': messageId,
       },
+      { source: 'tui', workflowId: allChecks.join(',') },
       async () => {
         try {
           const tuiExecFn = () =>

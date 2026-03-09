@@ -1593,6 +1593,11 @@ ${this.escapeXml(processedFallbackDiff)}
           : await agent.answer(prompt);
       }
 
+      try {
+        const { recordAiCall } = require('./telemetry/metrics');
+        recordAiCall({ checkId: _checkName, model: this.config.model || 'default' });
+      } catch {}
+
       log('✅ ProbeAgent session reuse completed successfully');
       log(`📤 Response length: ${response.length} characters`);
 
@@ -2182,6 +2187,11 @@ ${'='.repeat(60)}
           ? await agent.answer(prompt, undefined, schemaOptions)
           : await agent.answer(prompt);
       }
+
+      try {
+        const { recordAiCall } = require('./telemetry/metrics');
+        recordAiCall({ checkId: _checkName, model: this.config.model || 'default' });
+      } catch {}
 
       log('✅ ProbeAgent completed successfully');
       log(`📤 Response length: ${response.length} characters`);

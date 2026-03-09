@@ -7,7 +7,7 @@ import { SlackAdapter } from './adapter';
 import { CachePrewarmer } from './cache-prewarmer';
 import { RateLimiter, type RateLimitConfig } from './rate-limiter';
 import type { SlackBotConfig } from '../types/bot';
-import { withActiveSpan, getVisorRunAttributes } from '../telemetry/trace-helpers';
+import { withActiveSpan, withVisorRun, getVisorRunAttributes } from '../telemetry/trace-helpers';
 import { Scheduler } from '../scheduler/scheduler';
 import { ScheduleStore, type Schedule } from '../scheduler/schedule-store';
 import { createHash } from 'crypto';
@@ -793,8 +793,7 @@ export class SlackSocketRunner {
       // Note: We intentionally exclude PII (email, real_name) from traces for privacy compliance
       const userInfo = await this.fetchUserInfo(userId);
       try {
-        await withActiveSpan(
-          'visor.run',
+        await withVisorRun(
           {
             ...getVisorRunAttributes(),
             'visor.run.source': 'slack',
@@ -805,6 +804,12 @@ export class SlackSocketRunner {
             // Only include non-PII user info in traces (username is not PII, but email/real_name are)
             ...(userInfo?.name && { 'slack.user_name': userInfo.name }),
             ...(userInfo?.isGuest !== undefined && { 'slack.user_is_guest': userInfo.isGuest }),
+          },
+          {
+            source: 'slack',
+            userId,
+            userName: userInfo?.name,
+            workflowId: allChecks.join(','),
           },
           async () => {
             if (path) {
