@@ -1237,12 +1237,14 @@ export class AICheckProvider extends CheckProvider {
       }
     }
 
-    // Option 4: Extract workflow and tool entries from ai_mcp_servers/ai_mcp_servers_js
+    // Option 4: Extract workflow, tool, and http_client entries from ai_mcp_servers/ai_mcp_servers_js
     // Unified format:
     //   { workflow: 'name', inputs: {...} } → workflow tool
     //   { tool: 'name' } → custom tool from tools: section or built-in (e.g., 'schedule')
+    //   { type: 'http_client', base_url: '...', ... } → HTTP client tool (REST API proxy)
     const workflowEntriesFromMcp: WorkflowToolReference[] = [];
     const toolEntriesFromMcp: string[] = [];
+    const httpClientEntriesFromMcp: Array<{ name: string; config: Record<string, unknown> }> = [];
     const mcpEntriesToRemove: string[] = [];
 
     for (const [serverName, serverConfig] of Object.entries(mcpServers)) {
@@ -1259,6 +1261,13 @@ export class AICheckProvider extends CheckProvider {
         mcpEntriesToRemove.push(serverName);
         logger.debug(
           `[AICheckProvider] Extracted workflow tool '${serverName}' (workflow=${cfg.workflow}) from ai_mcp_servers`
+        );
+      } else if (cfg.type === 'http_client' && (cfg.base_url || cfg.url)) {
+        // HTTP client tool entry — REST API proxy exposed as an MCP tool
+        httpClientEntriesFromMcp.push({ name: serverName, config: cfg });
+        mcpEntriesToRemove.push(serverName);
+        logger.debug(
+          `[AICheckProvider] Extracted http_client tool '${serverName}' (base_url=${cfg.base_url || cfg.url}) from ai_mcp_servers`
         );
       } else if (cfg.tool && typeof cfg.tool === 'string') {
         // Custom tool or built-in tool entry
@@ -1338,8 +1347,10 @@ export class AICheckProvider extends CheckProvider {
       scheduleToolRequested || (config.ai?.enable_scheduler === true && !config.ai?.disableTools);
 
     if (
-      (customToolsToLoad.length > 0 || scheduleToolEnabled) &&
-      (customToolsServerName || scheduleToolEnabled) &&
+      (customToolsToLoad.length > 0 ||
+        scheduleToolEnabled ||
+        httpClientEntriesFromMcp.length > 0) &&
+      (customToolsServerName || scheduleToolEnabled || httpClientEntriesFromMcp.length > 0) &&
       !config.ai?.disableTools
     ) {
       if (!customToolsServerName) {
@@ -1381,6 +1392,54 @@ export class AICheckProvider extends CheckProvider {
           const scheduleTool = getScheduleToolDefinition();
           customTools.set(scheduleTool.name, scheduleTool);
           logger.debug(`[AICheckProvider] Added built-in schedule tool`);
+        }
+
+        // Add http_client tools extracted from ai_mcp_servers
+        for (const entry of httpClientEntriesFromMcp) {
+          const httpTool: CustomToolDefinition = {
+            name: entry.name,
+            type: 'http_client',
+            description:
+              (entry.config.description as string) ||
+              `Call ${entry.name} HTTP API (base: ${entry.config.base_url || entry.config.url})`,
+            base_url: (entry.config.base_url || entry.config.url) as string,
+            auth: entry.config.auth as CustomToolDefinition['auth'],
+            headers: entry.config.headers as Record<string, string>,
+            timeout: (entry.config.timeout as number) || 30000,
+            inputSchema: {
+              type: 'object',
+              properties: {
+                path: {
+                  type: 'string',
+                  description: 'API path (e.g. /jobs, /candidates/{id})',
+                },
+                method: {
+                  type: 'string',
+                  description: 'HTTP method (default: GET)',
+                  enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+                },
+                query: {
+                  type: 'object',
+                  description: 'Query string parameters',
+                  additionalProperties: { type: 'string' },
+                },
+                body: {
+                  type: 'object',
+                  description: 'Request body for POST/PUT/PATCH',
+                },
+              },
+              required: ['path'],
+            },
+          };
+          customTools.set(entry.name, httpTool);
+          logger.debug(
+            `[AICheckProvider] Added http_client tool '${entry.name}' (base_url=${httpTool.base_url})`
+          );
+        }
+
+        // Ensure SSE server is created when http_client tools are present
+        if (httpClientEntriesFromMcp.length > 0 && !customToolsServerName) {
+          customToolsServerName = '__tools__';
         }
 
         if (customTools.size > 0) {

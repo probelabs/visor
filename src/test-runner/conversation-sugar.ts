@@ -110,9 +110,11 @@ export function expandConversationToFlow(testCase: any): any {
 
     // After this stage, add user message + assumed assistant response to history
     messageHistory.push({ role: 'user', text: turn.text });
-    // Look for mock response text to add as assistant message for next turn
+    // Look for mock response text to add as assistant message for next turn.
+    // Record the index so the runner can replace it with the real response in --no-mocks mode.
     const assistantText = extractMockResponseText(turn.mocks);
     if (assistantText) {
+      stage._mockAssistantMsgIndex = messageHistory.length; // index of the assistant msg about to be pushed
       messageHistory.push({ role: 'assistant', text: assistantText });
     }
   }

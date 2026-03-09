@@ -782,6 +782,7 @@ async function handleTestCommand(argv: string[]): Promise<void> {
     const flagsWithValues = new Set([
       '--config',
       '--only',
+      '--case',
       '--json',
       '--report',
       '--summary',
@@ -810,7 +811,7 @@ async function handleTestCommand(argv: string[]): Promise<void> {
       break;
     }
   }
-  const only = getArg('--only');
+  const only = getArg('--only') || getArg('--case');
   const bail = hasFlag('--bail');
   const noMocks = hasFlag('--no-mocks');
   const noMocksForRaw = getArg('--no-mocks-for');

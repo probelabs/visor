@@ -21,6 +21,14 @@ import {
 } from '../scheduler/schedule-tool';
 // Legacy Slack-specific imports for backwards compatibility
 import { extractSlackContext } from '../slack/schedule-tool-handler';
+import { EnvironmentResolver } from '../utils/env-resolver';
+
+/**
+ * Check if a tool definition is an http_client tool
+ */
+function isHttpClientTool(tool: CustomToolDefinition | undefined): boolean {
+  return Boolean(tool && tool.type === 'http_client' && (tool.base_url || (tool as any).url));
+}
 
 /**
  * MCP Protocol message types
@@ -161,13 +169,15 @@ export class CustomToolsSSEServer implements CustomMCPServer {
       }
     }
 
-    // Second pass: separate workflow tools from regular tools
+    // Second pass: separate workflow and http_client tools from regular tools
     for (const [name, tool] of this.tools.entries()) {
-      // Skip workflow tools - they're handled separately
-      if (!isWorkflowTool(tool)) {
-        toolsRecord[name] = tool;
+      // Skip workflow and http_client tools - they're handled separately
+      if (isWorkflowTool(tool) || isHttpClientTool(tool)) {
+        if (isWorkflowTool(tool)) {
+          workflowToolNames.push(name);
+        }
       } else {
-        workflowToolNames.push(name);
+        toolsRecord[name] = tool;
       }
     }
 
@@ -764,7 +774,14 @@ export class CustomToolsSSEServer implements CustomMCPServer {
         description: tool.description || `Execute ${tool.name}`,
         inputSchema: normalizeInputSchema(tool.inputSchema as Record<string, unknown> | undefined),
       }));
-    const allTools = [...regularTools, ...workflowTools];
+    const httpClientTools = Array.from(this.tools.values())
+      .filter(isHttpClientTool)
+      .map(tool => ({
+        name: tool.name,
+        description: tool.description || `Call ${tool.name} HTTP API`,
+        inputSchema: normalizeInputSchema(tool.inputSchema as Record<string, unknown> | undefined),
+      }));
+    const allTools = [...regularTools, ...workflowTools, ...httpClientTools];
 
     if (this.debug) {
       logger.debug(
@@ -929,6 +946,9 @@ export class CustomToolsSSEServer implements CustomMCPServer {
               this.workflowContext,
               workflowTool.__argsOverrides
             );
+          } else if (tool && isHttpClientTool(tool)) {
+            // Execute HTTP client tool — proxy REST API calls
+            result = await this.executeHttpClientTool(tool, args);
           } else {
             // Execute regular custom tool
             result = await this.toolExecutor.execute(toolName, args);
@@ -1006,6 +1026,103 @@ export class CustomToolsSSEServer implements CustomMCPServer {
       if (workspace) {
         workspace.release();
       }
+    }
+  }
+
+  /**
+   * Execute an http_client tool — proxy REST API calls through the configured base URL.
+   */
+  private async executeHttpClientTool(
+    tool: CustomToolDefinition,
+    args: Record<string, unknown>
+  ): Promise<unknown> {
+    const baseUrl = ((tool.base_url || (tool as any).url) as string).replace(/\/+$/, '');
+    const apiPath = (args.path as string) || '';
+    const method = ((args.method as string) || 'GET').toUpperCase();
+    const queryParams = (args.query as Record<string, string>) || {};
+    const body = args.body;
+    const toolHeaders = tool.headers || {};
+    const timeout = tool.timeout || 30000;
+
+    // Build full URL
+    let url = apiPath.startsWith('http') ? apiPath : `${baseUrl}/${apiPath.replace(/^\/+/, '')}`;
+
+    // Append query parameters
+    if (Object.keys(queryParams).length > 0) {
+      const qs = new URLSearchParams(queryParams).toString();
+      url += `${url.includes('?') ? '&' : '?'}${qs}`;
+    }
+
+    // Resolve environment variables in headers
+    const resolvedHeaders: Record<string, string> = {};
+    for (const [key, value] of Object.entries(toolHeaders)) {
+      resolvedHeaders[key] = String(EnvironmentResolver.resolveValue(value));
+    }
+
+    // Handle auth
+    if (tool.auth) {
+      const authType = tool.auth.type;
+      if (authType === 'bearer' && tool.auth.token) {
+        const token = String(EnvironmentResolver.resolveValue(tool.auth.token));
+        resolvedHeaders['Authorization'] = `Bearer ${token}`;
+      }
+    }
+
+    if (this.debug) {
+      logger.debug(`[CustomToolsSSEServer:${this.sessionId}] HTTP client: ${method} ${url}`);
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    try {
+      const requestOptions: RequestInit = {
+        method,
+        headers: resolvedHeaders,
+        signal: controller.signal,
+      };
+
+      if (method !== 'GET' && body) {
+        requestOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
+        if (!resolvedHeaders['Content-Type'] && !resolvedHeaders['content-type']) {
+          resolvedHeaders['Content-Type'] = 'application/json';
+        }
+      }
+
+      const response = await fetch(url, requestOptions);
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        let errorBody = '';
+        try {
+          errorBody = await response.text();
+        } catch {}
+        throw new Error(
+          `HTTP ${response.status}: ${response.statusText}${errorBody ? ` - ${errorBody.substring(0, 500)}` : ''}`
+        );
+      }
+
+      // Parse response
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        return await response.json();
+      }
+
+      const text = await response.text();
+      if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
+        try {
+          return JSON.parse(text);
+        } catch {
+          return text;
+        }
+      }
+      return text;
+    } catch (error: unknown) {
+      clearTimeout(timeoutId);
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(`HTTP client request timed out after ${timeout}ms`);
+      }
+      throw error;
     }
   }
 
