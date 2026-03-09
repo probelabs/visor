@@ -240,6 +240,67 @@ Also see end-to-end example suites:
 - `examples/api-tools-ai-example.yaml` (embedded tests)
 - `examples/api-tools-inline-overlay-example.yaml` (embedded tests)
 
+## 10) LLM-as-judge: semantic response evaluation
+
+Use `llm_judge` to evaluate whether AI responses meet semantic criteria that can't be expressed with regex or exact matching.
+
+```yaml
+- name: response-quality-check
+  event: manual
+  fixture: local.minimal
+  mocks:
+    chat[]:
+      - text: |
+          Tyk Gateway uses Redis-based distributed rate limiting through its
+          middleware chain. Rate limits are configured per API key or policy
+          with `rate` and `per` fields. When exceeded, returns HTTP 429.
+      - intent: chat
+      - skills: [code-explorer]
+  expect:
+    calls:
+      - step: chat
+        exactly: 1
+    llm_judge:
+      # Simple pass/fail verdict
+      - step: chat
+        path: text
+        prompt: |
+          Does this response accurately explain rate limiting?
+          It should mention specific mechanisms, not be generic.
+
+      # Structured extraction with assertions
+      - step: chat
+        path: text
+        prompt: Analyze this technical response about rate limiting.
+        schema:
+          properties:
+            mentions_redis:
+              type: boolean
+              description: "Mentions Redis for distributed rate limiting?"
+            mentions_status_code:
+              type: boolean
+              description: "Mentions HTTP 429 status code?"
+            technical_depth:
+              type: string
+              enum: [shallow, moderate, deep]
+          required: [mentions_redis, mentions_status_code, technical_depth]
+        assert:
+          mentions_redis: true
+          mentions_status_code: true
+```
+
+Configure the judge model globally:
+
+```yaml
+tests:
+  defaults:
+    llm_judge:
+      model: gemini-2.0-flash
+      provider: google
+```
+
+Or per-assertion with the `model` field. Set `VISOR_JUDGE_MODEL` env var as a fallback.
+
 ## Related Documentation
 
 - [Getting Started](./getting-started.md) - Introduction to the test framework

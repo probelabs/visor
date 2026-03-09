@@ -22,6 +22,9 @@ tests:
         calls:
           - step: overview
             at_least: 1
+    llm_judge:                    # defaults for LLM-as-judge assertions
+      model: gemini-2.0-flash    # judge model (or VISOR_JUDGE_MODEL env)
+      provider: google            # google | openai | anthropic
     # Optional: include/exclude checks by tags (same semantics as main CLI)
     tags: "local,fast"         # or [local, fast]
     exclude_tags: "experimental,slow"  # or [experimental, slow]
@@ -148,13 +151,24 @@ expect:
   strict_violation:             # assert strict failure for a missing expect on a step
     for_step: <name>
     message_contains: <string>
+
+  llm_judge:                     # semantic evaluation via LLM
+    - step: <name>               # step to evaluate (uses output history)
+      path: <expr>               # dot/bracket path into output
+      index: first|last|<N>      # which output (default: last)
+      workflow_output: true       # use workflow output instead
+      prompt: <string>           # evaluation criteria (required)
+      model: <string>            # override judge model
+      schema: verdict|<object>   # verdict (default) or custom schema
+      assert:                    # field-level assertions on result
+        <field>: <expected>
 ```
 
 **Supported providers for `calls` and `no_calls`:**
 - `github`: GitHub API operations (`labels.add`, `issues.createComment`, `pulls.createReview`, `checks.create`, `checks.update`)
 - `slack`: Slack API operations (`chat.postMessage`)
 
-See [Assertions](./assertions.md) for detailed assertion syntax and examples.
+See [Assertions](./assertions.md) for detailed assertion syntax and examples (including LLM-as-judge).
 
 Inline example (calls + prompts + outputs):
 

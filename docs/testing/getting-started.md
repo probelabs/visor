@@ -86,7 +86,7 @@ Run `visor test --validate` to get precise YAML-path errors and suggestions:
 - [DSL Reference](./dsl-reference.md) - Complete test YAML schema
 - [Flows](./flows.md) - Multi-stage test flows
 - [Fixtures and Mocks](./fixtures-and-mocks.md) - Managing test data
-- [Assertions](./assertions.md) - Available assertion types
+- [Assertions](./assertions.md) - Available assertion types (including LLM-as-judge for semantic evaluation)
 - [Cookbook](./cookbook.md) - Common patterns and recipes
 - [CLI and Reporters](./cli.md) - Command-line options and output formats
 - [CI Integration](./ci.md) - Running tests in CI pipelines

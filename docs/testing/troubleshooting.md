@@ -80,6 +80,31 @@ Guarantee: if a check executed and defines `on_finish`, `on_finish` still execut
 - Ensure fixtures don't depend on local file paths or network access.
 - Run with `--debug` in CI to capture more diagnostic output.
 
+## LLM judge errors
+
+### "LLM judge error: API key not valid"
+
+- The judge uses ProbeAgent which needs API keys in the environment. Set `GOOGLE_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY` depending on your provider.
+- Configure the provider in test defaults: `tests.defaults.llm_judge.provider: google`
+- The default model is `gemini-2.0-flash`. Override with `VISOR_JUDGE_MODEL` env var or `tests.defaults.llm_judge.model`.
+
+### "LLM judge: no output history for step"
+
+- The step name doesn't match any executed step. Check your mock structure — with `max_loops: 0` and `chat[]` mocks, outputs land at `chat` not `chat.generate-response`.
+- Use `--debug` to see which steps executed and their output history keys.
+
+### LLM judge field assertion fails unexpectedly
+
+- LLM judgments are inherently non-deterministic. Use broader assertions (e.g., check `mentions_redis: true` rather than exact string matches).
+- For enum fields, consider if the LLM might reasonably choose a different value (e.g., "moderate" vs "deep").
+- The `pass`/`reason` fields are always present — check the `reason` in test output for the LLM's explanation.
+
+### "Failed to parse LLM judge response as JSON"
+
+- The LLM didn't return valid JSON. This is rare with schema-constrained output but can happen with some models.
+- Try a more capable model (e.g., `gemini-2.0-flash` or `gpt-4o`).
+- The judge handles markdown-wrapped JSON (`\`\`\`json ... \`\`\``) automatically.
+
 ## Related Documentation
 
 - [Getting Started](./getting-started.md) - Introduction to the test framework

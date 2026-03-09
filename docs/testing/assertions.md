@@ -9,6 +9,7 @@ Assertions live under `expect:` and cover several surfaces:
 - `no_calls`: assert that specific steps or provider ops were NOT called
 - `fail`: assert that the case failed with a specific message
 - `strict_violation`: assert strict mode failure for a missing expect on a step
+- `llm_judge`: semantic evaluation of outputs using an LLM (pass/fail verdicts or structured extraction)
 - `use`: reference reusable macros defined in `tests.defaults.macros`
 
 ## Calls
@@ -171,3 +172,91 @@ tests:
 ```
 
 Macros are merged with inline expectations, allowing you to compose reusable assertion patterns.
+
+## LLM Judge
+
+Use `llm_judge` for semantic evaluation of outputs using an LLM. This is useful when exact string matching or regex isn't enough — for example, verifying that a response is technically accurate, helpful, or follows specific criteria.
+
+### Simple verdict (pass/fail)
+
+```yaml
+expect:
+  llm_judge:
+    - step: chat
+      path: text
+      prompt: |
+        The user asked "How does rate limiting work?"
+        Evaluate whether the response:
+        1. Actually explains the mechanism (not generic)
+        2. Mentions specific technical details
+        3. Is well-structured and helpful
+```
+
+The LLM returns `{ pass: boolean, reason: string }`. If `pass` is false, the test fails with the `reason`.
+
+### Structured extraction with custom schema
+
+Define a custom schema to extract structured fields, then assert on them:
+
+```yaml
+expect:
+  llm_judge:
+    - step: generate-response
+      path: text
+      prompt: |
+        Analyze this technical response about authentication.
+        Extract the requested properties.
+      schema:
+        properties:
+          mentions_oauth:
+            type: boolean
+            description: "Does the response mention OAuth?"
+          mentions_jwt:
+            type: boolean
+            description: "Does the response mention JWT tokens?"
+          quality:
+            type: string
+            enum: [poor, adequate, good, excellent]
+            description: "Overall response quality"
+        required: [mentions_oauth, mentions_jwt, quality]
+      assert:
+        mentions_oauth: true
+        quality: "good"
+```
+
+Custom schemas always include `pass` and `reason` fields automatically.
+
+### Assertion types for `assert`
+
+- **boolean**: `field: true` or `field: false` — exact match
+- **string**: `field: "value"` — exact string match
+- **array**: `field: ["item1", "item2"]` — checks that all listed items are present in the array
+
+### Field reference
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `step` | string | Step name to evaluate (uses output history) |
+| `path` | string | Dot/bracket path into the output |
+| `index` | `first` \| `last` \| number | Which output from history (default: `last`) |
+| `workflow_output` | boolean | Use workflow output instead of step output |
+| `prompt` | string | **Required.** Evaluation criteria sent to the LLM |
+| `model` | string | Override model (default: from config or env) |
+| `schema` | `verdict` \| object | Schema mode (default: `verdict` = pass/fail) |
+| `assert` | object | Field-level assertions on extracted result |
+
+### Configuring the judge model
+
+Set defaults for all `llm_judge` assertions in `tests.defaults`:
+
+```yaml
+tests:
+  defaults:
+    llm_judge:
+      model: gemini-2.0-flash
+      provider: google      # google | openai | anthropic
+```
+
+Or override per-assertion with the `model` field. The judge uses ProbeAgent internally, so it respects the same environment variables (`GOOGLE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.).
+
+You can also set `VISOR_JUDGE_MODEL` environment variable as a global default.
