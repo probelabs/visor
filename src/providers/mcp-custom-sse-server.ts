@@ -728,8 +728,25 @@ export class CustomToolsSSEServer implements CustomMCPServer {
    * Handle tools/list MCP request
    */
   private async handleToolsList(id: number | string): Promise<MCPToolsListResponse> {
+    // Recursively ensure all array schemas have 'items' (Gemini rejects arrays without it)
+    const fixArraySchemas = (obj: unknown): unknown => {
+      if (!obj || typeof obj !== 'object') return obj;
+      if (Array.isArray(obj)) return obj.map(fixArraySchemas);
+      const record = obj as Record<string, unknown>;
+      if (record.type === 'array' && !record.items) {
+        record.items = { type: 'string' };
+      }
+      for (const key of Object.keys(record)) {
+        if (typeof record[key] === 'object' && record[key] !== null) {
+          fixArraySchemas(record[key]);
+        }
+      }
+      return record;
+    };
+
     const normalizeInputSchema = (schema: Record<string, unknown> | undefined): MCPInputSchema => {
       if (schema && schema.type === 'object') {
+        fixArraySchemas(schema);
         return schema as unknown as MCPInputSchema;
       }
       return {
