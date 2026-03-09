@@ -486,6 +486,16 @@ export class CLI {
    */
   public getExamplesText(): string {
     return `
+Subcommands:
+  visor init [template]                                      # Create a starter .visor.yaml
+                                                               # Templates: code-review, agent, automation, assistant
+  visor validate                                             # Validate configuration
+  visor test                                                 # Run YAML tests
+  visor review                                               # Run built-in code review
+  visor build <agent.yaml>                                   # Run agent builder
+  visor config snapshots                                     # Manage config snapshots
+  visor schedule start                                       # Start scheduler
+
 Examples:
   visor --check performance --output table
   visor --check performance --check security --config ./.visor.yaml

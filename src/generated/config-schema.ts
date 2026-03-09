@@ -217,7 +217,7 @@ export const configSchema = {
       properties: {
         type: {
           type: 'string',
-          enum: ['command', 'api'],
+          enum: ['command', 'api', 'workflow'],
           description: "Tool implementation type (defaults to 'command')",
         },
         name: {
@@ -416,6 +416,28 @@ export const configSchema = {
         request_timeout_ms: {
           type: 'number',
           description: 'Alias for requestTimeoutMs (snake_case)',
+        },
+        workflow: {
+          type: 'string',
+          description: "Workflow ID (registry lookup) or file path (for type: 'workflow')",
+        },
+        inputs: {
+          type: 'array',
+          items: {
+            $ref: '#/definitions/WorkflowInput',
+          },
+          description: "Inline workflow inputs (for type: 'workflow' with inline steps)",
+        },
+        outputs: {
+          type: 'array',
+          items: {
+            $ref: '#/definitions/WorkflowOutput',
+          },
+          description: "Inline workflow outputs (for type: 'workflow' with inline steps)",
+        },
+        steps: {
+          $ref: '#/definitions/Record%3Cstring%2CCheckConfig%3E',
+          description: "Inline workflow steps (for type: 'workflow' with inline definition)",
         },
       },
       required: ['name'],
@@ -967,7 +989,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -984,7 +1006,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1696,7 +1718,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1711,14 +1733,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916>>':
+    'Record<string,Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-55916>': {
+    'Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400>': {
       type: 'object',
       additionalProperties: false,
     },

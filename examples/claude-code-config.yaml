@@ -3,8 +3,6 @@
 # for advanced AI-powered code reviews with MCP tools
 
 version: "1.0"
-project: claude-code-example
-language: typescript
 
 # Claude Code checks with various configurations
 steps:
@@ -140,7 +138,6 @@ steps:
       # Hooks for custom processing
       hooks:
         onStart: "echo 'Starting comprehensive Claude Code review'"
-        onToolUse: "./hooks/log-tool-usage.sh"
         onEnd: "echo 'Comprehensive review complete'"
     on: [manual]  # Run manually due to high resource usage
 
@@ -165,27 +162,16 @@ output:
 ai_provider: google
 ai_model: gemini-pro
 
-# Failure conditions
-fail_if: "criticalIssues > 0 || securityIssues > 5"
+# Global MCP servers available to all AI steps
+ai_mcp_servers:
+  code_analyzer:
+    command: "python"
+    args: ["./mcp/analyzer.py"]
+    env:
+      ANALYSIS_LEVEL: "deep"
 
-# Custom MCP server configuration
-# This can be extended in .mcp.json for more servers
-mcp_config:
-  servers:
-    code_analyzer:
-      command: "python"
-      args: ["./mcp/analyzer.py"]
-      env:
-        ANALYSIS_LEVEL: "deep"
-
-    security_scanner:
-      command: "node"
-      args: ["./mcp/security.js"]
-      env:
-        SCAN_MODE: "full"
-
-# Environment variables for checks
-env:
-  ANALYSIS_DEPTH: "comprehensive"
-  INCLUDE_SUGGESTIONS: "true"
-  MAX_FILE_SIZE: "1000000"
+  security_scanner:
+    command: "node"
+    args: ["./mcp/security.js"]
+    env:
+      SCAN_MODE: "full"

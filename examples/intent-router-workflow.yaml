@@ -23,6 +23,8 @@ checks:
     workflow: intent-router
     criticality: internal
     depends_on: [ask]
+    assume:
+      - "outputs['ask']?.text != null"
     args:
       question: "{{ outputs['ask'].text }}"
       intents:

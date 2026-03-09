@@ -28,6 +28,8 @@ checks:
     workflow: code-talk
     criticality: internal
     depends_on: [get-question]
+    assume:
+      - "outputs['get-question']?.text != null"
     args:
       question: "{{ outputs['get-question'].text }}"
 

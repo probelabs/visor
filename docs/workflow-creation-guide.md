@@ -88,9 +88,9 @@ steps:
     type: ai
     on: [pr_opened, pr_updated]  # PR open or update
 
-  on-manual:
+  on-any-event:
     type: command
-    # No 'on:' means manual-only by default
+    # No 'on:' means the check runs on ANY event (event-agnostic)
 ```
 
 Available events:
@@ -143,7 +143,7 @@ steps:
     # AI configuration
     ai:
       provider: anthropic       # google, anthropic, openai
-      model: claude-3-opus-20240229
+      model: claude-sonnet-4-20250514
       skip_code_context: false  # Include code context in prompt
       disableTools: false       # Allow tool use
       system_prompt: |
@@ -903,7 +903,7 @@ my-step:
     Analyze for security issues...
   ai:
     provider: anthropic
-    model: claude-3-opus-20240229
+    model: claude-sonnet-4-20250514
 
   # 5. Contracts (Post-Exec)
   schema: code-review

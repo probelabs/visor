@@ -59,9 +59,9 @@ checks:
 
 Run it:
 ```bash
-visor run config.yaml --tui
+visor --config config.yaml --tui
 # or
-visor run config.yaml --message "How does authentication work?"
+visor --config config.yaml --message "How does authentication work?"
 ```
 
 ---
@@ -789,9 +789,9 @@ All workflows support:
 
 | Mode | Command |
 |------|---------|
-| **CLI (single message)** | `visor run config.yaml --message "Hello"` |
-| **CLI (interactive TUI)** | `visor run config.yaml --tui` |
-| **Slack bot** | `visor run config.yaml --slack` |
+| **CLI (single message)** | `visor --config config.yaml --message "Hello"` |
+| **CLI (interactive TUI)** | `visor --config config.yaml --tui` |
+| **Slack bot** | `visor --config config.yaml --slack` |
 | **GitHub Action** | Use `@probelabs/visor-action` |
 
 ---

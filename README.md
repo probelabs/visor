@@ -7,23 +7,35 @@
   [![Node](https://img.shields.io/badge/Node.js-18%2B-green)](https://nodejs.org/)
   [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-  Orchestrate checks, MCP tools, AI providers, and A2A agents with YAML-driven pipelines.
-  Runs as GitHub Action, CLI, Slack bot, HTTP API, or A2A agent server.
+  Orchestrate checks, MCP tools, and AI providers with YAML-driven pipelines.
+  Runs as GitHub Action, CLI, Slack bot, or HTTP API.
 </div>
 
 ---
 
-Visor is an open-source workflow engine that lets you define multi-step AI pipelines in YAML. Wire up shell commands, AI providers, MCP tools, A2A agents, HTTP calls, and custom scripts into dependency-aware DAGs — then run them from your terminal, CI, Slack, an HTTP endpoint, or as a standards-compliant A2A agent server.
+Visor is an open-source workflow engine that lets you define multi-step AI pipelines in YAML. Wire up shell commands, AI providers, MCP tools, HTTP calls, and custom scripts into dependency-aware DAGs — then run them from your terminal, CI, Slack, or an HTTP endpoint.
 
 **What you get out of the box:**
 
 - **YAML-driven pipelines** — define checks, transforms, routing, and AI prompts in a single config file.
-- **5 runtime modes** — CLI, GitHub Action, Slack bot, HTTP server, A2A agent server — same config, any surface.
-- **15+ provider types** — `ai`, `a2a`, `command`, `script`, `mcp`, `http`, `claude-code`, `github`, `memory`, `workflow`, and more.
-- **Agent interoperability** — A2A protocol support: expose workflows as discoverable agents, or call external A2A agents from your pipelines.
+- **4 runtime modes** — CLI, GitHub Action, Slack bot, HTTP server — same config, any surface.
+- **12+ provider types** — `ai`, `command`, `script`, `mcp`, `http`, `claude-code`, `github`, `memory`, `workflow`, and more.
 - **AI orchestration** — multi-provider (Gemini, Claude, OpenAI, Bedrock), session reuse, MCP tool calling, retry & fallback.
 - **Execution engine** — dependency DAGs, parallel waves, forEach fan-out, conditional routing, failure auto-remediation.
 - **Built-in testing** — YAML-native integration tests with fixtures, mocks, and assertions.
+
+## What do you want to build?
+
+| Goal | Start here | Example |
+|------|-----------|---------|
+| **Code review on PRs** | [Guide: Code Review Pipeline](docs/guides/build-code-review.md) | [quick-start-tags.yaml](examples/quick-start-tags.yaml) |
+| **AI agent with tools** | [Guide: AI Agent](docs/guides/build-ai-agent.md) | [ai-custom-tools-simple.yaml](examples/ai-custom-tools-simple.yaml) |
+| **Multi-step automation** | [Workflow Creation Guide](docs/workflow-creation-guide.md) | [enhanced-config.yaml](examples/enhanced-config.yaml) |
+| **Chat assistant / Slack bot** | [Assistant Workflows](docs/assistant-workflows.md) | [code-talk-workflow.yaml](examples/code-talk-workflow.yaml) |
+| **Run shell commands + AI** | [Command Provider](docs/command-provider.md) | [ai-with-bash.yaml](examples/ai-with-bash.yaml) |
+| **Connect MCP tools** | [MCP Provider](docs/mcp-provider.md) | [mcp-provider-example.yaml](examples/mcp-provider-example.yaml) |
+
+> **First time?** Run `npx visor init` to scaffold a working config, then `npx visor` to run it.
 
 ## Table of Contents
 
@@ -35,8 +47,6 @@ Visor is an open-source workflow engine that lets you define multi-step AI pipel
 - [Provider Types](#-provider-types)
 - [Orchestration](#-orchestration)
 - [AI & MCP](#-ai--mcp)
-- [Tools & Toolkits](#-tools--toolkits)
-- [Agent Protocol (A2A)](#-agent-protocol-a2a)
 - [GitHub Provider](#-github-provider)
 - [Templating & Transforms](#-templating--transforms)
 - [Suppressing Warnings](#-suppressing-warnings)
@@ -57,13 +67,23 @@ Visor is an open-source workflow engine that lets you define multi-step AI pipel
 ### Install & Run
 
 ```bash
-# One-off
-npx -y @probelabs/visor@latest --check all --output table
-
-# As a dev dependency
+# Install
 npm i -D @probelabs/visor
-npx visor --check all --output json
+
+# Scaffold a starter config (pick a template)
+npx visor init                  # interactive picker
+npx visor init code-review      # PR review pipeline
+npx visor init agent            # AI agent with tools
+npx visor init automation       # multi-step pipeline
+npx visor init assistant        # chat assistant / Slack bot
+
+# Run
+npx visor                       # run all steps
+npx visor --tags fast           # run steps tagged "fast"
+npx visor validate              # check config for errors
 ```
+
+Or one-off without installing: `npx -y @probelabs/visor@latest --check all --output table`
 
 ### Minimal Config (`.visor.yaml`)
 
@@ -166,7 +186,7 @@ Learn more: [docs/assistant-workflows.md](docs/assistant-workflows.md) | Example
 
 ## 🖥️ Runtime Modes
 
-Visor runs the same YAML config across five surfaces:
+Visor runs the same YAML config across four surfaces:
 
 | Mode | How to run | Best for |
 |------|-----------|----------|
@@ -174,7 +194,6 @@ Visor runs the same YAML config across five surfaces:
 | **GitHub Action** | `uses: probelabs/visor@v1` | PR reviews, issue triage, annotations |
 | **Slack bot** | `visor --slack --config .visor.yaml` | Team assistants, ChatOps |
 | **HTTP server** | `http_server: { enabled: true, port: 8080 }` | Webhooks, API integrations |
-| **A2A agent** | `visor --a2a --config .visor.yaml` | Agent interoperability, multi-agent systems |
 
 Additional modes:
 - **TUI** — interactive chat-style terminal UI: `visor --tui`
@@ -189,8 +208,6 @@ visor --analyze-branch-diff                   # PR-style diff analysis
 visor --event pr_updated                      # Simulate GitHub events
 visor --tui --config ./workflow.yaml          # Interactive TUI
 visor --debug-server --debug-port 3456        # Live web debugger
-visor --a2a --config workflow.yaml            # A2A agent server
-visor tasks list --watch                      # Monitor A2A task queue
 visor config snapshots                        # Config version history
 visor validate                                # Validate config
 visor test --progress compact                 # Run integration tests
@@ -233,7 +250,6 @@ Learn more: [docs/commands.md](docs/commands.md)
 | Provider | Description | Example use |
 |----------|------------|------------|
 | `ai` | Multi-provider AI (Gemini, Claude, OpenAI, Bedrock) | Code review, analysis, generation |
-| `a2a` | Call external A2A agents | Agent delegation, multi-agent workflows |
 | `command` | Shell commands with Liquid templating | Run tests, build, lint |
 | `script` | JavaScript in a secure sandbox | Transform data, custom logic |
 | `mcp` | MCP tool execution (stdio/SSE/HTTP) | External tool integration |
@@ -441,98 +457,6 @@ steps:
 
 Learn more: [docs/claude-code.md](docs/claude-code.md) · [docs/mcp-provider.md](docs/mcp-provider.md) · [docs/advanced-ai.md](docs/advanced-ai.md)
 
-## 🧰 Tools & Toolkits
-
-Define custom tools and expose them to AI agents — from simple commands to API bundles to multi-step workflows.
-
-```yaml
-tools:
-  # Shell command → 1 tool
-  git-status:
-    exec: "git status --porcelain"
-
-  # OpenAPI spec → N tools (one per operationId)
-  slack-api:
-    type: api
-    headers: { Authorization: "Bearer ${SLACK_BOT_TOKEN}" }
-    spec:
-      openapi: 3.0.0
-      servers: [{ url: "https://slack.com/api" }]
-      paths:
-        /chat.postMessage:
-          post: { operationId: chat_postMessage, ... }
-        /users.lookupByEmail:
-          get: { operationId: users_lookupByEmail, ... }
-
-  # Multi-step workflow → 1 tool (inline or file reference)
-  send-dm:
-    type: workflow
-    workflow: workflows/slack/send-dm.yaml
-```
-
-Share tools across workflows with `extends:`, group related tools in toolkit files, and expose them to AI via skills:
-
-```yaml
-# skills.yaml — activate tools based on user intent
-- id: slack
-  tools:
-    slack:
-      toolkit: workflows/slack/tools.yaml    # loads all tools from file
-```
-
-Learn more: [docs/tools-and-toolkits.md](docs/tools-and-toolkits.md) · [docs/ai-custom-tools.md](docs/ai-custom-tools.md)
-
-## 🤝 Agent Protocol (A2A)
-
-Visor implements the [A2A (Agent-to-Agent) protocol](https://github.com/google/A2A) for agent interoperability. Every Visor workflow can become a discoverable, standards-compliant agent — and every A2A agent in the ecosystem becomes a callable step in your workflows.
-
-### Server: Expose Workflows as an A2A Agent
-
-```yaml
-agent_protocol:
-  enabled: true
-  protocol: a2a
-  port: 9000
-  agent_card_inline:
-    name: "Code Review Agent"
-    description: "AI-powered code review"
-    skills:
-      - id: security
-        name: Security Review
-        description: Analyze code for vulnerabilities
-  skill_routing:
-    security: security-review
-  default_workflow: general-review
-  auth:
-    type: bearer
-    token_env: AGENT_AUTH_TOKEN
-```
-
-```bash
-visor --a2a --config .visor.yaml    # Start A2A server on port 9000
-visor tasks list --watch            # Monitor task queue
-```
-
-### Client: Call External A2A Agents
-
-```yaml
-steps:
-  compliance-scan:
-    type: a2a
-    agent_url: "http://compliance-agent:9000"
-    message: |
-      Review PR #{{ pr.number }}: {{ pr.title }}
-    blocking: true
-    timeout: 60000
-
-  summarize:
-    type: ai
-    depends_on: [compliance-scan]
-    prompt: "Summarize: {{ outputs['compliance-scan'] | json }}"
-```
-
-Learn more: [docs/a2a-provider.md](docs/a2a-provider.md) · [RFC: A2A Protocol Support](rfc/001-a2a-protocol-support.md) · [Example config](examples/a2a-agent-example.yaml)
-
 ## 🧰 GitHub Provider
 
 Native GitHub operations (labels, comments, checks) without shelling out to `gh`:
@@ -714,7 +638,41 @@ steps:
   # ... your pipeline
 ```
 
-Learn more: [docs/configuration.md](docs/configuration.md)
+### Where Things Go (Quick Reference)
+
+A common source of confusion is where to put AI settings. Here's the map:
+
+```yaml
+version: "1.0"
+
+# ── Global defaults (top level) ──────────────────────
+ai_provider: google              # default AI provider for all steps
+ai_model: gemini-2.5-flash       # default model for all steps
+
+steps:
+  my-step:
+    type: ai
+    prompt: "Analyze the code"
+
+    # ── Per-step overrides (step level) ──────────────
+    ai_provider: anthropic       # override provider for this step
+    ai_model: claude-sonnet-4-20250514    # override model for this step
+    ai_system_prompt: "You are..." # system prompt shorthand
+
+    # ── OR use the ai: block for full config ─────────
+    ai:
+      provider: anthropic
+      model: claude-sonnet-4-20250514
+      system_prompt: "You are a senior engineer."
+      retry:
+        maxRetries: 3
+      fallback:
+        providers: [{ provider: google, model: gemini-2.5-flash }]
+```
+
+> **Common mistakes:** `system_prompt` at step level (ignored — use `ai_system_prompt` or put it inside `ai:`). Top-level `ai:` block (not supported — use `ai_provider`/`ai_model`). `parseJson` on command steps (commands auto-parse JSON). Run `visor validate` to catch these.
+
+Learn more: [docs/ai-configuration.md](docs/ai-configuration.md) · [docs/configuration.md](docs/configuration.md)
 
 ## 👀 Observability
 
@@ -804,23 +762,29 @@ Learn more: [docs/enterprise-policy.md](docs/enterprise-policy.md)
 
 ## 📚 Further Reading
 
+**Getting started:**
+[Configuration](docs/configuration.md) · [AI config](docs/ai-configuration.md) · [CLI commands](docs/commands.md) · [GitHub Auth](docs/github-auth.md) · [CI/CLI mode](docs/ci-cli-mode.md) · [GitHub Action reference](docs/action-reference.md) · [Migration](docs/migration.md) · [FAQ](docs/faq.md) · [Glossary](docs/glossary.md)
+
 **Guides:**
-[Tools & Toolkits](docs/tools-and-toolkits.md) · [Assistant workflows](docs/assistant-workflows.md) · [CLI commands](docs/commands.md) · [Configuration](docs/configuration.md) · [AI config](docs/ai-configuration.md) · [Dependencies](docs/dependencies.md) · [forEach propagation](docs/foreach-dependency-propagation.md) · [Failure routing](docs/failure-routing.md) · [Liquid templates](docs/liquid-templates.md) · [Schema-template system](docs/schema-templates.md) · [Fail conditions](docs/fail-if.md) · [Timeouts](docs/timeouts.md) · [Execution limits](docs/limits.md) · [Output formats](docs/output-formats.md) · [Output formatting](docs/output-formatting.md) · [HTTP integration](docs/http.md) · [Scheduler](docs/scheduler.md)
+[Tools & Toolkits](docs/tools-and-toolkits.md) · [Assistant workflows](docs/assistant-workflows.md) · [Workflow creation](docs/workflow-creation-guide.md) · [Workflow style guide](docs/guides/workflow-style-guide.md) · [Dependencies](docs/dependencies.md) · [forEach propagation](docs/foreach-dependency-propagation.md) · [Failure routing](docs/failure-routing.md) · [Router patterns](docs/router-patterns.md) · [Lifecycle hooks](docs/lifecycle-hooks.md) · [Liquid templates](docs/liquid-templates.md) · [Schema-template system](docs/schema-templates.md) · [Fail conditions](docs/fail-if.md) · [Failure conditions schema](docs/failure-conditions-schema.md) · [Failure conditions impl](docs/failure-conditions-implementation.md) · [Timeouts](docs/timeouts.md) · [Execution limits](docs/limits.md) · [Event triggers](docs/event-triggers.md) · [Output formats](docs/output-formats.md) · [Output formatting](docs/output-formatting.md) · [Default output schema](docs/default-output-schema.md) · [Output history](docs/output-history.md) · [Reusable workflows](docs/workflows.md) · [Criticality modes](docs/guides/criticality-modes.md) · [Fault management](docs/guides/fault-management-and-contracts.md)
 
 **Providers:**
-[A2A](docs/a2a-provider.md) · [Command](docs/command-provider.md) · [Script](docs/script.md) · [MCP](docs/mcp-provider.md) · [MCP tools for AI](docs/mcp.md) · [Claude Code](docs/claude-code.md) · [GitHub ops](docs/github-ops.md) · [Custom providers](docs/pluggable.md)
+[A2A](docs/a2a-provider.md) · [Command](docs/command-provider.md) · [Script](docs/script.md) · [MCP](docs/mcp-provider.md) · [MCP tools for AI](docs/mcp.md) · [Claude Code](docs/claude-code.md) · [AI custom tools](docs/ai-custom-tools.md) · [AI custom tools usage](docs/ai-custom-tools-usage.md) · [Custom tools](docs/custom-tools.md) · [GitHub ops](docs/github-ops.md) · [Git checkout](docs/providers/git-checkout.md) · [HTTP integration](docs/http.md) · [Memory](docs/memory.md) · [Human input](docs/human-input-provider.md) · [Custom providers](docs/pluggable.md)
 
 **Operations:**
-[GitHub Action reference](docs/action-reference.md) · [Security](docs/security.md) · [Performance](docs/performance.md) · [Observability](docs/observability.md) · [Debugging](docs/debugging.md) · [Debug visualizer](docs/debug-visualizer.md) · [Troubleshooting](docs/troubleshooting.md) · [Suppressions](docs/suppressions.md) · [GitHub checks](docs/GITHUB_CHECKS.md)
-
-**Architecture:**
-[Failure conditions schema](docs/failure-conditions-schema.md) · [Failure conditions implementation](docs/failure-conditions-implementation.md)
+[Security](docs/security.md) · [Performance](docs/performance.md) · [Observability](docs/observability.md) · [Debugging](docs/debugging.md) · [Debug visualizer](docs/debug-visualizer.md) · [Telemetry setup](docs/telemetry-setup.md) · [Dashboards](docs/dashboards/README.md) · [Troubleshooting](docs/troubleshooting.md) · [Suppressions](docs/suppressions.md) · [GitHub checks](docs/GITHUB_CHECKS.md) · [Slack integration](docs/slack-integration.md) · [Scheduler](docs/scheduler.md) · [Sandbox engines](docs/sandbox-engines.md)
 
 **Testing:**
 [Getting started](docs/testing/getting-started.md) · [DSL reference](docs/testing/dsl-reference.md) · [Flows](docs/testing/flows.md) · [Fixtures & mocks](docs/testing/fixtures-and-mocks.md) · [Assertions](docs/testing/assertions.md) · [Cookbook](docs/testing/cookbook.md) · [CLI & reporters](docs/testing/cli.md) · [CI integration](docs/testing/ci.md) · [Troubleshooting](docs/testing/troubleshooting.md)
 
+**Enterprise:**
+[Licensing](docs/licensing.md) · [Enterprise policy](docs/enterprise-policy.md) · [Scheduler storage](docs/scheduler-storage.md) · [Database operations](docs/database-operations.md) · [Capacity planning](docs/capacity-planning.md) · [Production deployment](docs/production-deployment.md) · [Deployment](docs/DEPLOYMENT.md)
+
+**Architecture & RFCs:**
+[Architecture](docs/architecture.md) · [Contributing](docs/contributing.md) · [Failure routing RFC](docs/failure-routing-rfc.md) · [Bot transports RFC](docs/bot-transports-rfc.md) · [Debug visualizer RFC](docs/debug-visualizer-rfc.md) · [Debug visualizer progress](docs/debug-visualizer-progress.md) · [Engine state machine plan](docs/engine-state-machine-plan.md) · [Engine pause/resume RFC](docs/engine-pause-resume-rfc.md) · [Event-driven GitHub RFC](docs/event-driven-github-integration-rfc.md) · [Execution statistics RFC](docs/execution-statistics-rfc.md) · [Telemetry tracing RFC](docs/telemetry-tracing-rfc.md) · [Test framework RFC](docs/test-framework-rfc.md) · [SDK RFC](docs/visor-sdk-rfc.md) · [Goto/forward run plan](docs/goto-forward-run-plan.md) · [Loop routing refactor](docs/loop-routing-refactor.md) · [Schema next PR](docs/schema-next-pr.md) · [Fact validator gap analysis](docs/fact-validator-gap-analysis.md) · [Fact validator plan](docs/fact-validator-implementation-plan.md)
+
 **Recipes & examples:**
-[Recipes](docs/recipes.md) · [Dev playbook](docs/dev-playbook.md) · [Tag filtering](docs/tag-filtering.md) · [Author permissions](docs/author-permissions.md) · [Session reuse](docs/advanced-ai.md)
+[Recipes](docs/recipes.md) · [Dev playbook](docs/dev-playbook.md) · [Tag filtering](docs/tag-filtering.md) · [Author permissions](docs/author-permissions.md) · [Session reuse](docs/advanced-ai.md) · [SDK](docs/sdk.md)
 
 ## 🤝 Contributing
 
