@@ -47,6 +47,7 @@ export interface LlmJudgeExpectation {
   step?: string;
   path?: string;
   index?: number | 'first' | 'last';
+  turn?: number | 'current'; // 1-based turn number (conversation sugar); transformed to index before evaluation
   workflow_output?: boolean;
   prompt: string;
   model?: string;

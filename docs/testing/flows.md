@@ -241,6 +241,46 @@ Key points:
 - Output history accumulates across flow stages because the engine instance is shared
 - Each stage builds on the prior conversation by adding messages to `execution_context.conversation.messages`
 
+## Conversation sugar
+
+For multi-turn conversation tests, the `conversation:` format provides a more concise alternative to manually building flow stages with `execution_context.conversation`. It auto-expands into flow stages at runtime.
+
+```yaml
+- name: quick-conversation-test
+  strict: false
+  conversation:
+    - role: user
+      text: "What is Tyk?"
+      mocks:
+        chat: { text: "Tyk is an open-source API gateway.", intent: chat }
+      expect:
+        calls:
+          - step: chat
+            exactly: 1
+    - role: user
+      text: "How does rate limiting work?"
+      mocks:
+        chat: { text: "Rate limiting uses Redis counters.", intent: chat }
+      expect:
+        llm_judge:
+          - step: chat
+            turn: current
+            path: text
+            prompt: Does this explain rate limiting?
+          - step: chat
+            turn: 1
+            path: text
+            prompt: Was the first response a good intro?
+```
+
+**How it works:**
+- Each `role: user` turn becomes a flow stage with `event: manual`
+- Message history is auto-built from prior turns (mock response text is used as assistant messages)
+- `turn: N` (1-based) references the Nth turn's output; `turn: current` references the current turn
+- Use `role: assistant` turns to override mock-inferred responses in the history
+
+See [DSL Reference](./dsl-reference.md#conversation-sugar) for the full schema and [Cookbook](./cookbook.md) recipe #12 for more examples.
+
 ## Debugging flows
 
 - Set `VISOR_DEBUG=true` to print stage headers, selected checks, and internal debug lines from the engine.

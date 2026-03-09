@@ -370,6 +370,45 @@ tests:
 
 Or per-assertion with the `model` field. Set `VISOR_JUDGE_MODEL` env var as a fallback.
 
+## 12) Conversation sugar: multi-turn without boilerplate
+
+The `conversation:` format auto-builds message history from prior turns, removing the need to duplicate `execution_context.conversation.messages` across stages.
+
+```yaml
+- name: support-conversation
+  strict: false
+  conversation:
+    - role: user
+      text: "My API is returning 502 errors"
+      mocks:
+        chat: { text: "A 502 error typically means the upstream service is unreachable. Can you check if your backend is running?", intent: chat }
+      expect:
+        calls:
+          - step: chat
+            exactly: 1
+    - role: user
+      text: "The backend is running. Curl works directly."
+      mocks:
+        chat: { text: "If curl works directly but Tyk returns 502, check the target_url in your API definition and DNS resolution.", intent: chat }
+      expect:
+        outputs:
+          - step: chat
+            turn: current
+            path: text
+            matches: "(?i)target_url"
+        llm_judge:
+          - step: chat
+            turn: current
+            path: text
+            prompt: Does the response narrow down Tyk-specific causes?
+          - step: chat
+            turn: 1
+            path: text
+            prompt: Was the first response appropriately exploratory?
+```
+
+Compare this with the equivalent `flow:` format in recipe #10 — the `conversation:` format is significantly more concise.
+
 ## Related Documentation
 
 - [Getting Started](./getting-started.md) - Introduction to the test framework
