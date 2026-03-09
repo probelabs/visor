@@ -1009,7 +1009,10 @@ export class VisorTestRunner {
         console.log(this.gray('   Other provider types will still use mocks\n'));
       }
     } catch {}
-    const runOne = async (_case: any): Promise<{ name: string; failed: number }> => {
+    const runOne = async (_caseOrig: any): Promise<{ name: string; failed: number }> => {
+      // Expand conversation sugar to flow stages before any processing
+      const { expandConversationToFlow } = require('./conversation-sugar');
+      const _case = expandConversationToFlow(_caseOrig);
       // Case header for clarity
       const isFlow = Array.isArray((_case as any).flow) && (_case as any).flow.length > 0;
       const caseEvent = (_case as any).event as string | undefined;
@@ -1246,6 +1249,25 @@ export class VisorTestRunner {
           exec.outHistory,
           workflowOutputs
         );
+        // Run LLM judge assertions if present (async)
+        if (
+          Array.isArray((setup.expect as any).llm_judge) &&
+          (setup.expect as any).llm_judge.length > 0
+        ) {
+          try {
+            const { evaluateLlmJudgeExpectations } = require('./evaluators');
+            const judgeConfig = (this as any).suiteDefaults?.llm_judge || {};
+            const judgeErrors = await evaluateLlmJudgeExpectations(
+              setup.expect,
+              exec.outHistory,
+              workflowOutputs,
+              judgeConfig
+            );
+            caseFailures.push(...judgeErrors);
+          } catch (e) {
+            caseFailures.push(`LLM judge error: ${e instanceof Error ? e.message : e}`);
+          }
+        }
         // Warn about unmocked AI/command steps that executed
         try {
           const mocksUsed =
@@ -1480,6 +1502,8 @@ export class VisorTestRunner {
     const stagesSummary: Array<{ name: string; errors?: string[] }> = [];
     // Shared prompts captured across the flow (FlowStage computes deltas per-stage)
     const prompts: Record<string, string[]> = {};
+    // Cumulative output history across flow stages (for cross-turn assertions)
+    const cumulativeOutputHistory: Record<string, unknown[]> = {};
     // Stage filter (by name substring or 1-based index)
     const sf = (stageFilter || '').trim().toLowerCase();
     const sfIndex = sf && /^\d+$/.test(sf) ? parseInt(sf, 10) : undefined;
@@ -1538,7 +1562,9 @@ export class VisorTestRunner {
           defaultIncludeTags,
           defaultExcludeTags,
           (suiteDefaults.frontends || undefined) as any[],
-          noMocks
+          noMocks,
+          suiteDefaults.llm_judge || undefined,
+          cumulativeOutputHistory
         );
         const outcome = await stageRunner.run(stage, flowCase, strict);
         const expect = (stage as any).expect || {};

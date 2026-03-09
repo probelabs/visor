@@ -89,6 +89,16 @@ const schema: any = {
               type: 'object',
               additionalProperties: { $ref: '#/$defs/expectBlock' },
             },
+            llm_judge: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                model: { type: 'string' },
+                provider: { type: 'string' },
+                apiKey: { type: 'string' },
+                baseURL: { type: 'string' },
+              },
+            },
           },
         },
         fixtures: { type: 'array' },
@@ -186,9 +196,25 @@ const schema: any = {
           type: 'array',
           items: { $ref: '#/$defs/flowStage' },
         },
+        // Conversation sugar — auto-expanded to flow
+        conversation: {
+          oneOf: [
+            { type: 'array', items: { $ref: '#/$defs/conversationTurn' } },
+            {
+              type: 'object',
+              properties: {
+                transport: { type: 'string' },
+                thread_id: { type: 'string' },
+                fixture: { type: 'string' },
+                routing: { type: 'object' },
+                turns: { type: 'array', items: { $ref: '#/$defs/conversationTurn' } },
+              },
+            },
+          ],
+        },
       },
       required: ['name'],
-      anyOf: [{ required: ['event'] }, { required: ['flow'] }],
+      anyOf: [{ required: ['event'] }, { required: ['flow'] }, { required: ['conversation'] }],
     },
     flowStage: {
       type: 'object',
@@ -263,6 +289,22 @@ const schema: any = {
       },
       required: ['event'],
     },
+    conversationTurn: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        role: { type: 'string', enum: ['user', 'assistant'] },
+        text: { type: 'string' },
+        mocks: {
+          type: 'object',
+          additionalProperties: {
+            oneOf: [{ type: 'string' }, { type: 'array' }, { type: 'object' }],
+          },
+        },
+        expect: { $ref: '#/$defs/expectBlock' },
+      },
+      required: ['role', 'text'],
+    },
     countExpectation: {
       type: 'object',
       additionalProperties: false,
@@ -323,6 +365,7 @@ const schema: any = {
         index: {
           oneOf: [{ type: 'number' }, { enum: ['first', 'last'] }],
         },
+        turn: {},
         path: { type: 'string' },
         equals: {},
         equalsDeep: {},
@@ -410,6 +453,24 @@ const schema: any = {
           additionalProperties: false,
           properties: { for_step: { type: 'string' }, message_contains: { type: 'string' } },
         },
+        llm_judge: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: ['prompt'],
+            properties: {
+              step: { type: 'string' },
+              path: { type: 'string' },
+              index: {},
+              turn: {},
+              workflow_output: { type: 'boolean' },
+              prompt: { type: 'string' },
+              model: { type: 'string' },
+              schema: {},
+              assert: { type: 'object' },
+            },
+          },
+        },
       },
     },
   },
@@ -465,6 +526,7 @@ const knownKeys = new Set([
   'tests.defaults.github_recorder',
   'tests.defaults.macros',
   'tests.defaults.fail_on_unexpected_calls',
+  'tests.defaults.llm_judge',
   // case
   'name',
   'description',
@@ -479,6 +541,7 @@ const knownKeys = new Set([
   'workflow_input',
   'expect',
   'flow',
+  'conversation',
   // expect
   'expect.use',
   'expect.calls',
@@ -488,6 +551,7 @@ const knownKeys = new Set([
   'expect.no_calls',
   'expect.fail',
   'expect.strict_violation',
+  'expect.llm_judge',
   // calls
   'step',
   'provider',
@@ -544,7 +608,7 @@ function formatError(e: ErrorObject): string {
       if (hint) msg += ` (${hint})`;
       // Small curated allow-list for frequent nodes to reduce guesswork
       if (path.endsWith('expect')) {
-        msg += ` (allowed: use, calls, prompts, outputs, workflow_output, no_calls, fail, strict_violation)`;
+        msg += ` (allowed: use, calls, prompts, outputs, workflow_output, no_calls, fail, strict_violation, llm_judge)`;
       } else if (path.endsWith('env')) {
         msg += ` (values must be strings)`;
       } else if (path.endsWith('tests')) {

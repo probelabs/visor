@@ -22,6 +22,9 @@ tests:
         calls:
           - step: overview
             at_least: 1
+    llm_judge:                    # defaults for LLM-as-judge assertions
+      model: gemini-2.0-flash    # judge model (or VISOR_JUDGE_MODEL env)
+      provider: google            # google | openai | anthropic
     # Optional: include/exclude checks by tags (same semantics as main CLI)
     tags: "local,fast"         # or [local, fast]
     exclude_tags: "experimental,slow"  # or [experimental, slow]
@@ -46,6 +49,24 @@ tests:
       exclude_tags: "slow"      # optional per-case exclude filter
       github_recorder:           # per-case recorder overrides
         error_code: 429
+
+      # OR conversation sugar (auto-expands to flow)
+      conversation:
+        - role: user|assistant
+          text: <string>
+          mocks: { <step>: <value> }   # per-turn mocks
+          expect: <expect-block>       # per-turn assertions
+      # OR conversation with config
+      conversation:
+        transport: slack               # default: slack
+        thread_id: <string>            # default: auto-generated
+        fixture: <string>              # default: local.minimal
+        routing: { max_loops: 0 }      # default: { max_loops: 0 }
+        turns:
+          - role: user
+            text: <string>
+            mocks: ...
+            expect: ...
 
       # OR flow case
       flow:
@@ -148,13 +169,25 @@ expect:
   strict_violation:             # assert strict failure for a missing expect on a step
     for_step: <name>
     message_contains: <string>
+
+  llm_judge:                     # semantic evaluation via LLM
+    - step: <name>               # step to evaluate (uses output history)
+      path: <expr>               # dot/bracket path into output
+      index: first|last|<N>      # which output (default: last)
+      turn: <N>|current          # 1-based turn number (conversation sugar only)
+      workflow_output: true       # use workflow output instead
+      prompt: <string>           # evaluation criteria (required)
+      model: <string>            # override judge model
+      schema: verdict|<object>   # verdict (default) or custom schema
+      assert:                    # field-level assertions on result
+        <field>: <expected>
 ```
 
 **Supported providers for `calls` and `no_calls`:**
 - `github`: GitHub API operations (`labels.add`, `issues.createComment`, `pulls.createReview`, `checks.create`, `checks.update`)
 - `slack`: Slack API operations (`chat.postMessage`)
 
-See [Assertions](./assertions.md) for detailed assertion syntax and examples.
+See [Assertions](./assertions.md) for detailed assertion syntax and examples (including LLM-as-judge).
 
 Inline example (calls + prompts + outputs):
 
@@ -177,6 +210,46 @@ expect:
 ```
 
 Note on dependencies: test execution honors your base config routing, including `depends_on`. You can express ANY‑OF groups using pipe syntax in the base config (e.g., `depends_on: ["issue-assistant|comment-assistant"]`). The runner mixes these with normal ALL‑OF deps.
+
+## Conversation Sugar
+
+The `conversation:` format is a shorthand for multi-turn conversation tests. It auto-expands into `flow:` stages, building `execution_context.conversation.messages` from prior turns and inserting mock responses into the history.
+
+```yaml
+- name: multi-turn-test
+  strict: false
+  conversation:
+    - role: user
+      text: "What is ticket TT-5000 about?"
+      mocks:
+        chat: { text: "TT-5000 is about WebSocket support.", intent: chat }
+      expect:
+        calls:
+          - step: chat
+            exactly: 1
+    - role: user
+      text: "What middleware changes are needed?"
+      mocks:
+        chat: { text: "The middleware changes involve...", intent: chat }
+      expect:
+        outputs:
+          - step: chat
+            turn: 1              # reference turn 1's output (1-based)
+            path: text
+            matches: "TT-5000"
+        llm_judge:
+          - step: chat
+            turn: current        # current turn's output
+            path: text
+            prompt: Does this discuss middleware specifics?
+```
+
+**Key features:**
+- `turn: N` (1-based) — references the Nth user turn's output across the conversation. Transformed to `index: N-1` internally.
+- `turn: current` — aliases to `index: last`
+- Mock response text is automatically added as assistant messages in subsequent turns' history
+- Explicit `assistant` turns can override mock-inferred responses in the history
+- Config overrides (transport, fixture, routing) via object format with `turns:` key
 
 ## Strict mode semantics
 

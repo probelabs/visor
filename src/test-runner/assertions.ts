@@ -43,6 +43,18 @@ export interface OutputsExpectation {
   contains_unordered?: unknown[]; // array membership ignoring order
 }
 
+export interface LlmJudgeExpectation {
+  step?: string;
+  path?: string;
+  index?: number | 'first' | 'last';
+  turn?: number | 'current'; // 1-based turn number (conversation sugar); transformed to index before evaluation
+  workflow_output?: boolean;
+  prompt: string;
+  model?: string;
+  schema?: 'verdict' | Record<string, unknown>;
+  assert?: Record<string, unknown>;
+}
+
 export interface ExpectBlock {
   use?: string[];
   calls?: CallsExpectation[];
@@ -51,6 +63,7 @@ export interface ExpectBlock {
   no_calls?: Array<{ step?: string; provider?: string; op?: string }>;
   fail?: { message_contains?: string };
   strict_violation?: { for_step?: string; message_contains?: string };
+  llm_judge?: LlmJudgeExpectation[];
 }
 
 export function validateCounts(exp: CountExpectation): void {

@@ -240,6 +240,175 @@ Also see end-to-end example suites:
 - `examples/api-tools-ai-example.yaml` (embedded tests)
 - `examples/api-tools-inline-overlay-example.yaml` (embedded tests)
 
+## 10) Multi-turn conversation with cross-turn assertions
+
+Simulate a multi-message conversation and assert on each response — including looking back at earlier turns from a later stage.
+
+```yaml
+- name: multi-turn-support-conversation
+  flow:
+    - name: user-reports-issue
+      event: manual
+      fixture: local.minimal
+      routing: { max_loops: 0 }
+      execution_context:
+        conversation:
+          transport: slack
+          thread: { id: "support-thread" }
+          messages:
+            - { role: user, text: "My API is returning 502 errors" }
+          current: { role: user, text: "My API is returning 502 errors" }
+      mocks:
+        chat[]:
+          - text: "A 502 error typically means the upstream service is unreachable. Can you check if your backend is running and the target URL in your API definition is correct?"
+          - intent: chat
+      expect:
+        calls:
+          - step: chat
+            exactly: 1
+        llm_judge:
+          - step: chat
+            path: text
+            prompt: Does the response acknowledge the 502 error and suggest diagnostic steps?
+
+    - name: user-provides-details
+      event: manual
+      fixture: local.minimal
+      routing: { max_loops: 0 }
+      execution_context:
+        conversation:
+          transport: slack
+          thread: { id: "support-thread" }
+          messages:
+            - { role: user, text: "My API is returning 502 errors" }
+            - { role: assistant, text: "A 502 error typically means the upstream service is unreachable..." }
+            - { role: user, text: "The backend is running. I checked with curl and it works directly." }
+          current: { role: user, text: "The backend is running. I checked with curl and it works directly." }
+      mocks:
+        chat[]:
+          - text: "If curl works directly but Tyk returns 502, check: 1) The `target_url` in your API definition matches what curl uses 2) Tyk can resolve the hostname (DNS) 3) Any TLS certificate issues between Tyk and the upstream."
+          - intent: chat
+      expect:
+        calls:
+          - step: chat
+            exactly: 1
+        llm_judge:
+          # Assert current response narrows down based on user's info
+          - step: chat
+            index: last
+            path: text
+            prompt: |
+              The user said curl works directly but Tyk gives 502.
+              Does the response narrow down Tyk-specific causes (not repeat generic advice)?
+          # Verify first response was appropriately general (before details were known)
+          - step: chat
+            index: first
+            path: text
+            prompt: |
+              This was the first response before the user provided details.
+              Was it appropriately exploratory (asking for info) rather than jumping to conclusions?
+```
+
+## 11) LLM-as-judge: semantic evaluation
+
+Use `llm_judge` to evaluate whether AI responses meet semantic criteria that can't be expressed with regex or exact matching.
+
+```yaml
+- name: response-quality-check
+  event: manual
+  fixture: local.minimal
+  mocks:
+    chat[]:
+      - text: |
+          Tyk Gateway uses Redis-based distributed rate limiting through its
+          middleware chain. Rate limits are configured per API key or policy
+          with `rate` and `per` fields. When exceeded, returns HTTP 429.
+      - intent: chat
+      - skills: [code-explorer]
+  expect:
+    calls:
+      - step: chat
+        exactly: 1
+    llm_judge:
+      # Simple pass/fail verdict
+      - step: chat
+        path: text
+        prompt: |
+          Does this response accurately explain rate limiting?
+          It should mention specific mechanisms, not be generic.
+
+      # Structured extraction with assertions
+      - step: chat
+        path: text
+        prompt: Analyze this technical response about rate limiting.
+        schema:
+          properties:
+            mentions_redis:
+              type: boolean
+              description: "Mentions Redis for distributed rate limiting?"
+            mentions_status_code:
+              type: boolean
+              description: "Mentions HTTP 429 status code?"
+            technical_depth:
+              type: string
+              enum: [shallow, moderate, deep]
+          required: [mentions_redis, mentions_status_code, technical_depth]
+        assert:
+          mentions_redis: true
+          mentions_status_code: true
+```
+
+Configure the judge model globally:
+
+```yaml
+tests:
+  defaults:
+    llm_judge:
+      model: gemini-2.0-flash
+      provider: google
+```
+
+Or per-assertion with the `model` field. Set `VISOR_JUDGE_MODEL` env var as a fallback.
+
+## 12) Conversation sugar: multi-turn without boilerplate
+
+The `conversation:` format auto-builds message history from prior turns, removing the need to duplicate `execution_context.conversation.messages` across stages.
+
+```yaml
+- name: support-conversation
+  strict: false
+  conversation:
+    - role: user
+      text: "My API is returning 502 errors"
+      mocks:
+        chat: { text: "A 502 error typically means the upstream service is unreachable. Can you check if your backend is running?", intent: chat }
+      expect:
+        calls:
+          - step: chat
+            exactly: 1
+    - role: user
+      text: "The backend is running. Curl works directly."
+      mocks:
+        chat: { text: "If curl works directly but Tyk returns 502, check the target_url in your API definition and DNS resolution.", intent: chat }
+      expect:
+        outputs:
+          - step: chat
+            turn: current
+            path: text
+            matches: "(?i)target_url"
+        llm_judge:
+          - step: chat
+            turn: current
+            path: text
+            prompt: Does the response narrow down Tyk-specific causes?
+          - step: chat
+            turn: 1
+            path: text
+            prompt: Was the first response appropriately exploratory?
+```
+
+Compare this with the equivalent `flow:` format in recipe #10 — the `conversation:` format is significantly more concise.
+
 ## Related Documentation
 
 - [Getting Started](./getting-started.md) - Introduction to the test framework

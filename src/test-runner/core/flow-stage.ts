@@ -41,7 +41,9 @@ export class FlowStage {
     private readonly defaultIncludeTags?: string[],
     private readonly defaultExcludeTags?: string[],
     private readonly defaultFrontends?: any[],
-    private readonly noMocks?: boolean
+    private readonly noMocks?: boolean,
+    private readonly judgeConfig?: Record<string, unknown>,
+    private readonly cumulativeOutputHistory: Record<string, unknown[]> = {}
   ) {}
 
   async run(
@@ -361,6 +363,12 @@ export class FlowStage {
         }
       }
 
+      // Accumulate stage outputs into cumulative history (for cross-turn assertions)
+      for (const [k, arr] of Object.entries(stageHist)) {
+        if (!this.cumulativeOutputHistory[k]) this.cumulativeOutputHistory[k] = [];
+        this.cumulativeOutputHistory[k].push(...(arr as unknown[]));
+      }
+
       try {
         if (process.env.VISOR_DEBUG === 'true') {
           const parts = Object.entries(stageHist)
@@ -612,6 +620,8 @@ export class FlowStage {
 
       // Evaluate stage
       const expect: ExpectBlock = stage.expect || {};
+      // For conversation sugar, use cumulative history so cross-turn index/turn refs work
+      const histForEval = flowCase._conversationSugar ? this.cumulativeOutputHistory : stageHist;
       // evaluation proceeds without ad-hoc stage prompt previews
       const errors = evaluate(
         stageName,
@@ -622,7 +632,7 @@ export class FlowStage {
         strict,
         stagePrompts,
         res.results,
-        stageHist
+        histForEval
       );
       try {
         if (process.env.VISOR_DEBUG === 'true' && slackRecorder) {
@@ -632,6 +642,23 @@ export class FlowStage {
           );
         }
       } catch {}
+
+      // Run LLM judge assertions if present (async)
+      // Use cumulative history for cross-turn assertions (e.g., conversation sugar)
+      if (Array.isArray((expect as any).llm_judge) && (expect as any).llm_judge.length > 0) {
+        try {
+          const { evaluateLlmJudgeExpectations } = await import('../evaluators');
+          const judgeErrors = await evaluateLlmJudgeExpectations(
+            expect,
+            this.cumulativeOutputHistory,
+            undefined,
+            this.judgeConfig as any
+          );
+          errors.push(...judgeErrors);
+        } catch (e) {
+          errors.push(`LLM judge error: ${e instanceof Error ? e.message : e}`);
+        }
+      }
 
       // Warn about unmocked AI/command steps that executed
       try {
