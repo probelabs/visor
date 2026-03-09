@@ -166,6 +166,22 @@ export declare const configSchema: {
                     readonly $ref: "#/definitions/SlackConfig";
                     readonly description: "Slack configuration";
                 };
+                readonly telegram: {
+                    readonly $ref: "#/definitions/TelegramConfig";
+                    readonly description: "Telegram bot configuration";
+                };
+                readonly email: {
+                    readonly $ref: "#/definitions/EmailConfig";
+                    readonly description: "Email integration configuration";
+                };
+                readonly whatsapp: {
+                    readonly $ref: "#/definitions/WhatsAppConfig";
+                    readonly description: "WhatsApp bot configuration";
+                };
+                readonly teams: {
+                    readonly $ref: "#/definitions/TeamsConfig";
+                    readonly description: "Microsoft Teams bot configuration";
+                };
                 readonly scheduler: {
                     readonly $ref: "#/definitions/SchedulerConfig";
                     readonly description: "Scheduler configuration for scheduled workflow execution";
@@ -905,7 +921,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -921,7 +937,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -1076,7 +1092,7 @@ export declare const configSchema: {
         };
         readonly EventTrigger: {
             readonly type: "string";
-            readonly enum: readonly ["pr_opened", "pr_updated", "pr_closed", "issue_opened", "issue_comment", "manual", "schedule", "webhook_received", "slack_message"];
+            readonly enum: readonly ["pr_opened", "pr_updated", "pr_closed", "issue_opened", "issue_comment", "manual", "schedule", "webhook_received", "slack_message", "telegram_message", "email_message", "whatsapp_message", "teams_message"];
             readonly description: "Valid event triggers for checks";
         };
         readonly AIProviderConfig: {
@@ -1581,7 +1597,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1596,13 +1612,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400>': {
+        readonly 'Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };
@@ -2441,6 +2457,260 @@ export declare const configSchema: {
                 readonly enabled: {
                     readonly type: "boolean";
                     readonly description: "Enable telemetry ID suffix in Slack messages";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly TelegramConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly bot_token: {
+                    readonly type: "string";
+                    readonly description: "Bot token from";
+                };
+                readonly polling_timeout: {
+                    readonly type: "number";
+                    readonly description: "Polling timeout in seconds for getUpdates (default: 30)";
+                };
+                readonly chat_allowlist: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: readonly ["string", "number"];
+                    };
+                    readonly description: "Chat/group allowlist - numeric chat IDs that the bot responds in";
+                };
+                readonly require_mention: {
+                    readonly type: "boolean";
+                    readonly description: "In groups, only respond when";
+                };
+                readonly workflow: {
+                    readonly type: "string";
+                    readonly description: "Workflow to run when a message is received";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly EmailConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly receive: {
+                    readonly type: "object";
+                    readonly properties: {
+                        readonly type: {
+                            readonly type: "string";
+                            readonly enum: readonly ["imap", "resend"];
+                            readonly description: "Backend type: 'imap' (universal) or 'resend' (managed webhook)";
+                        };
+                        readonly host: {
+                            readonly type: "string";
+                            readonly description: "IMAP server hostname";
+                        };
+                        readonly port: {
+                            readonly type: "number";
+                            readonly description: "IMAP server port (default: 993)";
+                        };
+                        readonly auth: {
+                            readonly type: "object";
+                            readonly properties: {
+                                readonly user: {
+                                    readonly type: "string";
+                                };
+                                readonly pass: {
+                                    readonly type: "string";
+                                };
+                            };
+                            readonly additionalProperties: false;
+                            readonly description: "IMAP auth credentials";
+                            readonly patternProperties: {
+                                readonly '^x-': {};
+                            };
+                        };
+                        readonly secure: {
+                            readonly type: "boolean";
+                            readonly description: "Use TLS (default: true)";
+                        };
+                        readonly poll_interval: {
+                            readonly type: "number";
+                            readonly description: "Polling interval in seconds when IDLE not available (default: 30)";
+                        };
+                        readonly folder: {
+                            readonly type: "string";
+                            readonly description: "IMAP folder to monitor (default: 'INBOX')";
+                        };
+                        readonly mark_read: {
+                            readonly type: "boolean";
+                            readonly description: "Mark processed messages as read (default: true)";
+                        };
+                        readonly api_key: {
+                            readonly type: "string";
+                            readonly description: "Resend API key (for type: 'resend')";
+                        };
+                        readonly webhook_secret: {
+                            readonly type: "string";
+                            readonly description: "Resend webhook secret for signature verification";
+                        };
+                    };
+                    readonly additionalProperties: false;
+                    readonly description: "Receive backend configuration";
+                    readonly patternProperties: {
+                        readonly '^x-': {};
+                    };
+                };
+                readonly send: {
+                    readonly type: "object";
+                    readonly properties: {
+                        readonly type: {
+                            readonly type: "string";
+                            readonly enum: readonly ["smtp", "resend"];
+                            readonly description: "Backend type: 'smtp' (universal) or 'resend' (managed API)";
+                        };
+                        readonly host: {
+                            readonly type: "string";
+                            readonly description: "SMTP server hostname";
+                        };
+                        readonly port: {
+                            readonly type: "number";
+                            readonly description: "SMTP server port (default: 587)";
+                        };
+                        readonly auth: {
+                            readonly type: "object";
+                            readonly properties: {
+                                readonly user: {
+                                    readonly type: "string";
+                                };
+                                readonly pass: {
+                                    readonly type: "string";
+                                };
+                            };
+                            readonly additionalProperties: false;
+                            readonly description: "SMTP auth credentials";
+                            readonly patternProperties: {
+                                readonly '^x-': {};
+                            };
+                        };
+                        readonly secure: {
+                            readonly type: "boolean";
+                            readonly description: "Use TLS (default: true)";
+                        };
+                        readonly from: {
+                            readonly type: "string";
+                            readonly description: "Default sender address (e.g., \"Bot <bot@example.com>\")";
+                        };
+                        readonly api_key: {
+                            readonly type: "string";
+                            readonly description: "Resend API key (for type: 'resend')";
+                        };
+                    };
+                    readonly additionalProperties: false;
+                    readonly description: "Send backend configuration";
+                    readonly patternProperties: {
+                        readonly '^x-': {};
+                    };
+                };
+                readonly allowlist: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Only process emails from these senders";
+                };
+                readonly workflow: {
+                    readonly type: "string";
+                    readonly description: "Workflow to run when an email is received";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly WhatsAppConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly access_token: {
+                    readonly type: "string";
+                    readonly description: "WhatsApp Cloud API access token (or WHATSAPP_ACCESS_TOKEN env var)";
+                };
+                readonly phone_number_id: {
+                    readonly type: "string";
+                    readonly description: "Phone Number ID from Meta Business Suite (or WHATSAPP_PHONE_NUMBER_ID env var)";
+                };
+                readonly app_secret: {
+                    readonly type: "string";
+                    readonly description: "Meta App Secret for webhook signature verification (or WHATSAPP_APP_SECRET env var)";
+                };
+                readonly verify_token: {
+                    readonly type: "string";
+                    readonly description: "Verify token for webhook subscription challenge (or WHATSAPP_VERIFY_TOKEN env var)";
+                };
+                readonly api_version: {
+                    readonly type: "string";
+                    readonly description: "Graph API version (default: 'v21.0')";
+                };
+                readonly port: {
+                    readonly type: "number";
+                    readonly description: "Port for webhook HTTP server (default: 8443)";
+                };
+                readonly host: {
+                    readonly type: "string";
+                    readonly description: "Host for webhook HTTP server (default: '0.0.0.0')";
+                };
+                readonly phone_allowlist: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "Phone number allowlist — only respond to these numbers";
+                };
+                readonly workflow: {
+                    readonly type: "string";
+                    readonly description: "Workflow to run when a message is received";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly TeamsConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly app_id: {
+                    readonly type: "string";
+                    readonly description: "Azure AD App (client) ID (or TEAMS_APP_ID env var)";
+                };
+                readonly app_password: {
+                    readonly type: "string";
+                    readonly description: "Azure AD App client secret (or TEAMS_APP_PASSWORD env var)";
+                };
+                readonly tenant_id: {
+                    readonly type: "string";
+                    readonly description: "Azure AD Tenant ID for single-tenant apps (or TEAMS_TENANT_ID env var)";
+                };
+                readonly port: {
+                    readonly type: "number";
+                    readonly description: "Port for webhook HTTP server (default: 3978)";
+                };
+                readonly host: {
+                    readonly type: "string";
+                    readonly description: "Host for webhook HTTP server (default: '0.0.0.0')";
+                };
+                readonly user_allowlist: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "User ID allowlist — only respond to these AAD user IDs";
+                };
+                readonly workflow: {
+                    readonly type: "string";
+                    readonly description: "Workflow to run when a message is received";
                 };
             };
             readonly additionalProperties: false;
