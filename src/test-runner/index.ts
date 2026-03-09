@@ -1246,6 +1246,25 @@ export class VisorTestRunner {
           exec.outHistory,
           workflowOutputs
         );
+        // Run LLM judge assertions if present (async)
+        if (
+          Array.isArray((setup.expect as any).llm_judge) &&
+          (setup.expect as any).llm_judge.length > 0
+        ) {
+          try {
+            const { evaluateLlmJudgeExpectations } = require('./evaluators');
+            const judgeConfig = (this as any).suiteDefaults?.llm_judge || {};
+            const judgeErrors = await evaluateLlmJudgeExpectations(
+              setup.expect,
+              exec.outHistory,
+              workflowOutputs,
+              judgeConfig
+            );
+            caseFailures.push(...judgeErrors);
+          } catch (e) {
+            caseFailures.push(`LLM judge error: ${e instanceof Error ? e.message : e}`);
+          }
+        }
         // Warn about unmocked AI/command steps that executed
         try {
           const mocksUsed =

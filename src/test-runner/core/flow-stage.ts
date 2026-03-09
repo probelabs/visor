@@ -633,6 +633,17 @@ export class FlowStage {
         }
       } catch {}
 
+      // Run LLM judge assertions if present (async)
+      if (Array.isArray((expect as any).llm_judge) && (expect as any).llm_judge.length > 0) {
+        try {
+          const { evaluateLlmJudgeExpectations } = await import('../evaluators');
+          const judgeErrors = await evaluateLlmJudgeExpectations(expect, stageHist);
+          errors.push(...judgeErrors);
+        } catch (e) {
+          errors.push(`LLM judge error: ${e instanceof Error ? e.message : e}`);
+        }
+      }
+
       // Warn about unmocked AI/command steps that executed
       try {
         this.warnUnmockedProviders(stageStats, this.cfg, mergedMocks);

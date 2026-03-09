@@ -410,6 +410,23 @@ const schema: any = {
           additionalProperties: false,
           properties: { for_step: { type: 'string' }, message_contains: { type: 'string' } },
         },
+        llm_judge: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: ['prompt'],
+            properties: {
+              step: { type: 'string' },
+              path: { type: 'string' },
+              index: {},
+              workflow_output: { type: 'boolean' },
+              prompt: { type: 'string' },
+              model: { type: 'string' },
+              schema: {},
+              assert: { type: 'object' },
+            },
+          },
+        },
       },
     },
   },
@@ -465,6 +482,7 @@ const knownKeys = new Set([
   'tests.defaults.github_recorder',
   'tests.defaults.macros',
   'tests.defaults.fail_on_unexpected_calls',
+  'tests.defaults.llm_judge',
   // case
   'name',
   'description',
@@ -488,6 +506,7 @@ const knownKeys = new Set([
   'expect.no_calls',
   'expect.fail',
   'expect.strict_violation',
+  'expect.llm_judge',
   // calls
   'step',
   'provider',
@@ -544,7 +563,7 @@ function formatError(e: ErrorObject): string {
       if (hint) msg += ` (${hint})`;
       // Small curated allow-list for frequent nodes to reduce guesswork
       if (path.endsWith('expect')) {
-        msg += ` (allowed: use, calls, prompts, outputs, workflow_output, no_calls, fail, strict_violation)`;
+        msg += ` (allowed: use, calls, prompts, outputs, workflow_output, no_calls, fail, strict_violation, llm_judge)`;
       } else if (path.endsWith('env')) {
         msg += ` (values must be strings)`;
       } else if (path.endsWith('tests')) {

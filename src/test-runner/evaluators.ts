@@ -434,6 +434,60 @@ export function evaluateOutputs(
   }
 }
 
+/**
+ * Evaluate llm_judge expectations asynchronously.
+ * Called separately after evaluateCase since LLM calls are async.
+ */
+export async function evaluateLlmJudgeExpectations(
+  expect: ExpectBlock,
+  outputHistory: Record<string, unknown[]>,
+  workflowOutputs?: Record<string, unknown>,
+  judgeConfig?: import('./llm-judge').LlmJudgeConfig
+): Promise<string[]> {
+  const judges = (expect as any).llm_judge as
+    | import('./llm-judge').LlmJudgeExpectation[]
+    | undefined;
+  if (!Array.isArray(judges) || judges.length === 0) return [];
+
+  const { evaluateLlmJudge } = await import('./llm-judge');
+  const errors: string[] = [];
+
+  for (const judge of judges) {
+    // Resolve the output to evaluate
+    let output: unknown;
+    if (judge.workflow_output) {
+      output = workflowOutputs || {};
+      if (judge.path) {
+        output = deepGet(output, judge.path);
+      }
+    } else if (judge.step) {
+      const hist = outputHistory[judge.step] || [];
+      if (!Array.isArray(hist) || hist.length === 0) {
+        errors.push(`LLM judge: no output history for step "${judge.step}"`);
+        continue;
+      }
+      const idx =
+        judge.index === 'first'
+          ? 0
+          : judge.index === 'last' || judge.index === undefined
+            ? hist.length - 1
+            : judge.index;
+      output = hist[idx];
+      if (judge.path) {
+        output = deepGet(output, judge.path);
+      }
+    } else {
+      // No step specified — use entire outputHistory as context
+      output = outputHistory;
+    }
+
+    const result = await evaluateLlmJudge(judge, output, judgeConfig);
+    errors.push(...result.errors);
+  }
+
+  return errors;
+}
+
 export function evaluateCase(
   caseName: string,
   stats: ExecStats,
