@@ -823,7 +823,7 @@ var require_package = __commonJS({
         "@opentelemetry/sdk-node": "^0.203.0",
         "@opentelemetry/sdk-trace-base": "^1.30.1",
         "@opentelemetry/semantic-conventions": "^1.30.1",
-        "@probelabs/probe": "^0.6.0-rc290",
+        "@probelabs/probe": "^0.6.0-rc291",
         "@types/commander": "^2.12.0",
         "@types/uuid": "^10.0.0",
         acorn: "^8.16.0",
@@ -939,50 +939,53 @@ __export(metrics_exports, {
   resetRunAiCalls: () => resetRunAiCalls,
   resetTestMetricsSnapshot: () => resetTestMetricsSnapshot
 });
+function getMeter() {
+  return metrics.getMeter("visor");
+}
 function ensureInstruments() {
   if (initialized) return;
   try {
-    checkDurationHist = meter.createHistogram("visor.check.duration_ms", {
+    checkDurationHist = getMeter().createHistogram("visor.check.duration_ms", {
       description: "Duration of a check execution in milliseconds",
       unit: "ms"
     });
-    providerDurationHist = meter.createHistogram("visor.provider.duration_ms", {
+    providerDurationHist = getMeter().createHistogram("visor.provider.duration_ms", {
       description: "Duration of provider execution in milliseconds",
       unit: "ms"
     });
-    foreachDurationHist = meter.createHistogram("visor.foreach.item.duration_ms", {
+    foreachDurationHist = getMeter().createHistogram("visor.foreach.item.duration_ms", {
       description: "Duration of a forEach item execution in milliseconds",
       unit: "ms"
     });
-    issuesCounter = meter.createCounter("visor.check.issues", {
+    issuesCounter = getMeter().createCounter("visor.check.issues", {
       description: "Number of issues produced by checks",
       unit: "1"
     });
-    activeChecks = meter.createUpDownCounter("visor.run.active_checks", {
+    activeChecks = getMeter().createUpDownCounter("visor.run.active_checks", {
       description: "Number of checks actively running",
       unit: "1"
     });
-    failIfCounter = meter.createCounter("visor.fail_if.triggered", {
+    failIfCounter = getMeter().createCounter("visor.fail_if.triggered", {
       description: "Number of times fail_if condition triggered",
       unit: "1"
     });
-    diagramBlocks = meter.createCounter("visor.diagram.blocks", {
+    diagramBlocks = getMeter().createCounter("visor.diagram.blocks", {
       description: "Number of Mermaid diagram blocks emitted",
       unit: "1"
     });
-    runCounter = meter.createCounter("visor.run.total", {
+    runCounter = getMeter().createCounter("visor.run.total", {
       description: "Total number of visor runs (workflow executions)",
       unit: "1"
     });
-    runDurationHist = meter.createHistogram("visor.run.duration_ms", {
+    runDurationHist = getMeter().createHistogram("visor.run.duration_ms", {
       description: "Duration of a complete visor run in milliseconds",
       unit: "ms"
     });
-    aiCallCounter = meter.createCounter("visor.ai_call.total", {
+    aiCallCounter = getMeter().createCounter("visor.ai_call.total", {
       description: "Total number of AI provider calls",
       unit: "1"
     });
-    runAiCallsHist = meter.createHistogram("visor.run.ai_calls", {
+    runAiCallsHist = getMeter().createHistogram("visor.run.ai_calls", {
       description: "Number of AI calls per visor run",
       unit: "1"
     });
@@ -1119,13 +1122,12 @@ function getTestMetricsSnapshot() {
 function resetTestMetricsSnapshot() {
   Object.keys(TEST_SNAPSHOT).forEach((k) => TEST_SNAPSHOT[k] = 0);
 }
-var initialized, meter, TEST_ENABLED, TEST_SNAPSHOT, checkDurationHist, providerDurationHist, foreachDurationHist, issuesCounter, activeChecks, failIfCounter, diagramBlocks, runCounter, runDurationHist, aiCallCounter, runAiCallsHist, _currentRunAiCalls;
+var initialized, TEST_ENABLED, TEST_SNAPSHOT, checkDurationHist, providerDurationHist, foreachDurationHist, issuesCounter, activeChecks, failIfCounter, diagramBlocks, runCounter, runDurationHist, aiCallCounter, runAiCallsHist, _currentRunAiCalls;
 var init_metrics = __esm({
   "src/telemetry/metrics.ts"() {
     "use strict";
     init_lazy_otel();
     initialized = false;
-    meter = metrics.getMeter("visor");
     TEST_ENABLED = process.env.VISOR_TEST_METRICS === "true";
     TEST_SNAPSHOT = { fail_if_triggered: 0 };
     _currentRunAiCalls = 0;
