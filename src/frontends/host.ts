@@ -79,6 +79,18 @@ export class FrontendsHost {
       } else if (spec.name === 'tui') {
         const { TuiFrontend } = await import('../tui/tui-frontend');
         this.frontends.push(new TuiFrontend(spec.config as any));
+      } else if (spec.name === 'telegram') {
+        const { TelegramFrontend } = await import('./telegram-frontend');
+        this.frontends.push(new TelegramFrontend(spec.config as any));
+      } else if (spec.name === 'email') {
+        const { EmailFrontend } = await import('./email-frontend');
+        this.frontends.push(new EmailFrontend(spec.config as any));
+      } else if (spec.name === 'whatsapp') {
+        const { WhatsAppFrontend } = await import('./whatsapp-frontend');
+        this.frontends.push(new WhatsAppFrontend(spec.config as any));
+      } else if (spec.name === 'teams') {
+        const { TeamsFrontend } = await import('./teams-frontend');
+        this.frontends.push(new TeamsFrontend(spec.config as any));
       } else if (spec.name === 'a2a') {
         const { A2AFrontend } = await import('../agent-protocol/a2a-frontend');
         this.frontends.push(new A2AFrontend(spec.config as any));

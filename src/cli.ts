@@ -34,6 +34,10 @@ export class CLI {
       .description('Visor - AI-powered code review tool')
       .version(this.getVersion())
       .option('--slack', 'Enable Slack Socket Mode runner (uses SLACK_APP_TOKEN)')
+      .option('--telegram', 'Enable Telegram long-polling runner (uses TELEGRAM_BOT_TOKEN)')
+      .option('--email', 'Enable Email polling runner (IMAP/SMTP or Resend)')
+      .option('--whatsapp', 'Enable WhatsApp webhook runner (uses WHATSAPP_ACCESS_TOKEN)')
+      .option('--teams', 'Enable Microsoft Teams webhook runner (uses TEAMS_APP_ID)')
       .option('--a2a', 'Enable A2A Agent Protocol server mode')
       .option(
         '-c, --check <type>',
@@ -140,6 +144,7 @@ export class CLI {
         .description('Visor - AI-powered code review tool')
         .version(this.getVersion())
         .option('--slack', 'Enable Slack Socket Mode runner (uses SLACK_APP_TOKEN)')
+        .option('--telegram', 'Enable Telegram long-polling runner (uses TELEGRAM_BOT_TOKEN)')
         .option('--a2a', 'Enable A2A Agent Protocol server mode')
         .option(
           '-c, --check <type>',
@@ -286,6 +291,9 @@ export class CLI {
         message: options.message,
         githubV2: false,
         slack: Boolean(options.slack),
+        telegram: Boolean(options.telegram),
+        whatsapp: Boolean(options.whatsapp),
+        teams: Boolean(options.teams),
         a2a: Boolean(options.a2a),
         tui: Boolean(options.tui),
         keepWorkspace: Boolean(options.keepWorkspace),

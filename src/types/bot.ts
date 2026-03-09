@@ -1,6 +1,6 @@
 /** Bot transport types (trimmed for Slack v1) */
 
-export type BotTransportType = 'slack' | string;
+export type BotTransportType = 'slack' | 'telegram' | 'whatsapp' | 'teams' | string;
 
 /** Slack file attachment metadata */
 export interface SlackFileAttachment {
@@ -149,6 +149,104 @@ export interface SlackBotConfig {
   cache_observability?: SlackCacheObservabilityConfig;
   cache_prewarming?: SlackCachePrewarmingConfig;
   rate_limiting?: SlackRateLimitConfig;
+  workflow?: string;
+}
+
+export interface TelegramConfig {
+  /** Bot token from @BotFather (or TELEGRAM_BOT_TOKEN env var) */
+  bot_token?: string;
+  /** Polling timeout in seconds for getUpdates (default: 30) */
+  polling_timeout?: number;
+  /** Chat/group allowlist - numeric chat IDs that the bot responds in */
+  chat_allowlist?: (string | number)[];
+  /** In groups, only respond when @mentioned or replied to (default: true) */
+  require_mention?: boolean;
+  /** Workflow to run when a message is received */
+  workflow?: string;
+}
+
+export interface EmailConfig {
+  /** Receive backend configuration */
+  receive?: {
+    /** Backend type: 'imap' (universal) or 'resend' (managed webhook) */
+    type?: 'imap' | 'resend';
+    /** IMAP server hostname */
+    host?: string;
+    /** IMAP server port (default: 993) */
+    port?: number;
+    /** IMAP auth credentials */
+    auth?: { user?: string; pass?: string };
+    /** Use TLS (default: true) */
+    secure?: boolean;
+    /** Polling interval in seconds when IDLE not available (default: 30) */
+    poll_interval?: number;
+    /** IMAP folder to monitor (default: 'INBOX') */
+    folder?: string;
+    /** Mark processed messages as read (default: true) */
+    mark_read?: boolean;
+    /** Resend API key (for type: 'resend') */
+    api_key?: string;
+    /** Resend webhook secret for signature verification */
+    webhook_secret?: string;
+  };
+  /** Send backend configuration */
+  send?: {
+    /** Backend type: 'smtp' (universal) or 'resend' (managed API) */
+    type?: 'smtp' | 'resend';
+    /** SMTP server hostname */
+    host?: string;
+    /** SMTP server port (default: 587) */
+    port?: number;
+    /** SMTP auth credentials */
+    auth?: { user?: string; pass?: string };
+    /** Use TLS (default: true) */
+    secure?: boolean;
+    /** Default sender address (e.g., "Bot <bot@example.com>") */
+    from?: string;
+    /** Resend API key (for type: 'resend') */
+    api_key?: string;
+  };
+  /** Only process emails from these senders */
+  allowlist?: string[];
+  /** Workflow to run when an email is received */
+  workflow?: string;
+}
+
+export interface WhatsAppConfig {
+  /** WhatsApp Cloud API access token (or WHATSAPP_ACCESS_TOKEN env var) */
+  access_token?: string;
+  /** Phone Number ID from Meta Business Suite (or WHATSAPP_PHONE_NUMBER_ID env var) */
+  phone_number_id?: string;
+  /** Meta App Secret for webhook signature verification (or WHATSAPP_APP_SECRET env var) */
+  app_secret?: string;
+  /** Verify token for webhook subscription challenge (or WHATSAPP_VERIFY_TOKEN env var) */
+  verify_token?: string;
+  /** Graph API version (default: 'v21.0') */
+  api_version?: string;
+  /** Port for webhook HTTP server (default: 8443) */
+  port?: number;
+  /** Host for webhook HTTP server (default: '0.0.0.0') */
+  host?: string;
+  /** Phone number allowlist — only respond to these numbers */
+  phone_allowlist?: string[];
+  /** Workflow to run when a message is received */
+  workflow?: string;
+}
+
+export interface TeamsConfig {
+  /** Azure AD App (client) ID (or TEAMS_APP_ID env var) */
+  app_id?: string;
+  /** Azure AD App client secret (or TEAMS_APP_PASSWORD env var) */
+  app_password?: string;
+  /** Azure AD Tenant ID for single-tenant apps (or TEAMS_TENANT_ID env var) */
+  tenant_id?: string;
+  /** Port for webhook HTTP server (default: 3978) */
+  port?: number;
+  /** Host for webhook HTTP server (default: '0.0.0.0') */
+  host?: string;
+  /** User ID allowlist — only respond to these AAD user IDs */
+  user_allowlist?: string[];
+  /** Workflow to run when a message is received */
   workflow?: string;
 }
 

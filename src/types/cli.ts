@@ -61,6 +61,14 @@ export interface CliOptions {
   githubV2?: boolean;
   /** Enable Slack Socket Mode runner */
   slack?: boolean;
+  /** Enable Telegram long-polling runner */
+  telegram?: boolean;
+  /** Enable Email polling runner (IMAP/Resend) */
+  email?: boolean;
+  /** Enable WhatsApp webhook runner */
+  whatsapp?: boolean;
+  /** Enable Microsoft Teams webhook runner */
+  teams?: boolean;
   /** Enable A2A Agent Protocol server mode */
   a2a?: boolean;
   /** Enable interactive TUI (chat + logs tabs) */

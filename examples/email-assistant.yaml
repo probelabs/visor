@@ -1,0 +1,42 @@
+version: "1"
+
+# IMAP + SMTP email assistant
+# Configure via environment variables:
+#   EMAIL_IMAP_HOST, EMAIL_SMTP_HOST, EMAIL_USER, EMAIL_PASSWORD, EMAIL_FROM
+#
+# Or inline:
+email:
+  receive:
+    type: imap
+    host: ${EMAIL_IMAP_HOST}
+    port: 993
+    secure: true
+    auth:
+      user: ${EMAIL_USER}
+      pass: ${EMAIL_PASSWORD}
+    poll_interval: 30
+    folder: INBOX
+  send:
+    type: smtp
+    host: ${EMAIL_SMTP_HOST}
+    port: 587
+    secure: true
+    auth:
+      user: ${EMAIL_USER}
+      pass: ${EMAIL_PASSWORD}
+    from: "Visor Bot <${EMAIL_FROM}>"
+
+checks:
+  respond:
+    type: ai
+    schema: text
+    on:
+      - email_message
+      - manual
+    prompt: |
+      You are a helpful email assistant running inside Visor.
+      Reply to the email thread concisely.
+
+      From: {{ webhook.event.from }}
+      Subject: {{ webhook.event.subject }}
+      Message: {{ webhook.event.text }}

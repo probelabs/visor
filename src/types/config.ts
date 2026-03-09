@@ -231,7 +231,11 @@ export type EventTrigger =
   | 'manual'
   | 'schedule'
   | 'webhook_received'
-  | 'slack_message';
+  | 'slack_message'
+  | 'telegram_message'
+  | 'email_message'
+  | 'whatsapp_message'
+  | 'teams_message';
 
 /**
  * Valid output formats
@@ -1561,6 +1565,14 @@ export interface VisorConfig {
   sandbox_defaults?: SandboxDefaults;
   /** Slack configuration */
   slack?: SlackConfig;
+  /** Telegram bot configuration */
+  telegram?: import('./bot').TelegramConfig;
+  /** Email integration configuration */
+  email?: import('./bot').EmailConfig;
+  /** WhatsApp bot configuration */
+  whatsapp?: import('./bot').WhatsAppConfig;
+  /** Microsoft Teams bot configuration */
+  teams?: import('./bot').TeamsConfig;
   /** Scheduler configuration for scheduled workflow execution */
   scheduler?: SchedulerConfig;
   /** Enterprise policy engine configuration */
