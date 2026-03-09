@@ -7,6 +7,7 @@ import type { ReviewIssue } from '../reviewer';
 import type { PolicyConfig, StepPolicyOverride } from '../policy/types';
 import type { SandboxConfig } from '../sandbox/types';
 import type { AgentProtocolConfig } from '../agent-protocol/types';
+import type { TelegramConfig, EmailConfig, WhatsAppConfig, TeamsConfig } from './bot';
 
 // Export Issue type for backward compatibility
 export type Issue = ReviewIssue;
@@ -1566,13 +1567,13 @@ export interface VisorConfig {
   /** Slack configuration */
   slack?: SlackConfig;
   /** Telegram bot configuration */
-  telegram?: import('./bot').TelegramConfig;
+  telegram?: TelegramConfig;
   /** Email integration configuration */
-  email?: import('./bot').EmailConfig;
+  email?: EmailConfig;
   /** WhatsApp bot configuration */
-  whatsapp?: import('./bot').WhatsAppConfig;
+  whatsapp?: WhatsAppConfig;
   /** Microsoft Teams bot configuration */
-  teams?: import('./bot').TeamsConfig;
+  teams?: TeamsConfig;
   /** Scheduler configuration for scheduled workflow execution */
   scheduler?: SchedulerConfig;
   /** Enterprise policy engine configuration */

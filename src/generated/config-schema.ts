@@ -179,6 +179,22 @@ export const configSchema = {
           $ref: '#/definitions/SlackConfig',
           description: 'Slack configuration',
         },
+        telegram: {
+          $ref: '#/definitions/TelegramConfig',
+          description: 'Telegram bot configuration',
+        },
+        email: {
+          $ref: '#/definitions/EmailConfig',
+          description: 'Email integration configuration',
+        },
+        whatsapp: {
+          $ref: '#/definitions/WhatsAppConfig',
+          description: 'WhatsApp bot configuration',
+        },
+        teams: {
+          $ref: '#/definitions/TeamsConfig',
+          description: 'Microsoft Teams bot configuration',
+        },
         scheduler: {
           $ref: '#/definitions/SchedulerConfig',
           description: 'Scheduler configuration for scheduled workflow execution',
@@ -989,7 +1005,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1006,7 +1022,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1194,6 +1210,10 @@ export const configSchema = {
         'schedule',
         'webhook_received',
         'slack_message',
+        'telegram_message',
+        'email_message',
+        'whatsapp_message',
+        'teams_message',
       ],
       description: 'Valid event triggers for checks',
     },
@@ -1718,7 +1738,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1733,14 +1753,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400>>':
+    'Record<string,Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-13844-28438-src_types_config.ts-0-56400>': {
+    'Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833>': {
       type: 'object',
       additionalProperties: false,
     },
@@ -2603,6 +2623,263 @@ export const configSchema = {
         enabled: {
           type: 'boolean',
           description: 'Enable telemetry ID suffix in Slack messages',
+        },
+      },
+      additionalProperties: false,
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    TelegramConfig: {
+      type: 'object',
+      properties: {
+        bot_token: {
+          type: 'string',
+          description: 'Bot token from',
+        },
+        polling_timeout: {
+          type: 'number',
+          description: 'Polling timeout in seconds for getUpdates (default: 30)',
+        },
+        chat_allowlist: {
+          type: 'array',
+          items: {
+            type: ['string', 'number'],
+          },
+          description: 'Chat/group allowlist - numeric chat IDs that the bot responds in',
+        },
+        require_mention: {
+          type: 'boolean',
+          description: 'In groups, only respond when',
+        },
+        workflow: {
+          type: 'string',
+          description: 'Workflow to run when a message is received',
+        },
+      },
+      additionalProperties: false,
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    EmailConfig: {
+      type: 'object',
+      properties: {
+        receive: {
+          type: 'object',
+          properties: {
+            type: {
+              type: 'string',
+              enum: ['imap', 'resend'],
+              description: "Backend type: 'imap' (universal) or 'resend' (managed webhook)",
+            },
+            host: {
+              type: 'string',
+              description: 'IMAP server hostname',
+            },
+            port: {
+              type: 'number',
+              description: 'IMAP server port (default: 993)',
+            },
+            auth: {
+              type: 'object',
+              properties: {
+                user: {
+                  type: 'string',
+                },
+                pass: {
+                  type: 'string',
+                },
+              },
+              additionalProperties: false,
+              description: 'IMAP auth credentials',
+              patternProperties: {
+                '^x-': {},
+              },
+            },
+            secure: {
+              type: 'boolean',
+              description: 'Use TLS (default: true)',
+            },
+            poll_interval: {
+              type: 'number',
+              description: 'Polling interval in seconds when IDLE not available (default: 30)',
+            },
+            folder: {
+              type: 'string',
+              description: "IMAP folder to monitor (default: 'INBOX')",
+            },
+            mark_read: {
+              type: 'boolean',
+              description: 'Mark processed messages as read (default: true)',
+            },
+            api_key: {
+              type: 'string',
+              description: "Resend API key (for type: 'resend')",
+            },
+            webhook_secret: {
+              type: 'string',
+              description: 'Resend webhook secret for signature verification',
+            },
+          },
+          additionalProperties: false,
+          description: 'Receive backend configuration',
+          patternProperties: {
+            '^x-': {},
+          },
+        },
+        send: {
+          type: 'object',
+          properties: {
+            type: {
+              type: 'string',
+              enum: ['smtp', 'resend'],
+              description: "Backend type: 'smtp' (universal) or 'resend' (managed API)",
+            },
+            host: {
+              type: 'string',
+              description: 'SMTP server hostname',
+            },
+            port: {
+              type: 'number',
+              description: 'SMTP server port (default: 587)',
+            },
+            auth: {
+              type: 'object',
+              properties: {
+                user: {
+                  type: 'string',
+                },
+                pass: {
+                  type: 'string',
+                },
+              },
+              additionalProperties: false,
+              description: 'SMTP auth credentials',
+              patternProperties: {
+                '^x-': {},
+              },
+            },
+            secure: {
+              type: 'boolean',
+              description: 'Use TLS (default: true)',
+            },
+            from: {
+              type: 'string',
+              description: 'Default sender address (e.g., "Bot <bot@example.com>")',
+            },
+            api_key: {
+              type: 'string',
+              description: "Resend API key (for type: 'resend')",
+            },
+          },
+          additionalProperties: false,
+          description: 'Send backend configuration',
+          patternProperties: {
+            '^x-': {},
+          },
+        },
+        allowlist: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Only process emails from these senders',
+        },
+        workflow: {
+          type: 'string',
+          description: 'Workflow to run when an email is received',
+        },
+      },
+      additionalProperties: false,
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    WhatsAppConfig: {
+      type: 'object',
+      properties: {
+        access_token: {
+          type: 'string',
+          description: 'WhatsApp Cloud API access token (or WHATSAPP_ACCESS_TOKEN env var)',
+        },
+        phone_number_id: {
+          type: 'string',
+          description:
+            'Phone Number ID from Meta Business Suite (or WHATSAPP_PHONE_NUMBER_ID env var)',
+        },
+        app_secret: {
+          type: 'string',
+          description:
+            'Meta App Secret for webhook signature verification (or WHATSAPP_APP_SECRET env var)',
+        },
+        verify_token: {
+          type: 'string',
+          description:
+            'Verify token for webhook subscription challenge (or WHATSAPP_VERIFY_TOKEN env var)',
+        },
+        api_version: {
+          type: 'string',
+          description: "Graph API version (default: 'v21.0')",
+        },
+        port: {
+          type: 'number',
+          description: 'Port for webhook HTTP server (default: 8443)',
+        },
+        host: {
+          type: 'string',
+          description: "Host for webhook HTTP server (default: '0.0.0.0')",
+        },
+        phone_allowlist: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'Phone number allowlist — only respond to these numbers',
+        },
+        workflow: {
+          type: 'string',
+          description: 'Workflow to run when a message is received',
+        },
+      },
+      additionalProperties: false,
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    TeamsConfig: {
+      type: 'object',
+      properties: {
+        app_id: {
+          type: 'string',
+          description: 'Azure AD App (client) ID (or TEAMS_APP_ID env var)',
+        },
+        app_password: {
+          type: 'string',
+          description: 'Azure AD App client secret (or TEAMS_APP_PASSWORD env var)',
+        },
+        tenant_id: {
+          type: 'string',
+          description: 'Azure AD Tenant ID for single-tenant apps (or TEAMS_TENANT_ID env var)',
+        },
+        port: {
+          type: 'number',
+          description: 'Port for webhook HTTP server (default: 3978)',
+        },
+        host: {
+          type: 'string',
+          description: "Host for webhook HTTP server (default: '0.0.0.0')",
+        },
+        user_allowlist: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: 'User ID allowlist — only respond to these AAD user IDs',
+        },
+        workflow: {
+          type: 'string',
+          description: 'Workflow to run when a message is received',
         },
       },
       additionalProperties: false,
