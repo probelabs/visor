@@ -219,7 +219,7 @@ export declare const configSchema: {
             readonly properties: {
                 readonly type: {
                     readonly type: "string";
-                    readonly enum: readonly ["command", "api", "workflow"];
+                    readonly enum: readonly ["command", "api", "workflow", "http_client"];
                     readonly description: "Tool implementation type (defaults to 'command')";
                 };
                 readonly name: {
@@ -399,6 +399,27 @@ export declare const configSchema: {
                 readonly request_timeout_ms: {
                     readonly type: "number";
                     readonly description: "Alias for requestTimeoutMs (snake_case)";
+                };
+                readonly base_url: {
+                    readonly type: "string";
+                    readonly description: "Base URL for HTTP client tools";
+                };
+                readonly auth: {
+                    readonly type: "object";
+                    readonly properties: {
+                        readonly type: {
+                            readonly type: "string";
+                        };
+                        readonly token: {
+                            readonly type: "string";
+                        };
+                    };
+                    readonly required: readonly ["type"];
+                    readonly additionalProperties: {};
+                    readonly description: "Authentication config for HTTP client tools";
+                    readonly patternProperties: {
+                        readonly '^x-': {};
+                    };
                 };
                 readonly workflow: {
                     readonly type: "string";
@@ -921,7 +942,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -937,7 +958,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -1597,7 +1618,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1612,13 +1633,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833>': {
+        readonly 'Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };

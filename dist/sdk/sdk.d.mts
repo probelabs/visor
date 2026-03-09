@@ -1322,7 +1322,7 @@ interface VisorHooks {
  */
 interface CustomToolDefinition {
     /** Tool implementation type (defaults to 'command') */
-    type?: 'command' | 'api' | 'workflow';
+    type?: 'command' | 'api' | 'workflow' | 'http_client';
     /** Tool name - used to reference the tool in MCP blocks */
     name: string;
     /** Description of what the tool does */
@@ -1390,6 +1390,14 @@ interface CustomToolDefinition {
     requestTimeoutMs?: number;
     /** Alias for requestTimeoutMs (snake_case) */
     request_timeout_ms?: number;
+    /** Base URL for HTTP client tools */
+    base_url?: string;
+    /** Authentication config for HTTP client tools */
+    auth?: {
+        type: string;
+        token?: string;
+        [key: string]: unknown;
+    };
     /** Workflow ID (registry lookup) or file path (for type: 'workflow') */
     workflow?: string;
     /** Inline workflow inputs (for type: 'workflow' with inline steps) */

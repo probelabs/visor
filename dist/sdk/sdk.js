@@ -12724,7 +12724,7 @@ var init_config_schema = __esm({
           properties: {
             type: {
               type: "string",
-              enum: ["command", "api", "workflow"],
+              enum: ["command", "api", "workflow", "http_client"],
               description: "Tool implementation type (defaults to 'command')"
             },
             name: {
@@ -12920,6 +12920,27 @@ var init_config_schema = __esm({
             request_timeout_ms: {
               type: "number",
               description: "Alias for requestTimeoutMs (snake_case)"
+            },
+            base_url: {
+              type: "string",
+              description: "Base URL for HTTP client tools"
+            },
+            auth: {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string"
+                },
+                token: {
+                  type: "string"
+                }
+              },
+              required: ["type"],
+              additionalProperties: {},
+              description: "Authentication config for HTTP client tools",
+              patternProperties: {
+                "^x-": {}
+              }
             },
             workflow: {
               type: "string",
@@ -13460,7 +13481,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -13476,7 +13497,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -14178,7 +14199,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -14193,13 +14214,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833>>": {
+        "Record<string,Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-56833>": {
+        "Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090>": {
           type: "object",
           additionalProperties: false
         },
@@ -22043,6 +22064,9 @@ var init_schedule_tool_handler = __esm({
 });
 
 // src/providers/mcp-custom-sse-server.ts
+function isHttpClientTool(tool) {
+  return Boolean(tool && tool.type === "http_client" && (tool.base_url || tool.url));
+}
 var import_http, import_events, CustomToolsSSEServer;
 var init_mcp_custom_sse_server = __esm({
   "src/providers/mcp-custom-sse-server.ts"() {
@@ -22056,6 +22080,7 @@ var init_mcp_custom_sse_server = __esm({
     init_workflow_registry();
     init_schedule_tool();
     init_schedule_tool_handler();
+    init_env_resolver();
     CustomToolsSSEServer = class _CustomToolsSSEServer {
       server = null;
       port = 0;
@@ -22089,10 +22114,12 @@ var init_mcp_custom_sse_server = __esm({
           }
         }
         for (const [name, tool] of this.tools.entries()) {
-          if (!isWorkflowTool(tool)) {
-            toolsRecord[name] = tool;
+          if (isWorkflowTool(tool) || isHttpClientTool(tool)) {
+            if (isWorkflowTool(tool)) {
+              workflowToolNames.push(name);
+            }
           } else {
-            workflowToolNames.push(name);
+            toolsRecord[name] = tool;
           }
         }
         if (workflowToolNames.length > 0 && !workflowContext) {
@@ -22572,7 +22599,12 @@ var init_mcp_custom_sse_server = __esm({
           description: tool.description || `Execute ${tool.name}`,
           inputSchema: normalizeInputSchema(tool.inputSchema)
         }));
-        const allTools = [...regularTools, ...workflowTools];
+        const httpClientTools = Array.from(this.tools.values()).filter(isHttpClientTool).map((tool) => ({
+          name: tool.name,
+          description: tool.description || `Call ${tool.name} HTTP API`,
+          inputSchema: normalizeInputSchema(tool.inputSchema)
+        }));
+        const allTools = [...regularTools, ...workflowTools, ...httpClientTools];
         if (this.debug) {
           logger.debug(
             `[CustomToolsSSEServer:${this.sessionId}] Listing ${allTools.length} tools: ${allTools.map((t) => t.name).join(", ")}`
@@ -22696,6 +22728,8 @@ var init_mcp_custom_sse_server = __esm({
                   this.workflowContext,
                   workflowTool.__argsOverrides
                 );
+              } else if (tool && isHttpClientTool(tool)) {
+                result = await this.executeHttpClientTool(tool, args);
               } else {
                 result = await this.toolExecutor.execute(toolName, args);
               }
@@ -22757,6 +22791,83 @@ var init_mcp_custom_sse_server = __esm({
           if (workspace) {
             workspace.release();
           }
+        }
+      }
+      /**
+       * Execute an http_client tool — proxy REST API calls through the configured base URL.
+       */
+      async executeHttpClientTool(tool, args) {
+        const baseUrl = (tool.base_url || tool.url).replace(/\/+$/, "");
+        const apiPath = args.path || "";
+        const method = (args.method || "GET").toUpperCase();
+        const queryParams = args.query || {};
+        const body = args.body;
+        const toolHeaders = tool.headers || {};
+        const timeout = tool.timeout || 3e4;
+        let url = apiPath.startsWith("http") ? apiPath : `${baseUrl}/${apiPath.replace(/^\/+/, "")}`;
+        if (Object.keys(queryParams).length > 0) {
+          const qs = new URLSearchParams(queryParams).toString();
+          url += `${url.includes("?") ? "&" : "?"}${qs}`;
+        }
+        const resolvedHeaders = {};
+        for (const [key, value] of Object.entries(toolHeaders)) {
+          resolvedHeaders[key] = String(EnvironmentResolver.resolveValue(value));
+        }
+        if (tool.auth) {
+          const authType = tool.auth.type;
+          if (authType === "bearer" && tool.auth.token) {
+            const token = String(EnvironmentResolver.resolveValue(tool.auth.token));
+            resolvedHeaders["Authorization"] = `Bearer ${token}`;
+          }
+        }
+        if (this.debug) {
+          logger.debug(`[CustomToolsSSEServer:${this.sessionId}] HTTP client: ${method} ${url}`);
+        }
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeout);
+        try {
+          const requestOptions = {
+            method,
+            headers: resolvedHeaders,
+            signal: controller.signal
+          };
+          if (method !== "GET" && body) {
+            requestOptions.body = typeof body === "string" ? body : JSON.stringify(body);
+            if (!resolvedHeaders["Content-Type"] && !resolvedHeaders["content-type"]) {
+              resolvedHeaders["Content-Type"] = "application/json";
+            }
+          }
+          const response = await fetch(url, requestOptions);
+          clearTimeout(timeoutId);
+          if (!response.ok) {
+            let errorBody = "";
+            try {
+              errorBody = await response.text();
+            } catch {
+            }
+            throw new Error(
+              `HTTP ${response.status}: ${response.statusText}${errorBody ? ` - ${errorBody.substring(0, 500)}` : ""}`
+            );
+          }
+          const contentType = response.headers.get("content-type");
+          if (contentType && contentType.includes("application/json")) {
+            return await response.json();
+          }
+          const text = await response.text();
+          if (text.trim().startsWith("{") || text.trim().startsWith("[")) {
+            try {
+              return JSON.parse(text);
+            } catch {
+              return text;
+            }
+          }
+          return text;
+        } catch (error) {
+          clearTimeout(timeoutId);
+          if (error instanceof Error && error.name === "AbortError") {
+            throw new Error(`HTTP client request timed out after ${timeout}ms`);
+          }
+          throw error;
         }
       }
       /**
@@ -23842,6 +23953,7 @@ ${preview}`);
         }
         const workflowEntriesFromMcp = [];
         const toolEntriesFromMcp = [];
+        const httpClientEntriesFromMcp = [];
         const mcpEntriesToRemove = [];
         for (const [serverName, serverConfig] of Object.entries(mcpServers)) {
           const cfg = serverConfig;
@@ -23854,6 +23966,12 @@ ${preview}`);
             mcpEntriesToRemove.push(serverName);
             logger.debug(
               `[AICheckProvider] Extracted workflow tool '${serverName}' (workflow=${cfg.workflow}) from ai_mcp_servers`
+            );
+          } else if (cfg.type === "http_client" && (cfg.base_url || cfg.url)) {
+            httpClientEntriesFromMcp.push({ name: serverName, config: cfg });
+            mcpEntriesToRemove.push(serverName);
+            logger.debug(
+              `[AICheckProvider] Extracted http_client tool '${serverName}' (base_url=${cfg.base_url || cfg.url}) from ai_mcp_servers`
             );
           } else if (cfg.tool && typeof cfg.tool === "string") {
             toolEntriesFromMcp.push(cfg.tool);
@@ -23907,7 +24025,7 @@ ${preview}`);
           logger.debug(`[AICheckProvider] Schedule tool requested (${contextInfo})`);
         }
         const scheduleToolEnabled = scheduleToolRequested || config.ai?.enable_scheduler === true && !config.ai?.disableTools;
-        if ((customToolsToLoad.length > 0 || scheduleToolEnabled) && (customToolsServerName || scheduleToolEnabled) && !config.ai?.disableTools) {
+        if ((customToolsToLoad.length > 0 || scheduleToolEnabled || httpClientEntriesFromMcp.length > 0) && (customToolsServerName || scheduleToolEnabled || httpClientEntriesFromMcp.length > 0) && !config.ai?.disableTools) {
           if (!customToolsServerName) {
             customToolsServerName = "__tools__";
           }
@@ -23938,6 +24056,48 @@ ${preview}`);
               const scheduleTool = getScheduleToolDefinition();
               customTools.set(scheduleTool.name, scheduleTool);
               logger.debug(`[AICheckProvider] Added built-in schedule tool`);
+            }
+            for (const entry of httpClientEntriesFromMcp) {
+              const httpTool = {
+                name: entry.name,
+                type: "http_client",
+                description: entry.config.description || `Call ${entry.name} HTTP API (base: ${entry.config.base_url || entry.config.url})`,
+                base_url: entry.config.base_url || entry.config.url,
+                auth: entry.config.auth,
+                headers: entry.config.headers,
+                timeout: entry.config.timeout || 3e4,
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    path: {
+                      type: "string",
+                      description: "API path (e.g. /jobs, /candidates/{id})"
+                    },
+                    method: {
+                      type: "string",
+                      description: "HTTP method (default: GET)",
+                      enum: ["GET", "POST", "PUT", "PATCH", "DELETE"]
+                    },
+                    query: {
+                      type: "object",
+                      description: "Query string parameters",
+                      additionalProperties: { type: "string" }
+                    },
+                    body: {
+                      type: "object",
+                      description: "Request body for POST/PUT/PATCH"
+                    }
+                  },
+                  required: ["path"]
+                }
+              };
+              customTools.set(entry.name, httpTool);
+              logger.debug(
+                `[AICheckProvider] Added http_client tool '${entry.name}' (base_url=${httpTool.base_url})`
+              );
+            }
+            if (httpClientEntriesFromMcp.length > 0 && !customToolsServerName) {
+              customToolsServerName = "__tools__";
             }
             if (customTools.size > 0) {
               const sessionId = config.checkName || `ai-check-${Date.now()}`;
