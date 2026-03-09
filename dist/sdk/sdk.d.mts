@@ -1,100 +1,3 @@
-/** Bot transport types (trimmed for Slack v1) */
-type BotTransportType = 'slack' | 'telegram' | string;
-/** Slack file attachment metadata */
-interface SlackFileAttachment {
-    id: string;
-    name?: string;
-    mimetype?: string;
-    filetype?: string;
-    url_private?: string;
-    permalink?: string;
-    size?: number;
-}
-interface NormalizedMessage {
-    role: 'user' | 'bot';
-    text: string;
-    timestamp: string;
-    origin?: string;
-    /** Optional user identifier (e.g., Slack user id, GitHub login) */
-    user?: string;
-    /** File attachments from Slack messages */
-    files?: SlackFileAttachment[];
-}
-interface ConversationContext {
-    transport: BotTransportType;
-    thread: {
-        id: string;
-        url?: string;
-    };
-    messages: NormalizedMessage[];
-    current: NormalizedMessage;
-    attributes: Record<string, string>;
-}
-interface TelegramConfig {
-    /** Bot token from @BotFather (or TELEGRAM_BOT_TOKEN env var) */
-    bot_token?: string;
-    /** Polling timeout in seconds for getUpdates (default: 30) */
-    polling_timeout?: number;
-    /** Chat/group allowlist - numeric chat IDs that the bot responds in */
-    chat_allowlist?: (string | number)[];
-    /** In groups, only respond when @mentioned or replied to (default: true) */
-    require_mention?: boolean;
-    /** Workflow to run when a message is received */
-    workflow?: string;
-}
-interface EmailConfig {
-    /** Receive backend configuration */
-    receive?: {
-        /** Backend type: 'imap' (universal) or 'resend' (managed webhook) */
-        type?: 'imap' | 'resend';
-        /** IMAP server hostname */
-        host?: string;
-        /** IMAP server port (default: 993) */
-        port?: number;
-        /** IMAP auth credentials */
-        auth?: {
-            user?: string;
-            pass?: string;
-        };
-        /** Use TLS (default: true) */
-        secure?: boolean;
-        /** Polling interval in seconds when IDLE not available (default: 30) */
-        poll_interval?: number;
-        /** IMAP folder to monitor (default: 'INBOX') */
-        folder?: string;
-        /** Mark processed messages as read (default: true) */
-        mark_read?: boolean;
-        /** Resend API key (for type: 'resend') */
-        api_key?: string;
-        /** Resend webhook secret for signature verification */
-        webhook_secret?: string;
-    };
-    /** Send backend configuration */
-    send?: {
-        /** Backend type: 'smtp' (universal) or 'resend' (managed API) */
-        type?: 'smtp' | 'resend';
-        /** SMTP server hostname */
-        host?: string;
-        /** SMTP server port (default: 587) */
-        port?: number;
-        /** SMTP auth credentials */
-        auth?: {
-            user?: string;
-            pass?: string;
-        };
-        /** Use TLS (default: true) */
-        secure?: boolean;
-        /** Default sender address (e.g., "Bot <bot@example.com>") */
-        from?: string;
-        /** Resend API key (for type: 'resend') */
-        api_key?: string;
-    };
-    /** Only process emails from these senders */
-    allowlist?: string[];
-    /** Workflow to run when an email is received */
-    workflow?: string;
-}
-
 interface AIDebugInfo {
     /** The prompt sent to the AI */
     prompt: string;
@@ -341,6 +244,10 @@ interface AgentProtocolConfig {
 }
 
 /**
+ * Types for Visor configuration system
+ */
+
+/**
  * Failure condition severity levels
  */
 type FailureConditionSeverity = 'error' | 'warning' | 'info';
@@ -397,7 +304,7 @@ type ConfigCheckType = 'ai' | 'command' | 'script' | 'http' | 'http_input' | 'ht
 /**
  * Valid event triggers for checks
  */
-type EventTrigger = 'pr_opened' | 'pr_updated' | 'pr_closed' | 'issue_opened' | 'issue_comment' | 'manual' | 'schedule' | 'webhook_received' | 'slack_message' | 'telegram_message' | 'email_message';
+type EventTrigger = 'pr_opened' | 'pr_updated' | 'pr_closed' | 'issue_opened' | 'issue_comment' | 'manual' | 'schedule' | 'webhook_received' | 'slack_message';
 /**
  * Valid output formats
  */
@@ -1636,10 +1543,6 @@ interface VisorConfig {
     sandbox_defaults?: SandboxDefaults;
     /** Slack configuration */
     slack?: SlackConfig;
-    /** Telegram bot configuration */
-    telegram?: TelegramConfig;
-    /** Email integration configuration */
-    email?: EmailConfig;
     /** Scheduler configuration for scheduled workflow execution */
     scheduler?: SchedulerConfig;
     /** Enterprise policy engine configuration */
@@ -1809,6 +1712,39 @@ declare class EventBus {
     on<T = AnyEvent>(eventType: string, handler: EventHandler<T>): Subscription;
     onAny(handler: EventHandler): Subscription;
     emit(event: AnyEvent | EventEnvelope): Promise<void>;
+}
+
+/** Bot transport types (trimmed for Slack v1) */
+type BotTransportType = 'slack' | string;
+/** Slack file attachment metadata */
+interface SlackFileAttachment {
+    id: string;
+    name?: string;
+    mimetype?: string;
+    filetype?: string;
+    url_private?: string;
+    permalink?: string;
+    size?: number;
+}
+interface NormalizedMessage {
+    role: 'user' | 'bot';
+    text: string;
+    timestamp: string;
+    origin?: string;
+    /** Optional user identifier (e.g., Slack user id, GitHub login) */
+    user?: string;
+    /** File attachments from Slack messages */
+    files?: SlackFileAttachment[];
+}
+interface ConversationContext {
+    transport: BotTransportType;
+    thread: {
+        id: string;
+        url?: string;
+    };
+    messages: NormalizedMessage[];
+    current: NormalizedMessage;
+    attributes: Record<string, string>;
 }
 
 /**
