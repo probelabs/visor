@@ -101,6 +101,7 @@ const schema: any = {
             },
           },
         },
+        hooks: { $ref: '#/$defs/suiteHooks' },
         fixtures: { type: 'array' },
         cases: {
           type: 'array',
@@ -112,6 +113,33 @@ const schema: any = {
   },
   required: ['tests'],
   $defs: {
+    hookDef: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        exec: { type: 'string' },
+        timeout: { type: 'number' },
+      },
+      required: ['exec'],
+    },
+    suiteHooks: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        before_all: { $ref: '#/$defs/hookDef' },
+        after_all: { $ref: '#/$defs/hookDef' },
+        before_each: { $ref: '#/$defs/hookDef' },
+        after_each: { $ref: '#/$defs/hookDef' },
+      },
+    },
+    caseHooks: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        before: { $ref: '#/$defs/hookDef' },
+        after: { $ref: '#/$defs/hookDef' },
+      },
+    },
     fixtureRef: {
       oneOf: [
         { type: 'string' },
@@ -190,6 +218,7 @@ const schema: any = {
         },
         // Workflow testing: input values to pass to the workflow
         workflow_input: { type: 'object' },
+        hooks: { $ref: '#/$defs/caseHooks' },
         expect: { $ref: '#/$defs/expectBlock' },
         // Flow cases
         flow: {
