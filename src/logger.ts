@@ -25,6 +25,16 @@ function levelToNumber(level: LogLevel): number {
   }
 }
 
+// OTel severity mapping (OpenTelemetry SeverityNumber values)
+const OTEL_SEVERITY: Record<LogLevel, number> = {
+  silent: 0,
+  error: 17, // ERROR
+  warn: 13, // WARN
+  info: 9, // INFO
+  verbose: 5, // DEBUG
+  debug: 5, // DEBUG
+};
+
 class Logger {
   private level: LogLevel = 'info';
   private isJsonLike: boolean = false;
@@ -34,6 +44,8 @@ class Logger {
   private sinkPassthrough: boolean = true;
   private sinkErrorMode: 'throw' | 'warn' | 'silent' = 'throw';
   private sinkErrorHandler?: (error: unknown) => void;
+  private otelLogger: any = null;
+  private otelLoggerAttempted: boolean = false;
 
   configure(
     opts: {
@@ -111,11 +123,45 @@ class Logger {
     }
   }
 
+  private emitOtelLog(msg: string, level: LogLevel): void {
+    try {
+      if (!this.otelLoggerAttempted) {
+        this.otelLoggerAttempted = true;
+        try {
+          const { logs } = (function (name: string) {
+            return require(name);
+          })('@opentelemetry/api-logs');
+          this.otelLogger = logs.getLogger('visor');
+        } catch {
+          // @opentelemetry/api-logs not installed
+        }
+      }
+      if (!this.otelLogger) return;
+
+      const span = trace.getSpan(otContext.active()) || trace.getActiveSpan();
+      const spanCtx = span?.spanContext?.();
+      this.otelLogger.emit({
+        severityNumber: OTEL_SEVERITY[level] || 9,
+        severityText: level.toUpperCase(),
+        body: msg,
+        attributes: {
+          'visor.logger': true,
+          ...(spanCtx?.traceId ? { trace_id: spanCtx.traceId, span_id: spanCtx.spanId } : {}),
+        },
+      });
+    } catch {
+      // OTel logs not available; ignore
+    }
+  }
+
   private write(msg: string, level?: LogLevel): void {
     // Always route to stderr to keep stdout clean for results
     const suffix = this.getTraceSuffix(msg);
     const decoratedMsg = suffix ? `${msg}${suffix}` : msg;
     const lvl = level || 'info';
+
+    // Emit to OTel Logs pipeline (non-blocking, best-effort)
+    this.emitOtelLog(msg, lvl);
 
     if (this.sink) {
       try {

@@ -27,6 +27,7 @@ export interface TelemetryInitOptions {
 
 let sdk: NodeSDKType | null = null;
 let patched = false;
+let loggerProvider: any = null;
 
 /**
  * Reset telemetry state (for testing only).
@@ -173,6 +174,36 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
       }
     }
 
+    // Configure OTel Logs exporter when using 'otlp' sink
+    if (sink === 'otlp') {
+      try {
+        const { LoggerProvider, BatchLogRecordProcessor } = (function (name: string) {
+          return require(name);
+        })('@opentelemetry/sdk-logs');
+        const { OTLPLogExporter } = (function (name: string) {
+          return require(name);
+        })('@opentelemetry/exporter-logs-otlp-http');
+        const { logs: logsApi } = (function (name: string) {
+          return require(name);
+        })('@opentelemetry/api-logs');
+        const logExporter = new OTLPLogExporter({
+          url:
+            process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT || process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+          headers: process.env.OTEL_EXPORTER_OTLP_HEADERS,
+        });
+        const logProcessor = new BatchLogRecordProcessor(logExporter);
+        const lp = new LoggerProvider({ resource });
+        // v0.203+ removed addLogRecordProcessor from public API;
+        // register via internal shared state and global API
+        lp._sharedState.registeredLogRecordProcessors.push(logProcessor);
+        lp._sharedState.activeProcessor = logProcessor;
+        logsApi.setGlobalLoggerProvider(lp);
+        loggerProvider = lp;
+      } catch {
+        // Logs exporter not available; continue without OTel logs
+      }
+    }
+
     // Auto-instrumentations (optional)
     let instrumentations: Instrumentation[] | undefined;
     const autoInstr =
@@ -274,6 +305,14 @@ export async function initTelemetry(opts: TelemetryInitOptions = {}): Promise<vo
   }
 }
 
+/**
+ * Returns the OTel LoggerProvider if logs export is enabled, or null.
+ * Used by the Visor logger to bridge log records to the OTel pipeline.
+ */
+export function getOtelLoggerProvider(): any {
+  return loggerProvider;
+}
+
 export async function shutdownTelemetry(): Promise<void> {
   if (!sdk) return;
   try {
@@ -281,6 +320,12 @@ export async function shutdownTelemetry(): Promise<void> {
       const { flushNdjson } = require('./fallback-ndjson');
       await flushNdjson();
     } catch {}
+    if (loggerProvider) {
+      try {
+        await loggerProvider.shutdown();
+      } catch {}
+      loggerProvider = null;
+    }
     await sdk.shutdown();
   } catch {
     // ignore

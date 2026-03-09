@@ -30,9 +30,10 @@ Telemetry is configured via environment variables (highest precedence):
 | `VISOR_TELEMETRY_AUTO_INSTRUMENTATIONS` | Enable auto‑instrumentations (`true`/`false`) | `false` |
 | `VISOR_TELEMETRY_FULL_CAPTURE` | Capture full AI prompts/responses in spans | `false` |
 | `VISOR_FALLBACK_TRACE_FILE` | Explicit path for NDJSON trace file | auto-generated |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint URL (for both traces and metrics) | - |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint URL (for traces, metrics, and logs) | - |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | OTLP endpoint for traces (overrides above) | - |
 | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | OTLP endpoint for metrics (overrides above) | - |
+| `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | OTLP endpoint for logs (overrides above) | - |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Headers for OTLP requests (e.g., auth tokens) | - |
 
 Examples:
@@ -43,7 +44,7 @@ VISOR_TELEMETRY_ENABLED=true \
 VISOR_TELEMETRY_SINK=file \
 visor --config ./.visor.yaml
 
-# OTLP sink with Jaeger
+# OTLP sink with Grafana LGTM (or any OTLP-compatible backend)
 VISOR_TELEMETRY_ENABLED=true \
 VISOR_TELEMETRY_SINK=otlp \
 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces \
@@ -53,6 +54,31 @@ visor --config ./.visor.yaml
 VISOR_TELEMETRY_ENABLED=true \
 VISOR_TRACE_REPORT=true \
 visor --config ./.visor.yaml
+```
+
+## Local Development with Grafana LGTM
+
+The easiest way to get a full observability stack locally is [Grafana LGTM](https://github.com/grafana/docker-otel-lgtm) — a single Docker container with Grafana, Tempo (traces), Loki (logs), Prometheus (metrics), and an OpenTelemetry Collector:
+
+```bash
+# Start the all-in-one observability stack
+docker run -d --name grafana-otel \
+  -p 3000:3000 \
+  -p 4317:4317 \
+  -p 4318:4318 \
+  -v grafana-otel-data:/data \
+  grafana/otel-lgtm:latest
+
+# Run Visor with OTLP telemetry
+VISOR_TELEMETRY_ENABLED=true \
+VISOR_TELEMETRY_SINK=otlp \
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4318/v1/traces \
+visor --config .visor.yaml
+
+# Open Grafana at http://localhost:3000 (admin/admin)
+# - Explore → Tempo for traces
+# - Explore → Loki for logs (correlated with trace IDs)
+# - Explore → Prometheus for metrics
 ```
 
 ## Config (visor.yaml)
@@ -105,7 +131,7 @@ service:
 
 ## Connected Mode (OTLP HTTP)
 
-For real-time trace streaming to a collector:
+For real-time streaming of traces, metrics, and logs to a collector:
 
 ```bash
 export VISOR_TELEMETRY_ENABLED=true
@@ -115,7 +141,18 @@ export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://collector.example.com/v1/trace
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer your-token"
 ```
 
-When using OTLP sink, the metrics exporter is automatically enabled if the required dependencies are installed (`@opentelemetry/exporter-metrics-otlp-http`, `@opentelemetry/sdk-metrics`). Metrics include histograms and counters for checks, providers, forEach items, and fail_if triggers.
+When using the OTLP sink, Visor automatically enables all three observability signals:
+
+- **Traces** — Exported via `@opentelemetry/exporter-trace-otlp-http`. Shows full execution flow with spans for checks, routing, and AI calls.
+- **Metrics** — Exported via `@opentelemetry/exporter-metrics-otlp-http` and `@opentelemetry/sdk-metrics`. Includes histograms and counters for check durations, provider durations, forEach items, issues, and fail_if triggers.
+- **Logs** — Exported via `@opentelemetry/exporter-logs-otlp-http` and `@opentelemetry/sdk-logs`. All Visor logger output (info, warn, error, debug) is bridged to the OTel Logs pipeline with trace context correlation — click a log line in Grafana to jump to the associated trace.
+
+Each signal can use a separate endpoint if needed:
+```bash
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://tempo.example.com/v1/traces
+export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=https://mimir.example.com/v1/metrics
+export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://loki.example.com/v1/logs
+```
 
 ## Auto‑Instrumentations
 
