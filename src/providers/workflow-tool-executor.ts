@@ -86,6 +86,10 @@ export function workflowInputsToJsonSchema(
       if (input.schema.format) propSchema.format = input.schema.format;
       if (input.schema.properties) propSchema.properties = input.schema.properties;
       if (input.schema.items) propSchema.items = input.schema.items;
+      // Gemini rejects array schemas without items — add default if missing
+      if (propSchema.type === 'array' && !propSchema.items) {
+        propSchema.items = { type: 'string' };
+      }
       if (input.schema.additionalProperties !== undefined) {
         propSchema.additionalProperties = input.schema.additionalProperties;
       }
