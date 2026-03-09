@@ -28,11 +28,36 @@ function getCurrentDateXml(): string {
 
 function createProbeTracerAdapter(fallbackTracer?: any) {
   const fallback = fallbackTracer && typeof fallbackTracer === 'object' ? fallbackTracer : null;
+  // OTel span event attributes only support primitive types (string, number, boolean)
+  // and arrays of primitives. Complex values (objects, arrays of objects) are silently
+  // dropped. Flatten them to JSON strings so they survive serialization.
+  const flattenAttrs = (attrs?: Record<string, unknown>): Record<string, unknown> | undefined => {
+    if (!attrs) return attrs;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v === null || v === undefined) continue;
+      if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+        out[k] = v;
+      } else if (Array.isArray(v)) {
+        // Arrays of primitives are OK; arrays of objects need serialization
+        if (v.length > 0 && typeof v[0] === 'object') {
+          out[k] = JSON.stringify(v);
+        } else {
+          out[k] = v;
+        }
+      } else if (typeof v === 'object') {
+        out[k] = JSON.stringify(v);
+      } else {
+        out[k] = v;
+      }
+    }
+    return out;
+  };
   const emitEvent = (name: string, attrs?: Record<string, unknown>) => {
     try {
       const span = otTrace.getActiveSpan();
       if (span && typeof span.addEvent === 'function') {
-        span.addEvent(name, attrs as Record<string, unknown>);
+        span.addEvent(name, flattenAttrs(attrs) as Record<string, unknown>);
       }
     } catch {}
   };
@@ -88,6 +113,20 @@ function createProbeTracerAdapter(fallbackTracer?: any) {
       if (fallback && typeof fallback.recordToolResult === 'function') {
         try {
           fallback.recordToolResult(toolName, result, success, durationMs, metadata);
+        } catch {}
+      }
+    },
+    recordToolDecision: (toolName: string, params: unknown, metadata?: Record<string, unknown>) => {
+      const paramsStr = typeof params === 'string' ? params : JSON.stringify(params || {});
+      emitEvent('tool.decision', {
+        'tool.name': toolName,
+        'tool.params': paramsStr.substring(0, 5000),
+        'tool.params.length': paramsStr.length,
+        ...(metadata || {}),
+      });
+      if (fallback && typeof fallback.recordToolDecision === 'function') {
+        try {
+          fallback.recordToolDecision(toolName, params, metadata);
         } catch {}
       }
     },
