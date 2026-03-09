@@ -194,6 +194,7 @@ Visor runs the same YAML config across four surfaces:
 | **GitHub Action** | `uses: probelabs/visor@v1` | PR reviews, issue triage, annotations |
 | **Slack bot** | `visor --slack --config .visor.yaml` | Team assistants, ChatOps |
 | **Telegram bot** | `visor --telegram --config .visor.yaml` | Personal assistants, group bots |
+| **Email bot** | `visor --email --config .visor.yaml` | Email assistants, threaded conversations |
 | **HTTP server** | `http_server: { enabled: true, port: 8080 }` | Webhooks, API integrations |
 
 Additional modes:
@@ -609,11 +610,12 @@ extends:
 
 ### Dynamic Config Reloading
 
-Long-running modes (Slack, Telegram, HTTP) support live config reload:
+Long-running modes (Slack, Telegram, Email, HTTP) support live config reload:
 
 ```bash
 visor --slack --config .visor.yaml --watch       # Auto-reload on file change
 visor --telegram --config .visor.yaml --watch    # Telegram with hot reload
+visor --email --config .visor.yaml --watch       # Email with hot reload
 visor config snapshots                        # List config versions
 visor config diff 1 2                         # Diff two snapshots
 ```

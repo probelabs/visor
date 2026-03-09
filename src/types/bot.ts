@@ -165,6 +165,53 @@ export interface TelegramConfig {
   workflow?: string;
 }
 
+export interface EmailConfig {
+  /** Receive backend configuration */
+  receive?: {
+    /** Backend type: 'imap' (universal) or 'resend' (managed webhook) */
+    type?: 'imap' | 'resend';
+    /** IMAP server hostname */
+    host?: string;
+    /** IMAP server port (default: 993) */
+    port?: number;
+    /** IMAP auth credentials */
+    auth?: { user?: string; pass?: string };
+    /** Use TLS (default: true) */
+    secure?: boolean;
+    /** Polling interval in seconds when IDLE not available (default: 30) */
+    poll_interval?: number;
+    /** IMAP folder to monitor (default: 'INBOX') */
+    folder?: string;
+    /** Mark processed messages as read (default: true) */
+    mark_read?: boolean;
+    /** Resend API key (for type: 'resend') */
+    api_key?: string;
+    /** Resend webhook secret for signature verification */
+    webhook_secret?: string;
+  };
+  /** Send backend configuration */
+  send?: {
+    /** Backend type: 'smtp' (universal) or 'resend' (managed API) */
+    type?: 'smtp' | 'resend';
+    /** SMTP server hostname */
+    host?: string;
+    /** SMTP server port (default: 587) */
+    port?: number;
+    /** SMTP auth credentials */
+    auth?: { user?: string; pass?: string };
+    /** Use TLS (default: true) */
+    secure?: boolean;
+    /** Default sender address (e.g., "Bot <bot@example.com>") */
+    from?: string;
+    /** Resend API key (for type: 'resend') */
+    api_key?: string;
+  };
+  /** Only process emails from these senders */
+  allowlist?: string[];
+  /** Workflow to run when an email is received */
+  workflow?: string;
+}
+
 export interface SlackConfig {
   bots?: SlackBotConfig[];
   endpoint?: string;

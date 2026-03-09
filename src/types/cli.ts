@@ -63,6 +63,8 @@ export interface CliOptions {
   slack?: boolean;
   /** Enable Telegram long-polling runner */
   telegram?: boolean;
+  /** Enable Email polling runner (IMAP/Resend) */
+  email?: boolean;
   /** Enable A2A Agent Protocol server mode */
   a2a?: boolean;
   /** Enable interactive TUI (chat + logs tabs) */

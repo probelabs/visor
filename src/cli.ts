@@ -35,6 +35,7 @@ export class CLI {
       .version(this.getVersion())
       .option('--slack', 'Enable Slack Socket Mode runner (uses SLACK_APP_TOKEN)')
       .option('--telegram', 'Enable Telegram long-polling runner (uses TELEGRAM_BOT_TOKEN)')
+      .option('--email', 'Enable Email polling runner (IMAP/SMTP or Resend)')
       .option('--a2a', 'Enable A2A Agent Protocol server mode')
       .option(
         '-c, --check <type>',

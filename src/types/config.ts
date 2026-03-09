@@ -232,7 +232,8 @@ export type EventTrigger =
   | 'schedule'
   | 'webhook_received'
   | 'slack_message'
-  | 'telegram_message';
+  | 'telegram_message'
+  | 'email_message';
 
 /**
  * Valid output formats
@@ -1564,6 +1565,8 @@ export interface VisorConfig {
   slack?: SlackConfig;
   /** Telegram bot configuration */
   telegram?: import('./bot').TelegramConfig;
+  /** Email integration configuration */
+  email?: import('./bot').EmailConfig;
   /** Scheduler configuration for scheduled workflow execution */
   scheduler?: SchedulerConfig;
   /** Enterprise policy engine configuration */

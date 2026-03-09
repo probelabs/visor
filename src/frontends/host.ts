@@ -82,6 +82,9 @@ export class FrontendsHost {
       } else if (spec.name === 'telegram') {
         const { TelegramFrontend } = await import('./telegram-frontend');
         this.frontends.push(new TelegramFrontend(spec.config as any));
+      } else if (spec.name === 'email') {
+        const { EmailFrontend } = await import('./email-frontend');
+        this.frontends.push(new EmailFrontend(spec.config as any));
       } else if (spec.name === 'a2a') {
         const { A2AFrontend } = await import('../agent-protocol/a2a-frontend');
         this.frontends.push(new A2AFrontend(spec.config as any));
