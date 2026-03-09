@@ -904,11 +904,12 @@ export class SlackSocketRunner {
         return;
       }
 
-      // Build conversation context (for thread replies, fetch full thread)
+      // Build conversation context
       let conversationContext: any = undefined;
       try {
         const isThreadReply = !!threadTs && threadTs !== ts;
         if (isThreadReply) {
+          // Thread reply: fetch full thread history
           const adapter = this.getSlackAdapter();
           if (adapter && channel && threadTs) {
             const cleanedText = String(ev.text || '')
@@ -929,6 +930,23 @@ export class SlackSocketRunner {
         );
       }
 
+      // For root messages without thread context, build a minimal conversation
+      // so that {{ conversation.current.text }} works in templates
+      if (!conversationContext) {
+        const cleanedText = String(ev.text || '')
+          .replace(/<@[A-Z0-9]+>/g, '')
+          .trim();
+        conversationContext = {
+          current: {
+            user,
+            text: cleanedText || String(ev.text || ''),
+            timestamp: Date.now(),
+            files: Array.isArray(ev.files) ? ev.files : undefined,
+          },
+          messages: [],
+        };
+      }
+
       // Build synthetic webhook payload
       const triggerPayload = {
         ...payload,
@@ -937,7 +955,7 @@ export class SlackSocketRunner {
           type: 'on_message',
           workflow: trigger.workflow,
         },
-        ...(conversationContext ? { slack_conversation: conversationContext } : {}),
+        slack_conversation: conversationContext,
       };
 
       const webhookData = new Map<string, unknown>();
