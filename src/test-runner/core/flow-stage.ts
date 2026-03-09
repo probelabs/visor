@@ -115,6 +115,7 @@ export class FlowStage {
           }
           return raw;
         },
+        isMockExhausted: (step: string) => mockMgr.has(step) && mockMgr.isExhausted(step),
       },
     } as any);
 

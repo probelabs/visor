@@ -327,6 +327,10 @@ const schema: any = {
         equals: {},
         equalsDeep: {},
         matches: { type: 'string' },
+        gt: { type: 'number' },
+        gte: { type: 'number' },
+        lt: { type: 'number' },
+        lte: { type: 'number' },
         where: {
           type: 'object',
           additionalProperties: false,
@@ -350,6 +354,10 @@ const schema: any = {
         equals: {},
         equalsDeep: {},
         matches: { type: 'string' },
+        gt: { type: 'number' },
+        gte: { type: 'number' },
+        lt: { type: 'number' },
+        lte: { type: 'number' },
         contains: {
           oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
         },
@@ -498,6 +506,11 @@ const knownKeys = new Set([
   'equalsDeep',
   'where',
   'contains_unordered',
+  // numeric comparisons
+  'gt',
+  'gte',
+  'lt',
+  'lte',
   // routing
   'max_loops',
 ]);
