@@ -754,34 +754,39 @@ steps:
       skip_slack_context: false
       # Post-completion validation to prevent hallucination of completed actions
       completion_prompt: |
-        CRITICAL VALIDATION - Before finalizing your response, verify:
+        VALIDATION STEP — Review your response for accuracy before finalizing.
 
-        Action verification:
-        1. If you claimed to CREATE something (Jira ticket, PR, file, etc.), did you actually call the tool?
-           - Creating a Jira ticket requires calling mcp__jira__jira_create_issue
-           - Creating a PR requires calling the engineer tool
-           - If you didn't call the tool, DO NOT claim the action was completed
-        2. If you claimed to UPDATE something, did you actually call the update tool?
-        3. If you claimed to SEARCH or FETCH something, did you get actual results?
+        ╔══════════════════════════════════════════════════════════════╗
+        ║  NEVER REDO COMPLETED WORK. Check what was already done    ║
+        ║  before taking any action. Only act on GENUINE gaps.       ║
+        ╚══════════════════════════════════════════════════════════════╝
 
-        Tool output verification:
-        4. Check your tool call history - does it support your claims?
-        5. If a tool returned an error or empty result, acknowledge it honestly
-        6. Never claim success if you only PLANNED to do something but didn't execute it
+        Step 1 — Review completed work (MANDATORY before any action):
+        - Review ALL tasks in the conversation. Which are completed? What did they produce?
+        - Review ALL tool call results. What was actually created/fetched/modified?
+        - If a task created a PR, that PR EXISTS. Do not create another one.
+        - If code was already explored, do not explore the same code again.
 
-        Tool usage policy for this validation step:
-        7. Do NOT call code exploration tools (code-talk, search, delegate) unless
-           you found a SPECIFIC factual claim in your response that is unsupported
-           by any tool output in the conversation history above
-        8. If the conversation already contains tool results that answer the question,
-           use those results — do NOT re-explore the same codebase topics
-        9. Only call a tool if you can state exactly which claim needs verification
-           and why existing tool results are insufficient
+        Step 2 — Check your response text against reality:
+        1. If you claimed to CREATE something (PR, ticket, file), verify the tool was
+           actually called AND succeeded in the conversation history above
+        2. If you claimed to SEARCH or FETCH something, verify you got actual results
+        3. If a tool returned an error or empty result, acknowledge it honestly
+        4. Never claim success if you only PLANNED but didn't execute
 
-        If you find discrepancies:
-        - Correct your response to reflect what actually happened
-        - If you couldn't complete an action, explain why and what the user can do
-        - Be honest about failures rather than claiming false success
+        Step 3 — Act ONLY on genuine gaps:
+        - If everything checks out: respond with your previous answer exactly as-is
+        - If your text has inaccuracies but work was done: fix ONLY the text wording
+        - If you find a genuinely MISSING action (claimed but never executed):
+          ONLY THEN call the specific tool needed to fix it
+        - NEVER re-create something that already exists (PRs, tickets, etc.)
+        - NEVER create new tasks that duplicate already-completed tasks
+        - NEVER re-explore code that was already explored in this conversation
+
+        PR-specific rules:
+        - If a PR was already created, NEVER create a second PR for the same changes
+        - If the existing PR needs fixes, push additional commits to the SAME PR branch
+        - Check the engineer tool output above — if it returned a PR URL, that PR exists
       # Wildcard-with-exclusions pattern: allow everything except tools that
       # the AI tends to misuse instead of skill-specific MCP tools.
       # ProbeAgent resolves "*" and "!" patterns natively.

@@ -525,13 +525,29 @@ steps:
           - "curl:*"
         timeout: 60000
       completion_prompt: |
-        Before finalizing, verify:
+        VALIDATION STEP — Review your response for accuracy before finalizing.
 
-        1. Are all code references accurate (file paths, line numbers)?
-        2. If you identified a config variable, did you search for the code that
-           consumes it? Do not conclude from variable names alone.
-        3. Did you verify the user's claims independently, or just confirm their theory?
-        4. If gaps remain, use delegate to investigate before concluding.
+        ╔══════════════════════════════════════════════════════════════╗
+        ║  NEVER REDO COMPLETED WORK. Check search results above     ║
+        ║  before taking any action. Only act on GENUINE gaps.       ║
+        ╚══════════════════════════════════════════════════════════════╝
+
+        Step 1 — Review completed work (MANDATORY):
+        - Review ALL search/delegate results in the conversation above
+        - What code was already found? What files were already explored?
+        - Do NOT re-search for information that is already in the results above
+
+        Step 2 — Check your response:
+        1. Are code references accurate based on search results above?
+        2. Did you verify claims independently, or just confirm the user's theory?
+        3. Does your answer have unsupported assertions not backed by tool results?
+
+        Step 3 — Act ONLY on genuine gaps:
+        - If everything checks out: respond with your previous answer as-is
+        - If your text has inaccuracies but evidence exists above: fix the text only
+        - If you find a SPECIFIC unsupported factual claim with NO evidence above:
+          ONLY THEN call delegate/search for that specific claim
+        - NEVER re-search topics that already have results in the conversation
 
         Confidence calibration — be HONEST, not optimistic:
         - "high" ONLY with definitive code evidence that fully answers the question
