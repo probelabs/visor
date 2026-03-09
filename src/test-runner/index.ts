@@ -25,11 +25,21 @@ export type TestCase = {
   event?: string;
   flow?: Array<{ name: string }>;
 };
+export type TestHookDef = {
+  exec: string;
+  timeout?: number;
+};
 export type TestSuite = {
   version: string;
   extends?: string | string[];
   tests: {
     defaults?: Record<string, unknown>;
+    hooks?: {
+      before_all?: TestHookDef;
+      after_all?: TestHookDef;
+      before_each?: TestHookDef;
+      after_each?: TestHookDef;
+    };
     fixtures?: unknown[];
     cases: TestCase[];
   };
@@ -330,6 +340,34 @@ export class VisorTestRunner {
     const pad = Math.max(1, width - title.length - 2);
     return `${char.repeat(2)} ${title} ${char.repeat(pad)}`;
   }
+  /**
+   * Execute a lifecycle hook (shell command). Returns true on success, false on failure.
+   */
+  private async runHook(
+    hook: { exec: string; timeout?: number } | undefined,
+    label: string,
+    cwd: string
+  ): Promise<{ ok: boolean; error?: string }> {
+    if (!hook) return { ok: true };
+    const timeoutMs = hook.timeout || 30_000;
+    console.log(this.gray(`  ⚙ ${label}: ${hook.exec}`));
+    try {
+      const { execSync } = require('child_process');
+      execSync(hook.exec, {
+        cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: timeoutMs,
+        env: { ...process.env },
+      });
+      return { ok: true };
+    } catch (err: any) {
+      const stderr = err.stderr ? err.stderr.toString().trim() : '';
+      const msg = stderr || err.message || String(err);
+      console.log(this.color(`  ✖ ${label} failed: ${msg}`, '31'));
+      return { ok: false, error: `${label} failed: ${msg}` };
+    }
+  }
+
   // Extracted helper: prepare engine/recorder, prompts/mocks, env, and checksToRun for a single-event case
   private setupTestCase(
     _case: any,
@@ -786,6 +824,7 @@ export class VisorTestRunner {
       extends: (doc as any).extends,
       tests: {
         defaults: (tests as any).defaults || {},
+        hooks: (tests as any).hooks || undefined,
         fixtures: (tests as any).fixtures || [],
         cases: (tests as any).cases,
       },
@@ -1009,6 +1048,18 @@ export class VisorTestRunner {
         console.log(this.gray('   Other provider types will still use mocks\n'));
       }
     } catch {}
+    // Lifecycle hooks
+    const suiteHooks = (suite.tests as any).hooks || {};
+    const suiteCwd = path.dirname(testsPath);
+    const beforeAllResult = await this.runHook(suiteHooks.before_all, 'before_all', suiteCwd);
+    if (!beforeAllResult.ok) {
+      // Skip all cases when before_all fails
+      for (const c of selected) {
+        caseResults.push({ name: c.name, passed: false, errors: [beforeAllResult.error!] });
+      }
+      clearInterval(__keepAlive);
+      return { failures: selected.length, results: caseResults };
+    }
     const runOne = async (_caseOrig: any): Promise<{ name: string; failed: number }> => {
       // Expand conversation sugar to flow stages before any processing
       const { expandConversationToFlow } = require('./conversation-sugar');
@@ -1032,19 +1083,39 @@ export class VisorTestRunner {
         caseResults.push({ name: _case.name, passed: true, errors: [] as any });
         return { name: _case.name, failed: 0 };
       }
+      // Run before_each (suite-level) and before (case-level) hooks
+      const caseHooks = (_case as any).hooks || {};
+      const beforeEachRes = await this.runHook(suiteHooks.before_each, 'before_each', suiteCwd);
+      if (!beforeEachRes.ok) {
+        caseResults.push({ name: _case.name, passed: false, errors: [beforeEachRes.error!] });
+        return { name: _case.name, failed: 1 };
+      }
+      const beforeRes = await this.runHook(caseHooks.before, `before (${_case.name})`, suiteCwd);
+      if (!beforeRes.ok) {
+        // after_each still runs even if before fails
+        await this.runHook(suiteHooks.after_each, 'after_each', suiteCwd);
+        caseResults.push({ name: _case.name, passed: false, errors: [beforeRes.error!] });
+        return { name: _case.name, failed: 1 };
+      }
       if (Array.isArray((_case as any).flow) && (_case as any).flow.length > 0) {
-        const flowRes = await this.runFlowCase(
-          _case,
-          cfg,
-          defaultStrict,
-          options.bail || false,
-          defaultPromptCap,
-          stageFilter,
-          noMocksMode
-        );
-        const failed = flowRes.failures;
-        caseResults.push({ name: _case.name, passed: failed === 0, stages: flowRes.stages });
-        return { name: _case.name, failed };
+        try {
+          const flowRes = await this.runFlowCase(
+            _case,
+            cfg,
+            defaultStrict,
+            options.bail || false,
+            defaultPromptCap,
+            stageFilter,
+            noMocksMode
+          );
+          const failed = flowRes.failures;
+          caseResults.push({ name: _case.name, passed: failed === 0, stages: flowRes.stages });
+          return { name: _case.name, failed };
+        } finally {
+          // after (case-level) and after_each (suite-level) always run
+          await this.runHook(caseHooks.after, `after (${_case.name})`, suiteCwd);
+          await this.runHook(suiteHooks.after_each, 'after_each', suiteCwd);
+        }
       }
       // Per-case AI override: include code context when requested
       const suiteDefaults: any = (this as any).suiteDefaults || {};
@@ -1305,6 +1376,9 @@ export class VisorTestRunner {
         });
         return { name: _case.name, failed: 1 };
       } finally {
+        // after (case-level) and after_each (suite-level) always run
+        await this.runHook(caseHooks.after, `after (${_case.name})`, suiteCwd);
+        await this.runHook(suiteHooks.after_each, 'after_each', suiteCwd);
         try {
           // Restore env for this case using original setup
           setup.restoreEnv();
@@ -1331,6 +1405,8 @@ export class VisorTestRunner {
       };
       await Promise.all(Array.from({ length: workers }, runWorker));
     }
+    // after_all always runs (like finally), even if tests failed
+    await this.runHook(suiteHooks.after_all, 'after_all', suiteCwd);
     // Summary (suppressible for embedded runs)
     const failedCases = caseResults.filter(r => !r.passed);
     const passedCases = caseResults.filter(r => r.passed);
@@ -1567,6 +1643,28 @@ export class VisorTestRunner {
           cumulativeOutputHistory
         );
         const outcome = await stageRunner.run(stage, flowCase, strict);
+
+        // In conversation sugar + --no-mocks: replace mock assistant text in
+        // subsequent stages' message history with the real AI response.
+        if (
+          noMocks &&
+          flowCase._conversationSugar &&
+          typeof stage._mockAssistantMsgIndex === 'number'
+        ) {
+          const realText = this.extractLastResponseText(cumulativeOutputHistory);
+          if (realText) {
+            for (let j = i + 1; j < flowCase.flow.length; j++) {
+              const nextMsgs = flowCase.flow[j]?.execution_context?.conversation?.messages;
+              if (Array.isArray(nextMsgs) && nextMsgs[stage._mockAssistantMsgIndex]) {
+                nextMsgs[stage._mockAssistantMsgIndex] = {
+                  ...nextMsgs[stage._mockAssistantMsgIndex],
+                  text: realText,
+                };
+              }
+            }
+          }
+        }
+
         const expect = (stage as any).expect || {};
         if (outcome.stats) this.printCoverage(outcome.name, outcome.stats, expect);
         if (!outcome.errors) {
@@ -1609,6 +1707,20 @@ export class VisorTestRunner {
         `${(this as any).tagFail ? (this as any).tagFail() : '❌ FAIL'} ${flowName} (${failures} stage error${failures > 1 ? 's' : ''})`
       );
     return { failures, stages: stagesSummary };
+  }
+  /**
+   * Extract the last response text from cumulative output history (for conversation sugar).
+   * Looks for 'chat' step outputs with a 'text' field.
+   */
+  private extractLastResponseText(history: Record<string, unknown[]>): string | undefined {
+    // The assistant workflow emits output on the 'chat' step with a 'text' field
+    const chatOutputs = history['chat'];
+    if (!Array.isArray(chatOutputs) || chatOutputs.length === 0) return undefined;
+    const last = chatOutputs[chatOutputs.length - 1];
+    if (last && typeof last === 'object' && typeof (last as any).text === 'string') {
+      return (last as any).text;
+    }
+    return undefined;
   }
   private mapEventFromFixtureName(name?: string): import('../types/config').EventTrigger {
     if (!name) return 'manual';
