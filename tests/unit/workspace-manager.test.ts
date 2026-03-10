@@ -487,8 +487,8 @@ describe('WorkspaceManager', () => {
         fs.mkdirSync(testOriginalPath, { recursive: true });
       }
 
-      // First init: createMainProjectWorktree (fetch, resolve, sha, worktree add, reset, clean, branch --list)
-      // Second init: refreshWorktreeToUpstream (fetch, resolve, sha, checkout, reset, clean, branch --list)
+      // First init: createMainProjectWorktree (fetch, resolve, sha, worktree add, reset, clean, worktree list, branch --list)
+      // Second init: refreshWorktreeToUpstream (fetch, resolve, sha, checkout, reset, clean, worktree list, branch --list)
       commandExecutor.execute
         // --- First init: createMainProjectWorktree ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original)
@@ -499,6 +499,7 @@ describe('WorkspaceManager', () => {
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // clean -fdx
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (protected branches)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // branch --list (no local branches)
         // --- Second init: reuse path → refreshWorktreeToUpstream ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original) on 2nd init
@@ -510,6 +511,7 @@ describe('WorkspaceManager', () => {
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // checkout --detach
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // clean -fdx
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (protected branches)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // branch --list (no local branches)
 
       const manager1 = WorkspaceManager.getInstance('reuse-git-1', testOriginalPath, {
@@ -556,7 +558,7 @@ describe('WorkspaceManager', () => {
         fs.mkdirSync(testOriginalPath, { recursive: true });
       }
 
-      // First init: createMainProjectWorktree (fetch, resolve, sha, worktree add, reset, clean, branch --list)
+      // First init: createMainProjectWorktree (fetch, resolve, sha, worktree add, reset, clean, worktree list, branch --list)
       // Second init: invalid path → prune → createMainProjectWorktree again
       commandExecutor.execute
         // --- First init: createMainProjectWorktree ---
@@ -568,6 +570,7 @@ describe('WorkspaceManager', () => {
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // clean -fdx
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (protected branches)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // branch --list (no local branches)
         // --- Second init: invalid worktree → recreate ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original) 2nd
@@ -580,6 +583,7 @@ describe('WorkspaceManager', () => {
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add (recreate)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // clean -fdx
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (protected branches)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // branch --list (no local branches)
 
       const manager1 = WorkspaceManager.getInstance('invalid-wt-1', testOriginalPath, {
@@ -971,6 +975,7 @@ describe('WorkspaceManager', () => {
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // clean -fdx
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (protected branches)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // branch --list (no local branches)
         // --- Second init: refreshWorktreeToUpstream with checkout failure ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original)
@@ -982,6 +987,7 @@ describe('WorkspaceManager', () => {
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'checkout failed' }) // checkout --detach FAILS
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard HEAD (cleanup fallback)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // clean -fdx
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (protected branches)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // branch --list (no local branches)
 
       const manager1 = WorkspaceManager.getInstance('checkout-fail-1', testOriginalPath, {
@@ -1030,6 +1036,7 @@ describe('WorkspaceManager', () => {
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'reset failed' }) // reset --hard FAILS
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'clean failed' }) // clean -fdx FAILS
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree list --porcelain (protected branches)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // branch --list (no local branches)
 
       const manager = WorkspaceManager.getInstance('reset-fail-1', testOriginalPath, {
