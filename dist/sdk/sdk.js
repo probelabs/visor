@@ -823,7 +823,7 @@ var require_package = __commonJS({
         "@opentelemetry/sdk-node": "^0.203.0",
         "@opentelemetry/sdk-trace-base": "^1.30.1",
         "@opentelemetry/semantic-conventions": "^1.30.1",
-        "@probelabs/probe": "^0.6.0-rc291",
+        "@probelabs/probe": "^0.6.0-rc292",
         "@types/commander": "^2.12.0",
         "@types/uuid": "^10.0.0",
         acorn: "^8.16.0",
@@ -50326,7 +50326,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
         workflowInputs,
         ai: {
           ...checkConfig.ai || {},
-          timeout: checkConfig.ai?.timeout || 18e5,
+          timeout: checkConfig.timeout || checkConfig.ai?.timeout || 18e5,
           debug: !!context2.debug
         }
       };
@@ -50413,7 +50413,7 @@ async function executeCheckWithForEachItems(checkId, forEachParent, forEachItems
             context2,
             prInfo,
             dependencyResults,
-            checkConfig.ai?.timeout || 18e5,
+            checkConfig.timeout || checkConfig.ai?.timeout || 18e5,
             () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
           );
           try {
@@ -50829,7 +50829,7 @@ async function executeInvocation(item, context2, scope, prInfo, dependencyResult
       __outputHistory: outputHistory,
       ai: {
         ...stepConfig.ai || {},
-        timeout: stepConfig.ai?.timeout || 18e5,
+        timeout: stepConfig.timeout || stepConfig.ai?.timeout || 18e5,
         debug: !!context2.debug
       }
     };
@@ -51353,7 +51353,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       workflowInputs,
       ai: {
         ...checkConfig.ai || {},
-        timeout: checkConfig.ai?.timeout || 18e5,
+        timeout: checkConfig.timeout || checkConfig.ai?.timeout || 18e5,
         debug: !!context2.debug
       }
     };
@@ -51454,7 +51454,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
           context2,
           prInfo,
           dependencyResults,
-          checkConfig.ai?.timeout || 18e5,
+          checkConfig.timeout || checkConfig.ai?.timeout || 18e5,
           () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
         );
         try {
@@ -52226,7 +52226,7 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
         workflowInputs,
         ai: {
           ...checkConfig.ai || {},
-          timeout: checkConfig.ai?.timeout || 18e5,
+          timeout: checkConfig.timeout || checkConfig.ai?.timeout || 18e5,
           debug: !!context2.debug
         }
       };
@@ -52261,7 +52261,10 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
                   `[LevelDispatch] Conversation extracted (${conv?.transport || "unknown"}): ${messageCount} messages`
                 );
               }
-              const transportCtx = slackConv ? { slack: { event: event || {}, conversation: slackConv } } : { telegram: { event: event || {}, conversation: telegramConv }, webhook: payload };
+              const transportCtx = slackConv ? { slack: { event: event || {}, conversation: slackConv } } : {
+                telegram: { event: event || {}, conversation: telegramConv },
+                webhook: payload
+              };
               providerConfig.eventContext = {
                 ...providerConfig.eventContext,
                 ...transportCtx,
@@ -52425,7 +52428,7 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
             context2,
             prInfo,
             dependencyResults,
-            checkConfig.ai?.timeout || 18e5,
+            checkConfig.timeout || checkConfig.ai?.timeout || 18e5,
             () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
           );
           try {
@@ -53354,7 +53357,7 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
       workflowInputs,
       ai: {
         ...checkConfig2.ai || {},
-        timeout: checkConfig2.ai?.timeout || 18e5,
+        timeout: checkConfig2.timeout || checkConfig2.ai?.timeout || 18e5,
         debug: !!context2.debug
       }
     };
@@ -53385,7 +53388,9 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
             const event = payload?.event;
             const messageCount = Array.isArray(conv?.messages) ? conv.messages.length : 0;
             if (context2.debug) {
-              logger.info(`[LevelDispatch] Conversation extracted (${conv?.transport || "unknown"}): ${messageCount} messages`);
+              logger.info(
+                `[LevelDispatch] Conversation extracted (${conv?.transport || "unknown"}): ${messageCount} messages`
+              );
             }
             const transportCtx = slackConv ? { slack: { event: event || {}, conversation: slackConv } } : { telegram: { event: event || {}, conversation: telegramConv }, webhook: payload };
             providerConfig.eventContext = {
@@ -53523,7 +53528,7 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
           context2,
           prInfo,
           dependencyResults,
-          checkConfig2.ai?.timeout || 18e5,
+          checkConfig2.timeout || checkConfig2.ai?.timeout || 18e5,
           () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
         );
         try {
@@ -59474,6 +59479,21 @@ ${message}`;
           }
           if (out && typeof out._rawOutput === "string" && out._rawOutput.trim().length > 0) {
             text = (text || "") + "\n\n" + out._rawOutput.trim();
+          }
+          if (!text) {
+            const issues = result?.issues || [];
+            const errorIssues = issues.filter(
+              (i) => i.severity === "error" && (i.ruleId?.startsWith("system/") || i.ruleId?.endsWith("/error"))
+            );
+            if (errorIssues.length > 0) {
+              const errorMessages = errorIssues.map((i) => i.message).join("\n");
+              text = `:warning: Something went wrong while processing your request:
+${errorMessages}`;
+              this.errorNotified = true;
+              ctx.logger.warn(
+                `[slack-frontend] posting error fallback for ${checkId}: ${errorIssues.length} system error(s)`
+              );
+            }
           }
           if (!text) {
             ctx.logger.info(
