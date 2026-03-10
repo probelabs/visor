@@ -643,10 +643,31 @@ export class WorkspaceManager {
   }
 
   /**
-   * Delete all local branches in a worktree.
+   * Delete local branches in a worktree that are safe to remove.
+   * IMPORTANT: Git worktrees share the branch namespace with the main repo
+   * and all other worktrees. We must NOT delete branches that are checked out
+   * in the main working tree or any other worktree — doing so would destroy
+   * the user's work.
    */
   private async deleteLocalBranches(worktreePath: string): Promise<void> {
     const escapedPath = shellEscape(worktreePath);
+
+    // First, discover which branches are checked out in ANY worktree (including main).
+    // `git worktree list --porcelain` output contains "branch refs/heads/<name>" lines.
+    const worktreeListResult = await commandExecutor.execute(
+      `git -C ${escapedPath} worktree list --porcelain`,
+      { timeout: 10000 }
+    );
+    const protectedBranches = new Set<string>();
+    if (worktreeListResult.exitCode === 0) {
+      for (const line of worktreeListResult.stdout.split('\n')) {
+        const match = line.match(/^branch refs\/heads\/(.+)$/);
+        if (match) {
+          protectedBranches.add(match[1]);
+        }
+      }
+    }
+
     const listResult = await commandExecutor.execute(
       `git -C ${escapedPath} branch --list --format='%(refname:short)'`,
       { timeout: 10000 }
@@ -662,6 +683,10 @@ export class WorkspaceManager {
       .filter(b => b.length > 0);
 
     for (const branch of branches) {
+      if (protectedBranches.has(branch)) {
+        logger.debug(`[Workspace] Skipping branch '${branch}' — checked out in another worktree`);
+        continue;
+      }
       const deleteResult = await commandExecutor.execute(
         `git -C ${escapedPath} branch -D ${shellEscape(branch)}`,
         { timeout: 10000 }

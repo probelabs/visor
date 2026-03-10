@@ -648,11 +648,29 @@ export class WorktreeManager {
   }
 
   /**
-   * Delete all local branches in a worktree.
+   * Delete local branches in a worktree that are safe to remove.
    * Worktrees are always used in detached HEAD state, so any local branches
    * were unintentionally created and should be cleaned up.
+   * IMPORTANT: Git worktrees share the branch namespace with the main repo
+   * and all other worktrees. We must NOT delete branches that are checked out
+   * in the main working tree or any other worktree — doing so would destroy
+   * the user's work.
    */
   private async deleteLocalBranches(worktreePath: string): Promise<void> {
+    // First, discover which branches are checked out in ANY worktree (including main).
+    // `git worktree list --porcelain` output contains "branch refs/heads/<name>" lines.
+    const worktreeListCmd = `git -C ${this.escapeShellArg(worktreePath)} worktree list --porcelain`;
+    const worktreeListResult = await this.executeGitCommand(worktreeListCmd, { timeout: 10000 });
+    const protectedBranches = new Set<string>();
+    if (worktreeListResult.exitCode === 0) {
+      for (const line of worktreeListResult.stdout.split('\n')) {
+        const match = line.match(/^branch refs\/heads\/(.+)$/);
+        if (match) {
+          protectedBranches.add(match[1]);
+        }
+      }
+    }
+
     const listCmd = `git -C ${this.escapeShellArg(worktreePath)} branch --list --format='%(refname:short)'`;
     const listResult = await this.executeGitCommand(listCmd, { timeout: 10000 });
     if (listResult.exitCode !== 0 || !listResult.stdout.trim()) {
@@ -666,6 +684,10 @@ export class WorktreeManager {
       .filter(b => b.length > 0);
 
     for (const branch of branches) {
+      if (protectedBranches.has(branch)) {
+        logger.debug(`Skipping branch '${branch}' — checked out in another worktree`);
+        continue;
+      }
       const deleteCmd = `git -C ${this.escapeShellArg(worktreePath)} branch -D ${this.escapeShellArg(branch)}`;
       const deleteResult = await this.executeGitCommand(deleteCmd, { timeout: 10000 });
       if (deleteResult.exitCode === 0) {
