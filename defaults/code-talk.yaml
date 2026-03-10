@@ -613,10 +613,15 @@ steps:
       - Use the workingDirectory parameter instead of `cd`; no pipes or chained commands
       - Always use relative paths (e.g., "gateway/mw_jwt.go"), never absolute /tmp/ paths
 
-      Shallow clone awareness:
-      - Repos use fetch_depth: 1. Fetch before checkout: `git fetch origin <branch>`
-      - For PRs: `git fetch origin pull/<N>/head:pr-<N> && git checkout pr-<N>`
-      - For tags: `git fetch --tags` then `git tag -l "v5.8*"`
+      Branch switching:
+      - Repos are shallow clones (fetch_depth: 1). Always fetch before checkout.
+      - IMPORTANT: Never use `git checkout <branch-name>` — it fails when the branch
+        is checked out in another worktree. Instead use detached HEAD:
+          `git fetch origin <branch> && git checkout FETCH_HEAD`
+      - For PRs: `git fetch origin pull/<N>/head && git checkout FETCH_HEAD`
+      - For tags: `git fetch --tags` then `git checkout <tag>`
+      - If the question mentions a specific branch (e.g. "on the feature-x branch"),
+        switch to it FIRST before searching. Content may only exist on that branch.
 
       Delegate usage:
       - Each delegate should answer ONE specific question (not "look at the code")
