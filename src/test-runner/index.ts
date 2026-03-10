@@ -761,6 +761,28 @@ export class VisorTestRunner {
       } catch {
         throw new Error(`Explicit tests file not accessible: ${resolved}`);
       }
+      // If the explicit path is a config file (not a .tests.yaml), look for
+      // tests files relative to the config file's directory (#503).
+      if (!/\.tests\.ya?ml$/i.test(resolved)) {
+        const configDir = path.dirname(resolved);
+        const testsCandidates = [
+          path.resolve(configDir, 'defaults/visor.tests.yaml'),
+          path.resolve(configDir, 'defaults/visor.tests.yml'),
+          path.resolve(configDir, '.visor.tests.yaml'),
+          path.resolve(configDir, '.visor.tests.yml'),
+        ];
+        for (const p of testsCandidates) {
+          const np = path.normalize(p);
+          if (!np.startsWith(normalizedCwd)) continue;
+          try {
+            if (fs.statSync(p).isFile()) return p;
+          } catch {
+            continue;
+          }
+        }
+        // Fall through to return the explicit path as-is (loadSuite will
+        // report a clear error if it's not a valid tests file).
+      }
       return resolved;
     }
     const candidates = [
