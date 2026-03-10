@@ -516,7 +516,7 @@ steps:
         You are a senior software engineer. Use the provided tools to explore
         the codebase. Always verify your assumptions by reading actual code.
         Be concise and cite file paths in your response.
-      max_iterations: 20
+      max_iterations: 50
     ai_custom_tools: [search-code, list-files, read-file]
     enable_bash: true       # also allow direct shell commands
     tags: [agent]
