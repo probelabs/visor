@@ -7339,11 +7339,32 @@ function getCurrentDateXml() {
 }
 function createProbeTracerAdapter(fallbackTracer) {
   const fallback = fallbackTracer && typeof fallbackTracer === "object" ? fallbackTracer : null;
+  const flattenAttrs = (attrs) => {
+    if (!attrs) return attrs;
+    const out = {};
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v === null || v === void 0) continue;
+      if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+        out[k] = v;
+      } else if (Array.isArray(v)) {
+        if (v.length > 0 && typeof v[0] === "object") {
+          out[k] = JSON.stringify(v);
+        } else {
+          out[k] = v;
+        }
+      } else if (typeof v === "object") {
+        out[k] = JSON.stringify(v);
+      } else {
+        out[k] = v;
+      }
+    }
+    return out;
+  };
   const emitEvent = (name, attrs) => {
     try {
       const span = trace.getActiveSpan();
       if (span && typeof span.addEvent === "function") {
-        span.addEvent(name, attrs);
+        span.addEvent(name, flattenAttrs(attrs));
       }
     } catch {
     }
@@ -7391,6 +7412,21 @@ function createProbeTracerAdapter(fallbackTracer) {
       if (fallback && typeof fallback.recordToolResult === "function") {
         try {
           fallback.recordToolResult(toolName, result, success, durationMs, metadata);
+        } catch {
+        }
+      }
+    },
+    recordToolDecision: (toolName, params, metadata) => {
+      const paramsStr = typeof params === "string" ? params : JSON.stringify(params || {});
+      emitEvent("tool.decision", {
+        "tool.name": toolName,
+        "tool.params": paramsStr.substring(0, 5e3),
+        "tool.params.length": paramsStr.length,
+        ...metadata || {}
+      });
+      if (fallback && typeof fallback.recordToolDecision === "function") {
+        try {
+          fallback.recordToolDecision(toolName, params, metadata);
         } catch {
         }
       }
