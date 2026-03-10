@@ -491,14 +491,13 @@ steps:
           - "git:rev-parse:*"
           - "git:ls-files:*"
           - "git:ls-tree:*"
-          # File operations
+          - "git:worktree:list:*"
+          - "git:worktree:remove:*"
+          # File operations — ONLY ls and wc allowed
+          # Do NOT use cat/grep/find/head/tail for code exploration —
+          # use search() and extract() tools instead, they are faster and more accurate
           - "ls:*"
-          - "find:*"
-          - "cat:*"
-          - "head:*"
-          - "tail:*"
           - "wc:*"
-          - "grep:*"
           # GitHub CLI read-only operations
           - "gh:run:*"
           - "gh:run:list:*"
