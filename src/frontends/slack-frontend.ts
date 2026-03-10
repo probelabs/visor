@@ -534,6 +534,26 @@ export class SlackFrontend implements Frontend {
         text = (text || '') + '\n\n' + out._rawOutput.trim();
       }
 
+      // Fallback: if no text was extracted, check for error issues (e.g. timeout)
+      // and post an error message so the user isn't left with silence.
+      if (!text) {
+        const issues: any[] = (result as any)?.issues || [];
+        const errorIssues = issues.filter(
+          (i: any) =>
+            i.severity === 'error' &&
+            (i.ruleId?.startsWith('system/') || i.ruleId?.endsWith('/error'))
+        );
+        if (errorIssues.length > 0) {
+          const errorMessages = errorIssues.map((i: any) => i.message).join('\n');
+          text = `:warning: Something went wrong while processing your request:\n${errorMessages}`;
+          // Prevent maybePostExecutionFailure from double-posting the same error
+          this.errorNotified = true;
+          ctx.logger.warn(
+            `[slack-frontend] posting error fallback for ${checkId}: ${errorIssues.length} system error(s)`
+          );
+        }
+      }
+
       if (!text) {
         ctx.logger.info(
           `[slack-frontend] skip posting AI reply for ${checkId}: no renderable text in check output`

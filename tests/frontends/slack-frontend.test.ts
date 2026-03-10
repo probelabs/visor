@@ -130,6 +130,54 @@ describe('SlackFrontend (event-bus)', () => {
     expect(req.text).toBe('AI response here');
   });
 
+  test('posts error fallback when workflow output.text is null but has system error issues', async () => {
+    const bus = new EventBus();
+    const slack = makeFakeSlack();
+    const fe = new SlackFrontend({ defaultChannel: 'C1', debounceMs: 0 });
+    const map = new Map<string, unknown>();
+    map.set('/bots/slack/support', {
+      event: { type: 'app_mention', channel: 'C1', ts: '888.1', text: 'do something' },
+    });
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: {
+        slack: { endpoint: '/bots/slack/support' },
+        checks: {
+          chat: { type: 'workflow', workflow: 'assistant' },
+        },
+      },
+      run: { runId: 'r5' },
+      webhookContext: { webhookData: map },
+    } as any);
+    (fe as any).getSlack = () => slack;
+
+    // Simulate: generate-response timed out, workflow output.text is null,
+    // but error issues propagated up from the inner check
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'chat',
+      scope: [],
+      result: {
+        issues: [
+          {
+            file: 'system',
+            line: 0,
+            ruleId: 'system/ai-execution-error',
+            message: 'AI review timed out after 1800000ms',
+            severity: 'error',
+            category: 'logic',
+          },
+        ],
+        output: { text: null, intent: 'chat' },
+      },
+    });
+
+    expect(slack.chat.postMessage).toHaveBeenCalledTimes(1);
+    const [req] = slack.chat.postMessage.mock.calls[0];
+    expect(req.text).toContain('timed out');
+  });
+
   test('posts error notice for execution failures on completed checks', async () => {
     const bus = new EventBus();
     const slack = makeFakeSlack();
