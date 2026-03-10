@@ -801,7 +801,7 @@ async function executeCheckWithForEachItems(
         workflowInputs,
         ai: {
           ...(checkConfig.ai || {}),
-          timeout: checkConfig.ai?.timeout || 1800000,
+          timeout: checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
           debug: !!context.debug,
         },
       };
@@ -835,9 +835,7 @@ async function executeCheckWithForEachItems(
             const conv = slackConv || telegramConv;
             if (conv) {
               const event = (payload as any)?.event;
-              const messageCount = Array.isArray(conv?.messages)
-                ? conv.messages.length
-                : 0;
+              const messageCount = Array.isArray(conv?.messages) ? conv.messages.length : 0;
               if (context.debug) {
                 logger.info(
                   `[LevelDispatch] Conversation extracted (${conv?.transport || 'unknown'}): ${messageCount} messages`
@@ -846,7 +844,10 @@ async function executeCheckWithForEachItems(
               // Build transport-specific context
               const transportCtx = slackConv
                 ? { slack: { event: event || {}, conversation: slackConv } }
-                : { telegram: { event: event || {}, conversation: telegramConv }, webhook: payload };
+                : {
+                    telegram: { event: event || {}, conversation: telegramConv },
+                    webhook: payload,
+                  };
               (providerConfig as any).eventContext = {
                 ...(providerConfig as any).eventContext,
                 ...transportCtx,
@@ -1045,7 +1046,7 @@ async function executeCheckWithForEachItems(
             context,
             prInfo,
             dependencyResults,
-            checkConfig.ai?.timeout || 1800000,
+            checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
             () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
           );
           try {
@@ -2252,7 +2253,7 @@ async function executeSingleCheck(
       workflowInputs,
       ai: {
         ...(checkConfig.ai || {}),
-        timeout: checkConfig.ai?.timeout || 1800000,
+        timeout: checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
         debug: !!context.debug,
       },
     };
@@ -2288,7 +2289,9 @@ async function executeSingleCheck(
             const event = (payload as any)?.event;
             const messageCount = Array.isArray(conv?.messages) ? conv.messages.length : 0;
             if (context.debug) {
-              logger.info(`[LevelDispatch] Conversation extracted (${conv?.transport || 'unknown'}): ${messageCount} messages`);
+              logger.info(
+                `[LevelDispatch] Conversation extracted (${conv?.transport || 'unknown'}): ${messageCount} messages`
+              );
             }
             // Build transport-specific context
             const transportCtx = slackConv
@@ -2452,7 +2455,7 @@ async function executeSingleCheck(
           context,
           prInfo,
           dependencyResults,
-          checkConfig.ai?.timeout || 1800000,
+          checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
           () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
         );
         try {
