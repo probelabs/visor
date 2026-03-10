@@ -16136,7 +16136,11 @@ var init_config = __esm({
       "manual",
       "schedule",
       "webhook_received",
-      "slack_message"
+      "slack_message",
+      "telegram_message",
+      "email_message",
+      "whatsapp_message",
+      "teams_message"
     ];
     ConfigManager = class {
       validCheckTypes = [
