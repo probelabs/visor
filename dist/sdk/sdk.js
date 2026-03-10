@@ -23117,7 +23117,9 @@ var init_ai_check_provider = __esm({
           const first = Array.from(map.values())[0];
           if (!first || typeof first !== "object") return {};
           const ev = first.event;
-          const conv = first.slack_conversation;
+          const slackConv = first.slack_conversation;
+          const telegramConv = first.telegram_conversation;
+          const conv = slackConv || telegramConv;
           if (!ev && !conv) return {};
           if (conv && prInfo) {
             try {
@@ -23125,7 +23127,8 @@ var init_ai_check_provider = __esm({
             } catch {
             }
           }
-          return { slack: { event: ev, conversation: conv } };
+          const transportCtx = slackConv ? { slack: { event: ev, conversation: slackConv } } : { telegram: { event: ev, conversation: telegramConv } };
+          return { ...transportCtx, conversation: conv };
         } catch {
           return {};
         }
@@ -52229,22 +52232,22 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
         if (webhookData && webhookData.size > 0) {
           for (const payload of webhookData.values()) {
             const slackConv = payload?.slack_conversation;
-            if (slackConv) {
+            const telegramConv = payload?.telegram_conversation;
+            const conv = slackConv || telegramConv;
+            if (conv) {
               const event = payload?.event;
-              const messageCount = Array.isArray(slackConv?.messages) ? slackConv.messages.length : 0;
+              const messageCount = Array.isArray(conv?.messages) ? conv.messages.length : 0;
               if (context2.debug) {
                 logger.info(
-                  `[LevelDispatch] Slack conversation extracted: ${messageCount} messages`
+                  `[LevelDispatch] Conversation extracted (${conv?.transport || "unknown"}): ${messageCount} messages`
                 );
               }
+              const transportCtx = slackConv ? { slack: { event: event || {}, conversation: slackConv } } : { telegram: { event: event || {}, conversation: telegramConv }, webhook: payload };
               providerConfig.eventContext = {
                 ...providerConfig.eventContext,
-                slack: {
-                  event: event || {},
-                  conversation: slackConv
-                },
-                conversation: slackConv
-                // Also expose at top level for convenience
+                ...transportCtx,
+                conversation: conv
+                // Expose at top level for all transports
               };
               break;
             }
@@ -53357,20 +53360,20 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
       if (webhookData && webhookData.size > 0) {
         for (const payload of webhookData.values()) {
           const slackConv = payload?.slack_conversation;
-          if (slackConv) {
+          const telegramConv = payload?.telegram_conversation;
+          const conv = slackConv || telegramConv;
+          if (conv) {
             const event = payload?.event;
-            const messageCount = Array.isArray(slackConv?.messages) ? slackConv.messages.length : 0;
+            const messageCount = Array.isArray(conv?.messages) ? conv.messages.length : 0;
             if (context2.debug) {
-              logger.info(`[LevelDispatch] Slack conversation extracted: ${messageCount} messages`);
+              logger.info(`[LevelDispatch] Conversation extracted (${conv?.transport || "unknown"}): ${messageCount} messages`);
             }
+            const transportCtx = slackConv ? { slack: { event: event || {}, conversation: slackConv } } : { telegram: { event: event || {}, conversation: telegramConv }, webhook: payload };
             providerConfig.eventContext = {
               ...providerConfig.eventContext,
-              slack: {
-                event: event || {},
-                conversation: slackConv
-              },
-              conversation: slackConv
-              // Also expose at top level for convenience
+              ...transportCtx,
+              conversation: conv
+              // Expose at top level for all transports
             };
             break;
           }
