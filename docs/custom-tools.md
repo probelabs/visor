@@ -196,12 +196,19 @@ Tools have access to a rich template context through Liquid templates:
 - `{{ outputs }}` - Outputs from previous checks
 - `{{ env }}` - Environment variables
 
-### In `transform` and `transform_js`:
+### In `transform` and `transform_js` (command tools):
 - All of the above, plus:
 - `{{ output }}` - The raw command output (or parsed JSON if `parseJson: true`)
 - `{{ stdout }}` - Standard output (raw string)
 - `{{ stderr }}` - Standard error (raw string)
 - `{{ exitCode }}` - Command exit code (number)
+
+### In `transform_js` (http_client tools):
+- `output` - Parsed response body (JSON object or string)
+- `path` - API path called (e.g. `/jobs/ABC/candidates`)
+- `method` - HTTP method (`GET`, `POST`, etc.)
+- `query` - Query parameters object
+- `args` - Full tool arguments as passed by the AI
 
 ## Examples
 
@@ -365,6 +372,69 @@ Runnable examples in this repo:
 - `examples/api-tools-mcp-example.yaml` (includes embedded tests)
 - `examples/api-tools-ai-example.yaml` (includes embedded tests)
 - `examples/api-tools-inline-overlay-example.yaml` (includes embedded tests)
+
+### 6. HTTP Client Tool (`type: http_client`)
+
+Expose a REST API as a single MCP tool that the AI can call with arbitrary paths, methods, and parameters:
+
+```yaml
+tools:
+  my-api:
+    type: http_client
+    name: my-api
+    description: Call the Example API
+    base_url: "https://api.example.com/v1"
+    auth:
+      type: bearer
+      token: "${API_TOKEN}"
+    headers:
+      Content-Type: "application/json"
+```
+
+The AI receives a tool with `path`, `method`, `query`, and `body` parameters and can call any endpoint under `base_url`.
+
+**HTTP Client Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `base_url` | Base URL for all API calls | Required |
+| `auth` | Authentication config (`type: bearer`, `token`) | - |
+| `headers` | Default headers (supports `${ENV_VAR}` substitution) | {} |
+| `timeout` | Request timeout in milliseconds | 30000 |
+| `transform_js` | JavaScript to transform every response | - |
+
+**Response Transform with `transform_js`:**
+
+The `transform_js` runs after every API response and receives request context for conditional logic:
+
+```yaml
+tools:
+  my-api:
+    type: http_client
+    base_url: "https://api.example.com/v1"
+    auth:
+      type: bearer
+      token: "${API_TOKEN}"
+    transform_js: |
+      // Available variables:
+      //   output  - parsed response body (JSON object or string)
+      //   path    - API path called (e.g. "/candidates")
+      //   method  - HTTP method (e.g. "GET")
+      //   query   - query parameters object
+      //   args    - full tool arguments
+
+      // Example: filter results conditionally based on endpoint
+      if (path.includes('/candidates') && output.candidates) {
+        output.candidates = output.candidates.filter(c => !c.disqualified);
+      }
+      return output;
+```
+
+This is useful for:
+- **Filtering broken API responses** (e.g. when query params are ignored by the API)
+- **Normalizing data** across endpoints
+- **Stripping sensitive fields** before they reach the AI
+- **Reducing token usage** by removing unnecessary data
 
 ## Tool Libraries and Extends
 

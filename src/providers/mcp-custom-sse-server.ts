@@ -22,6 +22,7 @@ import {
 // Legacy Slack-specific imports for backwards compatibility
 import { extractSlackContext } from '../slack/schedule-tool-handler';
 import { EnvironmentResolver } from '../utils/env-resolver';
+import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 
 /**
  * Check if a tool definition is an http_client tool
@@ -1104,24 +1105,70 @@ export class CustomToolsSSEServer implements CustomMCPServer {
 
       // Parse response
       const contentType = response.headers.get('content-type');
+      let result: unknown;
       if (contentType && contentType.includes('application/json')) {
-        return await response.json();
-      }
-
-      const text = await response.text();
-      if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
-        try {
-          return JSON.parse(text);
-        } catch {
-          return text;
+        result = await response.json();
+      } else {
+        const text = await response.text();
+        if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
+          try {
+            result = JSON.parse(text);
+          } catch {
+            result = text;
+          }
+        } else {
+          result = text;
         }
       }
-      return text;
+
+      // Apply transform_js if specified
+      if (tool.transform_js) {
+        result = await this.applyHttpClientTransform(tool.transform_js, result, {
+          path: apiPath,
+          method,
+          query: queryParams,
+          url,
+          args,
+        });
+      }
+
+      return result;
     } catch (error: unknown) {
       clearTimeout(timeoutId);
       if (error instanceof Error && error.name === 'AbortError') {
         throw new Error(`HTTP client request timed out after ${timeout}ms`);
       }
+      throw error;
+    }
+  }
+
+  /**
+   * Apply a JavaScript transform to an http_client tool response.
+   * The transform receives `output` (parsed response) and `context` with request details
+   * (path, method, query, url, args) for conditional logic per endpoint.
+   */
+  private async applyHttpClientTransform(
+    transformJs: string,
+    output: unknown,
+    context: Record<string, unknown>
+  ): Promise<unknown> {
+    const sandbox = createSecureSandbox();
+
+    const code = `
+      const output = ${JSON.stringify(output)};
+      const context = ${JSON.stringify(context)};
+      const path = context.path || '';
+      const method = context.method || 'GET';
+      const query = context.query || {};
+      const args = context.args || {};
+
+      ${transformJs}
+    `;
+
+    try {
+      return await compileAndRun(sandbox, code, { timeout: 5000 });
+    } catch (error) {
+      logger.error(`[CustomToolsSSEServer] HTTP client transform_js error: ${error}`);
       throw error;
     }
   }
