@@ -48791,11 +48791,26 @@ var init_worktree_manager = __esm({
         await this.deleteLocalBranches(worktreePath);
       }
       /**
-       * Delete all local branches in a worktree.
+       * Delete local branches in a worktree that are safe to remove.
        * Worktrees are always used in detached HEAD state, so any local branches
        * were unintentionally created and should be cleaned up.
+       * IMPORTANT: Git worktrees share the branch namespace with the main repo
+       * and all other worktrees. We must NOT delete branches that are checked out
+       * in the main working tree or any other worktree — doing so would destroy
+       * the user's work.
        */
       async deleteLocalBranches(worktreePath) {
+        const worktreeListCmd = `git -C ${this.escapeShellArg(worktreePath)} worktree list --porcelain`;
+        const worktreeListResult = await this.executeGitCommand(worktreeListCmd, { timeout: 1e4 });
+        const protectedBranches = /* @__PURE__ */ new Set();
+        if (worktreeListResult.exitCode === 0) {
+          for (const line of worktreeListResult.stdout.split("\n")) {
+            const match = line.match(/^branch refs\/heads\/(.+)$/);
+            if (match) {
+              protectedBranches.add(match[1]);
+            }
+          }
+        }
         const listCmd = `git -C ${this.escapeShellArg(worktreePath)} branch --list --format='%(refname:short)'`;
         const listResult = await this.executeGitCommand(listCmd, { timeout: 1e4 });
         if (listResult.exitCode !== 0 || !listResult.stdout.trim()) {
@@ -48803,6 +48818,10 @@ var init_worktree_manager = __esm({
         }
         const branches = listResult.stdout.trim().split("\n").map((b) => b.trim()).filter((b) => b.length > 0);
         for (const branch of branches) {
+          if (protectedBranches.has(branch)) {
+            logger.debug(`Skipping branch '${branch}' \u2014 checked out in another worktree`);
+            continue;
+          }
           const deleteCmd = `git -C ${this.escapeShellArg(worktreePath)} branch -D ${this.escapeShellArg(branch)}`;
           const deleteResult = await this.executeGitCommand(deleteCmd, { timeout: 1e4 });
           if (deleteResult.exitCode === 0) {
@@ -56663,10 +56682,27 @@ var init_workspace_manager = __esm({
         await this.deleteLocalBranches(worktreePath);
       }
       /**
-       * Delete all local branches in a worktree.
+       * Delete local branches in a worktree that are safe to remove.
+       * IMPORTANT: Git worktrees share the branch namespace with the main repo
+       * and all other worktrees. We must NOT delete branches that are checked out
+       * in the main working tree or any other worktree — doing so would destroy
+       * the user's work.
        */
       async deleteLocalBranches(worktreePath) {
         const escapedPath = shellEscape(worktreePath);
+        const worktreeListResult = await commandExecutor.execute(
+          `git -C ${escapedPath} worktree list --porcelain`,
+          { timeout: 1e4 }
+        );
+        const protectedBranches = /* @__PURE__ */ new Set();
+        if (worktreeListResult.exitCode === 0) {
+          for (const line of worktreeListResult.stdout.split("\n")) {
+            const match = line.match(/^branch refs\/heads\/(.+)$/);
+            if (match) {
+              protectedBranches.add(match[1]);
+            }
+          }
+        }
         const listResult = await commandExecutor.execute(
           `git -C ${escapedPath} branch --list --format='%(refname:short)'`,
           { timeout: 1e4 }
@@ -56676,6 +56712,10 @@ var init_workspace_manager = __esm({
         }
         const branches = listResult.stdout.trim().split("\n").map((b) => b.trim()).filter((b) => b.length > 0);
         for (const branch of branches) {
+          if (protectedBranches.has(branch)) {
+            logger.debug(`[Workspace] Skipping branch '${branch}' \u2014 checked out in another worktree`);
+            continue;
+          }
           const deleteResult = await commandExecutor.execute(
             `git -C ${escapedPath} branch -D ${shellEscape(branch)}`,
             { timeout: 1e4 }
