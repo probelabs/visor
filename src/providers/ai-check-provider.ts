@@ -80,7 +80,9 @@ export class AICheckProvider extends CheckProvider {
       const first = Array.from(map.values())[0] as any;
       if (!first || typeof first !== 'object') return {};
       const ev = first.event;
-      const conv = first.slack_conversation;
+      const slackConv = first.slack_conversation;
+      const telegramConv = first.telegram_conversation;
+      const conv = slackConv || telegramConv;
       if (!ev && !conv) return {};
       // Attach conversation to prInfo so downstream helpers (XML context) can use it
       if (conv && prInfo) {
@@ -90,7 +92,11 @@ export class AICheckProvider extends CheckProvider {
           // best-effort only
         }
       }
-      return { slack: { event: ev, conversation: conv } };
+      // Build transport-specific context
+      const transportCtx = slackConv
+        ? { slack: { event: ev, conversation: slackConv } }
+        : { telegram: { event: ev, conversation: telegramConv } };
+      return { ...transportCtx, conversation: conv };
     } catch {
       return {};
     }

@@ -817,7 +817,7 @@ async function executeCheckWithForEachItems(
         }
       } catch {}
 
-      // Extract Slack conversation from webhookContext (for Slack socket mode)
+      // Extract conversation from webhookContext (for Slack/Telegram socket mode)
       // The socket-runner stores conversation data in webhookData under the endpoint key
       try {
         const webhookCtx = (context.executionContext as any)?.webhookContext;
@@ -828,27 +828,29 @@ async function executeCheckWithForEachItems(
           );
         }
         if (webhookData && webhookData.size > 0) {
-          // Find the payload with slack_conversation
+          // Find the payload with slack_conversation or telegram_conversation
           for (const payload of webhookData.values()) {
             const slackConv = (payload as any)?.slack_conversation;
-            if (slackConv) {
-              // Build slack context with event and conversation
+            const telegramConv = (payload as any)?.telegram_conversation;
+            const conv = slackConv || telegramConv;
+            if (conv) {
               const event = (payload as any)?.event;
-              const messageCount = Array.isArray(slackConv?.messages)
-                ? slackConv.messages.length
+              const messageCount = Array.isArray(conv?.messages)
+                ? conv.messages.length
                 : 0;
               if (context.debug) {
                 logger.info(
-                  `[LevelDispatch] Slack conversation extracted: ${messageCount} messages`
+                  `[LevelDispatch] Conversation extracted (${conv?.transport || 'unknown'}): ${messageCount} messages`
                 );
               }
+              // Build transport-specific context
+              const transportCtx = slackConv
+                ? { slack: { event: event || {}, conversation: slackConv } }
+                : { telegram: { event: event || {}, conversation: telegramConv }, webhook: payload };
               (providerConfig as any).eventContext = {
                 ...(providerConfig as any).eventContext,
-                slack: {
-                  event: event || {},
-                  conversation: slackConv,
-                },
-                conversation: slackConv, // Also expose at top level for convenience
+                ...transportCtx,
+                conversation: conv, // Expose at top level for all transports
               };
               break;
             }
@@ -857,7 +859,7 @@ async function executeCheckWithForEachItems(
       } catch {}
 
       // Fallback: expose conversation from executionContext (for CLI --message)
-      // Only if no Slack conversation was set above
+      // Only if no conversation was set above
       try {
         if (
           !(providerConfig as any).eventContext?.conversation &&
@@ -2266,7 +2268,7 @@ async function executeSingleCheck(
       }
     } catch {}
 
-    // Extract Slack conversation from webhookContext (for Slack socket mode)
+    // Extract conversation from webhookContext (for Slack/Telegram socket mode)
     // The socket-runner stores conversation data in webhookData under the endpoint key
     try {
       const webhookCtx = (context.executionContext as any)?.webhookContext;
@@ -2277,23 +2279,25 @@ async function executeSingleCheck(
         );
       }
       if (webhookData && webhookData.size > 0) {
-        // Find the payload with slack_conversation
+        // Find the payload with slack_conversation or telegram_conversation
         for (const payload of webhookData.values()) {
           const slackConv = (payload as any)?.slack_conversation;
-          if (slackConv) {
-            // Build slack context with event and conversation
+          const telegramConv = (payload as any)?.telegram_conversation;
+          const conv = slackConv || telegramConv;
+          if (conv) {
             const event = (payload as any)?.event;
-            const messageCount = Array.isArray(slackConv?.messages) ? slackConv.messages.length : 0;
+            const messageCount = Array.isArray(conv?.messages) ? conv.messages.length : 0;
             if (context.debug) {
-              logger.info(`[LevelDispatch] Slack conversation extracted: ${messageCount} messages`);
+              logger.info(`[LevelDispatch] Conversation extracted (${conv?.transport || 'unknown'}): ${messageCount} messages`);
             }
+            // Build transport-specific context
+            const transportCtx = slackConv
+              ? { slack: { event: event || {}, conversation: slackConv } }
+              : { telegram: { event: event || {}, conversation: telegramConv }, webhook: payload };
             (providerConfig as any).eventContext = {
               ...(providerConfig as any).eventContext,
-              slack: {
-                event: event || {},
-                conversation: slackConv,
-              },
-              conversation: slackConv, // Also expose at top level for convenience
+              ...transportCtx,
+              conversation: conv, // Expose at top level for all transports
             };
             break;
           }
@@ -2302,7 +2306,7 @@ async function executeSingleCheck(
     } catch {}
 
     // Fallback: expose conversation from executionContext (for CLI --message)
-    // Only if no Slack conversation was set above
+    // Only if no conversation was set above
     try {
       if (
         !(providerConfig as any).eventContext?.conversation &&
