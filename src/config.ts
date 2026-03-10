@@ -36,6 +36,10 @@ export const VALID_EVENT_TRIGGERS: readonly EventTrigger[] = [
   'schedule',
   'webhook_received',
   'slack_message',
+  'telegram_message',
+  'email_message',
+  'whatsapp_message',
+  'teams_message',
 ] as const;
 
 /**
