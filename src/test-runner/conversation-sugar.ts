@@ -33,6 +33,9 @@
 export interface ConversationTurn {
   role: 'user' | 'assistant';
   text: string;
+  /** Optional user identifier, exposed as `conversation.current.user` in Liquid templates.
+   *  Useful for simulating multi-user (group chat) scenarios in tests. */
+  user?: string;
   mocks?: Record<string, unknown>;
   expect?: Record<string, unknown>;
 }
@@ -99,7 +102,7 @@ export function expandConversationToFlow(testCase: any): any {
           transport,
           thread: { id: threadId },
           messages: [...currentMessages],
-          current: { role: 'user', text: turn.text },
+          current: { role: 'user', text: turn.text, ...(turn.user ? { user: turn.user } : {}) },
         },
       },
       ...(turn.mocks ? { mocks: turn.mocks } : {}),

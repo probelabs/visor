@@ -232,6 +232,59 @@ describe('expandConversationToFlow', () => {
     ]);
   });
 
+  it('passes per-turn user into conversation.current', () => {
+    const tc = {
+      name: 'multi-user',
+      conversation: [
+        {
+          role: 'user',
+          text: 'Hello from user 1',
+          user: 'user-1',
+          mocks: { chat: { text: 'Hi user 1!', intent: 'chat' } },
+        },
+        {
+          role: 'user',
+          text: 'Hello from user 2',
+          user: 'user-2',
+          mocks: { chat: { text: 'Hi user 2!', intent: 'chat' } },
+        },
+      ],
+    };
+
+    const result = expandConversationToFlow(tc);
+
+    // Stage 1: user-1
+    expect(result.flow[0].execution_context.conversation.current).toEqual({
+      role: 'user',
+      text: 'Hello from user 1',
+      user: 'user-1',
+    });
+
+    // Stage 2: user-2
+    expect(result.flow[1].execution_context.conversation.current).toEqual({
+      role: 'user',
+      text: 'Hello from user 2',
+      user: 'user-2',
+    });
+  });
+
+  it('omits user from current when not specified on turn', () => {
+    const tc = {
+      name: 'no-user',
+      conversation: [
+        { role: 'user', text: 'Hi', mocks: { chat: { text: 'Hello', intent: 'chat' } } },
+      ],
+    };
+
+    const result = expandConversationToFlow(tc);
+    expect(result.flow[0].execution_context.conversation.current).toEqual({
+      role: 'user',
+      text: 'Hi',
+    });
+    // No user key at all
+    expect('user' in result.flow[0].execution_context.conversation.current).toBe(false);
+  });
+
   it('uses default values for transport, fixture, routing', () => {
     const tc = {
       name: 'defaults',
