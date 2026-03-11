@@ -38,11 +38,16 @@ interface GitHubApiError {
 }
 
 /**
- * Manages GitHub PR comments with dynamic updating capabilities
+ * Manages GitHub PR comments with dynamic updating capabilities.
+ * All write operations are serialized through an internal queue to prevent
+ * concurrent GitHub API calls from racing against each other.
  */
 export class CommentManager {
   private octokit: Octokit;
   private retryConfig: RetryConfig;
+  // Serial write queue: chains all updateOrCreateComment calls so only one
+  // GitHub comment write is in-flight at a time within a job.
+  private _writeQueue: Promise<void> = Promise.resolve();
 
   constructor(octokit: Octokit, retryConfig?: Partial<RetryConfig>) {
     this.octokit = octokit;
@@ -106,6 +111,29 @@ export class CommentManager {
       allowConcurrentUpdates?: boolean;
       commitSha?: string;
       /** Cached GitHub comment ID to use for updates when listComments may not return it yet (eventual consistency) */
+      cachedGithubCommentId?: number;
+    } = {}
+  ): Promise<Comment> {
+    // Serialize all comment writes through a single queue so only one
+    // GitHub API write is in-flight at a time, preventing races between
+    // concurrent checks updating the same or different comments.
+    return new Promise<Comment>((resolve, reject) => {
+      this._writeQueue = this._writeQueue
+        .then(() => this._doUpdateOrCreate(owner, repo, prNumber, content, options))
+        .then(resolve, reject);
+    });
+  }
+
+  private async _doUpdateOrCreate(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    content: string,
+    options: {
+      commentId?: string;
+      triggeredBy?: string;
+      allowConcurrentUpdates?: boolean;
+      commitSha?: string;
       cachedGithubCommentId?: number;
     } = {}
   ): Promise<Comment> {

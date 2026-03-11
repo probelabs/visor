@@ -114,7 +114,12 @@ export function buildEngineContextForRun(
       async acquire(parentSessionId: any, _dbg?: boolean, queueTimeout?: number | null) {
         // Use visor session ID if probe didn't provide one
         const sid = parentSessionId || sessionId;
-        return fairLimiter.acquire(sid, _dbg, queueTimeout);
+        // ProbeAgent calls acquire(null) without queueTimeout, which defaults
+        // to 120s in FairConcurrencyLimiter — too short when AI checks take
+        // 5-30+ min and slots are occupied. Override to 0 (disabled) so the
+        // step/AI timeout governs cancellation instead.
+        const effectiveQueueTimeout = queueTimeout ?? 0;
+        return fairLimiter.acquire(sid, _dbg, effectiveQueueTimeout);
       },
       release(parentSessionId: any, _dbg?: boolean) {
         const sid = parentSessionId || sessionId;
