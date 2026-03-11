@@ -981,12 +981,15 @@ async function executeCheckWithForEachItems(
 
       // Evaluate assume contract for this iteration (design-by-contract)
       {
-        const assumeExpr = (checkConfig as any)?.assume as string | string[] | undefined;
-        if (assumeExpr) {
+        const assumeExpr = (checkConfig as any)?.assume as string | string[] | boolean | undefined;
+        if (assumeExpr !== undefined && assumeExpr !== null) {
           let ok = true;
           try {
             const evaluator = new FailureConditionEvaluator();
-            const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+            const rawExprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+            // Coerce non-string values (e.g., YAML boolean `true`) to strings
+            // so they can be safely evaluated as JavaScript expressions.
+            const exprs = rawExprs.map((e: unknown) => (typeof e === 'string' ? e : String(e)));
             // Get conversation from execution context (TUI/CLI) or provider event context (Slack)
             const conversation =
               (context.executionContext as any)?.conversation ||
@@ -2363,12 +2366,15 @@ async function executeSingleCheck(
 
     // Evaluate assume contract (design-by-contract) before executing
     {
-      const assumeExpr = (checkConfig as any)?.assume as string | string[] | undefined;
-      if (assumeExpr) {
+      const assumeExpr = (checkConfig as any)?.assume as string | string[] | boolean | undefined;
+      if (assumeExpr !== undefined && assumeExpr !== null) {
         let ok = true;
         try {
           const evaluator = new FailureConditionEvaluator();
-          const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+          const rawExprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+          // Coerce non-string values (e.g., YAML boolean `true`) to strings
+          // so they can be safely evaluated as JavaScript expressions.
+          const exprs = rawExprs.map((e: unknown) => (typeof e === 'string' ? e : String(e)));
           // Get conversation from execution context (TUI/CLI) or provider event context (Slack)
           const conversation =
             (context.executionContext as any)?.conversation ||
