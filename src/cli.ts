@@ -26,13 +26,11 @@ export class CLI {
   }
 
   /**
-   * Set up the commander program with options and validation
+   * Add all CLI options to a Command instance.
+   * Single source of truth — used by setupProgram(), parseArgs(), and getHelpText().
    */
-  private setupProgram(): void {
-    this.program
-      .name('visor')
-      .description('Visor - AI-powered code review tool')
-      .version(this.getVersion())
+  private configureOptions(program: Command): Command {
+    return program
       .option('--slack', 'Enable Slack Socket Mode runner (uses SLACK_APP_TOKEN)')
       .option('--telegram', 'Enable Telegram long-polling runner (uses TELEGRAM_BOT_TOKEN)')
       .option('--email', 'Enable Email polling runner (IMAP/SMTP or Resend)')
@@ -65,6 +63,10 @@ export class CLI {
       .option('--tags <tags>', 'Include checks with these tags (comma-separated)')
       .option('--exclude-tags <tags>', 'Exclude checks with these tags (comma-separated)')
       .option('--no-remote-extends', 'Disable loading configurations from remote URLs')
+      .option(
+        '--allowed-remote-patterns <patterns>',
+        'Comma-separated list of allowed URL prefixes for remote config extends (e.g., "https://github.com/,https://raw.githubusercontent.com/")'
+      )
       .option('--enable-code-context', 'Force include code diffs in analysis (CLI mode)')
       .option('--disable-code-context', 'Force exclude code diffs from analysis (CLI mode)')
       .option(
@@ -110,9 +112,19 @@ export class CLI {
       .option(
         '--github-installation-id <id>',
         'GitHub App installation ID, auto-detected if omitted'
-      )
-      .addHelpText('after', this.getExamplesText())
-      .exitOverride(); // Prevent automatic process.exit for better error handling
+      );
+  }
+
+  /**
+   * Set up the commander program with options and validation
+   */
+  private setupProgram(): void {
+    this.program
+      .name('visor')
+      .description('Visor - AI-powered code review tool')
+      .version(this.getVersion());
+
+    this.configureOptions(this.program).addHelpText('after', this.getExamplesText()).exitOverride(); // Prevent automatic process.exit for better error handling
 
     // Add validation for options
     this.program.hook('preAction', thisCommand => {
@@ -142,85 +154,9 @@ export class CLI {
       tempProgram
         .name('visor')
         .description('Visor - AI-powered code review tool')
-        .version(this.getVersion())
-        .option('--slack', 'Enable Slack Socket Mode runner (uses SLACK_APP_TOKEN)')
-        .option('--telegram', 'Enable Telegram long-polling runner (uses TELEGRAM_BOT_TOKEN)')
-        .option('--a2a', 'Enable A2A Agent Protocol server mode')
-        .option(
-          '-c, --check <type>',
-          'Specify check type (can be used multiple times)',
-          this.collectChecks,
-          []
-        )
-        .option('-o, --output <format>', 'Output format (table, json, markdown, sarif)', 'table')
-        .option('--output-file <path>', 'Write formatted output to a file instead of stdout')
-        .option('--config <path>', 'Path to configuration file')
-        .option(
-          '--timeout <ms>',
-          'Timeout for check operations in milliseconds (default: 1800000ms / 30 minutes)',
-          value => parseInt(value, 10)
-        )
-        .option(
-          '--max-parallelism <count>',
-          'Maximum number of checks to run in parallel (default: 3)',
-          value => parseInt(value, 10)
-        )
-        .option('--debug', 'Enable debug mode for detailed output')
-        .option('-v, --verbose', 'Increase verbosity (without full debug)')
-        .option('-q, --quiet', 'Reduce verbosity to warnings and errors')
-        .option('--fail-fast', 'Stop execution on first failure condition')
-        .option('--tags <tags>', 'Include checks with these tags (comma-separated)')
-        .option('--exclude-tags <tags>', 'Exclude checks with these tags (comma-separated)')
-        .option(
-          '--allowed-remote-patterns <patterns>',
-          'Comma-separated list of allowed URL prefixes for remote config extends (e.g., "https://github.com/,https://raw.githubusercontent.com/")'
-        )
-        .option('--enable-code-context', 'Force include code diffs in analysis (CLI mode)')
-        .option('--disable-code-context', 'Force exclude code diffs from analysis (CLI mode)')
-        .option(
-          '--analyze-branch-diff',
-          'Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas)'
-        )
-        .option(
-          '--event <type>',
-          'Simulate GitHub event (pr_opened, pr_updated, issue_opened, issue_comment, manual, all). Default: auto-detect from schema or "all"'
-        )
-        .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
-        .option('--debug-server', 'Start debug visualizer server for live execution visualization')
-        .option('--debug-port <port>', 'Port for debug server (default: 3456)', value =>
-          parseInt(value, 10)
-        )
-        .option('--message <text>', 'Message for human-input checks (inline text or file path)')
-        .option('--tui', 'Enable interactive TUI (chat + logs tabs)')
-        .option('--keep-workspace', 'Keep workspace folders after execution (for debugging)')
-        .option('--workspace-path <path>', 'Workspace base path (overrides VISOR_WORKSPACE_PATH)')
-        .option('--workspace-here', 'Place workspace under current directory')
-        .option(
-          '--workspace-name <name>',
-          'Workspace directory name (overrides VISOR_WORKSPACE_NAME)'
-        )
-        .option(
-          '--workspace-project-name <name>',
-          'Main project folder name inside workspace (overrides VISOR_WORKSPACE_PROJECT)'
-        )
-        .option(
-          '--watch',
-          'Watch config file for changes and reload automatically (requires --config)'
-        )
-        .option(
-          '--task-tracking',
-          'Enable cross-frontend task tracking (all executions recorded in visor tasks)'
-        )
-        .option('--github-token <token>', 'GitHub token for API operations (env: GITHUB_TOKEN)')
-        .option('--github-app-id <id>', 'GitHub App ID (env: GITHUB_APP_ID)')
-        .option(
-          '--github-private-key <key>',
-          'GitHub App private key, PEM content or file path (env: GITHUB_APP_PRIVATE_KEY)'
-        )
-        .option(
-          '--github-installation-id <id>',
-          'GitHub App installation ID, auto-detected if omitted'
-        )
+        .version(this.getVersion());
+
+      this.configureOptions(tempProgram)
         .allowUnknownOption(false)
         .allowExcessArguments(false) // Don't allow positional arguments
         .addHelpText('after', this.getExamplesText())
@@ -292,6 +228,7 @@ export class CLI {
         githubV2: false,
         slack: Boolean(options.slack),
         telegram: Boolean(options.telegram),
+        email: Boolean(options.email),
         whatsapp: Boolean(options.whatsapp),
         teams: Boolean(options.teams),
         a2a: Boolean(options.a2a),
@@ -385,67 +322,14 @@ export class CLI {
    * Get help text
    */
   public getHelpText(): string {
-    // Use the same configuration as parseArgs to ensure consistency
     const tempProgram = new Command();
     tempProgram
       .name('visor')
       .description('Visor - AI-powered code review tool')
-      .version(this.getVersion())
-      .option(
-        '-c, --check <type>',
-        'Specify check type (can be used multiple times)',
-        this.collectChecks,
-        []
-      )
-      .option('-o, --output <format>', 'Output format (table, json, markdown, sarif)', 'table')
-      .option('--output-file <path>', 'Write formatted output to a file instead of stdout')
-      .option('--config <path>', 'Path to configuration file')
-      .option(
-        '--timeout <ms>',
-        'Timeout for check operations in milliseconds (default: 1800000ms / 30 minutes)',
-        value => parseInt(value, 10)
-      )
-      .option(
-        '--max-parallelism <count>',
-        'Maximum number of checks to run in parallel (default: 3)',
-        value => parseInt(value, 10)
-      )
-      .option('--debug', 'Enable debug mode for detailed output')
-      .option('-v, --verbose', 'Increase verbosity (without full debug)')
-      .option('-q, --quiet', 'Reduce verbosity to warnings and errors')
-      .option('--fail-fast', 'Stop execution on first failure condition')
-      .option('--tags <tags>', 'Include checks with these tags (comma-separated)')
-      .option('--exclude-tags <tags>', 'Exclude checks with these tags (comma-separated)')
-      .option('--enable-code-context', 'Force include code diffs in analysis (CLI mode)')
-      .option('--disable-code-context', 'Force exclude code diffs from analysis (CLI mode)')
-      .option(
-        '--analyze-branch-diff',
-        'Analyze diff vs base branch when on feature branch (auto-enabled for code-review schemas)'
-      )
-      .option(
-        '--event <type>',
-        'Simulate GitHub event (pr_opened, pr_updated, issue_opened, issue_comment, manual, all). Default: auto-detect from schema or "all"'
-      )
-      .option('--mode <mode>', 'Run mode (cli|github-actions). Default: cli')
-      .option('--debug-server', 'Start debug visualizer server for live execution visualization')
-      .option('--debug-port <port>', 'Port for debug server (default: 3456)', value =>
-        parseInt(value, 10)
-      )
-      .option('--tui', 'Enable interactive TUI (chat + logs tabs)')
-      .option('--keep-workspace', 'Keep workspace folders after execution (for debugging)')
-      .option('--workspace-path <path>', 'Workspace base path (overrides VISOR_WORKSPACE_PATH)')
-      .option('--workspace-here', 'Place workspace under current directory')
-      .option(
-        '--workspace-name <name>',
-        'Workspace directory name (overrides VISOR_WORKSPACE_NAME)'
-      )
-      .option(
-        '--workspace-project-name <name>',
-        'Main project folder name inside workspace (overrides VISOR_WORKSPACE_PROJECT)'
-      )
-      .addHelpText('after', this.getExamplesText());
+      .version(this.getVersion());
 
-    // Get the basic help and append examples manually if addHelpText doesn't work
+    this.configureOptions(tempProgram).addHelpText('after', this.getExamplesText());
+
     const basicHelp = tempProgram.helpInformation();
     return basicHelp + this.getExamplesText();
   }
