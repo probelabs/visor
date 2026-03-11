@@ -421,6 +421,10 @@ export declare const configSchema: {
                         readonly '^x-': {};
                     };
                 };
+                readonly rate_limit: {
+                    readonly $ref: "#/definitions/RateLimitConfig";
+                    readonly description: "Rate limiting configuration for HTTP/API tools";
+                };
                 readonly workflow: {
                     readonly type: "string";
                     readonly description: "Workflow ID (registry lookup) or file path (for type: 'workflow')";
@@ -455,6 +459,43 @@ export declare const configSchema: {
             readonly type: "object";
             readonly additionalProperties: {
                 readonly type: "string";
+            };
+        };
+        readonly RateLimitConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly key: {
+                    readonly type: "string";
+                    readonly description: "Shared bucket name; defaults to URL origin";
+                };
+                readonly requests: {
+                    readonly type: "number";
+                    readonly description: "Max requests per window";
+                };
+                readonly per: {
+                    readonly type: "string";
+                    readonly enum: readonly ["second", "minute", "hour"];
+                    readonly description: "Time window unit";
+                };
+                readonly max_retries: {
+                    readonly type: "number";
+                    readonly description: "Max retries on 429 (default: 3)";
+                };
+                readonly backoff: {
+                    readonly type: "string";
+                    readonly enum: readonly ["fixed", "exponential"];
+                    readonly description: "Backoff strategy (default: exponential)";
+                };
+                readonly initial_delay_ms: {
+                    readonly type: "number";
+                    readonly description: "Base delay for backoff in ms (default: 1000)";
+                };
+            };
+            readonly required: readonly ["requests", "per"];
+            readonly additionalProperties: false;
+            readonly description: "Rate limit configuration for HTTP/API requests.";
+            readonly patternProperties: {
+                readonly '^x-': {};
             };
         };
         readonly WorkflowInput: {
@@ -558,6 +599,10 @@ export declare const configSchema: {
                 readonly headers: {
                     readonly $ref: "#/definitions/Record%3Cstring%2Cstring%3E";
                     readonly description: "HTTP headers";
+                };
+                readonly rate_limit: {
+                    readonly $ref: "#/definitions/RateLimitConfig";
+                    readonly description: "Rate limiting configuration for http_client checks";
                 };
                 readonly endpoint: {
                     readonly type: "string";
@@ -942,7 +987,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -958,7 +1003,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -1618,7 +1663,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1633,13 +1678,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090>': {
+        readonly 'Partial<interface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };

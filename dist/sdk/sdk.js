@@ -9912,6 +9912,162 @@ var init_command_executor = __esm({
   }
 });
 
+// src/utils/rate-limiter.ts
+function windowToMs(per) {
+  switch (per) {
+    case "second":
+      return 1e3;
+    case "minute":
+      return 6e4;
+    case "hour":
+      return 36e5;
+  }
+}
+function resolveRateLimitKey(config, fallbackUrl) {
+  if (config.key) {
+    return config.key;
+  }
+  if (fallbackUrl) {
+    try {
+      const url = new URL(fallbackUrl);
+      return url.origin;
+    } catch {
+      return fallbackUrl;
+    }
+  }
+  return "__default__";
+}
+async function rateLimitedFetch(url, options, rateLimitConfig) {
+  if (!rateLimitConfig) {
+    return fetch(url, options);
+  }
+  const key = resolveRateLimitKey(rateLimitConfig, url);
+  const registry = RateLimiterRegistry.getInstance();
+  const bucket = registry.getOrCreate(key, rateLimitConfig);
+  const maxRetries = rateLimitConfig.max_retries ?? 3;
+  const backoff = rateLimitConfig.backoff ?? "exponential";
+  const initialDelay = rateLimitConfig.initial_delay_ms ?? 1e3;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    await bucket.acquire();
+    const response = await fetch(url, options);
+    if (response.status !== 429) {
+      return response;
+    }
+    if (attempt === maxRetries) {
+      logger.warn(`[rate-limiter] Exhausted ${maxRetries} retries for ${url} (bucket: ${key})`);
+      return response;
+    }
+    let delayMs;
+    const retryAfter = response.headers.get("retry-after");
+    if (retryAfter) {
+      const parsed = Number(retryAfter);
+      if (!isNaN(parsed)) {
+        delayMs = parsed * 1e3;
+      } else {
+        const date = new Date(retryAfter).getTime();
+        delayMs = Math.max(0, date - Date.now());
+      }
+    } else {
+      delayMs = backoff === "exponential" ? initialDelay * Math.pow(2, attempt) : initialDelay;
+    }
+    logger.verbose(
+      `[rate-limiter] 429 on ${url} (bucket: ${key}), retry ${attempt + 1}/${maxRetries} in ${delayMs}ms`
+    );
+    await new Promise((resolve15) => setTimeout(resolve15, delayMs));
+  }
+  return fetch(url, options);
+}
+var TokenBucket, REGISTRY_KEY, RateLimiterRegistry;
+var init_rate_limiter = __esm({
+  "src/utils/rate-limiter.ts"() {
+    "use strict";
+    init_logger();
+    TokenBucket = class {
+      tokens;
+      capacity;
+      refillRate;
+      // tokens per ms
+      lastRefill;
+      waitQueue = [];
+      constructor(capacity, windowMs) {
+        this.capacity = capacity;
+        this.tokens = capacity;
+        this.refillRate = capacity / windowMs;
+        this.lastRefill = Date.now();
+      }
+      refill() {
+        const now = Date.now();
+        const elapsed = now - this.lastRefill;
+        const newTokens = elapsed * this.refillRate;
+        this.tokens = Math.min(this.capacity, this.tokens + newTokens);
+        this.lastRefill = now;
+      }
+      /**
+       * Non-blocking: try to consume one token.
+       */
+      tryConsume() {
+        this.refill();
+        if (this.tokens >= 1) {
+          this.tokens -= 1;
+          return true;
+        }
+        return false;
+      }
+      /**
+       * Blocking: wait until a token is available, then consume it.
+       * Requests are served FIFO.
+       */
+      async acquire() {
+        if (this.tryConsume()) {
+          return;
+        }
+        const waitMs = Math.ceil((1 - this.tokens) / this.refillRate);
+        return new Promise((resolve15) => {
+          const entry = { resolve: resolve15 };
+          this.waitQueue.push(entry);
+          setTimeout(() => {
+            const idx = this.waitQueue.indexOf(entry);
+            if (idx >= 0) {
+              this.waitQueue.splice(idx, 1);
+            }
+            this.refill();
+            if (this.tokens >= 1) {
+              this.tokens -= 1;
+            }
+            resolve15();
+          }, waitMs);
+        });
+      }
+    };
+    REGISTRY_KEY = /* @__PURE__ */ Symbol.for("visor.rateLimiterRegistry");
+    RateLimiterRegistry = class _RateLimiterRegistry {
+      buckets = /* @__PURE__ */ new Map();
+      static getInstance() {
+        const g = globalThis;
+        if (!g[REGISTRY_KEY]) {
+          g[REGISTRY_KEY] = new _RateLimiterRegistry();
+        }
+        return g[REGISTRY_KEY];
+      }
+      getOrCreate(key, config) {
+        let bucket = this.buckets.get(key);
+        if (!bucket) {
+          const windowMs = windowToMs(config.per);
+          bucket = new TokenBucket(config.requests, windowMs);
+          this.buckets.set(key, bucket);
+          logger.verbose(
+            `[rate-limiter] Created bucket "${key}": ${config.requests} req/${config.per}`
+          );
+        }
+        return bucket;
+      }
+      cleanup() {
+        this.buckets.clear();
+      }
+    };
+  }
+});
+
 // src/providers/api-tool-executor.ts
 function isHttpUrl(value) {
   return value.startsWith("http://") || value.startsWith("https://");
@@ -10140,7 +10296,8 @@ function getApiToolConfig(tool) {
     apiKey: tool.apiKey ?? tool.api_key,
     securitySchemeName: tool.securitySchemeName ?? tool.security_scheme_name,
     securityCredentials: tool.securityCredentials || tool.security_credentials || {},
-    requestTimeoutMs: tool.requestTimeoutMs ?? tool.request_timeout_ms ?? tool.timeout ?? 3e4
+    requestTimeoutMs: tool.requestTimeoutMs ?? tool.request_timeout_ms ?? tool.timeout ?? 3e4,
+    rateLimitConfig: tool.rate_limit
   };
 }
 function buildOutputSchema(operation) {
@@ -10572,12 +10729,16 @@ async function executeMappedApiTool(mappedTool, args) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), apiToolConfig.requestTimeoutMs);
   try {
-    const response = await fetch(endpoint.toString(), {
-      method,
-      headers,
-      body: requestBodyValue === void 0 ? void 0 : headers["Content-Type"]?.includes("application/json") ? JSON.stringify(requestBodyValue) : String(requestBodyValue),
-      signal: controller.signal
-    });
+    const response = await rateLimitedFetch(
+      endpoint.toString(),
+      {
+        method,
+        headers,
+        body: requestBodyValue === void 0 ? void 0 : headers["Content-Type"]?.includes("application/json") ? JSON.stringify(requestBodyValue) : String(requestBodyValue),
+        signal: controller.signal
+      },
+      apiToolConfig.rateLimitConfig
+    );
     const raw = await response.text();
     let body = raw;
     const contentType = response.headers.get("content-type") || "";
@@ -10621,6 +10782,7 @@ var init_api_tool_executor = __esm({
     import_jsonpath_plus = require("jsonpath-plus");
     import_minimatch = require("minimatch");
     init_logger();
+    init_rate_limiter();
     HTTP_METHODS = /* @__PURE__ */ new Set(["get", "put", "post", "delete", "options", "head", "patch", "trace"]);
     ApiToolRegistry = class {
       bundleCache = /* @__PURE__ */ new Map();
@@ -12978,6 +13140,10 @@ var init_config_schema = __esm({
                 "^x-": {}
               }
             },
+            rate_limit: {
+              $ref: "#/definitions/RateLimitConfig",
+              description: "Rate limiting configuration for HTTP/API tools"
+            },
             workflow: {
               type: "string",
               description: "Workflow ID (registry lookup) or file path (for type: 'workflow')"
@@ -13012,6 +13178,43 @@ var init_config_schema = __esm({
           type: "object",
           additionalProperties: {
             type: "string"
+          }
+        },
+        RateLimitConfig: {
+          type: "object",
+          properties: {
+            key: {
+              type: "string",
+              description: "Shared bucket name; defaults to URL origin"
+            },
+            requests: {
+              type: "number",
+              description: "Max requests per window"
+            },
+            per: {
+              type: "string",
+              enum: ["second", "minute", "hour"],
+              description: "Time window unit"
+            },
+            max_retries: {
+              type: "number",
+              description: "Max retries on 429 (default: 3)"
+            },
+            backoff: {
+              type: "string",
+              enum: ["fixed", "exponential"],
+              description: "Backoff strategy (default: exponential)"
+            },
+            initial_delay_ms: {
+              type: "number",
+              description: "Base delay for backoff in ms (default: 1000)"
+            }
+          },
+          required: ["requests", "per"],
+          additionalProperties: false,
+          description: "Rate limit configuration for HTTP/API requests.",
+          patternProperties: {
+            "^x-": {}
           }
         },
         WorkflowInput: {
@@ -13115,6 +13318,10 @@ var init_config_schema = __esm({
             headers: {
               $ref: "#/definitions/Record%3Cstring%2Cstring%3E",
               description: "HTTP headers"
+            },
+            rate_limit: {
+              $ref: "#/definitions/RateLimitConfig",
+              description: "Rate limiting configuration for http_client checks"
             },
             endpoint: {
               type: "string",
@@ -13517,7 +13724,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -13533,7 +13740,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -14235,7 +14442,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -14250,13 +14457,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090>>": {
+        "Record<string,Partial<interface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090>": {
+        "Partial<interface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785>": {
           type: "object",
           additionalProperties: false
         },
@@ -18316,6 +18523,14 @@ var init_workflow_check_provider = __esm({
           inputs,
           config.checkName || workflow.id
         );
+        const parentTimeout = config.timeout || config.ai?.timeout;
+        if (parentTimeout && workflowConfig.checks) {
+          for (const stepCfg of Object.values(workflowConfig.checks)) {
+            if (!stepCfg.timeout && !stepCfg.ai?.timeout) {
+              stepCfg.timeout = parentTimeout;
+            }
+          }
+        }
         const parentMemoryCfg = parentContext?.memory && parentContext.memory.getConfig && parentContext.memory.getConfig() || parentContext?.config?.memory;
         const childJournal = new ExecutionJournal2();
         const childMemory = MemoryStore2.createIsolated(parentMemoryCfg);
@@ -22121,6 +22336,7 @@ var init_mcp_custom_sse_server = __esm({
     init_schedule_tool();
     init_schedule_tool_handler();
     init_env_resolver();
+    init_rate_limiter();
     CustomToolsSSEServer = class _CustomToolsSSEServer {
       server = null;
       port = 0;
@@ -22877,7 +23093,8 @@ var init_mcp_custom_sse_server = __esm({
               resolvedHeaders["Content-Type"] = "application/json";
             }
           }
-          const response = await fetch(url, requestOptions);
+          const rateLimitConfig = tool.rate_limit;
+          const response = await rateLimitedFetch(url, requestOptions, rateLimitConfig);
           clearTimeout(timeoutId);
           if (!response.ok) {
             let errorBody = "";
@@ -25520,6 +25737,7 @@ var init_http_client_provider = __esm({
     init_template_context();
     init_oauth2_token_cache();
     init_logger();
+    init_rate_limiter();
     fs15 = __toESM(require("fs"));
     path19 = __toESM(require("path"));
     HttpClientProvider = class extends CheckProvider {
@@ -25676,6 +25894,7 @@ var init_http_client_provider = __esm({
               `[http_client] Body: ${requestBody.substring(0, 500)}${requestBody.length > 500 ? "..." : ""}`
             );
           }
+          const rateLimitConfig = config.rate_limit;
           if (resolvedOutputFile) {
             const fileResult = await this.downloadToFile(
               renderedUrl,
@@ -25683,11 +25902,19 @@ var init_http_client_provider = __esm({
               resolvedHeaders,
               requestBody,
               timeout,
-              resolvedOutputFile
+              resolvedOutputFile,
+              rateLimitConfig
             );
             return fileResult;
           }
-          const data = await this.fetchData(renderedUrl, method, resolvedHeaders, requestBody, timeout);
+          const data = await this.fetchData(
+            renderedUrl,
+            method,
+            resolvedHeaders,
+            requestBody,
+            timeout,
+            rateLimitConfig
+          );
           let processedData = data;
           if (transform) {
             try {
@@ -25770,7 +25997,7 @@ var init_http_client_provider = __esm({
           };
         }
       }
-      async fetchData(url, method, headers, body, timeout = 3e4) {
+      async fetchData(url, method, headers, body, timeout = 3e4, rateLimitConfig) {
         if (typeof fetch === "undefined") {
           throw new Error("HTTP client provider requires Node.js 18+ or node-fetch package");
         }
@@ -25793,7 +26020,7 @@ var init_http_client_provider = __esm({
               };
             }
           }
-          const response = await fetch(url, requestOptions);
+          const response = await rateLimitedFetch(url, requestOptions, rateLimitConfig);
           clearTimeout(timeoutId);
           logger.verbose(`[http_client] Response: ${response.status} ${response.statusText}`);
           if (!response.ok) {
@@ -25825,7 +26052,7 @@ var init_http_client_provider = __esm({
           throw error;
         }
       }
-      async downloadToFile(url, method, headers, body, timeout, outputFile) {
+      async downloadToFile(url, method, headers, body, timeout, outputFile, rateLimitConfig) {
         if (typeof fetch === "undefined") {
           throw new Error("HTTP client provider requires Node.js 18+ or node-fetch package");
         }
@@ -25846,7 +26073,7 @@ var init_http_client_provider = __esm({
               };
             }
           }
-          const response = await fetch(url, requestOptions);
+          const response = await rateLimitedFetch(url, requestOptions, rateLimitConfig);
           clearTimeout(timeoutId);
           if (!response.ok) {
             return {
@@ -52371,11 +52598,12 @@ async function executeCheckWithForEachItems2(checkId, forEachParent, forEachItem
       };
       {
         const assumeExpr = checkConfig?.assume;
-        if (assumeExpr) {
+        if (assumeExpr !== void 0 && assumeExpr !== null) {
           let ok = true;
           try {
             const evaluator = new FailureConditionEvaluator();
-            const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+            const rawExprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+            const exprs = rawExprs.map((e) => typeof e === "string" ? e : String(e));
             const conversation = context2.executionContext?.conversation || providerConfig?.eventContext?.conversation;
             for (const ex of exprs) {
               const res = await evaluator.evaluateIfCondition(checkId, ex, {
@@ -53443,11 +53671,12 @@ async function executeSingleCheck2(checkId, context2, state, emitEvent, transiti
     };
     {
       const assumeExpr = checkConfig2?.assume;
-      if (assumeExpr) {
+      if (assumeExpr !== void 0 && assumeExpr !== null) {
         let ok = true;
         try {
           const evaluator = new FailureConditionEvaluator();
-          const exprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+          const rawExprs = Array.isArray(assumeExpr) ? assumeExpr : [assumeExpr];
+          const exprs = rawExprs.map((e) => typeof e === "string" ? e : String(e));
           const conversation = context2.executionContext?.conversation || providerConfig?.eventContext?.conversation;
           for (const ex of exprs) {
             const res = await evaluator.evaluateIfCondition(checkId, ex, {
