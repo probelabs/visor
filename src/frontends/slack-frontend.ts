@@ -389,7 +389,8 @@ export class SlackFrontend implements Frontend {
       const checkCfg: any = cfg.checks?.[checkId];
       if (!checkCfg) return;
       if (checkCfg.type === 'human-input') return;
-      if (checkCfg.criticality === 'internal') return;
+      // Don't suppress execution failures for internal checks — timeouts and
+      // errors on steps like generate-response must still reach the user.
       const issues = (result as any)?.issues;
       if (!Array.isArray(issues) || issues.length === 0) return;
 
