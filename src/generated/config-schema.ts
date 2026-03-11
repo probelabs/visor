@@ -454,6 +454,10 @@ export const configSchema = {
             '^x-': {},
           },
         },
+        rate_limit: {
+          $ref: '#/definitions/RateLimitConfig',
+          description: 'Rate limiting configuration for HTTP/API tools',
+        },
         workflow: {
           type: 'string',
           description: "Workflow ID (registry lookup) or file path (for type: 'workflow')",
@@ -488,6 +492,43 @@ export const configSchema = {
       type: 'object',
       additionalProperties: {
         type: 'string',
+      },
+    },
+    RateLimitConfig: {
+      type: 'object',
+      properties: {
+        key: {
+          type: 'string',
+          description: 'Shared bucket name; defaults to URL origin',
+        },
+        requests: {
+          type: 'number',
+          description: 'Max requests per window',
+        },
+        per: {
+          type: 'string',
+          enum: ['second', 'minute', 'hour'],
+          description: 'Time window unit',
+        },
+        max_retries: {
+          type: 'number',
+          description: 'Max retries on 429 (default: 3)',
+        },
+        backoff: {
+          type: 'string',
+          enum: ['fixed', 'exponential'],
+          description: 'Backoff strategy (default: exponential)',
+        },
+        initial_delay_ms: {
+          type: 'number',
+          description: 'Base delay for backoff in ms (default: 1000)',
+        },
+      },
+      required: ['requests', 'per'],
+      additionalProperties: false,
+      description: 'Rate limit configuration for HTTP/API requests.',
+      patternProperties: {
+        '^x-': {},
       },
     },
     WorkflowInput: {
@@ -595,6 +636,10 @@ export const configSchema = {
         headers: {
           $ref: '#/definitions/Record%3Cstring%2Cstring%3E',
           description: 'HTTP headers',
+        },
+        rate_limit: {
+          $ref: '#/definitions/RateLimitConfig',
+          description: 'Rate limiting configuration for http_client checks',
         },
         endpoint: {
           type: 'string',
@@ -1026,7 +1071,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1043,7 +1088,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1759,7 +1804,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1774,14 +1819,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090>>':
+    'Record<string,Partial<interface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-14017-28611-src_types_config.ts-0-57090>': {
+    'Partial<interface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785>': {
       type: 'object',
       additionalProperties: false,
     },

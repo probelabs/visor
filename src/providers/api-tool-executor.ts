@@ -7,6 +7,7 @@ import { JSONPath } from 'jsonpath-plus';
 import { minimatch } from 'minimatch';
 import { logger } from '../logger';
 import type { CustomToolDefinition } from '../types/config';
+import { rateLimitedFetch, type RateLimitConfig } from '../utils/rate-limiter';
 
 type JsonSchemaObject = Record<string, unknown>;
 type OverlaySource = string | Record<string, unknown>;
@@ -18,6 +19,7 @@ interface ApiToolConfig {
   securitySchemeName?: string;
   securityCredentials: Record<string, string>;
   requestTimeoutMs: number;
+  rateLimitConfig?: RateLimitConfig;
 }
 
 interface ApiCallDetails {
@@ -329,6 +331,7 @@ function getApiToolConfig(tool: CustomToolDefinition): ApiToolConfig {
     securitySchemeName: tool.securitySchemeName ?? tool.security_scheme_name,
     securityCredentials: tool.securityCredentials || tool.security_credentials || {},
     requestTimeoutMs: tool.requestTimeoutMs ?? tool.request_timeout_ms ?? tool.timeout ?? 30000,
+    rateLimitConfig: tool.rate_limit as RateLimitConfig | undefined,
   };
 }
 
@@ -875,17 +878,21 @@ export async function executeMappedApiTool(
   const timeout = setTimeout(() => controller.abort(), apiToolConfig.requestTimeoutMs);
 
   try {
-    const response = await fetch(endpoint.toString(), {
-      method,
-      headers,
-      body:
-        requestBodyValue === undefined
-          ? undefined
-          : headers['Content-Type']?.includes('application/json')
-            ? JSON.stringify(requestBodyValue)
-            : String(requestBodyValue),
-      signal: controller.signal,
-    });
+    const response = await rateLimitedFetch(
+      endpoint.toString(),
+      {
+        method,
+        headers,
+        body:
+          requestBodyValue === undefined
+            ? undefined
+            : headers['Content-Type']?.includes('application/json')
+              ? JSON.stringify(requestBodyValue)
+              : String(requestBodyValue),
+        signal: controller.signal,
+      },
+      apiToolConfig.rateLimitConfig
+    );
 
     const raw = await response.text();
     let body: unknown = raw;

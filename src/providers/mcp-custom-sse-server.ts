@@ -22,6 +22,7 @@ import {
 // Legacy Slack-specific imports for backwards compatibility
 import { extractSlackContext } from '../slack/schedule-tool-handler';
 import { EnvironmentResolver } from '../utils/env-resolver';
+import { rateLimitedFetch, type RateLimitConfig } from '../utils/rate-limiter';
 
 /**
  * Check if a tool definition is an http_client tool
@@ -1089,7 +1090,8 @@ export class CustomToolsSSEServer implements CustomMCPServer {
         }
       }
 
-      const response = await fetch(url, requestOptions);
+      const rateLimitConfig = tool.rate_limit as RateLimitConfig | undefined;
+      const response = await rateLimitedFetch(url, requestOptions, rateLimitConfig);
       clearTimeout(timeoutId);
 
       if (!response.ok) {

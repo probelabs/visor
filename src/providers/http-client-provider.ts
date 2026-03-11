@@ -10,6 +10,7 @@ import { buildProviderTemplateContext } from '../utils/template-context';
 import { OAuth2TokenCache, AuthConfig } from '../utils/oauth2-token-cache';
 import Sandbox from '@nyariv/sandboxjs';
 import { logger } from '../logger';
+import { rateLimitedFetch, type RateLimitConfig } from '../utils/rate-limiter';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -227,6 +228,8 @@ export class HttpClientProvider extends CheckProvider {
         );
       }
 
+      const rateLimitConfig = config.rate_limit as RateLimitConfig | undefined;
+
       // If output_file is specified, download to file instead of returning data
       if (resolvedOutputFile) {
         const fileResult = await this.downloadToFile(
@@ -235,12 +238,20 @@ export class HttpClientProvider extends CheckProvider {
           resolvedHeaders,
           requestBody,
           timeout,
-          resolvedOutputFile
+          resolvedOutputFile,
+          rateLimitConfig
         );
         return fileResult;
       }
 
-      const data = await this.fetchData(renderedUrl, method, resolvedHeaders, requestBody, timeout);
+      const data = await this.fetchData(
+        renderedUrl,
+        method,
+        resolvedHeaders,
+        requestBody,
+        timeout,
+        rateLimitConfig
+      );
 
       // Apply Liquid transformation if specified
       let processedData = data;
@@ -340,7 +351,8 @@ export class HttpClientProvider extends CheckProvider {
     method: string,
     headers: Record<string, string>,
     body?: string,
-    timeout: number = 30000
+    timeout: number = 30000,
+    rateLimitConfig?: RateLimitConfig
   ): Promise<unknown> {
     // Check if fetch is available (Node 18+)
     if (typeof fetch === 'undefined') {
@@ -371,7 +383,7 @@ export class HttpClientProvider extends CheckProvider {
         }
       }
 
-      const response = await fetch(url, requestOptions);
+      const response = await rateLimitedFetch(url, requestOptions, rateLimitConfig);
 
       clearTimeout(timeoutId);
 
@@ -423,7 +435,8 @@ export class HttpClientProvider extends CheckProvider {
     headers: Record<string, string>,
     body: string | undefined,
     timeout: number,
-    outputFile: string
+    outputFile: string,
+    rateLimitConfig?: RateLimitConfig
   ): Promise<ReviewSummary> {
     // Check if fetch is available (Node 18+)
     if (typeof fetch === 'undefined') {
@@ -451,7 +464,7 @@ export class HttpClientProvider extends CheckProvider {
         }
       }
 
-      const response = await fetch(url, requestOptions);
+      const response = await rateLimitedFetch(url, requestOptions, rateLimitConfig);
       clearTimeout(timeoutId);
 
       if (!response.ok) {

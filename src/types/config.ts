@@ -466,6 +466,24 @@ export interface ClaudeCodeConfig {
 }
 
 /**
+ * Rate limit configuration for HTTP/API requests.
+ */
+export interface RateLimitConfig {
+  /** Shared bucket name; defaults to URL origin */
+  key?: string;
+  /** Max requests per window */
+  requests: number;
+  /** Time window unit */
+  per: 'second' | 'minute' | 'hour';
+  /** Max retries on 429 (default: 3) */
+  max_retries?: number;
+  /** Backoff strategy (default: exponential) */
+  backoff?: 'fixed' | 'exponential';
+  /** Base delay for backoff in ms (default: 1000) */
+  initial_delay_ms?: number;
+}
+
+/**
  * Configuration for a single check
  */
 export interface CheckConfig {
@@ -487,6 +505,8 @@ export interface CheckConfig {
   method?: string;
   /** HTTP headers */
   headers?: Record<string, string>;
+  /** Rate limiting configuration for http_client checks */
+  rate_limit?: RateLimitConfig;
   /** HTTP endpoint path - required for http_input checks */
   endpoint?: string;
   /** Transform template for http_input data (Liquid) - optional */
@@ -1262,6 +1282,8 @@ export interface CustomToolDefinition {
   base_url?: string;
   /** Authentication config for HTTP client tools */
   auth?: { type: string; token?: string; [key: string]: unknown };
+  /** Rate limiting configuration for HTTP/API tools */
+  rate_limit?: RateLimitConfig;
 
   // === Workflow tool fields (type: 'workflow') ===
   /** Workflow ID (registry lookup) or file path (for type: 'workflow') */
