@@ -5,6 +5,7 @@ import { ReviewSummary } from '../../../src/reviewer';
 import { Liquid } from 'liquidjs';
 import { EnvironmentResolver } from '../../../src/utils/env-resolver';
 import { OAuth2TokenCache } from '../../../src/utils/oauth2-token-cache';
+import { RateLimiterRegistry } from '../../../src/utils/rate-limiter';
 
 // Mock fetch globally
 const mockFetch = jest.fn();
@@ -37,6 +38,10 @@ describe('HttpClientProvider', () => {
   };
   let mockLiquid: jest.Mocked<Liquid>;
   let mockOutputs: Map<string, ReviewSummary>;
+
+  afterEach(() => {
+    RateLimiterRegistry.getInstance().cleanup();
+  });
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -604,6 +609,94 @@ describe('HttpClientProvider', () => {
       );
       // Verify auth header
       expect(mockFetch.mock.calls[1][1].headers['Authorization']).toBe('Bearer combined-token');
+    });
+  });
+
+  describe('rate_limit support', () => {
+    it('should pass rate_limit config through to fetch and succeed normally', async () => {
+      const config = {
+        type: 'http_client' as const,
+        url: 'https://api.workable.com/spi/v3/accounts',
+        headers: { Authorization: 'Bearer token' },
+        rate_limit: {
+          key: 'workable',
+          requests: 10,
+          per: 'minute' as const,
+        },
+      };
+
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: { get: jest.fn().mockReturnValue('application/json') },
+        json: jest.fn().mockResolvedValue({ accounts: [] }),
+      };
+      mockFetch.mockResolvedValue(mockResponse);
+
+      const result = await provider.execute(mockPRInfo, config, new Map());
+
+      expect(result.issues).toHaveLength(0);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('should retry on 429 when rate_limit is configured', async () => {
+      const config = {
+        type: 'http_client' as const,
+        url: 'https://api.workable.com/spi/v3/accounts',
+        headers: { Authorization: 'Bearer token' },
+        rate_limit: {
+          key: 'workable-retry-test',
+          requests: 100,
+          per: 'second' as const,
+          max_retries: 2,
+          initial_delay_ms: 10,
+        },
+      };
+
+      const response429 = {
+        ok: false,
+        status: 429,
+        statusText: 'Too Many Requests',
+        headers: new Headers({ 'Retry-After': '0' }),
+        text: jest.fn().mockResolvedValue('rate limited'),
+      };
+      const response200 = {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: { get: jest.fn().mockReturnValue('application/json') },
+        json: jest.fn().mockResolvedValue({ accounts: ['a'] }),
+      };
+      mockFetch.mockResolvedValueOnce(response429).mockResolvedValueOnce(response200);
+
+      const result = await provider.execute(mockPRInfo, config, new Map());
+
+      expect(result.issues).toHaveLength(0);
+      // rateLimitedFetch retried: 1st call returned 429, 2nd returned 200
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('should work without rate_limit config (passthrough)', async () => {
+      const config = {
+        type: 'http_client' as const,
+        url: 'https://api.example.com/data',
+        headers: {},
+      };
+
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: { get: jest.fn().mockReturnValue('application/json') },
+        json: jest.fn().mockResolvedValue({ data: 'ok' }),
+      };
+      mockFetch.mockResolvedValue(mockResponse);
+
+      const result = await provider.execute(mockPRInfo, config, new Map());
+
+      expect(result.issues).toHaveLength(0);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 });

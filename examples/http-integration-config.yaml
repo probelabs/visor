@@ -78,6 +78,22 @@ steps:
         "risk_score": {{ response.risk_score | default: 0 }}
       }
 
+  # Rate-limited API call — throttle to avoid hitting API limits
+  rate-limited-fetch:
+    type: http_client
+    criticality: external
+    assume: "env.EXTERNAL_API_TOKEN"
+    schema: plain
+    url: "https://api.external-service.com/v1/data"
+    headers:
+      Authorization: "Bearer ${EXTERNAL_API_TOKEN}"
+    rate_limit:
+      key: external-service     # Tools sharing this key share one bucket
+      requests: 10
+      per: minute
+      max_retries: 3
+      backoff: exponential
+
   # === HTTP INPUT: Receive webhook data ===
 
   # Receive GitHub webhook events

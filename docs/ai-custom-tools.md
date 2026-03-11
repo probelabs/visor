@@ -8,6 +8,7 @@ This feature allows AI checks to use custom tools defined in your Visor configur
 
 - shell/command tools (`exec`)
 - OpenAPI-backed API tool bundles (`type: api`)
+- HTTP client tools (`type: http_client`) — proxy REST API calls
 - workflow tools (`type: workflow`) — inline or file-referenced multi-step tools
 
 Custom tools are automatically exposed to AI via ephemeral SSE (Server-Sent Events) MCP (Model Context Protocol) servers that start on-demand and clean up automatically.
@@ -164,6 +165,54 @@ See runnable examples:
 - `examples/api-tools-ai-example.yaml` (embedded tests)
 - `examples/api-tools-mcp-example.yaml` (embedded tests)
 - `examples/api-tools-inline-overlay-example.yaml` (embedded tests)
+
+### Rate Limiting for API and HTTP Client Tools
+
+External APIs often enforce rate limits. Add `rate_limit` to any tool definition (`type: api` or `type: http_client`) to throttle outgoing requests. Tools sharing the same `key` share a single global token bucket.
+
+```yaml
+tools:
+  workable-api:
+    type: api
+    name: workable-api
+    spec: https://workable.com/openapi.yaml
+    targetUrl: https://www.workable.com/spi/v3
+    headers:
+      Authorization: "Bearer ${WORKABLE_TOKEN}"
+    rate_limit:
+      key: workable              # shared bucket name (defaults to URL origin)
+      requests: 10               # max requests per window
+      per: minute                # second | minute | hour
+      max_retries: 5             # retries on 429 (default: 3)
+      backoff: exponential       # fixed | exponential (default: exponential)
+      initial_delay_ms: 1000     # base delay for backoff (default: 1000)
+
+  github-rest:
+    type: http_client
+    name: github-rest
+    base_url: https://api.github.com
+    headers:
+      Authorization: "Bearer ${GITHUB_TOKEN}"
+    rate_limit:
+      key: github
+      requests: 30
+      per: minute
+```
+
+**Rate limit options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `key` | Shared bucket name; tools with the same key share one bucket | URL origin |
+| `requests` | Maximum requests allowed per window | Required |
+| `per` | Window duration: `second`, `minute`, or `hour` | Required |
+| `max_retries` | Number of retries on HTTP 429 responses | 3 |
+| `backoff` | Retry strategy: `fixed` or `exponential` | exponential |
+| `initial_delay_ms` | Base delay in milliseconds for backoff | 1000 |
+
+When a 429 response is received, the limiter automatically retries with backoff and respects the server's `Retry-After` header when present.
+
+Rate limiting also works on `http_client` check steps — see [HTTP Integration](./http.md) for details.
 
 ### Advanced Example with Multiple Tools
 

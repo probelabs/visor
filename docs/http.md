@@ -139,6 +139,29 @@ steps:
 | `transform_js` | JavaScript expression to transform response | - |
 | `output_file` | Download response to file instead of returning data | - |
 | `skip_if_exists` | Skip download if file exists (caching) | true |
+| `rate_limit` | Rate limiting configuration (see below) | - |
+
+**Rate Limiting:**
+
+Throttle outgoing requests to avoid hitting API rate limits. Multiple steps sharing the same `key` share a single token bucket globally.
+
+```yaml
+steps:
+  fetch-data:
+    type: http_client
+    url: "https://api.example.com/data"
+    headers:
+      Authorization: "Bearer ${API_TOKEN}"
+    rate_limit:
+      key: example-api        # Shared bucket name (defaults to URL origin)
+      requests: 30             # Max requests per window
+      per: minute              # second | minute | hour
+      max_retries: 3           # Retries on 429 (default: 3)
+      backoff: exponential     # fixed | exponential (default: exponential)
+      initial_delay_ms: 1000   # Base delay for backoff (default: 1000)
+```
+
+On a 429 response, the limiter automatically retries with backoff and respects the server's `Retry-After` header when present.
 
 **File Download Example:**
 
