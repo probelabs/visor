@@ -57355,7 +57355,8 @@ function buildEngineContextForRun(workingDirectory, config, prInfo, debug, maxPa
     sharedConcurrencyLimiter = {
       async acquire(parentSessionId, _dbg, queueTimeout) {
         const sid = parentSessionId || sessionId;
-        return fairLimiter.acquire(sid, _dbg, queueTimeout);
+        const effectiveQueueTimeout = queueTimeout ?? 0;
+        return fairLimiter.acquire(sid, _dbg, effectiveQueueTimeout);
       },
       release(parentSessionId, _dbg) {
         const sid = parentSessionId || sessionId;
@@ -58105,6 +58106,9 @@ var init_github_comments = __esm({
     CommentManager = class {
       octokit;
       retryConfig;
+      // Serial write queue: chains all updateOrCreateComment calls so only one
+      // GitHub comment write is in-flight at a time within a job.
+      _writeQueue = Promise.resolve();
       constructor(octokit, retryConfig) {
         this.octokit = octokit;
         this.retryConfig = {
@@ -58147,6 +58151,11 @@ var init_github_comments = __esm({
        * Update existing comment or create new one with collision detection
        */
       async updateOrCreateComment(owner, repo, prNumber, content, options = {}) {
+        return new Promise((resolve15, reject) => {
+          this._writeQueue = this._writeQueue.then(() => this._doUpdateOrCreate(owner, repo, prNumber, content, options)).then(resolve15, reject);
+        });
+      }
+      async _doUpdateOrCreate(owner, repo, prNumber, content, options = {}) {
         const {
           commentId = this.generateCommentId(),
           triggeredBy = "unknown",
