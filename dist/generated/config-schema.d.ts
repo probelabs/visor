@@ -987,7 +987,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -1003,7 +1003,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -1275,6 +1275,11 @@ export declare const configSchema: {
                 readonly enableExecutePlan: {
                     readonly type: "boolean";
                     readonly description: "Enable the execute_plan DSL orchestration tool (replaces analyze_all when enabled)";
+                };
+                readonly timeout_mode: {
+                    readonly type: "string";
+                    readonly enum: readonly ["probe", "visor"];
+                    readonly description: "Timeout mode: 'probe' lets Probe handle timeout with graceful wind-down (injects \"TIME LIMIT REACHED\" message and bonus steps), 'visor' uses Visor's external Promise.race hard kill (legacy behavior). Default: 'probe'";
                 };
             };
             readonly additionalProperties: false;
@@ -1663,7 +1668,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1678,13 +1683,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785>': {
+        readonly 'Partial<interface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };

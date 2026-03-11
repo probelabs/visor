@@ -7654,11 +7654,12 @@ var init_ai_review_service = __esm({
         try {
           const call = this.callProbeAgent(prompt, schema, debugInfo, checkName, sessionId);
           const timeoutMs = Math.max(0, this.config.timeout || 0);
+          const useProbeTimeout = (this.config.timeoutMode || "probe") === "probe";
           const {
             response,
             effectiveSchema,
             sessionId: usedSessionId
-          } = timeoutMs > 0 ? await this.withTimeout(call, timeoutMs, "AI review") : await call;
+          } = timeoutMs > 0 && !useProbeTimeout ? await this.withTimeout(call, timeoutMs, "AI review") : await call;
           const processingTime = Date.now() - startTime;
           if (debugInfo) {
             debugInfo.rawResponse = response;
@@ -7788,7 +7789,8 @@ var init_ai_review_service = __esm({
             checkName
           );
           const timeoutMs = Math.max(0, this.config.timeout || 0);
-          const { response, effectiveSchema } = timeoutMs > 0 ? await this.withTimeout(call, timeoutMs, "AI review (session)") : await call;
+          const useProbeTimeout = (this.config.timeoutMode || "probe") === "probe";
+          const { response, effectiveSchema } = timeoutMs > 0 && !useProbeTimeout ? await this.withTimeout(call, timeoutMs, "AI review (session)") : await call;
           const processingTime = Date.now() - startTime;
           if (debugInfo) {
             debugInfo.rawResponse = response;
@@ -8361,6 +8363,12 @@ ${this.escapeXml(processedFallbackDiff)}
         log("\u{1F504} Reusing existing ProbeAgent session for AI review...");
         log(`\u{1F4DD} Prompt length: ${prompt.length} characters`);
         log(`\u2699\uFE0F Model: ${this.config.model || "default"}, Provider: ${this.config.provider || "auto"}`);
+        const reuseTimeoutMs = this.config.timeout || 0;
+        if (reuseTimeoutMs > 12e4) {
+          agent.maxOperationTimeout = reuseTimeoutMs - 9e4;
+        } else if (reuseTimeoutMs > 0) {
+          agent.maxOperationTimeout = reuseTimeoutMs;
+        }
         try {
           log("\u{1F680} Calling existing ProbeAgent with answer()...");
           let schemaString = void 0;
@@ -8794,6 +8802,12 @@ ${"=".repeat(60)}
           }
           if (this.config.allowEdit !== void 0) {
             options.allowEdit = this.config.allowEdit;
+          }
+          const timeoutMs = this.config.timeout || 0;
+          if (timeoutMs > 12e4) {
+            options.maxOperationTimeout = timeoutMs - 9e4;
+          } else if (timeoutMs > 0) {
+            options.maxOperationTimeout = timeoutMs;
           }
           if (this.config.allowedTools !== void 0) {
             options.allowedTools = this.config.allowedTools;
@@ -13724,7 +13738,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -13740,7 +13754,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -14046,6 +14060,11 @@ var init_config_schema = __esm({
             enableExecutePlan: {
               type: "boolean",
               description: "Enable the execute_plan DSL orchestration tool (replaces analyze_all when enabled)"
+            },
+            timeout_mode: {
+              type: "string",
+              enum: ["probe", "visor"],
+              description: `Timeout mode: 'probe' lets Probe handle timeout with graceful wind-down (injects "TIME LIMIT REACHED" message and bonus steps), 'visor' uses Visor's external Promise.race hard kill (legacy behavior). Default: 'probe'`
             }
           },
           additionalProperties: false,
@@ -14442,7 +14461,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -14457,13 +14476,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785>>": {
+        "Record<string,Partial<interface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-14532-29218-src_types_config.ts-0-57785>": {
+        "Partial<interface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065>": {
           type: "object",
           additionalProperties: false
         },
@@ -23906,6 +23925,9 @@ ${preview}`);
           if (aiAny2.timeout !== void 0) {
             const resolvedTimeout = await resolveLiquid(aiAny2.timeout) ?? aiAny2.timeout;
             aiConfig.timeout = Number(resolvedTimeout);
+          }
+          if (aiAny2.timeout_mode !== void 0) {
+            aiConfig.timeoutMode = aiAny2.timeout_mode;
           }
           if (aiAny2.max_iterations !== void 0 || aiAny2.maxIterations !== void 0) {
             const raw = aiAny2.max_iterations ?? aiAny2.maxIterations;
@@ -59654,7 +59676,6 @@ ${message}`;
           const checkCfg = cfg.checks?.[checkId];
           if (!checkCfg) return;
           if (checkCfg.type === "human-input") return;
-          if (checkCfg.criticality === "internal") return;
           const issues = result?.issues;
           if (!Array.isArray(issues) || issues.length === 0) return;
           const failureIssue = issues.find((issue) => this.isExecutionFailureIssue(issue));
