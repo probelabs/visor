@@ -697,6 +697,18 @@ export class WorkflowCheckProvider extends CheckProvider {
       config.checkName || workflow.id
     );
 
+    // Propagate parent check's timeout to nested workflow steps that don't define their own.
+    // This ensures that a parent `timeout: 120000` caps nested AI steps instead of them
+    // falling back to the 30-minute default.
+    const parentTimeout = config.timeout || config.ai?.timeout;
+    if (parentTimeout && workflowConfig.checks) {
+      for (const stepCfg of Object.values(workflowConfig.checks) as any[]) {
+        if (!stepCfg.timeout && !stepCfg.ai?.timeout) {
+          stepCfg.timeout = parentTimeout;
+        }
+      }
+    }
+
     // Build isolated child engine context (separate journal/memory to avoid state contamination)
     // Reuse parent's memory config if available, but never the instance
     const parentMemoryCfg =
