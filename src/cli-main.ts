@@ -1633,11 +1633,11 @@ export async function main(): Promise<void> {
       if (!process.stdout.isTTY || !process.stderr.isTTY) reasons.push('non-interactive TTY');
       if (options.debugServer) reasons.push('--debug-server');
       if (options.slack) reasons.push('--slack');
-      if ((options as any).telegram) reasons.push('--telegram');
-      if ((options as any).email) reasons.push('--email');
-      if ((options as any).whatsapp) reasons.push('--whatsapp');
-      if ((options as any).teams) reasons.push('--teams');
-      if ((options as any).a2a) reasons.push('--a2a');
+      if (options.telegram) reasons.push('--telegram');
+      if (options.email) reasons.push('--email');
+      if (options.whatsapp) reasons.push('--whatsapp');
+      if (options.teams) reasons.push('--teams');
+      if (options.a2a) reasons.push('--a2a');
       if (process.env.NODE_ENV === 'test') reasons.push('test mode');
       const suffix = reasons.length > 0 ? ` (${reasons.join(', ')})` : '';
       console.error(`TUI requested but disabled${suffix}.`);
@@ -2031,7 +2031,7 @@ export async function main(): Promise<void> {
     }
 
     // Email polling runner: visor --email [--config file]
-    if ((options as any).email === true) {
+    if (options.email === true) {
       const { EmailPollingRunner } = await import('./email/polling-runner');
       const engine = sharedEngine ?? new StateMachineExecutionEngine();
       const emailAny: any = (config as any).email || {};
