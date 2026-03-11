@@ -270,11 +270,11 @@ inputs:
           allowed_commands:
             type: array
             items: { type: string }
-            description: Bash command patterns this skill is allowed to run (e.g., 'git:log:*')
+            description: Bash command patterns this skill is allowed to run (e.g., 'git:log:*'). Only applied for skills with non-workflow tools.
           disallowed_commands:
             type: array
             items: { type: string }
-            description: Bash command patterns this skill should not run (e.g., 'git:push:*')
+            description: Bash command patterns this skill should not run (e.g., 'git:push:*'). Only applied for skills with non-workflow tools.
           always:
             type: boolean
             description: Always activate this skill regardless of classification
@@ -654,18 +654,34 @@ steps:
             }
           }
 
-          // Collect bash command patterns from active skills
-          if (Array.isArray(skill.allowed_commands)) {
-            for (let j = 0; j < skill.allowed_commands.length; j++) {
-              if (bashAllow.indexOf(skill.allowed_commands[j]) === -1) {
-                bashAllow.push(skill.allowed_commands[j]);
+          // Only merge bash command patterns from skills whose tools run in the
+          // parent orchestrator (MCP servers, built-ins). Skip skills that only have
+          // workflow-based tools — those are sub-workflows with their own bash config.
+          let hasNonWorkflowTools = false;
+          if (normalizedTools && typeof normalizedTools === 'object') {
+            const tNames = Object.keys(normalizedTools);
+            for (let i = 0; i < tNames.length; i++) {
+              const tc = normalizedTools[tNames[i]];
+              if (!tc || !tc.workflow) {
+                hasNonWorkflowTools = true;
+                break;
               }
             }
           }
-          if (Array.isArray(skill.disallowed_commands)) {
-            for (let j = 0; j < skill.disallowed_commands.length; j++) {
-              if (bashDeny.indexOf(skill.disallowed_commands[j]) === -1) {
-                bashDeny.push(skill.disallowed_commands[j]);
+
+          if (hasNonWorkflowTools) {
+            if (Array.isArray(skill.allowed_commands)) {
+              for (let j = 0; j < skill.allowed_commands.length; j++) {
+                if (bashAllow.indexOf(skill.allowed_commands[j]) === -1) {
+                  bashAllow.push(skill.allowed_commands[j]);
+                }
+              }
+            }
+            if (Array.isArray(skill.disallowed_commands)) {
+              for (let j = 0; j < skill.disallowed_commands.length; j++) {
+                if (bashDeny.indexOf(skill.disallowed_commands[j]) === -1) {
+                  bashDeny.push(skill.disallowed_commands[j]);
+                }
               }
             }
           }
@@ -2244,10 +2260,6 @@ tests:
               request needs codebase exploration, understanding implementation details,
               code search, or documentation questions. READ-ONLY — cannot modify files,
               only investigate and answer questions.
-            allowed_commands:
-              - "git:log:*"
-              - "git:show:*"
-              - "git:diff:*"
             knowledge: |
               ## Code Explorer
               Use the code-talk tool to explore code repositories.
