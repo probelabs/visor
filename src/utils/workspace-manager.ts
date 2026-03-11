@@ -48,6 +48,8 @@ export interface WorkspaceInfo {
   mainProjectPath: string;
   mainProjectName: string;
   originalPath: string;
+  /** The git worktree root (before subdirectory offset). Used for cleanup. */
+  worktreeRootPath?: string;
 }
 
 export interface ProjectInfo {
@@ -220,10 +222,44 @@ export class WorkspaceManager {
     this.usedNames.add(mainProjectName);
 
     // Create worktree for main project
-    const mainProjectPath = path.join(this.workspacePath, mainProjectName);
+    let mainProjectPath = path.join(this.workspacePath, mainProjectName);
 
     // Check if original path is a git repository
     const isGitRepo = await this.isGitRepository(this.originalPath);
+
+    // Prune stale worktree references (from previous runs that were cleaned up).
+    // Without this, the worktree list grows unboundedly and can slow git operations.
+    if (isGitRepo) {
+      try {
+        await commandExecutor.execute(`git -C ${shellEscape(this.originalPath)} worktree prune`, {
+          timeout: 15000,
+        });
+      } catch {
+        // Best-effort — don't fail workspace init if prune fails
+      }
+    }
+
+    // Detect if originalPath is a subdirectory of a git repo.
+    // `git worktree add` always checks out the full repo, so if the user runs
+    // visor from a subdirectory (e.g. /repo/subdir), the worktree will contain
+    // the entire repo and we need to adjust mainProjectPath to point to the
+    // corresponding subdirectory inside the worktree.
+    let subdirOffset = '';
+    if (isGitRepo) {
+      const gitRootResult = await commandExecutor.execute(
+        `git -C ${shellEscape(this.originalPath)} rev-parse --show-toplevel`,
+        { timeout: 5000 }
+      );
+      if (gitRootResult.exitCode === 0) {
+        const gitRoot = gitRootResult.stdout.trim();
+        const normalizedOriginal = path.resolve(this.originalPath);
+        const normalizedRoot = path.resolve(gitRoot);
+        if (normalizedOriginal !== normalizedRoot) {
+          subdirOffset = path.relative(normalizedRoot, normalizedOriginal);
+          logger.info(`[Workspace] Original path is a subdirectory of git repo: ${subdirOffset}`);
+        }
+      }
+    }
 
     if (isGitRepo) {
       // Check if main project worktree already exists (reused workspace, e.g. Slack thread)
@@ -261,6 +297,27 @@ export class WorkspaceManager {
       }
     }
 
+    // Remember the worktree root before any subdirectory adjustment.
+    // Cleanup needs the actual worktree path (not the subdirectory inside it).
+    const worktreeRootPath = mainProjectPath;
+
+    // If the original path was a subdirectory, adjust mainProjectPath to
+    // point to the corresponding subdirectory inside the worktree.
+    // e.g. worktree at /tmp/ws/Oel contains full repo; if originalPath was
+    // /repo/Oel, then mainProjectPath becomes /tmp/ws/Oel/Oel
+    if (subdirOffset) {
+      mainProjectPath = path.join(mainProjectPath, subdirOffset);
+      logger.info(`[Workspace] Adjusted main project path to subdirectory: ${mainProjectPath}`);
+      // Ensure the subdirectory exists in the worktree
+      const subdirExists = await this.pathExists(mainProjectPath);
+      if (!subdirExists) {
+        logger.warn(
+          `[Workspace] Subdirectory '${subdirOffset}' not found in worktree — falling back to worktree root`
+        );
+        mainProjectPath = path.join(this.workspacePath, mainProjectName);
+      }
+    }
+
     // Scan existing entries in the workspace directory to populate usedNames.
     // This handles reused workspaces (e.g. Slack threads) where a previous run
     // left symlinks on disk but the in-memory state was cleared by cleanup().
@@ -284,6 +341,7 @@ export class WorkspaceManager {
       mainProjectPath,
       mainProjectName,
       originalPath: this.originalPath,
+      worktreeRootPath,
     };
 
     this.initialized = true;
@@ -418,15 +476,18 @@ export class WorkspaceManager {
     }
 
     try {
-      // Remove main project worktree if it exists
+      // Remove main project worktree if it exists.
+      // Use worktreeRootPath (the actual git worktree) rather than mainProjectPath
+      // which may include a subdirectory offset (e.g. Oel/Oel instead of Oel).
       if (this.mainProjectInfo) {
-        const mainProjectPath = this.mainProjectInfo.mainProjectPath;
+        const worktreePath =
+          this.mainProjectInfo.worktreeRootPath || this.mainProjectInfo.mainProjectPath;
 
         // Check if path exists and if it's a worktree (not a symlink)
         try {
-          const stats = await fsp.lstat(mainProjectPath);
+          const stats = await fsp.lstat(worktreePath);
           if (!stats.isSymbolicLink()) {
-            await this.removeMainProjectWorktree(mainProjectPath);
+            await this.removeMainProjectWorktree(worktreePath);
           }
         } catch {
           // Path doesn't exist, nothing to clean up

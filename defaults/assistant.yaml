@@ -871,6 +871,16 @@ steps:
       If you catch yourself about to use bash or file tools for code operations — STOP and
       delegate to the correct skill tool instead.
 
+      ## CRITICAL: Do Not Retry Failed Engineer Calls With the Same Approach
+      When the `engineer` tool fails or returns an error/partial result:
+      - **DO NOT call engineer again with the same task** — it will hit the same obstacles
+      - **Acknowledge the failure** to the user and explain what went wrong
+      - **Only retry if you have a fundamentally different approach** (different strategy,
+        different files, different technique — not just rephrasing the same request)
+      - If engineer hit its iteration limit or timed out, it means the task is too complex
+        for a single tool call — break it into smaller, independent pieces or report back
+      - Never poll/loop waiting for CI to pass — report the current status and let the user decide
+
       ## CRITICAL: Preserve Tool Output Details
       When tools return detailed data (lists, analytics, search results):
       - **DO NOT summarize or compress** the tool output
