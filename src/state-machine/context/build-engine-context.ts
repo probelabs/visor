@@ -116,9 +116,11 @@ export function buildEngineContextForRun(
         const sid = parentSessionId || sessionId;
         // ProbeAgent calls acquire(null) without queueTimeout, which defaults
         // to 120s in FairConcurrencyLimiter — too short when AI checks take
-        // 5-30+ min and slots are occupied. Override to 0 (disabled) so the
-        // step/AI timeout governs cancellation instead.
-        const effectiveQueueTimeout = queueTimeout ?? 0;
+        // 5-30+ min and slots are occupied. Use the configured global timeout
+        // (default 30min) so queued calls wait long enough for slots to free
+        // but don't hang forever if slots leak.
+        const checkTimeout = (clonedConfig as any).timeout || 1800000; // 30 min default
+        const effectiveQueueTimeout = queueTimeout ?? checkTimeout;
         return fairLimiter.acquire(sid, _dbg, effectiveQueueTimeout);
       },
       release(parentSessionId: any, _dbg?: boolean) {
