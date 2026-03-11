@@ -20341,10 +20341,28 @@ async function trackExecution(opts, executor) {
   );
   try {
     const result = await executor();
+    let responseText = "Execution completed";
+    try {
+      const history = result?.reviewSummary?.history;
+      if (history) {
+        for (const outputs of Object.values(history)) {
+          if (!Array.isArray(outputs)) continue;
+          for (const out of outputs) {
+            const text = out?.text;
+            if (typeof text === "string" && text.trim().length > 0) {
+              responseText = text.trim();
+              break;
+            }
+          }
+          if (responseText !== "Execution completed") break;
+        }
+      }
+    } catch {
+    }
     const completedMsg = {
       message_id: import_crypto2.default.randomUUID(),
       role: "agent",
-      parts: [{ text: "Execution completed" }]
+      parts: [{ text: responseText }]
     };
     taskStore.updateTaskState(task.id, "completed", completedMsg);
     logger.info(`[TaskTracking] Task ${task.id} completed`);
@@ -24048,7 +24066,7 @@ ${preview}`);
           aiConfig.maxIterations = config.ai_max_iterations;
         }
         if (aiConfig.maxIterations === void 0) {
-          aiConfig.maxIterations = 50;
+          aiConfig.maxIterations = 100;
         }
         const sharedLimiter = sessionInfo?._parentContext?.sharedConcurrencyLimiter;
         if (sharedLimiter) {
