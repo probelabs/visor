@@ -1038,9 +1038,9 @@ export class AICheckProvider extends CheckProvider {
     if (config.ai_max_iterations !== undefined && aiConfig.maxIterations === undefined) {
       aiConfig.maxIterations = config.ai_max_iterations as number;
     }
-    // Default to 50 iterations if not configured (ProbeAgent's own default is 30)
+    // Default to 100 iterations if not configured (ProbeAgent's own default is 30)
     if (aiConfig.maxIterations === undefined) {
-      aiConfig.maxIterations = 50;
+      aiConfig.maxIterations = 100;
     }
 
     // Pass shared concurrency limiter for global AI call gating

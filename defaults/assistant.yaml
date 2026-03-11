@@ -293,7 +293,7 @@ inputs:
   - name: max_iterations
     required: false
     description: Maximum AI iterations
-    default: 30
+    default: 100
     schema:
       type: number
 
