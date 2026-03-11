@@ -23876,45 +23876,44 @@ ${preview}`);
         const aiConfig = {};
         if (config.ai) {
           const aiAny2 = config.ai;
+          const resolveLiquid = async (val) => {
+            if (typeof val !== "string" || !val.includes("{{")) return void 0;
+            try {
+              return (await this.liquidEngine.parseAndRender(val, {
+                inputs: config.workflowInputs || {},
+                env: process.env
+              })).trim();
+            } catch {
+              return void 0;
+            }
+          };
+          const resolveBool = async (val) => {
+            const resolved = await resolveLiquid(val) ?? val;
+            if (typeof resolved === "boolean") return resolved;
+            if (typeof resolved === "string") return resolved === "true";
+            return !!resolved;
+          };
           const skipTransport = aiAny2.skip_transport_context === true;
           if (aiAny2.apiKey !== void 0) {
             aiConfig.apiKey = aiAny2.apiKey;
           }
           if (aiAny2.model !== void 0) {
-            let modelVal = String(aiAny2.model);
-            if (modelVal.includes("{{")) {
-              try {
-                const rendered = await this.liquidEngine.parseAndRender(modelVal, {
-                  inputs: config.workflowInputs || {},
-                  env: process.env
-                });
-                modelVal = rendered.trim();
-              } catch {
-              }
-            }
+            const modelVal = await resolveLiquid(aiAny2.model) ?? String(aiAny2.model);
             if (modelVal) {
               aiConfig.model = modelVal;
             }
           }
           if (aiAny2.timeout !== void 0) {
-            aiConfig.timeout = aiAny2.timeout;
+            const resolvedTimeout = await resolveLiquid(aiAny2.timeout) ?? aiAny2.timeout;
+            aiConfig.timeout = Number(resolvedTimeout);
           }
           if (aiAny2.max_iterations !== void 0 || aiAny2.maxIterations !== void 0) {
             const raw = aiAny2.max_iterations ?? aiAny2.maxIterations;
-            aiConfig.maxIterations = Number(raw);
+            const resolved = await resolveLiquid(raw) ?? raw;
+            aiConfig.maxIterations = Number(resolved);
           }
           if (aiAny2.provider !== void 0) {
-            let providerVal = String(aiAny2.provider);
-            if (providerVal.includes("{{")) {
-              try {
-                const rendered = await this.liquidEngine.parseAndRender(providerVal, {
-                  inputs: config.workflowInputs || {},
-                  env: process.env
-                });
-                providerVal = rendered.trim();
-              } catch {
-              }
-            }
+            const providerVal = await resolveLiquid(aiAny2.provider) ?? String(aiAny2.provider);
             if (providerVal) {
               aiConfig.provider = providerVal;
             }
@@ -23923,16 +23922,16 @@ ${preview}`);
             aiConfig.debug = aiAny2.debug;
           }
           if (aiAny2.enableDelegate !== void 0) {
-            aiConfig.enableDelegate = aiAny2.enableDelegate;
+            aiConfig.enableDelegate = await resolveBool(aiAny2.enableDelegate);
           }
           if (aiAny2.enableTasks !== void 0) {
-            aiConfig.enableTasks = aiAny2.enableTasks;
+            aiConfig.enableTasks = await resolveBool(aiAny2.enableTasks);
           }
           if (aiAny2.enableExecutePlan !== void 0) {
-            aiConfig.enableExecutePlan = aiAny2.enableExecutePlan;
+            aiConfig.enableExecutePlan = await resolveBool(aiAny2.enableExecutePlan);
           }
           if (aiAny2.allowEdit !== void 0) {
-            aiConfig.allowEdit = aiAny2.allowEdit;
+            aiConfig.allowEdit = await resolveBool(aiAny2.allowEdit);
           }
           if (aiAny2.allowedTools !== void 0) {
             aiConfig.allowedTools = aiAny2.allowedTools;
@@ -23941,20 +23940,20 @@ ${preview}`);
             );
           }
           if (aiAny2.disableTools !== void 0) {
-            aiConfig.disableTools = aiAny2.disableTools;
+            aiConfig.disableTools = await resolveBool(aiAny2.disableTools);
             this.logDebug(`[AI Provider] Read disableTools from YAML: ${aiAny2.disableTools}`);
           }
           if (aiAny2.allowBash !== void 0) {
-            aiConfig.allowBash = aiAny2.allowBash;
+            aiConfig.allowBash = await resolveBool(aiAny2.allowBash);
           }
           if (aiAny2.bashConfig !== void 0) {
             aiConfig.bashConfig = aiAny2.bashConfig;
           }
           if (aiAny2.search_delegate_provider !== void 0) {
-            aiConfig.search_delegate_provider = aiAny2.search_delegate_provider;
+            aiConfig.search_delegate_provider = await resolveLiquid(aiAny2.search_delegate_provider) ?? aiAny2.search_delegate_provider;
           }
           if (aiAny2.search_delegate_model !== void 0) {
-            aiConfig.search_delegate_model = aiAny2.search_delegate_model;
+            aiConfig.search_delegate_model = await resolveLiquid(aiAny2.search_delegate_model) ?? aiAny2.search_delegate_model;
           }
           if (aiAny2.completion_prompt !== void 0) {
             aiConfig.completionPrompt = aiAny2.completion_prompt;
@@ -24065,7 +24064,7 @@ ${preview}`);
         if (config.ai_max_iterations !== void 0 && aiConfig.maxIterations === void 0) {
           aiConfig.maxIterations = config.ai_max_iterations;
         }
-        if (aiConfig.maxIterations === void 0) {
+        if (aiConfig.maxIterations === void 0 || Number.isNaN(aiConfig.maxIterations)) {
           aiConfig.maxIterations = 100;
         }
         const sharedLimiter = sessionInfo?._parentContext?.sharedConcurrencyLimiter;
