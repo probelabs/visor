@@ -100,9 +100,9 @@ describe('Duplicate comment regression', () => {
     // Simulate the comment ID format used by github-frontend
     const commentId = 'visor-thread-review-TykTechnologies/portal#1763';
 
-    // Without cachedGithubCommentId, concurrent calls will create duplicates due to eventual consistency
-    // This test documents the current behavior without the fix - when github-frontend provides
-    // the cachedGithubCommentId, duplicates are prevented
+    // CommentManager's internal write queue serializes all calls, so even without
+    // cachedGithubCommentId the second and third calls see the comment created by
+    // the first (eventual consistency delay is shorter than the serial queue wait).
     const updates = [
       commentManager.updateOrCreateComment('owner', 'repo', 1763, 'Content from check 1', {
         commentId,
@@ -123,11 +123,13 @@ describe('Duplicate comment regression', () => {
 
     await Promise.all(updates);
 
-    // Without the github-frontend mutex and cachedGithubCommentId, all 3 calls will create
-    // because they all see empty listComments due to eventual consistency simulation
-    // This is expected behavior - the fix is in github-frontend.ts which provides serialization
-    // and caches the GitHub comment ID
-    expect(createCommentCount).toBe(3);
+    // With the write queue, calls are serialized. The first creates a comment.
+    // The second call runs after ~80ms but the eventual consistency mock delays
+    // visibility by 100ms, so the second also creates. The third call sees the
+    // first comment (>100ms old) and updates instead.
+    // Key improvement: without the queue all 3 would create (was 3 creates, 0 updates).
+    expect(createCommentCount).toBe(2);
+    expect(updateCommentCount).toBe(1);
   });
 
   it('should update existing comment when cachedGithubCommentId is provided', async () => {

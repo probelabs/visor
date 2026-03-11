@@ -121,6 +121,29 @@ describe('FairConcurrencyLimiter', () => {
     await expect(limiter.acquire('b', false, 100)).rejects.toThrow(/Queue timeout/);
   });
 
+  it('queueTimeout=0 waits indefinitely until slot is released', async () => {
+    // Fill all 3 slots
+    await limiter.acquire('a');
+    await limiter.acquire('a');
+    await limiter.acquire('a');
+
+    let resolved = false;
+    // queueTimeout=0 means no timeout — should wait indefinitely
+    const p = limiter.acquire('b', false, 0).then(() => {
+      resolved = true;
+    });
+
+    // Wait longer than the default 120s would allow (use 200ms as proxy)
+    await new Promise(r => setTimeout(r, 200));
+    expect(resolved).toBe(false);
+    expect(limiter.getStats().queueSize).toBe(1);
+
+    // Release a slot — queued request should resolve
+    limiter.release('a');
+    await p;
+    expect(resolved).toBe(true);
+  });
+
   it('singleton via getInstance', () => {
     const a = FairConcurrencyLimiter.getInstance(5);
     const b = FairConcurrencyLimiter.getInstance(5);

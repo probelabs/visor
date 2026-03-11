@@ -374,4 +374,82 @@ describe('CommentManager', () => {
       expect(result).toBeNull();
     });
   });
+
+  describe('write queue serialization', () => {
+    it('serializes concurrent updateOrCreateComment calls', async () => {
+      const callOrder: number[] = [];
+      let callCount = 0;
+
+      // Each createComment call takes some time and records its order
+      mockOctokit.rest.issues.listComments.mockResolvedValue({ data: [] });
+      mockOctokit.rest.issues.createComment.mockImplementation(async () => {
+        const myIndex = ++callCount;
+        // Simulate varying API latency
+        await new Promise(r => setTimeout(r, myIndex === 1 ? 50 : 10));
+        callOrder.push(myIndex);
+        return {
+          data: {
+            id: myIndex,
+            body: `<!-- visor-comment-id:id-${myIndex} -->content<!-- /visor-comment-id:id-${myIndex} -->`,
+            user: { login: 'bot' },
+            created_at: '2023-01-01T00:00:00Z',
+            updated_at: '2023-01-01T00:00:00Z',
+          },
+        };
+      });
+
+      // Fire 3 concurrent writes
+      const p1 = commentManager.updateOrCreateComment('owner', 'repo', 1, 'body1', {
+        commentId: 'id-1',
+      });
+      const p2 = commentManager.updateOrCreateComment('owner', 'repo', 1, 'body2', {
+        commentId: 'id-2',
+      });
+      const p3 = commentManager.updateOrCreateComment('owner', 'repo', 1, 'body3', {
+        commentId: 'id-3',
+      });
+
+      await Promise.all([p1, p2, p3]);
+
+      // All 3 should have executed in strict serial order (1, 2, 3)
+      // even though call 1 has longer latency than call 2
+      expect(callOrder).toEqual([1, 2, 3]);
+    });
+
+    it('does not block subsequent calls when a write fails', async () => {
+      mockOctokit.rest.issues.listComments.mockResolvedValue({ data: [] });
+
+      let callCount = 0;
+      mockOctokit.rest.issues.createComment.mockImplementation(async () => {
+        callCount++;
+        if (callCount <= 1) {
+          const err: any = new Error('Not found');
+          err.status = 404;
+          err.response = { status: 404 };
+          throw err;
+        }
+        return {
+          data: {
+            id: callCount,
+            body: `<!-- visor-comment-id:ok -->content<!-- /visor-comment-id:ok -->`,
+            user: { login: 'bot' },
+            created_at: '2023-01-01T00:00:00Z',
+            updated_at: '2023-01-01T00:00:00Z',
+          },
+        };
+      });
+
+      const p1 = commentManager.updateOrCreateComment('owner', 'repo', 1, 'fail', {
+        commentId: 'fail-id',
+      });
+      const p2 = commentManager.updateOrCreateComment('owner', 'repo', 1, 'ok', {
+        commentId: 'ok-id',
+      });
+
+      await expect(p1).rejects.toThrow('Not found');
+      // Second call should still succeed despite first failing
+      const result = await p2;
+      expect(result.id).toBeGreaterThan(0);
+    });
+  });
 });
