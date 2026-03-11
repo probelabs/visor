@@ -83,10 +83,35 @@ export async function trackExecution<T>(
   try {
     const result = await executor();
 
+    // Extract AI response text from the result using the same pattern as Slack frontend:
+    // result.reviewSummary.history has check outputs, look for output.text in any check
+    let responseText = 'Execution completed';
+    try {
+      const history = (result as any)?.reviewSummary?.history as
+        | Record<string, unknown[]>
+        | undefined;
+      if (history) {
+        // Look through check outputs for a text response (e.g., generate-response)
+        for (const outputs of Object.values(history)) {
+          if (!Array.isArray(outputs)) continue;
+          for (const out of outputs) {
+            const text = (out as any)?.text;
+            if (typeof text === 'string' && text.trim().length > 0) {
+              responseText = text.trim();
+              break;
+            }
+          }
+          if (responseText !== 'Execution completed') break;
+        }
+      }
+    } catch {
+      // ignore extraction errors
+    }
+
     const completedMsg: AgentMessage = {
       message_id: crypto.randomUUID(),
       role: 'agent',
-      parts: [{ text: 'Execution completed' }],
+      parts: [{ text: responseText }],
     };
     taskStore.updateTaskState(task.id, 'completed', completedMsg);
     logger.info(`[TaskTracking] Task ${task.id} completed`);

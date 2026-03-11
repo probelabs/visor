@@ -500,6 +500,21 @@ async function handleShow(
     if (match.run_id) detailTable.push({ 'Run ID': match.run_id });
     detailTable.push({ Input: match.request_message });
 
+    // Show AI response from status_message (recorded on completion/failure)
+    const fullTask = store.getTask(match.id);
+    if (fullTask?.status?.message) {
+      const parts = fullTask.status.message.parts ?? [];
+      const textPart = parts.find((p: any) => typeof p.text === 'string');
+      if (textPart) {
+        const responseText = (textPart as any).text as string;
+        // Truncate long responses for display
+        const maxLen = 500;
+        const display =
+          responseText.length > maxLen ? responseText.slice(0, maxLen) + '...' : responseText;
+        detailTable.push({ Response: display });
+      }
+    }
+
     // Show metadata
     const meta = match.metadata;
     const metaKeys = Object.keys(meta).filter(k => k !== 'source');
