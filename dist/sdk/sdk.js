@@ -1152,11 +1152,11 @@ function getTracer() {
 }
 async function withActiveSpan(name, attrs, fn) {
   const tracer = getTracer();
-  return await new Promise((resolve15, reject) => {
+  return await new Promise((resolve16, reject) => {
     const callback = async (span) => {
       try {
         const res = await fn(span);
-        resolve15(res);
+        resolve16(res);
       } catch (err) {
         try {
           if (err instanceof Error) span.recordException(err);
@@ -7158,7 +7158,7 @@ async function renderMermaidToPng(mermaidCode) {
     if (chromiumPath) {
       env.PUPPETEER_EXECUTABLE_PATH = chromiumPath;
     }
-    const result = await new Promise((resolve15) => {
+    const result = await new Promise((resolve16) => {
       const proc = (0, import_child_process.spawn)(
         "npx",
         [
@@ -7188,13 +7188,13 @@ async function renderMermaidToPng(mermaidCode) {
       });
       proc.on("close", (code) => {
         if (code === 0) {
-          resolve15({ success: true });
+          resolve16({ success: true });
         } else {
-          resolve15({ success: false, error: stderr || `Exit code ${code}` });
+          resolve16({ success: false, error: stderr || `Exit code ${code}` });
         }
       });
       proc.on("error", (err) => {
-        resolve15({ success: false, error: err.message });
+        resolve16({ success: false, error: err.message });
       });
     });
     if (!result.success) {
@@ -9471,7 +9471,7 @@ ${"=".repeat(60)}
        * Generate mock response for testing
        */
       async generateMockResponse(_prompt, _checkName, _schema) {
-        await new Promise((resolve15) => setTimeout(resolve15, 500));
+        await new Promise((resolve16) => setTimeout(resolve16, 500));
         const name = (_checkName || "").toLowerCase();
         if (name.includes("extract-facts")) {
           const arr = Array.from({ length: 6 }, (_, i) => ({
@@ -9832,7 +9832,7 @@ var init_command_executor = __esm({
        * Execute command with stdin input
        */
       executeWithStdin(command, options) {
-        return new Promise((resolve15, reject) => {
+        return new Promise((resolve16, reject) => {
           const childProcess = (0, import_child_process2.exec)(
             command,
             {
@@ -9844,7 +9844,7 @@ var init_command_executor = __esm({
               if (error && error.killed && (error.code === "ETIMEDOUT" || error.signal === "SIGTERM")) {
                 reject(new Error(`Command timed out after ${options.timeout || 3e4}ms`));
               } else {
-                resolve15({
+                resolve16({
                   stdout: stdout || "",
                   stderr: stderr || "",
                   exitCode: error ? error.code || 1 : 0
@@ -9973,7 +9973,7 @@ async function rateLimitedFetch(url, options, rateLimitConfig) {
     logger.verbose(
       `[rate-limiter] 429 on ${url} (bucket: ${key}), retry ${attempt + 1}/${maxRetries} in ${delayMs}ms`
     );
-    await new Promise((resolve15) => setTimeout(resolve15, delayMs));
+    await new Promise((resolve16) => setTimeout(resolve16, delayMs));
   }
   return fetch(url, options);
 }
@@ -10022,8 +10022,8 @@ var init_rate_limiter = __esm({
           return;
         }
         const waitMs = Math.ceil((1 - this.tokens) / this.refillRate);
-        return new Promise((resolve15) => {
-          const entry = { resolve: resolve15 };
+        return new Promise((resolve16) => {
+          const entry = { resolve: resolve16 };
           this.waitQueue.push(entry);
           setTimeout(() => {
             const idx = this.waitQueue.indexOf(entry);
@@ -10034,7 +10034,7 @@ var init_rate_limiter = __esm({
             if (this.tokens >= 1) {
               this.tokens -= 1;
             }
-            resolve15();
+            resolve16();
           }, waitMs);
         });
       }
@@ -22397,7 +22397,7 @@ var init_mcp_custom_sse_server = __esm({
        * Returns the actual bound port number
        */
       async start() {
-        return new Promise((resolve15, reject) => {
+        return new Promise((resolve16, reject) => {
           try {
             this.server = import_http.default.createServer((req, res) => {
               this.handleRequest(req, res).catch((error) => {
@@ -22431,7 +22431,7 @@ var init_mcp_custom_sse_server = __esm({
                 );
               }
               this.startKeepalive();
-              resolve15(this.port);
+              resolve16(this.port);
             });
           } catch (error) {
             reject(error);
@@ -22494,7 +22494,7 @@ var init_mcp_custom_sse_server = __esm({
             logger.debug(
               `[CustomToolsSSEServer:${this.sessionId}] Grace period before stop: ${waitMs}ms (activeToolCalls=${this.activeToolCalls})`
             );
-            await new Promise((resolve15) => setTimeout(resolve15, waitMs));
+            await new Promise((resolve16) => setTimeout(resolve16, waitMs));
           }
         }
         if (this.activeToolCalls > 0) {
@@ -22503,7 +22503,7 @@ var init_mcp_custom_sse_server = __esm({
             `[CustomToolsSSEServer:${this.sessionId}] Waiting for ${this.activeToolCalls} active tool call(s) before stop`
           );
           while (this.activeToolCalls > 0 && Date.now() - startedAt < effectiveDrainTimeoutMs) {
-            await new Promise((resolve15) => setTimeout(resolve15, 250));
+            await new Promise((resolve16) => setTimeout(resolve16, 250));
           }
           if (this.activeToolCalls > 0) {
             logger.warn(
@@ -22528,21 +22528,21 @@ var init_mcp_custom_sse_server = __esm({
         }
         this.connections.clear();
         if (this.server) {
-          await new Promise((resolve15, reject) => {
+          await new Promise((resolve16, reject) => {
             const timeout = setTimeout(() => {
               if (this.debug) {
                 logger.debug(
                   `[CustomToolsSSEServer:${this.sessionId}] Force closing server after timeout`
                 );
               }
-              this.server?.close(() => resolve15());
+              this.server?.close(() => resolve16());
             }, 5e3);
             this.server.close((error) => {
               clearTimeout(timeout);
               if (error) {
                 reject(error);
               } else {
-                resolve15();
+                resolve16();
               }
             });
           });
@@ -22999,7 +22999,7 @@ var init_mcp_custom_sse_server = __esm({
               logger.warn(
                 `[CustomToolsSSEServer:${this.sessionId}] Tool ${toolName} failed (attempt ${attempt + 1}/${retryCount + 1}): ${errorMsg}. Retrying in ${delay}ms`
               );
-              await new Promise((resolve15) => setTimeout(resolve15, delay));
+              await new Promise((resolve16) => setTimeout(resolve16, delay));
               attempt++;
             }
           }
@@ -24046,6 +24046,9 @@ ${preview}`);
         }
         if (config.ai_max_iterations !== void 0 && aiConfig.maxIterations === void 0) {
           aiConfig.maxIterations = config.ai_max_iterations;
+        }
+        if (aiConfig.maxIterations === void 0) {
+          aiConfig.maxIterations = 50;
         }
         const sharedLimiter = sessionInfo?._parentContext?.sharedConcurrencyLimiter;
         if (sharedLimiter) {
@@ -32662,8 +32665,8 @@ var require_util2 = __commonJS({
     function createDeferredPromise() {
       let res;
       let rej;
-      const promise = new Promise((resolve15, reject) => {
-        res = resolve15;
+      const promise = new Promise((resolve16, reject) => {
+        res = resolve16;
         rej = reject;
       });
       return { promise, resolve: res, reject: rej };
@@ -34168,8 +34171,8 @@ Content-Type: ${value.type || "application/octet-stream"}\r
                 });
               }
             });
-            const busboyResolve = new Promise((resolve15, reject) => {
-              busboy.on("finish", resolve15);
+            const busboyResolve = new Promise((resolve16, reject) => {
+              busboy.on("finish", resolve16);
               busboy.on("error", (err) => reject(new TypeError(err)));
             });
             if (this.body !== null) for await (const chunk of consumeBody(this[kState].body)) busboy.write(chunk);
@@ -34703,9 +34706,9 @@ var require_dispatcher_base = __commonJS({
       }
       close(callback) {
         if (callback === void 0) {
-          return new Promise((resolve15, reject) => {
+          return new Promise((resolve16, reject) => {
             this.close((err, data) => {
-              return err ? reject(err) : resolve15(data);
+              return err ? reject(err) : resolve16(data);
             });
           });
         }
@@ -34743,12 +34746,12 @@ var require_dispatcher_base = __commonJS({
           err = null;
         }
         if (callback === void 0) {
-          return new Promise((resolve15, reject) => {
+          return new Promise((resolve16, reject) => {
             this.destroy(err, (err2, data) => {
               return err2 ? (
                 /* istanbul ignore next: should never error */
                 reject(err2)
-              ) : resolve15(data);
+              ) : resolve16(data);
             });
           });
         }
@@ -35810,16 +35813,16 @@ var require_client = __commonJS({
         return this[kNeedDrain] < 2;
       }
       async [kClose]() {
-        return new Promise((resolve15) => {
+        return new Promise((resolve16) => {
           if (!this[kSize]) {
-            resolve15(null);
+            resolve16(null);
           } else {
-            this[kClosedResolve] = resolve15;
+            this[kClosedResolve] = resolve16;
           }
         });
       }
       async [kDestroy](err) {
-        return new Promise((resolve15) => {
+        return new Promise((resolve16) => {
           const requests = this[kQueue].splice(this[kPendingIdx]);
           for (let i = 0; i < requests.length; i++) {
             const request = requests[i];
@@ -35830,7 +35833,7 @@ var require_client = __commonJS({
               this[kClosedResolve]();
               this[kClosedResolve] = null;
             }
-            resolve15();
+            resolve16();
           };
           if (this[kHTTP2Session] != null) {
             util.destroy(this[kHTTP2Session], err);
@@ -36410,7 +36413,7 @@ var require_client = __commonJS({
         });
       }
       try {
-        const socket = await new Promise((resolve15, reject) => {
+        const socket = await new Promise((resolve16, reject) => {
           client[kConnector]({
             host,
             hostname,
@@ -36422,7 +36425,7 @@ var require_client = __commonJS({
             if (err) {
               reject(err);
             } else {
-              resolve15(socket2);
+              resolve16(socket2);
             }
           });
         });
@@ -37046,12 +37049,12 @@ upgrade: ${upgrade}\r
           cb();
         }
       }
-      const waitForDrain = () => new Promise((resolve15, reject) => {
+      const waitForDrain = () => new Promise((resolve16, reject) => {
         assert(callback === null);
         if (socket[kError]) {
           reject(socket[kError]);
         } else {
-          callback = resolve15;
+          callback = resolve16;
         }
       });
       if (client[kHTTPConnVersion] === "h2") {
@@ -37397,8 +37400,8 @@ var require_pool_base = __commonJS({
         if (this[kQueue].isEmpty()) {
           return Promise.all(this[kClients].map((c) => c.close()));
         } else {
-          return new Promise((resolve15) => {
-            this[kClosedResolve] = resolve15;
+          return new Promise((resolve16) => {
+            this[kClosedResolve] = resolve16;
           });
         }
       }
@@ -37976,7 +37979,7 @@ var require_readable = __commonJS({
         if (this.closed) {
           return Promise.resolve(null);
         }
-        return new Promise((resolve15, reject) => {
+        return new Promise((resolve16, reject) => {
           const signalListenerCleanup = signal ? util.addAbortListener(signal, () => {
             this.destroy();
           }) : noop;
@@ -37985,7 +37988,7 @@ var require_readable = __commonJS({
             if (signal && signal.aborted) {
               reject(signal.reason || Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
             } else {
-              resolve15(null);
+              resolve16(null);
             }
           }).on("error", noop).on("data", function(chunk) {
             limit -= chunk.length;
@@ -38007,11 +38010,11 @@ var require_readable = __commonJS({
         throw new TypeError("unusable");
       }
       assert(!stream[kConsume]);
-      return new Promise((resolve15, reject) => {
+      return new Promise((resolve16, reject) => {
         stream[kConsume] = {
           type,
           stream,
-          resolve: resolve15,
+          resolve: resolve16,
           reject,
           length: 0,
           body: []
@@ -38046,12 +38049,12 @@ var require_readable = __commonJS({
       }
     }
     function consumeEnd(consume2) {
-      const { type, body, resolve: resolve15, stream, length } = consume2;
+      const { type, body, resolve: resolve16, stream, length } = consume2;
       try {
         if (type === "text") {
-          resolve15(toUSVString(Buffer.concat(body)));
+          resolve16(toUSVString(Buffer.concat(body)));
         } else if (type === "json") {
-          resolve15(JSON.parse(Buffer.concat(body)));
+          resolve16(JSON.parse(Buffer.concat(body)));
         } else if (type === "arrayBuffer") {
           const dst = new Uint8Array(length);
           let pos = 0;
@@ -38059,12 +38062,12 @@ var require_readable = __commonJS({
             dst.set(buf, pos);
             pos += buf.byteLength;
           }
-          resolve15(dst.buffer);
+          resolve16(dst.buffer);
         } else if (type === "blob") {
           if (!Blob2) {
             Blob2 = require("buffer").Blob;
           }
-          resolve15(new Blob2(body, { type: stream[kContentType] }));
+          resolve16(new Blob2(body, { type: stream[kContentType] }));
         }
         consumeFinish(consume2);
       } catch (err) {
@@ -38321,9 +38324,9 @@ var require_api_request = __commonJS({
     };
     function request(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve15, reject) => {
+        return new Promise((resolve16, reject) => {
           request.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve15(data);
+            return err ? reject(err) : resolve16(data);
           });
         });
       }
@@ -38496,9 +38499,9 @@ var require_api_stream = __commonJS({
     };
     function stream(opts, factory, callback) {
       if (callback === void 0) {
-        return new Promise((resolve15, reject) => {
+        return new Promise((resolve16, reject) => {
           stream.call(this, opts, factory, (err, data) => {
-            return err ? reject(err) : resolve15(data);
+            return err ? reject(err) : resolve16(data);
           });
         });
       }
@@ -38779,9 +38782,9 @@ var require_api_upgrade = __commonJS({
     };
     function upgrade(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve15, reject) => {
+        return new Promise((resolve16, reject) => {
           upgrade.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve15(data);
+            return err ? reject(err) : resolve16(data);
           });
         });
       }
@@ -38870,9 +38873,9 @@ var require_api_connect = __commonJS({
     };
     function connect(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve15, reject) => {
+        return new Promise((resolve16, reject) => {
           connect.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve15(data);
+            return err ? reject(err) : resolve16(data);
           });
         });
       }
@@ -42495,7 +42498,7 @@ var require_fetch = __commonJS({
       async function dispatch({ body }) {
         const url = requestCurrentURL(request);
         const agent = fetchParams.controller.dispatcher;
-        return new Promise((resolve15, reject) => agent.dispatch(
+        return new Promise((resolve16, reject) => agent.dispatch(
           {
             path: url.pathname + url.search,
             origin: url.origin,
@@ -42571,7 +42574,7 @@ var require_fetch = __commonJS({
                   }
                 }
               }
-              resolve15({
+              resolve16({
                 status,
                 statusText,
                 headersList: headers[kHeadersList],
@@ -42614,7 +42617,7 @@ var require_fetch = __commonJS({
                 const val = headersList[n + 1].toString("latin1");
                 headers[kHeadersList].append(key, val);
               }
-              resolve15({
+              resolve16({
                 status,
                 statusText: STATUS_CODES[status],
                 headersList: headers[kHeadersList],
@@ -46429,7 +46432,7 @@ var init_mcp_check_provider = __esm({
             logger.warn(
               `MCP ${transportName} failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${error instanceof Error ? error.message : String(error)}`
             );
-            await new Promise((resolve15) => setTimeout(resolve15, delay));
+            await new Promise((resolve16) => setTimeout(resolve16, delay));
             attempt += 1;
           } finally {
             try {
@@ -46722,7 +46725,7 @@ async function acquirePromptLock() {
     );
   }, 1e4);
   try {
-    await new Promise((resolve15) => waiters.push(resolve15));
+    await new Promise((resolve16) => waiters.push(resolve16));
   } finally {
     clearInterval(reminder);
     const waitedMs = Date.now() - queuedAt;
@@ -46741,7 +46744,7 @@ function releasePromptLock() {
 }
 async function interactivePrompt(options) {
   await acquirePromptLock();
-  return new Promise((resolve15, reject) => {
+  return new Promise((resolve16, reject) => {
     const dbg = process.env.VISOR_DEBUG === "true";
     try {
       if (dbg) {
@@ -46828,12 +46831,12 @@ async function interactivePrompt(options) {
     };
     const finish = (value) => {
       cleanup();
-      resolve15(value);
+      resolve16(value);
     };
     if (options.timeout && options.timeout > 0) {
       timeoutId = setTimeout(() => {
         cleanup();
-        if (defaultValue !== void 0) return resolve15(defaultValue);
+        if (defaultValue !== void 0) return resolve16(defaultValue);
         return reject(new Error("Input timeout"));
       }, options.timeout);
     }
@@ -46965,7 +46968,7 @@ async function interactivePrompt(options) {
   });
 }
 async function simplePrompt(prompt) {
-  return new Promise((resolve15) => {
+  return new Promise((resolve16) => {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout
@@ -46981,7 +46984,7 @@ async function simplePrompt(prompt) {
     rl.question(`${prompt}
 > `, (answer) => {
       rl.close();
-      resolve15(answer.trim());
+      resolve16(answer.trim());
     });
   });
 }
@@ -47149,7 +47152,7 @@ function isStdinAvailable() {
   return !process.stdin.isTTY;
 }
 async function readStdin(timeout, maxSize = 1024 * 1024) {
-  return new Promise((resolve15, reject) => {
+  return new Promise((resolve16, reject) => {
     let data = "";
     let timeoutId;
     if (timeout) {
@@ -47176,7 +47179,7 @@ async function readStdin(timeout, maxSize = 1024 * 1024) {
     };
     const onEnd = () => {
       cleanup();
-      resolve15(data.trim());
+      resolve16(data.trim());
     };
     const onError = (err) => {
       cleanup();
@@ -56533,8 +56536,8 @@ var init_workspace_manager = __esm({
         );
         if (this.cleanupRequested && this.activeOperations === 0) {
           logger.debug(`[Workspace] All references released, proceeding with deferred cleanup`);
-          for (const resolve15 of this.cleanupResolvers) {
-            resolve15();
+          for (const resolve16 of this.cleanupResolvers) {
+            resolve16();
           }
           this.cleanupResolvers = [];
         }
@@ -56581,8 +56584,32 @@ var init_workspace_manager = __esm({
           configuredMainProjectName || this.extractProjectName(this.originalPath)
         );
         this.usedNames.add(mainProjectName);
-        const mainProjectPath = path25.join(this.workspacePath, mainProjectName);
+        let mainProjectPath = path25.join(this.workspacePath, mainProjectName);
         const isGitRepo = await this.isGitRepository(this.originalPath);
+        if (isGitRepo) {
+          try {
+            await commandExecutor.execute(`git -C ${shellEscape(this.originalPath)} worktree prune`, {
+              timeout: 15e3
+            });
+          } catch {
+          }
+        }
+        let subdirOffset = "";
+        if (isGitRepo) {
+          const gitRootResult = await commandExecutor.execute(
+            `git -C ${shellEscape(this.originalPath)} rev-parse --show-toplevel`,
+            { timeout: 5e3 }
+          );
+          if (gitRootResult.exitCode === 0) {
+            const gitRoot = gitRootResult.stdout.trim();
+            const normalizedOriginal = path25.resolve(this.originalPath);
+            const normalizedRoot = path25.resolve(gitRoot);
+            if (normalizedOriginal !== normalizedRoot) {
+              subdirOffset = path25.relative(normalizedRoot, normalizedOriginal);
+              logger.info(`[Workspace] Original path is a subdirectory of git repo: ${subdirOffset}`);
+            }
+          }
+        }
         if (isGitRepo) {
           const exists = await this.pathExists(mainProjectPath);
           if (exists) {
@@ -56616,6 +56643,18 @@ var init_workspace_manager = __esm({
             }
           }
         }
+        const worktreeRootPath = mainProjectPath;
+        if (subdirOffset) {
+          mainProjectPath = path25.join(mainProjectPath, subdirOffset);
+          logger.info(`[Workspace] Adjusted main project path to subdirectory: ${mainProjectPath}`);
+          const subdirExists = await this.pathExists(mainProjectPath);
+          if (!subdirExists) {
+            logger.warn(
+              `[Workspace] Subdirectory '${subdirOffset}' not found in worktree \u2014 falling back to worktree root`
+            );
+            mainProjectPath = path25.join(this.workspacePath, mainProjectName);
+          }
+        }
         try {
           const entries = await fsp2.readdir(this.workspacePath, { withFileTypes: true });
           for (const entry of entries) {
@@ -56631,7 +56670,8 @@ var init_workspace_manager = __esm({
           workspacePath: this.workspacePath,
           mainProjectPath,
           mainProjectName,
-          originalPath: this.originalPath
+          originalPath: this.originalPath,
+          worktreeRootPath
         };
         this.initialized = true;
         logger.info(`Workspace initialized: ${this.workspacePath}`);
@@ -56713,30 +56753,30 @@ var init_workspace_manager = __esm({
           );
           this.cleanupRequested = true;
           await Promise.race([
-            new Promise((resolve15) => {
+            new Promise((resolve16) => {
               if (this.activeOperations === 0) {
-                resolve15();
+                resolve16();
               } else {
-                this.cleanupResolvers.push(resolve15);
+                this.cleanupResolvers.push(resolve16);
               }
             }),
-            new Promise((resolve15) => {
+            new Promise((resolve16) => {
               setTimeout(() => {
                 logger.warn(
                   `[Workspace] Cleanup timeout after ${timeout}ms, proceeding anyway (${this.activeOperations} operations still active)`
                 );
-                resolve15();
+                resolve16();
               }, timeout);
             })
           ]);
         }
         try {
           if (this.mainProjectInfo) {
-            const mainProjectPath = this.mainProjectInfo.mainProjectPath;
+            const worktreePath = this.mainProjectInfo.worktreeRootPath || this.mainProjectInfo.mainProjectPath;
             try {
-              const stats = await fsp2.lstat(mainProjectPath);
+              const stats = await fsp2.lstat(worktreePath);
               if (!stats.isSymbolicLink()) {
-                await this.removeMainProjectWorktree(mainProjectPath);
+                await this.removeMainProjectWorktree(worktreePath);
               }
             } catch {
             }
@@ -57140,8 +57180,8 @@ var init_fair_concurrency_limiter = __esm({
         );
         const queuedAt = Date.now();
         const effectiveTimeout = queueTimeout ?? 12e4;
-        return new Promise((resolve15, reject) => {
-          const entry = { resolve: resolve15, reject, queuedAt };
+        return new Promise((resolve16, reject) => {
+          const entry = { resolve: resolve16, reject, queuedAt };
           entry.reminder = setInterval(() => {
             const waited = Math.round((Date.now() - queuedAt) / 1e3);
             const curQueued = this._totalQueued();
@@ -58151,8 +58191,8 @@ var init_github_comments = __esm({
        * Update existing comment or create new one with collision detection
        */
       async updateOrCreateComment(owner, repo, prNumber, content, options = {}) {
-        return new Promise((resolve15, reject) => {
-          this._writeQueue = this._writeQueue.then(() => this._doUpdateOrCreate(owner, repo, prNumber, content, options)).then(resolve15, reject);
+        return new Promise((resolve16, reject) => {
+          this._writeQueue = this._writeQueue.then(() => this._doUpdateOrCreate(owner, repo, prNumber, content, options)).then(resolve16, reject);
         });
       }
       async _doUpdateOrCreate(owner, repo, prNumber, content, options = {}) {
@@ -58363,8 +58403,8 @@ ${content}
        * Sleep utility
        */
       sleep(ms) {
-        return new Promise((resolve15) => {
-          const t = setTimeout(resolve15, ms);
+        return new Promise((resolve16) => {
+          const t = setTimeout(resolve16, ms);
           if (typeof t.unref === "function") {
             try {
               t.unref();
@@ -58649,8 +58689,8 @@ ${end}`);
       async updateGroupedComment(ctx, comments, group, changedIds) {
         const existingLock = this.updateLocks.get(group);
         let resolveLock;
-        const ourLock = new Promise((resolve15) => {
-          resolveLock = resolve15;
+        const ourLock = new Promise((resolve16) => {
+          resolveLock = resolve16;
         });
         this.updateLocks.set(group, ourLock);
         try {
@@ -58981,7 +59021,7 @@ ${blocks}
        * Sleep utility for enforcing delays
        */
       sleep(ms) {
-        return new Promise((resolve15) => setTimeout(resolve15, ms));
+        return new Promise((resolve16) => setTimeout(resolve16, ms));
       }
     };
   }
@@ -59378,7 +59418,16 @@ var init_slack_frontend = __esm({
         this.subs.push(
           bus.on("StateTransition", async (env) => {
             const ev = env && env.payload || env;
-            if (ev && (ev.to === "Completed" || ev.to === "Error")) {
+            if (ev && ev.to === "Completed") {
+              await this.finalizeReactions(ctx).catch(() => {
+              });
+            } else if (ev && ev.to === "Error") {
+              if (!this.errorNotified) {
+                await this.maybePostError(ctx, "Run failed", "Workflow finished with errors").catch(
+                  () => {
+                  }
+                );
+              }
               await this.finalizeReactions(ctx).catch(() => {
               });
             }
@@ -59388,7 +59437,7 @@ var init_slack_frontend = __esm({
           bus.on("Shutdown", async (env) => {
             const ev = env && env.payload || env;
             const message = ev?.error?.message || "Fatal error";
-            await this.maybePostError(ctx, "Run failed", message).catch(() => {
+            await this.forcePostError(ctx, "Run failed", message).catch(() => {
             });
           })
         );
@@ -59514,6 +59563,16 @@ var init_slack_frontend = __esm({
       }
       async maybePostError(ctx, title, message, checkId) {
         if (this.errorNotified) return;
+        return this.postErrorToSlack(ctx, title, message, checkId);
+      }
+      /**
+       * Post error to Slack regardless of errorNotified flag.
+       * Used for fatal/shutdown errors that must always reach the user.
+       */
+      async forcePostError(ctx, title, message, checkId) {
+        return this.postErrorToSlack(ctx, title, message, checkId);
+      }
+      async postErrorToSlack(ctx, title, message, checkId) {
         const slack = this.getSlack(ctx);
         if (!slack) return;
         const payload = this.getInboundSlackPayload(ctx);
@@ -60843,11 +60902,11 @@ var require_request3 = __commonJS({
     "use strict";
     var __awaiter = exports2 && exports2.__awaiter || function(thisArg, _arguments, P, generator) {
       function adopt(value) {
-        return value instanceof P ? value : new P(function(resolve15) {
-          resolve15(value);
+        return value instanceof P ? value : new P(function(resolve16) {
+          resolve16(value);
         });
       }
-      return new (P || (P = Promise))(function(resolve15, reject) {
+      return new (P || (P = Promise))(function(resolve16, reject) {
         function fulfilled(value) {
           try {
             step(generator.next(value));
@@ -60863,7 +60922,7 @@ var require_request3 = __commonJS({
           }
         }
         function step(result) {
-          result.done ? resolve15(result.value) : adopt(result.value).then(fulfilled, rejected);
+          result.done ? resolve16(result.value) : adopt(result.value).then(fulfilled, rejected);
         }
         step((generator = generator.apply(thisArg, _arguments || [])).next());
       });
@@ -60992,7 +61051,7 @@ var require_request3 = __commonJS({
     }
     function sendWithRetry(url, init, retryScheduleInMs, nextInterval = 50, triesLeft = 2, fetchImpl = fetch, retryCount = 1) {
       return __awaiter(this, void 0, void 0, function* () {
-        const sleep = (interval) => new Promise((resolve15) => setTimeout(resolve15, interval));
+        const sleep = (interval) => new Promise((resolve16) => setTimeout(resolve16, interval));
         try {
           const response = yield fetchImpl(url, init);
           if (triesLeft <= 0 || response.status < 500) {
@@ -70849,13 +70908,13 @@ __export(a2a_frontend_exports, {
   resultToArtifacts: () => resultToArtifacts
 });
 function readJsonBody(req) {
-  return new Promise((resolve15, reject) => {
+  return new Promise((resolve16, reject) => {
     const chunks = [];
     req.on("data", (chunk) => chunks.push(chunk));
     req.on("end", () => {
       try {
         const body = Buffer.concat(chunks).toString("utf8");
-        resolve15(body ? JSON.parse(body) : {});
+        resolve16(body ? JSON.parse(body) : {});
       } catch {
         reject(new ParseError("Malformed JSON body"));
       }
@@ -71098,12 +71157,12 @@ var init_a2a_frontend = __esm({
         }
         const port = this.config.port ?? 9e3;
         const host = this.config.host ?? "0.0.0.0";
-        await new Promise((resolve15) => {
+        await new Promise((resolve16) => {
           this.server.listen(port, host, () => {
             const addr = this.server.address();
             this._boundPort = typeof addr === "object" && addr ? addr.port : port;
             logger.info(`A2A server listening on ${host}:${this._boundPort}`);
-            resolve15();
+            resolve16();
           });
         });
         if (this.agentCard) {
@@ -71127,8 +71186,8 @@ var init_a2a_frontend = __esm({
         }
         this.streamManager.shutdown();
         if (this.server) {
-          await new Promise((resolve15, reject) => {
-            this.server.close((err) => err ? reject(err) : resolve15());
+          await new Promise((resolve16, reject) => {
+            this.server.close((err) => err ? reject(err) : resolve16());
           });
           this.server = null;
         }

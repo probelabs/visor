@@ -18,10 +18,6 @@ description: >
   request needs codebase exploration, understanding implementation details,
   code search, or documentation questions. READ-ONLY — cannot modify files,
   only investigate and answer questions.
-allowed_commands:
-  - "git:log:*"
-  - "git:show:*"
-  - "git:diff:*"
 knowledge: |
   ## Code Explorer
   Use the code-talk tool to explore code repositories.
