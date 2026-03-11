@@ -202,6 +202,7 @@ describe('AICheckProvider', () => {
         model: 'gemini-2.0',
         apiKey: 'test-key',
         timeout: 60000,
+        maxIterations: 100,
       });
     });
 

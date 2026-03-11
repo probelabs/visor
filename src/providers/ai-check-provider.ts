@@ -807,44 +807,49 @@ export class AICheckProvider extends CheckProvider {
     // Check-level AI configuration (ai object)
     if (config.ai) {
       const aiAny: any = config.ai;
+      // Helper to resolve Liquid templates in ai config values (e.g., "{{ inputs.max_iterations }}")
+      const resolveLiquid = async (val: unknown): Promise<string | undefined> => {
+        if (typeof val !== 'string' || !val.includes('{{')) return undefined;
+        try {
+          return (
+            await this.liquidEngine.parseAndRender(val, {
+              inputs: (config as any).workflowInputs || {},
+              env: process.env,
+            })
+          ).trim();
+        } catch {
+          return undefined;
+        }
+      };
+      // Helper to resolve a boolean that may be a Liquid template string
+      const resolveBool = async (val: unknown): Promise<boolean> => {
+        const resolved = (await resolveLiquid(val)) ?? val;
+        if (typeof resolved === 'boolean') return resolved;
+        if (typeof resolved === 'string') return resolved === 'true';
+        return !!resolved;
+      };
       const skipTransport: boolean = aiAny.skip_transport_context === true;
       // Only set properties that are actually defined to avoid overriding env vars
       if (aiAny.apiKey !== undefined) {
         aiConfig.apiKey = aiAny.apiKey as string;
       }
       if (aiAny.model !== undefined) {
-        let modelVal = String(aiAny.model);
-        if (modelVal.includes('{{')) {
-          try {
-            const rendered = await this.liquidEngine.parseAndRender(modelVal, {
-              inputs: (config as any).workflowInputs || {},
-              env: process.env,
-            });
-            modelVal = rendered.trim();
-          } catch {}
-        }
+        const modelVal = (await resolveLiquid(aiAny.model)) ?? String(aiAny.model);
         if (modelVal) {
           aiConfig.model = modelVal;
         }
       }
       if (aiAny.timeout !== undefined) {
-        aiConfig.timeout = aiAny.timeout as number;
+        const resolvedTimeout = (await resolveLiquid(aiAny.timeout)) ?? aiAny.timeout;
+        aiConfig.timeout = Number(resolvedTimeout);
       }
       if (aiAny.max_iterations !== undefined || aiAny.maxIterations !== undefined) {
         const raw = aiAny.max_iterations ?? aiAny.maxIterations;
-        aiConfig.maxIterations = Number(raw);
+        const resolved = (await resolveLiquid(raw)) ?? raw;
+        aiConfig.maxIterations = Number(resolved);
       }
       if (aiAny.provider !== undefined) {
-        let providerVal = String(aiAny.provider);
-        if (providerVal.includes('{{')) {
-          try {
-            const rendered = await this.liquidEngine.parseAndRender(providerVal, {
-              inputs: (config as any).workflowInputs || {},
-              env: process.env,
-            });
-            providerVal = rendered.trim();
-          } catch {}
-        }
+        const providerVal = (await resolveLiquid(aiAny.provider)) ?? String(aiAny.provider);
         if (providerVal) {
           aiConfig.provider = providerVal as 'google' | 'anthropic' | 'openai' | 'bedrock' | 'mock';
         }
@@ -853,16 +858,16 @@ export class AICheckProvider extends CheckProvider {
         aiConfig.debug = aiAny.debug as boolean;
       }
       if (aiAny.enableDelegate !== undefined) {
-        aiConfig.enableDelegate = aiAny.enableDelegate as boolean;
+        aiConfig.enableDelegate = await resolveBool(aiAny.enableDelegate);
       }
       if (aiAny.enableTasks !== undefined) {
-        aiConfig.enableTasks = aiAny.enableTasks as boolean;
+        aiConfig.enableTasks = await resolveBool(aiAny.enableTasks);
       }
       if (aiAny.enableExecutePlan !== undefined) {
-        aiConfig.enableExecutePlan = aiAny.enableExecutePlan as boolean;
+        aiConfig.enableExecutePlan = await resolveBool(aiAny.enableExecutePlan);
       }
       if (aiAny.allowEdit !== undefined) {
-        aiConfig.allowEdit = aiAny.allowEdit as boolean;
+        aiConfig.allowEdit = await resolveBool(aiAny.allowEdit);
       }
       if (aiAny.allowedTools !== undefined) {
         aiConfig.allowedTools = aiAny.allowedTools as string[];
@@ -871,20 +876,24 @@ export class AICheckProvider extends CheckProvider {
         );
       }
       if (aiAny.disableTools !== undefined) {
-        aiConfig.disableTools = aiAny.disableTools as boolean;
+        aiConfig.disableTools = await resolveBool(aiAny.disableTools);
         this.logDebug(`[AI Provider] Read disableTools from YAML: ${aiAny.disableTools}`);
       }
       if (aiAny.allowBash !== undefined) {
-        aiConfig.allowBash = aiAny.allowBash as boolean;
+        aiConfig.allowBash = await resolveBool(aiAny.allowBash);
       }
       if (aiAny.bashConfig !== undefined) {
         aiConfig.bashConfig = aiAny.bashConfig as import('../types/config').BashConfig;
       }
       if (aiAny.search_delegate_provider !== undefined) {
-        aiConfig.search_delegate_provider = aiAny.search_delegate_provider as string;
+        aiConfig.search_delegate_provider =
+          (await resolveLiquid(aiAny.search_delegate_provider)) ??
+          (aiAny.search_delegate_provider as string);
       }
       if (aiAny.search_delegate_model !== undefined) {
-        aiConfig.search_delegate_model = aiAny.search_delegate_model as string;
+        aiConfig.search_delegate_model =
+          (await resolveLiquid(aiAny.search_delegate_model)) ??
+          (aiAny.search_delegate_model as string);
       }
       if (aiAny.completion_prompt !== undefined) {
         aiConfig.completionPrompt = aiAny.completion_prompt as string;
@@ -1039,7 +1048,8 @@ export class AICheckProvider extends CheckProvider {
       aiConfig.maxIterations = config.ai_max_iterations as number;
     }
     // Default to 100 iterations if not configured (ProbeAgent's own default is 30)
-    if (aiConfig.maxIterations === undefined) {
+    // Guard against NaN from template rendering (e.g., Number("{{ ... }}") = NaN)
+    if (aiConfig.maxIterations === undefined || Number.isNaN(aiConfig.maxIterations)) {
       aiConfig.maxIterations = 100;
     }
 
