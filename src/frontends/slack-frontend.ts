@@ -121,11 +121,20 @@ export class SlackFrontend implements Frontend {
       })
     );
 
-    // On terminal state, replace 👀 with 👍 if we acked an inbound Slack message
+    // On terminal state, replace 👀 with 👍 if we acked an inbound Slack message.
+    // For error states, always post an error notice (bypass errorNotified flag)
+    // so the user is never left without feedback when a run fails.
     this.subs.push(
       bus.on('StateTransition', async (env: any) => {
         const ev = (env && env.payload) || env;
-        if (ev && (ev.to === 'Completed' || ev.to === 'Error')) {
+        if (ev && ev.to === 'Completed') {
+          await this.finalizeReactions(ctx).catch(() => {});
+        } else if (ev && ev.to === 'Error') {
+          if (!this.errorNotified) {
+            await this.maybePostError(ctx, 'Run failed', 'Workflow finished with errors').catch(
+              () => {}
+            );
+          }
           await this.finalizeReactions(ctx).catch(() => {});
         }
       })
@@ -134,7 +143,10 @@ export class SlackFrontend implements Frontend {
       bus.on('Shutdown', async (env: any) => {
         const ev = (env && env.payload) || env;
         const message = ev?.error?.message || 'Fatal error';
-        await this.maybePostError(ctx, 'Run failed', message).catch(() => {});
+        // Always post shutdown errors — bypass errorNotified since a fatal
+        // shutdown is critical and must reach the user even if a previous
+        // (possibly unrelated) check already posted a non-fatal error.
+        await this.forcePostError(ctx, 'Run failed', message).catch(() => {});
       })
     );
     // Add 👀 acknowledgement as soon as first check is scheduled for Slack-driven runs
@@ -278,6 +290,28 @@ export class SlackFrontend implements Frontend {
     checkId?: string
   ): Promise<void> {
     if (this.errorNotified) return;
+    return this.postErrorToSlack(ctx, title, message, checkId);
+  }
+
+  /**
+   * Post error to Slack regardless of errorNotified flag.
+   * Used for fatal/shutdown errors that must always reach the user.
+   */
+  private async forcePostError(
+    ctx: FrontendContext,
+    title: string,
+    message: string,
+    checkId?: string
+  ): Promise<void> {
+    return this.postErrorToSlack(ctx, title, message, checkId);
+  }
+
+  private async postErrorToSlack(
+    ctx: FrontendContext,
+    title: string,
+    message: string,
+    checkId?: string
+  ): Promise<void> {
     const slack = this.getSlack(ctx);
     if (!slack) return;
     const payload = this.getInboundSlackPayload(ctx);

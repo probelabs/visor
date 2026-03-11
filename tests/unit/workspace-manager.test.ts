@@ -492,6 +492,8 @@ describe('WorkspaceManager', () => {
       commandExecutor.execute
         // --- First init: createMainProjectWorktree ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref (no origin/HEAD)
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
@@ -503,6 +505,8 @@ describe('WorkspaceManager', () => {
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // branch --list (no local branches)
         // --- Second init: reuse path → refreshWorktreeToUpstream ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original) on 2nd init
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(mainProject) valid
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref (no origin/HEAD)
@@ -563,6 +567,8 @@ describe('WorkspaceManager', () => {
       commandExecutor.execute
         // --- First init: createMainProjectWorktree ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref (no origin/HEAD)
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
@@ -574,6 +580,8 @@ describe('WorkspaceManager', () => {
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // branch --list (no local branches)
         // --- Second init: invalid worktree → recreate ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original) 2nd
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // isGitRepository(mainProject) = INVALID
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin (recreate)
@@ -623,7 +631,7 @@ describe('WorkspaceManager', () => {
       const pruneCalls = executeCalls.filter((call: any[]) =>
         String(call[0]).includes('worktree prune')
       );
-      expect(pruneCalls.length).toBe(1);
+      expect(pruneCalls.length).toBe(3);
 
       // Cleanup
       fs.rmSync(workspacePath, { recursive: true, force: true });
@@ -792,6 +800,8 @@ describe('WorkspaceManager', () => {
 
       commandExecutor.execute
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'fatal: no remote' }) // fetch origin FAILS
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
@@ -820,6 +830,8 @@ describe('WorkspaceManager', () => {
 
       commandExecutor.execute
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // rev-parse origin/main FAILS
@@ -856,6 +868,8 @@ describe('WorkspaceManager', () => {
 
       commandExecutor.execute
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: 'no remote' }) // fetch origin fails
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // rev-parse origin/main fails
@@ -892,6 +906,8 @@ describe('WorkspaceManager', () => {
 
       commandExecutor.execute
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({
           exitCode: 0,
@@ -930,6 +946,8 @@ describe('WorkspaceManager', () => {
 
       commandExecutor.execute
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main succeeds
@@ -968,6 +986,8 @@ describe('WorkspaceManager', () => {
       commandExecutor.execute
         // --- First init: createMainProjectWorktree ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
@@ -979,6 +999,8 @@ describe('WorkspaceManager', () => {
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // branch --list (no local branches)
         // --- Second init: refreshWorktreeToUpstream with checkout failure ---
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(original)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository(mainProject)
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref
@@ -1029,6 +1051,8 @@ describe('WorkspaceManager', () => {
 
       commandExecutor.execute
         .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '/tmp/test-project\n', stderr: '' }) // rev-parse --show-toplevel
         .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
         .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
         .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main
@@ -1050,6 +1074,86 @@ describe('WorkspaceManager', () => {
       // Verify warnings were logged
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('reset --hard failed'));
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('clean -fdx failed'));
+
+      fs.rmSync(manager.getWorkspacePath(), { recursive: true, force: true });
+      fs.rmSync(testOriginalPath, { recursive: true, force: true });
+    });
+  });
+
+  describe('subdirectory offset', () => {
+    it('adjusts mainProjectPath when originalPath is a subdirectory of git root', async () => {
+      const { commandExecutor } = require('../../src/utils/command-executor');
+
+      // Simulate running from /tmp/test-project which is a subdir of /tmp
+      const subOriginalPath = '/tmp/test-sub-project/subdir';
+      const gitRoot = '/tmp/test-sub-project';
+      if (!fs.existsSync(subOriginalPath)) {
+        fs.mkdirSync(subOriginalPath, { recursive: true });
+      }
+
+      commandExecutor.execute
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: gitRoot + '\n', stderr: '' }) // rev-parse --show-toplevel (different from original!)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
+
+      const manager = WorkspaceManager.getInstance('subdir-test-1', subOriginalPath, {
+        basePath: testBasePath,
+      });
+
+      // Pre-create the subdirectory that would exist in the worktree
+      // (git worktree add creates full repo; the subdir would be inside it)
+      const worktreeSubdir = path.join(testBasePath, 'subdir-test-1', 'subdir', 'subdir');
+      fs.mkdirSync(worktreeSubdir, { recursive: true });
+
+      const info = await manager.initialize();
+
+      // The worktree is created at /basePath/sessionId/subdir (the basename of originalPath)
+      // Since originalPath is a subdir of git root, mainProjectPath gets adjusted
+      // to point to the "subdir" subdirectory inside the worktree
+      expect(info.mainProjectPath).toContain('subdir');
+      expect(info.mainProjectPath).toMatch(/subdir\/subdir$/);
+      // worktreeRootPath should point to the worktree root (without subdirectory offset)
+      expect(info.worktreeRootPath).toMatch(/subdir$/);
+      expect(info.worktreeRootPath).not.toMatch(/subdir\/subdir$/);
+
+      fs.rmSync(manager.getWorkspacePath(), { recursive: true, force: true });
+      fs.rmSync(gitRoot, { recursive: true, force: true });
+    });
+
+    it('does not adjust path when originalPath IS the git root', async () => {
+      const { commandExecutor } = require('../../src/utils/command-executor');
+
+      if (!fs.existsSync(testOriginalPath)) {
+        fs.mkdirSync(testOriginalPath, { recursive: true });
+      }
+
+      commandExecutor.execute
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '.git', stderr: '' }) // isGitRepository
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree prune
+        .mockResolvedValueOnce({ exitCode: 0, stdout: testOriginalPath + '\n', stderr: '' }) // rev-parse --show-toplevel (same as original)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // fetch origin
+        .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' }) // symbolic-ref fails
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse --verify origin/main
+        .mockResolvedValueOnce({ exitCode: 0, stdout: 'abc123\n', stderr: '' }) // rev-parse origin/main (sha)
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // worktree add
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }) // reset --hard
+        .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' }); // clean -fdx
+
+      const manager = WorkspaceManager.getInstance('no-subdir-1', testOriginalPath, {
+        basePath: testBasePath,
+      });
+
+      const info = await manager.initialize();
+
+      // No subdirectory adjustment — path should just be basePath/session/project-name
+      expect(info.mainProjectPath).toBe(path.join(testBasePath, 'no-subdir-1', 'test-project'));
 
       fs.rmSync(manager.getWorkspacePath(), { recursive: true, force: true });
       fs.rmSync(testOriginalPath, { recursive: true, force: true });
