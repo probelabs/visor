@@ -71,8 +71,9 @@ tests:
       conversation:
         - role: user|assistant
           text: <string>
-          mocks: { <step>: <value> }   # per-turn mocks
-          expect: <expect-block>       # per-turn assertions
+          user: <string>                 # optional — sets conversation.current.user
+          mocks: { <step>: <value> }     # per-turn mocks
+          expect: <expect-block>         # per-turn assertions
       # OR conversation with config
       conversation:
         transport: slack               # default: slack
@@ -82,6 +83,7 @@ tests:
         turns:
           - role: user
             text: <string>
+            user: <string>             # optional — sets conversation.current.user
             mocks: ...
             expect: ...
 

@@ -279,7 +279,39 @@ For multi-turn conversation tests, the `conversation:` format provides a more co
 - `turn: N` (1-based) references the Nth turn's output; `turn: current` references the current turn
 - Use `role: assistant` turns to override mock-inferred responses in the history
 
-See [DSL Reference](./dsl-reference.md#conversation-sugar) for the full schema and [Cookbook](./cookbook.md) recipe #12 for more examples.
+### Per-turn user identity
+
+Add `user:` to a turn to set `conversation.current.user` for that stage. This is useful for testing multi-user scenarios like group chats where different users interact in the same thread.
+
+```yaml
+- name: group-chat-isolation
+  conversation:
+    turns:
+      - role: user
+        user: "alice"
+        text: "What are my open tickets?"
+        mocks:
+          chat: { text: "You have 3 open tickets.", intent: chat }
+        expect:
+          outputs:
+            - step: chat
+              path: text
+              matches: "(?i)3|ticket"
+      - role: user
+        user: "bob"
+        text: "Show me my tickets"
+        mocks:
+          chat: { text: "You have 1 open ticket.", intent: chat }
+        expect:
+          outputs:
+            - step: chat
+              path: text
+              matches: "(?i)1|ticket"
+```
+
+The `user` value is available in Liquid templates as `{{ conversation.current.user }}`. This lets the system prompt pass per-user identity to tool calls, enabling true data isolation testing in `--no-mocks` mode.
+
+See [DSL Reference](./dsl-reference.md#conversation-sugar) for the full schema and [Cookbook](./cookbook.md) recipes #12–13 for more examples.
 
 ## Debugging flows
 

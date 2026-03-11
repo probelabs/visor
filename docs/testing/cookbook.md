@@ -409,6 +409,54 @@ The `conversation:` format auto-builds message history from prior turns, removin
 
 Compare this with the equivalent `flow:` format in recipe #10 — the `conversation:` format is significantly more concise.
 
+## 13) Multi-user conversation: group chat isolation
+
+Use the `user:` field on turns to simulate different users in the same conversation thread. The value is exposed as `conversation.current.user` in Liquid templates.
+
+```yaml
+- name: group-chat-data-isolation
+  conversation:
+    turns:
+      # User 1 asks about their data
+      - role: user
+        user: "user-1"
+        text: "What are my open tickets?"
+        mocks:
+          chat: { text: "You have 3 open tickets: AUTH-1, AUTH-2, AUTH-3.", intent: chat }
+          getUserContext:
+            user: { id: 1, name: "Alice", role: "engineer" }
+            tickets: [{ id: "AUTH-1" }, { id: "AUTH-2" }, { id: "AUTH-3" }]
+        expect:
+          outputs:
+            - step: chat
+              path: text
+              matches: "(?i)3|AUTH|ticket"
+
+      # Different user in the same thread — sees DIFFERENT data
+      - role: user
+        user: "user-2"
+        text: "Show me my tickets too"
+        mocks:
+          chat: { text: "You have 1 open ticket: API-42.", intent: chat }
+          getUserContext:
+            user: { id: 2, name: "Bob", role: "manager" }
+            tickets: [{ id: "API-42" }]
+        expect:
+          outputs:
+            - step: chat
+              path: text
+              matches: "(?i)1|API-42|ticket"
+```
+
+**How it works in `--no-mocks` mode:**
+
+1. The test runner sets `conversation.current.user` from the turn's `user:` field
+2. Your system prompt uses Liquid: `provider_id: "{{ conversation.current.user }}"`
+3. The AI reads the rendered prompt and passes the identity as a tool argument
+4. Your backend resolves the identity and returns user-specific data
+
+This enables end-to-end testing of per-user data isolation without mocks.
+
 ## Related Documentation
 
 - [Getting Started](./getting-started.md) - Introduction to the test framework
