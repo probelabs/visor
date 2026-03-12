@@ -12,6 +12,21 @@ import { shouldFilterVisorReviewComment } from './utils/comment-metadata';
 import { extractFileSections, replaceFileSections } from './slack/markdown';
 
 /**
+ * Grace period (ms) subtracted from Visor's hard timeout to derive Probe's
+ * maxOperationTimeout.  This gives Probe enough headroom to inject its
+ * "TIME LIMIT REACHED" message and run 4 bonus wind-down steps before
+ * Visor's external Promise.race fires.
+ */
+const PROBE_GRACEFUL_MARGIN_MS = 90_000;
+
+/**
+ * Minimum Visor timeout (ms) required before we subtract the grace margin.
+ * If the timeout is shorter than this, the full value is forwarded to Probe
+ * as-is because there isn't enough room for a meaningful margin.
+ */
+const MIN_TIMEOUT_FOR_MARGIN_MS = PROBE_GRACEFUL_MARGIN_MS + 30_000; // 120 000
+
+/**
  * Helper function to log debug messages using the centralized logger
  */
 function log(...args: unknown[]): void {
@@ -1450,7 +1465,10 @@ ${this.escapeXml(processedFallbackDiff)}
     // Use explicit aiTimeout if set, otherwise default to timeout - 90s
     const reuseTimeoutMs = this.config.timeout || 0;
     const reuseAiTimeout =
-      this.config.aiTimeout || (reuseTimeoutMs > 120000 ? reuseTimeoutMs - 90000 : reuseTimeoutMs);
+      this.config.aiTimeout ||
+      (reuseTimeoutMs > MIN_TIMEOUT_FOR_MARGIN_MS
+        ? reuseTimeoutMs - PROBE_GRACEFUL_MARGIN_MS
+        : reuseTimeoutMs);
     if (reuseAiTimeout > 0) {
       (agent as any).maxOperationTimeout = reuseAiTimeout;
     }
@@ -1975,7 +1993,10 @@ ${'='.repeat(60)}
       // wind-down (4 bonus steps + 60s safety net) fires before Visor's hard kill.
       const visorTimeout = this.config.timeout || 0;
       const aiTimeout =
-        this.config.aiTimeout || (visorTimeout > 120000 ? visorTimeout - 90000 : visorTimeout);
+        this.config.aiTimeout ||
+        (visorTimeout > MIN_TIMEOUT_FOR_MARGIN_MS
+          ? visorTimeout - PROBE_GRACEFUL_MARGIN_MS
+          : visorTimeout);
       if (aiTimeout > 0) {
         (options as any).maxOperationTimeout = aiTimeout;
       }
