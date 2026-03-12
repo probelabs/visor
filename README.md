@@ -34,6 +34,7 @@ Visor is an open-source workflow engine that lets you define multi-step AI pipel
 | **Chat assistant / Bot** | [Bot Integrations](docs/bot-integrations.md) | [teams-assistant.yaml](examples/teams-assistant.yaml) |
 | **Run shell commands + AI** | [Command Provider](docs/command-provider.md) | [ai-with-bash.yaml](examples/ai-with-bash.yaml) |
 | **Connect MCP tools** | [MCP Provider](docs/mcp-provider.md) | [mcp-provider-example.yaml](examples/mcp-provider-example.yaml) |
+| **Call tools via UTCP** | [UTCP Provider](docs/utcp-provider.md) | [utcp-provider-example.yaml](examples/utcp-provider-example.yaml) |
 | **Add API integrations (TDD)** | [Guide: TDD Assistant Workflows](docs/guides/tdd-assistant-workflows.md) | [workable.tests.yaml](https://github.com/TykTechnologies/REFINE/blob/main/Oel/tests/workable.tests.yaml) |
 
 > **First time?** Run `npx visor init` to scaffold a working config, then `npx visor` to run it.

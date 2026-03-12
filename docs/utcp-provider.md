@@ -295,5 +295,6 @@ Increase the `timeout` value or check network connectivity to the tool endpoint.
 
 - [UTCP Specification](https://utcp.io)
 - [UTCP TypeScript SDK](https://github.com/anthropics/utcp-spec)
+- [Example Configurations](../examples/utcp-provider-example.yaml)
 - [Pluggable Architecture](./pluggable.md)
 - [MCP Provider](./mcp-provider.md) (comparison)
