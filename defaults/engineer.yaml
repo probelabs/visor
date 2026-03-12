@@ -60,28 +60,34 @@ inputs:
     schema:
       type: string
 
-  # Pre-resolved project paths (from code-explorer or other workflow)
+  # Projects — accepts EITHER format:
+  #   1. Pre-resolved (from code-explorer): { project_id, repository, path, ... }
+  #      → skips routing/checkout, uses paths directly
+  #   2. Definitions (for standalone routing): { id, repo, description, ... }
+  #      → runs project-setup sub-workflow for routing + checkout
+  #   Same schema as code-talk's projects input, so both skills can share
+  #   a single loadConfig('projects.yaml') source.
   - name: projects
     required: false
     description: |
-      Pre-resolved project objects with paths (skips routing/checkout when provided):
-        - project_id: identifier
-        - repository: owner/repo
-        - path: local checkout path
-        - description: project description
-        - services: optional service config
-        - setup: optional setup commands
-        - knowledge: optional project knowledge
+      Project list — either pre-resolved paths or definitions for routing.
+      Pre-resolved (has path): skips routing, uses checkout paths directly.
+      Definitions (has id/repo): runs project-setup for AI routing + checkout.
     default: []
     schema:
       type: array
       items:
         type: object
         properties:
+          # Pre-resolved fields
           project_id: { type: string }
           repository: { type: string }
           path: { type: string }
+          # Definition fields (same as code-talk projects)
+          id: { type: string }
+          repo: { type: string }
           description: { type: string }
+          sandbox: { type: string }
           services:
             type: object
           setup:
@@ -89,7 +95,6 @@ inputs:
             items: { type: string }
           knowledge: { type: string }
 
-  # Standalone mode inputs (for project-setup sub-workflow)
   - name: architecture
     required: false
     description: Architecture model for project routing (standalone mode)
@@ -110,28 +115,6 @@ inputs:
     default: main
     schema:
       type: string
-
-  - name: project_definitions
-    required: false
-    description: |
-      Project definitions for standalone routing (same schema as code-talk projects)
-    default: []
-    schema:
-      type: array
-      items:
-        type: object
-        properties:
-          id: { type: string }
-          repo: { type: string }
-          description: { type: string }
-          sandbox: { type: string }
-          services:
-            type: object
-          setup:
-            type: array
-            items: { type: string }
-          knowledge: { type: string }
-        required: [id, repo, description]
 
   - name: max_projects
     required: false
@@ -230,7 +213,7 @@ steps:
       docs_repo: "{{ inputs.docs_repo }}"
       docs_ref: "{{ inputs.docs_ref }}"
       projects:
-        expression: "inputs.project_definitions"
+        expression: "inputs.projects"
       max_projects:
         expression: "inputs.max_projects ?? 3"
       routing_prompt: "{{ inputs.routing_prompt }}"
@@ -509,7 +492,7 @@ tests:
         task: "Fix the login bug"
         architecture: "# Arch\n- backend: Backend services"
         docs_repo: org/docs
-        project_definitions:
+        projects:
           - id: backend
             repo: org/backend
             description: Backend services

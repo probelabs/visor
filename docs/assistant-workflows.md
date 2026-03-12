@@ -1,12 +1,14 @@
 # Assistant Workflows
 
-Three composable workflows for building AI-powered assistants, bundled with Visor:
+Five composable workflows for building AI-powered assistants, bundled with Visor:
 
 | Workflow | Purpose |
 |----------|---------|
 | [**assistant**](#assistant) | Full AI assistant with skills, tools, knowledge, and bash commands |
 | [**code-talk**](#code-talk) | Multi-project code exploration with references and confidence scoring |
+| [**engineer**](#engineer) | AI-driven code modification with PR creation across multiple repos |
 | [**intent-router**](#intent-router) | Intent classification and skill/tag selection |
+| [**project-setup**](#project-setup) | Shared project routing and checkout (internal, used by code-talk and engineer) |
 
 Import them using the `visor://` protocol:
 
@@ -41,6 +43,8 @@ checks:
         - id: code_help
           description: questions about code or architecture
           default_skills: [code-explorer]
+        - id: task
+          description: create, update, or execute something
       skills:
         - id: code-explorer
           description: needs codebase exploration or code search
@@ -48,11 +52,18 @@ checks:
             code-talk:
               workflow: code-talk
               inputs:
-                projects:
-                  - id: backend
-                    repo: my-org/backend
-                    description: Backend API service
+                expression: "loadConfig('config/projects.yaml')"
           allowed_commands: ['git:log:*', 'git:diff:*']
+        - id: engineer
+          description: wants code changes, a PR, or a feature implemented
+          requires: [code-explorer]
+          tools:
+            engineer:
+              workflow: engineer
+              inputs:
+                expression: "loadConfig('config/projects.yaml')"
+          allowed_commands: ['git:*', 'npm:*']
+          disallowed_commands: ['git:push:--force', 'git:reset:--hard']
     on_success:
       goto: ask
 ```
@@ -351,13 +362,7 @@ checks:
             code-talk:
               workflow: code-talk
               inputs:
-                projects:
-                  - id: backend
-                    repo: acme/backend
-                    description: Go backend API
-                  - id: frontend
-                    repo: acme/frontend
-                    description: React frontend
+                expression: "loadConfig('config/projects.yaml')"
           allowed_commands: ['git:log:*', 'git:show:*', 'git:diff:*']
 
         - id: engineer
@@ -366,7 +371,8 @@ checks:
           tools:
             engineer:
               workflow: engineer
-              inputs: {}
+              inputs:
+                expression: "loadConfig('config/projects.yaml')"
           allowed_commands: ['git:*', 'npm:*']
           disallowed_commands: ['git:push:--force', 'git:reset:--hard']
 
@@ -396,20 +402,16 @@ AI-powered code exploration workflow. Routes questions to relevant repositories,
 Question + project list
     |
     v
-[1. checkout-docs]      -- shallow-clone documentation repo
-    |
+[1. setup-projects]     -- project-setup sub-workflow:
+    |                       docs checkout, AI routing, project checkout
     v
-[2. route-projects]     -- AI selects which projects to explore
-    |
-    v
-[3. checkout-projects]  -- shallow-clone selected repos (parallel)
-    |
-    v
-[4. explore-code]       -- AI explores code with tools + bash
+[2. explore-code]       -- AI explores code with tools + bash
     |
     v
 Output: { answer, references, confidence, projects_explored }
 ```
+
+Internally, step 1 delegates to the [project-setup](#project-setup) workflow which handles docs checkout, AI-based project routing, and parallel project checkout. This is the same sub-workflow used by [engineer](#engineer).
 
 ### Inputs
 
@@ -548,6 +550,309 @@ See `examples/code-talk-workflow.yaml` and `examples/code-talk-as-tool.yaml`.
 
 ---
 
+## engineer
+
+AI-driven code modification workflow. Takes an engineering task, routes to the relevant repositories, checks out code, implements changes, and creates pull requests. Supports two modes: pre-resolved (projects already checked out by code-explorer) and standalone (handles routing and checkout itself via project-setup).
+
+### How It Works
+
+```
+Task + projects input
+    |
+    v
+[1. prepare-projects]    -- detect: pre-resolved paths or definitions?
+    |                         |
+    +--- pre-resolved --------+--- definitions (standalone)
+    |    (has .path field)     |
+    |                          v
+    |                    [2. setup-projects]   -- project-setup sub-workflow:
+    |                          |                  docs checkout, AI routing, checkout
+    |                          v
+    +<-------------------------+
+    |
+    v
+[3. merge-projects]      -- unify both sources into a single project list
+    |
+    v
+[4. run-setup]           -- execute project setup commands (if any)
+    |
+    v
+[5. engineer-task]       -- AI implements changes, runs build/test, creates PRs
+    |
+    v
+Output: { summary, pr_urls, files_changed, error, result, projects_used }
+```
+
+**Pre-resolved mode** is the typical path when engineer is activated as a skill alongside code-explorer in the assistant workflow. The code-explorer has already checked out the repositories, so engineer reuses those paths directly without re-routing or re-cloning.
+
+**Standalone mode** is used when engineer runs independently (no prior code-explorer). It delegates to the [project-setup](#project-setup) sub-workflow for AI-based routing and checkout.
+
+### Inputs
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `task` | string | yes | | The engineering task to accomplish |
+| `context` | string | no | `""` | Additional context (conversation thread, ticket details) |
+| `projects` | array | no | `[]` | Unified project input -- accepts either pre-resolved paths or definitions (see below) |
+| `architecture` | string | no | `""` | Architecture description for standalone routing |
+| `docs_repo` | string | no | `""` | Documentation repo for standalone mode (`owner/name`) |
+| `docs_ref` | string | no | `"main"` | Git ref for docs repository |
+| `max_projects` | number | no | `3` | Maximum projects for standalone routing |
+| `routing_prompt` | string | no | `""` | Additional routing instructions for standalone mode |
+| `trace_id` | string | no | `""` | Trace ID for telemetry correlation |
+| `slack_user_id` | string | no | `""` | Slack user ID for PR footer attribution |
+
+#### Unified `projects` Input
+
+The `projects` array accepts two formats. This allows both code-talk and engineer to share the same `loadConfig('projects.yaml')` data source:
+
+**Pre-resolved** (from code-explorer -- has `path` field):
+```yaml
+projects:
+  - project_id: backend
+    repository: my-org/backend
+    path: /tmp/visor/workspace/backend
+```
+
+**Definitions** (for standalone routing -- has `id`/`repo` fields):
+```yaml
+projects:
+  - id: backend
+    repo: my-org/backend
+    description: Backend API service
+    sandbox: node-env           # optional sandbox image
+    services:                   # optional service dependencies
+      redis:
+        image: redis:7-alpine
+    setup:                      # optional setup commands
+      - npm install
+    knowledge: docs/dev.md      # optional per-project knowledge
+```
+
+The workflow detects which format is provided by checking for the `path` field on the first item.
+
+### Outputs
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `summary` | string | Detailed summary of what was implemented and why |
+| `pr_urls` | array | List of pull request URLs created |
+| `files_changed` | array | List of files that were created or modified |
+| `error` | string\|null | Error details if PR creation failed |
+| `result` | object | Full engineer output (all fields above) |
+| `projects_used` | array | Project IDs that were used |
+
+### Prompt Features
+
+The engineer AI task includes several battle-tested prompt sections that enforce reliable behavior:
+
+#### Mandatory Build Discovery Delegate
+
+Before writing any code, the AI must delegate a "Discover build system" task for each repository. The delegate inspects `Makefile`, `package.json`, CI configs, and README to find the exact build, test, and lint commands. These discovered commands are used throughout the session -- the AI never guesses.
+
+#### Mandatory Plan Validation Delegate
+
+Before implementation, the AI delegates a "Plan validation" task that verifies: do the target files exist? Are there existing tests? Are there patterns or utilities to reuse? This prevents the AI from implementing changes that conflict with the codebase.
+
+#### Git Workflow Checklist
+
+The prompt enforces a strict checklist before the final response:
+1. Build passes (using discovered commands)
+2. Tests pass (full suite, not just new tests)
+3. Lint/format passes
+4. `git add`, `git commit`, `git push`
+5. `gh pr create`
+
+No PR URL means a failed task. The AI must report errors honestly.
+
+#### Structured Output Enforcement
+
+The JSON output schema requires `pr_urls`, `summary`, and `files_changed`. The prompt explicitly instructs the AI to only include URLs from PRs it actually created (not existing PRs it merely checked out), and to set `error` with the real reason if `pr_urls` is empty.
+
+#### Bash Deny Patterns
+
+The engineer has broad bash access (`*`) but denies destructive operations:
+- `git push --force`, `git push -f`, `git push --force-with-lease`
+- `gh repo delete/archive/rename`, `gh secret set/delete`, `gh workflow run`
+- `sudo *`
+
+#### Task Tracking
+
+The AI is instructed to create and track tasks for each phase: discover build system, validate plan, implement changes, verify build, create PR. This provides visibility into progress during long-running sessions.
+
+### Usage
+
+#### As a Skill Tool in Assistant
+
+The most common pattern. Engineer is paired with code-explorer, sharing project config via `loadConfig`:
+
+```yaml
+skills:
+  - id: code-explorer
+    description: needs codebase exploration or code search
+    tools:
+      code-talk:
+        workflow: code-talk
+        inputs:
+          expression: "loadConfig('config/projects.yaml')"
+    allowed_commands: ['git:log:*', 'git:diff:*']
+
+  - id: engineer
+    description: wants code changes, a PR, or a feature implemented
+    requires: [code-explorer]
+    tools:
+      engineer:
+        workflow: engineer
+        inputs:
+          expression: "loadConfig('config/projects.yaml')"
+    allowed_commands: ['git:*', 'npm:*']
+    disallowed_commands: ['git:push:--force', 'git:reset:--hard']
+```
+
+When the user asks for code changes, the assistant activates both skills (via `requires`). If code-explorer has already checked out repos, engineer receives pre-resolved project paths and skips routing.
+
+#### As a Standalone Workflow
+
+```yaml
+imports:
+  - visor://engineer.yaml
+
+checks:
+  modify:
+    type: workflow
+    workflow: engineer
+    args:
+      task: "Add rate limiting middleware to the API gateway"
+      architecture: |
+        # Architecture
+        ## Projects
+        | ID | Description |
+        |----|-------------|
+        | gateway | API gateway with middleware |
+        | backend | Core business logic |
+      docs_repo: my-org/docs
+      projects:
+        - id: gateway
+          repo: my-org/gateway
+          description: API gateway with middleware, rate limiting, auth
+        - id: backend
+          repo: my-org/backend
+          description: Core business logic and data layer
+      max_projects: 2
+```
+
+#### With loadConfig for Shared Projects
+
+Both code-talk and engineer accept the same project schema, so you can define projects once in a YAML file and share it:
+
+```yaml
+# config/projects.yaml
+architecture: |
+  # Architecture
+  - gateway: API Gateway
+  - backend: Core services
+docs_repo: my-org/docs
+projects:
+  - id: gateway
+    repo: my-org/gateway
+    description: API gateway
+  - id: backend
+    repo: my-org/backend
+    description: Core services
+```
+
+```yaml
+skills:
+  - id: code-explorer
+    tools:
+      code-talk:
+        workflow: code-talk
+        inputs:
+          expression: "loadConfig('config/projects.yaml')"
+  - id: engineer
+    requires: [code-explorer]
+    tools:
+      engineer:
+        workflow: engineer
+        inputs:
+          expression: "loadConfig('config/projects.yaml')"
+```
+
+---
+
+## project-setup
+
+Shared sub-workflow that handles documentation checkout, AI-based project routing, and parallel project checkout. Used internally by [code-talk](#code-talk) and [engineer](#engineer). You typically do not call this directly, but it is available for custom workflows that need the same routing and checkout logic.
+
+### How It Works
+
+```
+Question + project definitions
+    |
+    v
+[1. checkout-docs]      -- shallow-clone documentation repo
+    |
+    v
+[2. route-projects]     -- AI selects relevant projects (skipped if selected_projects provided)
+    |
+    v
+[3. project-items]      -- map routed IDs to checkout descriptors with metadata
+    |
+    v
+[4. checkout-projects]  -- shallow-clone selected repos (parallel via forEach)
+    |
+    v
+Output: { docs_path, routing_decision, project_items, checkout_projects }
+```
+
+### Inputs
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `question` | string | yes | | The question or task driving project selection |
+| `architecture` | string | yes | | Architecture description (file path or inline markdown) |
+| `docs_repo` | string | yes | | Documentation repository (`owner/name`) |
+| `projects` | array | yes | | Available projects (`[{id, repo, description, sandbox?, services?, setup?, knowledge?}]`) |
+| `max_projects` | number | no | `3` | Maximum code repos to checkout |
+| `docs_ref` | string | no | `"main"` | Git ref for docs repository |
+| `routing_prompt` | string | no | `""` | Additional routing instructions |
+| `selected_projects` | array | no | `[]` | Pre-selected project IDs to skip AI routing |
+
+### Outputs
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `docs_path` | string | Path where docs repo was checked out |
+| `routing_decision` | object | Raw AI routing output (`{projects: [{project_id, reason}], notes?}`) |
+| `project_items` | array | Routed project descriptors with metadata |
+| `checkout_projects` | array | Checked-out projects with paths (`[{project_id, repository, description, path, sandbox, services, setup, knowledge}]`) |
+
+### The `selected_projects` Bypass
+
+When `selected_projects` is provided, the AI routing step is skipped entirely. The listed project IDs are looked up directly from the `projects` input and checked out. This is useful when the caller already knows which projects are needed:
+
+```yaml
+args:
+  question: "Fix the auth bug"
+  architecture: "# Arch"
+  docs_repo: my-org/docs
+  projects:
+    - id: gateway
+      repo: my-org/gateway
+      description: API Gateway
+    - id: backend
+      repo: my-org/backend
+      description: Backend services
+  selected_projects:
+    - gateway   # skip routing, just checkout gateway
+```
+
+### Metadata Propagation
+
+Project definitions can include `sandbox`, `services`, `setup`, and `knowledge` fields. These are propagated through routing and checkout into the `checkout_projects` output, so downstream workflows (code-talk, engineer) have access to the full project configuration without re-reading it.
+
+---
+
 ## intent-router
 
 Lightweight intent classification workflow. Classifies the user's intent, rewrites the request as a short question, and selects relevant skills or tags. Used internally by the assistant workflow, but can also be used standalone for custom routing.
@@ -680,7 +985,7 @@ See `examples/intent-router-workflow.yaml`.
 
 ### Pattern 1: Assistant with Multiple Skills
 
-The most common pattern. The assistant workflow handles routing, skill activation, and response generation internally:
+The most common pattern. The assistant workflow handles routing, skill activation, and response generation internally. Both code-talk and engineer share project config via `loadConfig`:
 
 ```yaml
 workflow: assistant
@@ -700,7 +1005,8 @@ args:
       tools:
         code-talk:
           workflow: code-talk
-          inputs: { projects: [...] }
+          inputs:
+            expression: "loadConfig('config/projects.yaml')"
       allowed_commands: ['git:log:*', 'git:diff:*']
 
     - id: jira
@@ -717,7 +1023,8 @@ args:
       tools:
         engineer:
           workflow: engineer
-          inputs: {}
+          inputs:
+            expression: "loadConfig('config/projects.yaml')"
       allowed_commands: ['git:*', 'npm:*']
       disallowed_commands: ['git:push:--force']
 ```
@@ -780,6 +1087,69 @@ checks:
 ```
 
 The AI calls the code-talk tool only when it needs code context, rather than exploring on every message.
+
+### Pattern 4: Shared Project Config with loadConfig
+
+Define project data once in a YAML file and share it across both code-talk and engineer skills. This avoids duplication and ensures both workflows operate on the same set of repositories with the same metadata:
+
+```yaml
+# config/projects.yaml
+architecture: |
+  # System Architecture
+  ## Projects
+  | ID | Description |
+  |----|-------------|
+  | gateway | API gateway with auth, rate limiting, middleware |
+  | backend | Core business logic, data access |
+  | frontend | React SPA |
+docs_repo: acme/docs
+projects:
+  - id: gateway
+    repo: acme/gateway
+    description: API gateway with middleware and auth
+    sandbox: go-env
+    services:
+      redis:
+        image: redis:7-alpine
+    setup:
+      - make deps
+  - id: backend
+    repo: acme/backend
+    description: Core business logic and data layer
+    sandbox: node-env
+    setup:
+      - npm install
+  - id: frontend
+    repo: acme/frontend
+    description: React frontend application
+    sandbox: node-env
+    setup:
+      - npm install
+```
+
+Then reference it from both skills:
+
+```yaml
+skills:
+  - id: code-explorer
+    description: needs codebase exploration or code search
+    tools:
+      code-talk:
+        workflow: code-talk
+        inputs:
+          expression: "loadConfig('config/projects.yaml')"
+
+  - id: engineer
+    description: wants code changes, a PR, or a feature
+    requires: [code-explorer]
+    tools:
+      engineer:
+        workflow: engineer
+        inputs:
+          expression: "loadConfig('config/projects.yaml')"
+```
+
+Both workflows receive the same `architecture`, `docs_repo`, and `projects` fields. The `sandbox`, `services`, `setup`, and `knowledge` metadata flows through [project-setup](#project-setup) into the checked-out project descriptors.
 
 ---
 
