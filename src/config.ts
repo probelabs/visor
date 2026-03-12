@@ -63,6 +63,7 @@ export class ConfigManager {
     'workflow',
     'git-checkout',
     'a2a',
+    'utcp',
   ];
   private validEventTriggers: EventTrigger[] = [...VALID_EVENT_TRIGGERS];
   private validOutputFormats: ConfigOutputFormat[] = ['table', 'json', 'markdown', 'sarif'];

@@ -19,8 +19,8 @@ Visor is an open-source workflow engine that lets you define multi-step AI pipel
 
 - **YAML-driven pipelines** — define checks, transforms, routing, and AI prompts in a single config file.
 - **8 runtime modes** — CLI, GitHub Action, Slack bot, Telegram bot, Email, WhatsApp, Teams, HTTP server — same config, any surface.
-- **12+ provider types** — `ai`, `command`, `script`, `mcp`, `http`, `claude-code`, `github`, `memory`, `workflow`, and more.
-- **AI orchestration** — multi-provider (Gemini, Claude, OpenAI, Bedrock), session reuse, MCP tool calling, retry & fallback.
+- **17 provider types** — `ai`, `command`, `script`, `mcp`, `utcp`, `http`, `claude-code`, `a2a`, `github`, `memory`, `workflow`, and more.
+- **AI orchestration** — multi-provider (Gemini, Claude, OpenAI, Bedrock), session reuse, MCP/UTCP tool calling, retry & fallback.
 - **Execution engine** — dependency DAGs, parallel waves, forEach fan-out, conditional routing, failure auto-remediation.
 - **Built-in testing** — YAML-native integration tests with fixtures, mocks, and assertions.
 
@@ -241,7 +241,7 @@ Learn more: [docs/commands.md](docs/commands.md)
 | Concept | What it is |
 |---------|-----------|
 | **Step** (or Check) | Unit of work — a shell command, AI call, HTTP request, script, etc. |
-| **Provider** | How a step runs: `ai`, `command`, `script`, `mcp`, `http`, `claude-code`, `github`, `memory`, `workflow`, … |
+| **Provider** | How a step runs: `ai`, `command`, `script`, `mcp`, `utcp`, `http`, `claude-code`, `github`, `memory`, `workflow`, … |
 | **depends_on** | Execution order — independents run in parallel, dependents wait. |
 | **forEach** | Fan-out — transform output into an array, run dependents per item. |
 | **Routing** | `on_fail`, `on_success`, `goto`, `retry` — conditional flow with loop safety. |
@@ -260,6 +260,7 @@ Learn more: [docs/commands.md](docs/commands.md)
 | `command` | Shell commands with Liquid templating | Run tests, build, lint |
 | `script` | JavaScript in a secure sandbox | Transform data, custom logic |
 | `mcp` | MCP tool execution (stdio/SSE/HTTP) | External tool integration |
+| `utcp` | UTCP tool execution (HTTP/CLI/SSE) | Direct tool calling via manuals |
 | `claude-code` | Claude Code SDK with MCP tools | Deep code analysis, refactoring |
 | `http` | HTTP output/webhook sender | Notify Slack, trigger CI |
 | `http_input` | Webhook receiver | Accept external events |
@@ -778,7 +779,7 @@ Learn more: [docs/enterprise-policy.md](docs/enterprise-policy.md)
 [Tools & Toolkits](docs/tools-and-toolkits.md) · [Assistant workflows](docs/assistant-workflows.md) · [TDD for assistant workflows](docs/guides/tdd-assistant-workflows.md) · [Workflow creation](docs/workflow-creation-guide.md) · [Workflow style guide](docs/guides/workflow-style-guide.md) · [Dependencies](docs/dependencies.md) · [forEach propagation](docs/foreach-dependency-propagation.md) · [Failure routing](docs/failure-routing.md) · [Router patterns](docs/router-patterns.md) · [Lifecycle hooks](docs/lifecycle-hooks.md) · [Liquid templates](docs/liquid-templates.md) · [Schema-template system](docs/schema-templates.md) · [Fail conditions](docs/fail-if.md) · [Failure conditions schema](docs/failure-conditions-schema.md) · [Failure conditions impl](docs/failure-conditions-implementation.md) · [Timeouts](docs/timeouts.md) · [Execution limits](docs/limits.md) · [Event triggers](docs/event-triggers.md) · [Output formats](docs/output-formats.md) · [Output formatting](docs/output-formatting.md) · [Default output schema](docs/default-output-schema.md) · [Output history](docs/output-history.md) · [Reusable workflows](docs/workflows.md) · [Criticality modes](docs/guides/criticality-modes.md) · [Fault management](docs/guides/fault-management-and-contracts.md)
 
 **Providers:**
-[A2A](docs/a2a-provider.md) · [Command](docs/command-provider.md) · [Script](docs/script.md) · [MCP](docs/mcp-provider.md) · [MCP tools for AI](docs/mcp.md) · [Claude Code](docs/claude-code.md) · [AI custom tools](docs/ai-custom-tools.md) · [AI custom tools usage](docs/ai-custom-tools-usage.md) · [Custom tools](docs/custom-tools.md) · [GitHub ops](docs/github-ops.md) · [Git checkout](docs/providers/git-checkout.md) · [HTTP integration](docs/http.md) · [Memory](docs/memory.md) · [Human input](docs/human-input-provider.md) · [Custom providers](docs/pluggable.md)
+[A2A](docs/a2a-provider.md) · [Command](docs/command-provider.md) · [Script](docs/script.md) · [MCP](docs/mcp-provider.md) · [UTCP](docs/utcp-provider.md) · [MCP tools for AI](docs/mcp.md) · [Claude Code](docs/claude-code.md) · [AI custom tools](docs/ai-custom-tools.md) · [AI custom tools usage](docs/ai-custom-tools-usage.md) · [Custom tools](docs/custom-tools.md) · [GitHub ops](docs/github-ops.md) · [Git checkout](docs/providers/git-checkout.md) · [HTTP integration](docs/http.md) · [Memory](docs/memory.md) · [Human input](docs/human-input-provider.md) · [Custom providers](docs/pluggable.md)
 
 **Operations:**
 [Security](docs/security.md) · [Performance](docs/performance.md) · [Observability](docs/observability.md) · [Debugging](docs/debugging.md) · [Debug visualizer](docs/debug-visualizer.md) · [Telemetry setup](docs/telemetry-setup.md) · [Dashboards](docs/dashboards/README.md) · [Troubleshooting](docs/troubleshooting.md) · [Suppressions](docs/suppressions.md) · [GitHub checks](docs/GITHUB_CHECKS.md) · [Bot integrations](docs/bot-integrations.md) · [Slack](docs/slack-integration.md) · [Telegram](docs/telegram-integration.md) · [Email](docs/email-integration.md) · [WhatsApp](docs/whatsapp-integration.md) · [Teams](docs/teams-integration.md) · [Scheduler](docs/scheduler.md) · [Sandbox engines](docs/sandbox-engines.md)

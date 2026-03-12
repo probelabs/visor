@@ -2,7 +2,7 @@
 
 Visor supports multiple provider types. You can also add custom providers.
 
-**Built-in Providers:** a2a, ai, mcp, command, script, http, http_input, http_client, log, memory, noop, github, human-input, workflow, git-checkout, claude-code
+**Built-in Providers:** a2a, ai, mcp, utcp, command, script, http, http_input, http_client, log, memory, noop, github, human-input, workflow, git-checkout, claude-code
 
 ### Custom Provider Skeleton (TypeScript)
 
@@ -62,6 +62,21 @@ steps:
 ```
 
 [Learn more](./mcp-provider.md)
+
+#### UTCP Provider (`type: utcp`)
+Call UTCP (Universal Tool Calling Protocol) tools directly via their native protocols. Unlike MCP which requires a running server, UTCP tools publish JSON "manuals" and the client calls them directly over HTTP, CLI, or SSE.
+
+```yaml
+steps:
+  api-check:
+    type: utcp
+    manual: https://api.example.com/utcp
+    method: analyze
+    methodArgs:
+      files: "{{ files | map: 'filename' | join: ',' }}"
+```
+
+[Learn more](./utcp-provider.md)
 
 #### Command Provider (`type: command`)
 Execute shell commands with templating and security controls.

@@ -15,4 +15,5 @@ export { HumanInputCheckProvider } from './human-input-check-provider';
 export { ClaudeCodeCheckProvider } from './claude-code-check-provider';
 export { McpCheckProvider } from './mcp-check-provider';
 export { ScriptCheckProvider } from './script-check-provider';
+export { UtcpCheckProvider } from './utcp-check-provider';
 export { VisorMcpTools, McpServerManager, DEFAULT_MCP_TOOLS_CONFIG } from './mcp-tools';

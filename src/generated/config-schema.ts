@@ -1046,6 +1046,28 @@ export const configSchema = {
           type: 'string',
           description: 'Working directory (for stdio transport in MCP checks)',
         },
+        manual: {
+          anyOf: [
+            {
+              type: 'string',
+            },
+            {
+              $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+            },
+          ],
+          description: 'UTCP manual source: URL string, file path, or inline call template object',
+        },
+        variables: {
+          $ref: '#/definitions/Record%3Cstring%2Cstring%3E',
+          description: 'UTCP variables for manual authentication/configuration',
+        },
+        plugins: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: "UTCP plugins to load (default: ['http'])",
+        },
         placeholder: {
           type: 'string',
           description: 'Placeholder text to show in input field',
@@ -1071,7 +1093,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14897-29977-src_types_config.ts-0-58544%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1088,7 +1110,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14897-29977-src_types_config.ts-0-58544%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1192,6 +1214,7 @@ export const configSchema = {
         'workflow',
         'git-checkout',
         'a2a',
+        'utcp',
       ],
       description: 'Valid check types in configuration',
     },
@@ -1809,7 +1832,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14897-29977-src_types_config.ts-0-58544%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1824,14 +1847,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139>>':
+    'Record<string,Partial<interface-src_types_config.ts-14897-29977-src_types_config.ts-0-58544>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-14897-29977-src_types_config.ts-0-58544%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139>': {
+    'Partial<interface-src_types_config.ts-14897-29977-src_types_config.ts-0-58544>': {
       type: 'object',
       additionalProperties: false,
     },

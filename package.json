@@ -122,6 +122,8 @@
     "@probelabs/probe": "^0.6.0-rc295",
     "@types/commander": "^2.12.0",
     "@types/uuid": "^10.0.0",
+    "@utcp/file": "^1.1.0",
+    "@utcp/text": "^1.1.0",
     "acorn": "^8.16.0",
     "acorn-walk": "^8.3.5",
     "ajv": "^8.17.1",
@@ -153,6 +155,8 @@
   "optionalDependencies": {
     "@anthropic/claude-code-sdk": "npm:null@*",
     "@open-policy-agent/opa-wasm": "^1.10.0",
+    "@utcp/http": "^1.1.0",
+    "@utcp/sdk": "^1.1.0",
     "knex": "^3.1.0",
     "mysql2": "^3.11.0",
     "pg": "^8.13.0",
@@ -192,6 +196,12 @@
   },
   "peerDependenciesMeta": {
     "@anthropic/claude-code-sdk": {
+      "optional": true
+    },
+    "@utcp/sdk": {
+      "optional": true
+    },
+    "@utcp/http": {
       "optional": true
     }
   },

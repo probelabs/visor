@@ -444,6 +444,7 @@ class CheckProviderRegistry {
 | `http_input` | HTTP Input | Receives webhook data |
 | `http_client` | HTTP Client | Makes HTTP requests |
 | `mcp` | MCP | Connects to MCP tool servers |
+| `utcp` | UTCP | Calls UTCP tools via native protocols |
 | `claude-code` | Claude Code | Uses Claude Code SDK with MCP tools |
 | `memory` | Memory | Persistent key-value storage |
 | `log` | Logger | Debug logging output |
@@ -1249,6 +1250,7 @@ src/
     http-input-provider.ts       # HTTP webhook input provider
     http-client-provider.ts      # HTTP client provider
     mcp-check-provider.ts        # MCP tool provider
+    utcp-check-provider.ts       # UTCP tool provider
     mcp-tools.ts                 # MCP server management
     memory-check-provider.ts     # Key-value memory provider
     log-check-provider.ts        # Debug logging provider
@@ -1420,3 +1422,4 @@ Events that flow through the state machine:
 | **Task Store** | SQLite-backed persistence layer for A2A tasks |
 | **Task Queue** | Async execution queue for processing A2A tasks with concurrency control |
 | **MCP** | Model Context Protocol - standard for AI tool integration |
+| **UTCP** | Universal Tool Calling Protocol - client-side protocol for calling tools directly via native protocols |

@@ -218,7 +218,8 @@ export type ConfigCheckType =
   | 'human-input'
   | 'workflow'
   | 'git-checkout'
-  | 'a2a';
+  | 'a2a'
+  | 'utcp';
 
 /**
  * Valid event triggers for checks
@@ -753,6 +754,15 @@ export interface CheckConfig {
   command_args?: string[];
   /** Working directory (for stdio transport in MCP checks) */
   workingDirectory?: string;
+  /**
+   * UTCP provider specific options (optional, only used when type === 'utcp').
+   */
+  /** UTCP manual source: URL string, file path, or inline call template object */
+  manual?: string | Record<string, unknown>;
+  /** UTCP variables for manual authentication/configuration */
+  variables?: Record<string, string>;
+  /** UTCP plugins to load (default: ['http']) */
+  plugins?: string[];
   /**
    * Human input provider specific options (optional, only used when type === 'human-input').
    */

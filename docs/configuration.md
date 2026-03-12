@@ -41,6 +41,7 @@ Visor supports the following check types:
 | `http_input` | Receive webhooks | [HTTP Integration](./http.md) |
 | `http_client` | Fetch data from APIs | [HTTP Integration](./http.md) |
 | `mcp` | MCP tool execution | [MCP Provider](./mcp-provider.md) |
+| `utcp` | UTCP tool execution (HTTP/CLI/SSE) | [UTCP Provider](./utcp-provider.md) |
 | `memory` | Key-value storage operations | [Memory](./memory.md) |
 | `workflow` | Reusable workflow invocation | [Workflows](./workflows.md) |
 | `git-checkout` | Git repository checkout | [Git Checkout](./providers/git-checkout.md) |
@@ -137,7 +138,7 @@ If there are errors, you'll get detailed messages with hints:
 ```
 ❌ Configuration validation failed!
 
-Error: Invalid check type "webhook". Must be: ai, claude-code, mcp, command, script, http, http_input, http_client, memory, noop, log, github, human-input, workflow, git-checkout
+Error: Invalid check type "webhook". Must be: ai, claude-code, mcp, utcp, command, script, http, http_input, http_client, memory, noop, log, github, human-input, workflow, git-checkout, a2a
 
 💡 Hint: The 'webhook' type has been renamed to 'http' for output and 'http_input' for input.
 ```
