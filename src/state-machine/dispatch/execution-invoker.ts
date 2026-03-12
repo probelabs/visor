@@ -614,6 +614,19 @@ export async function executeSingleCheck(
       require('../../providers/check-provider-registry').CheckProviderRegistry.getInstance();
     const provider = providerRegistry.getProviderOrThrow(providerType);
 
+    // Compute effective timeout, capped by any inherited parent deadline.
+    const configTimeout = checkConfig.timeout || checkConfig.ai?.timeout || 1800000;
+    const parentDeadline = context.executionContext?.deadline;
+    let effectiveTimeout = configTimeout;
+    if (parentDeadline) {
+      const remaining = parentDeadline - Date.now();
+      if (remaining <= 0) {
+        throw new Error(`Parent deadline exceeded: no time remaining for check '${checkId}'`);
+      }
+      effectiveTimeout = Math.min(effectiveTimeout, remaining);
+    }
+    const deadline = Date.now() + effectiveTimeout;
+
     const outputHistory = buildOutputHistoryFromJournal(context);
     // Resolve workflow inputs from config or context (centralized logic)
     const workflowInputs = resolveWorkflowInputs(checkConfig, context);
@@ -638,7 +651,7 @@ export async function executeSingleCheck(
       workflowInputs,
       ai: {
         ...(checkConfig.ai || {}),
-        timeout: checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
+        timeout: effectiveTimeout,
         debug: !!context.debug,
       },
     };
@@ -695,6 +708,8 @@ export async function executeSingleCheck(
       _parentState: state,
       // Explicitly propagate workspace reference for nested workflows
       workspace: context.workspace,
+      // Propagate deadline so sub-workflows can cap their own timeouts
+      deadline,
     };
 
     // Attach session reuse hints for providers that support them (AI, Claude Code, etc).
@@ -759,7 +774,7 @@ export async function executeSingleCheck(
           context,
           prInfo,
           dependencyResults,
-          checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
+          effectiveTimeout,
           () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
         );
         // Capture output in span for trace visualization
