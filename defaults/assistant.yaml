@@ -762,7 +762,6 @@ steps:
       - "outputs['build-config'] != null"
     guarantee: "(output?.text ?? '').length > 0"
     ai:
-      timeout_mode: probe
       max_iterations: "{{ inputs.max_iterations }}"
       enableDelegate: "{{ inputs.enableDelegate }}"
       enableTasks: "{{ inputs.enableTasks }}"

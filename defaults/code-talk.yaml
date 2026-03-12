@@ -297,7 +297,6 @@ steps:
     guarantee: "(output?.projects?.length ?? 0) > 0 || (output?.notes?.length ?? 0) > 0"
     fail_if: "(output?.projects?.length ?? 0) === 0 && !(output?.notes?.length > 0)"
     ai:
-      timeout_mode: probe
       skip_code_context: true
       prompt_type: general
       system_prompt: |
@@ -471,7 +470,6 @@ steps:
     assume:
       - "outputs['route-projects']?.projects?.length > 0"
     ai:
-      timeout_mode: probe
       skip_code_context: true
       enableDelegate: true
       enableExecutePlan: false

@@ -1071,7 +1071,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1088,7 +1088,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1407,11 +1407,10 @@ export const configSchema = {
           description:
             'Enable the execute_plan DSL orchestration tool (replaces analyze_all when enabled)',
         },
-        timeout_mode: {
-          type: 'string',
-          enum: ['probe', 'visor'],
+        ai_timeout: {
+          type: 'number',
           description:
-            "Timeout mode: 'probe' lets Probe handle timeout with graceful wind-down (injects \"TIME LIMIT REACHED\" message and bonus steps), 'visor' uses Visor's external Promise.race hard kill (legacy behavior). Default: 'probe'",
+            'Probe-level timeout in milliseconds for graceful wind-down (maxOperationTimeout). When set, Probe injects "TIME LIMIT REACHED" and gives bonus steps before hard abort. Defaults to (timeout - 90s) when not explicitly set. The main `timeout` field controls Visor\'s external hard kill (always active).',
         },
       },
       additionalProperties: false,
@@ -1810,7 +1809,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1825,14 +1824,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065>>':
+    'Record<string,Partial<interface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065>': {
+    'Partial<interface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139>': {
       type: 'object',
       additionalProperties: false,
     },

@@ -398,11 +398,12 @@ export interface AIProviderConfig {
   /** Enable the execute_plan DSL orchestration tool (replaces analyze_all when enabled) */
   enableExecutePlan?: boolean;
   /**
-   * Timeout mode: 'probe' lets Probe handle timeout with graceful wind-down
-   * (injects "TIME LIMIT REACHED" message and bonus steps), 'visor' uses
-   * Visor's external Promise.race hard kill (legacy behavior). Default: 'probe'
+   * Probe-level timeout in milliseconds for graceful wind-down (maxOperationTimeout).
+   * When set, Probe injects "TIME LIMIT REACHED" and gives bonus steps before hard abort.
+   * Defaults to (timeout - 90s) when not explicitly set.
+   * The main `timeout` field controls Visor's external hard kill (always active).
    */
-  timeout_mode?: 'probe' | 'visor';
+  ai_timeout?: number;
 }
 
 /**

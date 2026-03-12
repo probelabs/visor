@@ -88,6 +88,12 @@ export interface ExecutionContext {
     /** reset per-run guard state before grouped execution */
     resetPerRunState?: boolean;
   };
+  /**
+   * Absolute timestamp (ms since epoch) by which this execution must complete.
+   * Set by the engine from `Date.now() + timeout` and inherited by sub-workflows
+   * so nested steps know how much time the parent has left.
+   */
+  deadline?: number;
   /** Optional event bus for emitting integration events (e.g., HumanInputRequested) */
   eventBus?: import('../event-bus/event-bus').EventBus;
   /** Optional webhook context (e.g., Slack Events API payload) */
