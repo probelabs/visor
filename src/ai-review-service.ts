@@ -288,10 +288,10 @@ export interface AIReviewConfig {
   completionPrompt?: string;
   /** Shared concurrency limiter for global AI call gating */
   concurrencyLimiter?: any;
-  // Timeout mode: 'probe' lets Probe handle timeout with graceful wind-down,
-  // 'visor' uses Visor's external Promise.race hard kill (legacy behavior).
-  // Default: 'probe'
-  timeoutMode?: 'probe' | 'visor';
+  // Probe-level timeout (maxOperationTimeout) for graceful wind-down.
+  // When set, Probe will inject "TIME LIMIT REACHED" and give bonus steps before hard abort.
+  // Defaults to timeout - 90s when not explicitly set.
+  aiTimeout?: number;
 }
 
 export interface AIDebugInfo {
@@ -500,14 +500,11 @@ export class AIReviewService {
     try {
       const call = this.callProbeAgent(prompt, schema, debugInfo, checkName, sessionId);
       const timeoutMs = Math.max(0, this.config.timeout || 0);
-      const useProbeTimeout = (this.config.timeoutMode || 'probe') === 'probe';
       const {
         response,
         effectiveSchema,
         sessionId: usedSessionId,
-      } = timeoutMs > 0 && !useProbeTimeout
-        ? await this.withTimeout(call, timeoutMs, 'AI review')
-        : await call;
+      } = timeoutMs > 0 ? await this.withTimeout(call, timeoutMs, 'AI review') : await call;
       const processingTime = Date.now() - startTime;
 
       if (debugInfo) {
@@ -669,11 +666,8 @@ export class AIReviewService {
         checkName
       );
       const timeoutMs = Math.max(0, this.config.timeout || 0);
-      const useProbeTimeout = (this.config.timeoutMode || 'probe') === 'probe';
       const { response, effectiveSchema } =
-        timeoutMs > 0 && !useProbeTimeout
-          ? await this.withTimeout(call, timeoutMs, 'AI review (session)')
-          : await call;
+        timeoutMs > 0 ? await this.withTimeout(call, timeoutMs, 'AI review (session)') : await call;
       const processingTime = Date.now() - startTime;
 
       if (debugInfo) {
@@ -1453,11 +1447,12 @@ ${this.escapeXml(processedFallbackDiff)}
     log(`⚙️ Model: ${this.config.model || 'default'}, Provider: ${this.config.provider || 'auto'}`);
 
     // Update maxOperationTimeout for this reuse call (timeout may differ from original)
+    // Use explicit aiTimeout if set, otherwise default to timeout - 90s
     const reuseTimeoutMs = this.config.timeout || 0;
-    if (reuseTimeoutMs > 120000) {
-      (agent as any).maxOperationTimeout = reuseTimeoutMs - 90000;
-    } else if (reuseTimeoutMs > 0) {
-      (agent as any).maxOperationTimeout = reuseTimeoutMs;
+    const reuseAiTimeout =
+      this.config.aiTimeout || (reuseTimeoutMs > 120000 ? reuseTimeoutMs - 90000 : reuseTimeoutMs);
+    if (reuseAiTimeout > 0) {
+      (agent as any).maxOperationTimeout = reuseAiTimeout;
     }
 
     try {
@@ -1975,15 +1970,14 @@ ${'='.repeat(60)}
         (options as any).allowEdit = this.config.allowEdit;
       }
 
-      // Wire Visor's check timeout into Probe's graceful timeout mechanism.
-      // Set maxOperationTimeout 90s before Visor's hard kill so Probe can wind
-      // down (4 bonus steps + 60s safety net) before the external Promise.race fires.
-      const timeoutMs = this.config.timeout || 0;
-      if (timeoutMs > 120000) {
-        (options as any).maxOperationTimeout = timeoutMs - 90000;
-      } else if (timeoutMs > 0) {
-        // Too short for graceful wind-down; let Probe use the full timeout
-        (options as any).maxOperationTimeout = timeoutMs;
+      // Wire Probe's graceful timeout (maxOperationTimeout).
+      // Use explicit aiTimeout if set, otherwise default to timeout - 90s so Probe's
+      // wind-down (4 bonus steps + 60s safety net) fires before Visor's hard kill.
+      const visorTimeout = this.config.timeout || 0;
+      const aiTimeout =
+        this.config.aiTimeout || (visorTimeout > 120000 ? visorTimeout - 90000 : visorTimeout);
+      if (aiTimeout > 0) {
+        (options as any).maxOperationTimeout = aiTimeout;
       }
 
       // Pass tool filtering options to ProbeAgent (native in rc168+)

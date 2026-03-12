@@ -843,8 +843,9 @@ export class AICheckProvider extends CheckProvider {
         const resolvedTimeout = (await resolveLiquid(aiAny.timeout)) ?? aiAny.timeout;
         aiConfig.timeout = Number(resolvedTimeout);
       }
-      if (aiAny.timeout_mode !== undefined) {
-        aiConfig.timeoutMode = aiAny.timeout_mode as 'probe' | 'visor';
+      if (aiAny.ai_timeout !== undefined) {
+        const resolvedAiTimeout = (await resolveLiquid(aiAny.ai_timeout)) ?? aiAny.ai_timeout;
+        aiConfig.aiTimeout = Number(resolvedAiTimeout);
       }
       if (aiAny.max_iterations !== undefined || aiAny.maxIterations !== undefined) {
         const raw = aiAny.max_iterations ?? aiAny.maxIterations;
