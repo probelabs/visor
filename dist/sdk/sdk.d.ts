@@ -590,11 +590,12 @@ interface AIProviderConfig {
     /** Enable the execute_plan DSL orchestration tool (replaces analyze_all when enabled) */
     enableExecutePlan?: boolean;
     /**
-     * Timeout mode: 'probe' lets Probe handle timeout with graceful wind-down
-     * (injects "TIME LIMIT REACHED" message and bonus steps), 'visor' uses
-     * Visor's external Promise.race hard kill (legacy behavior). Default: 'probe'
+     * Probe-level timeout in milliseconds for graceful wind-down (maxOperationTimeout).
+     * When set, Probe injects "TIME LIMIT REACHED" and gives bonus steps before hard abort.
+     * Defaults to (timeout - 90s) when not explicitly set.
+     * The main `timeout` field controls Visor's external hard kill (always active).
      */
-    timeout_mode?: 'probe' | 'visor';
+    ai_timeout?: number;
 }
 /**
  * Unified MCP server/tool entry - type detected by which properties are present
@@ -1953,6 +1954,12 @@ interface ExecutionContext {
         /** reset per-run guard state before grouped execution */
         resetPerRunState?: boolean;
     };
+    /**
+     * Absolute timestamp (ms since epoch) by which this execution must complete.
+     * Set by the engine from `Date.now() + timeout` and inherited by sub-workflows
+     * so nested steps know how much time the parent has left.
+     */
+    deadline?: number;
     /** Optional event bus for emitting integration events (e.g., HumanInputRequested) */
     eventBus?: EventBus;
     /** Optional webhook context (e.g., Slack Events API payload) */

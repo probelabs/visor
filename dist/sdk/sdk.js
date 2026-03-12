@@ -7530,7 +7530,7 @@ function createProbeTracerAdapter(fallbackTracer) {
     }
   };
 }
-var import_probe2, AIReviewService;
+var import_probe2, PROBE_GRACEFUL_MARGIN_MS, MIN_TIMEOUT_FOR_MARGIN_MS, AIReviewService;
 var init_ai_review_service = __esm({
   "src/ai-review-service.ts"() {
     "use strict";
@@ -7543,6 +7543,8 @@ var init_ai_review_service = __esm({
     init_diff_processor();
     init_comment_metadata();
     init_markdown();
+    PROBE_GRACEFUL_MARGIN_MS = 9e4;
+    MIN_TIMEOUT_FOR_MARGIN_MS = PROBE_GRACEFUL_MARGIN_MS + 3e4;
     AIReviewService = class {
       config;
       sessionRegistry;
@@ -7654,12 +7656,11 @@ var init_ai_review_service = __esm({
         try {
           const call = this.callProbeAgent(prompt, schema, debugInfo, checkName, sessionId);
           const timeoutMs = Math.max(0, this.config.timeout || 0);
-          const useProbeTimeout = (this.config.timeoutMode || "probe") === "probe";
           const {
             response,
             effectiveSchema,
             sessionId: usedSessionId
-          } = timeoutMs > 0 && !useProbeTimeout ? await this.withTimeout(call, timeoutMs, "AI review") : await call;
+          } = timeoutMs > 0 ? await this.withTimeout(call, timeoutMs, "AI review") : await call;
           const processingTime = Date.now() - startTime;
           if (debugInfo) {
             debugInfo.rawResponse = response;
@@ -7789,8 +7790,7 @@ var init_ai_review_service = __esm({
             checkName
           );
           const timeoutMs = Math.max(0, this.config.timeout || 0);
-          const useProbeTimeout = (this.config.timeoutMode || "probe") === "probe";
-          const { response, effectiveSchema } = timeoutMs > 0 && !useProbeTimeout ? await this.withTimeout(call, timeoutMs, "AI review (session)") : await call;
+          const { response, effectiveSchema } = timeoutMs > 0 ? await this.withTimeout(call, timeoutMs, "AI review (session)") : await call;
           const processingTime = Date.now() - startTime;
           if (debugInfo) {
             debugInfo.rawResponse = response;
@@ -8364,10 +8364,9 @@ ${this.escapeXml(processedFallbackDiff)}
         log(`\u{1F4DD} Prompt length: ${prompt.length} characters`);
         log(`\u2699\uFE0F Model: ${this.config.model || "default"}, Provider: ${this.config.provider || "auto"}`);
         const reuseTimeoutMs = this.config.timeout || 0;
-        if (reuseTimeoutMs > 12e4) {
-          agent.maxOperationTimeout = reuseTimeoutMs - 9e4;
-        } else if (reuseTimeoutMs > 0) {
-          agent.maxOperationTimeout = reuseTimeoutMs;
+        const reuseAiTimeout = this.config.aiTimeout || (reuseTimeoutMs > MIN_TIMEOUT_FOR_MARGIN_MS ? reuseTimeoutMs - PROBE_GRACEFUL_MARGIN_MS : reuseTimeoutMs);
+        if (reuseAiTimeout > 0) {
+          agent.maxOperationTimeout = reuseAiTimeout;
         }
         try {
           log("\u{1F680} Calling existing ProbeAgent with answer()...");
@@ -8803,11 +8802,10 @@ ${"=".repeat(60)}
           if (this.config.allowEdit !== void 0) {
             options.allowEdit = this.config.allowEdit;
           }
-          const timeoutMs = this.config.timeout || 0;
-          if (timeoutMs > 12e4) {
-            options.maxOperationTimeout = timeoutMs - 9e4;
-          } else if (timeoutMs > 0) {
-            options.maxOperationTimeout = timeoutMs;
+          const visorTimeout = this.config.timeout || 0;
+          const aiTimeout = this.config.aiTimeout || (visorTimeout > MIN_TIMEOUT_FOR_MARGIN_MS ? visorTimeout - PROBE_GRACEFUL_MARGIN_MS : visorTimeout);
+          if (aiTimeout > 0) {
+            options.maxOperationTimeout = aiTimeout;
           }
           if (this.config.allowedTools !== void 0) {
             options.allowedTools = this.config.allowedTools;
@@ -13738,7 +13736,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -13754,7 +13752,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -14061,10 +14059,9 @@ var init_config_schema = __esm({
               type: "boolean",
               description: "Enable the execute_plan DSL orchestration tool (replaces analyze_all when enabled)"
             },
-            timeout_mode: {
-              type: "string",
-              enum: ["probe", "visor"],
-              description: `Timeout mode: 'probe' lets Probe handle timeout with graceful wind-down (injects "TIME LIMIT REACHED" message and bonus steps), 'visor' uses Visor's external Promise.race hard kill (legacy behavior). Default: 'probe'`
+            ai_timeout: {
+              type: "number",
+              description: 'Probe-level timeout in milliseconds for graceful wind-down (maxOperationTimeout). When set, Probe injects "TIME LIMIT REACHED" and gives bonus steps before hard abort. Defaults to (timeout - 90s) when not explicitly set. The main `timeout` field controls Visor\'s external hard kill (always active).'
             }
           },
           additionalProperties: false,
@@ -14461,7 +14458,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -14476,13 +14473,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065>>": {
+        "Record<string,Partial<interface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-14812-29498-src_types_config.ts-0-58065>": {
+        "Partial<interface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139>": {
           type: "object",
           additionalProperties: false
         },
@@ -23926,8 +23923,9 @@ ${preview}`);
             const resolvedTimeout = await resolveLiquid(aiAny2.timeout) ?? aiAny2.timeout;
             aiConfig.timeout = Number(resolvedTimeout);
           }
-          if (aiAny2.timeout_mode !== void 0) {
-            aiConfig.timeoutMode = aiAny2.timeout_mode;
+          if (aiAny2.ai_timeout !== void 0) {
+            const resolvedAiTimeout = await resolveLiquid(aiAny2.ai_timeout) ?? aiAny2.ai_timeout;
+            aiConfig.aiTimeout = Number(resolvedAiTimeout);
           }
           if (aiAny2.max_iterations !== void 0 || aiAny2.maxIterations !== void 0) {
             const raw = aiAny2.max_iterations ?? aiAny2.maxIterations;
@@ -51600,6 +51598,17 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
     const providerType = checkConfig.type || "ai";
     const providerRegistry = (init_check_provider_registry(), __toCommonJS(check_provider_registry_exports)).CheckProviderRegistry.getInstance();
     const provider = providerRegistry.getProviderOrThrow(providerType);
+    const configTimeout = checkConfig.timeout || checkConfig.ai?.timeout || 18e5;
+    const parentDeadline = context2.executionContext?.deadline;
+    let effectiveTimeout = configTimeout;
+    if (parentDeadline) {
+      const remaining = parentDeadline - Date.now();
+      if (remaining <= 0) {
+        throw new Error(`Parent deadline exceeded: no time remaining for check '${checkId}'`);
+      }
+      effectiveTimeout = Math.min(effectiveTimeout, remaining);
+    }
+    const deadline = Date.now() + effectiveTimeout;
     const outputHistory = buildOutputHistoryFromJournal(context2);
     const workflowInputs = resolveWorkflowInputs(checkConfig, context2);
     const providerConfig = {
@@ -51622,7 +51631,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       workflowInputs,
       ai: {
         ...checkConfig.ai || {},
-        timeout: checkConfig.timeout || checkConfig.ai?.timeout || 18e5,
+        timeout: effectiveTimeout,
         debug: !!context2.debug
       }
     };
@@ -51669,7 +51678,9 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       _parentContext: context2,
       _parentState: state,
       // Explicitly propagate workspace reference for nested workflows
-      workspace: context2.workspace
+      workspace: context2.workspace,
+      // Propagate deadline so sub-workflows can cap their own timeouts
+      deadline
     };
     if (reuseSession && parentSessionId) {
       executionContext.parentSessionId = parentSessionId;
@@ -51723,7 +51734,7 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
           context2,
           prInfo,
           dependencyResults,
-          checkConfig.timeout || checkConfig.ai?.timeout || 18e5,
+          effectiveTimeout,
           () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
         );
         try {
