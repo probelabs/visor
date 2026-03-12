@@ -202,6 +202,9 @@ steps:
       server-name:
         command: "..."
         args: [...]
+      utcp-tools:                  # or UTCP tools
+        type: utcp
+        manual: https://tools.example.com/utcp
 ```
 
 ## Complete examples
@@ -210,6 +213,7 @@ steps:
 - [ai-with-bash.yaml](../../examples/ai-with-bash.yaml) — AI with bash access
 - [claude-code-config.yaml](../../examples/claude-code-config.yaml) — Claude Code with MCP tools
 - [mcp-provider-example.yaml](../../examples/mcp-provider-example.yaml) — Direct MCP tool calls
+- [utcp-provider-example.yaml](../../examples/utcp-provider-example.yaml) — UTCP tools (standalone and with AI)
 
 ## Common mistakes
 

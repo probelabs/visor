@@ -76,6 +76,18 @@ steps:
       files: "{{ files | map: 'filename' | join: ',' }}"
 ```
 
+UTCP tools can also be exposed to AI agents via `ai_mcp_servers`:
+
+```yaml
+steps:
+  ai-review:
+    type: ai
+    ai_mcp_servers:
+      scanner:
+        type: utcp
+        manual: https://scanner.example.com/utcp
+```
+
 [Learn more](./utcp-provider.md)
 
 #### Command Provider (`type: command`)

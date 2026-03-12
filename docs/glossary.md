@@ -287,7 +287,7 @@ Declarative routing rules in `on_success`, `on_fail`, or `on_finish` blocks. Eac
 A client-side protocol for AI agents to discover and call tools directly via their native protocols (HTTP, CLI, SSE). Tools publish JSON "manuals" describing how to call them; the UTCP client reads the manual and makes direct calls without intermediate servers. Visor supports UTCP via the `utcp` provider. See [UTCP Provider](./utcp-provider.md).
 
 ### UTCP Provider
-A provider (`type: utcp`) that calls UTCP tools directly using their native protocols. Supports manual discovery from URLs, local files, or inline call templates. See [UTCP Provider](./utcp-provider.md).
+A provider (`type: utcp`) that calls UTCP tools directly using their native protocols. Supports manual discovery from URLs, local files, or inline call templates. UTCP tools can also be exposed as MCP tools to AI agents via `ai_mcp_servers` with `type: utcp` entries. See [UTCP Provider](./utcp-provider.md).
 
 ## V
 

@@ -1261,14 +1261,16 @@ export class AICheckProvider extends CheckProvider {
       }
     }
 
-    // Option 4: Extract workflow, tool, and http_client entries from ai_mcp_servers/ai_mcp_servers_js
+    // Option 4: Extract workflow, tool, http_client, and utcp entries from ai_mcp_servers/ai_mcp_servers_js
     // Unified format:
     //   { workflow: 'name', inputs: {...} } → workflow tool
     //   { tool: 'name' } → custom tool from tools: section or built-in (e.g., 'schedule')
     //   { type: 'http_client', base_url: '...', ... } → HTTP client tool (REST API proxy)
+    //   { type: 'utcp', manual: '...', ... } → UTCP tools (discovered from manual)
     const workflowEntriesFromMcp: WorkflowToolReference[] = [];
     const toolEntriesFromMcp: string[] = [];
     const httpClientEntriesFromMcp: Array<{ name: string; config: Record<string, unknown> }> = [];
+    const utcpEntriesFromMcp: Array<{ name: string; config: Record<string, unknown> }> = [];
     const mcpEntriesToRemove: string[] = [];
 
     for (const [serverName, serverConfig] of Object.entries(mcpServers)) {
@@ -1292,6 +1294,13 @@ export class AICheckProvider extends CheckProvider {
         mcpEntriesToRemove.push(serverName);
         logger.debug(
           `[AICheckProvider] Extracted http_client tool '${serverName}' (base_url=${cfg.base_url || cfg.url}) from ai_mcp_servers`
+        );
+      } else if (cfg.type === 'utcp' && cfg.manual) {
+        // UTCP tool entry — tools discovered from manual and exposed via SSE server
+        utcpEntriesFromMcp.push({ name: serverName, config: cfg });
+        mcpEntriesToRemove.push(serverName);
+        logger.debug(
+          `[AICheckProvider] Extracted utcp entry '${serverName}' (manual=${typeof cfg.manual === 'string' ? cfg.manual : 'inline'}) from ai_mcp_servers`
         );
       } else if (cfg.tool && typeof cfg.tool === 'string') {
         // Custom tool or built-in tool entry
@@ -1464,6 +1473,106 @@ export class AICheckProvider extends CheckProvider {
         // Ensure SSE server is created when http_client tools are present
         if (httpClientEntriesFromMcp.length > 0 && !customToolsServerName) {
           customToolsServerName = '__tools__';
+        }
+
+        // Add UTCP tools discovered from ai_mcp_servers entries
+        if (utcpEntriesFromMcp.length > 0) {
+          for (const entry of utcpEntriesFromMcp) {
+            try {
+              const { UtcpCheckProvider } = await import('./utcp-check-provider');
+              const manual = entry.config.manual as string | Record<string, unknown>;
+              const variables = entry.config.variables as Record<string, string> | undefined;
+              const plugins = (entry.config.plugins as string[]) || ['http'];
+
+              // Resolve environment variable placeholders in variables
+              const resolvedVariables: Record<string, string> = {};
+              if (variables) {
+                for (const [key, value] of Object.entries(variables)) {
+                  resolvedVariables[key] = String(EnvironmentResolver.resolveValue(value));
+                }
+              }
+
+              // Resolve manual to call template
+              const callTemplate = await UtcpCheckProvider.resolveManualCallTemplate(manual);
+
+              // Load UTCP SDK and plugins
+              const { UtcpClient } = await import('@utcp/sdk');
+              for (const plugin of plugins) {
+                try {
+                  await import(`@utcp/${plugin}`);
+                } catch {
+                  logger.debug(`[AICheckProvider] UTCP plugin @utcp/${plugin} not available`);
+                }
+              }
+
+              // Create client and discover tools
+              const client = await UtcpClient.create(process.cwd(), {
+                manual_call_templates: [callTemplate],
+                variables: resolvedVariables,
+              } as any);
+
+              try {
+                const tools = await client.getTools();
+                logger.debug(
+                  `[AICheckProvider] UTCP entry '${entry.name}' discovered ${tools.length} tools: ${tools.map((t: any) => t.name).join(', ')}`
+                );
+
+                for (const tool of tools) {
+                  const toolName = (tool as any).name as string;
+                  const toolDesc = (tool as any).description as string | undefined;
+                  const toolInputs = (tool as any).inputs || (tool as any).inputSchema;
+
+                  // Convert UTCP input schema to MCP-compatible inputSchema
+                  let inputSchema: CustomToolDefinition['inputSchema'] = {
+                    type: 'object',
+                    properties: {},
+                    required: [],
+                  };
+                  if (toolInputs && typeof toolInputs === 'object') {
+                    // UTCP inputs may be a JSON Schema object directly
+                    if (toolInputs.type === 'object') {
+                      inputSchema = toolInputs;
+                    } else if (toolInputs.properties) {
+                      inputSchema = {
+                        type: 'object',
+                        properties: toolInputs.properties,
+                        required: toolInputs.required || [],
+                      };
+                    }
+                  }
+
+                  const utcpTool: CustomToolDefinition = {
+                    name: toolName,
+                    type: 'utcp',
+                    description: toolDesc || `UTCP tool ${toolName} from ${entry.name}`,
+                    inputSchema,
+                    __utcpManual: manual,
+                    __utcpToolName: toolName,
+                    __utcpVariables: resolvedVariables,
+                    __utcpPlugins: plugins,
+                  };
+                  customTools.set(toolName, utcpTool);
+                  logger.debug(
+                    `[AICheckProvider] Added UTCP tool '${toolName}' from entry '${entry.name}'`
+                  );
+                }
+              } finally {
+                try {
+                  if (typeof (client as any).close === 'function') {
+                    await (client as any).close();
+                  }
+                } catch {}
+              }
+            } catch (error) {
+              const errMsg = error instanceof Error ? error.message : 'Unknown error';
+              logger.error(
+                `[AICheckProvider] Failed to discover UTCP tools from entry '${entry.name}': ${errMsg}`
+              );
+            }
+          }
+          if (!customToolsServerName) {
+            customToolsServerName = '__tools__';
+          }
         }
 
         if (customTools.size > 0) {

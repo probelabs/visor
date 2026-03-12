@@ -277,6 +277,49 @@ steps:
       lint_results: "{{ outputs['lint'] | json }}"
 ```
 
+## Using UTCP Tools with AI Checks
+
+UTCP tools can be exposed as MCP tools to AI agents via `ai_mcp_servers`. The AI agent discovers all tools from the UTCP manual and can call any of them during analysis.
+
+```yaml
+steps:
+  ai-review:
+    type: ai
+    prompt: "Review this PR for security and performance issues. Use the scanner tools to analyze the code."
+    ai_mcp_servers:
+      scanner:
+        type: utcp
+        manual: https://scanner.example.com/utcp
+        variables:
+          API_KEY: "${SCANNER_API_KEY}"
+        plugins: ["http"]
+```
+
+When the AI check starts, Visor:
+1. Resolves the UTCP manual (URL, file, or inline)
+2. Discovers all tools via `client.getTools()`
+3. Exposes each discovered tool as an MCP tool to the AI agent
+4. Routes AI tool calls through the UTCP SDK
+
+This works alongside other `ai_mcp_servers` entry types (workflows, http_client, regular MCP servers):
+
+```yaml
+steps:
+  smart-review:
+    type: ai
+    prompt: "Review and analyze using all available tools."
+    ai_mcp_servers:
+      scanner:
+        type: utcp
+        manual: https://scanner.example.com/utcp
+      jira:
+        command: npx
+        args: ["-y", "@aashari/mcp-server-atlassian-jira"]
+      internal-api:
+        type: http_client
+        base_url: https://internal.example.com/api
+```
+
 ## Troubleshooting
 
 ### "Tool not found in the repository"

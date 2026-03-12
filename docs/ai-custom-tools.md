@@ -127,6 +127,31 @@ steps:
 - You want to give a meaningful name to your tool server
 - You prefer all MCP configuration in one place
 
+### Method 3: Using UTCP tools in `ai_mcp_servers`
+
+UTCP tools can be exposed as MCP tools to AI agents. All tools discovered from the UTCP manual are automatically available:
+
+```yaml
+steps:
+  security-review:
+    type: ai
+    prompt: |
+      Use the scanner tools to check for security issues.
+    ai_mcp_servers:
+      scanner:
+        type: utcp
+        manual: https://scanner.example.com/utcp
+        variables:
+          API_KEY: "${SCANNER_API_KEY}"
+```
+
+**Choose UTCP in `ai_mcp_servers` when:**
+- You have UTCP-compatible tools (tools that publish JSON manuals)
+- You want direct tool calling without MCP server processes
+- You need to integrate HTTP/CLI tools with AI agents
+
+See [UTCP Provider — AI Integration](./utcp-provider.md#using-utcp-tools-with-ai-checks) for details.
+
 ### Basic Example
 
 ### API Bundle Example (`type: api`)

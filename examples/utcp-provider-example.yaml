@@ -241,3 +241,50 @@ steps:
         category: 'security',
         ruleId: 'utcp/vuln-' + v.id
       }));
+
+# -------------------------------------------------------------------
+# Example 11: UTCP Tools Exposed to AI Agent
+# UTCP tools registered in ai_mcp_servers are discovered and exposed
+# as MCP tools to the AI agent. The AI can call any discovered tool.
+# -------------------------------------------------------------------
+  ai-with-utcp-tools:
+    type: ai
+    prompt: |
+      Review this PR for security issues. Use the scanner tools
+      to perform deep analysis of the code changes.
+    ai_mcp_servers:
+      scanner:
+        type: utcp
+        manual: https://scanner.example.com/utcp
+        variables:
+          API_KEY: "${SCANNER_API_KEY}"
+        plugins: ["http"]
+
+# -------------------------------------------------------------------
+# Example 12: AI with Mixed Tool Sources (UTCP + MCP + HTTP)
+# Combine UTCP tools, regular MCP servers, and HTTP client tools
+# in a single AI check. The AI sees all tools together.
+# -------------------------------------------------------------------
+  ai-mixed-tools:
+    type: ai
+    prompt: |
+      Analyze this PR using all available tools.
+      Use the code scanner for security, JIRA for ticket context,
+      and the internal API for deployment status.
+    ai_mcp_servers:
+      code-scanner:
+        type: utcp
+        manual: https://scanner.example.com/utcp
+        variables:
+          TOKEN: "${SCANNER_TOKEN}"
+      jira:
+        command: npx
+        args: ["-y", "@aashari/mcp-server-atlassian-jira"]
+        env:
+          ATLASSIAN_SITE_NAME: mysite
+      deploy-api:
+        type: http_client
+        base_url: https://deploy.internal.example.com/api
+        auth:
+          type: bearer
+          token: "${DEPLOY_TOKEN}"

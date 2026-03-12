@@ -383,9 +383,19 @@ export class UtcpCheckProvider extends CheckProvider {
   }
 
   /**
-   * Resolve manual config to a UTCP call template object
+   * Resolve manual config to a UTCP call template object (instance method, delegates to static)
    */
   private async resolveManualCallTemplate(
+    manual: string | Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    return UtcpCheckProvider.resolveManualCallTemplate(manual);
+  }
+
+  /**
+   * Resolve manual config to a UTCP call template object.
+   * Shared utility used by both the standalone UTCP provider and the AI check provider's UTCP-to-MCP bridge.
+   */
+  static async resolveManualCallTemplate(
     manual: string | Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     if (typeof manual === 'object') {
@@ -402,7 +412,7 @@ export class UtcpCheckProvider extends CheckProvider {
     // URL-based discovery
     if (manual.startsWith('http://') || manual.startsWith('https://')) {
       return {
-        name: this.deriveManualName(manual),
+        name: UtcpCheckProvider.deriveManualName(manual),
         call_template_type: 'http',
         url: manual,
         http_method: 'GET',
@@ -441,9 +451,17 @@ export class UtcpCheckProvider extends CheckProvider {
   }
 
   /**
-   * Derive a manual name from a URL
+   * Derive a manual name from a URL (instance method, delegates to static)
    */
   private deriveManualName(url: string): string {
+    return UtcpCheckProvider.deriveManualName(url);
+  }
+
+  /**
+   * Derive a manual name from a URL.
+   * Shared utility for UTCP manual name derivation.
+   */
+  static deriveManualName(url: string): string {
     try {
       const parsed = new URL(url);
       // Use hostname with dots replaced by underscores

@@ -144,7 +144,27 @@ ai_mcp_servers:
 - [Jira Workflow Automation](../examples/jira-workflow-mcp.yaml) - Complete Jira integration examples
 - [Simple Jira Analysis](../examples/jira-simple-example.yaml) - Basic JQL → analyze → label workflow
 
+#### UTCP Tools in AI Checks
+
+You can also expose UTCP tools to AI agents via `ai_mcp_servers`. UTCP tools are discovered from a manual and bridged to MCP automatically:
+
+```yaml
+steps:
+  review:
+    type: ai
+    prompt: "Use the scanner to check for security issues."
+    ai_mcp_servers:
+      scanner:
+        type: utcp
+        manual: https://scanner.example.com/utcp
+        variables:
+          API_KEY: "${SCANNER_API_KEY}"
+```
+
+All tools discovered from the UTCP manual are exposed as MCP tools to the AI agent. See [UTCP Provider — AI Integration](./utcp-provider.md#using-utcp-tools-with-ai-checks).
+
 #### Related Documentation
 
 - [MCP Provider](./mcp-provider.md) - Standalone MCP tool execution (direct tool calls without AI)
+- [UTCP Provider](./utcp-provider.md) - Standalone UTCP tool execution and AI integration
 - [Custom Tools](./custom-tools.md) - Define custom tools for use with MCP
