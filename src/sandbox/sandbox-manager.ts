@@ -274,6 +274,21 @@ export class SandboxManager {
   }
 
   /**
+   * Generate environment variables from a ProjectEnvironment's service endpoints.
+   * Produces {SERVICE_NAME}_HOST and {SERVICE_NAME}_PORT for each service.
+   * E.g., redis → REDIS_HOST=redis, REDIS_PORT=6379
+   */
+  static generateServiceEnvVars(env: ProjectEnvironment): Record<string, string> {
+    const vars: Record<string, string> = {};
+    for (const [serviceName, endpoint] of Object.entries(env.serviceEndpoints)) {
+      const prefix = serviceName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+      vars[`${prefix}_HOST`] = endpoint.host;
+      vars[`${prefix}_PORT`] = String(endpoint.port);
+    }
+    return vars;
+  }
+
+  /**
    * Stop all running sandbox instances and run cache eviction
    */
   async stopAll(): Promise<void> {

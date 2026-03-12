@@ -1,0 +1,41 @@
+# =============================================================================
+# Default engineer skill shipped with visor
+# =============================================================================
+#
+# Provides a ready-to-use code modification capability. Users only need to
+# provide project-specific config (repos, architecture) via extends:
+#
+#   - extends: "visor://skills/engineer.yaml"
+#     tools:
+#       engineer:
+#         inputs:
+#           expression: "loadConfig('config/my-projects.yaml')"
+#
+# =============================================================================
+
+id: engineer
+description: >
+  user wants to modify files, edit code, fix bugs, implement features,
+  refactor code, or create a pull request. READ-WRITE — can modify files
+  and create PRs.
+requires: [code-explorer]
+knowledge: |
+  ## Engineer — Code Changes and PR Creation
+  The `engineer` tool modifies code, implements features, fixes bugs, and creates PRs.
+
+  **IMPORTANT**: Call `code-explorer` FIRST to understand the codebase before making changes.
+  The engineer tool needs pre-resolved project paths from code-explorer's output.
+
+  Workflow:
+  1. Use `code-explorer` to investigate and understand relevant code
+  2. Pass the explored project information to `engineer` for implementation
+  3. The engineer will create branches, make changes, run tests, and optionally create PRs
+
+  The tool returns:
+  - `text`: Summary of changes made
+  - `changes`: Array of modified files with actions (created/modified/deleted)
+  - `pr_url`: URL of created pull request (if applicable)
+tools:
+  engineer:
+    workflow: engineer
+    inputs: {}

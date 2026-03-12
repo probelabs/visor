@@ -1,0 +1,550 @@
+# =============================================================================
+# engineer: Built-in workflow for AI-driven code modification
+# =============================================================================
+#
+# Two-path flow:
+#   1. Pre-resolved mode: caller already checked out projects (e.g., from
+#      code-explorer), skips routing and checkout entirely.
+#   2. Standalone mode: runs project-setup sub-workflow for routing + checkout.
+#
+# Usage (standalone):
+#   imports:
+#     - visor://engineer.yaml
+#
+#   checks:
+#     modify:
+#       type: workflow
+#       workflow: engineer
+#       args:
+#         task: "Add rate limiting to the API"
+#         architecture: ./ARCHITECTURE.md
+#         docs_repo: my-org/docs
+#         project_definitions:
+#           - id: backend
+#             repo: my-org/backend
+#             description: Backend API
+#
+# Usage (pre-resolved, from code-explorer):
+#   checks:
+#     modify:
+#       type: workflow
+#       workflow: engineer
+#       args:
+#         task: "Add rate limiting to the API"
+#         projects:
+#           - project_id: backend
+#             repository: my-org/backend
+#             path: /tmp/visor/workspace/backend
+#
+# =============================================================================
+
+id: engineer
+name: Engineer
+description: AI-driven code modification workflow with project routing or pre-resolved paths
+version: "1.0.0"
+
+imports:
+  - project-setup.yaml
+
+inputs:
+  - name: task
+    required: true
+    description: The engineering task to accomplish
+    schema:
+      type: string
+
+  - name: context
+    required: false
+    description: Additional context for the task (e.g., conversation thread, ticket details)
+    default: ""
+    schema:
+      type: string
+
+  # Pre-resolved project paths (from code-explorer or other workflow)
+  - name: projects
+    required: false
+    description: |
+      Pre-resolved project objects with paths (skips routing/checkout when provided):
+        - project_id: identifier
+        - repository: owner/repo
+        - path: local checkout path
+        - description: project description
+        - services: optional service config
+        - setup: optional setup commands
+        - knowledge: optional project knowledge
+    default: []
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          project_id: { type: string }
+          repository: { type: string }
+          path: { type: string }
+          description: { type: string }
+          services:
+            type: object
+          setup:
+            type: array
+            items: { type: string }
+          knowledge: { type: string }
+
+  # Standalone mode inputs (for project-setup sub-workflow)
+  - name: architecture
+    required: false
+    description: Architecture model for project routing (standalone mode)
+    default: ""
+    schema:
+      type: string
+
+  - name: docs_repo
+    required: false
+    description: Documentation repository for standalone mode
+    default: ""
+    schema:
+      type: string
+
+  - name: docs_ref
+    required: false
+    description: Git ref for docs repository
+    default: main
+    schema:
+      type: string
+
+  - name: project_definitions
+    required: false
+    description: |
+      Project definitions for standalone routing (same schema as code-talk projects)
+    default: []
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id: { type: string }
+          repo: { type: string }
+          description: { type: string }
+          sandbox: { type: string }
+          services:
+            type: object
+          setup:
+            type: array
+            items: { type: string }
+          knowledge: { type: string }
+        required: [id, repo, description]
+
+  - name: max_projects
+    required: false
+    description: Maximum projects for standalone routing
+    default: 3
+    schema:
+      type: number
+
+  - name: routing_prompt
+    required: false
+    description: Additional routing instructions for standalone mode
+    default: ""
+    schema:
+      type: string
+
+  - name: trace_id
+    required: false
+    description: Trace ID for telemetry correlation
+    default: ""
+    schema:
+      type: string
+
+  - name: slack_user_id
+    required: false
+    description: Slack user ID for notifications
+    default: ""
+    schema:
+      type: string
+
+outputs:
+  - name: summary
+    description: The engineer's response/summary
+    value_js: |
+      return outputs?.['engineer-task']?.summary ?? outputs?.['engineer-task']?.text ?? null;
+
+  - name: pr_urls
+    description: List of pull request URLs created
+    value_js: |
+      return outputs?.['engineer-task']?.pr_urls ?? [];
+
+  - name: files_changed
+    description: List of files that were created or modified
+    value_js: |
+      return outputs?.['engineer-task']?.files_changed ?? [];
+
+  - name: error
+    description: Error details if PR creation failed
+    value_js: |
+      return outputs?.['engineer-task']?.error ?? null;
+
+  - name: result
+    description: Full engineer output
+    value_js: |
+      return outputs?.['engineer-task'] ?? null;
+
+  - name: projects_used
+    description: Which projects were used
+    value_js: |
+      const merged = outputs?.['merge-projects'];
+      if (!Array.isArray(merged)) return [];
+      return merged.map(function(p) { return p.project_id; }).filter(Boolean);
+
+steps:
+  # ===========================================================================
+  # Step 1: Check if projects are pre-resolved
+  # Returns pre-resolved projects or null (triggers standalone flow)
+  # ===========================================================================
+  prepare-projects:
+    type: script
+    criticality: internal
+    assume:
+      - "true"
+    guarantee: "output === null || Array.isArray(output)"
+    content: |
+      const projects = inputs?.projects;
+      if (Array.isArray(projects) && projects.length > 0 && projects[0]?.path) {
+        return projects;
+      }
+      return null;
+
+  # ===========================================================================
+  # Step 2: Standalone mode — run project-setup for routing + checkout
+  # Only runs when prepare-projects returns null
+  # ===========================================================================
+  setup-projects:
+    type: workflow
+    workflow: project-setup
+    criticality: internal
+    depends_on: [prepare-projects]
+    assume:
+      - "true"
+    if: "outputs['prepare-projects'] === null"
+    args:
+      question: "{{ inputs.task }}"
+      architecture: "{{ inputs.architecture }}"
+      docs_repo: "{{ inputs.docs_repo }}"
+      docs_ref: "{{ inputs.docs_ref }}"
+      projects:
+        expression: "inputs.project_definitions"
+      max_projects:
+        expression: "inputs.max_projects ?? 3"
+      routing_prompt: "{{ inputs.routing_prompt }}"
+
+  # ===========================================================================
+  # Step 3: Merge project sources (OR dependency — runs when EITHER completes)
+  # ===========================================================================
+  merge-projects:
+    type: script
+    criticality: internal
+    depends_on: ["prepare-projects|setup-projects"]
+    assume:
+      - "true"
+    guarantee: "Array.isArray(output)"
+    content: |
+      const prepared = outputs?.['prepare-projects'];
+      if (Array.isArray(prepared) && prepared.length > 0) {
+        return prepared;
+      }
+      return outputs?.['setup-projects']?.checkout_projects ?? [];
+
+  # ===========================================================================
+  # Step 4: Run setup commands for each project (if any)
+  # ===========================================================================
+  run-setup:
+    type: script
+    criticality: internal
+    depends_on: [merge-projects]
+    assume:
+      - "true"
+    guarantee: "Array.isArray(output)"
+    if: |
+      const projects = outputs['merge-projects'];
+      if (!Array.isArray(projects)) return false;
+      return projects.some(function(p) { return Array.isArray(p.setup) && p.setup.length > 0; });
+    content: |
+      const projects = outputs['merge-projects'] ?? [];
+      const results = [];
+      for (let i = 0; i < projects.length; i++) {
+        const p = projects[i];
+        if (!Array.isArray(p.setup) || p.setup.length === 0) continue;
+        results.push({
+          project_id: p.project_id,
+          setup_commands: p.setup,
+          path: p.path
+        });
+      }
+      return results;
+
+  # ===========================================================================
+  # Step 5: Main AI engineering task
+  # ===========================================================================
+  engineer-task:
+    type: ai
+    criticality: policy
+    depends_on: [merge-projects]
+    guarantee: "(output?.pr_urls?.length > 0) || (output?.error != null && output?.error != '')"
+    timeout: 3000000
+    ai:
+      skip_code_context: true
+      prompt_type: engineer
+      allowBash: true
+      allowEdit: true
+      enableDelegate: true
+      enableTasks: true
+      max_iterations: 100
+      bashConfig:
+        disableDefaultAllow: true
+        disableDefaultDeny: true
+        allow:
+          - "*"
+        deny:
+          # Destructive git operations
+          - "git:push:--force"
+          - "git:push:-f"
+          - "git:push:--force-with-lease"
+          # Destructive GitHub operations
+          - "gh:repo:delete"
+          - "gh:repo:archive"
+          - "gh:repo:rename"
+          - "gh:release:delete"
+          - "gh:secret:set"
+          - "gh:secret:delete"
+          - "gh:variable:set"
+          - "gh:variable:delete"
+          - "gh:ssh-key:add"
+          - "gh:ssh-key:delete"
+          - "gh:workflow:run"
+          - "gh:workflow:enable"
+          - "gh:workflow:disable"
+          # No sudo
+          - "sudo:*"
+        timeout: 300000
+    schema:
+      type: object
+      additionalProperties: false
+      properties:
+        summary:
+          type: string
+          description: "Detailed summary of what was implemented, files changed, and why"
+        pr_urls:
+          type: array
+          items: { type: string }
+          description: "List of pull request URLs created. MUST NOT be empty if files were edited."
+        files_changed:
+          type: array
+          items: { type: string }
+          description: "List of files that were created or modified"
+        error:
+          type: string
+          description: "Error details if PR creation failed. Only set if pr_urls is empty."
+      required: [summary, pr_urls, files_changed]
+    prompt: |
+      You are a software engineer. Multi-repo tasks must ALL be completed —
+      use delegate tool to work on repos in parallel.
+
+      <delegation>
+      Use the delegate tool for parallel work, plan validation, and build discovery.
+
+      MANDATORY FIRST STEP — delegate "Discover build system" for each repository:
+      - Check: Makefile, package.json (scripts), Cargo.toml, go.mod, pyproject.toml
+      - Check: CI config (.github/workflows/, .gitlab-ci.yml, Jenkinsfile)
+      - Check: README for build/test/lint instructions
+      - Return the EXACT commands for: build, test, lint/format, and any pre-commit hooks
+      - Example output: "build: make, test: make test, lint: gofmt -l . && golangci-lint run"
+      Use these commands throughout the session. Do NOT guess — use what the delegate found.
+
+      MANDATORY BEFORE IMPLEMENTATION — delegate "Plan validation":
+      - Describe: files to change, approach, patterns to follow
+      - Ask the delegate to verify: do these files exist? Are there existing tests?
+        Are there related utilities or patterns to reuse? Any API contracts to respect?
+      - Wait for the response before writing code
+
+      Also delegate for:
+      - Multi-repo changes (one delegate per repo, in parallel)
+      - Independent sub-tasks (e.g., "update tests" + "update docs")
+      - Exploring unfamiliar code before making changes
+
+      Do NOT delegate:
+      - Sequential dependent work (step B needs step A's output)
+      - Simple single-file edits (fewer than 5 iterations)
+      - Git operations (commit, push, PR) — always do these yourself
+
+      Delegates have fewer iterations and no access to your conversation.
+      Provide all necessary context in the delegate prompt.
+      </delegation>
+
+      <git-workflow>
+      This workspace is TEMPORARY — uncommitted changes are DELETED after the session.
+      Complete ALL git operations via tool calls before outputting your final response.
+
+      Before your final response, verify:
+      □ Build passes (using exact commands from "Discover build system" delegate)
+      □ Tests pass (run the full test suite, not just your new tests)
+      □ Lint/format passes (if the project has a linter)
+      □ git add <files>
+      □ git commit -m "descriptive message"
+      □ git push -u origin <branch-name>
+      □ gh pr create (for new PRs) or update existing PR
+      No PR URL = failed task. Report errors honestly, never claim false success.
+
+      If build/test/lint fails, fix the issue before committing. If you cannot fix it,
+      report exactly what failed and why in your final answer and in the PR description.
+      </git-workflow>
+
+      <structured-output>
+      Your JSON output fields must match reality:
+      - pr_urls: ONLY URLs from PRs you created/updated via `gh pr create` or `git push`.
+        Checking out an existing PR does NOT count — only include it if you pushed to it.
+      - summary: What you ACTUALLY did, not what you planned.
+      - files_changed: Only files you modified AND committed.
+      - error: Set this with the real reason if pr_urls is empty (ran out of iterations,
+        tests failed, build broken, push rejected). Leave pr_urls empty in this case.
+      </structured-output>
+
+      <efficiency>
+      - Use context data directly — don't re-read files or re-run searches for
+        information already provided by code-explorer.
+      - Use tasks to track multi-step work. Create these tasks at minimum:
+        1. "Discover build system" (delegate) — find exact build/test/lint commands
+        2. "Plan validation" (delegate) — verify approach before coding
+        3. "Implement changes" — the actual code/file changes
+        4. "Verify build" — run build, test, and lint commands; fix any failures
+        5. "Create pull request" — git branch, add, commit, push, gh pr create
+        Mark in_progress/completed as you go. Do NOT skip "Verify build".
+      - If a bash command fails, try a different approach. Don't retry the same
+        command or get stuck in loops.
+      </efficiency>
+      {% if inputs.trace_id != "" or inputs.slack_user_id != "" %}
+
+      <pr-footer>
+      Add this footer to the PR body:
+      ---
+      {% if inputs.slack_user_id != "" %}Requested by: <@{{ inputs.slack_user_id }}>{% endif %}
+      {% if inputs.trace_id != "" %}Trace: {{ inputs.trace_id }}{% endif %}
+      Generated with Visor AI Assistant
+      </pr-footer>
+      {% endif %}
+
+      <task>
+      {{ inputs.task }}
+      </task>
+
+      {% if inputs.context != "" %}
+      <context>
+      {{ inputs.context }}
+      </context>
+      {% endif %}
+
+      {% assign projects = outputs['merge-projects'] %}
+      <projects>
+      {% if projects %}
+      {% for p in projects %}
+      <project>
+        <id>{{ p.project_id }}</id>
+        <repo>{{ p.repository }}</repo>
+        <path>{{ p.path }}</path>
+        <description>{{ p.description }}</description>
+        {% if p.knowledge %}
+        <knowledge>{{ p.knowledge }}</knowledge>
+        {% endif %}
+        {% if p.services %}
+        <services>{{ p.services | json }}</services>
+        {% endif %}
+      </project>
+      {% endfor %}
+      {% endif %}
+      </projects>
+
+# =============================================================================
+# Tests
+# =============================================================================
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+
+  cases:
+    - name: pre-resolved-projects
+      description: Uses pre-resolved project paths (skips routing)
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        task: "Add rate limiting to the API"
+        projects:
+          - project_id: backend
+            repository: org/backend
+            path: /tmp/visor/workspace/backend
+            description: Backend API
+      mocks:
+        engineer-task:
+          summary: "Added rate limiting middleware"
+          pr_urls: ["https://github.com/org/backend/pull/1"]
+          files_changed: ["src/middleware/rate-limit.ts"]
+      expect:
+        calls:
+          - step: prepare-projects
+            exactly: 1
+          - step: setup-projects
+            exactly: 0
+          - step: merge-projects
+            exactly: 1
+          - step: engineer-task
+            exactly: 1
+        workflow_output:
+          - path: summary
+            equals: "Added rate limiting middleware"
+          - path: pr_urls[0]
+            equals: "https://github.com/org/backend/pull/1"
+
+    - name: standalone-with-routing
+      description: Standalone mode with full project routing
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        task: "Fix the login bug"
+        architecture: "# Arch\n- backend: Backend services"
+        docs_repo: org/docs
+        project_definitions:
+          - id: backend
+            repo: org/backend
+            description: Backend services
+      mocks:
+        setup-projects:
+          docs_path: "/tmp/visor/docs"
+          routing_decision:
+            projects:
+              - project_id: "backend"
+                reason: "Login is in backend"
+          checkout_projects:
+            - project_id: "backend"
+              repository: "org/backend"
+              description: "Backend services"
+              path: "/tmp/visor/workspace/backend"
+              sandbox: null
+              services: null
+              setup: null
+              knowledge: null
+        engineer-task:
+          summary: "Fixed login validation bug"
+          pr_urls: ["https://github.com/org/backend/pull/2"]
+          files_changed: ["src/auth/login.ts"]
+      expect:
+        calls:
+          - step: prepare-projects
+            exactly: 1
+          - step: setup-projects
+            exactly: 1
+          - step: merge-projects
+            exactly: 1
+          - step: engineer-task
+            exactly: 1
+        workflow_output:
+          - path: summary
+            equals: "Fixed login validation bug"
+          - path: pr_urls[0]
+            equals: "https://github.com/org/backend/pull/2"

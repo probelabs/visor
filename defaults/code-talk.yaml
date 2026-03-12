@@ -29,6 +29,9 @@ name: Code Talk
 description: AI-powered code exploration across multiple repositories with confidence scoring
 version: "1.0.0"
 
+imports:
+  - project-setup.yaml
+
 inputs:
   - name: question
     required: true
@@ -133,7 +136,7 @@ outputs:
     value_js: |
       const result = outputs?.['explore-code'];
       if (result?.answer) return result.answer;
-      const routeOutput = outputs?.['route-projects'];
+      const routeOutput = outputs?.['setup-projects']?.routing_decision;
       // Handle proper notes field
       const routeNotes = routeOutput?.notes;
       if (typeof routeNotes === 'string' && routeNotes.trim().length > 0) {
@@ -159,7 +162,7 @@ outputs:
     value_js: |
       const result = outputs?.['explore-code'];
       if (result?.confidence) return result.confidence;
-      const routeNotes = outputs?.['route-projects']?.notes;
+      const routeNotes = outputs?.['setup-projects']?.routing_decision?.notes;
       if (typeof routeNotes === 'string' && routeNotes.trim().length > 0) return 'low';
       return 'low';
 
@@ -173,25 +176,16 @@ outputs:
       const reason = result?.confidence_reason;
       if (typeof reason === 'string') return reason;
       if (confidence === 'high') return '';
-      const routeNotes = outputs?.['route-projects']?.notes;
+      const routeNotes = outputs?.['setup-projects']?.routing_decision?.notes;
       if (typeof routeNotes === 'string' && routeNotes.trim().length > 0) return routeNotes;
       return 'No confidence explanation was provided by explore-code.';
 
   - name: projects_explored
     description: Which project IDs were checked out
     value_js: |
-      // Try to get from history first
-      const historyItems = outputs?.history?.['project-items'];
-      const lastItems = Array.isArray(historyItems) ? historyItems[historyItems.length - 1] : historyItems;
-      if (Array.isArray(lastItems)) {
-        return lastItems
-          .map(function (p) { return p?.project_id; })
-          .filter(function (p) { return p; });
-      }
-      // Fallback: try to get from direct output
-      const projectItems = outputs?.['project-items'];
-      if (Array.isArray(projectItems)) {
-        return projectItems
+      const checkoutProjects = outputs?.['setup-projects']?.checkout_projects;
+      if (Array.isArray(checkoutProjects)) {
+        return checkoutProjects
           .map(function (p) { return p?.project_id; })
           .filter(function (p) { return p; });
       }
@@ -200,317 +194,58 @@ outputs:
   - name: projects_explored_details
     description: Project details for routed projects (id, repo, description, reason)
     value_js: |
-      const normalizeFromItems = function (items) {
-        const result = [];
-        if (!Array.isArray(items)) return result;
-        for (let i = 0; i < items.length; i++) {
-          const item = items[i];
-          if (!item) continue;
-          const id = item.project_id ?? item.id;
-          const repo = item.repository ?? item.repo;
-          if (!id || !repo) continue;
-          result.push({
-            id,
-            repo,
-            description: item.description ?? '',
-            reason: item.reason ?? ''
-          });
-        }
-        return result;
-      };
+      const checkoutProjects = outputs?.['setup-projects']?.checkout_projects;
+      if (!Array.isArray(checkoutProjects)) return [];
 
-      // Prefer detailed project-items output (includes repo/description/reason)
-      const historyItems = outputs?.history?.['project-items'];
-      const lastHistory = Array.isArray(historyItems) ? historyItems[historyItems.length - 1] : historyItems;
-      const normalized = normalizeFromItems(lastHistory);
-      if (normalized.length > 0) return normalized;
-
-      const directItems = normalizeFromItems(outputs?.['project-items']);
-      if (directItems.length > 0) return directItems;
-
-      // Fallback: map project IDs to inputs.projects
-      let ids = [];
-      if (Array.isArray(lastHistory)) {
-        ids = lastHistory
-          .map(function (p) { return p?.project_id; })
-          .filter(function (p) { return p; });
-      }
-      if (ids.length === 0) {
-        const projectItems = outputs?.['project-items'];
-        if (Array.isArray(projectItems)) {
-          ids = projectItems
-            .map(function (p) { return p?.project_id; })
-            .filter(function (p) { return p; });
-        }
-      }
-
-      const inputProjects = Array.isArray(inputs?.projects) ? inputs.projects : [];
-      const byId = {};
-      for (let j = 0; j < inputProjects.length; j++) {
-        const p = inputProjects[j];
-        if (p?.id) {
-          byId[p.id] = p;
-        }
-      }
-
-      const mapped = [];
-      for (let k = 0; k < ids.length; k++) {
-        const pid = ids[k];
-        const info = byId[pid];
-        if (!info?.repo) continue;
-        mapped.push({
-          id: pid,
-          repo: info.repo,
-          description: info.description ?? '',
-          reason: ''
+      const result = [];
+      for (let i = 0; i < checkoutProjects.length; i++) {
+        const p = checkoutProjects[i];
+        if (!p?.project_id) continue;
+        result.push({
+          id: p.project_id,
+          repo: p.repository ?? '',
+          description: p.description ?? '',
+          reason: p.reason ?? ''
         });
       }
-      return mapped;
+      return result;
 
   - name: checkout_projects
     description: Checked-out project paths aligned with routed projects
     value_js: |
-      const historyItems = outputs?.history?.['project-items'];
-      const lastHistory = Array.isArray(historyItems) ? historyItems[historyItems.length - 1] : historyItems;
-      const items = Array.isArray(outputs?.['project-items'])
-        ? outputs['project-items']
-        : Array.isArray(lastHistory)
-          ? lastHistory
-          : [];
-
-      const checkoutOutput = outputs?.['checkout-projects'];
-      const checkouts = Array.isArray(checkoutOutput?.forEachItems)
-        ? checkoutOutput.forEachItems
-        : Array.isArray(checkoutOutput)
-          ? checkoutOutput
-          : [];
-
-      const result = [];
-      if (!Array.isArray(items) || !Array.isArray(checkouts)) return result;
-
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        if (!item?.project_id) continue;
-        const checkout = checkouts[i] ?? {};
-        result.push({
-          project_id: item.project_id,
-          repository: item.repository ?? item.repo ?? '',
-          description: item.description ?? '',
-          path: checkout.path ?? checkout.workspace_path ?? '',
-          sandbox: item.sandbox ?? null,
-          services: item.services ?? null,
-          setup: item.setup ?? null,
-          knowledge: item.knowledge ?? null
-        });
-      }
-      return result;
+      return outputs?.['setup-projects']?.checkout_projects ?? [];
 
 steps:
   # ===========================================================================
-  # Step 1: Checkout documentation (always first)
+  # Step 1: Project routing and checkout (shared sub-workflow)
   # ===========================================================================
-  checkout-docs:
-    type: git-checkout
+  setup-projects:
+    type: workflow
+    workflow: project-setup
     criticality: internal
     assume:
       - "true"
-    repository: "{{ inputs.docs_repo }}"
-    ref: "{{ inputs.docs_ref }}"
-    fetch_depth: 1
-    description: "Documentation"
+    args:
+      question: "{{ inputs.question }}"
+      architecture: "{{ inputs.architecture }}"
+      docs_repo: "{{ inputs.docs_repo }}"
+      projects:
+        expression: "inputs.projects"
+      max_projects:
+        expression: "inputs.max_projects ?? 3"
+      docs_ref: "{{ inputs.docs_ref }}"
+      routing_prompt: "{{ inputs.routing_prompt }}"
 
   # ===========================================================================
-  # Step 2: Route to relevant projects (AI-based)
-  # ===========================================================================
-  route-projects:
-    type: ai
-    criticality: internal
-    depends_on: [checkout-docs]
-    assume:
-      - "true"
-    guarantee: "(output?.projects?.length ?? 0) > 0 || (output?.notes?.length ?? 0) > 0"
-    fail_if: "(output?.projects?.length ?? 0) === 0 && !(output?.notes?.length > 0)"
-    ai:
-      skip_code_context: true
-      prompt_type: general
-      system_prompt: |
-        <role>
-        You are a project routing planner. Given a question, you decide which
-        code repositories need to be queried. You do NOT answer questions
-        directly - you only plan which projects to consult.
-        </role>
-
-        <context_handling>
-        The full conversation context (e.g., Slack thread) may be available in
-        <slack_context>. Use it to understand the real question. If the latest
-        message is a correction, reconstruct the original question from earlier
-        messages. Questions may include appended ticket/page context.
-        </context_handling>
-
-        <architecture>
-        {{ inputs.architecture }}
-        </architecture>
-
-        <docs_context>
-        The documentation has been checked out and is available for reference.
-        Use it to understand feature behavior, configuration options, and
-        cross-component interactions before deciding which code projects to query.
-        Path: {{ outputs['checkout-docs'].path }}
-        </docs_context>
-
-        <available_projects>
-        {% for p in inputs.projects %}
-        - id: {{ p.id }}
-          repo: {{ p.repo }}
-          description: {{ p.description }}
-        {% endfor %}
-        </available_projects>
-    schema: |
-      {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "projects": {
-            "type": "array",
-            "description": "Projects to query for this question",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "project_id": {
-                  "type": "string",
-                  "description": "One of the available project IDs",
-                  "enum": [{% for p in inputs.projects %}"{{ p.id }}"{% unless forloop.last %}, {% endunless %}{% endfor %}]
-                },
-                "reason": {
-                  "type": "string",
-                  "description": "Brief explanation of why this project is relevant"
-                }
-              },
-              "required": ["project_id"]
-            }
-          },
-          "notes": {
-            "type": "string",
-            "description": "Optional planner notes"
-          }
-        },
-        "required": ["projects"]
-      }
-    prompt: |
-      <question>{{ inputs.question }}</question>
-
-      <task>
-      Determine which projects are needed to answer this question.
-      Consider all parts of the stack that the functionality touches, then
-      select the smallest set that covers the behavior.
-
-      Return a "projects" array with:
-      - "project_id": from the available project IDs listed above
-      - "reason" (optional): brief explanation of relevance
-      - If you cannot determine the relevant projects from the context,
-        return an empty "projects" array and include a "notes" string
-        asking for the missing details you need.
-
-      Routing guidelines:
-      - When functionality spans multiple components, include ALL affected projects
-      - It's better to include a small superset than to miss a relevant project
-      - Typical plans contain 1-3 projects, but include more when necessary
-      - Consider how data/config flows between services
-      - Maximum projects: {{ inputs.max_projects }}
-      </task>
-
-      {% if inputs.routing_prompt %}
-      <additional_routing_rules>
-      {{ inputs.routing_prompt }}
-      </additional_routing_rules>
-      {% endif %}
-
-  # ===========================================================================
-  # Step 3: Map routed projects to checkout descriptors
-  # ===========================================================================
-  project-items:
-    type: script
-    criticality: internal
-    depends_on: [route-projects]
-    assume:
-      - "Array.isArray(outputs['route-projects']?.projects)"
-    guarantee: "Array.isArray(output)"
-    schema:
-      type: array
-    content: |
-      // Build a map of project ID -> project info from inputs
-      const projectMap = {};
-      const inputProjects = Array.isArray(inputs?.projects) ? inputs.projects : [];
-      for (let i = 0; i < inputProjects.length; i++) {
-        const p = inputProjects[i];
-        if (p?.id) {
-          projectMap[p.id] = {
-            repo: p.repo,
-            description: p.description ?? p.id,
-            sandbox: p.sandbox ?? null,
-            services: p.services ?? null,
-            setup: p.setup ?? null,
-            knowledge: p.knowledge ?? null
-          };
-        }
-      }
-
-      // Get routed projects from AI
-      const routeOutput = outputs?.['route-projects'];
-      const routedProjects = Array.isArray(routeOutput?.projects) ? routeOutput.projects : [];
-
-      // Map to checkout descriptors
-      const result = [];
-      const maxProjects = inputs?.max_projects ?? 3;
-
-      for (let j = 0; j < routedProjects.length && result.length < maxProjects; j++) {
-        const routed = routedProjects[j];
-        if (!routed?.project_id) continue;
-
-        const info = projectMap[routed.project_id];
-        // Skip unknown project IDs (not in inputs.projects)
-        if (!info?.repo) continue;
-
-        result.push({
-          project_id: routed.project_id,
-          reason: routed.reason ?? '',
-          repository: info.repo,
-          description: info.description,
-          sandbox: info.sandbox,
-          services: info.services,
-          setup: info.setup,
-          knowledge: info.knowledge
-        });
-      }
-
-      return result;
-    forEach: true
-
-  # ===========================================================================
-  # Step 4: Checkout each selected project
-  # ===========================================================================
-  checkout-projects:
-    type: git-checkout
-    criticality: internal
-    depends_on: [project-items]
-    assume:
-      - "output != null"
-    repository: "{{ outputs['project-items'].repository }}"
-    ref: main
-    fetch_depth: 1
-    description: "{{ outputs['project-items'].description }}"
-
-  # ===========================================================================
-  # Step 5: Explore code across all projects (main AI call)
+  # Step 2: Explore code across all projects (main AI call)
   # ===========================================================================
   explore-code:
     type: ai
     criticality: internal
-    depends_on: [route-projects, project-items, checkout-projects]
+    depends_on: [setup-projects]
     fanout: reduce
     assume:
-      - "outputs['route-projects']?.projects?.length > 0"
+      - "outputs['setup-projects']?.checkout_projects?.length > 0"
     ai:
       # ── Timeout Configuration ──────────────────────────────────────────
       # Probe soft timeout: 25 min — observer fires here
@@ -700,28 +435,23 @@ steps:
         </architecture>
 
         <routing_decision>
-          {{ outputs['route-projects'] | json }}
+          {{ outputs['setup-projects'].routing_decision | json }}
         </routing_decision>
 
         <docs_checkout>
           <repo>{{ inputs.docs_repo }}</repo>
           <ref>{{ inputs.docs_ref }}</ref>
-          <path>{{ outputs['checkout-docs'].path }}</path>
+          <path>{{ outputs['setup-projects'].docs_path }}</path>
         </docs_checkout>
 
-        {% assign items = outputs.history['project-items'] | last %}
-        {% assign checkouts = outputs.history['checkout-projects'] %}
-        {% if checkouts == nil or checkouts == empty %}
-        {% assign checkouts = outputs['checkout-projects'].forEachItems %}
-        {% endif %}
+        {% assign projects = outputs['setup-projects'].checkout_projects %}
         <projects>
-        {% if items and checkouts %}
-        {% for p in items %}
-        {% assign co = checkouts[forloop.index0] %}
+        {% if projects %}
+        {% for p in projects %}
           <project>
             <id>{{ p.project_id }}</id>
             <repo>{{ p.repository }}</repo>
-            <path>{{ co.path }}</path>
+            <path>{{ p.path }}</path>
             <reason>{{ p.reason | default: 'not provided' }}</reason>
           </project>
         {% endfor %}
@@ -771,18 +501,27 @@ tests:
             repo: org/backend
             description: Backend services
       mocks:
-        checkout-docs:
-          path: "/tmp/visor/docs"
-          repository: "org/docs"
-          ref: "main"
-        checkout-projects:
-          path: "/tmp/visor/project"
-          repository: "org/gateway"
-          ref: "main"
-        route-projects:
-          projects:
+        setup-projects:
+          docs_path: "/tmp/visor/docs"
+          routing_decision:
+            projects:
+              - project_id: "gateway"
+                reason: "Gateway handles authentication"
+          project_items:
             - project_id: "gateway"
+              repository: "org/gateway"
+              description: "API Gateway"
               reason: "Gateway handles authentication"
+          checkout_projects:
+            - project_id: "gateway"
+              repository: "org/gateway"
+              description: "API Gateway"
+              path: "/tmp/visor/project"
+              reason: "Gateway handles authentication"
+              sandbox: null
+              services: null
+              setup: null
+              knowledge: null
         explore-code:
           answer:
             text: "Authentication is handled in the gateway via JWT middleware."
@@ -795,26 +534,10 @@ tests:
           confidence_reason: ""
       expect:
         calls:
-          - step: checkout-docs
-            exactly: 1
-          - step: route-projects
-            exactly: 1
-          - step: project-items
-            exactly: 1
-          - step: checkout-projects
+          - step: setup-projects
             exactly: 1
           - step: explore-code
             exactly: 1
-        # Verify workflow inputs are rendered in the route-projects prompt
-        # Note: prompts assertion captures the user prompt only, not system_prompt.
-        # The user prompt contains question; system_prompt contains architecture and projects.
-        prompts:
-          - step: route-projects
-            contains:
-              # Verify question input is rendered (from inputs.question)
-              - "How does authentication work?"
-              # Verify max_projects default is rendered
-              - "Maximum projects:"
         workflow_output:
           - path: answer.text
             equals: "Authentication is handled in the gateway via JWT middleware."
@@ -836,20 +559,33 @@ tests:
             repo: org/backend
             description: Backend services
       mocks:
-        checkout-docs:
-          path: "/tmp/visor/docs"
-          repository: "org/docs"
-          ref: "main"
-        checkout-projects:
-          path: "/tmp/visor/project"
-          repository: "org/example"
-          ref: "main"
-        route-projects:
-          projects:
+        setup-projects:
+          docs_path: "/tmp/visor/docs"
+          routing_decision:
+            projects:
+              - project_id: "gateway"
+                reason: "Handles incoming requests"
+              - project_id: "backend"
+                reason: "Processes data"
+          checkout_projects:
             - project_id: "gateway"
+              repository: "org/gateway"
+              description: "API Gateway"
+              path: "/tmp/visor/project-1"
               reason: "Handles incoming requests"
+              sandbox: null
+              services: null
+              setup: null
+              knowledge: null
             - project_id: "backend"
+              repository: "org/backend"
+              description: "Backend services"
+              path: "/tmp/visor/project-2"
               reason: "Processes data"
+              sandbox: null
+              services: null
+              setup: null
+              knowledge: null
         explore-code:
           answer:
             text: "Data flows via gRPC from gateway to backend."
@@ -858,14 +594,8 @@ tests:
           confidence_reason: "References are incomplete for full cross-project verification."
       expect:
         calls:
-          - step: checkout-docs
+          - step: setup-projects
             exactly: 1
-          - step: route-projects
-            exactly: 1
-          - step: project-items
-            exactly: 1
-          - step: checkout-projects
-            exactly: 2
           - step: explore-code
             exactly: 1
 
@@ -882,16 +612,15 @@ tests:
             repo: org/main
             description: Main app
       mocks:
-        checkout-docs:
-          path: "/tmp/visor/docs"
-          repository: "org/docs"
-          ref: "main"
-        route-projects:
-          projects: []
-          notes: "I need more context to route this question."
+        setup-projects:
+          docs_path: "/tmp/visor/docs"
+          routing_decision:
+            projects: []
+            notes: "I need more context to route this question."
+          checkout_projects: []
       expect:
         calls:
-          - step: route-projects
+          - step: setup-projects
             exactly: 1
         workflow_output:
           - path: answer.text
@@ -899,7 +628,7 @@ tests:
 
     # =========================================================================
     # Edge Case: Checkout failure stops downstream checks
-    # When checkout fails (success: false), dependent checks don't run.
+    # When setup-projects fails, explore-code doesn't run.
     # =========================================================================
     - name: checkout-failure-stops-exploration
       strict: false
@@ -914,29 +643,14 @@ tests:
             repo: org/backend
             description: Backend services
       mocks:
-        checkout-docs:
-          path: "/tmp/visor/docs"
-          repository: "org/docs"
-          ref: "main"
-        route-projects:
-          projects:
-            - project_id: "backend"
-              reason: "Auth is in backend"
-        checkout-projects:
-          # Failure stops downstream checks
+        setup-projects:
           success: false
           error: "Repository not found: org/backend"
       expect:
         calls:
-          - step: checkout-docs
+          - step: setup-projects
             exactly: 1
-          - step: route-projects
-            exactly: 1
-          - step: project-items
-            exactly: 1
-          - step: checkout-projects
-            exactly: 1
-          # explore-code does NOT run because checkout failed
+          # explore-code does NOT run because setup failed
           - step: explore-code
             exactly: 0
 
@@ -956,22 +670,19 @@ tests:
             repo: org/app
             description: Main app
       mocks:
-        checkout-docs:
-          path: "/tmp/visor/docs"
-          repository: "org/docs"
-          ref: "main"
-        route-projects:
-          # Missing 'projects' field entirely - malformed response
-          notes: "I couldn't determine the projects"
+        setup-projects:
+          docs_path: "/tmp/visor/docs"
+          routing_decision:
+            notes: "I couldn't determine the projects"
+          checkout_projects: []
       expect:
         calls:
-          - step: route-projects
+          - step: setup-projects
             exactly: 1
-          # Should fail because projects array is missing/empty
 
     # =========================================================================
     # Edge Case: Unknown project ID in routing (not in input projects)
-    # The script filters out unknown IDs and only processes valid ones.
+    # The project-setup filters out unknown IDs and only processes valid ones.
     # =========================================================================
     - name: unknown-project-id-filtered
       event: manual
@@ -985,22 +696,24 @@ tests:
             repo: org/backend
             description: Backend services
       mocks:
-        checkout-docs:
-          path: "/tmp/visor/docs"
-          repository: "org/docs"
-          ref: "main"
-        checkout-projects:
-          path: "/tmp/visor/project"
-          repository: "org/backend"
-          ref: "main"
-        route-projects:
-          projects:
-            # AI returns a project ID that doesn't exist in inputs
-            - project_id: "nonexistent-service"
-              reason: "This doesn't exist"
-            # Plus a valid one
+        setup-projects:
+          docs_path: "/tmp/visor/docs"
+          routing_decision:
+            projects:
+              - project_id: "nonexistent-service"
+                reason: "This doesn't exist"
+              - project_id: "backend"
+                reason: "Caching logic"
+          checkout_projects:
             - project_id: "backend"
+              repository: "org/backend"
+              description: "Backend services"
+              path: "/tmp/visor/project"
               reason: "Caching logic"
+              sandbox: null
+              services: null
+              setup: null
+              knowledge: null
         explore-code:
           answer:
             text: "Caching is implemented in the backend."
@@ -1009,14 +722,7 @@ tests:
           confidence_reason: "One routed project was invalid and filtered before exploration."
       expect:
         calls:
-          - step: checkout-docs
-            exactly: 1
-          - step: route-projects
-            exactly: 1
-          - step: project-items
-            exactly: 1
-          # Only 1 checkout because nonexistent-service is filtered out
-          - step: checkout-projects
+          - step: setup-projects
             exactly: 1
           - step: explore-code
             exactly: 1
@@ -1049,20 +755,31 @@ tests:
             repo: org/cache
             description: Cache layer
       mocks:
-        checkout-docs:
-          path: "/tmp/visor/docs"
-          repository: "org/docs"
-          ref: "main"
-        checkout-projects:
-          path: "/tmp/visor/project"
-          repository: "org/example"
-          ref: "main"
-        route-projects:
-          projects:
+        setup-projects:
+          docs_path: "/tmp/visor/docs"
+          routing_decision:
+            projects:
+              - project_id: "frontend"
+              - project_id: "backend"
+              - project_id: "database"
+              - project_id: "cache"
+          checkout_projects:
             - project_id: "frontend"
+              repository: "org/frontend"
+              description: "Frontend app"
+              path: "/tmp/visor/project-1"
+              sandbox: null
+              services: null
+              setup: null
+              knowledge: null
             - project_id: "backend"
-            - project_id: "database"
-            - project_id: "cache"
+              repository: "org/backend"
+              description: "Backend services"
+              path: "/tmp/visor/project-2"
+              sandbox: null
+              services: null
+              setup: null
+              knowledge: null
         explore-code:
           answer:
             text: "The stack flows from frontend through backend."
@@ -1071,21 +788,14 @@ tests:
           confidence_reason: "Exploration scope was reduced by max_projects limit."
       expect:
         calls:
-          - step: checkout-docs
+          - step: setup-projects
             exactly: 1
-          - step: route-projects
-            exactly: 1
-          - step: project-items
-            exactly: 1
-          # Only 2 checkouts due to max_projects: 2
-          - step: checkout-projects
-            exactly: 2
           - step: explore-code
             exactly: 1
 
     # =========================================================================
     # Project-level services, setup, and sandbox fields
-    # Verifies new project config fields flow through project-items
+    # Verifies new project config fields flow through setup-projects
     # =========================================================================
     - name: project-services-and-setup
       event: manual
@@ -1114,18 +824,29 @@ tests:
             repo: TykTechnologies/tyk-pump
             description: Tyk Pump
       mocks:
-        checkout-docs:
-          path: "/tmp/visor/docs"
-          repository: "org/docs"
-          ref: "main"
-        checkout-projects:
-          path: "/tmp/visor/project"
-          repository: "TykTechnologies/tyk"
-          ref: "main"
-        route-projects:
-          projects:
+        setup-projects:
+          docs_path: "/tmp/visor/docs"
+          routing_decision:
+            projects:
+              - project_id: "tyk"
+                reason: "Integration tests are in the gateway"
+          checkout_projects:
             - project_id: "tyk"
-              reason: "Integration tests are in the gateway"
+              repository: "TykTechnologies/tyk"
+              description: "Tyk Gateway"
+              path: "/tmp/visor/project"
+              sandbox: "go-env"
+              services:
+                redis:
+                  image: "redis:7-alpine"
+                mongo:
+                  image: "mongo:6"
+                  environment:
+                    MONGO_INITDB_DATABASE: "tyk"
+              setup:
+                - "make deps"
+                - "go generate ./..."
+              knowledge: "docs/internal/testing.md"
         explore-code:
           answer:
             text: "Integration tests use redis and mongo fixtures."
@@ -1138,45 +859,13 @@ tests:
           confidence_reason: ""
       expect:
         calls:
-          - step: checkout-docs
-            exactly: 1
-          - step: route-projects
-            exactly: 1
-          - step: project-items
-            exactly: 1
-          - step: checkout-projects
+          - step: setup-projects
             exactly: 1
           - step: explore-code
             exactly: 1
         workflow_output:
           - path: answer.text
             equals: "Integration tests use redis and mongo fixtures."
-        # Verify project-items step output includes new fields
-        outputs:
-          - step: project-items
-            path: project_id
-            equals: "tyk"
-          - step: project-items
-            path: sandbox
-            equals: "go-env"
-          - step: project-items
-            path: services.redis.image
-            equals: "redis:7-alpine"
-          - step: project-items
-            path: services.mongo.image
-            equals: "mongo:6"
-          - step: project-items
-            path: services.mongo.environment.MONGO_INITDB_DATABASE
-            equals: "tyk"
-          - step: project-items
-            path: setup[0]
-            equals: "make deps"
-          - step: project-items
-            path: setup[1]
-            equals: "go generate ./..."
-          - step: project-items
-            path: knowledge
-            equals: "docs/internal/testing.md"
 
     # =========================================================================
     # Project without services/setup (backwards compat)
@@ -1194,18 +883,21 @@ tests:
             repo: org/pump
             description: Tyk Pump
       mocks:
-        checkout-docs:
-          path: "/tmp/visor/docs"
-          repository: "org/docs"
-          ref: "main"
-        checkout-projects:
-          path: "/tmp/visor/project"
-          repository: "org/pump"
-          ref: "main"
-        route-projects:
-          projects:
+        setup-projects:
+          docs_path: "/tmp/visor/docs"
+          routing_decision:
+            projects:
+              - project_id: "pump"
+                reason: "Direct match"
+          checkout_projects:
             - project_id: "pump"
-              reason: "Direct match"
+              repository: "org/pump"
+              description: "Tyk Pump"
+              path: "/tmp/visor/project"
+              sandbox: null
+              services: null
+              setup: null
+              knowledge: null
         explore-code:
           answer:
             text: "Pump aggregates analytics."
@@ -1214,33 +906,10 @@ tests:
           confidence_reason: ""
       expect:
         calls:
-          - step: checkout-docs
-            exactly: 1
-          - step: route-projects
-            exactly: 1
-          - step: project-items
-            exactly: 1
-          - step: checkout-projects
+          - step: setup-projects
             exactly: 1
           - step: explore-code
             exactly: 1
-        # Verify project-items output has null for absent fields
-        outputs:
-          - step: project-items
-            path: project_id
-            equals: "pump"
-          - step: project-items
-            path: sandbox
-            equals: null
-          - step: project-items
-            path: services
-            equals: null
-          - step: project-items
-            path: setup
-            equals: null
-          - step: project-items
-            path: knowledge
-            equals: null
 
     # =========================================================================
     # Edge Case: Empty explore-code response handled gracefully
@@ -1257,17 +926,20 @@ tests:
             repo: org/main
             description: Main app
       mocks:
-        checkout-docs:
-          path: "/tmp/visor/docs"
-          repository: "org/docs"
-          ref: "main"
-        checkout-projects:
-          path: "/tmp/visor/project"
-          repository: "org/main"
-          ref: "main"
-        route-projects:
-          projects:
+        setup-projects:
+          docs_path: "/tmp/visor/docs"
+          routing_decision:
+            projects:
+              - project_id: "main"
+          checkout_projects:
             - project_id: "main"
+              repository: "org/main"
+              description: "Main app"
+              path: "/tmp/visor/project"
+              sandbox: null
+              services: null
+              setup: null
+              knowledge: null
         explore-code:
           # Minimal valid response with empty text
           answer:
@@ -1277,13 +949,7 @@ tests:
           confidence_reason: "The final answer text is empty."
       expect:
         calls:
-          - step: checkout-docs
-            exactly: 1
-          - step: route-projects
-            exactly: 1
-          - step: project-items
-            exactly: 1
-          - step: checkout-projects
+          - step: setup-projects
             exactly: 1
           - step: explore-code
             exactly: 1

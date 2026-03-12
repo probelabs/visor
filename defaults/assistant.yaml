@@ -72,6 +72,7 @@ version: "1.0.0"
 imports:
   - intent-router.yaml
   - code-talk.yaml
+  - engineer.yaml
 
 inputs:
   # =========================================================================
