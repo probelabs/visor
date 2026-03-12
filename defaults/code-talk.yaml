@@ -65,6 +65,36 @@ inputs:
           id: { type: string }
           repo: { type: string }
           description: { type: string }
+          sandbox: { type: string }
+          services:
+            type: object
+            additionalProperties:
+              type: object
+              properties:
+                image: { type: string }
+                ports:
+                  type: array
+                  items: { type: number }
+                environment:
+                  type: object
+                  additionalProperties: { type: string }
+                volumes:
+                  type: array
+                  items: { type: string }
+                healthcheck:
+                  type: object
+                  properties:
+                    test:
+                      type: array
+                      items: { type: string }
+                    interval: { type: string }
+                    timeout: { type: string }
+                    retries: { type: number }
+              required: [image]
+          setup:
+            type: array
+            items: { type: string }
+          knowledge: { type: string }
         required: [id, repo, description]
 
   - name: max_projects
@@ -266,7 +296,11 @@ outputs:
           project_id: item.project_id,
           repository: item.repository ?? item.repo ?? '',
           description: item.description ?? '',
-          path: checkout.path ?? checkout.workspace_path ?? ''
+          path: checkout.path ?? checkout.workspace_path ?? '',
+          sandbox: item.sandbox ?? null,
+          services: item.services ?? null,
+          setup: item.setup ?? null,
+          knowledge: item.knowledge ?? null
         });
       }
       return result;
@@ -413,7 +447,11 @@ steps:
         if (p?.id) {
           projectMap[p.id] = {
             repo: p.repo,
-            description: p.description ?? p.id
+            description: p.description ?? p.id,
+            sandbox: p.sandbox ?? null,
+            services: p.services ?? null,
+            setup: p.setup ?? null,
+            knowledge: p.knowledge ?? null
           };
         }
       }
@@ -438,7 +476,11 @@ steps:
           project_id: routed.project_id,
           reason: routed.reason ?? '',
           repository: info.repo,
-          description: info.description
+          description: info.description,
+          sandbox: info.sandbox,
+          services: info.services,
+          setup: info.setup,
+          knowledge: info.knowledge
         });
       }
 
@@ -1040,6 +1082,165 @@ tests:
             exactly: 2
           - step: explore-code
             exactly: 1
+
+    # =========================================================================
+    # Project-level services, setup, and sandbox fields
+    # Verifies new project config fields flow through project-items
+    # =========================================================================
+    - name: project-services-and-setup
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "How do integration tests work in tyk?"
+        architecture: "# Arch"
+        docs_repo: org/docs
+        projects:
+          - id: tyk
+            repo: TykTechnologies/tyk
+            description: Tyk Gateway
+            sandbox: go-env
+            services:
+              redis:
+                image: redis:7-alpine
+              mongo:
+                image: mongo:6
+                environment:
+                  MONGO_INITDB_DATABASE: tyk
+            setup:
+              - make deps
+              - go generate ./...
+            knowledge: "docs/internal/testing.md"
+          - id: tyk-pump
+            repo: TykTechnologies/tyk-pump
+            description: Tyk Pump
+      mocks:
+        checkout-docs:
+          path: "/tmp/visor/docs"
+          repository: "org/docs"
+          ref: "main"
+        checkout-projects:
+          path: "/tmp/visor/project"
+          repository: "TykTechnologies/tyk"
+          ref: "main"
+        route-projects:
+          projects:
+            - project_id: "tyk"
+              reason: "Integration tests are in the gateway"
+        explore-code:
+          answer:
+            text: "Integration tests use redis and mongo fixtures."
+            summary: "Test infra in tyk"
+          references:
+            - project: tyk
+              file: tests/integration_test.go
+              url: https://github.com/TykTechnologies/tyk/blob/main/tests/integration_test.go
+          confidence: high
+          confidence_reason: ""
+      expect:
+        calls:
+          - step: checkout-docs
+            exactly: 1
+          - step: route-projects
+            exactly: 1
+          - step: project-items
+            exactly: 1
+          - step: checkout-projects
+            exactly: 1
+          - step: explore-code
+            exactly: 1
+        workflow_output:
+          - path: answer.text
+            equals: "Integration tests use redis and mongo fixtures."
+        # Verify project-items step output includes new fields
+        outputs:
+          - step: project-items
+            path: project_id
+            equals: "tyk"
+          - step: project-items
+            path: sandbox
+            equals: "go-env"
+          - step: project-items
+            path: services.redis.image
+            equals: "redis:7-alpine"
+          - step: project-items
+            path: services.mongo.image
+            equals: "mongo:6"
+          - step: project-items
+            path: services.mongo.environment.MONGO_INITDB_DATABASE
+            equals: "tyk"
+          - step: project-items
+            path: setup[0]
+            equals: "make deps"
+          - step: project-items
+            path: setup[1]
+            equals: "go generate ./..."
+          - step: project-items
+            path: knowledge
+            equals: "docs/internal/testing.md"
+
+    # =========================================================================
+    # Project without services/setup (backwards compat)
+    # Verifies projects without new fields still produce null values
+    # =========================================================================
+    - name: project-without-services
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "What does the pump do?"
+        architecture: "# Arch"
+        docs_repo: org/docs
+        projects:
+          - id: pump
+            repo: org/pump
+            description: Tyk Pump
+      mocks:
+        checkout-docs:
+          path: "/tmp/visor/docs"
+          repository: "org/docs"
+          ref: "main"
+        checkout-projects:
+          path: "/tmp/visor/project"
+          repository: "org/pump"
+          ref: "main"
+        route-projects:
+          projects:
+            - project_id: "pump"
+              reason: "Direct match"
+        explore-code:
+          answer:
+            text: "Pump aggregates analytics."
+          references: []
+          confidence: high
+          confidence_reason: ""
+      expect:
+        calls:
+          - step: checkout-docs
+            exactly: 1
+          - step: route-projects
+            exactly: 1
+          - step: project-items
+            exactly: 1
+          - step: checkout-projects
+            exactly: 1
+          - step: explore-code
+            exactly: 1
+        # Verify project-items output has null for absent fields
+        outputs:
+          - step: project-items
+            path: project_id
+            equals: "pump"
+          - step: project-items
+            path: sandbox
+            equals: null
+          - step: project-items
+            path: services
+            equals: null
+          - step: project-items
+            path: setup
+            equals: null
+          - step: project-items
+            path: knowledge
+            equals: null
 
     # =========================================================================
     # Edge Case: Empty explore-code response handled gracefully

@@ -37,6 +37,18 @@ jest.mock('../../src/sandbox/cache-volume-manager', () => ({
   }),
 }));
 
+// Mock the compose generator to avoid real filesystem writes in unit tests
+jest.mock('../../src/sandbox/compose-generator', () => ({
+  generateComposeFile: jest.fn().mockResolvedValue({
+    filePath: '/tmp/mock-compose/docker-compose-test-project.yml',
+    projectName: 'visor-test-project-abcdef12',
+    serviceName: 'workspace',
+    serviceEndpoints: {
+      redis: { host: 'redis', port: 6379 },
+    },
+  }),
+}));
+
 describe('SandboxManager', () => {
   const sandboxDefs: Record<string, SandboxConfig> = {
     'node-env': {
@@ -49,6 +61,10 @@ describe('SandboxManager', () => {
     'compose-env': {
       compose: './docker-compose.yml',
       service: 'app',
+    },
+    'go-env': {
+      image: 'golang:1.22-bookworm',
+      network: true,
     },
   };
 
@@ -128,6 +144,198 @@ describe('SandboxManager', () => {
       // After stopAll, starting again should create new instances
       const instance = await manager.getOrStart('node-env');
       expect(instance).toBeDefined();
+    });
+  });
+
+  // =========================================================================
+  // Project Services Lifecycle
+  // =========================================================================
+  describe('startProjectServices', () => {
+    it('should start project services and return environment', async () => {
+      const env = await manager.startProjectServices(
+        'tyk',
+        { redis: { image: 'redis:7-alpine' } },
+        'go-env',
+        'session-1234567890',
+        '/tmp/workspace/tyk'
+      );
+
+      expect(env.projectId).toBe('tyk');
+      expect(env.projectName).toBe('visor-test-project-abcdef12');
+      expect(env.serviceName).toBe('workspace');
+      expect(env.started).toBe(true);
+      expect(env.serviceEndpoints).toEqual({
+        redis: { host: 'redis', port: 6379 },
+      });
+    });
+
+    it('should return existing environment if already started', async () => {
+      const first = await manager.startProjectServices(
+        'tyk',
+        { redis: { image: 'redis:7-alpine' } },
+        undefined,
+        'session-1234567890',
+        '/tmp/workspace/tyk'
+      );
+
+      const second = await manager.startProjectServices(
+        'tyk',
+        { redis: { image: 'redis:7-alpine' } },
+        undefined,
+        'session-1234567890',
+        '/tmp/workspace/tyk'
+      );
+
+      expect(first).toBe(second);
+    });
+
+    it('should register compose sandbox as instance for exec', async () => {
+      await manager.startProjectServices(
+        'myproject',
+        { redis: { image: 'redis:7-alpine' } },
+        undefined,
+        'session-abc',
+        '/tmp/workspace/myproject'
+      );
+
+      // The instance should be accessible via exec
+      const result = await manager.exec('project-myproject', {
+        command: 'echo hello',
+        env: {},
+        timeoutMs: 10000,
+        maxBuffer: 1024,
+      });
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('should pass sandbox config to compose generator when sandbox name provided', async () => {
+      const { generateComposeFile } = require('../../src/sandbox/compose-generator');
+
+      await manager.startProjectServices(
+        'tyk',
+        { redis: { image: 'redis:7-alpine' } },
+        'go-env',
+        'session-123',
+        '/tmp/workspace/tyk'
+      );
+
+      expect(generateComposeFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: 'tyk',
+          workspaceSandbox: sandboxDefs['go-env'],
+        })
+      );
+    });
+  });
+
+  describe('stopProjectServices', () => {
+    it('should stop running project services', async () => {
+      await manager.startProjectServices(
+        'tyk',
+        { redis: { image: 'redis:7-alpine' } },
+        undefined,
+        'session-123',
+        '/tmp/workspace/tyk'
+      );
+
+      expect(manager.getProjectEnvironment('tyk')).toBeDefined();
+
+      await manager.stopProjectServices('tyk');
+
+      expect(manager.getProjectEnvironment('tyk')).toBeUndefined();
+    });
+
+    it('should be a no-op for unknown project', async () => {
+      // Should not throw
+      await manager.stopProjectServices('nonexistent');
+    });
+
+    it('should be a no-op for already stopped project', async () => {
+      await manager.startProjectServices(
+        'tyk',
+        { redis: { image: 'redis:7-alpine' } },
+        undefined,
+        'session-123',
+        '/tmp/workspace/tyk'
+      );
+      await manager.stopProjectServices('tyk');
+
+      // Second stop should be no-op
+      await manager.stopProjectServices('tyk');
+    });
+  });
+
+  describe('getProjectEnvironment', () => {
+    it('should return undefined for unknown project', () => {
+      expect(manager.getProjectEnvironment('unknown')).toBeUndefined();
+    });
+
+    it('should return environment after starting services', async () => {
+      await manager.startProjectServices(
+        'tyk',
+        { redis: { image: 'redis:7-alpine' } },
+        undefined,
+        'session-123',
+        '/tmp/workspace/tyk'
+      );
+
+      const env = manager.getProjectEnvironment('tyk');
+      expect(env).toBeDefined();
+      expect(env!.projectId).toBe('tyk');
+      expect(env!.started).toBe(true);
+      expect(env!.serviceEndpoints.redis).toEqual({ host: 'redis', port: 6379 });
+    });
+  });
+
+  describe('stopAll with project services', () => {
+    it('should stop project services and regular instances together', async () => {
+      // Start a regular sandbox
+      await manager.getOrStart('node-env');
+
+      // Start project services
+      await manager.startProjectServices(
+        'tyk',
+        { redis: { image: 'redis:7-alpine' } },
+        undefined,
+        'session-123',
+        '/tmp/workspace/tyk'
+      );
+
+      expect(manager.getProjectEnvironment('tyk')).toBeDefined();
+
+      await manager.stopAll();
+
+      // Both should be cleaned up
+      expect(manager.getProjectEnvironment('tyk')).toBeUndefined();
+
+      // Regular sandbox should be recreatable
+      const instance = await manager.getOrStart('node-env');
+      expect(instance).toBeDefined();
+    });
+
+    it('should handle stopAll with multiple project environments', async () => {
+      await manager.startProjectServices(
+        'project-a',
+        { redis: { image: 'redis:7-alpine' } },
+        undefined,
+        'session-1',
+        '/tmp/workspace/a'
+      );
+      await manager.startProjectServices(
+        'project-b',
+        { postgres: { image: 'postgres:15' } },
+        undefined,
+        'session-2',
+        '/tmp/workspace/b'
+      );
+
+      expect(manager.getProjectEnvironment('project-a')).toBeDefined();
+      expect(manager.getProjectEnvironment('project-b')).toBeDefined();
+
+      await manager.stopAll();
+
+      expect(manager.getProjectEnvironment('project-a')).toBeUndefined();
+      expect(manager.getProjectEnvironment('project-b')).toBeUndefined();
     });
   });
 });
