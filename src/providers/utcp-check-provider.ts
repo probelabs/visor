@@ -202,9 +202,6 @@ export class UtcpCheckProvider extends CheckProvider {
         methodArgs = (await renderValue(methodArgs)) as Record<string, unknown>;
       }
 
-      // Resolve manual to a call template
-      const callTemplate = await this.resolveManualCallTemplate(cfg.manual);
-
       // Resolve variables through environment resolver
       const resolvedVariables: Record<string, string> = {};
       if (cfg.variables) {
@@ -213,60 +210,14 @@ export class UtcpCheckProvider extends CheckProvider {
         }
       }
 
-      // Dynamic import UTCP SDK
-      const { UtcpClient } = await import('@utcp/sdk');
-
-      // Load plugins
-      const plugins = cfg.plugins || ['http'];
-      for (const plugin of plugins) {
-        try {
-          await import(`@utcp/${plugin}`);
-        } catch (err) {
-          logger.debug(`UTCP plugin @utcp/${plugin} not available: ${err}`);
-        }
-      }
-
-      // Create UTCP client
-      const timeout = (cfg.timeout || 60) * 1000;
-      const client = await UtcpClient.create(process.cwd(), {
-        manual_call_templates: [callTemplate],
+      // Call tool via shared static method (handles SDK import, client lifecycle, timeout)
+      const result = await UtcpCheckProvider.callTool(cfg.manual, cfg.method, methodArgs, {
         variables: resolvedVariables,
-      } as any);
+        plugins: cfg.plugins || ['http'],
+        timeoutMs: (cfg.timeout || 60) * 1000,
+      });
 
-      try {
-        // Resolve tool name - try exact match first, then suffix match
-        let toolName = cfg.method;
-        try {
-          const tools = await client.getTools();
-          const toolNames = tools.map((t: any) => t.name as string);
-          logger.debug(`UTCP tools available: ${JSON.stringify(toolNames)}`);
-
-          if (!toolNames.includes(toolName)) {
-            // Try suffix match: user may specify "get_ip" but tool is "manual_name.get_ip"
-            const suffixMatch = toolNames.find((name: string) => name.endsWith(`.${toolName}`));
-            if (suffixMatch) {
-              logger.debug(
-                `UTCP method '${toolName}' resolved to '${suffixMatch}' via suffix match`
-              );
-              toolName = suffixMatch;
-            }
-          }
-        } catch (err) {
-          logger.debug(`Failed to list UTCP tools for name resolution: ${err}`);
-        }
-
-        // Call tool with timeout (clear timer on success to avoid resource leak)
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const result = await Promise.race([
-          client.callTool(toolName, methodArgs as Record<string, any>),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () => reject(new Error(`UTCP tool call timed out after ${cfg.timeout || 60}s`)),
-              timeout
-            );
-          }),
-        ]).finally(() => clearTimeout(timer));
-
+      {
         // Apply transforms
         let finalOutput = result;
 
@@ -332,12 +283,6 @@ export class UtcpCheckProvider extends CheckProvider {
           issues: [],
           ...(finalOutput ? { output: finalOutput } : {}),
         } as ReviewSummary;
-      } finally {
-        try {
-          await client.close();
-        } catch (err) {
-          logger.debug(`Failed to close UTCP client: ${err}`);
-        }
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -366,15 +311,6 @@ export class UtcpCheckProvider extends CheckProvider {
         ],
       };
     }
-  }
-
-  /**
-   * Resolve manual config to a UTCP call template object (instance method, delegates to static)
-   */
-  private async resolveManualCallTemplate(
-    manual: string | Record<string, unknown>
-  ): Promise<Record<string, unknown>> {
-    return UtcpCheckProvider.resolveManualCallTemplate(manual);
   }
 
   /**
@@ -484,13 +420,6 @@ export class UtcpCheckProvider extends CheckProvider {
   }
 
   /**
-   * Derive a manual name from a URL (instance method, delegates to static)
-   */
-  private deriveManualName(url: string): string {
-    return UtcpCheckProvider.deriveManualName(url);
-  }
-
-  /**
    * Derive a manual name from a URL.
    * Shared utility for UTCP manual name derivation.
    */
@@ -542,10 +471,32 @@ export class UtcpCheckProvider extends CheckProvider {
     } as any);
 
     try {
+      // Resolve tool name - try exact match first, then suffix match
+      let resolvedToolName = toolName;
+      try {
+        const tools = await client.getTools();
+        const toolNames = tools.map((t: any) => t.name as string);
+        logger.debug(`UTCP tools available: ${JSON.stringify(toolNames)}`);
+
+        if (!toolNames.includes(resolvedToolName)) {
+          const suffixMatch = toolNames.find((name: string) =>
+            name.endsWith(`.${resolvedToolName}`)
+          );
+          if (suffixMatch) {
+            logger.debug(
+              `UTCP method '${resolvedToolName}' resolved to '${suffixMatch}' via suffix match`
+            );
+            resolvedToolName = suffixMatch;
+          }
+        }
+      } catch (err) {
+        logger.debug(`Failed to list UTCP tools for name resolution: ${err}`);
+      }
+
       // Call tool with timeout (clear timer on success to avoid resource leak)
       let timer: ReturnType<typeof setTimeout> | undefined;
       const result = await Promise.race([
-        client.callTool(toolName, args as Record<string, any>),
+        client.callTool(resolvedToolName, args as Record<string, any>),
         new Promise<never>((_, reject) => {
           timer = setTimeout(
             () => reject(new Error(`UTCP tool '${toolName}' timed out after ${timeoutMs}ms`)),
