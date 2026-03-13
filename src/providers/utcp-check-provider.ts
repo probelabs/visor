@@ -255,16 +255,17 @@ export class UtcpCheckProvider extends CheckProvider {
           logger.debug(`Failed to list UTCP tools for name resolution: ${err}`);
         }
 
-        // Call tool with timeout
+        // Call tool with timeout (clear timer on success to avoid resource leak)
+        let timer: ReturnType<typeof setTimeout> | undefined;
         const result = await Promise.race([
           client.callTool(toolName, methodArgs as Record<string, any>),
-          new Promise<never>((_, reject) =>
-            setTimeout(
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
               () => reject(new Error(`UTCP tool call timed out after ${cfg.timeout || 60}s`)),
               timeout
-            )
-          ),
-        ]);
+            );
+          }),
+        ]).finally(() => clearTimeout(timer));
 
         // Apply transforms
         let finalOutput = result;
@@ -284,18 +285,10 @@ export class UtcpCheckProvider extends CheckProvider {
             }
           } catch (error) {
             logger.error(`Failed to apply Liquid transform: ${error}`);
-            return {
-              issues: [
-                {
-                  file: 'utcp',
-                  line: 0,
-                  ruleId: 'utcp/transform_error',
-                  message: `Failed to apply transform: ${error instanceof Error ? error.message : 'Unknown error'}`,
-                  severity: 'error',
-                  category: 'logic',
-                },
-              ],
-            };
+            // Throw to let the outer finally close the client before returning
+            throw new Error(
+              `Failed to apply transform: ${error instanceof Error ? error.message : 'Unknown error'}`
+            );
           }
         }
 
@@ -318,18 +311,10 @@ export class UtcpCheckProvider extends CheckProvider {
             );
           } catch (error) {
             logger.error(`Failed to apply JavaScript transform: ${error}`);
-            return {
-              issues: [
-                {
-                  file: 'utcp',
-                  line: 0,
-                  ruleId: 'utcp/transform_js_error',
-                  message: `Failed to apply JavaScript transform: ${error instanceof Error ? error.message : 'Unknown error'}`,
-                  severity: 'error',
-                  category: 'logic',
-                },
-              ],
-            };
+            // Throw to let the outer finally close the client before returning
+            throw new Error(
+              `Failed to apply JavaScript transform: ${error instanceof Error ? error.message : 'Unknown error'}`
+            );
           }
         }
 
@@ -530,16 +515,17 @@ export class UtcpCheckProvider extends CheckProvider {
     } as any);
 
     try {
-      // Call tool with timeout
+      // Call tool with timeout (clear timer on success to avoid resource leak)
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const result = await Promise.race([
         client.callTool(toolName, args as Record<string, any>),
-        new Promise<never>((_, reject) =>
-          setTimeout(
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
             () => reject(new Error(`UTCP tool '${toolName}' timed out after ${timeoutMs}ms`)),
             timeoutMs
-          )
-        ),
-      ]);
+          );
+        }),
+      ]).finally(() => clearTimeout(timer));
 
       return result;
     } finally {
