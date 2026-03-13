@@ -132,6 +132,38 @@ describe('UTCP-MCP Bridge', () => {
     });
   });
 
+  describe('resolveManualCallTemplate path traversal protection', () => {
+    it('should reject paths with null bytes', async () => {
+      const { UtcpCheckProvider } = await import('../../../src/providers/utcp-check-provider');
+      await expect(UtcpCheckProvider.resolveManualCallTemplate('manual\x00.json')).rejects.toThrow(
+        'null bytes are not allowed'
+      );
+    });
+
+    it('should reject paths that traverse outside cwd', async () => {
+      const { UtcpCheckProvider } = await import('../../../src/providers/utcp-check-provider');
+      await expect(
+        UtcpCheckProvider.resolveManualCallTemplate('../../../etc/passwd')
+      ).rejects.toThrow('Path traversal detected');
+    });
+
+    it('should reject absolute paths outside cwd', async () => {
+      const { UtcpCheckProvider } = await import('../../../src/providers/utcp-check-provider');
+      await expect(UtcpCheckProvider.resolveManualCallTemplate('/etc/passwd')).rejects.toThrow(
+        'Path traversal detected'
+      );
+    });
+
+    it('should allow URL-based manuals without path checks', async () => {
+      const { UtcpCheckProvider } = await import('../../../src/providers/utcp-check-provider');
+      const result = await UtcpCheckProvider.resolveManualCallTemplate(
+        'https://example.com/../../../etc/passwd'
+      );
+      // URL-based manuals are handled by the SDK, not read locally
+      expect(result.call_template_type).toBe('http');
+    });
+  });
+
   describe('UTCP tool creation for CustomToolDefinition', () => {
     it('should create CustomToolDefinition with UTCP fields', () => {
       const utcpTool: CustomToolDefinition = {

@@ -406,7 +406,34 @@ export class UtcpCheckProvider extends CheckProvider {
     }
 
     // File-based discovery
+
+    // Security: reject null bytes that could bypass path validation
+    if (manual.includes('\0')) {
+      throw new Error('Invalid UTCP manual path: null bytes are not allowed');
+    }
+
     const resolvedPath = path.resolve(manual);
+
+    // Security: ensure resolved path stays within cwd (prevent path traversal)
+    const cwd = path.resolve(process.cwd());
+    const normalizedResolved = path.normalize(resolvedPath);
+    const cwdPrefix = cwd.endsWith(path.sep) ? cwd : cwd + path.sep;
+    if (normalizedResolved !== cwd && !normalizedResolved.startsWith(cwdPrefix)) {
+      throw new Error(
+        `Path traversal detected: "${manual}" resolves outside the project directory. ` +
+          `UTCP manual paths must be within the project directory.`
+      );
+    }
+
+    // Security: resolve symlinks and re-validate to prevent symlink attacks
+    if (fs.existsSync(resolvedPath)) {
+      const realPath = fs.realpathSync(resolvedPath);
+      if (realPath !== cwd && !realPath.startsWith(cwdPrefix)) {
+        throw new Error(
+          `Symlink traversal detected: "${manual}" points outside the project directory via symlink.`
+        );
+      }
+    }
 
     // Validate file exists and is readable
     if (!fs.existsSync(resolvedPath)) {
