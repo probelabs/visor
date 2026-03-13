@@ -1146,7 +1146,7 @@ export class CustomToolsSSEServer implements CustomMCPServer {
   }
 
   /**
-   * Execute a UTCP tool — call via UTCP SDK using stored manual/variables.
+   * Execute a UTCP tool — delegates to UtcpCheckProvider.callTool() for shared lifecycle.
    */
   private async executeUtcpTool(
     tool: CustomToolDefinition,
@@ -1155,9 +1155,6 @@ export class CustomToolsSSEServer implements CustomMCPServer {
   ): Promise<unknown> {
     const manual = tool.__utcpManual;
     const utcpToolName = tool.__utcpToolName || toolName;
-    const variables = tool.__utcpVariables || {};
-    const plugins = tool.__utcpPlugins || ['http'];
-    const timeout = tool.timeout || 60000;
 
     if (!manual) {
       throw new Error(`UTCP tool '${toolName}' missing manual configuration`);
@@ -1169,48 +1166,12 @@ export class CustomToolsSSEServer implements CustomMCPServer {
       );
     }
 
-    // Dynamic import UTCP SDK and plugins
-    const { UtcpClient } = await import('@utcp/sdk');
-    for (const plugin of plugins) {
-      try {
-        await import(`@utcp/${plugin}`);
-      } catch {
-        logger.debug(
-          `[CustomToolsSSEServer:${this.sessionId}] UTCP plugin @utcp/${plugin} not available`
-        );
-      }
-    }
-
-    // Resolve call template
     const { UtcpCheckProvider } = await import('./utcp-check-provider');
-    const callTemplate = await UtcpCheckProvider.resolveManualCallTemplate(manual);
-
-    // Create client
-    const client = await UtcpClient.create(process.cwd(), {
-      manual_call_templates: [callTemplate],
-      variables,
-    } as any);
-
-    try {
-      // Call tool with timeout
-      const result = await Promise.race([
-        client.callTool(utcpToolName, args as Record<string, any>),
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error(`UTCP tool '${utcpToolName}' timed out after ${timeout}ms`)),
-            timeout
-          )
-        ),
-      ]);
-
-      return result;
-    } finally {
-      try {
-        if (typeof (client as any).close === 'function') {
-          await (client as any).close();
-        }
-      } catch {}
-    }
+    return UtcpCheckProvider.callTool(manual, utcpToolName, args, {
+      variables: tool.__utcpVariables || {},
+      plugins: tool.__utcpPlugins || ['http'],
+      timeoutMs: tool.timeout || 60000,
+    });
   }
 
   /**
