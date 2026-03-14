@@ -22,6 +22,56 @@ export interface ProjectMeta {
 }
 
 /**
+ * Extract ProjectMeta from dependency results.
+ *
+ * Scans dependency outputs for project arrays (from merge-projects, checkout_projects,
+ * or similar steps) that contain objects with { project_id, services, path }.
+ * Returns an array of ProjectMeta for all projects that have services defined.
+ *
+ * This bridges the gap between workflow-level project config and engine-level
+ * sandbox execution: workflows define services in project definitions, and
+ * this function extracts them so executeWithSandboxRouting() can start services.
+ */
+export function extractProjectMeta(dependencyResults: Map<string, ReviewSummary>): ProjectMeta[] {
+  const result: ProjectMeta[] = [];
+  const seen = new Set<string>();
+
+  for (const [, depResult] of dependencyResults) {
+    const output = (depResult as any)?.output;
+    // Look for arrays of project objects (merge-projects, checkout_projects, etc.)
+    const candidates = Array.isArray(output)
+      ? output
+      : Array.isArray(output?.checkout_projects)
+        ? output.checkout_projects
+        : null;
+
+    if (!candidates) continue;
+
+    for (const item of candidates) {
+      if (!item || typeof item !== 'object') continue;
+      const projectId = item.project_id;
+      if (!projectId || typeof projectId !== 'string' || seen.has(projectId)) continue;
+      seen.add(projectId);
+
+      // Only create ProjectMeta if there are services to start
+      if (
+        item.services &&
+        typeof item.services === 'object' &&
+        Object.keys(item.services).length > 0
+      ) {
+        result.push({
+          projectId,
+          services: item.services,
+          workspacePath: item.path || undefined,
+        });
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
  * Execute a check either in a sandbox container or on the host.
  *
  * When the check is configured with a sandbox (check-level or workspace-level default),
@@ -41,7 +91,7 @@ export async function executeWithSandboxRouting(
   dependencyResults: Map<string, ReviewSummary>,
   timeout: number | undefined,
   hostExecute: () => Promise<ReviewSummary>,
-  projectMeta?: ProjectMeta
+  projectMeta?: ProjectMeta | ProjectMeta[]
 ): Promise<ReviewSummary> {
   const sandboxManager = context.sandboxManager;
   if (!sandboxManager) {
@@ -64,27 +114,36 @@ export async function executeWithSandboxRouting(
     throw new Error(`Sandbox '${sandboxName}' not found in sandboxes configuration`);
   }
 
-  // Start project services if defined and collect env vars
+  // Normalize to array of ProjectMeta
+  const projectMetas: ProjectMeta[] = projectMeta
+    ? Array.isArray(projectMeta)
+      ? projectMeta
+      : [projectMeta]
+    : extractProjectMeta(dependencyResults);
+
+  // Start project services for all projects that define them, collect env vars
   let serviceEnvVars: Record<string, string> | undefined;
-  if (projectMeta?.services && Object.keys(projectMeta.services).length > 0) {
+  for (const meta of projectMetas) {
+    if (!meta.services || Object.keys(meta.services).length === 0) continue;
     try {
       const { SandboxManager: SM } = require('../../sandbox/sandbox-manager');
       const projectEnv = await sandboxManager.startProjectServices(
-        projectMeta.projectId,
-        projectMeta.services,
+        meta.projectId,
+        meta.services,
         sandboxName,
         context.sessionId,
-        projectMeta.workspacePath || sandboxManager.getRepoPath()
+        meta.workspacePath || sandboxManager.getRepoPath()
       );
-      serviceEnvVars = SM.generateServiceEnvVars(projectEnv);
+      const envVars = SM.generateServiceEnvVars(projectEnv);
+      serviceEnvVars = { ...(serviceEnvVars || {}), ...envVars };
       logger.info(
-        `[SandboxRouting] Started services for project '${projectMeta.projectId}': ${Object.keys(serviceEnvVars || {}).join(', ')}`
+        `[SandboxRouting] Started services for project '${meta.projectId}': ${Object.keys(envVars || {}).join(', ')}`
       );
     } catch (err) {
       logger.warn(
-        `[SandboxRouting] Failed to start project services for '${projectMeta.projectId}': ${err}`
+        `[SandboxRouting] Failed to start project services for '${meta.projectId}': ${err}`
       );
-      // Non-fatal: continue without service env vars
+      // Non-fatal: continue without service env vars for this project
     }
   }
 

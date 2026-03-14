@@ -130,6 +130,19 @@ inputs:
     schema:
       type: string
 
+  - name: engineer_prompt
+    required: false
+    description: |
+      Additional instructions injected into the engineer AI prompt.
+      Use this to customize engineering behavior per-assistant:
+      - Coding conventions (e.g., "Always use Go table-driven tests")
+      - PR conventions (e.g., "Prefix branch names with ticket ID")
+      - Tool preferences (e.g., "Use pnpm instead of npm")
+      - Domain-specific guidance
+    default: ""
+    schema:
+      type: string
+
   - name: trace_id
     required: false
     description: Trace ID for telemetry correlation
@@ -236,35 +249,9 @@ steps:
       return outputs?.['setup-projects']?.checkout_projects ?? [];
 
   # ===========================================================================
-  # Step 4: Run setup commands for each project (if any)
-  # ===========================================================================
-  run-setup:
-    type: script
-    criticality: internal
-    depends_on: [merge-projects]
-    assume:
-      - "true"
-    guarantee: "Array.isArray(output)"
-    if: |
-      const projects = outputs['merge-projects'];
-      if (!Array.isArray(projects)) return false;
-      return projects.some(function(p) { return Array.isArray(p.setup) && p.setup.length > 0; });
-    content: |
-      const projects = outputs['merge-projects'] ?? [];
-      const results = [];
-      for (let i = 0; i < projects.length; i++) {
-        const p = projects[i];
-        if (!Array.isArray(p.setup) || p.setup.length === 0) continue;
-        results.push({
-          project_id: p.project_id,
-          setup_commands: p.setup,
-          path: p.path
-        });
-      }
-      return results;
-
-  # ===========================================================================
-  # Step 5: Main AI engineering task
+  # Step 4: Main AI engineering task
+  # Setup commands (if any) are exposed via <setup> tags in the prompt —
+  # the AI runs them in each project directory before coding.
   # ===========================================================================
   engineer-task:
     type: ai
@@ -330,6 +317,12 @@ steps:
       You are a software engineer. Multi-repo tasks must ALL be completed —
       use delegate tool to work on repos in parallel.
 
+      {% if inputs.engineer_prompt != "" %}
+      <custom_instructions>
+      {{ inputs.engineer_prompt }}
+      </custom_instructions>
+      {% endif %}
+
       <delegation>
       Use the delegate tool for parallel work, plan validation, and build discovery.
 
@@ -392,12 +385,16 @@ steps:
       <efficiency>
       - Use context data directly — don't re-read files or re-run searches for
         information already provided by code-explorer.
+      - If a project has <setup> commands listed, run them FIRST (in the project's
+        directory) before any other work. These are prerequisites (e.g., `npm install`,
+        `make deps`, database migrations).
       - Use tasks to track multi-step work. Create these tasks at minimum:
-        1. "Discover build system" (delegate) — find exact build/test/lint commands
-        2. "Plan validation" (delegate) — verify approach before coding
-        3. "Implement changes" — the actual code/file changes
-        4. "Verify build" — run build, test, and lint commands; fix any failures
-        5. "Create pull request" — git branch, add, commit, push, gh pr create
+        1. "Run setup commands" — execute <setup> commands for each project (if any)
+        2. "Discover build system" (delegate) — find exact build/test/lint commands
+        3. "Plan validation" (delegate) — verify approach before coding
+        4. "Implement changes" — the actual code/file changes
+        5. "Verify build" — run build, test, and lint commands; fix any failures
+        6. "Create pull request" — git branch, add, commit, push, gh pr create
         Mark in_progress/completed as you go. Do NOT skip "Verify build".
       - If a bash command fails, try a different approach. Don't retry the same
         command or get stuck in loops.
@@ -432,12 +429,10 @@ steps:
         <repo>{{ p.repository }}</repo>
         <path>{{ p.path }}</path>
         <description>{{ p.description }}</description>
-        {% if p.knowledge %}
-        <knowledge>{{ p.knowledge }}</knowledge>
-        {% endif %}
-        {% if p.services %}
-        <services>{{ p.services | json }}</services>
-        {% endif %}
+        {% if p.sandbox %}<sandbox>{{ p.sandbox }}</sandbox>{% endif %}
+        {% if p.knowledge %}<knowledge>{{ p.knowledge }}</knowledge>{% endif %}
+        {% if p.services %}<services>{{ p.services | json }}</services>{% endif %}
+        {% if p.setup %}<setup>{{ p.setup | json }}</setup>{% endif %}
       </project>
       {% endfor %}
       {% endif %}
@@ -458,6 +453,7 @@ tests:
       fixture: local.minimal
       workflow_input:
         task: "Add rate limiting to the API"
+        engineer_prompt: "Always use table-driven tests in Go"
         projects:
           - project_id: backend
             repository: org/backend
@@ -478,6 +474,10 @@ tests:
             exactly: 1
           - step: engineer-task
             exactly: 1
+        prompts:
+          - step: engineer-task
+            contains:
+              - "table-driven tests in Go"
         workflow_output:
           - path: summary
             equals: "Added rate limiting middleware"
@@ -531,3 +531,52 @@ tests:
             equals: "Fixed login validation bug"
           - path: pr_urls[0]
             equals: "https://github.com/org/backend/pull/2"
+
+    - name: pre-resolved-with-services-and-setup
+      description: Verifies sandbox, services, setup, knowledge appear in prompt
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        task: "Add integration test for auth"
+        projects:
+          - project_id: gateway
+            repository: org/gateway
+            path: /tmp/visor/workspace/gateway
+            description: API Gateway
+            sandbox: go-env
+            services:
+              redis:
+                image: redis:7-alpine
+                ports: [6379]
+              mongo:
+                image: mongo:7
+                ports: [27017]
+            setup:
+              - make deps
+              - make generate
+            knowledge: |
+              Gateway uses Go 1.22 and requires Redis for session storage.
+      mocks:
+        engineer-task:
+          summary: "Added auth integration tests"
+          pr_urls: ["https://github.com/org/gateway/pull/5"]
+          files_changed: ["tests/auth_test.go"]
+      expect:
+        calls:
+          - step: prepare-projects
+            exactly: 1
+          - step: setup-projects
+            exactly: 0
+          - step: merge-projects
+            exactly: 1
+          - step: engineer-task
+            exactly: 1
+        prompts:
+          - step: engineer-task
+            contains:
+              - "<sandbox>go-env</sandbox>"
+              - "redis"
+              - "mongo"
+              - "make deps"
+              - "make generate"
+              - "Gateway uses Go 1.22"

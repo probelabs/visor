@@ -453,6 +453,10 @@ steps:
             <repo>{{ p.repository }}</repo>
             <path>{{ p.path }}</path>
             <reason>{{ p.reason | default: 'not provided' }}</reason>
+            {% if p.sandbox %}<sandbox>{{ p.sandbox }}</sandbox>{% endif %}
+            {% if p.services %}<services>{{ p.services | json }}</services>{% endif %}
+            {% if p.setup %}<setup>{{ p.setup | json }}</setup>{% endif %}
+            {% if p.knowledge %}<knowledge>{{ p.knowledge }}</knowledge>{% endif %}
           </project>
         {% endfor %}
         {% endif %}
@@ -863,6 +867,14 @@ tests:
             exactly: 1
           - step: explore-code
             exactly: 1
+        prompts:
+          - step: explore-code
+            contains:
+              - "<sandbox>go-env</sandbox>"
+              - "redis"
+              - "mongo"
+              - "make deps"
+              - "testing.md"
         workflow_output:
           - path: answer.text
             equals: "Integration tests use redis and mongo fixtures."
