@@ -987,7 +987,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -1003,7 +1003,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -1279,6 +1279,27 @@ export declare const configSchema: {
                 readonly ai_timeout: {
                     readonly type: "number";
                     readonly description: "Probe-level timeout in milliseconds for graceful wind-down (maxOperationTimeout). When set, Probe injects \"TIME LIMIT REACHED\" and gives bonus steps before hard abort. Defaults to (timeout - 90s) when not explicitly set. The main `timeout` field controls Visor's external hard kill (always active).";
+                };
+                readonly timeout_behavior: {
+                    readonly type: "string";
+                    readonly enum: readonly ["graceful", "negotiated"];
+                    readonly description: "Timeout behavior: 'graceful' (default) injects wind-down message; 'negotiated' uses observer LLM to decide extensions";
+                };
+                readonly negotiated_timeout_budget: {
+                    readonly type: "number";
+                    readonly description: "Total extra time budget in ms for negotiated timeout extensions";
+                };
+                readonly negotiated_timeout_max_requests: {
+                    readonly type: "number";
+                    readonly description: "Maximum number of extension requests for negotiated timeout";
+                };
+                readonly negotiated_timeout_max_per_request: {
+                    readonly type: "number";
+                    readonly description: "Maximum time in ms per individual extension request";
+                };
+                readonly graceful_stop_deadline: {
+                    readonly type: "number";
+                    readonly description: "Wind-down deadline in ms for sub-agents after graceful stop is triggered";
                 };
             };
             readonly additionalProperties: false;
@@ -1667,7 +1688,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1682,13 +1703,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139>': {
+        readonly 'Partial<interface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };

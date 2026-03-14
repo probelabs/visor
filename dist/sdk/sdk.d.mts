@@ -596,6 +596,16 @@ interface AIProviderConfig {
      * The main `timeout` field controls Visor's external hard kill (always active).
      */
     ai_timeout?: number;
+    /** Timeout behavior: 'graceful' (default) injects wind-down message; 'negotiated' uses observer LLM to decide extensions */
+    timeout_behavior?: 'graceful' | 'negotiated';
+    /** Total extra time budget in ms for negotiated timeout extensions */
+    negotiated_timeout_budget?: number;
+    /** Maximum number of extension requests for negotiated timeout */
+    negotiated_timeout_max_requests?: number;
+    /** Maximum time in ms per individual extension request */
+    negotiated_timeout_max_per_request?: number;
+    /** Wind-down deadline in ms for sub-agents after graceful stop is triggered */
+    graceful_stop_deadline?: number;
 }
 /**
  * Unified MCP server/tool entry - type detected by which properties are present

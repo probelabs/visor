@@ -823,7 +823,7 @@ var require_package = __commonJS({
         "@opentelemetry/sdk-node": "^0.203.0",
         "@opentelemetry/sdk-trace-base": "^1.30.1",
         "@opentelemetry/semantic-conventions": "^1.30.1",
-        "@probelabs/probe": "^0.6.0-rc295",
+        "@probelabs/probe": "0.6.0-rc296",
         "@types/commander": "^2.12.0",
         "@types/uuid": "^10.0.0",
         acorn: "^8.16.0",
@@ -1282,15 +1282,15 @@ function __getOrCreateNdjsonPath() {
     if (process.env.VISOR_TELEMETRY_SINK && process.env.VISOR_TELEMETRY_SINK !== "file")
       return null;
     const path29 = require("path");
-    const fs25 = require("fs");
+    const fs26 = require("fs");
     if (process.env.VISOR_FALLBACK_TRACE_FILE) {
       __ndjsonPath = process.env.VISOR_FALLBACK_TRACE_FILE;
       const dir = path29.dirname(__ndjsonPath);
-      if (!fs25.existsSync(dir)) fs25.mkdirSync(dir, { recursive: true });
+      if (!fs26.existsSync(dir)) fs26.mkdirSync(dir, { recursive: true });
       return __ndjsonPath;
     }
     const outDir = process.env.VISOR_TRACE_DIR || path29.join(process.cwd(), "output", "traces");
-    if (!fs25.existsSync(outDir)) fs25.mkdirSync(outDir, { recursive: true });
+    if (!fs26.existsSync(outDir)) fs26.mkdirSync(outDir, { recursive: true });
     if (!__ndjsonPath) {
       const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
       __ndjsonPath = path29.join(outDir, `${ts}.ndjson`);
@@ -1302,11 +1302,11 @@ function __getOrCreateNdjsonPath() {
 }
 function _appendRunMarker() {
   try {
-    const fs25 = require("fs");
+    const fs26 = require("fs");
     const p = __getOrCreateNdjsonPath();
     if (!p) return;
     const line = { name: "visor.run", attributes: { started: true } };
-    fs25.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
+    fs26.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
   } catch {
   }
 }
@@ -6609,7 +6609,7 @@ var init_dependency_gating = __esm({
 async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs25 = await import("fs/promises");
+    const fs26 = await import("fs/promises");
     const path29 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
@@ -6619,7 +6619,7 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
       const resolved = path29.resolve(process.cwd(), file);
-      templateContent = await fs25.readFile(resolved, "utf-8");
+      templateContent = await fs26.readFile(resolved, "utf-8");
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
@@ -6635,7 +6635,7 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs25.readFile(p, "utf-8");
+            templateContent = await fs26.readFile(p, "utf-8");
             if (templateContent) break;
           } catch {
           }
@@ -7040,7 +7040,7 @@ async function processDiffWithOutline(diffContent) {
   }
   try {
     const originalProbePath = process.env.PROBE_PATH;
-    const fs25 = require("fs");
+    const fs26 = require("fs");
     const possiblePaths = [
       // Relative to current working directory (most common in production)
       path6.join(process.cwd(), "node_modules/@probelabs/probe/bin/probe-binary"),
@@ -7051,7 +7051,7 @@ async function processDiffWithOutline(diffContent) {
     ];
     let probeBinaryPath;
     for (const candidatePath of possiblePaths) {
-      if (fs25.existsSync(candidatePath)) {
+      if (fs26.existsSync(candidatePath)) {
         probeBinaryPath = candidatePath;
         break;
       }
@@ -7360,11 +7360,31 @@ function createProbeTracerAdapter(fallbackTracer) {
     }
     return out;
   };
+  const SPAN_WORTHY_EVENTS = /* @__PURE__ */ new Set([
+    "tool.result",
+    "tool.decision",
+    "delegation.start",
+    "delegation.complete",
+    "graceful_stop.invoked",
+    "probe.timeout_configured",
+    "negotiated_timeout.observer"
+  ]);
   const emitEvent = (name, attrs) => {
     try {
+      const flat = flattenAttrs(attrs);
+      if (SPAN_WORTHY_EVENTS.has(name)) {
+        try {
+          const tracer = trace.getTracer("visor");
+          const childSpan = tracer.startSpan(`probe.event.${name}`, {
+            attributes: { "probe.event.name": name, ...flat }
+          });
+          childSpan.end();
+        } catch {
+        }
+      }
       const span = trace.getActiveSpan();
       if (span && typeof span.addEvent === "function") {
-        span.addEvent(name, flattenAttrs(attrs));
+        span.addEvent(name, flat);
       }
     } catch {
     }
@@ -7517,6 +7537,30 @@ function createProbeTracerAdapter(fallbackTracer) {
           }
         }
       };
+    },
+    // Probe calls this on every agentic loop iteration. Emit as a short-lived
+    // child span so each iteration is visible in Jaeger even if the parent
+    // ai.request span never ends (process killed during long run).
+    recordIterationEvent: (phase, iteration, data) => {
+      try {
+        const tracer = trace.getTracer("visor");
+        const childSpan = tracer.startSpan(`probe.iteration.${phase}`, {
+          attributes: {
+            "probe.iteration": iteration,
+            "probe.phase": phase,
+            ...flattenAttrs(data)
+          }
+        });
+        childSpan.end();
+      } catch {
+      }
+      emitEvent(`iteration.${phase}`, { iteration, ...data || {} });
+      if (fallback && typeof fallback.recordIterationEvent === "function") {
+        try {
+          fallback.recordIterationEvent(phase, iteration, data);
+        } catch {
+        }
+      }
     },
     flush: async () => {
       if (fallback && typeof fallback.flush === "function") {
@@ -8368,6 +8412,21 @@ ${this.escapeXml(processedFallbackDiff)}
         if (reuseAiTimeout > 0) {
           agent.maxOperationTimeout = reuseAiTimeout;
         }
+        if (this.config.timeoutBehavior) {
+          agent.timeoutBehavior = this.config.timeoutBehavior;
+        }
+        if (this.config.negotiatedTimeoutBudget !== void 0) {
+          agent.negotiatedTimeoutBudget = this.config.negotiatedTimeoutBudget;
+        }
+        if (this.config.negotiatedTimeoutMaxRequests !== void 0) {
+          agent.negotiatedTimeoutMaxRequests = this.config.negotiatedTimeoutMaxRequests;
+        }
+        if (this.config.negotiatedTimeoutMaxPerRequest !== void 0) {
+          agent.negotiatedTimeoutMaxPerRequest = this.config.negotiatedTimeoutMaxPerRequest;
+        }
+        if (this.config.gracefulStopDeadline !== void 0) {
+          agent.gracefulStopDeadline = this.config.gracefulStopDeadline;
+        }
         try {
           log("\u{1F680} Calling existing ProbeAgent with answer()...");
           let schemaString = void 0;
@@ -8399,7 +8458,7 @@ ${schemaString}`);
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs25 = require("fs");
+              const fs26 = require("fs");
               const path29 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const provider = this.config.provider || "auto";
@@ -8515,19 +8574,19 @@ ${"=".repeat(60)}
               readableVersion += `${"=".repeat(60)}
 `;
               const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path29.join(process.cwd(), "debug-artifacts");
-              if (!fs25.existsSync(debugArtifactsDir)) {
-                fs25.mkdirSync(debugArtifactsDir, { recursive: true });
+              if (!fs26.existsSync(debugArtifactsDir)) {
+                fs26.mkdirSync(debugArtifactsDir, { recursive: true });
               }
               const debugFile = path29.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.json`
               );
-              fs25.writeFileSync(debugFile, debugJson, "utf-8");
+              fs26.writeFileSync(debugFile, debugJson, "utf-8");
               const readableFile = path29.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.txt`
               );
-              fs25.writeFileSync(readableFile, readableVersion, "utf-8");
+              fs26.writeFileSync(readableFile, readableVersion, "utf-8");
               log(`
 \u{1F4BE} Full debug info saved to:`);
               log(`   JSON: ${debugFile}`);
@@ -8565,7 +8624,7 @@ ${"=".repeat(60)}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs25 = require("fs");
+              const fs26 = require("fs");
               const path29 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny2 = agent;
@@ -8590,7 +8649,7 @@ ${"=".repeat(60)}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs25.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs26.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -8617,7 +8676,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs25.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs26.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -8626,7 +8685,7 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs25 = require("fs");
+              const fs26 = require("fs");
               const path29 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path29.join(process.cwd(), "debug-artifacts");
@@ -8663,7 +8722,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs25.writeFileSync(responseFile, responseContent, "utf-8");
+              fs26.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -8679,9 +8738,9 @@ ${"=".repeat(60)}
                 await agentAny._telemetryConfig.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${agentAny._traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs25 = require("fs");
-                  if (fs25.existsSync(agentAny._traceFilePath)) {
-                    const stats = fs25.statSync(agentAny._traceFilePath);
+                  const fs26 = require("fs");
+                  if (fs26.existsSync(agentAny._traceFilePath)) {
+                    const stats = fs26.statSync(agentAny._traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::${agentAny._traceFilePath} (${stats.size} bytes)`
                     );
@@ -8807,6 +8866,48 @@ ${"=".repeat(60)}
           if (aiTimeout > 0) {
             options.maxOperationTimeout = aiTimeout;
           }
+          if (this.config.timeoutBehavior) {
+            options.timeoutBehavior = this.config.timeoutBehavior;
+          }
+          if (this.config.negotiatedTimeoutBudget !== void 0) {
+            options.negotiatedTimeoutBudget = this.config.negotiatedTimeoutBudget;
+          }
+          if (this.config.negotiatedTimeoutMaxRequests !== void 0) {
+            options.negotiatedTimeoutMaxRequests = this.config.negotiatedTimeoutMaxRequests;
+          }
+          if (this.config.negotiatedTimeoutMaxPerRequest !== void 0) {
+            options.negotiatedTimeoutMaxPerRequest = this.config.negotiatedTimeoutMaxPerRequest;
+          }
+          if (this.config.gracefulStopDeadline !== void 0) {
+            options.gracefulStopDeadline = this.config.gracefulStopDeadline;
+          }
+          if (this.config.timeoutBehavior || aiTimeout > 0) {
+            try {
+              const { addEvent: addEvent3, setSpanAttributes: setSpanAttributes2 } = (init_trace_helpers(), __toCommonJS(trace_helpers_exports));
+              const timeoutAttrs = {
+                "probe.ai_timeout": aiTimeout,
+                "probe.visor_timeout": visorTimeout
+              };
+              if (this.config.timeoutBehavior) {
+                timeoutAttrs["probe.timeout_behavior"] = this.config.timeoutBehavior;
+              }
+              if (this.config.negotiatedTimeoutBudget !== void 0) {
+                timeoutAttrs["probe.negotiated_timeout_budget"] = this.config.negotiatedTimeoutBudget;
+              }
+              if (this.config.negotiatedTimeoutMaxRequests !== void 0) {
+                timeoutAttrs["probe.negotiated_timeout_max_requests"] = this.config.negotiatedTimeoutMaxRequests;
+              }
+              if (this.config.negotiatedTimeoutMaxPerRequest !== void 0) {
+                timeoutAttrs["probe.negotiated_timeout_max_per_request"] = this.config.negotiatedTimeoutMaxPerRequest;
+              }
+              if (this.config.gracefulStopDeadline !== void 0) {
+                timeoutAttrs["probe.graceful_stop_deadline"] = this.config.gracefulStopDeadline;
+              }
+              setSpanAttributes2(timeoutAttrs);
+              addEvent3("probe.timeout_configured", timeoutAttrs);
+            } catch {
+            }
+          }
           if (this.config.allowedTools !== void 0) {
             options.allowedTools = this.config.allowedTools;
             log(`\u{1F527} Setting allowedTools: ${JSON.stringify(this.config.allowedTools)}`);
@@ -8899,7 +9000,7 @@ ${schemaString}`);
           const model = this.config.model || "default";
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs25 = require("fs");
+              const fs26 = require("fs");
               const path29 = require("path");
               const os2 = require("os");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
@@ -8975,7 +9076,7 @@ ${"=".repeat(60)}
 `;
               const tempDir = os2.tmpdir();
               const promptFile = path29.join(tempDir, `visor-prompt-${timestamp}.txt`);
-              fs25.writeFileSync(promptFile, prompt, "utf-8");
+              fs26.writeFileSync(promptFile, prompt, "utf-8");
               log(`
 \u{1F4BE} Prompt saved to: ${promptFile}`);
               const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path29.join(process.cwd(), "debug-artifacts");
@@ -8984,8 +9085,8 @@ ${"=".repeat(60)}
                   debugArtifactsDir,
                   `prompt-${_checkName || "unknown"}-${timestamp}`
                 );
-                fs25.writeFileSync(base + ".json", debugJson, "utf-8");
-                fs25.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
+                fs26.writeFileSync(base + ".json", debugJson, "utf-8");
+                fs26.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
                 log(`
 \u{1F4BE} Full debug info saved to directory: ${debugArtifactsDir}`);
               } catch {
@@ -9035,7 +9136,7 @@ $ ${cliCommand}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs25 = require("fs");
+              const fs26 = require("fs");
               const path29 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny = agent;
@@ -9060,7 +9161,7 @@ $ ${cliCommand}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs25.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs26.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -9087,7 +9188,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs25.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs26.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -9096,7 +9197,7 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs25 = require("fs");
+              const fs26 = require("fs");
               const path29 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path29.join(process.cwd(), "debug-artifacts");
@@ -9133,7 +9234,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs25.writeFileSync(responseFile, responseContent, "utf-8");
+              fs26.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -9151,9 +9252,9 @@ ${"=".repeat(60)}
                 await telemetry.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs25 = require("fs");
-                  if (fs25.existsSync(traceFilePath)) {
-                    const stats = fs25.statSync(traceFilePath);
+                  const fs26 = require("fs");
+                  if (fs26.existsSync(traceFilePath)) {
+                    const stats = fs26.statSync(traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::OpenTelemetry trace file size: ${stats.size} bytes`
                     );
@@ -9191,7 +9292,7 @@ ${"=".repeat(60)}
        * Load schema content from schema files or inline definitions
        */
       async loadSchemaContent(schema) {
-        const fs25 = require("fs").promises;
+        const fs26 = require("fs").promises;
         const path29 = require("path");
         if (typeof schema === "object" && schema !== null) {
           log("\u{1F4CB} Using inline schema object from configuration");
@@ -9212,7 +9313,7 @@ ${"=".repeat(60)}
           try {
             const schemaPath = path29.resolve(process.cwd(), schema);
             log(`\u{1F4CB} Loading custom schema from file: ${schemaPath}`);
-            const schemaContent = await fs25.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs26.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch (error) {
             throw new Error(
@@ -9234,7 +9335,7 @@ ${"=".repeat(60)}
         ];
         for (const schemaPath of candidatePaths) {
           try {
-            const schemaContent = await fs25.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs26.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch {
           }
@@ -11275,7 +11376,29 @@ var init_workflow_registry = __esm({
               results.push(...childResults);
             }
           }
-          const workflows = Array.isArray(data) ? data : [data];
+          const rawWorkflows = Array.isArray(data) ? data : [data];
+          const workflows = [];
+          for (const raw of rawWorkflows) {
+            if (raw && typeof raw === "object" && typeof raw.extends === "string") {
+              const basePath = importBasePath || path10.dirname(resolvedSource || source);
+              const baseResolved = path10.isAbsolute(raw.extends) ? raw.extends : path10.resolve(basePath, raw.extends);
+              try {
+                const baseContent = await import_fs3.promises.readFile(baseResolved, "utf-8");
+                const baseData = this.parseWorkflowContent(baseContent, baseResolved);
+                const { extends: _extends, ...rest } = raw;
+                void _extends;
+                const merged = this.deepMergeWorkflow(baseData, rest);
+                workflows.push(merged);
+              } catch (err) {
+                logger.warn(
+                  `[WorkflowRegistry] Failed to resolve extends '${raw.extends}' for workflow '${raw.id || "?"}': ${err instanceof Error ? err.message : err}`
+                );
+                workflows.push(raw);
+              }
+            } else {
+              workflows.push(raw);
+            }
+          }
           for (const workflow of workflows) {
             const workflowImports = workflow?.imports;
             if (Array.isArray(workflowImports)) {
@@ -11520,6 +11643,24 @@ var init_workflow_registry = __esm({
             );
           }
         }
+      }
+      /**
+       * Deep-merge a base workflow config with an override.
+       * Objects merge recursively (override wins for leaf values); arrays/primitives override.
+       */
+      deepMergeWorkflow(base, override) {
+        if (!base || !override || typeof base !== "object" || typeof override !== "object" || Array.isArray(base) || Array.isArray(override)) {
+          return override !== void 0 ? override : base;
+        }
+        const result = { ...base };
+        for (const key of Object.keys(override)) {
+          if (key in result && result[key] && typeof result[key] === "object" && !Array.isArray(result[key]) && override[key] && typeof override[key] === "object" && !Array.isArray(override[key])) {
+            result[key] = this.deepMergeWorkflow(result[key], override[key]);
+          } else {
+            result[key] = override[key];
+          }
+        }
+        return result;
       }
       /**
        * Detect circular dependencies in workflow steps using DependencyResolver
@@ -13736,7 +13877,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -13752,7 +13893,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -14062,6 +14203,27 @@ var init_config_schema = __esm({
             ai_timeout: {
               type: "number",
               description: 'Probe-level timeout in milliseconds for graceful wind-down (maxOperationTimeout). When set, Probe injects "TIME LIMIT REACHED" and gives bonus steps before hard abort. Defaults to (timeout - 90s) when not explicitly set. The main `timeout` field controls Visor\'s external hard kill (always active).'
+            },
+            timeout_behavior: {
+              type: "string",
+              enum: ["graceful", "negotiated"],
+              description: "Timeout behavior: 'graceful' (default) injects wind-down message; 'negotiated' uses observer LLM to decide extensions"
+            },
+            negotiated_timeout_budget: {
+              type: "number",
+              description: "Total extra time budget in ms for negotiated timeout extensions"
+            },
+            negotiated_timeout_max_requests: {
+              type: "number",
+              description: "Maximum number of extension requests for negotiated timeout"
+            },
+            negotiated_timeout_max_per_request: {
+              type: "number",
+              description: "Maximum time in ms per individual extension request"
+            },
+            graceful_stop_deadline: {
+              type: "number",
+              description: "Wind-down deadline in ms for sub-agents after graceful stop is triggered"
             }
           },
           additionalProperties: false,
@@ -14458,7 +14620,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -14473,13 +14635,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139>>": {
+        "Record<string,Partial<interface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-14886-29572-src_types_config.ts-0-58139>": {
+        "Partial<interface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763>": {
           type: "object",
           additionalProperties: false
         },
@@ -18868,13 +19030,13 @@ var init_workflow_check_provider = __esm({
        */
       async loadWorkflowFromConfigPath(sourcePath, baseDir) {
         const path29 = require("path");
-        const fs25 = require("fs");
+        const fs26 = require("fs");
         const yaml5 = require("js-yaml");
         const resolved = path29.isAbsolute(sourcePath) ? sourcePath : path29.resolve(baseDir, sourcePath);
-        if (!fs25.existsSync(resolved)) {
+        if (!fs26.existsSync(resolved)) {
           throw new Error(`Workflow config not found at: ${resolved}`);
         }
-        const rawContent = fs25.readFileSync(resolved, "utf8");
+        const rawContent = fs26.readFileSync(resolved, "utf8");
         const rawData = yaml5.load(rawContent);
         if (rawData.imports && Array.isArray(rawData.imports)) {
           const configDir = path29.dirname(resolved);
@@ -20361,10 +20523,12 @@ async function trackExecution(opts, executor) {
     try {
       const history = result?.reviewSummary?.history;
       if (history) {
-        for (const outputs of Object.values(history)) {
+        const entries = Object.values(history);
+        for (let i = entries.length - 1; i >= 0; i--) {
+          const outputs = entries[i];
           if (!Array.isArray(outputs)) continue;
-          for (const out of outputs) {
-            const text = out?.text;
+          for (let j = outputs.length - 1; j >= 0; j--) {
+            const text = outputs[j]?.text;
             if (typeof text === "string" && text.trim().length > 0) {
               responseText = text.trim();
               break;
@@ -22356,12 +22520,13 @@ var init_schedule_tool_handler = __esm({
 function isHttpClientTool(tool) {
   return Boolean(tool && tool.type === "http_client" && (tool.base_url || tool.url));
 }
-var import_http, import_events, CustomToolsSSEServer;
+var import_fs5, import_http, import_events, CustomToolsSSEServer;
 var init_mcp_custom_sse_server = __esm({
   "src/providers/mcp-custom-sse-server.ts"() {
     "use strict";
     init_custom_tool_executor();
     init_logger();
+    import_fs5 = __toESM(require("fs"));
     import_http = __toESM(require("http"));
     import_events = require("events");
     init_workflow_tool_executor();
@@ -22385,6 +22550,7 @@ var init_mcp_custom_sse_server = __esm({
       keepaliveInterval = null;
       activeToolCalls = 0;
       lastActivityAt = Date.now();
+      gracefulStopRequested = false;
       static KEEPALIVE_INTERVAL_MS = 3e4;
       // 30 seconds
       constructor(tools, sessionId, debug = false, workflowContext) {
@@ -22895,6 +23061,11 @@ var init_mcp_custom_sse_server = __esm({
           inputSchema: normalizeInputSchema(tool.inputSchema)
         }));
         const allTools = [...regularTools, ...workflowTools, ...httpClientTools];
+        allTools.push({
+          name: "graceful_stop",
+          description: "Signal this server to gracefully wind down all active tool executions.",
+          inputSchema: { type: "object", properties: {}, required: [] }
+        });
         if (this.debug) {
           logger.debug(
             `[CustomToolsSSEServer:${this.sessionId}] Listing ${allTools.length} tools: ${allTools.map((t) => t.name).join(", ")}`
@@ -22927,6 +23098,76 @@ var init_mcp_custom_sse_server = __esm({
             logger.debug(
               `[CustomToolsSSEServer:${this.sessionId}] Executing tool: ${toolName} with args: ${JSON.stringify(args)}`
             );
+          }
+          if (toolName === "graceful_stop") {
+            this.gracefulStopRequested = true;
+            try {
+              const { addEvent: addEvent3 } = (init_trace_helpers(), __toCommonJS(trace_helpers_exports));
+              addEvent3("graceful_stop.invoked", {
+                "mcp.session_id": this.sessionId,
+                "mcp.server": "custom-tools-sse"
+              });
+            } catch {
+            }
+            if (this.workflowContext?.executionContext) {
+              const newDeadline = Date.now() + 3e4;
+              const current = this.workflowContext.executionContext.deadline;
+              if (!current || newDeadline < current) {
+                this.workflowContext.executionContext.deadline = newDeadline;
+              }
+              try {
+                const { addEvent: addEvent3 } = (init_trace_helpers(), __toCommonJS(trace_helpers_exports));
+                addEvent3("graceful_stop.deadline_shortened", {
+                  "mcp.session_id": this.sessionId,
+                  "graceful_stop.previous_deadline": current ?? "none",
+                  "graceful_stop.new_deadline": newDeadline,
+                  "graceful_stop.remaining_ms": 3e4
+                });
+              } catch {
+              }
+            }
+            let sessionCount = 0;
+            try {
+              const { SessionRegistry: SessionRegistry2 } = (init_session_registry(), __toCommonJS(session_registry_exports));
+              const registry = SessionRegistry2.getInstance();
+              const activeIds = registry.getActiveSessionIds();
+              for (const sid of activeIds) {
+                const agent = registry.getSession(sid);
+                if (agent && typeof agent.triggerGracefulWindDown === "function") {
+                  agent.triggerGracefulWindDown();
+                  sessionCount++;
+                  logger.info(
+                    `[CustomToolsSSEServer:${this.sessionId}] Triggered graceful wind-down on ProbeAgent session ${sid}`
+                  );
+                  try {
+                    const { addEvent: addEvent3 } = (init_trace_helpers(), __toCommonJS(trace_helpers_exports));
+                    addEvent3("graceful_stop.session_signaled", {
+                      "mcp.session_id": this.sessionId,
+                      "probe.session_id": sid
+                    });
+                  } catch {
+                  }
+                }
+              }
+            } catch (e) {
+              logger.debug(
+                `[CustomToolsSSEServer:${this.sessionId}] Could not signal ProbeAgent sessions: ${e}`
+              );
+            }
+            try {
+              const { addEvent: addEvent3 } = (init_trace_helpers(), __toCommonJS(trace_helpers_exports));
+              addEvent3("graceful_stop.completed", {
+                "mcp.session_id": this.sessionId,
+                "graceful_stop.sessions_signaled": sessionCount
+              });
+            } catch {
+            }
+            logger.info(`[CustomToolsSSEServer:${this.sessionId}] Graceful stop acknowledged`);
+            return {
+              jsonrpc: "2.0",
+              id,
+              result: { content: [{ type: "text", text: "Stop acknowledged" }] }
+            };
           }
           const retryCount = this.getEnvNumber("VISOR_CUSTOM_TOOLS_RETRY_COUNT", 0);
           const retryDelayMs = this.getEnvNumber("VISOR_CUSTOM_TOOLS_RETRY_DELAY_MS", 1e3);
@@ -23001,6 +23242,13 @@ var init_mcp_custom_sse_server = __esm({
               }
               const tool = this.tools.get(toolName);
               if (tool && isWorkflowTool(tool)) {
+                if (this.gracefulStopRequested) {
+                  logger.warn(
+                    `[CustomToolsSSEServer:${this.sessionId}] Rejecting workflow tool '${toolName}' \u2014 graceful_stop already requested`
+                  );
+                  result = `[REJECTED] The server is shutting down (graceful_stop was called). Tool '${toolName}' cannot be started. Please produce your final answer now with the information you already have.`;
+                  break;
+                }
                 if (!this.workflowContext) {
                   throw new Error(
                     `Workflow tool '${toolName}' requires workflow context but none was provided`
@@ -23037,7 +23285,26 @@ var init_mcp_custom_sse_server = __esm({
               attempt++;
             }
           }
-          const resultText = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+          let resultText;
+          if (typeof result === "string") {
+            resultText = result;
+          } else {
+            resultText = JSON.stringify(result);
+          }
+          const MAX_RESULT_BYTES = 512 * 1024;
+          if (resultText.length > MAX_RESULT_BYTES) {
+            const originalLen = resultText.length;
+            const keepHead = Math.floor(MAX_RESULT_BYTES * 0.8);
+            const keepTail = MAX_RESULT_BYTES - keepHead - 200;
+            resultText = resultText.substring(0, keepHead) + `
+
+... [TRUNCATED: ${originalLen} chars total, showing first ${keepHead} and last ${keepTail} chars] ...
+
+` + resultText.substring(originalLen - keepTail);
+            logger.warn(
+              `[CustomToolsSSEServer:${this.sessionId}] Tool ${toolName} result truncated from ${originalLen} to ${resultText.length} chars`
+            );
+          }
           const resultPreview = resultText.length > 500 ? `${resultText.substring(0, 250)}...TRUNCATED(${resultText.length} chars)...${resultText.substring(resultText.length - 250)}` : resultText;
           logger.info(
             `[CustomToolsSSEServer:${this.sessionId}] Tool ${toolName} completed. Result size: ${resultText.length} chars`
@@ -23045,16 +23312,42 @@ var init_mcp_custom_sse_server = __esm({
           logger.debug(
             `[CustomToolsSSEServer:${this.sessionId}] Tool ${toolName} result preview: ${resultPreview}`
           );
+          const contentBlocks = [
+            {
+              type: "text",
+              text: resultText
+            }
+          ];
+          if (result && typeof result === "object") {
+            logger.info(
+              `[CustomToolsSSEServer:${this.sessionId}] Image detection: keys=${Object.keys(result).join(",")}, type=${typeof result}`
+            );
+            const r = result;
+            const filePath = r.file_path || r.output?.file_path || r.result?.file_path;
+            const contentType = r.content_type || r.output?.content_type || r.result?.content_type || "";
+            if (filePath && typeof filePath === "string" && contentType.startsWith("image/")) {
+              try {
+                const imageBuffer = import_fs5.default.readFileSync(filePath);
+                contentBlocks.push({
+                  type: "image",
+                  data: imageBuffer.toString("base64"),
+                  mimeType: contentType
+                });
+                logger.info(
+                  `[CustomToolsSSEServer:${this.sessionId}] Included inline image from ${filePath} (${imageBuffer.length} bytes)`
+                );
+              } catch (imgErr) {
+                logger.warn(
+                  `[CustomToolsSSEServer:${this.sessionId}] Failed to read image file ${filePath}: ${imgErr}`
+                );
+              }
+            }
+          }
           const response = {
             jsonrpc: "2.0",
             id,
             result: {
-              content: [
-                {
-                  type: "text",
-                  text: resultText
-                }
-              ]
+              content: contentBlocks
             }
           };
           logger.debug(
@@ -23506,9 +23799,9 @@ var init_ai_check_provider = __esm({
           } else {
             resolvedPath = import_path8.default.resolve(process.cwd(), str);
           }
-          const fs25 = require("fs").promises;
+          const fs26 = require("fs").promises;
           try {
-            const stat2 = await fs25.stat(resolvedPath);
+            const stat2 = await fs26.stat(resolvedPath);
             return stat2.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
@@ -23927,6 +24220,21 @@ ${preview}`);
             const resolvedAiTimeout = await resolveLiquid(aiAny2.ai_timeout) ?? aiAny2.ai_timeout;
             aiConfig.aiTimeout = Number(resolvedAiTimeout);
           }
+          if (aiAny2.timeout_behavior !== void 0) {
+            aiConfig.timeoutBehavior = aiAny2.timeout_behavior;
+          }
+          if (aiAny2.negotiated_timeout_budget !== void 0) {
+            aiConfig.negotiatedTimeoutBudget = Number(aiAny2.negotiated_timeout_budget);
+          }
+          if (aiAny2.negotiated_timeout_max_requests !== void 0) {
+            aiConfig.negotiatedTimeoutMaxRequests = Number(aiAny2.negotiated_timeout_max_requests);
+          }
+          if (aiAny2.negotiated_timeout_max_per_request !== void 0) {
+            aiConfig.negotiatedTimeoutMaxPerRequest = Number(aiAny2.negotiated_timeout_max_per_request);
+          }
+          if (aiAny2.graceful_stop_deadline !== void 0) {
+            aiConfig.gracefulStopDeadline = Number(aiAny2.graceful_stop_deadline);
+          }
           if (aiAny2.max_iterations !== void 0 || aiAny2.maxIterations !== void 0) {
             const raw = aiAny2.max_iterations ?? aiAny2.maxIterations;
             const resolved = await resolveLiquid(raw) ?? raw;
@@ -24047,6 +24355,12 @@ ${preview}`);
             } else if (mainProjectPath) {
               logger.debug(`[AI Provider] Excluding main project (disabled): ${mainProjectPath}`);
             }
+            const extraFolders = config.ai?.extra_allowed_folders;
+            if (Array.isArray(extraFolders)) {
+              for (const f of extraFolders) {
+                if (typeof f === "string" && f) folders.push(f);
+              }
+            }
             const unique = Array.from(new Set(folders.filter((p) => typeof p === "string" && p)));
             if (unique.length > 0 && workspaceRoot) {
               if (unique[0] !== workspaceRoot) {
@@ -24066,7 +24380,14 @@ ${preview}`);
             }
           } else if (parentCtx && typeof parentCtx.workingDirectory === "string") {
             if (!aiConfig.allowedFolders) {
-              aiConfig.allowedFolders = [parentCtx.workingDirectory];
+              const fallbackFolders = [parentCtx.workingDirectory];
+              const extraFolders = config.ai?.extra_allowed_folders;
+              if (Array.isArray(extraFolders)) {
+                for (const f of extraFolders) {
+                  if (typeof f === "string" && f) fallbackFolders.push(f);
+                }
+              }
+              aiConfig.allowedFolders = fallbackFolders;
             }
             if (!aiConfig.path) {
               aiConfig.path = parentCtx.workingDirectory;
@@ -24513,6 +24834,31 @@ ${preview}`);
           } catch (error) {
             logger.error(
               `[AICheckProvider] Failed to evaluate ai_allowed_tools_js: ${error instanceof Error ? error.message : "Unknown error"}`
+            );
+          }
+        }
+        const extraFoldersJsExpr = config.ai_extra_allowed_folders_js;
+        if (extraFoldersJsExpr && _dependencyResults) {
+          try {
+            const result = this.evaluateAllowedToolsJs(
+              extraFoldersJsExpr,
+              prInfo,
+              _dependencyResults,
+              config
+            );
+            if (Array.isArray(result) && result.length > 0) {
+              const existing = aiConfig.allowedFolders || [];
+              aiConfig.allowedFolders = [
+                ...existing,
+                ...result.filter((f) => typeof f === "string" && f)
+              ];
+              logger.debug(
+                `[AI Provider] ai_extra_allowed_folders_js added: ${JSON.stringify(result)}`
+              );
+            }
+          } catch (error) {
+            logger.error(
+              `[AICheckProvider] Failed to evaluate ai_extra_allowed_folders_js: ${error instanceof Error ? error.message : "Unknown error"}`
             );
           }
         }
@@ -25766,7 +26112,7 @@ var init_oauth2_token_cache = __esm({
 });
 
 // src/providers/http-client-provider.ts
-var fs15, path19, HttpClientProvider;
+var fs16, path19, HttpClientProvider;
 var init_http_client_provider = __esm({
   "src/providers/http-client-provider.ts"() {
     "use strict";
@@ -25778,7 +26124,7 @@ var init_http_client_provider = __esm({
     init_oauth2_token_cache();
     init_logger();
     init_rate_limiter();
-    fs15 = __toESM(require("fs"));
+    fs16 = __toESM(require("fs"));
     path19 = __toESM(require("path"));
     HttpClientProvider = class extends CheckProvider {
       liquid;
@@ -25857,6 +26203,10 @@ var init_http_client_provider = __esm({
             { attachMemoryReadHelpers: false }
           );
           templateContext.env = process.env;
+          const workflowInputs = config.workflowInputs;
+          if (workflowInputs) {
+            templateContext.inputs = workflowInputs;
+          }
           let renderedUrl = String(EnvironmentResolver.resolveValue(url));
           resolvedUrlForErrors = renderedUrl;
           if (renderedUrl.includes("{{") || renderedUrl.includes("{%")) {
@@ -25908,11 +26258,16 @@ var init_http_client_provider = __esm({
                 `[http_client] Resolved relative output_file to workspace: ${resolvedOutputFile}`
               );
             }
-            if (skipIfExists && fs15.existsSync(resolvedOutputFile)) {
-              const stats = fs15.statSync(resolvedOutputFile);
+            if (skipIfExists && fs16.existsSync(resolvedOutputFile)) {
+              const stats = fs16.statSync(resolvedOutputFile);
               logger.verbose(`[http_client] File cached: ${resolvedOutputFile} (${stats.size} bytes)`);
               return {
                 issues: [],
+                output: {
+                  file_path: resolvedOutputFile,
+                  size: stats.size,
+                  cached: true
+                },
                 file_path: resolvedOutputFile,
                 size: stats.size,
                 cached: true
@@ -26116,6 +26471,11 @@ var init_http_client_provider = __esm({
           const response = await rateLimitedFetch(url, requestOptions, rateLimitConfig);
           clearTimeout(timeoutId);
           if (!response.ok) {
+            try {
+              const errorBody = await response.text();
+              logger.warn(`[http_client] Download error body: ${errorBody.substring(0, 500)}`);
+            } catch {
+            }
             return {
               issues: [
                 {
@@ -26130,16 +26490,22 @@ var init_http_client_provider = __esm({
             };
           }
           const parentDir = path19.dirname(outputFile);
-          if (parentDir && !fs15.existsSync(parentDir)) {
-            fs15.mkdirSync(parentDir, { recursive: true });
+          if (parentDir && !fs16.existsSync(parentDir)) {
+            fs16.mkdirSync(parentDir, { recursive: true });
           }
           const arrayBuffer = await response.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
-          fs15.writeFileSync(outputFile, buffer);
+          fs16.writeFileSync(outputFile, buffer);
           const contentType = response.headers.get("content-type") || "application/octet-stream";
           logger.verbose(`[http_client] Downloaded: ${outputFile} (${buffer.length} bytes)`);
           return {
             issues: [],
+            output: {
+              file_path: outputFile,
+              size: buffer.length,
+              content_type: contentType,
+              cached: false
+            },
             file_path: outputFile,
             size: buffer.length,
             content_type: contentType,
@@ -46646,9 +47012,11 @@ var init_mcp_check_provider = __esm({
           return null;
         }
         const data = raw;
-        const message = this.toTrimmedString(
-          data.message || data.text || data.description || data.summary
-        );
+        const rawMessage = data.message || data.text || data.description || data.summary;
+        if (typeof rawMessage !== "string") {
+          return null;
+        }
+        const message = rawMessage.trim();
         if (!message) {
           return null;
         }
@@ -47246,7 +47614,7 @@ var init_stdin_reader = __esm({
 });
 
 // src/providers/human-input-check-provider.ts
-var fs17, path21, HumanInputCheckProvider;
+var fs18, path21, HumanInputCheckProvider;
 var init_human_input_check_provider = __esm({
   "src/providers/human-input-check-provider.ts"() {
     "use strict";
@@ -47255,7 +47623,7 @@ var init_human_input_check_provider = __esm({
     init_prompt_state();
     init_liquid_extensions();
     init_stdin_reader();
-    fs17 = __toESM(require("fs"));
+    fs18 = __toESM(require("fs"));
     path21 = __toESM(require("path"));
     HumanInputCheckProvider = class _HumanInputCheckProvider extends CheckProvider {
       liquid;
@@ -47437,12 +47805,12 @@ var init_human_input_check_provider = __esm({
             return null;
           }
           try {
-            await fs17.promises.access(normalizedPath, fs17.constants.R_OK);
-            const stats = await fs17.promises.stat(normalizedPath);
+            await fs18.promises.access(normalizedPath, fs18.constants.R_OK);
+            const stats = await fs18.promises.stat(normalizedPath);
             if (!stats.isFile()) {
               return null;
             }
-            const content = await fs17.promises.readFile(normalizedPath, "utf-8");
+            const content = await fs18.promises.readFile(normalizedPath, "utf-8");
             return content.trim();
           } catch {
             return null;
@@ -48595,11 +48963,11 @@ var init_script_check_provider = __esm({
 });
 
 // src/utils/worktree-manager.ts
-var fs18, fsp, path22, crypto2, WorktreeManager, worktreeManager;
+var fs19, fsp, path22, crypto2, WorktreeManager, worktreeManager;
 var init_worktree_manager = __esm({
   "src/utils/worktree-manager.ts"() {
     "use strict";
-    fs18 = __toESM(require("fs"));
+    fs19 = __toESM(require("fs"));
     fsp = __toESM(require("fs/promises"));
     path22 = __toESM(require("path"));
     crypto2 = __toESM(require("crypto"));
@@ -48654,12 +49022,12 @@ var init_worktree_manager = __esm({
         }
         const reposDir = this.getReposDir();
         const worktreesDir = this.getWorktreesDir();
-        if (!fs18.existsSync(reposDir)) {
-          fs18.mkdirSync(reposDir, { recursive: true });
+        if (!fs19.existsSync(reposDir)) {
+          fs19.mkdirSync(reposDir, { recursive: true });
           logger.debug(`Created repos directory: ${reposDir}`);
         }
-        if (!fs18.existsSync(worktreesDir)) {
-          fs18.mkdirSync(worktreesDir, { recursive: true });
+        if (!fs19.existsSync(worktreesDir)) {
+          fs19.mkdirSync(worktreesDir, { recursive: true });
           logger.debug(`Created worktrees directory: ${worktreesDir}`);
         }
       }
@@ -48693,11 +49061,12 @@ var init_worktree_manager = __esm({
         const reposDir = this.getReposDir();
         const repoName = repository.replace(/\//g, "-");
         const bareRepoPath = path22.join(reposDir, `${repoName}.git`);
-        if (fs18.existsSync(bareRepoPath)) {
+        if (fs19.existsSync(bareRepoPath)) {
           logger.debug(`Bare repository already exists: ${bareRepoPath}`);
           const verifyResult = await this.verifyBareRepoRemote(bareRepoPath, repoUrl);
           if (verifyResult === "timeout") {
-            logger.info(`Using stale bare repository (verification timed out): ${bareRepoPath}`);
+            logger.warn(`Bare repo verification timed out, attempting ref update: ${bareRepoPath}`);
+            await this.updateBareRepo(bareRepoPath);
             return bareRepoPath;
           } else if (verifyResult === false) {
             logger.warn(
@@ -48736,22 +49105,43 @@ var init_worktree_manager = __esm({
         return bareRepoPath;
       }
       /**
-       * Update bare repository refs
+       * Update bare repository refs.
+       *
+       * Retries once on failure to handle transient network issues.
+       * If the bare repo is shallow, unshallow it first so that branch-tip
+       * fetches always succeed.
        */
       async updateBareRepo(bareRepoPath) {
         logger.debug(`Updating bare repository: ${bareRepoPath}`);
         try {
-          const updateCmd = `git -C ${this.escapeShellArg(bareRepoPath)} remote update --prune`;
-          const result = await this.executeGitCommand(updateCmd, { timeout: 6e4 });
-          if (result.exitCode !== 0) {
-            logger.warn(`Failed to update bare repository: ${result.stderr}`);
-          } else {
-            logger.debug(`Successfully updated bare repository`);
+          const isShallowCmd = `git -C ${this.escapeShellArg(bareRepoPath)} rev-parse --is-shallow-repository`;
+          const isShallowResult = await this.executeGitCommand(isShallowCmd, { timeout: 1e4 });
+          if (isShallowResult.exitCode === 0 && isShallowResult.stdout.trim() === "true") {
+            logger.info(`Unshallowing bare repository to ensure fresh refs: ${bareRepoPath}`);
+            const unshallowCmd = `git -C ${this.escapeShellArg(bareRepoPath)} fetch --unshallow origin`;
+            await this.executeGitCommand(unshallowCmd, { timeout: 12e4 });
           }
         } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          logger.warn(`Failed to update bare repository (will use stale refs): ${errorMessage}`);
+          logger.debug(`Unshallow attempt failed (non-fatal): ${error}`);
         }
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            const updateCmd = `git -C ${this.escapeShellArg(bareRepoPath)} fetch --all --prune --force`;
+            const result = await this.executeGitCommand(updateCmd, { timeout: 9e4 });
+            if (result.exitCode === 0) {
+              logger.debug(`Successfully updated bare repository`);
+              return;
+            }
+            logger.warn(`Bare repo update attempt ${attempt}/2 failed: ${result.stderr}`);
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            logger.warn(`Bare repo update attempt ${attempt}/2 error: ${errorMessage}`);
+          }
+          if (attempt < 2) {
+            await new Promise((resolve16) => setTimeout(resolve16, 2e3));
+          }
+        }
+        logger.warn(`Failed to update bare repository after 2 attempts (will rely on per-ref fetch)`);
       }
       /**
        * Verify that a bare repository has the correct remote URL.
@@ -48844,7 +49234,8 @@ var init_worktree_manager = __esm({
         if (options.workingDirectory) {
           worktreePath = this.validatePath(options.workingDirectory);
         }
-        if (fs18.existsSync(worktreePath)) {
+        let refreshFailedNeedsRecreate = false;
+        if (fs19.existsSync(worktreePath)) {
           logger.debug(`Worktree already exists: ${worktreePath}`);
           const metadata2 = await this.loadMetadata(worktreePath);
           if (metadata2) {
@@ -48894,21 +49285,38 @@ var init_worktree_manager = __esm({
                 }
               } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : String(error);
-                logger.warn(`Failed to refresh worktree, will reuse existing: ${errorMessage}`);
+                const commonBranches = ["main", "master", "develop", "dev"];
+                if (commonBranches.includes(ref)) {
+                  logger.error(
+                    `Failed to refresh worktree for default branch '${ref}': ${errorMessage}. Refusing to serve stale worktree \u2014 removing and re-creating.`
+                  );
+                  try {
+                    const rmCmd = `git -C ${this.escapeShellArg(bareRepoPath)} worktree remove ${this.escapeShellArg(worktreePath)} --force`;
+                    await this.executeGitCommand(rmCmd, { timeout: 3e4 });
+                    await fsp.rm(worktreePath, { recursive: true, force: true });
+                  } catch (rmErr) {
+                    logger.debug(`Cleanup of stale worktree failed: ${rmErr}`);
+                  }
+                  refreshFailedNeedsRecreate = true;
+                } else {
+                  logger.warn(`Failed to refresh worktree, will reuse existing: ${errorMessage}`);
+                }
               }
-              if (options.clean) {
-                logger.debug(`Cleaning existing worktree`);
-                await this.cleanWorktree(worktreePath, metadata2.commit);
+              if (!refreshFailedNeedsRecreate) {
+                if (options.clean) {
+                  logger.debug(`Cleaning existing worktree`);
+                  await this.cleanWorktree(worktreePath, metadata2.commit);
+                }
+                this.activeWorktrees.set(worktreeId, metadata2);
+                return {
+                  id: worktreeId,
+                  path: worktreePath,
+                  ref: metadata2.ref,
+                  commit: metadata2.commit,
+                  metadata: metadata2,
+                  locked: false
+                };
               }
-              this.activeWorktrees.set(worktreeId, metadata2);
-              return {
-                id: worktreeId,
-                path: worktreePath,
-                ref: metadata2.ref,
-                commit: metadata2.commit,
-                metadata: metadata2,
-                locked: false
-              };
             } else {
               logger.info(
                 `Worktree exists with different ref (${metadata2.ref} -> ${ref}), updating...`
@@ -48964,10 +49372,17 @@ var init_worktree_manager = __esm({
           }
         }
         const fetched = await this.fetchRef(bareRepoPath, ref);
-        const commit = await this.getCommitShaForRef(bareRepoPath, ref);
         if (!fetched) {
-          logger.warn(`Using cached ref ${ref}; fetch failed`);
+          const commonBranches = ["main", "master", "develop", "dev"];
+          if (commonBranches.includes(ref)) {
+            logger.warn(
+              `Failed to fetch latest '${ref}' \u2014 will attempt to use cached ref. Check network connectivity and repository access.`
+            );
+          } else {
+            logger.warn(`Using cached ref ${ref}; fetch failed (non-default branch, proceeding)`);
+          }
         }
+        const commit = await this.getCommitShaForRef(bareRepoPath, ref);
         await this.pruneWorktrees(bareRepoPath);
         logger.info(`Creating worktree for ${repository}@${ref} (${commit})`);
         const createCmd = `git -C ${this.escapeShellArg(
@@ -49016,18 +49431,28 @@ var init_worktree_manager = __esm({
         }
       }
       /**
-       * Fetch a specific ref in bare repository
+       * Fetch a specific ref in bare repository.
+       *
+       * Uses --force to overwrite local refs that may have diverged (e.g. after
+       * a force-push on main). Retries once on failure.
        */
       async fetchRef(bareRepoPath, ref) {
         this.validateRef(ref);
         logger.debug(`Fetching ref: ${ref}`);
-        const fetchCmd = `git -C ${this.escapeShellArg(bareRepoPath)} fetch origin ${this.escapeShellArg(ref + ":" + ref)} 2>&1`;
-        const result = await this.executeGitCommand(fetchCmd, { timeout: 6e4 });
-        if (result.exitCode !== 0) {
-          logger.warn(`Failed to fetch ref ${ref}: ${result.stderr}`);
-          return false;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          const fetchCmd = `git -C ${this.escapeShellArg(bareRepoPath)} fetch --force origin ${this.escapeShellArg(ref + ":refs/remotes/origin/" + ref)}`;
+          const result = await this.executeGitCommand(fetchCmd, { timeout: 6e4 });
+          if (result.exitCode === 0) {
+            return true;
+          }
+          logger.warn(
+            `Failed to fetch ref ${ref} (attempt ${attempt}/2): ${result.stderr || result.stdout}`
+          );
+          if (attempt < 2) {
+            await new Promise((resolve16) => setTimeout(resolve16, 1e3));
+          }
         }
-        return true;
+        return false;
       }
       /**
        * Clean worktree (reset and remove untracked files).
@@ -49108,27 +49533,32 @@ var init_worktree_manager = __esm({
        * falls back to the other common default branch name.
        */
       async getCommitShaForRef(bareRepoPath, ref) {
-        const cmd = `git -C ${this.escapeShellArg(bareRepoPath)} rev-parse ${this.escapeShellArg(ref)}`;
-        const result = await this.executeGitCommand(cmd);
-        if (result.exitCode !== 0) {
-          const fallbackRefs = {
-            main: "master",
-            master: "main"
-          };
-          const fallbackRef = fallbackRefs[ref];
-          if (fallbackRef) {
-            logger.debug(`Ref '${ref}' not found, trying fallback '${fallbackRef}'`);
-            await this.fetchRef(bareRepoPath, fallbackRef);
-            const fallbackCmd = `git -C ${this.escapeShellArg(bareRepoPath)} rev-parse ${this.escapeShellArg(fallbackRef)}`;
-            const fallbackResult = await this.executeGitCommand(fallbackCmd);
-            if (fallbackResult.exitCode === 0) {
+        const candidates = [`refs/remotes/origin/${ref}`, ref];
+        for (const candidate of candidates) {
+          const cmd = `git -C ${this.escapeShellArg(bareRepoPath)} rev-parse ${this.escapeShellArg(candidate)}`;
+          const result = await this.executeGitCommand(cmd);
+          if (result.exitCode === 0) {
+            return result.stdout.trim();
+          }
+        }
+        const fallbackRefs = {
+          main: "master",
+          master: "main"
+        };
+        const fallbackRef = fallbackRefs[ref];
+        if (fallbackRef) {
+          logger.debug(`Ref '${ref}' not found, trying fallback '${fallbackRef}'`);
+          await this.fetchRef(bareRepoPath, fallbackRef);
+          for (const candidate of [`refs/remotes/origin/${fallbackRef}`, fallbackRef]) {
+            const cmd = `git -C ${this.escapeShellArg(bareRepoPath)} rev-parse ${this.escapeShellArg(candidate)}`;
+            const result = await this.executeGitCommand(cmd);
+            if (result.exitCode === 0) {
               logger.info(`Using fallback branch '${fallbackRef}' instead of '${ref}'`);
-              return fallbackResult.stdout.trim();
+              return result.stdout.trim();
             }
           }
-          throw new Error(`Failed to get commit SHA for ref ${ref}: ${result.stderr}`);
         }
-        return result.stdout.trim();
+        throw new Error(`Failed to get commit SHA for ref ${ref}`);
       }
       /**
        * Remove a worktree
@@ -49145,15 +49575,15 @@ var init_worktree_manager = __esm({
         const result = await this.executeGitCommand(removeCmd, { timeout: 3e4 });
         if (result.exitCode !== 0) {
           logger.warn(`Failed to remove worktree via git: ${result.stderr}`);
-          if (fs18.existsSync(worktree_path)) {
+          if (fs19.existsSync(worktree_path)) {
             logger.debug(`Manually removing worktree directory`);
-            fs18.rmSync(worktree_path, { recursive: true, force: true });
+            fs19.rmSync(worktree_path, { recursive: true, force: true });
           }
         }
         const metadataPath = this.getMetadataPath(worktree_path);
         try {
-          if (fs18.existsSync(metadataPath)) {
-            fs18.unlinkSync(metadataPath);
+          if (fs19.existsSync(metadataPath)) {
+            fs19.unlinkSync(metadataPath);
           }
         } catch {
         }
@@ -49173,7 +49603,7 @@ var init_worktree_manager = __esm({
        */
       async saveMetadata(worktreePath, metadata) {
         const metadataPath = this.getMetadataPath(worktreePath);
-        fs18.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
+        fs19.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
       }
       /**
        * Load worktree metadata
@@ -49181,12 +49611,12 @@ var init_worktree_manager = __esm({
       async loadMetadata(worktreePath) {
         const metadataPath = this.getMetadataPath(worktreePath);
         const legacyPath = path22.join(worktreePath, ".visor-metadata.json");
-        const pathToRead = fs18.existsSync(metadataPath) ? metadataPath : fs18.existsSync(legacyPath) ? legacyPath : null;
+        const pathToRead = fs19.existsSync(metadataPath) ? metadataPath : fs19.existsSync(legacyPath) ? legacyPath : null;
         if (!pathToRead) {
           return null;
         }
         try {
-          const content = fs18.readFileSync(pathToRead, "utf8");
+          const content = fs19.readFileSync(pathToRead, "utf8");
           return JSON.parse(content);
         } catch (error) {
           logger.warn(`Failed to load metadata: ${error}`);
@@ -49198,10 +49628,10 @@ var init_worktree_manager = __esm({
        */
       async listWorktrees() {
         const worktreesDir = this.getWorktreesDir();
-        if (!fs18.existsSync(worktreesDir)) {
+        if (!fs19.existsSync(worktreesDir)) {
           return [];
         }
-        const entries = fs18.readdirSync(worktreesDir, { withFileTypes: true });
+        const entries = fs19.readdirSync(worktreesDir, { withFileTypes: true });
         const worktrees = [];
         for (const entry of entries) {
           if (!entry.isDirectory()) continue;
@@ -51719,31 +52149,47 @@ async function executeSingleCheck(checkId, context2, state, emitEvent, transitio
       });
     } catch {
     }
-    const result = await withActiveSpan(
-      `visor.check.${checkId}`,
-      {
-        "visor.check.id": checkId,
-        "visor.check.type": providerType,
-        session_id: context2.sessionId,
-        wave: state.wave
-      },
-      async (span) => {
-        const res = await executeWithSandboxRouting(
-          checkId,
-          checkConfig,
-          context2,
-          prInfo,
-          dependencyResults,
-          effectiveTimeout,
-          () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-        );
-        try {
-          captureCheckOutput(span, res.output);
-        } catch {
-        }
-        return res;
+    const spanAttrs = {
+      "visor.check.id": checkId,
+      "visor.check.type": providerType,
+      session_id: context2.sessionId,
+      wave: state.wave,
+      "visor.check.effective_timeout": effectiveTimeout,
+      "visor.check.deadline": deadline
+    };
+    if (parentDeadline) {
+      spanAttrs["visor.check.parent_deadline"] = parentDeadline;
+    }
+    const aiBlock = checkConfig.ai;
+    if (aiBlock) {
+      if (aiBlock.ai_timeout) spanAttrs["visor.check.ai_timeout"] = aiBlock.ai_timeout;
+      if (aiBlock.timeout_behavior)
+        spanAttrs["visor.check.timeout_behavior"] = aiBlock.timeout_behavior;
+      if (aiBlock.negotiated_timeout_budget !== void 0)
+        spanAttrs["visor.check.negotiated_timeout_budget"] = aiBlock.negotiated_timeout_budget;
+      if (aiBlock.negotiated_timeout_max_requests !== void 0)
+        spanAttrs["visor.check.negotiated_timeout_max_requests"] = aiBlock.negotiated_timeout_max_requests;
+      if (aiBlock.negotiated_timeout_max_per_request !== void 0)
+        spanAttrs["visor.check.negotiated_timeout_max_per_request"] = aiBlock.negotiated_timeout_max_per_request;
+      if (aiBlock.graceful_stop_deadline !== void 0)
+        spanAttrs["visor.check.graceful_stop_deadline"] = aiBlock.graceful_stop_deadline;
+    }
+    const result = await withActiveSpan(`visor.check.${checkId}`, spanAttrs, async (span) => {
+      const res = await executeWithSandboxRouting(
+        checkId,
+        checkConfig,
+        context2,
+        prInfo,
+        dependencyResults,
+        effectiveTimeout,
+        () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+      );
+      try {
+        captureCheckOutput(span, res.output);
+      } catch {
       }
-    );
+      return res;
+    });
     const enrichedIssues = (result.issues || []).map((issue) => ({
       ...issue,
       checkName: checkId,
@@ -51948,7 +52394,7 @@ __export(renderer_schema_exports, {
 });
 async function loadRendererSchema(name) {
   try {
-    const fs25 = await import("fs/promises");
+    const fs26 = await import("fs/promises");
     const path29 = await import("path");
     const sanitized = String(name).replace(/[^a-zA-Z0-9-]/g, "");
     if (!sanitized) return void 0;
@@ -51964,7 +52410,7 @@ async function loadRendererSchema(name) {
     ];
     for (const p of candidates) {
       try {
-        const raw = await fs25.readFile(p, "utf-8");
+        const raw = await fs26.readFile(p, "utf-8");
         return JSON.parse(raw);
       } catch {
       }
@@ -54416,7 +54862,7 @@ function updateStats2(results, state, isForEachIteration = false) {
 async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs25 = await import("fs/promises");
+    const fs26 = await import("fs/promises");
     const path29 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" && !schemaRaw.includes("{{") && !schemaRaw.includes("{%") ? schemaRaw : typeof schemaRaw === "object" ? "code-review" : "plain";
@@ -54427,7 +54873,7 @@ async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
       const resolved = path29.resolve(process.cwd(), file);
-      templateContent = await fs25.readFile(resolved, "utf-8");
+      templateContent = await fs26.readFile(resolved, "utf-8");
       logger.debug(`[LevelDispatch] Using template file for ${checkId}: ${resolved}`);
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
@@ -54446,7 +54892,7 @@ async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs25.readFile(p, "utf-8");
+            templateContent = await fs26.readFile(p, "utf-8");
             if (templateContent) {
               logger.debug(`[LevelDispatch] Using schema template for ${checkId}: ${p}`);
               break;
@@ -55053,13 +55499,13 @@ var init_runner = __esm({
 });
 
 // src/sandbox/docker-image-sandbox.ts
-var import_util2, import_child_process3, import_fs5, import_path10, import_os, import_crypto3, execFileAsync, EXEC_MAX_BUFFER, DockerImageSandbox;
+var import_util2, import_child_process3, import_fs6, import_path10, import_os, import_crypto3, execFileAsync, EXEC_MAX_BUFFER, DockerImageSandbox;
 var init_docker_image_sandbox = __esm({
   "src/sandbox/docker-image-sandbox.ts"() {
     "use strict";
     import_util2 = require("util");
     import_child_process3 = require("child_process");
-    import_fs5 = require("fs");
+    import_fs6 = require("fs");
     import_path10 = require("path");
     import_os = require("os");
     import_crypto3 = require("crypto");
@@ -55105,9 +55551,9 @@ var init_docker_image_sandbox = __esm({
                   `Sandbox '${this.name}' has invalid dockerfile_inline: must contain a FROM instruction`
                 );
               }
-              const tmpDir = (0, import_fs5.mkdtempSync)((0, import_path10.join)((0, import_os.tmpdir)(), "visor-build-"));
+              const tmpDir = (0, import_fs6.mkdtempSync)((0, import_path10.join)((0, import_os.tmpdir)(), "visor-build-"));
               const dockerfilePath = (0, import_path10.join)(tmpDir, "Dockerfile");
-              (0, import_fs5.writeFileSync)(dockerfilePath, this.config.dockerfile_inline, "utf8");
+              (0, import_fs6.writeFileSync)(dockerfilePath, this.config.dockerfile_inline, "utf8");
               try {
                 logger.info(`Building sandbox image '${imageName}' from inline Dockerfile`);
                 await execFileAsync(
@@ -55120,7 +55566,7 @@ var init_docker_image_sandbox = __esm({
                 );
               } finally {
                 try {
-                  (0, import_fs5.unlinkSync)(dockerfilePath);
+                  (0, import_fs6.unlinkSync)(dockerfilePath);
                 } catch {
                 }
               }
@@ -55555,13 +56001,13 @@ var bubblewrap_sandbox_exports = {};
 __export(bubblewrap_sandbox_exports, {
   BubblewrapSandbox: () => BubblewrapSandbox
 });
-var import_util5, import_child_process6, import_fs6, import_path11, execFileAsync4, EXEC_MAX_BUFFER4, BubblewrapSandbox;
+var import_util5, import_child_process6, import_fs7, import_path11, execFileAsync4, EXEC_MAX_BUFFER4, BubblewrapSandbox;
 var init_bubblewrap_sandbox = __esm({
   "src/sandbox/bubblewrap-sandbox.ts"() {
     "use strict";
     import_util5 = require("util");
     import_child_process6 = require("child_process");
-    import_fs6 = require("fs");
+    import_fs7 = require("fs");
     import_path11 = require("path");
     init_logger();
     init_sandbox_telemetry();
@@ -55636,16 +56082,16 @@ var init_bubblewrap_sandbox = __esm({
         const args = [];
         args.push("--ro-bind", "/usr", "/usr");
         args.push("--ro-bind", "/bin", "/bin");
-        if ((0, import_fs6.existsSync)("/lib")) {
+        if ((0, import_fs7.existsSync)("/lib")) {
           args.push("--ro-bind", "/lib", "/lib");
         }
-        if ((0, import_fs6.existsSync)("/lib64")) {
+        if ((0, import_fs7.existsSync)("/lib64")) {
           args.push("--ro-bind", "/lib64", "/lib64");
         }
-        if ((0, import_fs6.existsSync)("/etc/resolv.conf")) {
+        if ((0, import_fs7.existsSync)("/etc/resolv.conf")) {
           args.push("--ro-bind", "/etc/resolv.conf", "/etc/resolv.conf");
         }
-        if ((0, import_fs6.existsSync)("/etc/ssl")) {
+        if ((0, import_fs7.existsSync)("/etc/ssl")) {
           args.push("--ro-bind", "/etc/ssl", "/etc/ssl");
         }
         args.push("--dev", "/dev");
@@ -55692,14 +56138,14 @@ var seatbelt_sandbox_exports = {};
 __export(seatbelt_sandbox_exports, {
   SeatbeltSandbox: () => SeatbeltSandbox
 });
-var import_util6, import_child_process7, import_path12, import_fs7, execFileAsync5, EXEC_MAX_BUFFER5, SeatbeltSandbox;
+var import_util6, import_child_process7, import_path12, import_fs8, execFileAsync5, EXEC_MAX_BUFFER5, SeatbeltSandbox;
 var init_seatbelt_sandbox = __esm({
   "src/sandbox/seatbelt-sandbox.ts"() {
     "use strict";
     import_util6 = require("util");
     import_child_process7 = require("child_process");
     import_path12 = require("path");
-    import_fs7 = require("fs");
+    import_fs8 = require("fs");
     init_logger();
     init_sandbox_telemetry();
     execFileAsync5 = (0, import_util6.promisify)(import_child_process7.execFile);
@@ -55712,8 +56158,8 @@ var init_seatbelt_sandbox = __esm({
       constructor(name, config, repoPath, visorDistPath) {
         this.name = name;
         this.config = config;
-        this.repoPath = (0, import_fs7.realpathSync)((0, import_path12.resolve)(repoPath));
-        this.visorDistPath = (0, import_fs7.realpathSync)((0, import_path12.resolve)(visorDistPath));
+        this.repoPath = (0, import_fs8.realpathSync)((0, import_path12.resolve)(repoPath));
+        this.visorDistPath = (0, import_fs8.realpathSync)((0, import_path12.resolve)(visorDistPath));
       }
       /**
        * Check if sandbox-exec binary is available on the system.
@@ -55839,12 +56285,12 @@ var init_seatbelt_sandbox = __esm({
 });
 
 // src/sandbox/sandbox-manager.ts
-var import_path13, import_fs8, SandboxManager;
+var import_path13, import_fs9, SandboxManager;
 var init_sandbox_manager = __esm({
   "src/sandbox/sandbox-manager.ts"() {
     "use strict";
     import_path13 = require("path");
-    import_fs8 = require("fs");
+    import_fs9 = require("fs");
     init_docker_image_sandbox();
     init_docker_compose_sandbox();
     init_cache_volume_manager();
@@ -55866,7 +56312,7 @@ var init_sandbox_manager = __esm({
         this.repoPath = (0, import_path13.resolve)(repoPath);
         this.gitBranch = gitBranch;
         this.cacheManager = new CacheVolumeManager();
-        this.visorDistPath = (0, import_fs8.existsSync)((0, import_path13.join)(__dirname, "index.js")) ? __dirname : (0, import_path13.resolve)((0, import_path13.dirname)(__dirname));
+        this.visorDistPath = (0, import_fs9.existsSync)((0, import_path13.join)(__dirname, "index.js")) ? __dirname : (0, import_path13.resolve)((0, import_path13.dirname)(__dirname));
       }
       /**
        * Resolve which sandbox a check should use.
@@ -55995,12 +56441,12 @@ var init_sandbox_manager = __esm({
 });
 
 // src/utils/file-exclusion.ts
-var import_ignore, fs19, path23, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
+var import_ignore, fs20, path23, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
 var init_file_exclusion = __esm({
   "src/utils/file-exclusion.ts"() {
     "use strict";
     import_ignore = __toESM(require("ignore"));
-    fs19 = __toESM(require("fs"));
+    fs20 = __toESM(require("fs"));
     path23 = __toESM(require("path"));
     DEFAULT_EXCLUSION_PATTERNS = [
       "dist/",
@@ -56046,8 +56492,8 @@ var init_file_exclusion = __esm({
           if (additionalPatterns && additionalPatterns.length > 0) {
             this.gitignore.add(additionalPatterns);
           }
-          if (fs19.existsSync(gitignorePath)) {
-            const rawContent = fs19.readFileSync(gitignorePath, "utf8");
+          if (fs20.existsSync(gitignorePath)) {
+            const rawContent = fs20.readFileSync(gitignorePath, "utf8");
             const gitignoreContent = rawContent.replace(/[\r\n]+/g, "\n").replace(/[\x00-\x09\x0B-\x1F\x7F]/g, "").split("\n").filter((line) => line.length < 1e3).join("\n").trim();
             this.gitignore.add(gitignoreContent);
             if (process.env.VISOR_DEBUG === "true") {
@@ -56079,13 +56525,13 @@ var git_repository_analyzer_exports = {};
 __export(git_repository_analyzer_exports, {
   GitRepositoryAnalyzer: () => GitRepositoryAnalyzer
 });
-var import_simple_git2, path24, fs20, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
+var import_simple_git2, path24, fs21, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
 var init_git_repository_analyzer = __esm({
   "src/git-repository-analyzer.ts"() {
     "use strict";
     import_simple_git2 = require("simple-git");
     path24 = __toESM(require("path"));
-    fs20 = __toESM(require("fs"));
+    fs21 = __toESM(require("fs"));
     init_file_exclusion();
     MAX_PATCH_SIZE = 50 * 1024;
     GitRepositoryAnalyzer = class {
@@ -56381,7 +56827,7 @@ ${file.patch}`).join("\n\n");
         let content;
         let truncated = false;
         try {
-          if (includeContext && status !== "added" && fs20.existsSync(filePath)) {
+          if (includeContext && status !== "added" && fs21.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const result = this.truncatePatch(diff, filename);
@@ -56391,7 +56837,7 @@ ${file.patch}`).join("\n\n");
               additions = lines.filter((line) => line.startsWith("+")).length;
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
-          } else if (status !== "added" && fs20.existsSync(filePath)) {
+          } else if (status !== "added" && fs21.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const lines = diff.split("\n");
@@ -56399,17 +56845,17 @@ ${file.patch}`).join("\n\n");
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
           }
-          if (status === "added" && fs20.existsSync(filePath)) {
+          if (status === "added" && fs21.existsSync(filePath)) {
             try {
-              const stats = fs20.statSync(filePath);
+              const stats = fs21.statSync(filePath);
               if (stats.isFile() && stats.size < 1024 * 1024) {
                 if (includeContext) {
-                  content = fs20.readFileSync(filePath, "utf8");
+                  content = fs21.readFileSync(filePath, "utf8");
                   const result = this.truncatePatch(content, filename);
                   patch = result.patch;
                   truncated = result.truncated;
                 }
-                const fileContent = includeContext ? content : fs20.readFileSync(filePath, "utf8");
+                const fileContent = includeContext ? content : fs21.readFileSync(filePath, "utf8");
                 additions = fileContent.split("\n").length;
               }
             } catch {
@@ -57584,11 +58030,11 @@ var ndjson_sink_exports = {};
 __export(ndjson_sink_exports, {
   NdjsonSink: () => NdjsonSink
 });
-var import_fs9, import_path14, NdjsonSink;
+var import_fs10, import_path14, NdjsonSink;
 var init_ndjson_sink = __esm({
   "src/frontends/ndjson-sink.ts"() {
     "use strict";
-    import_fs9 = __toESM(require("fs"));
+    import_fs10 = __toESM(require("fs"));
     import_path14 = __toESM(require("path"));
     NdjsonSink = class {
       name = "ndjson-sink";
@@ -57610,7 +58056,7 @@ var init_ndjson_sink = __esm({
               payload: envelope && envelope.payload || envelope,
               safe: true
             });
-            await import_fs9.default.promises.appendFile(this.filePath, line + "\n");
+            await import_fs10.default.promises.appendFile(this.filePath, line + "\n");
           } catch (err) {
             ctx.logger.error("[ndjson-sink] Failed to write event:", err);
           }
@@ -59270,7 +59716,8 @@ var init_client = __esm({
             text: m.text,
             bot_id: m.bot_id,
             thread_ts: m.thread_ts,
-            files: Array.isArray(m.files) ? m.files : void 0
+            files: Array.isArray(m.files) ? m.files : void 0,
+            attachments: Array.isArray(m.attachments) ? m.attachments : void 0
           }));
         } catch (e) {
           console.warn(
@@ -70200,12 +70647,12 @@ function taskRowToAgentTask(row) {
     workflow_id: row.workflow_id ?? void 0
   };
 }
-var import_path15, import_fs10, import_crypto8, SqliteTaskStore;
+var import_path15, import_fs11, import_crypto8, SqliteTaskStore;
 var init_task_store = __esm({
   "src/agent-protocol/task-store.ts"() {
     "use strict";
     import_path15 = __toESM(require("path"));
-    import_fs10 = __toESM(require("fs"));
+    import_fs11 = __toESM(require("fs"));
     import_crypto8 = __toESM(require("crypto"));
     init_logger();
     init_types();
@@ -70219,7 +70666,7 @@ var init_task_store = __esm({
       async initialize() {
         const resolvedPath = import_path15.default.resolve(process.cwd(), this.dbPath);
         const dir = import_path15.default.dirname(resolvedPath);
-        import_fs10.default.mkdirSync(dir, { recursive: true });
+        import_fs11.default.mkdirSync(dir, { recursive: true });
         const { createRequire } = require("module");
         const runtimeRequire = createRequire(__filename);
         let Database;
@@ -70517,6 +70964,24 @@ var init_task_store = __esm({
          SET state = 'failed', updated_at = ?, status_message = ?
          WHERE state = 'working'`
         ).run(now, statusMessage);
+        return result.changes;
+      }
+      failStaleTasksByAge(olderThanMs, reason) {
+        const db = this.getDb();
+        const now = nowISO();
+        const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+        const msg = reason || "Task exceeded maximum working duration";
+        const statusMessage = JSON.stringify({
+          message_id: import_crypto8.default.randomUUID(),
+          role: "agent",
+          parts: [{ text: msg }]
+        });
+        const result = db.prepare(
+          `UPDATE agent_tasks
+         SET state = 'failed', updated_at = ?, status_message = ?
+         WHERE state = 'working'
+         AND updated_at <= ?`
+        ).run(now, statusMessage, cutoff);
         return result.changes;
       }
       purgeOldTasks(olderThanMs) {
@@ -71074,13 +71539,13 @@ function resultToArtifacts(checkResults) {
   }
   return artifacts;
 }
-var import_http2, import_https, import_fs11, import_crypto11, A2AFrontend;
+var import_http2, import_https, import_fs12, import_crypto11, A2AFrontend;
 var init_a2a_frontend = __esm({
   "src/agent-protocol/a2a-frontend.ts"() {
     "use strict";
     import_http2 = __toESM(require("http"));
     import_https = __toESM(require("https"));
-    import_fs11 = __toESM(require("fs"));
+    import_fs12 = __toESM(require("fs"));
     import_crypto11 = __toESM(require("crypto"));
     init_logger();
     init_task_store();
@@ -71132,7 +71597,7 @@ var init_a2a_frontend = __esm({
         if (ctx.visorConfig) this._visorConfig = ctx.visorConfig;
         if (this.config.agent_card) {
           const cardPath = this.config.agent_card;
-          const raw = import_fs11.default.readFileSync(cardPath, "utf8");
+          const raw = import_fs12.default.readFileSync(cardPath, "utf8");
           this.agentCard = JSON.parse(raw);
         } else if (this.config.agent_card_inline) {
           this.agentCard = { ...this.config.agent_card_inline };
@@ -71140,8 +71605,8 @@ var init_a2a_frontend = __esm({
         const handler = this.handleRequest.bind(this);
         if (this.config.tls) {
           const tlsOptions = {
-            cert: import_fs11.default.readFileSync(this.config.tls.cert),
-            key: import_fs11.default.readFileSync(this.config.tls.key)
+            cert: import_fs12.default.readFileSync(this.config.tls.cert),
+            key: import_fs12.default.readFileSync(this.config.tls.key)
           };
           this.server = import_https.default.createServer(tlsOptions, handler);
         } else {
@@ -71953,7 +72418,7 @@ function serializeRunState(state) {
     ])
   };
 }
-var path28, fs24, StateMachineExecutionEngine;
+var path28, fs25, StateMachineExecutionEngine;
 var init_state_machine_execution_engine = __esm({
   "src/state-machine-execution-engine.ts"() {
     "use strict";
@@ -71961,7 +72426,7 @@ var init_state_machine_execution_engine = __esm({
     init_logger();
     init_sandbox_manager();
     path28 = __toESM(require("path"));
-    fs24 = __toESM(require("fs"));
+    fs25 = __toESM(require("fs"));
     StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       workingDirectory;
       executionContext;
@@ -72349,7 +72814,7 @@ var init_state_machine_execution_engine = __esm({
                   const checkId = String(ev?.checkId || "unknown");
                   const threadKey = ev?.threadKey || (channel && threadTs ? `${channel}:${threadTs}` : "session");
                   const baseDir = process.env.VISOR_SNAPSHOT_DIR || path28.resolve(process.cwd(), ".visor", "snapshots");
-                  fs24.mkdirSync(baseDir, { recursive: true });
+                  fs25.mkdirSync(baseDir, { recursive: true });
                   const filePath = path28.join(baseDir, `${threadKey}-${checkId}.json`);
                   await this.saveSnapshotToFile(filePath);
                   logger.info(`[Snapshot] Saved run snapshot: ${filePath}`);
@@ -72491,7 +72956,7 @@ var init_state_machine_execution_engine = __esm({
        * Does not include secrets. Intended for debugging and future resume support.
        */
       async saveSnapshotToFile(filePath) {
-        const fs25 = await import("fs/promises");
+        const fs26 = await import("fs/promises");
         const ctx = this._lastContext;
         const runner = this._lastRunner;
         if (!ctx || !runner) {
@@ -72511,14 +72976,14 @@ var init_state_machine_execution_engine = __esm({
           journal: entries,
           requestedChecks: ctx.requestedChecks || []
         };
-        await fs25.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+        await fs26.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
       }
       /**
        * Load a snapshot JSON from file and return it. Resume support can build on this.
        */
       async loadSnapshotFromFile(filePath) {
-        const fs25 = await import("fs/promises");
-        const raw = await fs25.readFile(filePath, "utf8");
+        const fs26 = await import("fs/promises");
+        const raw = await fs26.readFile(filePath, "utf8");
         return JSON.parse(raw);
       }
       /**
