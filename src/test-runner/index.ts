@@ -50,9 +50,6 @@ export interface DiscoverOptions {
 }
 function ensureTestEnvDefaults(): void {
   if (!process.env.VISOR_TEST_MODE) process.env.VISOR_TEST_MODE = 'true';
-  if (!process.env.VISOR_TEST_PROMPT_MAX_CHARS) {
-    process.env.VISOR_TEST_PROMPT_MAX_CHARS = process.env.CI === 'true' ? '4000' : '8000';
-  }
   if (!process.env.VISOR_TEST_HISTORY_LIMIT) {
     process.env.VISOR_TEST_HISTORY_LIMIT = process.env.CI === 'true' ? '200' : '500';
   }
@@ -193,7 +190,6 @@ export async function runSuites(
     noMocksFor?: string[];
     maxParallelSuites?: number;
     maxParallel?: number;
-    promptMaxChars?: number;
   }
 ): Promise<{
   totalSuites: number;
@@ -261,7 +257,6 @@ export async function runSuites(
         noMocks: options.noMocks,
         noMocksFor: options.noMocksFor,
         maxParallel: options.maxParallel,
-        promptMaxChars: options.promptMaxChars,
       });
       perSuite.push({ file: fp, failures: r.failures, results: r.results });
       failedSuites += r.failures > 0 ? 1 : 0;
@@ -373,7 +368,6 @@ export class VisorTestRunner {
     _case: any,
     cfg: any,
     defaultStrict: boolean,
-    defaultPromptCap?: number,
     ghRec?: { error_code?: number; timeout_ms?: number },
     defaultIncludeTags?: string[] | undefined,
     defaultExcludeTags?: string[] | undefined,
@@ -499,11 +493,7 @@ export class VisorTestRunner {
         onPromptCaptured: (info: { step: string; provider: string; prompt: string }) => {
           const k = info.step;
           if (!prompts[k]) prompts[k] = [];
-          const p =
-            defaultPromptCap && info.prompt.length > defaultPromptCap
-              ? info.prompt.slice(0, defaultPromptCap)
-              : info.prompt;
-          prompts[k].push(p);
+          prompts[k].push(info.prompt);
         },
         // In noMocks mode, always return undefined to let real providers execute
         // In noMocksFor mode, skip mocks for steps matching excluded provider types
@@ -890,7 +880,6 @@ export class VisorTestRunner {
       noMocks?: boolean;
       noMocksFor?: string[];
       maxParallel?: number;
-      promptMaxChars?: number;
     }
   ): Promise<{
     failures: number;
@@ -961,14 +950,6 @@ export class VisorTestRunner {
     const ghRec = defaultsAny?.github_recorder as
       | { error_code?: number; timeout_ms?: number }
       | undefined;
-    const envPromptCapRaw = process.env.VISOR_TEST_PROMPT_MAX_CHARS;
-    const envPromptCap = envPromptCapRaw ? parseInt(envPromptCapRaw, 10) : undefined;
-    const defaultPromptCap: number | undefined =
-      options.promptMaxChars ??
-      (typeof defaultsAny?.prompt_max_chars === 'number'
-        ? defaultsAny.prompt_max_chars
-        : undefined) ??
-      (Number.isFinite(envPromptCap as number) ? (envPromptCap as number) : undefined);
     const caseMaxParallel =
       options.maxParallel ||
       (typeof defaultsAny?.max_parallel === 'number' ? defaultsAny.max_parallel : undefined) ||
@@ -1126,7 +1107,6 @@ export class VisorTestRunner {
             cfg,
             defaultStrict,
             options.bail || false,
-            defaultPromptCap,
             stageFilter,
             noMocksMode
           );
@@ -1174,7 +1154,6 @@ export class VisorTestRunner {
         _case,
         cfgLocal,
         defaultStrict,
-        defaultPromptCap,
         ghRec,
         defaultIncludeTags,
         defaultExcludeTags,
@@ -1577,7 +1556,6 @@ export class VisorTestRunner {
     cfg: any,
     defaultStrict: boolean,
     bail: boolean,
-    promptCap?: number,
     stageFilter?: string,
     noMocks?: boolean
   ): Promise<{ failures: number; stages: Array<{ name: string; errors?: string[] }> }> {
@@ -1651,7 +1629,6 @@ export class VisorTestRunner {
           recorder,
           cfg,
           prompts,
-          promptCap,
           this.mapEventFromFixtureName.bind(this),
           this.computeChecksToRun.bind(this),
           this.printStageHeader.bind(this),
@@ -2022,7 +1999,6 @@ export async function runMvp(options: {
   only?: string;
   bail?: boolean;
   maxParallel?: number;
-  promptMaxChars?: number;
 }): Promise<number> {
   const runner = new VisorTestRunner();
   const testsPath = runner.resolveTestsPath(options.testsPath);
@@ -2031,7 +2007,6 @@ export async function runMvp(options: {
     only: options.only,
     bail: !!options.bail,
     maxParallel: options.maxParallel,
-    promptMaxChars: options.promptMaxChars,
   });
   return failures;
 }

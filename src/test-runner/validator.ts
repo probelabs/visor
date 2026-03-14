@@ -99,7 +99,6 @@ const schema: any = {
                 baseURL: { type: 'string' },
               },
             },
-            prompt_max_chars: { type: 'number' },
             max_parallel: { type: 'number' },
           },
         },
