@@ -965,10 +965,10 @@ export class VisorTestRunner {
     const envPromptCap = envPromptCapRaw ? parseInt(envPromptCapRaw, 10) : undefined;
     const defaultPromptCap: number | undefined =
       options.promptMaxChars ??
-      (Number.isFinite(envPromptCap as number) ? (envPromptCap as number) : undefined) ??
       (typeof defaultsAny?.prompt_max_chars === 'number'
         ? defaultsAny.prompt_max_chars
-        : undefined);
+        : undefined) ??
+      (Number.isFinite(envPromptCap as number) ? (envPromptCap as number) : undefined);
     const caseMaxParallel =
       options.maxParallel ||
       (typeof defaultsAny?.max_parallel === 'number' ? defaultsAny.max_parallel : undefined) ||

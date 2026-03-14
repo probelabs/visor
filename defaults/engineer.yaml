@@ -446,6 +446,7 @@ tests:
   defaults:
     strict: true
     ai_provider: mock
+    prompt_max_chars: 8000
 
   cases:
     - name: pre-resolved-projects
