@@ -584,7 +584,7 @@ export class SqliteTaskStore implements TaskStore {
         `UPDATE agent_tasks
          SET state = 'failed', updated_at = ?, status_message = ?
          WHERE state = 'working'
-         AND updated_at < ?`
+         AND updated_at <= ?`
       )
       .run(now, statusMessage, cutoff);
     return result.changes;
