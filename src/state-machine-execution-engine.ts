@@ -63,7 +63,10 @@ export class StateMachineExecutionEngine {
       logger.info('Analyzing local git repository...');
       const repositoryInfo = await gitAnalyzer.analyzeRepository();
 
-      if (!repositoryInfo.isGitRepository) {
+      // When a conversation context is present (TUI, SDK chat, Telegram, etc.),
+      // git is not required — these are chat/assistant workflows, not code reviews.
+      const hasConversation = !!(this.executionContext as any)?.conversation;
+      if (!repositoryInfo.isGitRepository && !hasConversation) {
         return this.createErrorResult(
           repositoryInfo,
           'Not a git repository or no changes found',
