@@ -78833,7 +78833,8 @@ var init_state_machine_execution_engine = __esm({
           const gitAnalyzer = new GitRepositoryAnalyzer2(options.workingDirectory);
           logger.info("Analyzing local git repository...");
           const repositoryInfo = await gitAnalyzer.analyzeRepository();
-          if (!repositoryInfo.isGitRepository) {
+          const hasConversation = !!this.executionContext?.conversation;
+          if (!repositoryInfo.isGitRepository && !hasConversation) {
             return this.createErrorResult(
               repositoryInfo,
               "Not a git repository or no changes found",
