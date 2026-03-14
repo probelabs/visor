@@ -592,6 +592,53 @@ describe('SqliteTaskStore', () => {
     });
   });
 
+  describe('failStaleTasksByAge', () => {
+    it('should fail working tasks older than the age threshold', () => {
+      const msg = makeMessage();
+      const t1 = store.createTask({ contextId: 'ctx1', requestMessage: msg });
+      const t2 = store.createTask({ contextId: 'ctx2', requestMessage: msg });
+
+      store.updateTaskState(t1.id, 'working');
+      store.updateTaskState(t2.id, 'working');
+
+      // With 0ms threshold, both should be stale immediately
+      const count = store.failStaleTasksByAge(0, 'exceeded max duration');
+      expect(count).toBe(2);
+      expect(store.getTask(t1.id)!.status.state).toBe('failed');
+      expect(store.getTask(t2.id)!.status.state).toBe('failed');
+      expect(store.getTask(t2.id)!.status.message?.parts?.[0]).toHaveProperty(
+        'text',
+        'exceeded max duration'
+      );
+    });
+
+    it('should not fail recently started working tasks', () => {
+      const msg = makeMessage();
+      const task = store.createTask({ contextId: 'ctx', requestMessage: msg });
+      store.updateTaskState(task.id, 'working');
+
+      // With a large threshold, task should not be stale
+      const count = store.failStaleTasksByAge(86_400_000);
+      expect(count).toBe(0);
+      expect(store.getTask(task.id)!.status.state).toBe('working');
+    });
+
+    it('should not affect submitted or completed tasks', () => {
+      const msg = makeMessage();
+      const t1 = store.createTask({ contextId: 'ctx1', requestMessage: msg });
+      const t2 = store.createTask({ contextId: 'ctx2', requestMessage: msg });
+
+      // t1 stays submitted, t2 goes to completed
+      store.updateTaskState(t2.id, 'working');
+      store.updateTaskState(t2.id, 'completed');
+
+      const count = store.failStaleTasksByAge(0);
+      expect(count).toBe(0);
+      expect(store.getTask(t1.id)!.status.state).toBe('submitted');
+      expect(store.getTask(t2.id)!.status.state).toBe('completed');
+    });
+  });
+
   describe('purgeOldTasks', () => {
     it('should delete terminal tasks older than threshold', () => {
       const msg = makeMessage();

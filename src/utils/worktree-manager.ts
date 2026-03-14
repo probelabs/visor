@@ -138,8 +138,9 @@ export class WorktreeManager {
       // Verify the bare repo has the correct remote URL to prevent using corrupted repos
       const verifyResult = await this.verifyBareRepoRemote(bareRepoPath, repoUrl);
       if (verifyResult === 'timeout') {
-        // Timeout during verification - use stale cache to avoid hanging on re-clone
-        logger.info(`Using stale bare repository (verification timed out): ${bareRepoPath}`);
+        // Timeout during verification — still try to update refs so we don't serve stale data
+        logger.warn(`Bare repo verification timed out, attempting ref update: ${bareRepoPath}`);
+        await this.updateBareRepo(bareRepoPath);
         return bareRepoPath;
       } else if (verifyResult === false) {
         logger.warn(
@@ -200,26 +201,56 @@ export class WorktreeManager {
   }
 
   /**
-   * Update bare repository refs
+   * Update bare repository refs.
+   *
+   * Retries once on failure to handle transient network issues.
+   * If the bare repo is shallow, unshallow it first so that branch-tip
+   * fetches always succeed.
    */
   private async updateBareRepo(bareRepoPath: string): Promise<void> {
     logger.debug(`Updating bare repository: ${bareRepoPath}`);
 
+    // Unshallow if this is a shallow bare clone — shallow repos can't
+    // reliably fetch branch tips that are outside the original depth.
     try {
-      const updateCmd = `git -C ${this.escapeShellArg(bareRepoPath)} remote update --prune`;
-      const result = await this.executeGitCommand(updateCmd, { timeout: 60000 }); // 1 minute timeout
-
-      if (result.exitCode !== 0) {
-        logger.warn(`Failed to update bare repository: ${result.stderr}`);
-        // Don't throw - we can continue with stale refs
-      } else {
-        logger.debug(`Successfully updated bare repository`);
+      const isShallowCmd = `git -C ${this.escapeShellArg(bareRepoPath)} rev-parse --is-shallow-repository`;
+      const isShallowResult = await this.executeGitCommand(isShallowCmd, { timeout: 10000 });
+      if (isShallowResult.exitCode === 0 && isShallowResult.stdout.trim() === 'true') {
+        logger.info(`Unshallowing bare repository to ensure fresh refs: ${bareRepoPath}`);
+        const unshallowCmd = `git -C ${this.escapeShellArg(bareRepoPath)} fetch --unshallow origin`;
+        await this.executeGitCommand(unshallowCmd, { timeout: 120000 });
       }
     } catch (error) {
-      // Handle timeout or other errors gracefully - we can continue with stale refs
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      logger.warn(`Failed to update bare repository (will use stale refs): ${errorMessage}`);
+      // Non-fatal: if unshallow fails we still try the normal update
+      logger.debug(`Unshallow attempt failed (non-fatal): ${error}`);
     }
+
+    // Try up to 2 attempts for the remote update
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const updateCmd = `git -C ${this.escapeShellArg(bareRepoPath)} fetch --all --prune --force`;
+        const result = await this.executeGitCommand(updateCmd, { timeout: 90000 });
+
+        if (result.exitCode === 0) {
+          logger.debug(`Successfully updated bare repository`);
+          return;
+        }
+
+        logger.warn(`Bare repo update attempt ${attempt}/2 failed: ${result.stderr}`);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.warn(`Bare repo update attempt ${attempt}/2 error: ${errorMessage}`);
+      }
+
+      if (attempt < 2) {
+        // Brief pause before retry
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
+
+    // Both attempts failed — log a warning but don't throw.
+    // fetchRef() will also try to fetch the specific ref, giving another chance.
+    logger.warn(`Failed to update bare repository after 2 attempts (will rely on per-ref fetch)`);
   }
 
   /**
@@ -363,6 +394,10 @@ export class WorktreeManager {
       worktreePath = this.validatePath(options.workingDirectory);
     }
 
+    // Flag: set to true when a stale worktree for a common branch (main/master)
+    // fails to refresh — triggers removal + fresh creation instead of serving stale data
+    let refreshFailedNeedsRecreate = false;
+
     // Check if worktree already exists
     if (fs.existsSync(worktreePath)) {
       logger.debug(`Worktree already exists: ${worktreePath}`);
@@ -421,23 +456,43 @@ export class WorktreeManager {
             }
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            logger.warn(`Failed to refresh worktree, will reuse existing: ${errorMessage}`);
+            const commonBranches = ['main', 'master', 'develop', 'dev'];
+            if (commonBranches.includes(ref)) {
+              logger.error(
+                `Failed to refresh worktree for default branch '${ref}': ${errorMessage}. ` +
+                  `Refusing to serve stale worktree — removing and re-creating.`
+              );
+              // Remove stale worktree and fall through to create a fresh one below
+              try {
+                const rmCmd = `git -C ${this.escapeShellArg(bareRepoPath)} worktree remove ${this.escapeShellArg(worktreePath)} --force`;
+                await this.executeGitCommand(rmCmd, { timeout: 30000 });
+                await fsp.rm(worktreePath, { recursive: true, force: true });
+              } catch (rmErr) {
+                logger.debug(`Cleanup of stale worktree failed: ${rmErr}`);
+              }
+              // Don't return — fall through to "create new worktree" at end of method
+              refreshFailedNeedsRecreate = true;
+            } else {
+              logger.warn(`Failed to refresh worktree, will reuse existing: ${errorMessage}`);
+            }
           }
 
-          // Same ref - reuse existing worktree (already up to date or refresh failed)
-          if (options.clean) {
-            logger.debug(`Cleaning existing worktree`);
-            await this.cleanWorktree(worktreePath, metadata.commit);
+          if (!refreshFailedNeedsRecreate) {
+            // Same ref - reuse existing worktree (already up to date or refresh failed)
+            if (options.clean) {
+              logger.debug(`Cleaning existing worktree`);
+              await this.cleanWorktree(worktreePath, metadata.commit);
+            }
+            this.activeWorktrees.set(worktreeId, metadata);
+            return {
+              id: worktreeId,
+              path: worktreePath,
+              ref: metadata.ref,
+              commit: metadata.commit,
+              metadata,
+              locked: false,
+            };
           }
-          this.activeWorktrees.set(worktreeId, metadata);
-          return {
-            id: worktreeId,
-            path: worktreePath,
-            ref: metadata.ref,
-            commit: metadata.commit,
-            metadata,
-            locked: false,
-          };
         } else {
           // Different ref requested - update the worktree to the new ref
           logger.info(
@@ -518,10 +573,18 @@ export class WorktreeManager {
     // can have multiple worktrees for the same branch without git refusing
     // with "branch X is already checked out".
     const fetched = await this.fetchRef(bareRepoPath, ref);
-    const commit = await this.getCommitShaForRef(bareRepoPath, ref);
     if (!fetched) {
-      logger.warn(`Using cached ref ${ref}; fetch failed`);
+      const commonBranches = ['main', 'master', 'develop', 'dev'];
+      if (commonBranches.includes(ref)) {
+        logger.warn(
+          `Failed to fetch latest '${ref}' — will attempt to use cached ref. ` +
+            `Check network connectivity and repository access.`
+        );
+      } else {
+        logger.warn(`Using cached ref ${ref}; fetch failed (non-default branch, proceeding)`);
+      }
     }
+    const commit = await this.getCommitShaForRef(bareRepoPath, ref);
 
     // Prune stale worktree entries before creating a new one.
     // This handles the case where a worktree directory was manually deleted
@@ -589,7 +652,10 @@ export class WorktreeManager {
   }
 
   /**
-   * Fetch a specific ref in bare repository
+   * Fetch a specific ref in bare repository.
+   *
+   * Uses --force to overwrite local refs that may have diverged (e.g. after
+   * a force-push on main). Retries once on failure.
    */
   private async fetchRef(bareRepoPath: string, ref: string): Promise<boolean> {
     // Validate ref (already validated in createWorktree, but double-check for safety)
@@ -597,14 +663,26 @@ export class WorktreeManager {
 
     logger.debug(`Fetching ref: ${ref}`);
 
-    // Try to fetch the ref (might be a PR ref or branch)
-    const fetchCmd = `git -C ${this.escapeShellArg(bareRepoPath)} fetch origin ${this.escapeShellArg(ref + ':' + ref)} 2>&1`;
-    const result = await this.executeGitCommand(fetchCmd, { timeout: 60000 });
-    if (result.exitCode !== 0) {
-      logger.warn(`Failed to fetch ref ${ref}: ${result.stderr}`);
-      return false;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      // Fetch into refs/remotes/origin/<ref> instead of refs/heads/<ref>.
+      // Using refs/heads/<ref> conflicts with worktrees: git refuses to update
+      // a local branch that exists in any worktree's branch namespace, even when
+      // the worktree is in detached HEAD mode.
+      const fetchCmd = `git -C ${this.escapeShellArg(bareRepoPath)} fetch --force origin ${this.escapeShellArg(ref + ':refs/remotes/origin/' + ref)}`;
+      const result = await this.executeGitCommand(fetchCmd, { timeout: 60000 });
+      if (result.exitCode === 0) {
+        return true;
+      }
+
+      logger.warn(
+        `Failed to fetch ref ${ref} (attempt ${attempt}/2): ${result.stderr || result.stdout}`
+      );
+      if (attempt < 2) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
     }
-    return true;
+
+    return false;
   }
 
   /**
@@ -708,36 +786,42 @@ export class WorktreeManager {
    * falls back to the other common default branch name.
    */
   private async getCommitShaForRef(bareRepoPath: string, ref: string): Promise<string> {
-    const cmd = `git -C ${this.escapeShellArg(bareRepoPath)} rev-parse ${this.escapeShellArg(ref)}`;
-    const result = await this.executeGitCommand(cmd);
+    // Prefer refs/remotes/origin/<ref> — that's where fetchRef writes.
+    // Fall back to the bare ref name for tags, SHAs, and legacy local branches.
+    const candidates = [`refs/remotes/origin/${ref}`, ref];
 
-    if (result.exitCode !== 0) {
-      // If main/master doesn't exist, try the other common default branch
-      const fallbackRefs: Record<string, string> = {
-        main: 'master',
-        master: 'main',
-      };
-
-      const fallbackRef = fallbackRefs[ref];
-      if (fallbackRef) {
-        logger.debug(`Ref '${ref}' not found, trying fallback '${fallbackRef}'`);
-
-        // Fetch the fallback ref
-        await this.fetchRef(bareRepoPath, fallbackRef);
-
-        const fallbackCmd = `git -C ${this.escapeShellArg(bareRepoPath)} rev-parse ${this.escapeShellArg(fallbackRef)}`;
-        const fallbackResult = await this.executeGitCommand(fallbackCmd);
-
-        if (fallbackResult.exitCode === 0) {
-          logger.info(`Using fallback branch '${fallbackRef}' instead of '${ref}'`);
-          return fallbackResult.stdout.trim();
-        }
+    for (const candidate of candidates) {
+      const cmd = `git -C ${this.escapeShellArg(bareRepoPath)} rev-parse ${this.escapeShellArg(candidate)}`;
+      const result = await this.executeGitCommand(cmd);
+      if (result.exitCode === 0) {
+        return result.stdout.trim();
       }
-
-      throw new Error(`Failed to get commit SHA for ref ${ref}: ${result.stderr}`);
     }
 
-    return result.stdout.trim();
+    // If main/master doesn't exist, try the other common default branch
+    const fallbackRefs: Record<string, string> = {
+      main: 'master',
+      master: 'main',
+    };
+
+    const fallbackRef = fallbackRefs[ref];
+    if (fallbackRef) {
+      logger.debug(`Ref '${ref}' not found, trying fallback '${fallbackRef}'`);
+
+      // Fetch the fallback ref
+      await this.fetchRef(bareRepoPath, fallbackRef);
+
+      for (const candidate of [`refs/remotes/origin/${fallbackRef}`, fallbackRef]) {
+        const cmd = `git -C ${this.escapeShellArg(bareRepoPath)} rev-parse ${this.escapeShellArg(candidate)}`;
+        const result = await this.executeGitCommand(cmd);
+        if (result.exitCode === 0) {
+          logger.info(`Using fallback branch '${fallbackRef}' instead of '${ref}'`);
+          return result.stdout.trim();
+        }
+      }
+    }
+
+    throw new Error(`Failed to get commit SHA for ref ${ref}`);
   }
 
   /**

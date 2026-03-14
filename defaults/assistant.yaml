@@ -536,6 +536,7 @@ steps:
       const knowledgeParts = [];
       const bashAllow = [];
       const bashDeny = [];
+      const extraAllowedFolders = [];
       let bashEnabled = false;
       let executePlanEnabled = false;
 
@@ -685,6 +686,15 @@ steps:
               }
             }
           }
+
+          // Collect extra allowed folders (e.g. /tmp for screenshot tools)
+          if (Array.isArray(skill.allowed_folders)) {
+            for (let j = 0; j < skill.allowed_folders.length; j++) {
+              if (extraAllowedFolders.indexOf(skill.allowed_folders[j]) === -1) {
+                extraAllowedFolders.push(skill.allowed_folders[j]);
+              }
+            }
+          }
         }
       }
 
@@ -747,7 +757,8 @@ steps:
         bash_config: {
           allow: bashAllow,
           deny: bashDeny
-        }
+        },
+        extra_allowed_folders: extraAllowedFolders
       };
 
   # -------------------------------------------------------------------------
@@ -762,6 +773,20 @@ steps:
       - "outputs['build-config'] != null"
     guarantee: "(output?.text ?? '').length > 0"
     ai:
+      # ── Timeout Configuration ──────────────────────────────────────────
+      # Visor hard kill: 2 hours (safety net, always active)
+      timeout: 7200000
+      # Probe soft timeout: 30 minutes — observer fires here
+      ai_timeout: 1800000
+      # Negotiated: independent observer LLM decides extensions
+      timeout_behavior: negotiated
+      # Budget: 60 min total (3 × 20 min extensions → up to 1.5h total)
+      negotiated_timeout_budget: 3600000
+      negotiated_timeout_max_requests: 3
+      negotiated_timeout_max_per_request: 1200000
+      # Wind-down for sub-workflows (engineer, code-talk) after stop
+      graceful_stop_deadline: 30000
+      # ──────────────────────────────────────────────────────────────────
       max_iterations: "{{ inputs.max_iterations }}"
       enableDelegate: "{{ inputs.enableDelegate }}"
       enableTasks: "{{ inputs.enableTasks }}"
@@ -820,6 +845,8 @@ steps:
     ai_mcp_servers_js: |
       // Return the pre-built MCP servers from build-config
       return outputs['build-config']?.mcp_servers ?? {};
+    ai_extra_allowed_folders_js: |
+      return outputs['build-config']?.extra_allowed_folders ?? [];
     ai_bash_config_js: |
       return outputs['build-config']?.bash_config ?? {};
     schema:

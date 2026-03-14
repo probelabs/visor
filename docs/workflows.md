@@ -12,6 +12,7 @@ Visor supports defining reusable workflows that can be used as building blocks i
 - [Advanced Features](#advanced-features)
 - [Examples](#examples)
 - [Best Practices](#best-practices)
+- [Graceful Stop and Timeouts](#graceful-stop-and-timeouts)
 
 ## Overview
 
@@ -686,6 +687,34 @@ This will show:
 - Step execution order
 - Output computation values
 
+## Graceful Stop and Timeouts
+
+When workflows are used as MCP tools for AI agents (via `ai_custom_tools`), they participate in the agent's timeout lifecycle. If the parent agent is using [negotiated timeouts](./timeouts.md#negotiated-timeout), the `graceful_stop` MCP tool will:
+
+1. Shorten the shared execution deadline for all active sub-workflow tool calls.
+2. Signal running ProbeAgent sessions within sub-workflows to wind down.
+
+This allows sub-workflows to produce partial results rather than being abruptly killed. Configure `graceful_stop_deadline` on the parent AI step to control the wind-down window.
+
+```yaml
+imports:
+  - ./workflows/engineer.yaml
+
+steps:
+  assistant:
+    type: ai
+    prompt: "Help the user with their request"
+    ai:
+      ai_timeout: 60000
+      timeout_behavior: negotiated
+      negotiated_timeout_budget: 120000
+      graceful_stop_deadline: 5000       # Sub-workflows get 5s to wind down
+    ai_custom_tools:
+      - workflow: engineer
+```
+
+See [Timeouts: Negotiated Timeout](./timeouts.md#negotiated-timeout) and [Advanced AI: Negotiated Timeout](./advanced-ai.md#negotiated-timeout-and-graceful-stop) for full details.
+
 ## See Also
 
 - [Workflow Creation Guide](workflow-creation-guide.md) - Comprehensive guide with all check types and patterns
@@ -693,3 +722,4 @@ This will show:
 - [Event Triggers](event-triggers.md) - Configuring when workflows run
 - [Liquid Templates](liquid-templates.md) - Template syntax for dynamic values
 - [Debugging](debugging.md) - Debugging techniques for workflows
+- [Timeouts](timeouts.md) - Timeout behavior including negotiated timeout for sub-workflows

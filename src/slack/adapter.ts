@@ -15,6 +15,7 @@ interface SlackMessage {
   bot_id?: string;
   thread_ts?: string;
   files?: any[];
+  attachments?: any[];
 }
 
 export class SlackAdapter {
@@ -44,7 +45,14 @@ export class SlackAdapter {
   async fetchConversation(
     channel: string,
     threadTs: string,
-    currentMessage: { ts: string; user: string; text: string; timestamp: number; files?: any[] }
+    currentMessage: {
+      ts: string;
+      user: string;
+      text: string;
+      timestamp: number;
+      files?: any[];
+      attachments?: any[];
+    }
   ): Promise<ConversationContext> {
     const threadId = `${channel}:${threadTs}`;
     const cached = this.cache.get(threadId);
@@ -59,6 +67,7 @@ export class SlackAdapter {
       user: currentMessage.user,
       text: currentMessage.text,
       files: currentMessage.files,
+      attachments: currentMessage.attachments,
     });
     return this.buildConversationContext(
       channel,
@@ -87,12 +96,49 @@ export class SlackAdapter {
     }
   }
 
+  /**
+   * Extract readable text from Slack message attachments (used by integrations
+   * like Logz.io, PagerDuty, Datadog, etc. that send structured attachments
+   * with no top-level text).
+   */
+  private extractAttachmentText(attachments: any[]): string {
+    const parts: string[] = [];
+    for (const att of attachments) {
+      // Collect the key text fields from each attachment
+      if (att.pretext) parts.push(att.pretext);
+      if (att.author_name) parts.push(att.author_name);
+      if (att.title) parts.push(att.title);
+      if (att.text) parts.push(att.text);
+      if (att.footer) parts.push(att.footer);
+      // Structured fields (e.g. alert samples, key-value pairs)
+      if (Array.isArray(att.fields)) {
+        for (const field of att.fields) {
+          const title = field.title ? `${field.title}: ` : '';
+          if (field.value) parts.push(`${title}${field.value}`);
+        }
+      }
+    }
+    return parts.join('\n');
+  }
+
   normalizeSlackMessage(msg: SlackMessage): NormalizedMessage {
     const isBot = msg.bot_id !== undefined || (msg.user && msg.user === this.botUserId);
     const origin = isBot ? 'visor' : undefined;
+
+    // Build message text: use top-level text, fall back to attachment content
+    let text = msg.text || '';
+    if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
+      const attachmentText = this.extractAttachmentText(msg.attachments);
+      if (attachmentText) {
+        // If there's no top-level text, use attachment text directly;
+        // otherwise append it so both are visible to the AI
+        text = text ? `${text}\n\n${attachmentText}` : attachmentText;
+      }
+    }
+
     const normalized: NormalizedMessage = {
       role: isBot ? 'bot' : 'user',
-      text: msg.text || '',
+      text,
       timestamp: msg.ts,
       origin,
       user: msg.user ? String(msg.user) : undefined,

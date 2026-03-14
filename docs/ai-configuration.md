@@ -181,6 +181,37 @@ steps:
     prompt: "Investigate the issue and gather evidence from code."
 ```
 
+#### Timeout Behavior and Negotiated Timeout
+
+Control how AI agents handle timeouts, including observer-based negotiated extensions for long-running agents with sub-workflow tools.
+
+Accepted keys (under `ai:`):
+- `ai_timeout`: Probe-level soft timeout in milliseconds (separate from Visor's hard `timeout`)
+- `timeout_behavior`: `'graceful'` (default) or `'negotiated'`
+- `negotiated_timeout_budget`: Total extra time the observer can grant (ms)
+- `negotiated_timeout_max_requests`: Max extension requests before hard stop
+- `negotiated_timeout_max_per_request`: Max time per extension (ms)
+- `graceful_stop_deadline`: Wind-down window for sub-agents after stop (ms)
+
+```yaml
+steps:
+  long-running-agent:
+    type: ai
+    prompt: "Perform deep analysis using sub-workflow tools"
+    ai:
+      timeout: 300000                          # Visor hard kill (5 min)
+      ai_timeout: 60000                        # Probe soft timeout (1 min)
+      timeout_behavior: negotiated             # Use observer LLM
+      negotiated_timeout_budget: 120000        # 2 min total extra time
+      negotiated_timeout_max_requests: 3       # Max 3 extensions
+      negotiated_timeout_max_per_request: 60000  # Max 1 min each
+      graceful_stop_deadline: 5000             # 5s wind-down for sub-agents
+```
+
+**Important**: The observer works in minute granularity. Use values ≥ 60000ms (1 min) for budget fields.
+
+See [Timeouts: Negotiated Timeout](./timeouts.md#negotiated-timeout) for full details on the observer flow and `graceful_stop` MCP tool.
+
 #### AWS Bedrock Specific Configuration
 
 Complete example for Bedrock with all options:

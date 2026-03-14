@@ -222,6 +222,7 @@ export class SlackClient {
       bot_id?: string;
       thread_ts?: string;
       files?: any[];
+      attachments?: any[];
     }>
   > {
     try {
@@ -253,6 +254,7 @@ export class SlackClient {
         bot_id: m.bot_id,
         thread_ts: m.thread_ts,
         files: Array.isArray(m.files) ? m.files : undefined,
+        attachments: Array.isArray(m.attachments) ? m.attachments : undefined,
       }));
     } catch (e) {
       console.warn(

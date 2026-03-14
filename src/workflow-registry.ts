@@ -176,7 +176,38 @@ export class WorkflowRegistry {
       }
 
       // Handle both single workflow and multiple workflows
-      const workflows: WorkflowDefinition[] = Array.isArray(data) ? data : [data];
+      const rawWorkflows: any[] = Array.isArray(data) ? data : [data];
+
+      // Resolve `extends` for each workflow before registration.
+      // When a workflow file declares `extends: api.yaml`, we load the base
+      // file and deep-merge its fields (e.g. tools) into the workflow so that
+      // nested MCP steps can find the API tool definitions.
+      const workflows: WorkflowDefinition[] = [];
+      for (const raw of rawWorkflows) {
+        if (raw && typeof raw === 'object' && typeof raw.extends === 'string') {
+          const basePath = importBasePath || path.dirname(resolvedSource || source);
+          const baseResolved = path.isAbsolute(raw.extends)
+            ? raw.extends
+            : path.resolve(basePath, raw.extends);
+          try {
+            const baseContent = await fs.readFile(baseResolved, 'utf-8');
+            const baseData = this.parseWorkflowContent(baseContent, baseResolved);
+            // Deep-merge: base fields first, then overlay with current workflow (current wins)
+            const { extends: _extends, ...rest } = raw;
+            void _extends; // consumed by destructuring
+            const merged = this.deepMergeWorkflow(baseData, rest);
+            workflows.push(merged);
+          } catch (err) {
+            logger.warn(
+              `[WorkflowRegistry] Failed to resolve extends '${raw.extends}' for workflow '${raw.id || '?'}': ${err instanceof Error ? err.message : err}`
+            );
+            // Fall back to the raw workflow without extends resolution
+            workflows.push(raw);
+          }
+        } else {
+          workflows.push(raw);
+        }
+      }
 
       for (const workflow of workflows) {
         const workflowImports = (workflow as any)?.imports;
@@ -485,6 +516,40 @@ export class WorkflowRegistry {
         );
       }
     }
+  }
+
+  /**
+   * Deep-merge a base workflow config with an override.
+   * Objects merge recursively (override wins for leaf values); arrays/primitives override.
+   */
+  private deepMergeWorkflow(base: any, override: any): any {
+    if (
+      !base ||
+      !override ||
+      typeof base !== 'object' ||
+      typeof override !== 'object' ||
+      Array.isArray(base) ||
+      Array.isArray(override)
+    ) {
+      return override !== undefined ? override : base;
+    }
+    const result: any = { ...base };
+    for (const key of Object.keys(override)) {
+      if (
+        key in result &&
+        result[key] &&
+        typeof result[key] === 'object' &&
+        !Array.isArray(result[key]) &&
+        override[key] &&
+        typeof override[key] === 'object' &&
+        !Array.isArray(override[key])
+      ) {
+        result[key] = this.deepMergeWorkflow(result[key], override[key]);
+      } else {
+        result[key] = override[key];
+      }
+    }
+    return result;
   }
 
   /**

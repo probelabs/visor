@@ -549,6 +549,181 @@ steps:
     });
   });
 
+  describe('extends resolution', () => {
+    it('should merge tools from base file when workflow uses extends', async () => {
+      const basePath = '/repo/workflows/slack';
+
+      // Base file (api.yaml) with tools
+      const apiYaml = yaml.dump({
+        tools: {
+          'slack-bot-api': {
+            type: 'api',
+            name: 'slack-bot-api',
+            headers: { Authorization: 'Bearer ${SLACK_BOT_TOKEN}' },
+            spec: {
+              openapi: '3.0.0',
+              info: { title: 'Slack Bot API', version: '1.0.0' },
+              servers: [{ url: 'https://slack.com/api' }],
+              paths: {
+                '/files.info': {
+                  get: {
+                    operationId: 'files_info',
+                    parameters: [
+                      { name: 'file', in: 'query', required: true, schema: { type: 'string' } },
+                    ],
+                    responses: { '200': { description: 'OK' } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      // Workflow file that extends api.yaml
+      const workflowYaml = yaml.dump({
+        extends: 'api.yaml',
+        id: 'slack-download-file',
+        name: 'Slack Download File',
+        steps: {
+          'parse-file-id': { type: 'script', content: 'return { file_id: inputs.file_id }' },
+          'file-info': {
+            type: 'mcp',
+            transport: 'custom',
+            method: 'files_info',
+            depends_on: ['parse-file-id'],
+          },
+        },
+      });
+
+      const workflowPath = path.resolve(basePath, 'slack-download-file.yaml');
+      const apiPath = path.resolve(basePath, 'api.yaml');
+
+      (fs.promises.readFile as jest.Mock).mockImplementation((filePath: string) => {
+        if (filePath === workflowPath) return Promise.resolve(workflowYaml);
+        if (filePath === apiPath) return Promise.resolve(apiYaml);
+        return Promise.reject(new Error(`Unexpected path: ${filePath}`));
+      });
+
+      const results = await registry.import('./slack-download-file.yaml', { basePath });
+
+      expect(results).toHaveLength(1);
+      expect(results[0].valid).toBe(true);
+      expect(registry.has('slack-download-file')).toBe(true);
+
+      const workflow = registry.get('slack-download-file');
+      expect(workflow).toBeDefined();
+      // Tools from api.yaml should be merged into the workflow
+      expect((workflow as any).tools).toBeDefined();
+      expect((workflow as any).tools['slack-bot-api']).toBeDefined();
+      expect((workflow as any).tools['slack-bot-api'].type).toBe('api');
+    });
+
+    it('should let workflow fields override base fields', async () => {
+      const basePath = '/repo';
+
+      const baseYaml = yaml.dump({
+        name: 'Base Name',
+        description: 'Base description',
+        tools: { tool1: { type: 'api', name: 'tool1' } },
+      });
+
+      const workflowYaml = yaml.dump({
+        extends: 'base.yaml',
+        id: 'override-test',
+        name: 'Override Name',
+        steps: { step1: { type: 'ai', prompt: 'Test' } },
+      });
+
+      (fs.promises.readFile as jest.Mock).mockImplementation((filePath: string) => {
+        if (filePath === path.resolve(basePath, 'workflow.yaml'))
+          return Promise.resolve(workflowYaml);
+        if (filePath === path.resolve(basePath, 'base.yaml')) return Promise.resolve(baseYaml);
+        return Promise.reject(new Error(`Unexpected path: ${filePath}`));
+      });
+
+      const results = await registry.import('./workflow.yaml', { basePath });
+
+      expect(results).toHaveLength(1);
+      expect(results[0].valid).toBe(true);
+
+      const workflow = registry.get('override-test');
+      // Workflow's own name should override base
+      expect(workflow?.name).toBe('Override Name');
+      // Base tools should still be present
+      expect((workflow as any).tools).toBeDefined();
+      expect((workflow as any).tools.tool1.type).toBe('api');
+    });
+
+    it('should still register workflow if extends file is not found', async () => {
+      const basePath = '/repo';
+
+      const workflowYaml = yaml.dump({
+        extends: 'nonexistent.yaml',
+        id: 'fallback-workflow',
+        name: 'Fallback Workflow',
+        steps: { step1: { type: 'ai', prompt: 'Test' } },
+      });
+
+      (fs.promises.readFile as jest.Mock).mockImplementation((filePath: string) => {
+        if (filePath === path.resolve(basePath, 'workflow.yaml'))
+          return Promise.resolve(workflowYaml);
+        return Promise.reject(new Error('File not found'));
+      });
+
+      const results = await registry.import('./workflow.yaml', { basePath });
+
+      // Should still register (falls back to raw workflow without extends)
+      expect(results).toHaveLength(1);
+      expect(results[0].valid).toBe(true);
+      expect(registry.has('fallback-workflow')).toBe(true);
+    });
+
+    it('should deep-merge nested objects from extends', async () => {
+      const basePath = '/repo';
+
+      const baseYaml = yaml.dump({
+        tools: {
+          api1: { type: 'api', name: 'api1', headers: { 'X-Base': 'true' } },
+          api2: { type: 'api', name: 'api2' },
+        },
+      });
+
+      const workflowYaml = yaml.dump({
+        extends: 'base.yaml',
+        id: 'deep-merge-test',
+        name: 'Deep Merge Test',
+        tools: {
+          api1: { headers: { 'X-Override': 'true' } },
+          api3: { type: 'api', name: 'api3' },
+        },
+        steps: { step1: { type: 'ai', prompt: 'Test' } },
+      });
+
+      (fs.promises.readFile as jest.Mock).mockImplementation((filePath: string) => {
+        if (filePath === path.resolve(basePath, 'workflow.yaml'))
+          return Promise.resolve(workflowYaml);
+        if (filePath === path.resolve(basePath, 'base.yaml')) return Promise.resolve(baseYaml);
+        return Promise.reject(new Error(`Unexpected path: ${filePath}`));
+      });
+
+      const results = await registry.import('./workflow.yaml', { basePath });
+      expect(results[0].valid).toBe(true);
+
+      const workflow = registry.get('deep-merge-test');
+      const tools = (workflow as any).tools;
+      // api1 should be deep-merged (override headers win, base fields preserved)
+      expect(tools.api1.type).toBe('api');
+      expect(tools.api1.name).toBe('api1');
+      expect(tools.api1.headers['X-Override']).toBe('true');
+      // api2 from base should still be present
+      expect(tools.api2).toBeDefined();
+      expect(tools.api2.type).toBe('api');
+      // api3 from workflow should be present
+      expect(tools.api3).toBeDefined();
+    });
+  });
+
   describe('visor:// protocol', () => {
     it('should resolve visor:// URLs to package root', async () => {
       const workflowYaml = `

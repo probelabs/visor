@@ -93,7 +93,7 @@ function anotherFunction(param) {
       expect(mockConsoleLog).toHaveBeenCalled();
       expect(helpOutput).toContain('Visor - AI-powered code review tool');
       expect(helpOutput).toContain('--fail-fast');
-      expect(helpOutput).toContain('Stop execution on first failure condition');
+      expect(helpOutput).toContain('Stop execution on first failure');
       expect(mockProcessExit).toHaveBeenCalledWith(0);
     } finally {
       process.argv = originalArgv;

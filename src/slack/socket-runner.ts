@@ -62,6 +62,7 @@ export class SlackSocketRunner {
   private closing = false; // prevent duplicate reconnects
   private taskStore?: import('../agent-protocol/task-store').TaskStore;
   private configPath?: string;
+  private staleTaskTimer?: ReturnType<typeof setInterval>;
 
   constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: SlackSocketConfig) {
     const app = opts.appToken || process.env.SLACK_APP_TOKEN || '';
@@ -260,6 +261,23 @@ export class SlackSocketRunner {
 
     // Clean up stale workspace directories from previous runs
     WorkspaceManager.cleanupStale().catch(() => {});
+
+    // Periodic stale task sweep — fail 'working' tasks older than 2 hours
+    if (this.taskStore) {
+      const STALE_TASK_SWEEP_INTERVAL = 600_000; // 10 minutes
+      const STALE_TASK_AGE = 7_200_000; // 2 hours
+      this.staleTaskTimer = setInterval(() => {
+        try {
+          const failed = (this.taskStore as any).failStaleTasksByAge?.(
+            STALE_TASK_AGE,
+            'Task exceeded maximum working duration (2h)'
+          );
+          if (failed > 0) {
+            logger.info(`[SlackSocket] Marked ${failed} stale task(s) as failed`);
+          }
+        } catch {}
+      }, STALE_TASK_SWEEP_INTERVAL);
+    }
   }
 
   private async openConnection(): Promise<string> {
@@ -491,6 +509,30 @@ export class SlackSocketRunner {
     const type = ev.type as string;
     const subtype = ev.subtype as string | undefined;
 
+    // Extract text from attachments (monitoring tools like Logz.io, PagerDuty, Datadog
+    // send messages with empty text and all content in attachments)
+    const attachmentText = (() => {
+      if (!Array.isArray(ev.attachments) || ev.attachments.length === 0) return '';
+      const parts: string[] = [];
+      for (const att of ev.attachments) {
+        if (att.pretext) parts.push(att.pretext);
+        if (att.title) parts.push(att.title);
+        if (att.text) parts.push(att.text);
+        if (Array.isArray(att.fields)) {
+          for (const f of att.fields) {
+            if (f.value) parts.push(f.title ? `${f.title}: ${f.value}` : f.value);
+          }
+        }
+      }
+      return parts.join('\n');
+    })();
+    // Full text: top-level text + attachment text (for trigger matching and context)
+    const fullText = ev.text
+      ? attachmentText
+        ? `${ev.text}\n\n${attachmentText}`
+        : String(ev.text)
+      : attachmentText;
+
     // Ensure botUserId is available for mention detection when possible
     try {
       await this.ensureClient();
@@ -560,7 +602,7 @@ export class SlackSocketRunner {
         const matches = this.messageTriggerEvaluator.evaluate({
           channel: String(ev.channel || ''),
           user: String(ev.user || ''),
-          text: String(ev.text || ''),
+          text: fullText || String(ev.text || ''),
           isBot: subtype === 'bot_message',
           threadTs: ev.thread_ts ? String(ev.thread_ts) : undefined,
           ts: String(ev.ts || ev.event_ts || ''),
@@ -669,6 +711,7 @@ export class SlackSocketRunner {
           text: cleanedText || String(ev.text || ''),
           timestamp: Date.now(),
           files: Array.isArray(ev.files) ? ev.files : undefined,
+          attachments: Array.isArray(ev.attachments) ? ev.attachments : undefined,
         });
         payloadForContext = { ...env.payload, slack_conversation: conversation };
       }
@@ -732,10 +775,8 @@ export class SlackSocketRunner {
       const mgr = getPromptStateManager();
       const ch = String(ev.channel || '');
       const rootTs = String(ev.thread_ts || ev.ts || ev.event_ts || '');
-      // Remove @mentions to get clean content
-      const cleaned = String(ev.text || '')
-        .replace(/<@[A-Z0-9]+>/g, '')
-        .trim();
+      // Remove @mentions to get clean content; include attachment text for monitoring messages
+      const cleaned = (fullText || String(ev.text || '')).replace(/<@[A-Z0-9]+>/g, '').trim();
       if (ch && rootTs && cleaned) mgr.setFirstMessage(ch, rootTs, cleaned);
     } catch {}
 
@@ -863,6 +904,11 @@ export class SlackSocketRunner {
             }
           }
         );
+        // Force-flush telemetry to ensure visor.run span is exported promptly
+        try {
+          const { forceFlushTelemetry } = await import('../telemetry/opentelemetry');
+          await forceFlushTelemetry();
+        } catch {}
       } finally {
         if (this.limiter && rlReq) await this.limiter.release(rlReq);
       }
@@ -1059,6 +1105,12 @@ export class SlackSocketRunner {
           }
         }
       );
+
+      // Force-flush telemetry to ensure visor.run span is exported promptly
+      try {
+        const { forceFlushTelemetry } = await import('../telemetry/opentelemetry');
+        await forceFlushTelemetry();
+      } catch {}
 
       logger.info(`[SlackSocket] Message trigger '${id}' workflow completed`);
     } finally {
@@ -1296,6 +1348,11 @@ export class SlackSocketRunner {
    * Stop the socket runner and clean up resources
    */
   async stop(): Promise<void> {
+    // Stop stale task sweep timer
+    if (this.staleTaskTimer) {
+      clearInterval(this.staleTaskTimer);
+      this.staleTaskTimer = undefined;
+    }
     // Notify active threads before tearing down
     await this.notifyActiveThreadsOfShutdown();
     // Stop background GitHub App token refresh
