@@ -757,6 +757,7 @@ Each server config can be:
 - **SSE/HTTP MCP server**: `{ url, transport }`
 - **Workflow tool**: `{ workflow, inputs }`
 - **Built-in tool**: `{ tool: 'schedule' }`
+- **UTCP tools**: `{ type: 'utcp', manual: '...', variables: {...} }` — discovers and exposes all tools from a UTCP manual
 
 Dynamic servers are merged with any static `ai_mcp_servers` configuration.
 

@@ -33,7 +33,7 @@ Configuration for retry delays. Supports `fixed` (constant delay) or `exponentia
 A single unit of work in a Visor workflow. Each check has a type (provider), configuration, and optional dependencies. The terms "check" and "step" are used interchangeably; `steps:` is the recommended configuration key.
 
 ### Check Provider
-A pluggable component that executes a specific type of check. Visor includes 15 built-in providers: `ai`, `claude-code`, `mcp`, `command`, `script`, `http`, `http_input`, `http_client`, `memory`, `noop`, `log`, `github`, `human-input`, `workflow`, and `git-checkout`. See [Pluggable Architecture](./pluggable.md).
+A pluggable component that executes a specific type of check. Visor includes 17 built-in providers: `ai`, `claude-code`, `mcp`, `utcp`, `a2a`, `command`, `script`, `http`, `http_input`, `http_client`, `memory`, `noop`, `log`, `github`, `human-input`, `workflow`, and `git-checkout`. See [Pluggable Architecture](./pluggable.md).
 
 ### Claude Code Provider
 A provider (`type: claude-code`) that integrates the Claude Code SDK with MCP tools and advanced agent capabilities including subagents and streaming. See [Claude Code](./claude-code.md).
@@ -298,6 +298,14 @@ The `transform` (Liquid) or `transform_js` (JavaScript) fields that modify step 
 
 ### Transitions
 Declarative routing rules in `on_success`, `on_fail`, or `on_finish` blocks. Each rule has `when` (condition), `to` (target step), and optional `goto_event`. Evaluated in order; first match wins. See [Failure Routing](./failure-routing.md).
+
+## U
+
+### UTCP (Universal Tool Calling Protocol)
+A client-side protocol for AI agents to discover and call tools directly via their native protocols (HTTP, CLI, SSE). Tools publish JSON "manuals" describing how to call them; the UTCP client reads the manual and makes direct calls without intermediate servers. Visor supports UTCP via the `utcp` provider. See [UTCP Provider](./utcp-provider.md).
+
+### UTCP Provider
+A provider (`type: utcp`) that calls UTCP tools directly using their native protocols. Supports manual discovery from URLs, local files, or inline call templates. UTCP tools can also be exposed as MCP tools to AI agents via `ai_mcp_servers` with `type: utcp` entries. See [UTCP Provider](./utcp-provider.md).
 
 ## V
 

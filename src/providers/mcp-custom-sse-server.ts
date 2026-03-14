@@ -33,6 +33,13 @@ function isHttpClientTool(tool: CustomToolDefinition | undefined): boolean {
 }
 
 /**
+ * Check if a tool definition is a UTCP tool
+ */
+function isUtcpTool(tool: CustomToolDefinition | undefined): boolean {
+  return Boolean(tool && tool.type === 'utcp' && tool.__utcpManual);
+}
+
+/**
  * MCP Protocol message types
  */
 interface MCPMessage {
@@ -179,10 +186,10 @@ export class CustomToolsSSEServer implements CustomMCPServer {
       }
     }
 
-    // Second pass: separate workflow and http_client tools from regular tools
+    // Second pass: separate workflow, http_client, and utcp tools from regular tools
     for (const [name, tool] of this.tools.entries()) {
-      // Skip workflow and http_client tools - they're handled separately
-      if (isWorkflowTool(tool) || isHttpClientTool(tool)) {
+      // Skip workflow, http_client, and utcp tools - they're handled separately
+      if (isWorkflowTool(tool) || isHttpClientTool(tool) || isUtcpTool(tool)) {
         if (isWorkflowTool(tool)) {
           workflowToolNames.push(name);
         }
@@ -791,7 +798,14 @@ export class CustomToolsSSEServer implements CustomMCPServer {
         description: tool.description || `Call ${tool.name} HTTP API`,
         inputSchema: normalizeInputSchema(tool.inputSchema as Record<string, unknown> | undefined),
       }));
-    const allTools = [...regularTools, ...workflowTools, ...httpClientTools];
+    const utcpTools = Array.from(this.tools.values())
+      .filter(isUtcpTool)
+      .map(tool => ({
+        name: tool.name,
+        description: tool.description || `Call ${tool.name} via UTCP`,
+        inputSchema: normalizeInputSchema(tool.inputSchema as Record<string, unknown> | undefined),
+      }));
+    const allTools = [...regularTools, ...workflowTools, ...httpClientTools, ...utcpTools];
 
     // Add graceful_stop tool for cooperative shutdown signaling
     allTools.push({
@@ -1061,6 +1075,9 @@ export class CustomToolsSSEServer implements CustomMCPServer {
           } else if (tool && isHttpClientTool(tool)) {
             // Execute HTTP client tool — proxy REST API calls
             result = await this.executeHttpClientTool(tool, args);
+          } else if (tool && isUtcpTool(tool)) {
+            // Execute UTCP tool — call via UTCP SDK
+            result = await this.executeUtcpTool(tool, toolName, args);
           } else {
             // Execute regular custom tool
             result = await this.toolExecutor.execute(toolName, args);
@@ -1295,6 +1312,35 @@ export class CustomToolsSSEServer implements CustomMCPServer {
       }
       throw error;
     }
+  }
+
+  /**
+   * Execute a UTCP tool — delegates to UtcpCheckProvider.callTool() for shared lifecycle.
+   */
+  private async executeUtcpTool(
+    tool: CustomToolDefinition,
+    toolName: string,
+    args: Record<string, unknown>
+  ): Promise<unknown> {
+    const manual = tool.__utcpManual;
+    const utcpToolName = tool.__utcpToolName || toolName;
+
+    if (!manual) {
+      throw new Error(`UTCP tool '${toolName}' missing manual configuration`);
+    }
+
+    if (this.debug) {
+      logger.debug(
+        `[CustomToolsSSEServer:${this.sessionId}] Executing UTCP tool '${utcpToolName}' with args: ${JSON.stringify(args)}`
+      );
+    }
+
+    const { UtcpCheckProvider } = await import('./utcp-check-provider');
+    return UtcpCheckProvider.callTool(manual, utcpToolName, args, {
+      variables: tool.__utcpVariables || {},
+      plugins: tool.__utcpPlugins || ['http'],
+      timeoutMs: tool.timeout || 60000,
+    });
   }
 
   /**

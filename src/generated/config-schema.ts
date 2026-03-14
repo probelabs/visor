@@ -233,7 +233,7 @@ export const configSchema = {
       properties: {
         type: {
           type: 'string',
-          enum: ['command', 'api', 'workflow', 'http_client'],
+          enum: ['command', 'api', 'workflow', 'http_client', 'utcp'],
           description: "Tool implementation type (defaults to 'command')",
         },
         name: {
@@ -457,6 +457,32 @@ export const configSchema = {
         rate_limit: {
           $ref: '#/definitions/RateLimitConfig',
           description: 'Rate limiting configuration for HTTP/API tools',
+        },
+        __utcpManual: {
+          anyOf: [
+            {
+              type: 'string',
+            },
+            {
+              $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+            },
+          ],
+          description: 'UTCP manual source (URL, file path, or inline call template)',
+        },
+        __utcpToolName: {
+          type: 'string',
+          description: 'Resolved UTCP tool name from discovery',
+        },
+        __utcpVariables: {
+          $ref: '#/definitions/Record%3Cstring%2Cstring%3E',
+          description: 'UTCP variables for authentication',
+        },
+        __utcpPlugins: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: "UTCP plugins to load (default: ['http'])",
         },
         workflow: {
           type: 'string',
@@ -1046,6 +1072,28 @@ export const configSchema = {
           type: 'string',
           description: 'Working directory (for stdio transport in MCP checks)',
         },
+        manual: {
+          anyOf: [
+            {
+              type: 'string',
+            },
+            {
+              $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
+            },
+          ],
+          description: 'UTCP manual source: URL string, file path, or inline call template object',
+        },
+        variables: {
+          $ref: '#/definitions/Record%3Cstring%2Cstring%3E',
+          description: 'UTCP variables for manual authentication/configuration',
+        },
+        plugins: {
+          type: 'array',
+          items: {
+            type: 'string',
+          },
+          description: "UTCP plugins to load (default: ['http'])",
+        },
         placeholder: {
           type: 'string',
           description: 'Placeholder text to show in input field',
@@ -1071,7 +1119,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1088,7 +1136,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1192,6 +1240,7 @@ export const configSchema = {
         'workflow',
         'git-checkout',
         'a2a',
+        'utcp',
       ],
       description: 'Valid check types in configuration',
     },
@@ -1831,7 +1880,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1846,14 +1895,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763>>':
+    'Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763>': {
+    'Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584>': {
       type: 'object',
       additionalProperties: false,
     },

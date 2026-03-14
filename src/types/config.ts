@@ -218,7 +218,8 @@ export type ConfigCheckType =
   | 'human-input'
   | 'workflow'
   | 'git-checkout'
-  | 'a2a';
+  | 'a2a'
+  | 'utcp';
 
 /**
  * Valid event triggers for checks
@@ -764,6 +765,15 @@ export interface CheckConfig {
   /** Working directory (for stdio transport in MCP checks) */
   workingDirectory?: string;
   /**
+   * UTCP provider specific options (optional, only used when type === 'utcp').
+   */
+  /** UTCP manual source: URL string, file path, or inline call template object */
+  manual?: string | Record<string, unknown>;
+  /** UTCP variables for manual authentication/configuration */
+  variables?: Record<string, string>;
+  /** UTCP plugins to load (default: ['http']) */
+  plugins?: string[];
+  /**
    * Human input provider specific options (optional, only used when type === 'human-input').
    */
   /** Placeholder text to show in input field */
@@ -1223,7 +1233,7 @@ export interface VisorHooks {
  */
 export interface CustomToolDefinition {
   /** Tool implementation type (defaults to 'command') */
-  type?: 'command' | 'api' | 'workflow' | 'http_client';
+  type?: 'command' | 'api' | 'workflow' | 'http_client' | 'utcp';
   /** Tool name - used to reference the tool in MCP blocks */
   name: string;
   /** Description of what the tool does */
@@ -1301,6 +1311,16 @@ export interface CustomToolDefinition {
   auth?: { type: string; token?: string; [key: string]: unknown };
   /** Rate limiting configuration for HTTP/API tools */
   rate_limit?: RateLimitConfig;
+
+  // === UTCP tool fields (type: 'utcp') ===
+  /** UTCP manual source (URL, file path, or inline call template) */
+  __utcpManual?: string | Record<string, unknown>;
+  /** Resolved UTCP tool name from discovery */
+  __utcpToolName?: string;
+  /** UTCP variables for authentication */
+  __utcpVariables?: Record<string, string>;
+  /** UTCP plugins to load (default: ['http']) */
+  __utcpPlugins?: string[];
 
   // === Workflow tool fields (type: 'workflow') ===
   /** Workflow ID (registry lookup) or file path (for type: 'workflow') */

@@ -159,6 +159,8 @@ The following providers have been added:
 | `script` | `script` | Execute custom JavaScript logic |
 | `log` | `log` | Debug logging (replaces `logger`) |
 | `github` | `github` | Native GitHub API operations |
+| `a2a` | `a2a` | Call external A2A-compatible agents |
+| `utcp` | `utcp` | Call UTCP tools via native protocols (HTTP/CLI/SSE); also usable as `ai_mcp_servers` entry with `type: utcp` |
 
 ### Provider Type Renames
 
