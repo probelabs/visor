@@ -219,7 +219,7 @@ export declare const configSchema: {
             readonly properties: {
                 readonly type: {
                     readonly type: "string";
-                    readonly enum: readonly ["command", "api", "workflow", "http_client"];
+                    readonly enum: readonly ["command", "api", "workflow", "http_client", "utcp"];
                     readonly description: "Tool implementation type (defaults to 'command')";
                 };
                 readonly name: {
@@ -424,6 +424,29 @@ export declare const configSchema: {
                 readonly rate_limit: {
                     readonly $ref: "#/definitions/RateLimitConfig";
                     readonly description: "Rate limiting configuration for HTTP/API tools";
+                };
+                readonly __utcpManual: {
+                    readonly anyOf: readonly [{
+                        readonly type: "string";
+                    }, {
+                        readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    }];
+                    readonly description: "UTCP manual source (URL, file path, or inline call template)";
+                };
+                readonly __utcpToolName: {
+                    readonly type: "string";
+                    readonly description: "Resolved UTCP tool name from discovery";
+                };
+                readonly __utcpVariables: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cstring%3E";
+                    readonly description: "UTCP variables for authentication";
+                };
+                readonly __utcpPlugins: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "UTCP plugins to load (default: ['http'])";
                 };
                 readonly workflow: {
                     readonly type: "string";
@@ -962,6 +985,25 @@ export declare const configSchema: {
                     readonly type: "string";
                     readonly description: "Working directory (for stdio transport in MCP checks)";
                 };
+                readonly manual: {
+                    readonly anyOf: readonly [{
+                        readonly type: "string";
+                    }, {
+                        readonly $ref: "#/definitions/Record%3Cstring%2Cunknown%3E";
+                    }];
+                    readonly description: "UTCP manual source: URL string, file path, or inline call template object";
+                };
+                readonly variables: {
+                    readonly $ref: "#/definitions/Record%3Cstring%2Cstring%3E";
+                    readonly description: "UTCP variables for manual authentication/configuration";
+                };
+                readonly plugins: {
+                    readonly type: "array";
+                    readonly items: {
+                        readonly type: "string";
+                    };
+                    readonly description: "UTCP plugins to load (default: ['http'])";
+                };
                 readonly placeholder: {
                     readonly type: "string";
                     readonly description: "Placeholder text to show in input field";
@@ -987,7 +1029,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -1003,7 +1045,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -1087,7 +1129,7 @@ export declare const configSchema: {
         };
         readonly ConfigCheckType: {
             readonly type: "string";
-            readonly enum: readonly ["ai", "command", "script", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input", "workflow", "git-checkout", "a2a"];
+            readonly enum: readonly ["ai", "command", "script", "http", "http_input", "http_client", "noop", "log", "memory", "github", "claude-code", "mcp", "human-input", "workflow", "git-checkout", "a2a", "utcp"];
             readonly description: "Valid check types in configuration";
         };
         readonly 'Record<string,McpServerConfig>': {
@@ -1688,7 +1730,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1703,13 +1745,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-15510-30196-src_types_config.ts-0-58763>': {
+        readonly 'Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };
