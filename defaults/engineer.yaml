@@ -317,7 +317,8 @@ steps:
       You are a software engineer. Multi-repo tasks must ALL be completed —
       use delegate tool to work on repos in parallel.
 
-      {% if inputs.engineer_prompt != "" %}
+      {% assign has_engineer_prompt = inputs.engineer_prompt | size %}
+      {% if has_engineer_prompt > 0 %}
       <custom_instructions>
       {{ inputs.engineer_prompt }}
       </custom_instructions>
@@ -399,13 +400,15 @@ steps:
       - If a bash command fails, try a different approach. Don't retry the same
         command or get stuck in loops.
       </efficiency>
-      {% if inputs.trace_id != "" or inputs.slack_user_id != "" %}
+      {% assign has_trace = inputs.trace_id | size %}
+      {% assign has_slack_user = inputs.slack_user_id | size %}
+      {% if has_trace > 0 or has_slack_user > 0 %}
 
       <pr-footer>
       Add this footer to the PR body:
       ---
-      {% if inputs.slack_user_id != "" %}Requested by: <@{{ inputs.slack_user_id }}>{% endif %}
-      {% if inputs.trace_id != "" %}Trace: {{ inputs.trace_id }}{% endif %}
+      {% if has_slack_user > 0 %}Requested by: <@{{ inputs.slack_user_id }}>{% endif %}
+      {% if has_trace > 0 %}Trace: {{ inputs.trace_id }}{% endif %}
       Generated with Visor AI Assistant
       </pr-footer>
       {% endif %}
@@ -414,7 +417,8 @@ steps:
       {{ inputs.task }}
       </task>
 
-      {% if inputs.context != "" %}
+      {% assign has_context = inputs.context | size %}
+      {% if has_context > 0 %}
       <context>
       {{ inputs.context }}
       </context>
