@@ -420,10 +420,8 @@ steps:
       </context>
       {% endif %}
 
-      {% assign projects = outputs['merge-projects'] %}
-      <projects>
-      {% if projects %}
-      {% for p in projects %}
+      <projects count="{{ outputs['merge-projects'].size }}">
+      {% for p in outputs['merge-projects'] %}
       <project>
         <id>{{ p.project_id }}</id>
         <repo>{{ p.repository }}</repo>
@@ -435,7 +433,6 @@ steps:
         {% if p.setup %}<setup>{{ p.setup | json }}</setup>{% endif %}
       </project>
       {% endfor %}
-      {% endif %}
       </projects>
 
 # =============================================================================
@@ -571,6 +568,20 @@ tests:
             exactly: 1
           - step: engineer-task
             exactly: 1
+        outputs:
+          # Verify merge-projects passes through project metadata
+          - step: merge-projects
+            index: last
+            path: "[0].project_id"
+            equals: "gateway"
+          - step: merge-projects
+            index: last
+            path: "[0].sandbox"
+            equals: "go-env"
+          - step: merge-projects
+            index: last
+            path: "[0].services.redis.image"
+            equals: "redis:7-alpine"
         prompts:
           - step: engineer-task
             contains:
