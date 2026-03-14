@@ -104,4 +104,79 @@ describe('ai_timeout and graceful margin', () => {
       expect(deriveProbeTimeout(visor, visor)).toBe(visor);
     });
   });
+
+  describe('negotiated timeout config fields', () => {
+    /**
+     * Simulates the YAML → AIReviewConfig mapping done by ai-check-provider.ts
+     */
+    function parseNegotiatedTimeoutConfig(yamlObj: Record<string, unknown>) {
+      const config: Record<string, unknown> = {};
+      if (yamlObj.timeout_behavior !== undefined) {
+        config.timeoutBehavior = yamlObj.timeout_behavior;
+      }
+      if (yamlObj.negotiated_timeout_budget !== undefined) {
+        config.negotiatedTimeoutBudget = Number(yamlObj.negotiated_timeout_budget);
+      }
+      if (yamlObj.negotiated_timeout_max_requests !== undefined) {
+        config.negotiatedTimeoutMaxRequests = Number(yamlObj.negotiated_timeout_max_requests);
+      }
+      if (yamlObj.negotiated_timeout_max_per_request !== undefined) {
+        config.negotiatedTimeoutMaxPerRequest = Number(yamlObj.negotiated_timeout_max_per_request);
+      }
+      if (yamlObj.graceful_stop_deadline !== undefined) {
+        config.gracefulStopDeadline = Number(yamlObj.graceful_stop_deadline);
+      }
+      return config;
+    }
+
+    it('should parse all negotiated timeout fields from YAML', () => {
+      const yaml = {
+        timeout_behavior: 'negotiated',
+        negotiated_timeout_budget: 120000,
+        negotiated_timeout_max_requests: 3,
+        negotiated_timeout_max_per_request: 60000,
+        graceful_stop_deadline: 30000,
+      };
+
+      const config = parseNegotiatedTimeoutConfig(yaml);
+      expect(config).toEqual({
+        timeoutBehavior: 'negotiated',
+        negotiatedTimeoutBudget: 120000,
+        negotiatedTimeoutMaxRequests: 3,
+        negotiatedTimeoutMaxPerRequest: 60000,
+        gracefulStopDeadline: 30000,
+      });
+    });
+
+    it('should parse graceful timeout_behavior', () => {
+      const config = parseNegotiatedTimeoutConfig({ timeout_behavior: 'graceful' });
+      expect(config.timeoutBehavior).toBe('graceful');
+    });
+
+    it('should handle string numbers from YAML', () => {
+      const yaml = {
+        negotiated_timeout_budget: '120000',
+        negotiated_timeout_max_requests: '5',
+      };
+      const config = parseNegotiatedTimeoutConfig(yaml);
+      expect(config.negotiatedTimeoutBudget).toBe(120000);
+      expect(config.negotiatedTimeoutMaxRequests).toBe(5);
+    });
+
+    it('should return empty config when no fields set', () => {
+      const config = parseNegotiatedTimeoutConfig({});
+      expect(config).toEqual({});
+    });
+
+    it('should handle partial config (only some fields set)', () => {
+      const config = parseNegotiatedTimeoutConfig({
+        timeout_behavior: 'negotiated',
+        graceful_stop_deadline: 15000,
+      });
+      expect(config).toEqual({
+        timeoutBehavior: 'negotiated',
+        gracefulStopDeadline: 15000,
+      });
+    });
+  });
 });

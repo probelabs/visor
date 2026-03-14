@@ -847,6 +847,21 @@ export class AICheckProvider extends CheckProvider {
         const resolvedAiTimeout = (await resolveLiquid(aiAny.ai_timeout)) ?? aiAny.ai_timeout;
         aiConfig.aiTimeout = Number(resolvedAiTimeout);
       }
+      if (aiAny.timeout_behavior !== undefined) {
+        aiConfig.timeoutBehavior = aiAny.timeout_behavior;
+      }
+      if (aiAny.negotiated_timeout_budget !== undefined) {
+        aiConfig.negotiatedTimeoutBudget = Number(aiAny.negotiated_timeout_budget);
+      }
+      if (aiAny.negotiated_timeout_max_requests !== undefined) {
+        aiConfig.negotiatedTimeoutMaxRequests = Number(aiAny.negotiated_timeout_max_requests);
+      }
+      if (aiAny.negotiated_timeout_max_per_request !== undefined) {
+        aiConfig.negotiatedTimeoutMaxPerRequest = Number(aiAny.negotiated_timeout_max_per_request);
+      }
+      if (aiAny.graceful_stop_deadline !== undefined) {
+        aiConfig.gracefulStopDeadline = Number(aiAny.graceful_stop_deadline);
+      }
       if (aiAny.max_iterations !== undefined || aiAny.maxIterations !== undefined) {
         const raw = aiAny.max_iterations ?? aiAny.maxIterations;
         const resolved = (await resolveLiquid(raw)) ?? raw;
@@ -998,6 +1013,13 @@ export class AICheckProvider extends CheckProvider {
         } else if (mainProjectPath) {
           logger.debug(`[AI Provider] Excluding main project (disabled): ${mainProjectPath}`);
         }
+        // Append extra_allowed_folders from AI config (e.g. /tmp for screenshot tools)
+        const extraFolders = (config.ai as any)?.extra_allowed_folders;
+        if (Array.isArray(extraFolders)) {
+          for (const f of extraFolders) {
+            if (typeof f === 'string' && f) folders.push(f);
+          }
+        }
         const unique = Array.from(new Set(folders.filter(p => typeof p === 'string' && p)));
         if (unique.length > 0 && workspaceRoot) {
           if (unique[0] !== workspaceRoot) {
@@ -1025,7 +1047,14 @@ export class AICheckProvider extends CheckProvider {
         // workspace main project path once initializeWorkspace has updated
         // the parent context.
         if (!(aiConfig as any).allowedFolders) {
-          (aiConfig as any).allowedFolders = [parentCtx.workingDirectory];
+          const fallbackFolders = [parentCtx.workingDirectory];
+          const extraFolders = (config.ai as any)?.extra_allowed_folders;
+          if (Array.isArray(extraFolders)) {
+            for (const f of extraFolders) {
+              if (typeof f === 'string' && f) fallbackFolders.push(f);
+            }
+          }
+          (aiConfig as any).allowedFolders = fallbackFolders;
         }
         if (!(aiConfig as any).path) {
           (aiConfig as any).path = parentCtx.workingDirectory;
@@ -1602,6 +1631,33 @@ export class AICheckProvider extends CheckProvider {
       } catch (error) {
         logger.error(
           `[AICheckProvider] Failed to evaluate ai_allowed_tools_js: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+      }
+    }
+
+    // Evaluate ai_extra_allowed_folders_js for dynamic folder access (e.g. /tmp for screenshot tools)
+    const extraFoldersJsExpr = (config as any).ai_extra_allowed_folders_js as string | undefined;
+    if (extraFoldersJsExpr && _dependencyResults) {
+      try {
+        const result = this.evaluateAllowedToolsJs(
+          extraFoldersJsExpr,
+          prInfo,
+          _dependencyResults,
+          config
+        );
+        if (Array.isArray(result) && result.length > 0) {
+          const existing = (aiConfig as any).allowedFolders || [];
+          (aiConfig as any).allowedFolders = [
+            ...existing,
+            ...result.filter((f: unknown) => typeof f === 'string' && f),
+          ];
+          logger.debug(
+            `[AI Provider] ai_extra_allowed_folders_js added: ${JSON.stringify(result)}`
+          );
+        }
+      } catch (error) {
+        logger.error(
+          `[AICheckProvider] Failed to evaluate ai_extra_allowed_folders_js: ${error instanceof Error ? error.message : 'Unknown error'}`
         );
       }
     }

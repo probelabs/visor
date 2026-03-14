@@ -759,31 +759,52 @@ export async function executeSingleCheck(
       });
     } catch {}
 
-    const result = await withActiveSpan(
-      `visor.check.${checkId}`,
-      {
-        'visor.check.id': checkId,
-        'visor.check.type': providerType,
-        session_id: context.sessionId,
-        wave: state.wave,
-      },
-      async span => {
-        const res = await executeWithSandboxRouting(
-          checkId,
-          checkConfig,
-          context,
-          prInfo,
-          dependencyResults,
-          effectiveTimeout,
-          () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-        );
-        // Capture output in span for trace visualization
-        try {
-          captureCheckOutput(span, (res as any).output);
-        } catch {}
-        return res;
-      }
-    );
+    // Build span attributes including timeout configuration for telemetry
+    const spanAttrs: Record<string, unknown> = {
+      'visor.check.id': checkId,
+      'visor.check.type': providerType,
+      session_id: context.sessionId,
+      wave: state.wave,
+      'visor.check.effective_timeout': effectiveTimeout,
+      'visor.check.deadline': deadline,
+    };
+    if (parentDeadline) {
+      spanAttrs['visor.check.parent_deadline'] = parentDeadline;
+    }
+    // Capture AI timeout and negotiated timeout config for trace visibility
+    const aiBlock = checkConfig.ai;
+    if (aiBlock) {
+      if (aiBlock.ai_timeout) spanAttrs['visor.check.ai_timeout'] = aiBlock.ai_timeout;
+      if (aiBlock.timeout_behavior)
+        spanAttrs['visor.check.timeout_behavior'] = aiBlock.timeout_behavior;
+      if (aiBlock.negotiated_timeout_budget !== undefined)
+        spanAttrs['visor.check.negotiated_timeout_budget'] = aiBlock.negotiated_timeout_budget;
+      if (aiBlock.negotiated_timeout_max_requests !== undefined)
+        spanAttrs['visor.check.negotiated_timeout_max_requests'] =
+          aiBlock.negotiated_timeout_max_requests;
+      if (aiBlock.negotiated_timeout_max_per_request !== undefined)
+        spanAttrs['visor.check.negotiated_timeout_max_per_request'] =
+          aiBlock.negotiated_timeout_max_per_request;
+      if (aiBlock.graceful_stop_deadline !== undefined)
+        spanAttrs['visor.check.graceful_stop_deadline'] = aiBlock.graceful_stop_deadline;
+    }
+
+    const result = await withActiveSpan(`visor.check.${checkId}`, spanAttrs, async span => {
+      const res = await executeWithSandboxRouting(
+        checkId,
+        checkConfig,
+        context,
+        prInfo,
+        dependencyResults,
+        effectiveTimeout,
+        () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+      );
+      // Capture output in span for trace visualization
+      try {
+        captureCheckOutput(span, (res as any).output);
+      } catch {}
+      return res;
+    });
 
     const enrichedIssues = (result.issues || []).map((issue: ReviewIssue) => ({
       ...issue,

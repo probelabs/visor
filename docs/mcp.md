@@ -144,7 +144,14 @@ ai_mcp_servers:
 - [Jira Workflow Automation](../examples/jira-workflow-mcp.yaml) - Complete Jira integration examples
 - [Simple Jira Analysis](../examples/jira-simple-example.yaml) - Basic JQL → analyze → label workflow
 
+#### Built-in MCP Tools
+
+Visor's MCP SSE server automatically exposes a `graceful_stop` tool alongside any custom workflow tools. This tool is called by Probe when a [negotiated timeout](./timeouts.md#negotiated-timeout) observer declines an extension. It signals all active sub-workflow executions to wind down gracefully by shortening the shared execution deadline and notifying running ProbeAgent sessions.
+
+You do not need to configure `graceful_stop` — it is always available. See [Timeouts: Negotiated Timeout](./timeouts.md#negotiated-timeout) for details.
+
 #### Related Documentation
 
 - [MCP Provider](./mcp-provider.md) - Standalone MCP tool execution (direct tool calls without AI)
 - [Custom Tools](./custom-tools.md) - Define custom tools for use with MCP
+- [Timeouts](./timeouts.md) - Timeout configuration including negotiated timeout and `graceful_stop`

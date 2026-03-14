@@ -1,0 +1,15 @@
+id: helper
+name: Helper
+description: Simple helper that answers questions briefly
+inputs:
+  - name: question
+    required: true
+    description: The question to answer
+    schema:
+      type: string
+steps:
+  answer:
+    type: ai
+    prompt: |
+      Answer briefly: {{ inputs.question }}
+    schema: plain

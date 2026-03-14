@@ -142,8 +142,11 @@ Report any TODOs you find as issues.
         method: 'tools/list',
       });
 
-      expect(toolsList.result.tools).toHaveLength(1);
-      expect(toolsList.result.tools[0].name).toBe('check-secrets');
+      // Tools include configured tools + built-in graceful_stop
+      expect(toolsList.result.tools.length).toBeGreaterThanOrEqual(1);
+      const toolNames = toolsList.result.tools.map((t: any) => t.name);
+      expect(toolNames).toContain('check-secrets');
+      expect(toolNames).toContain('graceful_stop');
 
       console.log(`✓ Tools list retrieved: ${toolsList.result.tools.length} tools`);
 

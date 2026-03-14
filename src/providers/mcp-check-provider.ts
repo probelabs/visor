@@ -2,7 +2,7 @@ import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary, ReviewIssue } from '../reviewer';
 import { logger } from '../logger';
-import { Liquid } from 'liquidjs';
+import type { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -883,9 +883,14 @@ export class McpCheckProvider extends CheckProvider {
 
     const data = raw as Record<string, unknown>;
 
-    const message = this.toTrimmedString(
-      data.message || data.text || data.description || data.summary
-    );
+    // Only accept string values for issue message fields.
+    // Non-string values (e.g. Slack's `message: {text: "...", ...}` object)
+    // must not be coerced — they are API payloads, not issue descriptions.
+    const rawMessage = data.message || data.text || data.description || data.summary;
+    if (typeof rawMessage !== 'string') {
+      return null;
+    }
+    const message = rawMessage.trim();
     if (!message) {
       return null;
     }

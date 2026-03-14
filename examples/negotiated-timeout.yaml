@@ -1,0 +1,65 @@
+# =============================================================================
+# Negotiated Timeout with Sub-Workflow Tools
+# =============================================================================
+#
+# Demonstrates the negotiated timeout feature where an independent observer LLM
+# decides whether to grant time extensions to a running agent.
+#
+# Key concepts:
+#   - timeout_behavior: negotiated  — enables observer-based timeout decisions
+#   - ai_timeout: 15s              — soft timeout; observer fires at this point
+#   - negotiated_timeout_budget     — total extra time the observer can grant
+#   - negotiated_timeout_max_requests — max extension requests before hard stop
+#   - graceful_stop_deadline        — wind-down window for sub-agents after stop
+#
+# The agent calls the "helper" sub-workflow via MCP. When the soft timeout fires,
+# the observer LLM evaluates progress and decides whether to extend. If declined,
+# Probe calls `graceful_stop` on the MCP server, which shortens the shared
+# execution deadline and signals any running ProbeAgent sessions to wind down.
+#
+# Usage:
+#   visor --config examples/negotiated-timeout.yaml --check agent --debug
+#
+# =============================================================================
+
+version: "1.0"
+
+imports:
+  - ./workflows/helper-workflow.yaml
+
+checks:
+  agent:
+    type: ai
+    prompt: |
+      You have a helper tool. Use it to answer ALL of these questions one by one.
+      You MUST call the helper tool separately for EACH question:
+      1. What is 2+2?
+      2. What is the capital of France?
+      3. What is the meaning of life?
+      4. What is the speed of light?
+      5. What is the largest ocean?
+      6. Who painted the Mona Lisa?
+      7. What is the boiling point of water?
+      8. What is the smallest country?
+      9. Who wrote Romeo and Juliet?
+      10. What is the tallest mountain?
+      After getting ALL answers, compile them into a final summary.
+    schema: plain
+    ai:
+      # Visor's external hard kill (always active)
+      timeout: 300000           # 5 minutes
+
+      # Probe-level soft timeout — observer fires here
+      ai_timeout: 15000         # 15 seconds
+
+      # Negotiated timeout: observer LLM decides extensions
+      timeout_behavior: negotiated
+      negotiated_timeout_budget: 120000          # 2 min total extra time
+      negotiated_timeout_max_requests: 2         # max 2 extension requests
+      negotiated_timeout_max_per_request: 60000  # max 1 min per extension
+
+      # Wind-down deadline for sub-agents after graceful_stop
+      graceful_stop_deadline: 5000               # 5 seconds
+
+    ai_custom_tools:
+      - workflow: helper

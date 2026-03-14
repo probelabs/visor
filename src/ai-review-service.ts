@@ -68,11 +68,39 @@ function createProbeTracerAdapter(fallbackTracer?: any) {
     }
     return out;
   };
+  // Names of events that should be promoted to short-lived child spans
+  // so they survive even if the parent span never ends (process killed).
+  // Everything else stays as a cheap addEvent on the current span.
+  const SPAN_WORTHY_EVENTS = new Set([
+    'tool.result',
+    'tool.decision',
+    'delegation.start',
+    'delegation.complete',
+    'graceful_stop.invoked',
+    'probe.timeout_configured',
+    'negotiated_timeout.observer',
+  ]);
+
   const emitEvent = (name: string, attrs?: Record<string, unknown>) => {
     try {
+      const flat = flattenAttrs(attrs) as Record<string, unknown>;
+
+      // For important events, emit a short-lived child span that ends
+      // immediately so it gets exported even if the parent span never closes.
+      if (SPAN_WORTHY_EVENTS.has(name)) {
+        try {
+          const tracer = otTrace.getTracer('visor');
+          const childSpan = tracer.startSpan(`probe.event.${name}`, {
+            attributes: { 'probe.event.name': name, ...flat },
+          });
+          childSpan.end(); // ends immediately → gets exported by BatchSpanProcessor
+        } catch {}
+      }
+
+      // Always also add as a span event on the active span (for in-span context)
       const span = otTrace.getActiveSpan();
       if (span && typeof span.addEvent === 'function') {
-        span.addEvent(name, flattenAttrs(attrs) as Record<string, unknown>);
+        span.addEvent(name, flat);
       }
     } catch {}
   };
@@ -221,6 +249,29 @@ function createProbeTracerAdapter(fallbackTracer?: any) {
         },
       };
     },
+    // Probe calls this on every agentic loop iteration. Emit as a short-lived
+    // child span so each iteration is visible in Jaeger even if the parent
+    // ai.request span never ends (process killed during long run).
+    recordIterationEvent: (phase: string, iteration: number, data?: Record<string, unknown>) => {
+      try {
+        const tracer = otTrace.getTracer('visor');
+        const childSpan = tracer.startSpan(`probe.iteration.${phase}`, {
+          attributes: {
+            'probe.iteration': iteration,
+            'probe.phase': phase,
+            ...(flattenAttrs(data) as Record<string, unknown>),
+          },
+        });
+        childSpan.end();
+      } catch {}
+      // Also emit as event on the active span for in-span context
+      emitEvent(`iteration.${phase}`, { iteration, ...(data || {}) });
+      if (fallback && typeof fallback.recordIterationEvent === 'function') {
+        try {
+          fallback.recordIterationEvent(phase, iteration, data);
+        } catch {}
+      }
+    },
     flush: async () => {
       if (fallback && typeof fallback.flush === 'function') {
         await fallback.flush();
@@ -307,6 +358,11 @@ export interface AIReviewConfig {
   // When set, Probe will inject "TIME LIMIT REACHED" and give bonus steps before hard abort.
   // Defaults to timeout - 90s when not explicitly set.
   aiTimeout?: number;
+  timeoutBehavior?: 'graceful' | 'negotiated';
+  negotiatedTimeoutBudget?: number;
+  negotiatedTimeoutMaxRequests?: number;
+  negotiatedTimeoutMaxPerRequest?: number;
+  gracefulStopDeadline?: number;
 }
 
 export interface AIDebugInfo {
@@ -1472,6 +1528,22 @@ ${this.escapeXml(processedFallbackDiff)}
     if (reuseAiTimeout > 0) {
       (agent as any).maxOperationTimeout = reuseAiTimeout;
     }
+    // Update negotiated timeout / graceful stop options on session reuse
+    if (this.config.timeoutBehavior) {
+      (agent as any).timeoutBehavior = this.config.timeoutBehavior;
+    }
+    if (this.config.negotiatedTimeoutBudget !== undefined) {
+      (agent as any).negotiatedTimeoutBudget = this.config.negotiatedTimeoutBudget;
+    }
+    if (this.config.negotiatedTimeoutMaxRequests !== undefined) {
+      (agent as any).negotiatedTimeoutMaxRequests = this.config.negotiatedTimeoutMaxRequests;
+    }
+    if (this.config.negotiatedTimeoutMaxPerRequest !== undefined) {
+      (agent as any).negotiatedTimeoutMaxPerRequest = this.config.negotiatedTimeoutMaxPerRequest;
+    }
+    if (this.config.gracefulStopDeadline !== undefined) {
+      (agent as any).gracefulStopDeadline = this.config.gracefulStopDeadline;
+    }
 
     try {
       log('🚀 Calling existing ProbeAgent with answer()...');
@@ -1999,6 +2071,54 @@ ${'='.repeat(60)}
           : visorTimeout);
       if (aiTimeout > 0) {
         (options as any).maxOperationTimeout = aiTimeout;
+      }
+
+      // Pass negotiated timeout / graceful stop options to ProbeAgent
+      if (this.config.timeoutBehavior) {
+        (options as any).timeoutBehavior = this.config.timeoutBehavior;
+      }
+      if (this.config.negotiatedTimeoutBudget !== undefined) {
+        (options as any).negotiatedTimeoutBudget = this.config.negotiatedTimeoutBudget;
+      }
+      if (this.config.negotiatedTimeoutMaxRequests !== undefined) {
+        (options as any).negotiatedTimeoutMaxRequests = this.config.negotiatedTimeoutMaxRequests;
+      }
+      if (this.config.negotiatedTimeoutMaxPerRequest !== undefined) {
+        (options as any).negotiatedTimeoutMaxPerRequest =
+          this.config.negotiatedTimeoutMaxPerRequest;
+      }
+      if (this.config.gracefulStopDeadline !== undefined) {
+        (options as any).gracefulStopDeadline = this.config.gracefulStopDeadline;
+      }
+
+      // Emit telemetry for timeout configuration on ProbeAgent creation
+      if (this.config.timeoutBehavior || aiTimeout > 0) {
+        try {
+          const { addEvent, setSpanAttributes } = require('./telemetry/trace-helpers');
+          const timeoutAttrs: Record<string, unknown> = {
+            'probe.ai_timeout': aiTimeout,
+            'probe.visor_timeout': visorTimeout,
+          };
+          if (this.config.timeoutBehavior) {
+            timeoutAttrs['probe.timeout_behavior'] = this.config.timeoutBehavior;
+          }
+          if (this.config.negotiatedTimeoutBudget !== undefined) {
+            timeoutAttrs['probe.negotiated_timeout_budget'] = this.config.negotiatedTimeoutBudget;
+          }
+          if (this.config.negotiatedTimeoutMaxRequests !== undefined) {
+            timeoutAttrs['probe.negotiated_timeout_max_requests'] =
+              this.config.negotiatedTimeoutMaxRequests;
+          }
+          if (this.config.negotiatedTimeoutMaxPerRequest !== undefined) {
+            timeoutAttrs['probe.negotiated_timeout_max_per_request'] =
+              this.config.negotiatedTimeoutMaxPerRequest;
+          }
+          if (this.config.gracefulStopDeadline !== undefined) {
+            timeoutAttrs['probe.graceful_stop_deadline'] = this.config.gracefulStopDeadline;
+          }
+          setSpanAttributes(timeoutAttrs);
+          addEvent('probe.timeout_configured', timeoutAttrs);
+        } catch {}
       }
 
       // Pass tool filtering options to ProbeAgent (native in rc168+)

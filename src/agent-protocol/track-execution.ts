@@ -83,19 +83,24 @@ export async function trackExecution<T>(
   try {
     const result = await executor();
 
-    // Extract AI response text from the result using the same pattern as Slack frontend:
-    // result.reviewSummary.history has check outputs, look for output.text in any check
+    // Extract AI response text from the result.
+    // result.reviewSummary.history is keyed by checkId with arrays of outputs.
+    // We want the LAST check's text output (the final AI response), not the
+    // first (which is typically the intent router).
     let responseText = 'Execution completed';
     try {
       const history = (result as any)?.reviewSummary?.history as
         | Record<string, unknown[]>
         | undefined;
       if (history) {
-        // Look through check outputs for a text response (e.g., generate-response)
-        for (const outputs of Object.values(history)) {
+        const entries = Object.values(history);
+        // Iterate in reverse — last check output is the final response
+        for (let i = entries.length - 1; i >= 0; i--) {
+          const outputs = entries[i];
           if (!Array.isArray(outputs)) continue;
-          for (const out of outputs) {
-            const text = (out as any)?.text;
+          // Within a check, look at the last output first too
+          for (let j = outputs.length - 1; j >= 0; j--) {
+            const text = (outputs[j] as any)?.text;
             if (typeof text === 'string' && text.trim().length > 0) {
               responseText = text.trim();
               break;

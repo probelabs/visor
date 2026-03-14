@@ -165,6 +165,8 @@ export interface TaskStore {
   // Cleanup & recovery
   /** Mark all 'working' tasks as 'failed' (crash recovery on startup). */
   failStaleTasks(reason?: string): number;
+  /** Mark 'working' tasks older than the given age as 'failed' (runtime stale detection). */
+  failStaleTasksByAge(olderThanMs: number, reason?: string): number;
   /** Delete completed/failed/canceled tasks older than the given age. */
   purgeOldTasks(olderThanMs: number): number;
   deleteExpiredTasks(): string[];
@@ -564,6 +566,27 @@ export class SqliteTaskStore implements TaskStore {
          WHERE state = 'working'`
       )
       .run(now, statusMessage);
+    return result.changes;
+  }
+
+  failStaleTasksByAge(olderThanMs: number, reason?: string): number {
+    const db = this.getDb();
+    const now = nowISO();
+    const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+    const msg = reason || 'Task exceeded maximum working duration';
+    const statusMessage = JSON.stringify({
+      message_id: crypto.randomUUID(),
+      role: 'agent',
+      parts: [{ text: msg }],
+    });
+    const result = db
+      .prepare(
+        `UPDATE agent_tasks
+         SET state = 'failed', updated_at = ?, status_message = ?
+         WHERE state = 'working'
+         AND updated_at < ?`
+      )
+      .run(now, statusMessage, cutoff);
     return result.changes;
   }
 
