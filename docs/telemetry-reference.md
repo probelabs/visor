@@ -161,6 +161,15 @@ Additional attributes for Slack message triggers:
 | `visor.foreach.index` | Iteration index (if inside a forEach) |
 | `session_id` | Session identifier |
 | `wave` | Wave number |
+| `visor.check.effective_timeout` | Computed timeout in ms (capped by parent deadline) |
+| `visor.check.deadline` | Absolute deadline timestamp |
+| `visor.check.parent_deadline` | Parent workflow's deadline (if nested) |
+| `visor.check.ai_timeout` | Probe soft timeout in ms (if configured) |
+| `visor.check.timeout_behavior` | `graceful` or `negotiated` (if configured) |
+| `visor.check.negotiated_timeout_budget` | Total extra time budget in ms (if configured) |
+| `visor.check.negotiated_timeout_max_requests` | Max extension requests (if configured) |
+| `visor.check.negotiated_timeout_max_per_request` | Max time per extension in ms (if configured) |
+| `visor.check.graceful_stop_deadline` | Wind-down window in ms (if configured) |
 
 ### AI Provider Spans
 
@@ -178,6 +187,13 @@ Additional attributes for Slack message triggers:
 | `check.mode` | `session_reuse` (reuse calls only) |
 | `prompt.length` | Length of the prompt in characters |
 | `schema.type` | Output schema type |
+| `probe.ai_timeout` | Probe-level soft timeout in ms |
+| `probe.visor_timeout` | Visor hard timeout in ms |
+| `probe.timeout_behavior` | `graceful` or `negotiated` |
+| `probe.negotiated_timeout_budget` | Total observer extension budget in ms |
+| `probe.negotiated_timeout_max_requests` | Max extension requests |
+| `probe.negotiated_timeout_max_per_request` | Max time per extension in ms |
+| `probe.graceful_stop_deadline` | Wind-down window for sub-agents in ms |
 
 ### Sandbox Spans
 
@@ -240,6 +256,31 @@ Events are attached to the currently active span and provide fine-grained execut
 | `visor.sandbox.bwrap.exec` | Bubblewrap sandbox execution |
 | `visor.sandbox.seatbelt.exec` | Seatbelt sandbox execution |
 | `visor.sandbox.stopped` | Sandbox stopped |
+
+### Timeout Configuration Events (AI Provider)
+
+| Event Name | Description |
+|------------|-------------|
+| `probe.timeout_configured` | Emitted when a ProbeAgent is created with timeout configuration |
+
+**Attributes:** `probe.ai_timeout`, `probe.visor_timeout`, `probe.timeout_behavior`, `probe.negotiated_timeout_budget`, `probe.negotiated_timeout_max_requests`, `probe.negotiated_timeout_max_per_request`, `probe.graceful_stop_deadline`
+
+### Graceful Stop Events (MCP Server)
+
+| Event Name | Description |
+|------------|-------------|
+| `graceful_stop.invoked` | The `graceful_stop` MCP tool was called |
+| `graceful_stop.deadline_shortened` | Shared execution deadline was shortened |
+| `graceful_stop.session_signaled` | A ProbeAgent session was signaled to wind down |
+| `graceful_stop.completed` | Graceful stop processing completed |
+
+**Attributes for `graceful_stop.invoked`:** `mcp.session_id`, `mcp.server`
+
+**Attributes for `graceful_stop.deadline_shortened`:** `mcp.session_id`, `graceful_stop.previous_deadline`, `graceful_stop.new_deadline`, `graceful_stop.remaining_ms`
+
+**Attributes for `graceful_stop.session_signaled`:** `mcp.session_id`, `probe.session_id`
+
+**Attributes for `graceful_stop.completed`:** `mcp.session_id`, `graceful_stop.sessions_signaled`
 
 ### Diagram Events
 

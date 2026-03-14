@@ -1119,7 +1119,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14897-29977-src_types_config.ts-0-58960%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1136,7 +1136,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14897-29977-src_types_config.ts-0-58960%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1460,6 +1460,28 @@ export const configSchema = {
           type: 'number',
           description:
             'Probe-level timeout in milliseconds for graceful wind-down (maxOperationTimeout). When set, Probe injects "TIME LIMIT REACHED" and gives bonus steps before hard abort. Defaults to (timeout - 90s) when not explicitly set. The main `timeout` field controls Visor\'s external hard kill (always active).',
+        },
+        timeout_behavior: {
+          type: 'string',
+          enum: ['graceful', 'negotiated'],
+          description:
+            "Timeout behavior: 'graceful' (default) injects wind-down message; 'negotiated' uses observer LLM to decide extensions",
+        },
+        negotiated_timeout_budget: {
+          type: 'number',
+          description: 'Total extra time budget in ms for negotiated timeout extensions',
+        },
+        negotiated_timeout_max_requests: {
+          type: 'number',
+          description: 'Maximum number of extension requests for negotiated timeout',
+        },
+        negotiated_timeout_max_per_request: {
+          type: 'number',
+          description: 'Maximum time in ms per individual extension request',
+        },
+        graceful_stop_deadline: {
+          type: 'number',
+          description: 'Wind-down deadline in ms for sub-agents after graceful stop is triggered',
         },
       },
       additionalProperties: false,
@@ -1858,7 +1880,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-14897-29977-src_types_config.ts-0-58960%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1873,14 +1895,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-14897-29977-src_types_config.ts-0-58960>>':
+    'Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-14897-29977-src_types_config.ts-0-58960%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-14897-29977-src_types_config.ts-0-58960>': {
+    'Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584>': {
       type: 'object',
       additionalProperties: false,
     },

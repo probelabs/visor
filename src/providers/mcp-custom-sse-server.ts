@@ -1,6 +1,7 @@
 import { CustomToolDefinition } from '../types/config';
 import { CustomToolExecutor } from './custom-tool-executor';
 import { logger } from '../logger';
+import fs from 'fs';
 import http from 'http';
 import { EventEmitter } from 'events';
 import {
@@ -101,10 +102,17 @@ interface MCPToolCallResponse {
   jsonrpc: '2.0';
   id: number | string;
   result?: {
-    content: Array<{
-      type: 'text';
-      text: string;
-    }>;
+    content: Array<
+      | {
+          type: 'text';
+          text: string;
+        }
+      | {
+          type: 'image';
+          data: string;
+          mimeType: string;
+        }
+    >;
   };
   error?: {
     code: number;
@@ -148,6 +156,7 @@ export class CustomToolsSSEServer implements CustomMCPServer {
   private keepaliveInterval: NodeJS.Timeout | null = null;
   private activeToolCalls: number = 0;
   private lastActivityAt: number = Date.now();
+  private gracefulStopRequested: boolean = false;
   private static readonly KEEPALIVE_INTERVAL_MS = 30000; // 30 seconds
 
   constructor(
@@ -798,6 +807,13 @@ export class CustomToolsSSEServer implements CustomMCPServer {
       }));
     const allTools = [...regularTools, ...workflowTools, ...httpClientTools, ...utcpTools];
 
+    // Add graceful_stop tool for cooperative shutdown signaling
+    allTools.push({
+      name: 'graceful_stop',
+      description: 'Signal this server to gracefully wind down all active tool executions.',
+      inputSchema: { type: 'object', properties: {}, required: [] },
+    });
+
     if (this.debug) {
       logger.debug(
         `[CustomToolsSSEServer:${this.sessionId}] Listing ${allTools.length} tools: ${allTools.map(t => t.name).join(', ')}`
@@ -839,6 +855,88 @@ export class CustomToolsSSEServer implements CustomMCPServer {
         logger.debug(
           `[CustomToolsSSEServer:${this.sessionId}] Executing tool: ${toolName} with args: ${JSON.stringify(args)}`
         );
+      }
+
+      // Handle graceful_stop: shorten deadline so active workflows wind down,
+      // then signal any running ProbeAgent sessions to initiate their own wind-down.
+      if (toolName === 'graceful_stop') {
+        this.gracefulStopRequested = true;
+
+        // Emit telemetry event for the graceful_stop invocation
+        try {
+          const { addEvent } = require('../telemetry/trace-helpers');
+          addEvent('graceful_stop.invoked', {
+            'mcp.session_id': this.sessionId,
+            'mcp.server': 'custom-tools-sse',
+          });
+        } catch {}
+
+        if (this.workflowContext?.executionContext) {
+          const newDeadline = Date.now() + 30000; // 30s wind-down window
+          const current = this.workflowContext.executionContext.deadline;
+          if (!current || newDeadline < current) {
+            (this.workflowContext.executionContext as any).deadline = newDeadline;
+          }
+          // Emit telemetry for deadline change
+          try {
+            const { addEvent } = require('../telemetry/trace-helpers');
+            addEvent('graceful_stop.deadline_shortened', {
+              'mcp.session_id': this.sessionId,
+              'graceful_stop.previous_deadline': current ?? 'none',
+              'graceful_stop.new_deadline': newDeadline,
+              'graceful_stop.remaining_ms': 30000,
+            });
+          } catch {}
+        }
+        // Signal all active ProbeAgent sessions to wind down gracefully.
+        // This ensures currently-running AI steps (blocked on LLM calls) get
+        // the wind-down message at their next step, rather than waiting for the
+        // deadline to expire.
+        let sessionCount = 0;
+        try {
+          const { SessionRegistry } = require('../session-registry');
+          const registry = SessionRegistry.getInstance();
+          const activeIds = registry.getActiveSessionIds();
+          for (const sid of activeIds) {
+            const agent = registry.getSession(sid);
+            if (agent && typeof (agent as any).triggerGracefulWindDown === 'function') {
+              (agent as any).triggerGracefulWindDown();
+              sessionCount++;
+              logger.info(
+                `[CustomToolsSSEServer:${this.sessionId}] Triggered graceful wind-down on ProbeAgent session ${sid}`
+              );
+              // Emit per-session telemetry
+              try {
+                const { addEvent } = require('../telemetry/trace-helpers');
+                addEvent('graceful_stop.session_signaled', {
+                  'mcp.session_id': this.sessionId,
+                  'probe.session_id': sid,
+                });
+              } catch {}
+            }
+          }
+        } catch (e) {
+          // Best-effort: older Probe versions may not have triggerGracefulWindDown
+          logger.debug(
+            `[CustomToolsSSEServer:${this.sessionId}] Could not signal ProbeAgent sessions: ${e}`
+          );
+        }
+
+        // Emit summary telemetry event
+        try {
+          const { addEvent } = require('../telemetry/trace-helpers');
+          addEvent('graceful_stop.completed', {
+            'mcp.session_id': this.sessionId,
+            'graceful_stop.sessions_signaled': sessionCount,
+          });
+        } catch {}
+
+        logger.info(`[CustomToolsSSEServer:${this.sessionId}] Graceful stop acknowledged`);
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: { content: [{ type: 'text', text: 'Stop acknowledged' }] },
+        };
       }
 
       const retryCount = this.getEnvNumber('VISOR_CUSTOM_TOOLS_RETRY_COUNT', 0);
@@ -941,6 +1039,19 @@ export class CustomToolsSSEServer implements CustomMCPServer {
           // Check if this is a workflow tool
           const tool = this.tools.get(toolName);
           if (tool && isWorkflowTool(tool)) {
+            // After graceful_stop, reject new workflow invocations — they are
+            // the long-running ones (engineer, code-explorer) that would restart
+            // the cycle.  Short tools (slack-send-dm, etc.) are still allowed
+            // so the agent can send a final message before stopping.
+            if (this.gracefulStopRequested) {
+              logger.warn(
+                `[CustomToolsSSEServer:${this.sessionId}] Rejecting workflow tool '${toolName}' — graceful_stop already requested`
+              );
+              result =
+                `[REJECTED] The server is shutting down (graceful_stop was called). ` +
+                `Tool '${toolName}' cannot be started. Please produce your final answer now with the information you already have.`;
+              break;
+            }
             // Execute workflow tool
             if (!this.workflowContext) {
               throw new Error(
@@ -986,8 +1097,32 @@ export class CustomToolsSSEServer implements CustomMCPServer {
         }
       }
 
-      // Format result as MCP response
-      const resultText = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+      // Format result as MCP response.
+      // Avoid pretty-printing (null instead of 2) for large objects — JSON.stringify
+      // with indentation on multi-MB objects blocks the event loop for seconds.
+      let resultText: string;
+      if (typeof result === 'string') {
+        resultText = result;
+      } else {
+        // Use compact JSON to minimise CPU time and memory
+        resultText = JSON.stringify(result);
+      }
+
+      // Cap result size to prevent event-loop stalls from multi-MB tool outputs.
+      // 512 KB is generous for any AI to process; beyond that we truncate.
+      const MAX_RESULT_BYTES = 512 * 1024;
+      if (resultText.length > MAX_RESULT_BYTES) {
+        const originalLen = resultText.length;
+        const keepHead = Math.floor(MAX_RESULT_BYTES * 0.8);
+        const keepTail = MAX_RESULT_BYTES - keepHead - 200; // room for truncation notice
+        resultText =
+          resultText.substring(0, keepHead) +
+          `\n\n... [TRUNCATED: ${originalLen} chars total, showing first ${keepHead} and last ${keepTail} chars] ...\n\n` +
+          resultText.substring(originalLen - keepTail);
+        logger.warn(
+          `[CustomToolsSSEServer:${this.sessionId}] Tool ${toolName} result truncated from ${originalLen} to ${resultText.length} chars`
+        );
+      }
 
       // Always log tool completion with result details (important for debugging MCP issues)
       const resultPreview =
@@ -1001,16 +1136,50 @@ export class CustomToolsSSEServer implements CustomMCPServer {
         `[CustomToolsSSEServer:${this.sessionId}] Tool ${toolName} result preview: ${resultPreview}`
       );
 
+      // Check if result contains an image file that should be included inline
+      const contentBlocks: NonNullable<MCPToolCallResponse['result']>['content'] = [
+        {
+          type: 'text',
+          text: resultText,
+        },
+      ];
+
+      if (result && typeof result === 'object') {
+        logger.info(
+          `[CustomToolsSSEServer:${this.sessionId}] Image detection: keys=${Object.keys(result as any).join(',')}, type=${typeof result}`
+        );
+        // Search for file_path in common result structures:
+        // Direct: { file_path, content_type }
+        // Nested output: { output: { file_path, content_type } }
+        // Workflow result wrapper: { result: { file_path, content_type } }
+        const r = result as any;
+        const filePath = r.file_path || r.output?.file_path || r.result?.file_path;
+        const contentType =
+          r.content_type || r.output?.content_type || r.result?.content_type || '';
+        if (filePath && typeof filePath === 'string' && contentType.startsWith('image/')) {
+          try {
+            const imageBuffer = fs.readFileSync(filePath);
+            contentBlocks.push({
+              type: 'image',
+              data: imageBuffer.toString('base64'),
+              mimeType: contentType,
+            });
+            logger.info(
+              `[CustomToolsSSEServer:${this.sessionId}] Included inline image from ${filePath} (${imageBuffer.length} bytes)`
+            );
+          } catch (imgErr) {
+            logger.warn(
+              `[CustomToolsSSEServer:${this.sessionId}] Failed to read image file ${filePath}: ${imgErr}`
+            );
+          }
+        }
+      }
+
       const response: MCPToolCallResponse = {
         jsonrpc: '2.0',
         id,
         result: {
-          content: [
-            {
-              type: 'text',
-              text: resultText,
-            },
-          ],
+          content: contentBlocks,
         },
       };
 

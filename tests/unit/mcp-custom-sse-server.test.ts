@@ -359,7 +359,227 @@ describe('CustomToolsSSEServer', () => {
         method: 'tools/list',
       });
 
-      expect(response.result.tools).toEqual([]);
+      // Even with no custom tools, graceful_stop is always present
+      expect(response.result.tools).toEqual([
+        expect.objectContaining({
+          name: 'graceful_stop',
+          description: 'Signal this server to gracefully wind down all active tool executions.',
+        }),
+      ]);
+    });
+  });
+
+  describe('MCP Protocol - graceful_stop', () => {
+    let server: CustomToolsSSEServer;
+
+    afterEach(async () => {
+      if (server) {
+        await server.stop();
+      }
+    });
+
+    it('should always include graceful_stop in tools list', async () => {
+      server = new CustomToolsSSEServer(testTools, testSessionId, false);
+      const port = await server.start();
+
+      const response = await sendMCPRequest(port, {
+        jsonrpc: '2.0',
+        id: 100,
+        method: 'tools/list',
+      });
+
+      const gracefulStop = response.result.tools.find((t: any) => t.name === 'graceful_stop');
+      expect(gracefulStop).toBeDefined();
+      expect(gracefulStop.description).toBe(
+        'Signal this server to gracefully wind down all active tool executions.'
+      );
+      expect(gracefulStop.inputSchema).toMatchObject({
+        type: 'object',
+        properties: {},
+        required: [],
+      });
+    });
+
+    it('should acknowledge graceful_stop call', async () => {
+      server = new CustomToolsSSEServer(testTools, testSessionId, false);
+      const port = await server.start();
+
+      const response = await sendMCPRequest(port, {
+        jsonrpc: '2.0',
+        id: 101,
+        method: 'tools/call',
+        params: {
+          name: 'graceful_stop',
+          arguments: {},
+        },
+      });
+
+      expect(response.jsonrpc).toBe('2.0');
+      expect(response.id).toBe(101);
+      expect(response.result).toBeDefined();
+      expect(response.result.content).toHaveLength(1);
+      expect(response.result.content[0].type).toBe('text');
+      expect(response.result.content[0].text).toBe('Stop acknowledged');
+    });
+
+    it('should set gracefulStopRequested flag on call', async () => {
+      server = new CustomToolsSSEServer(testTools, testSessionId, false);
+      const port = await server.start();
+
+      expect((server as any).gracefulStopRequested).toBe(false);
+
+      await sendMCPRequest(port, {
+        jsonrpc: '2.0',
+        id: 102,
+        method: 'tools/call',
+        params: {
+          name: 'graceful_stop',
+          arguments: {},
+        },
+      });
+
+      expect((server as any).gracefulStopRequested).toBe(true);
+    });
+
+    it('should shorten executionContext deadline when workflowContext exists', async () => {
+      const executionContext = {
+        deadline: Date.now() + 600000, // 10 minutes from now
+        webhookContext: undefined,
+      };
+      const workflowContext = {
+        executionContext,
+        workspace: undefined,
+      };
+
+      server = new CustomToolsSSEServer(testTools, testSessionId, false, workflowContext as any);
+      const port = await server.start();
+
+      const beforeCall = Date.now();
+      await sendMCPRequest(port, {
+        jsonrpc: '2.0',
+        id: 103,
+        method: 'tools/call',
+        params: {
+          name: 'graceful_stop',
+          arguments: {},
+        },
+      });
+
+      // Deadline should be shortened to ~30s from now
+      const expectedDeadline = beforeCall + 30000;
+      expect(executionContext.deadline).toBeGreaterThanOrEqual(expectedDeadline - 1000);
+      expect(executionContext.deadline).toBeLessThanOrEqual(expectedDeadline + 2000);
+    });
+
+    it('should not extend deadline if already shorter than 30s wind-down', async () => {
+      const shortDeadline = Date.now() + 5000; // Only 5s left
+      const executionContext = {
+        deadline: shortDeadline,
+        webhookContext: undefined,
+      };
+      const workflowContext = {
+        executionContext,
+        workspace: undefined,
+      };
+
+      server = new CustomToolsSSEServer(testTools, testSessionId, false, workflowContext as any);
+      const port = await server.start();
+
+      await sendMCPRequest(port, {
+        jsonrpc: '2.0',
+        id: 104,
+        method: 'tools/call',
+        params: {
+          name: 'graceful_stop',
+          arguments: {},
+        },
+      });
+
+      // Deadline should remain unchanged since it's already shorter
+      expect(executionContext.deadline).toBe(shortDeadline);
+    });
+
+    it('should set deadline when none exists', async () => {
+      const executionContext = {
+        deadline: undefined as number | undefined,
+        webhookContext: undefined,
+      };
+      const workflowContext = {
+        executionContext,
+        workspace: undefined,
+      };
+
+      server = new CustomToolsSSEServer(testTools, testSessionId, false, workflowContext as any);
+      const port = await server.start();
+
+      const beforeCall = Date.now();
+      await sendMCPRequest(port, {
+        jsonrpc: '2.0',
+        id: 105,
+        method: 'tools/call',
+        params: {
+          name: 'graceful_stop',
+          arguments: {},
+        },
+      });
+
+      // Should set a new deadline ~30s from now
+      expect(executionContext.deadline).toBeDefined();
+      expect(executionContext.deadline!).toBeGreaterThanOrEqual(beforeCall + 29000);
+      expect(executionContext.deadline!).toBeLessThanOrEqual(beforeCall + 32000);
+    });
+
+    it('should work without workflowContext (no crash)', async () => {
+      server = new CustomToolsSSEServer(testTools, testSessionId, false);
+      const port = await server.start();
+
+      // Should not throw even without workflowContext
+      const response = await sendMCPRequest(port, {
+        jsonrpc: '2.0',
+        id: 106,
+        method: 'tools/call',
+        params: {
+          name: 'graceful_stop',
+          arguments: {},
+        },
+      });
+
+      expect(response.result.content[0].text).toBe('Stop acknowledged');
+    });
+
+    it('should handle multiple graceful_stop calls idempotently', async () => {
+      const executionContext = {
+        deadline: Date.now() + 600000,
+        webhookContext: undefined,
+      };
+      const workflowContext = {
+        executionContext,
+        workspace: undefined,
+      };
+
+      server = new CustomToolsSSEServer(testTools, testSessionId, false, workflowContext as any);
+      const port = await server.start();
+
+      // First call
+      await sendMCPRequest(port, {
+        jsonrpc: '2.0',
+        id: 107,
+        method: 'tools/call',
+        params: { name: 'graceful_stop', arguments: {} },
+      });
+
+      const deadlineAfterFirst = executionContext.deadline;
+
+      // Second call should not extend the deadline
+      await sendMCPRequest(port, {
+        jsonrpc: '2.0',
+        id: 108,
+        method: 'tools/call',
+        params: { name: 'graceful_stop', arguments: {} },
+      });
+
+      // Deadline should stay the same or get shorter, never longer
+      expect(executionContext.deadline).toBeLessThanOrEqual(deadlineAfterFirst);
     });
   });
 

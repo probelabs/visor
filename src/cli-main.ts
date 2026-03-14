@@ -1794,10 +1794,20 @@ export async function main(): Promise<void> {
         // Standalone --a2a mode: block here with shutdown handlers
         let shuttingDown = false;
         const onShutdown = async (sig: NodeJS.Signals) => {
-          if (shuttingDown) return;
+          if (shuttingDown) {
+            process.exit(1);
+            return;
+          }
           shuttingDown = true;
           logger.info(`[A2A] Received ${sig}, shutting down gracefully...`);
-          await frontend.stop();
+          const forceTimer = setTimeout(() => {
+            logger.error('[A2A] Shutdown timed out, forcing exit');
+            process.exit(1);
+          }, 5000);
+          forceTimer.unref();
+          try {
+            await frontend.stop();
+          } catch {}
           process.exit(0);
         };
         process.on('SIGINT', sig => {
@@ -1895,23 +1905,40 @@ export async function main(): Promise<void> {
       // Graceful shutdown: notify active threads before exiting
       let shuttingDown = false;
       const onShutdown = async (sig: NodeJS.Signals) => {
-        if (shuttingDown) return;
+        if (shuttingDown) {
+          // Second signal — force exit immediately
+          logger.warn(`[Slack] Received ${sig} again, forcing exit`);
+          process.exit(1);
+          return;
+        }
         shuttingDown = true;
         logger.info(`[Slack] Received ${sig}, shutting down gracefully…`);
-        if (configWatcher) configWatcher.stop();
-        if (configWatchStore) configWatchStore.shutdown().catch(() => {});
-        if (a2aFrontendInstance) {
-          try {
-            await a2aFrontendInstance.stop();
-          } catch {
-            /* ignore */
+
+        // Force exit after 5s if graceful shutdown hangs
+        const forceTimer = setTimeout(() => {
+          logger.error('[Slack] Graceful shutdown timed out after 5s, forcing exit');
+          process.exit(1);
+        }, 5000);
+        forceTimer.unref();
+
+        try {
+          if (configWatcher) configWatcher.stop();
+          if (configWatchStore) configWatchStore.shutdown().catch(() => {});
+          if (a2aFrontendInstance) {
+            try {
+              await a2aFrontendInstance.stop();
+            } catch {
+              /* ignore */
+            }
           }
-        }
-        await runner.stop();
-        if (sharedTaskStore) {
-          try {
-            await sharedTaskStore.shutdown();
-          } catch {}
+          await runner.stop();
+          if (sharedTaskStore) {
+            try {
+              await sharedTaskStore.shutdown();
+            } catch {}
+          }
+        } catch (err) {
+          logger.warn(`[Slack] Error during shutdown: ${err}`);
         }
         process.exit(0);
       };
@@ -2006,17 +2033,27 @@ export async function main(): Promise<void> {
       // Graceful shutdown
       let shuttingDown = false;
       const onShutdown = async (sig: NodeJS.Signals) => {
-        if (shuttingDown) return;
+        if (shuttingDown) {
+          process.exit(1);
+          return;
+        }
         shuttingDown = true;
         logger.info(`[Telegram] Received ${sig}, shutting down gracefully…`);
-        if (configWatcher) configWatcher.stop();
-        if (configWatchStore) configWatchStore.shutdown().catch(() => {});
-        await runner.stop();
-        if (sharedTaskStore) {
-          try {
-            await sharedTaskStore.shutdown();
-          } catch {}
-        }
+        const forceTimer = setTimeout(() => {
+          logger.error('[Telegram] Shutdown timed out, forcing exit');
+          process.exit(1);
+        }, 5000);
+        forceTimer.unref();
+        try {
+          if (configWatcher) configWatcher.stop();
+          if (configWatchStore) configWatchStore.shutdown().catch(() => {});
+          await runner.stop();
+          if (sharedTaskStore) {
+            try {
+              await sharedTaskStore.shutdown();
+            } catch {}
+          }
+        } catch {}
         process.exit(0);
       };
       process.on('SIGINT', sig => {
@@ -2108,17 +2145,27 @@ export async function main(): Promise<void> {
       // Graceful shutdown
       let shuttingDown = false;
       const onShutdown = async (sig: NodeJS.Signals) => {
-        if (shuttingDown) return;
+        if (shuttingDown) {
+          process.exit(1);
+          return;
+        }
         shuttingDown = true;
         logger.info(`[Email] Received ${sig}, shutting down gracefully…`);
-        if (configWatcher) configWatcher.stop();
-        if (configWatchStore) configWatchStore.shutdown().catch(() => {});
-        await runner.stop();
-        if (sharedTaskStore) {
-          try {
-            await sharedTaskStore.shutdown();
-          } catch {}
-        }
+        const forceTimer = setTimeout(() => {
+          logger.error('[Email] Shutdown timed out, forcing exit');
+          process.exit(1);
+        }, 5000);
+        forceTimer.unref();
+        try {
+          if (configWatcher) configWatcher.stop();
+          if (configWatchStore) configWatchStore.shutdown().catch(() => {});
+          await runner.stop();
+          if (sharedTaskStore) {
+            try {
+              await sharedTaskStore.shutdown();
+            } catch {}
+          }
+        } catch {}
         process.exit(0);
       };
       process.on('SIGINT', sig => {
@@ -2217,17 +2264,27 @@ export async function main(): Promise<void> {
       // Graceful shutdown
       let shuttingDown = false;
       const onShutdown = async (sig: NodeJS.Signals) => {
-        if (shuttingDown) return;
+        if (shuttingDown) {
+          process.exit(1);
+          return;
+        }
         shuttingDown = true;
         logger.info(`[WhatsApp] Received ${sig}, shutting down gracefully…`);
-        if (configWatcher) configWatcher.stop();
-        if (configWatchStore) configWatchStore.shutdown().catch(() => {});
-        await runner.stop();
-        if (sharedTaskStore) {
-          try {
-            await sharedTaskStore.shutdown();
-          } catch {}
-        }
+        const forceTimer = setTimeout(() => {
+          logger.error('[WhatsApp] Shutdown timed out, forcing exit');
+          process.exit(1);
+        }, 5000);
+        forceTimer.unref();
+        try {
+          if (configWatcher) configWatcher.stop();
+          if (configWatchStore) configWatchStore.shutdown().catch(() => {});
+          await runner.stop();
+          if (sharedTaskStore) {
+            try {
+              await sharedTaskStore.shutdown();
+            } catch {}
+          }
+        } catch {}
         process.exit(0);
       };
       process.on('SIGINT', sig => {
@@ -2322,17 +2379,27 @@ export async function main(): Promise<void> {
       // Graceful shutdown
       let shuttingDown = false;
       const onShutdown = async (sig: NodeJS.Signals) => {
-        if (shuttingDown) return;
+        if (shuttingDown) {
+          process.exit(1);
+          return;
+        }
         shuttingDown = true;
         logger.info(`[Teams] Received ${sig}, shutting down gracefully…`);
-        if (configWatcher) configWatcher.stop();
-        if (configWatchStore) configWatchStore.shutdown().catch(() => {});
-        await runner.stop();
-        if (sharedTaskStore) {
-          try {
-            await sharedTaskStore.shutdown();
-          } catch {}
-        }
+        const forceTimer = setTimeout(() => {
+          logger.error('[Teams] Shutdown timed out, forcing exit');
+          process.exit(1);
+        }, 5000);
+        forceTimer.unref();
+        try {
+          if (configWatcher) configWatcher.stop();
+          if (configWatchStore) configWatchStore.shutdown().catch(() => {});
+          await runner.stop();
+          if (sharedTaskStore) {
+            try {
+              await sharedTaskStore.shutdown();
+            } catch {}
+          }
+        } catch {}
         process.exit(0);
       };
       process.on('SIGINT', sig => {

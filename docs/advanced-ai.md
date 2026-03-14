@@ -232,6 +232,45 @@ I would like to request a dark mode feature for better accessibility...
 </issue>
 ```
 
+### Negotiated Timeout and Graceful Stop
+
+For long-running AI agents — especially those invoking sub-workflows via MCP tools — Visor supports **negotiated timeouts** where an independent observer LLM decides whether to grant time extensions.
+
+This is critical for complex multi-agent setups (e.g., an assistant that delegates to engineer and code-explorer sub-workflows) where the main agent loop is blocked waiting for MCP tool responses and cannot process a standard wind-down message.
+
+#### Quick Setup
+
+```yaml
+steps:
+  complex-agent:
+    type: ai
+    prompt: "Perform deep analysis using multiple tools"
+    ai:
+      timeout: 300000                          # Hard kill (5 min)
+      ai_timeout: 60000                        # Soft timeout (1 min)
+      timeout_behavior: negotiated             # Observer-based
+      negotiated_timeout_budget: 120000        # 2 min extra budget
+      negotiated_timeout_max_requests: 3
+      negotiated_timeout_max_per_request: 60000
+      graceful_stop_deadline: 5000             # 5s wind-down
+    ai_custom_tools:
+      - workflow: engineer                     # Sub-workflow as MCP tool
+```
+
+#### How Sub-Workflow Shutdown Works
+
+When the observer declines an extension:
+
+1. Probe calls `graceful_stop` on the MCP server hosting the sub-workflows.
+2. The MCP server shortens the shared `executionContext.deadline` — all active workflow tool calls see the new deadline at their next iteration.
+3. Active ProbeAgent sessions are signaled via `triggerGracefulWindDown()`.
+4. Sub-workflows produce partial results within the `graceful_stop_deadline` window.
+5. After the deadline, remaining executions are hard-stopped.
+
+This propagation works through any nesting depth: parent agent → MCP tool → sub-workflow → nested AI check → sub-ProbeAgent.
+
+See [Timeouts: Negotiated Timeout](./timeouts.md#negotiated-timeout) for the complete configuration reference and [the official example](../examples/negotiated-timeout.yaml).
+
 ### Incremental Commit Analysis
 When new commits are pushed to a PR, Visor performs incremental analysis:
 - Full Analysis: Reviews the entire PR on initial creation

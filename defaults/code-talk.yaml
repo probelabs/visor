@@ -470,6 +470,17 @@ steps:
     assume:
       - "outputs['route-projects']?.projects?.length > 0"
     ai:
+      # ── Timeout Configuration ──────────────────────────────────────────
+      # Probe soft timeout: 25 min — observer fires here
+      ai_timeout: 1500000
+      # Negotiated: observer decides if exploration needs more time
+      timeout_behavior: negotiated
+      # Budget: 20 min total (2 × 10 min extensions)
+      negotiated_timeout_budget: 1200000
+      negotiated_timeout_max_requests: 2
+      negotiated_timeout_max_per_request: 600000
+      # No hard timeout needed; parent deadline propagation caps this step
+      # ──────────────────────────────────────────────────────────────────
       skip_code_context: true
       enableDelegate: true
       enableExecutePlan: false

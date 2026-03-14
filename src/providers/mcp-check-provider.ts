@@ -2,7 +2,7 @@ import { CheckProvider, CheckProviderConfig } from './check-provider.interface';
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary, ReviewIssue } from '../reviewer';
 import { logger } from '../logger';
-import { Liquid } from 'liquidjs';
+import type { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';

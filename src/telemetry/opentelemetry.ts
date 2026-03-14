@@ -313,6 +313,20 @@ export function getOtelLoggerProvider(): any {
   return loggerProvider;
 }
 
+/**
+ * Force-flush all pending spans without shutting down the SDK.
+ * Call after ending critical spans (e.g. visor.run) in long-running
+ * processes to ensure they are exported before the next batch interval.
+ */
+export async function forceFlushTelemetry(): Promise<void> {
+  if (!sdk) return;
+  try {
+    await sdk.forceFlush();
+  } catch {
+    // ignore — best-effort flush
+  }
+}
+
 export async function shutdownTelemetry(): Promise<void> {
   if (!sdk) return;
   try {

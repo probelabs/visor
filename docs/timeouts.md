@@ -90,6 +90,87 @@ steps:
       timeout: 120000  # 2 minutes
 ```
 
+#### AI Timeout (`ai_timeout`)
+
+The `ai_timeout` field sets a **Probe-level soft timeout** that is separate from Visor's external hard timeout. When `ai_timeout` fires, Probe's internal timeout handling kicks in (graceful wind-down or negotiated extension) rather than Visor abruptly killing the process.
+
+```yaml
+steps:
+  ai-review:
+    type: ai
+    prompt: "Analyze the codebase"
+    ai:
+      timeout: 300000      # Visor's hard kill (5 minutes)
+      ai_timeout: 60000    # Probe's soft timeout (1 minute)
+```
+
+See [Negotiated Timeout](#negotiated-timeout) below for the observer-based extension pattern.
+
+### Negotiated Timeout
+
+The **negotiated timeout** feature enables an independent observer LLM to decide whether a running AI agent should receive a time extension or be stopped. This is particularly useful for long-running agents that invoke sub-workflow tools via MCP, where the main agent loop may be blocked waiting for a tool response and cannot process a simple graceful wind-down message.
+
+#### How It Works
+
+1. The agent runs until `ai_timeout` fires (the soft timeout).
+2. An independent observer LLM evaluates the agent's progress.
+3. The observer either **grants an extension** (with a time budget) or **declines**.
+4. If declined, Probe calls `graceful_stop` on connected MCP servers, which:
+   - Shortens the shared execution deadline for all active sub-workflows
+   - Signals running ProbeAgent sessions to wind down via `triggerGracefulWindDown()`
+5. After the `graceful_stop_deadline` window, the agent is hard-stopped.
+
+#### Configuration
+
+```yaml
+steps:
+  complex-analysis:
+    type: ai
+    prompt: "Perform comprehensive analysis using sub-workflow tools"
+    ai:
+      # Visor's external hard kill (always active as safety net)
+      timeout: 300000                        # 5 minutes
+
+      # Probe-level soft timeout — observer fires here
+      ai_timeout: 60000                      # 1 minute
+
+      # Negotiated timeout: observer LLM decides extensions
+      timeout_behavior: negotiated
+      negotiated_timeout_budget: 120000      # 2 min total extra time
+      negotiated_timeout_max_requests: 3     # max 3 extension requests
+      negotiated_timeout_max_per_request: 60000  # max 1 min per extension
+
+      # Wind-down deadline for sub-agents after graceful_stop
+      graceful_stop_deadline: 5000           # 5 seconds
+```
+
+#### Configuration Reference
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timeout_behavior` | `'graceful'` \| `'negotiated'` | Timeout strategy. `graceful` (default) sends a wind-down message. `negotiated` uses an observer LLM. |
+| `negotiated_timeout_budget` | number (ms) | Total extra time the observer can grant across all extensions. Use values ≥ 60000 (1 min) since the observer works in minute granularity. |
+| `negotiated_timeout_max_requests` | number | Maximum number of extension requests before hard stop. |
+| `negotiated_timeout_max_per_request` | number (ms) | Maximum time per individual extension grant. Use values ≥ 60000 (1 min). |
+| `graceful_stop_deadline` | number (ms) | Time window for sub-agents to wind down after `graceful_stop` is called. |
+
+#### The `graceful_stop` MCP Tool
+
+When the observer declines an extension, Probe calls `graceful_stop` on all connected MCP servers. Visor's built-in MCP SSE server implements this tool to:
+
+1. **Shorten the shared execution deadline** — all active sub-workflow tool calls see the new deadline at their next check iteration.
+2. **Signal active ProbeAgent sessions** — iterates the `SessionRegistry` and calls `triggerGracefulWindDown()` on each session.
+
+This two-phase approach ensures that even deeply nested workflows (e.g., assistant → engineer sub-workflow → code analysis) receive the stop signal and can produce partial results before the hard deadline.
+
+See the [official example](../examples/negotiated-timeout.yaml) for a complete working configuration.
+
+#### Important Notes
+
+- **Minute granularity**: The observer works in minutes. Budget values under 60000ms round to 0 minutes and won't grant meaningful extensions. Use at least 60000ms (1 min) for `negotiated_timeout_budget` and `negotiated_timeout_max_per_request`.
+- **Safety net**: Visor's external `timeout` always acts as the ultimate hard kill, regardless of negotiated timeout settings.
+- **Default behavior**: If `timeout_behavior` is not set, the default is `graceful` — Probe sends a wind-down message when `ai_timeout` fires.
+
 ### Human Input Provider
 
 - **Units**: seconds
@@ -199,8 +280,12 @@ steps:
 - [Command Provider](./command-provider.md) - Shell command execution
 - [HTTP Integration](./http.md) - HTTP client and webhook providers
 - [MCP Provider](./mcp-provider.md) - MCP tool execution
-- [AI Configuration](./ai-configuration.md) - AI provider settings
+- [AI Configuration](./ai-configuration.md) - AI provider settings including negotiated timeout fields
+- [Advanced AI Features](./advanced-ai.md) - Negotiated timeout and graceful stop for sub-workflows
+- [Workflows](./workflows.md) - Reusable workflows and graceful stop propagation
+- [MCP Tools](./mcp.md) - MCP server configuration and built-in `graceful_stop` tool
 - [Human Input Provider](./human-input-provider.md) - Interactive input
 - [Custom Tools](./custom-tools.md) - YAML-defined tools
 - [Git Checkout Provider](./providers/git-checkout.md) - Repository checkout
 - [Failure Routing](./failure-routing.md) - Handling failures and retries
+- [Glossary](./glossary.md) - Definitions for Negotiated Timeout, Graceful Stop, Timeout Observer

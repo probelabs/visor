@@ -121,6 +121,12 @@ export class HttpClientProvider extends CheckProvider {
       // Add env to context for shell-style variable resolution
       (templateContext as Record<string, unknown>).env = process.env;
 
+      // Make workflow inputs available as 'inputs' in Liquid templates
+      const workflowInputs = (config as any).workflowInputs;
+      if (workflowInputs) {
+        (templateContext as Record<string, unknown>).inputs = workflowInputs;
+      }
+
       // First resolve shell-style environment variables (${VAR}, $VAR, ${{ env.VAR }})
       let renderedUrl = String(EnvironmentResolver.resolveValue(url));
       resolvedUrlForErrors = renderedUrl; // Track for error messages
@@ -200,6 +206,11 @@ export class HttpClientProvider extends CheckProvider {
           logger.verbose(`[http_client] File cached: ${resolvedOutputFile} (${stats.size} bytes)`);
           return {
             issues: [],
+            output: {
+              file_path: resolvedOutputFile,
+              size: stats.size,
+              cached: true,
+            },
             file_path: resolvedOutputFile,
             size: stats.size,
             cached: true,
@@ -468,6 +479,11 @@ export class HttpClientProvider extends CheckProvider {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
+        // Log error body for debugging
+        try {
+          const errorBody = await response.text();
+          logger.warn(`[http_client] Download error body: ${errorBody.substring(0, 500)}`);
+        } catch {}
         return {
           issues: [
             {
@@ -498,6 +514,12 @@ export class HttpClientProvider extends CheckProvider {
 
       return {
         issues: [],
+        output: {
+          file_path: outputFile,
+          size: buffer.length,
+          content_type: contentType,
+          cached: false,
+        },
         file_path: outputFile,
         size: buffer.length,
         content_type: contentType,

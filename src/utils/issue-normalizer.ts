@@ -95,7 +95,14 @@ export function normalizeIssue(raw: unknown, defaultRuleId = 'tool'): ReviewIssu
 
   const data = raw as Record<string, unknown>;
 
-  const message = toTrimmedString(data.message || data.text || data.description || data.summary);
+  // Only accept string values for issue message fields.
+  // Non-string values (e.g. Slack's `message: {text: "...", ...}` object)
+  // must not be coerced — they are API payloads, not issue descriptions.
+  const rawMessage = data.message || data.text || data.description || data.summary;
+  if (typeof rawMessage !== 'string') {
+    return null;
+  }
+  const message = rawMessage.trim();
   if (!message) {
     return null;
   }

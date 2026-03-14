@@ -7,6 +7,9 @@ This glossary provides definitions for all key terms and concepts used in Visor.
 ### AI Provider
 An integration with a large language model service (Google Gemini, Anthropic Claude, OpenAI GPT, AWS Bedrock) that enables AI-powered code analysis. Configured via `type: ai` in step definitions. See [AI Configuration](./ai-configuration.md).
 
+### `ai_timeout`
+A Probe-level soft timeout (in milliseconds) that is separate from Visor's external hard `timeout`. When `ai_timeout` fires, Probe's internal timeout handling activates — either graceful wind-down or negotiated extension via an observer LLM. Configured under `ai:`. See [Timeouts](./timeouts.md#ai-timeout-ai_timeout) and [AI Configuration](./ai-configuration.md#timeout-behavior-and-negotiated-timeout).
+
 ### `appendPrompt`
 A configuration option that appends additional text to an inherited prompt when using `extends`. The parent and child prompts are joined with a double newline. See [Configuration](./configuration.md).
 
@@ -103,6 +106,12 @@ Event-driven integration points that trigger Visor workflows. Includes GitHub (w
 
 ## G
 
+### `graceful_stop` (MCP Tool)
+A built-in MCP tool exposed by Visor's SSE server that signals all active sub-workflow executions to wind down. When called, it shortens the shared execution deadline and signals running ProbeAgent sessions via `triggerGracefulWindDown()`. Automatically invoked by Probe when a [Negotiated Timeout](#negotiated-timeout) observer declines an extension. See [Timeouts: Negotiated Timeout](./timeouts.md#negotiated-timeout).
+
+### `graceful_stop_deadline`
+A configuration field (in milliseconds) that sets the wind-down window for sub-agents after `graceful_stop` is called. During this period, sub-workflows can produce partial results before being hard-stopped. Configured under `ai:`. See [Timeouts: Negotiated Timeout](./timeouts.md#negotiated-timeout).
+
 ### Git-Checkout Provider
 A provider (`type: git-checkout`) that checks out code from git repositories using efficient worktree management. Supports cross-repository comparisons. See [Git Checkout](./providers/git-checkout.md).
 
@@ -183,6 +192,9 @@ A provider (`type: memory`) that provides persistent key-value storage across ch
 The runtime storage system accessible via the `memory` object in JavaScript expressions and Liquid templates. Supports namespaces for isolation. See [Memory](./memory.md).
 
 ## N
+
+### Negotiated Timeout
+A timeout strategy (`timeout_behavior: negotiated`) where an independent observer LLM evaluates a running agent's progress and decides whether to grant time extensions or stop execution. Works even when the main agent loop is blocked waiting for MCP tool responses. See [Timeouts: Negotiated Timeout](./timeouts.md#negotiated-timeout) and [AI Configuration](./ai-configuration.md#timeout-behavior-and-negotiated-timeout).
 
 ### Namespace
 A memory isolation context that separates key-value data between different workflows or concerns. Configured via `memory.namespace` globally or `namespace:` per step.
@@ -265,6 +277,12 @@ See [Check](#check). The recommended term and configuration key (`steps:` instea
 The ability to disable specific issues via inline comments (`// visor-disable: rule-id`). Controlled by `output.suppressionEnabled`. See [Suppressions](./suppressions.md).
 
 ## T
+
+### `timeout_behavior`
+A configuration field that selects the timeout strategy for AI agents. Values: `'graceful'` (default — sends wind-down message) or `'negotiated'` (uses an observer LLM to decide extensions). Configured under `ai:`. See [Timeouts: Negotiated Timeout](./timeouts.md#negotiated-timeout).
+
+### Timeout Observer
+An independent LLM call used in [Negotiated Timeout](#negotiated-timeout) mode. Fires when `ai_timeout` is reached and evaluates whether the agent is making progress. Can grant time extensions (up to `negotiated_timeout_budget`) or decline, triggering graceful shutdown.
 
 ### Tags
 Labels attached to steps for categorization and filtering. Common patterns: `local`/`remote`, `fast`/`slow`, `security`, `experimental`. Configured via `tags:` field. See [Tag Filtering](./tag-filtering.md).
