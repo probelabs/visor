@@ -1408,9 +1408,17 @@ export class CustomToolsSSEServer implements CustomMCPServer {
       const workflowId = tool.workflow;
       const workflow = registry.get(workflowId);
 
+      // Skill-level inputs (object, not array) serve as pre-filled overrides for the workflow.
+      // Array inputs are inline workflow input definitions (handled in the branch above).
+      const skillInputOverrides =
+        tool.inputs && !Array.isArray(tool.inputs)
+          ? (tool.inputs as Record<string, unknown>)
+          : undefined;
+
       if (workflow) {
         // Build inputSchema from the registered workflow's inputs
-        return createWorkflowToolDefinition(workflow, undefined, tool.name || name);
+        // Pass skill-level inputs as argsOverrides so they're pre-filled and hidden from the AI schema
+        return createWorkflowToolDefinition(workflow, skillInputOverrides, tool.name || name);
       }
 
       // Workflow not yet in registry -- create a placeholder that will resolve at call time
@@ -1431,6 +1439,7 @@ export class CustomToolsSSEServer implements CustomMCPServer {
         exec: '',
         __isWorkflowTool: true,
         __workflowId: workflowId,
+        __argsOverrides: skillInputOverrides,
       };
     }
 

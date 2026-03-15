@@ -130,7 +130,7 @@ inputs:
     schema:
       type: string
 
-  - name: engineer_prompt
+  - name: custom_instructions
     required: false
     description: |
       Additional instructions injected into the engineer AI prompt.
@@ -153,6 +153,16 @@ inputs:
   - name: slack_user_id
     required: false
     description: Slack user ID for notifications
+    default: ""
+    schema:
+      type: string
+
+  - name: sandbox
+    required: false
+    description: |
+      Sandbox name for the engineer-task step (e.g., "bwrap", "docker").
+      Must match a sandbox defined in the parent config's sandboxes block.
+      When empty, engineer-task runs on the host.
     default: ""
     schema:
       type: string
@@ -317,10 +327,10 @@ steps:
       You are a software engineer. Multi-repo tasks must ALL be completed —
       use delegate tool to work on repos in parallel.
 
-      {% assign has_engineer_prompt = inputs.engineer_prompt | size %}
-      {% if has_engineer_prompt > 0 %}
+      {% assign has_custom_instructions = inputs.custom_instructions | size %}
+      {% if has_custom_instructions > 0 %}
       <custom_instructions>
-      {{ inputs.engineer_prompt }}
+      {{ inputs.custom_instructions }}
       </custom_instructions>
       {% endif %}
 
@@ -454,7 +464,7 @@ tests:
       fixture: local.minimal
       workflow_input:
         task: "Add rate limiting to the API"
-        engineer_prompt: "Always use table-driven tests in Go"
+        custom_instructions: "Always use table-driven tests in Go"
         projects:
           - project_id: backend
             repository: org/backend

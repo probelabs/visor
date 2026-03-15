@@ -99,8 +99,9 @@ export async function executeWithSandboxRouting(
   }
 
   // Resolve which sandbox this check should use
+  // Check step-level sandbox, then workflow input sandbox, then config-level default
   const sandboxName = sandboxManager.resolveSandbox(
-    checkConfig.sandbox,
+    checkConfig.sandbox || (checkConfig as any).workflowInputs?.sandbox || undefined,
     context.config.sandbox as string | undefined
   );
 
@@ -122,9 +123,18 @@ export async function executeWithSandboxRouting(
     : extractProjectMeta(dependencyResults);
 
   // Start project services for all projects that define them, collect env vars
+  // Services require Docker networking — warn if sandbox engine is not Docker
   let serviceEnvVars: Record<string, string> | undefined;
   for (const meta of projectMetas) {
     if (!meta.services || Object.keys(meta.services).length === 0) continue;
+    if (sandboxConfig.engine && sandboxConfig.engine !== 'docker') {
+      logger.warn(
+        `[SandboxRouting] Project '${meta.projectId}' defines services (${Object.keys(meta.services).join(', ')}), ` +
+          `but sandbox '${sandboxName}' uses engine '${sandboxConfig.engine}'. ` +
+          `Services require Docker networking and will not be available in '${sandboxConfig.engine}' sandboxes.`
+      );
+      continue;
+    }
     try {
       const { SandboxManager: SM } = require('../../sandbox/sandbox-manager');
       const projectEnv = await sandboxManager.startProjectServices(

@@ -697,6 +697,16 @@ export class WorkflowCheckProvider extends CheckProvider {
       config.checkName || workflow.id
     );
 
+    // Propagate parent sandboxes to nested workflow if the workflow doesn't define its own.
+    // This allows workflows like the built-in engineer to reference sandbox names defined
+    // in the parent config (e.g., tyk-assistant.yaml).
+    if (parentContext?.config?.sandboxes && !workflowConfig.sandboxes) {
+      workflowConfig.sandboxes = { ...parentContext.config.sandboxes };
+    }
+    if (parentContext?.config?.sandbox_defaults && !workflowConfig.sandbox_defaults) {
+      workflowConfig.sandbox_defaults = { ...(parentContext.config.sandbox_defaults as any) };
+    }
+
     // Propagate parent check's timeout to nested workflow steps that don't define their own.
     // This ensures that a parent `timeout: 120000` caps nested AI steps instead of them
     // falling back to the 30-minute default.
