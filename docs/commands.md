@@ -102,7 +102,7 @@ visor config restore 1 --output restored.yaml  # Restore snapshot to file
 
 #### `visor mcp-server`
 
-Start Visor as an MCP (Model Context Protocol) server.
+Start Visor as an MCP (Model Context Protocol) server. Supports local stdio transport (default) and remote HTTP transport with authentication and TLS.
 
 ```bash
 visor mcp-server [options]
@@ -112,6 +112,39 @@ visor mcp-server [options]
 - `--config <path>` - Configuration file path
 - `--mcp-tool-name <name>` - Custom tool name for the MCP server
 - `--mcp-tool-description <desc>` - Custom tool description
+- `--transport <stdio|http>` - Transport type (default: `stdio`)
+- `--port <number>` - Port for HTTP transport (default: `8080`)
+- `--host <address>` - Bind address for HTTP transport (default: `0.0.0.0`)
+- `--auth-token <token>` - Bearer token for HTTP authentication
+- `--auth-token-env <var>` - Environment variable name containing the Bearer token
+- `--tls-cert <path>` - Path to TLS certificate PEM file
+- `--tls-key <path>` - Path to TLS private key PEM file
+
+> **Note:** HTTP transport requires `--auth-token` or `--auth-token-env` — the server refuses to start without authentication to prevent accidental unauthenticated exposure.
+
+**Examples:**
+```bash
+# Local stdio (default, for Claude Desktop / Claude Code)
+visor mcp-server
+
+# Fixed workflow via stdio
+visor mcp-server --config defaults/code-review.yaml
+
+# Remote HTTP with direct token
+visor mcp-server --transport http --port 8080 --auth-token "my-secret-token"
+
+# Remote HTTP with token from env var
+VISOR_MCP_TOKEN=secret visor mcp-server --transport http --auth-token-env VISOR_MCP_TOKEN
+
+# HTTPS with TLS certificates
+visor mcp-server --transport http --port 443 \
+  --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem \
+  --auth-token-env VISOR_MCP_TOKEN
+
+# Fixed workflow + remote HTTP
+visor mcp-server --transport http --config defaults/code-review.yaml \
+  --mcp-tool-name code_review --auth-token-env VISOR_MCP_TOKEN
+```
 
 #### `visor tasks`
 

@@ -2,19 +2,30 @@
  * MCP Server for Visor
  *
  * Exposes Visor workflows as MCP tools, allowing Claude Code and other
- * MCP clients to execute workflows programmatically via stdio transport.
+ * MCP clients to execute workflows programmatically via stdio or HTTP transport.
  *
  * Usage:
- *   # Generic mode - workflow is a tool parameter
+ *   # Generic mode - workflow is a tool parameter (stdio)
  *   visor mcp-server
  *
- *   # Fixed workflow mode - workflow is pre-configured
+ *   # Fixed workflow mode - workflow is pre-configured (stdio)
  *   visor mcp-server --config defaults/code-review.yaml
  *
  *   # Custom tool name and description
  *   visor mcp-server --config defaults/code-review.yaml \
  *     --mcp-tool-name "code_review" \
  *     --mcp-tool-description "Run a code review for current uncommitted changes"
+ *
+ *   # Remote HTTP mode with Bearer token auth
+ *   visor mcp-server --transport http --port 8080 --auth-token "my-secret"
+ *
+ *   # HTTP with token from environment variable
+ *   VISOR_MCP_TOKEN=secret visor mcp-server --transport http --auth-token-env VISOR_MCP_TOKEN
+ *
+ *   # HTTPS with TLS certificates
+ *   visor mcp-server --transport http --port 443 \
+ *     --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem \
+ *     --auth-token-env VISOR_MCP_TOKEN
  *
  * Claude Code config example (~/.claude/claude_desktop_config.json):
  *   {
@@ -29,10 +40,14 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { runChecks } from './sdk';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as http from 'http';
+import * as https from 'https';
+import * as crypto from 'crypto';
 
 /**
  * Configuration options for the MCP server.
@@ -53,6 +68,27 @@ export interface McpServerOptions {
    * Custom tool description.
    */
   toolDescription?: string;
+
+  /** Transport type: 'stdio' (default) or 'http' for remote access. */
+  transport?: 'stdio' | 'http';
+
+  /** Port for HTTP transport (default: 8080). */
+  port?: number;
+
+  /** Host/bind address for HTTP transport (default: '0.0.0.0'). */
+  host?: string;
+
+  /** Bearer token for HTTP transport authentication. */
+  authToken?: string;
+
+  /** Environment variable name containing the Bearer token. */
+  authTokenEnv?: string;
+
+  /** Path to TLS certificate PEM file. */
+  tlsCert?: string;
+
+  /** Path to TLS private key PEM file. */
+  tlsKey?: string;
 }
 
 /**
@@ -457,14 +493,176 @@ export async function executeFixedWorkflow(
 }
 
 /**
+ * Validate a Bearer token from an HTTP request using timing-safe comparison.
+ */
+export function validateBearerToken(req: http.IncomingMessage, expectedToken: string): boolean {
+  const header = req.headers['authorization'];
+  if (!header || !header.startsWith('Bearer ')) return false;
+  const token = header.slice(7);
+  if (token.length !== expectedToken.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expectedToken));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read and parse JSON body from an HTTP request.
+ */
+function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (chunk: Buffer) => (data += chunk));
+    req.on('end', () => {
+      try {
+        resolve(JSON.parse(data));
+      } catch {
+        reject(new Error('Invalid JSON'));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+/**
+ * Start the MCP server over HTTP/HTTPS with StreamableHTTPServerTransport.
+ */
+async function startHttpMcpServer(server: McpServer, options: McpServerOptions): Promise<void> {
+  const port = options.port || 8080;
+  const host = options.host || '0.0.0.0';
+
+  // Resolve auth token
+  const authToken =
+    options.authToken || (options.authTokenEnv ? process.env[options.authTokenEnv] : undefined);
+  if (!authToken) {
+    throw new Error(
+      'HTTP transport requires --auth-token or --auth-token-env for security. ' +
+        'Refusing to start an unauthenticated remote MCP endpoint.'
+    );
+  }
+
+  // Per-session transport map
+  const transports = new Map<string, StreamableHTTPServerTransport>();
+
+  const handleRequest = async (req: http.IncomingMessage, res: http.ServerResponse) => {
+    // CORS preflight
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, mcp-session-id',
+      });
+      res.end();
+      return;
+    }
+
+    // Auth check on all requests
+    if (!validateBearerToken(req, authToken)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized' }));
+      return;
+    }
+
+    // Only serve /mcp endpoint
+    const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+    if (url.pathname !== '/mcp') {
+      res.writeHead(404);
+      res.end('Not found');
+      return;
+    }
+
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+    if (req.method === 'POST' && !sessionId) {
+      // New session
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => crypto.randomUUID(),
+      });
+      transport.onclose = () => {
+        if (transport.sessionId) transports.delete(transport.sessionId);
+      };
+      await server.connect(transport);
+      if (transport.sessionId) transports.set(transport.sessionId, transport);
+      const body = await readBody(req);
+      await transport.handleRequest(req, res, body);
+      return;
+    }
+
+    if (sessionId) {
+      const transport = transports.get(sessionId);
+      if (!transport) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Session not found' }));
+        return;
+      }
+      if (req.method === 'DELETE') {
+        await transport.handleRequest(req, res);
+        return;
+      }
+      const body = await readBody(req);
+      await transport.handleRequest(req, res, body);
+      return;
+    }
+
+    // GET without session (standalone SSE stream)
+    if (req.method === 'GET') {
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => crypto.randomUUID(),
+      });
+      transport.onclose = () => {
+        if (transport.sessionId) transports.delete(transport.sessionId);
+      };
+      await server.connect(transport);
+      if (transport.sessionId) transports.set(transport.sessionId, transport);
+      await transport.handleRequest(req, res);
+      return;
+    }
+
+    res.writeHead(405);
+    res.end('Method not allowed');
+  };
+
+  // Create HTTP or HTTPS server
+  let httpServer: http.Server | https.Server;
+  if (options.tlsCert && options.tlsKey) {
+    const cert = fs.readFileSync(options.tlsCert);
+    const key = fs.readFileSync(options.tlsKey);
+    httpServer = https.createServer({ cert, key }, handleRequest);
+    console.error(`Visor MCP server (HTTPS) listening on ${host}:${port}`);
+  } else {
+    httpServer = http.createServer(handleRequest);
+    console.error(`Visor MCP server (HTTP) listening on ${host}:${port}`);
+    if (host !== '127.0.0.1' && host !== 'localhost') {
+      console.error(
+        '⚠️  WARNING: Running without TLS on a non-localhost address. Use --tls-cert and --tls-key for production.'
+      );
+    }
+  }
+
+  httpServer.listen(port, host);
+
+  // Graceful shutdown
+  const shutdown = () => {
+    console.error('Shutting down MCP server...');
+    for (const transport of transports.values()) {
+      transport.close();
+    }
+    httpServer.close();
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
+/**
  * Start the MCP server with Visor tools.
  *
  * The server exposes the following tools:
  * - run_workflow (or custom name): Execute a Visor workflow and return results
  *
- * Communication is via stdio transport (stdin/stdout for JSON-RPC messages).
+ * Supports stdio (default) and HTTP transports.
  *
- * @param options - Optional configuration for fixed workflow mode
+ * @param options - Optional configuration for fixed workflow mode and transport
  */
 export async function startMcpServer(options: McpServerOptions = {}): Promise<void> {
   try {
@@ -526,9 +724,13 @@ export async function startMcpServer(options: McpServerOptions = {}): Promise<vo
       console.error('Visor MCP server started');
     }
 
-    // Connect via stdio transport
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
+    // Connect via selected transport
+    if (options.transport === 'http') {
+      await startHttpMcpServer(server, options);
+    } else {
+      const transport = new StdioServerTransport();
+      await server.connect(transport);
+    }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error(`Failed to start MCP server: ${errorMessage}`);

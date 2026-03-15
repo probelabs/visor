@@ -1310,6 +1310,13 @@ export async function main(): Promise<void> {
         configPath: getArg('--config'),
         toolName: getArg('--mcp-tool-name'),
         toolDescription: getArg('--mcp-tool-description'),
+        transport: (getArg('--transport') as 'stdio' | 'http') || 'stdio',
+        port: getArg('--port') ? Number(getArg('--port')) : 8080,
+        host: getArg('--host') || '0.0.0.0',
+        authToken: getArg('--auth-token'),
+        authTokenEnv: getArg('--auth-token-env'),
+        tlsCert: getArg('--tls-cert'),
+        tlsKey: getArg('--tls-key'),
       };
 
       const { startMcpServer } = await import('./mcp-server');
