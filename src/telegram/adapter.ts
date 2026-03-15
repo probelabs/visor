@@ -22,9 +22,20 @@ export interface TelegramMessageInfo {
   message_thread_id?: number;
 }
 
+/** In-memory conversation history per chat thread */
+interface ChatHistory {
+  messages: NormalizedMessage[];
+  lastUpdated: number;
+}
+
+const MAX_HISTORY_PER_CHAT = 50;
+const MAX_CHATS = 500;
+const HISTORY_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+
 export class TelegramAdapter {
   private client: TelegramClient;
   private botInfo: TelegramUser | null = null;
+  private chatHistories = new Map<string, ChatHistory>();
 
   constructor(client: TelegramClient) {
     this.client = client;
@@ -70,7 +81,39 @@ export class TelegramAdapter {
     };
   }
 
-  /** Build ConversationContext from a Telegram message */
+  /** Add a message to chat history */
+  addToHistory(threadId: string, message: NormalizedMessage): void {
+    const now = Date.now();
+    this.cleanupExpired();
+
+    let history = this.chatHistories.get(threadId);
+    if (!history) {
+      // Evict oldest chat if at capacity
+      if (this.chatHistories.size >= MAX_CHATS) {
+        let oldestKey: string | null = null;
+        let oldestTime = Infinity;
+        for (const [key, h] of this.chatHistories.entries()) {
+          if (h.lastUpdated < oldestTime) {
+            oldestTime = h.lastUpdated;
+            oldestKey = key;
+          }
+        }
+        if (oldestKey) this.chatHistories.delete(oldestKey);
+      }
+      history = { messages: [], lastUpdated: now };
+      this.chatHistories.set(threadId, history);
+    }
+
+    history.messages.push(message);
+    history.lastUpdated = now;
+
+    // Trim to max history size
+    if (history.messages.length > MAX_HISTORY_PER_CHAT) {
+      history.messages = history.messages.slice(-MAX_HISTORY_PER_CHAT);
+    }
+  }
+
+  /** Build ConversationContext from a Telegram message, including chat history */
   buildConversationContext(msg: TelegramMessageInfo): ConversationContext {
     const chatId = String(msg.chat.id);
     const threadId = msg.message_thread_id ? `${chatId}:${msg.message_thread_id}` : chatId;
@@ -84,13 +127,20 @@ export class TelegramAdapter {
         .trim();
     }
 
+    // Add current user message to history
+    this.addToHistory(threadId, current);
+
+    // Get full conversation history for this chat
+    const history = this.chatHistories.get(threadId);
+    const messages = history ? [...history.messages] : [current];
+
     return {
       transport: 'telegram',
       thread: {
         id: threadId,
         url: msg.chat.username ? `https://t.me/${msg.chat.username}/${msg.message_id}` : undefined,
       },
-      messages: [current],
+      messages,
       current,
       attributes: {
         chat_id: chatId,
@@ -102,5 +152,15 @@ export class TelegramAdapter {
         ...(msg.chat.title ? { chat_title: msg.chat.title } : {}),
       },
     };
+  }
+
+  /** Remove expired chat histories */
+  private cleanupExpired(): void {
+    const now = Date.now();
+    for (const [key, history] of this.chatHistories.entries()) {
+      if (now - history.lastUpdated > HISTORY_TTL_MS) {
+        this.chatHistories.delete(key);
+      }
+    }
   }
 }
