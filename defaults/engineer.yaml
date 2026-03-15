@@ -267,6 +267,7 @@ steps:
     type: ai
     criticality: policy
     depends_on: [merge-projects]
+    sandbox: "{{ inputs.sandbox }}"
     guarantee: "(output?.pr_urls?.length > 0) || (output?.error != null && output?.error != '')"
     timeout: 3000000
     ai:
