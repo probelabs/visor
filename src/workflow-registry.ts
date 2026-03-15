@@ -347,15 +347,24 @@ export class WorkflowRegistry {
 
     // Validate steps
     for (const [stepId, step] of Object.entries(workflow.steps || {})) {
-      // Validate step dependencies
+      // Validate step dependencies (supports OR groups via pipe syntax, e.g., "A|B")
       if (step.depends_on) {
         for (const dep of step.depends_on) {
-          if (!workflow.steps[dep]) {
-            errors.push({
-              path: `steps.${stepId}.depends_on`,
-              message: `Step '${stepId}' depends on non-existent step '${dep}'`,
-              value: dep,
-            });
+          const orParts =
+            typeof dep === 'string' && dep.includes('|')
+              ? dep
+                  .split('|')
+                  .map((s: string) => s.trim())
+                  .filter(Boolean)
+              : [dep];
+          for (const part of orParts) {
+            if (!workflow.steps[part]) {
+              errors.push({
+                path: `steps.${stepId}.depends_on`,
+                message: `Step '${stepId}' depends on non-existent step '${part}'`,
+                value: dep,
+              });
+            }
           }
         }
       }
