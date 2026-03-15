@@ -30,6 +30,9 @@ module.exports = {
     '^@octokit/auth-app$': '<rootDir>/__mocks__/@octokit/auth-app.ts',
     '^@octokit/rest$': '<rootDir>/__mocks__/@octokit/rest.ts',
     '^@probelabs/probe$': '<rootDir>/__mocks__/@probelabs/probe.ts',
+    '^@utcp/sdk$': '<rootDir>/__mocks__/@utcp/sdk.ts',
+    '^@utcp/http$': '<rootDir>/__mocks__/@utcp/http.ts',
+    '^@utcp/file$': '<rootDir>/__mocks__/@utcp/file.ts',
     '^open$': '<rootDir>/__mocks__/open.ts',
   },
   transformIgnorePatterns: [
