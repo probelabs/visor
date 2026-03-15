@@ -1,0 +1,216 @@
+version: "1.0"
+
+# E2E test: Project-level services, setup, and sandbox configuration
+# This config simulates a real agent workflow:
+# 1. Define projects with services/sandbox/setup metadata
+# 2. Use a script step to build project environment descriptors (like project-items)
+# 3. Use a real AI step to generate setup instructions from the metadata
+# 4. Validate the AI can see and reason about project services
+
+sandboxes:
+  go-env:
+    image: golang:1.22-bookworm
+    network: true
+
+steps:
+  # Step 1: Build project environment descriptors (simulates project-items)
+  build-project-env:
+    type: script
+    content: |
+      // Simulate what project-items does in code-talk.yaml
+      const projects = [
+        {
+          project_id: "tyk-gateway",
+          repository: "TykTechnologies/tyk",
+          description: "Tyk API Gateway",
+          sandbox: "go-env",
+          services: {
+            redis: {
+              image: "redis:7-alpine",
+              ports: [6379]
+            },
+            mongo: {
+              image: "mongo:6",
+              ports: [27017],
+              environment: {
+                MONGO_INITDB_DATABASE: "tyk_test"
+              }
+            }
+          },
+          setup: [
+            "go mod download",
+            "go generate ./..."
+          ],
+          knowledge: "docs/testing-guide.md"
+        },
+        {
+          project_id: "tyk-pump",
+          repository: "TykTechnologies/tyk-pump",
+          description: "Tyk Pump - analytics aggregator",
+          sandbox: null,
+          services: null,
+          setup: null,
+          knowledge: null
+        }
+      ];
+      return projects;
+
+  # Step 2: Real AI step - ask AI to generate docker-compose and setup script
+  # based on the project environment descriptors
+  generate-env-plan:
+    type: ai
+    depends_on: [build-project-env]
+    ai:
+      skip_code_context: true
+      prompt_type: general
+      system_prompt: |
+        You are a DevOps assistant that generates environment setup plans.
+        Given project configurations with services, setup commands, and sandbox info,
+        produce a brief JSON plan.
+    prompt: |
+      Given these project configurations:
+
+      ```json
+      {{ outputs['build-project-env'] | json }}
+      ```
+
+      For each project that has services defined, create a brief environment plan with:
+      1. Which docker services are needed
+      2. The setup commands to run
+      3. Environment variables the test runner should set (like REDIS_HOST, MONGO_HOST)
+
+      For projects without services, note they run on the host.
+    schema:
+      type: object
+      properties:
+        projects:
+          type: array
+          items:
+            type: object
+            properties:
+              project_id:
+                type: string
+              has_services:
+                type: boolean
+              docker_services:
+                type: array
+                items: { type: string }
+              env_vars:
+                type: object
+                additionalProperties: { type: string }
+              setup_commands:
+                type: array
+                items: { type: string }
+              notes:
+                type: string
+            required: [project_id, has_services]
+      required: [projects]
+
+  # Step 3: Validate the AI response contains expected structure
+  validate-plan:
+    type: script
+    depends_on: [generate-env-plan]
+    content: |
+      const plan = outputs['generate-env-plan'];
+      const errors = [];
+
+      // Check we got projects array
+      if (!plan?.projects || !Array.isArray(plan.projects)) {
+        errors.push("Missing projects array in AI response");
+        return { valid: false, errors };
+      }
+
+      // Check tyk-gateway has services
+      const tyk = plan.projects.find(p => p.project_id === "tyk-gateway");
+      if (!tyk) {
+        errors.push("Missing tyk-gateway in response");
+      } else {
+        if (!tyk.has_services) {
+          errors.push("tyk-gateway should have has_services=true");
+        }
+        if (!tyk.docker_services || tyk.docker_services.length === 0) {
+          errors.push("tyk-gateway should list docker services");
+        }
+      }
+
+      // Check tyk-pump has no services
+      const pump = plan.projects.find(p => p.project_id === "tyk-pump");
+      if (!pump) {
+        errors.push("Missing tyk-pump in response");
+      } else {
+        if (pump.has_services === true && pump.docker_services?.length > 0) {
+          errors.push("tyk-pump should not have services");
+        }
+      }
+
+      if (errors.length > 0) {
+        return { valid: false, errors };
+      }
+      return {
+        valid: true,
+        project_count: plan.projects.length,
+        tyk_services: tyk.docker_services,
+        tyk_env_vars: tyk.env_vars
+      };
+    fail_if: "!output.valid"
+
+tests:
+  defaults:
+    ai_provider: mock
+    strict: true
+
+  cases:
+    - name: project-services-e2e
+      event: manual
+      fixture: local.minimal
+      mocks:
+        generate-env-plan:
+          projects:
+            - project_id: tyk-gateway
+              has_services: true
+              docker_services: [redis, mongo]
+              env_vars:
+                REDIS_HOST: redis
+                REDIS_PORT: "6379"
+                MONGO_HOST: mongo
+                MONGO_PORT: "27017"
+              setup_commands: ["go mod download", "go generate ./..."]
+              notes: "Requires redis and mongo services"
+            - project_id: tyk-pump
+              has_services: false
+              docker_services: []
+              notes: "Runs on host, no services needed"
+      expect:
+        calls:
+          - step: build-project-env
+            exactly: 1
+          - step: generate-env-plan
+            exactly: 1
+          - step: validate-plan
+            exactly: 1
+        # Verify build-project-env output has correct structure
+        outputs:
+          - step: build-project-env
+            index: last
+            path: "[0].project_id"
+            equals: "tyk-gateway"
+          - step: build-project-env
+            index: last
+            path: "[0].services.redis.image"
+            equals: "redis:7-alpine"
+          - step: build-project-env
+            index: last
+            path: "[0].sandbox"
+            equals: "go-env"
+          - step: build-project-env
+            index: last
+            path: "[1].project_id"
+            equals: "tyk-pump"
+          - step: build-project-env
+            index: last
+            path: "[1].services"
+            equals: null
+          # Verify AI generated valid plan
+          - step: validate-plan
+            path: valid
+            equals: true

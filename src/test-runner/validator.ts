@@ -99,6 +99,7 @@ const schema: any = {
                 baseURL: { type: 'string' },
               },
             },
+            max_parallel: { type: 'number' },
           },
         },
         hooks: { $ref: '#/$defs/suiteHooks' },

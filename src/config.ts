@@ -842,10 +842,14 @@ export class ConfigManager {
         });
       }
 
-      // Validate check-level sandbox references
+      // Validate check-level sandbox references (skip Liquid templates — resolved at runtime)
       if (checksToValidate) {
         for (const [checkName, checkConfig] of Object.entries(checksToValidate)) {
-          if (checkConfig.sandbox && !sandboxNames.includes(checkConfig.sandbox)) {
+          if (
+            checkConfig.sandbox &&
+            !checkConfig.sandbox.includes('{{') &&
+            !sandboxNames.includes(checkConfig.sandbox)
+          ) {
             errors.push({
               field: `checks.${checkName}.sandbox`,
               message: `Check '${checkName}' references sandbox '${checkConfig.sandbox}' which is not defined. Available: ${sandboxNames.join(', ')}`,
@@ -856,7 +860,8 @@ export class ConfigManager {
       }
     } else {
       // If no sandboxes defined, check that nothing references them
-      if (config.sandbox) {
+      // Skip Liquid templates (e.g., "{{ inputs.sandbox }}") — resolved at runtime
+      if (config.sandbox && !String(config.sandbox).includes('{{')) {
         errors.push({
           field: 'sandbox',
           message: `Top-level sandbox '${config.sandbox}' is set but no sandboxes are defined`,
@@ -865,7 +870,7 @@ export class ConfigManager {
       }
       if (checksToValidate) {
         for (const [checkName, checkConfig] of Object.entries(checksToValidate)) {
-          if (checkConfig.sandbox) {
+          if (checkConfig.sandbox && !checkConfig.sandbox.includes('{{')) {
             errors.push({
               field: `checks.${checkName}.sandbox`,
               message: `Check '${checkName}' references sandbox '${checkConfig.sandbox}' but no sandboxes are defined`,

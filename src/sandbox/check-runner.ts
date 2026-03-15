@@ -66,7 +66,8 @@ export class CheckRunner {
     prInfo: PRInfo,
     dependencyResults?: Map<string, ReviewSummary>,
     timeoutMs?: number,
-    workspaceDefaults?: { env_passthrough?: string[] }
+    workspaceDefaults?: { env_passthrough?: string[] },
+    serviceEnvVars?: Record<string, string>
   ): Promise<ReviewSummary> {
     return withActiveSpan(
       'visor.sandbox.runCheck',
@@ -97,6 +98,11 @@ export class CheckRunner {
           sandboxConfig.env_passthrough,
           workspaceDefaults?.env_passthrough
         );
+
+        // Inject project service endpoint env vars (e.g., REDIS_HOST, REDIS_PORT)
+        if (serviceEnvVars) {
+          Object.assign(env, serviceEnvVars);
+        }
 
         // Set up child trace file relay (skip for read-only sandboxes)
         const workdir =

@@ -32,7 +32,6 @@ export class FlowStage {
     private readonly recorder: RecordingOctokit,
     private readonly cfg: any,
     private readonly prompts: Record<string, string[]>,
-    private readonly promptCap: number | undefined,
     private readonly mapEventFromFixtureName: MapEventFn,
     private readonly computeChecksToRun: ComputeChecksFn,
     private readonly printStageHeader: PrintHeaderFn,
@@ -100,12 +99,7 @@ export class FlowStage {
         onPromptCaptured: (info: { step: string; provider: string; prompt: string }) => {
           const k = info.step;
           if (!this.prompts[k]) this.prompts[k] = [];
-          const p =
-            this.promptCap && info.prompt.length > this.promptCap
-              ? info.prompt.slice(0, this.promptCap)
-              : info.prompt;
-          this.prompts[k].push(p);
-          // prompts are captured for assertions only — no ad-hoc console/file output
+          this.prompts[k].push(info.prompt);
         },
         mockForStep: (step: string) => {
           if (this.noMocks) return undefined;

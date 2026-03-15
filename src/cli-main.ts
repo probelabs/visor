@@ -788,7 +788,6 @@ async function handleTestCommand(argv: string[]): Promise<void> {
       '--summary',
       '--max-parallel',
       '--max-suites',
-      '--prompt-max-chars',
       '--progress',
       '--no-mocks-for',
     ]);
@@ -830,12 +829,8 @@ async function handleTestCommand(argv: string[]): Promise<void> {
   const summaryArg = getArg('--summary'); // e.g. md:path.md
   const maxParallelRaw = getArg('--max-parallel');
   const maxSuitesRaw = getArg('--max-suites');
-  const promptMaxCharsRaw = getArg('--prompt-max-chars');
   const maxParallel = maxParallelRaw ? Math.max(1, parseInt(maxParallelRaw, 10) || 1) : undefined;
   const maxParallelSuites = maxSuitesRaw ? Math.max(1, parseInt(maxSuitesRaw, 10) || 1) : undefined;
-  const promptMaxChars = promptMaxCharsRaw
-    ? Math.max(1, parseInt(promptMaxCharsRaw, 10) || 1)
-    : undefined;
 
   // Configure logger for concise console output
   // Respect --debug flag if present, or VISOR_DEBUG from environment
@@ -901,7 +896,6 @@ async function handleTestCommand(argv: string[]): Promise<void> {
         noMocksFor,
         maxParallelSuites: maxParallelSuites || Math.max(1, require('os').cpus()?.length || 2),
         maxParallel,
-        promptMaxChars,
       });
       failures = agg.failedSuites;
       // Print aggregated summary with re-run hints
@@ -1018,7 +1012,6 @@ async function handleTestCommand(argv: string[]): Promise<void> {
         noMocks,
         noMocksFor,
         maxParallel,
-        promptMaxChars,
         engineMode: 'state-machine',
       });
       failures = runRes.failures;

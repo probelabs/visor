@@ -44,6 +44,45 @@ export interface SandboxBindPath {
 }
 
 /**
+ * Configuration for a project-level Docker service (e.g., redis, postgres)
+ */
+export interface ProjectServiceConfig {
+  /** Docker image (e.g., "redis:7-alpine") */
+  image: string;
+  /** Ports to expose within compose network (no host mapping) */
+  ports?: number[];
+  /** Environment variables for the service container */
+  environment?: Record<string, string>;
+  /** Volume mounts for the service */
+  volumes?: string[];
+  /** Healthcheck configuration */
+  healthcheck?: {
+    test: string[];
+    interval?: string;
+    timeout?: string;
+    retries?: number;
+  };
+}
+
+/**
+ * Tracks a running project service environment (compose project)
+ */
+export interface ProjectEnvironment {
+  /** Project identifier */
+  projectId: string;
+  /** Path to the generated docker-compose.yml */
+  composeFilePath: string;
+  /** Docker Compose project name */
+  projectName: string;
+  /** Workspace service name to exec into */
+  serviceName: string;
+  /** Service endpoints for env injection (service name -> host:port) */
+  serviceEndpoints: Record<string, { host: string; port: number }>;
+  /** Whether compose services are running */
+  started: boolean;
+}
+
+/**
  * Configuration for a single sandbox environment
  */
 export interface SandboxConfig {
