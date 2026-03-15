@@ -6006,40 +6006,6 @@ var init_workflow_inputs = __esm({
   }
 });
 
-// src/sandbox/env-filter.ts
-function matchesPattern(name, pattern) {
-  if (pattern === name) return true;
-  if (pattern.endsWith("*")) {
-    const prefix = pattern.slice(0, -1);
-    return name.startsWith(prefix);
-  }
-  return false;
-}
-function filterEnvForSandbox(checkEnv, hostEnv, passthroughPatterns, defaultPatterns) {
-  const result = {};
-  const defaults = defaultPatterns !== void 0 ? defaultPatterns : BUILTIN_PASSTHROUGH;
-  const patterns = [...defaults, ...passthroughPatterns || []];
-  for (const [key, value] of Object.entries(hostEnv)) {
-    if (value === void 0) continue;
-    if (patterns.some((pattern) => matchesPattern(key, pattern))) {
-      result[key] = value;
-    }
-  }
-  if (checkEnv) {
-    for (const [key, value] of Object.entries(checkEnv)) {
-      result[key] = String(value);
-    }
-  }
-  return result;
-}
-var BUILTIN_PASSTHROUGH;
-var init_env_filter = __esm({
-  "src/sandbox/env-filter.ts"() {
-    "use strict";
-    BUILTIN_PASSTHROUGH = ["PATH", "HOME", "USER", "CI", "NODE_ENV", "LANG"];
-  }
-});
-
 // src/sandbox/sandbox-telemetry.ts
 function getTraceHelpers() {
   if (_attempted) return _traceHelpers;
@@ -6079,6 +6045,1204 @@ var init_sandbox_telemetry = __esm({
   }
 });
 
+// src/sandbox/docker-image-sandbox.ts
+var import_util, import_child_process, import_fs, import_path3, import_os, import_crypto, execFileAsync, EXEC_MAX_BUFFER, DockerImageSandbox;
+var init_docker_image_sandbox = __esm({
+  "src/sandbox/docker-image-sandbox.ts"() {
+    "use strict";
+    import_util = require("util");
+    import_child_process = require("child_process");
+    import_fs = require("fs");
+    import_path3 = require("path");
+    import_os = require("os");
+    import_crypto = require("crypto");
+    init_logger();
+    init_sandbox_telemetry();
+    execFileAsync = (0, import_util.promisify)(import_child_process.execFile);
+    EXEC_MAX_BUFFER = 50 * 1024 * 1024;
+    DockerImageSandbox = class {
+      name;
+      config;
+      containerId = null;
+      containerName;
+      repoPath;
+      visorDistPath;
+      cacheVolumeMounts;
+      constructor(name, config, repoPath, visorDistPath, cacheVolumeMounts = []) {
+        this.name = name;
+        this.config = config;
+        this.repoPath = repoPath;
+        this.visorDistPath = visorDistPath;
+        this.containerName = `visor-${name}-${(0, import_crypto.randomUUID)().slice(0, 8)}`;
+        this.cacheVolumeMounts = cacheVolumeMounts;
+      }
+      /**
+       * Build the Docker image if needed (dockerfile or dockerfile_inline mode)
+       */
+      async buildImageIfNeeded() {
+        if (this.config.image) {
+          return this.config.image;
+        }
+        const imageName = `visor-sandbox-${this.name}`;
+        const buildMode = this.config.dockerfile_inline ? "inline" : "dockerfile";
+        return withActiveSpan2(
+          "visor.sandbox.build",
+          {
+            "visor.sandbox.name": this.name,
+            "visor.sandbox.build.mode": buildMode
+          },
+          async () => {
+            if (this.config.dockerfile_inline) {
+              if (!/^\s*FROM\s+/im.test(this.config.dockerfile_inline)) {
+                throw new Error(
+                  `Sandbox '${this.name}' has invalid dockerfile_inline: must contain a FROM instruction`
+                );
+              }
+              const tmpDir = (0, import_fs.mkdtempSync)((0, import_path3.join)((0, import_os.tmpdir)(), "visor-build-"));
+              const dockerfilePath = (0, import_path3.join)(tmpDir, "Dockerfile");
+              (0, import_fs.writeFileSync)(dockerfilePath, this.config.dockerfile_inline, "utf8");
+              try {
+                logger.info(`Building sandbox image '${imageName}' from inline Dockerfile`);
+                await execFileAsync(
+                  "docker",
+                  ["build", "-t", imageName, "-f", dockerfilePath, this.repoPath],
+                  {
+                    maxBuffer: EXEC_MAX_BUFFER,
+                    timeout: 3e5
+                  }
+                );
+              } finally {
+                try {
+                  (0, import_fs.unlinkSync)(dockerfilePath);
+                } catch {
+                }
+              }
+              return imageName;
+            }
+            if (this.config.dockerfile) {
+              logger.info(`Building sandbox image '${imageName}' from ${this.config.dockerfile}`);
+              await execFileAsync(
+                "docker",
+                ["build", "-t", imageName, "-f", this.config.dockerfile, this.repoPath],
+                { maxBuffer: EXEC_MAX_BUFFER, timeout: 3e5 }
+              );
+              return imageName;
+            }
+            throw new Error(`Sandbox '${this.name}' has no image, dockerfile, or dockerfile_inline`);
+          }
+        );
+      }
+      /**
+       * Start the sandbox container
+       */
+      async start() {
+        const image = await this.buildImageIfNeeded();
+        const workdir = this.config.workdir === "host" ? this.repoPath : this.config.workdir || "/workspace";
+        const visorPath = this.config.visor_path || "/opt/visor";
+        const readOnlySuffix = this.config.read_only ? ":ro" : "";
+        const args = [
+          "docker",
+          "run",
+          "-d",
+          "--name",
+          this.containerName,
+          "-v",
+          `${this.repoPath}:${workdir}${readOnlySuffix}`,
+          "-v",
+          `${this.visorDistPath}:${visorPath}:ro`,
+          "-w",
+          workdir
+        ];
+        if (this.config.network === false) {
+          args.push("--network", "none");
+        }
+        if (this.config.resources?.memory) {
+          args.push("--memory", this.config.resources.memory);
+        }
+        if (this.config.resources?.cpu) {
+          args.push("--cpus", String(this.config.resources.cpu));
+        }
+        for (const mount of this.cacheVolumeMounts) {
+          args.push("-v", mount);
+        }
+        if (this.config.bind_paths) {
+          for (const bp of this.config.bind_paths) {
+            const hostPath = bp.host.startsWith("~") ? (0, import_path3.resolve)((process.env.HOME || "/root") + bp.host.slice(1)) : (0, import_path3.resolve)(bp.host);
+            const containerPath = bp.container || hostPath;
+            const readOnly = bp.read_only !== false;
+            args.push("-v", `${hostPath}:${containerPath}${readOnly ? ":ro" : ""}`);
+          }
+        }
+        args.push(image, "sleep", "infinity");
+        logger.info(`Starting sandbox container '${this.containerName}'`);
+        const { stdout } = await execFileAsync(args[0], args.slice(1), {
+          maxBuffer: EXEC_MAX_BUFFER,
+          timeout: 6e4
+        });
+        this.containerId = stdout.trim();
+        addEvent2("visor.sandbox.container.started", {
+          container_name: this.containerName,
+          image
+        });
+      }
+      /**
+       * Execute a command inside the running container
+       */
+      async exec(options) {
+        if (!this.containerId) {
+          throw new Error(`Sandbox '${this.name}' is not started`);
+        }
+        const args = ["docker", "exec"];
+        for (const [key, value] of Object.entries(options.env)) {
+          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+            throw new Error(`Invalid environment variable name: '${key}'`);
+          }
+          args.push("-e", `${key}=${value}`);
+        }
+        args.push(this.containerName, "sh", "-c", options.command);
+        try {
+          const { stdout, stderr } = await execFileAsync(args[0], args.slice(1), {
+            maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER,
+            timeout: options.timeoutMs || 6e5
+          });
+          return { stdout, stderr, exitCode: 0 };
+        } catch (err) {
+          const execErr = err;
+          return {
+            stdout: execErr.stdout || "",
+            stderr: execErr.stderr || "",
+            exitCode: typeof execErr.code === "number" ? execErr.code : 1
+          };
+        }
+      }
+      /**
+       * Stop and remove the container
+       */
+      async stop() {
+        if (this.containerName) {
+          try {
+            await execFileAsync("docker", ["rm", "-f", this.containerName], {
+              maxBuffer: EXEC_MAX_BUFFER,
+              timeout: 3e4
+            });
+          } catch {
+          }
+          addEvent2("visor.sandbox.container.stopped", {
+            container_name: this.containerName
+          });
+          this.containerId = null;
+        }
+      }
+    };
+  }
+});
+
+// src/sandbox/docker-compose-sandbox.ts
+var import_util2, import_child_process2, import_crypto2, execFileAsync2, EXEC_MAX_BUFFER2, DockerComposeSandbox;
+var init_docker_compose_sandbox = __esm({
+  "src/sandbox/docker-compose-sandbox.ts"() {
+    "use strict";
+    import_util2 = require("util");
+    import_child_process2 = require("child_process");
+    import_crypto2 = require("crypto");
+    init_logger();
+    execFileAsync2 = (0, import_util2.promisify)(import_child_process2.execFile);
+    EXEC_MAX_BUFFER2 = 50 * 1024 * 1024;
+    DockerComposeSandbox = class {
+      name;
+      config;
+      projectName;
+      started = false;
+      constructor(name, config) {
+        this.name = name;
+        this.config = config;
+        this.projectName = `visor-${name}-${(0, import_crypto2.randomUUID)().slice(0, 8)}`;
+      }
+      /**
+       * Start the compose services
+       */
+      async start() {
+        if (!this.config.compose) {
+          throw new Error(`Sandbox '${this.name}' has no compose file specified`);
+        }
+        if (!this.config.service) {
+          throw new Error(`Sandbox '${this.name}' requires a 'service' field for compose mode`);
+        }
+        logger.info(`Starting compose sandbox '${this.name}' (project: ${this.projectName})`);
+        await execFileAsync2(
+          "docker",
+          ["compose", "-f", this.config.compose, "-p", this.projectName, "up", "-d"],
+          {
+            maxBuffer: EXEC_MAX_BUFFER2,
+            timeout: 12e4
+          }
+        );
+        this.started = true;
+      }
+      /**
+       * Execute a command inside the compose service
+       */
+      async exec(options) {
+        if (!this.started) {
+          throw new Error(`Compose sandbox '${this.name}' is not started`);
+        }
+        const service = this.config.service;
+        const args = [
+          "docker",
+          "compose",
+          "-f",
+          this.config.compose,
+          "-p",
+          this.projectName,
+          "exec",
+          "-T"
+          // non-interactive
+        ];
+        for (const [key, value] of Object.entries(options.env)) {
+          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+            throw new Error(`Invalid environment variable name: '${key}'`);
+          }
+          args.push("-e", `${key}=${value}`);
+        }
+        if (this.config.workdir) {
+          args.push("-w", this.config.workdir);
+        }
+        args.push(service, "sh", "-c", options.command);
+        try {
+          const { stdout, stderr } = await execFileAsync2(args[0], args.slice(1), {
+            maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER2,
+            timeout: options.timeoutMs || 6e5
+          });
+          return { stdout, stderr, exitCode: 0 };
+        } catch (err) {
+          const execErr = err;
+          return {
+            stdout: execErr.stdout || "",
+            stderr: execErr.stderr || "",
+            exitCode: typeof execErr.code === "number" ? execErr.code : 1
+          };
+        }
+      }
+      /**
+       * Stop and tear down the compose project
+       */
+      async stop() {
+        if (this.started && this.config.compose) {
+          try {
+            await execFileAsync2(
+              "docker",
+              ["compose", "-f", this.config.compose, "-p", this.projectName, "down"],
+              {
+                maxBuffer: EXEC_MAX_BUFFER2,
+                timeout: 6e4
+              }
+            );
+          } catch {
+          }
+          this.started = false;
+        }
+      }
+    };
+  }
+});
+
+// src/sandbox/cache-volume-manager.ts
+function pathHash(containerPath) {
+  return (0, import_crypto3.createHash)("sha256").update(containerPath).digest("hex").slice(0, 8);
+}
+function parseTtl(ttl) {
+  let ms = 0;
+  const dayMatch = ttl.match(/(\d+)d/);
+  const hourMatch = ttl.match(/(\d+)h/);
+  const minMatch = ttl.match(/(\d+)m/);
+  if (dayMatch) ms += parseInt(dayMatch[1], 10) * 864e5;
+  if (hourMatch) ms += parseInt(hourMatch[1], 10) * 36e5;
+  if (minMatch) ms += parseInt(minMatch[1], 10) * 6e4;
+  return ms || 6048e5;
+}
+var import_util3, import_child_process3, import_crypto3, execFileAsync3, EXEC_MAX_BUFFER3, CacheVolumeManager;
+var init_cache_volume_manager = __esm({
+  "src/sandbox/cache-volume-manager.ts"() {
+    "use strict";
+    import_util3 = require("util");
+    import_child_process3 = require("child_process");
+    import_crypto3 = require("crypto");
+    init_logger();
+    execFileAsync3 = (0, import_util3.promisify)(import_child_process3.execFile);
+    EXEC_MAX_BUFFER3 = 10 * 1024 * 1024;
+    CacheVolumeManager = class {
+      /**
+       * Resolve cache config into Docker volume mount specs.
+       *
+       * Volume naming: visor-cache-<prefix>-<sandboxName>-<pathHash>
+       *
+       * @param sandboxName - Name of the sandbox
+       * @param cacheConfig - Cache configuration from sandbox config
+       * @param gitBranch - Current git branch (used as default prefix)
+       * @returns Array of volume mount specs for docker run -v
+       */
+      async resolveVolumes(sandboxName, cacheConfig, gitBranch) {
+        const prefix = (cacheConfig.prefix || gitBranch).replace(/[^a-zA-Z0-9._-]/g, "-");
+        const volumes = [];
+        for (const containerPath of cacheConfig.paths) {
+          if (/\.\./.test(containerPath)) {
+            throw new Error(`Cache path '${containerPath}' must not contain '..' path traversal`);
+          }
+          const hash = pathHash(containerPath);
+          const volumeName = `visor-cache-${prefix}-${sandboxName}-${hash}`;
+          const exists = await this.volumeExists(volumeName);
+          if (!exists && cacheConfig.fallback_prefix) {
+            const fallbackPrefix = cacheConfig.fallback_prefix.replace(/[^a-zA-Z0-9._-]/g, "-");
+            const fallbackVolume = `visor-cache-${fallbackPrefix}-${sandboxName}-${hash}`;
+            const fallbackExists = await this.volumeExists(fallbackVolume);
+            if (fallbackExists) {
+              logger.info(`Cache miss for '${volumeName}', copying from fallback '${fallbackVolume}'`);
+              await this.copyVolume(fallbackVolume, volumeName);
+            } else {
+              await this.createVolume(volumeName);
+            }
+          } else if (!exists) {
+            await this.createVolume(volumeName);
+          }
+          await this.touchVolume(volumeName);
+          volumes.push({
+            volumeName,
+            mountSpec: `${volumeName}:${containerPath}`
+          });
+        }
+        return volumes;
+      }
+      /**
+       * Check if a Docker volume exists
+       */
+      async volumeExists(name) {
+        try {
+          await execFileAsync3("docker", ["volume", "inspect", name], {
+            maxBuffer: EXEC_MAX_BUFFER3,
+            timeout: 1e4
+          });
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      /**
+       * Create a Docker named volume
+       */
+      async createVolume(name) {
+        const now = (/* @__PURE__ */ new Date()).toISOString();
+        await execFileAsync3("docker", ["volume", "create", "--label", `visor.last-used=${now}`, name], {
+          maxBuffer: EXEC_MAX_BUFFER3,
+          timeout: 1e4
+        });
+      }
+      /**
+       * Copy data from one volume to another using a temp container
+       */
+      async copyVolume(source, target) {
+        await this.createVolume(target);
+        try {
+          await execFileAsync3(
+            "docker",
+            [
+              "run",
+              "--rm",
+              "-v",
+              `${source}:/src:ro`,
+              "-v",
+              `${target}:/dst`,
+              "alpine",
+              "sh",
+              "-c",
+              "cp -a /src/. /dst/"
+            ],
+            { maxBuffer: EXEC_MAX_BUFFER3, timeout: 6e4 }
+          );
+        } catch (err) {
+          logger.warn(`Failed to copy cache volume ${source} -> ${target}: ${err}`);
+        }
+      }
+      /**
+       * Update the last-used label on a volume.
+       * Docker doesn't support updating labels in-place, so we record via a temp file approach
+       * by simply re-creating volumes with updated labels if they don't exist.
+       * For existing volumes, we track usage time via the volume name pattern.
+       */
+      async touchVolume(_name) {
+      }
+      /**
+       * Evict expired cache volumes for a sandbox
+       */
+      async evictExpired(sandboxName, ttl, maxScopes) {
+        const ttlMs = ttl ? parseTtl(ttl) : 6048e5;
+        const maxScopesLimit = maxScopes || 10;
+        try {
+          const { stdout } = await execFileAsync3(
+            "docker",
+            ["volume", "ls", "--filter", "name=visor-cache-", "--format", "{{.Name}}"],
+            { maxBuffer: EXEC_MAX_BUFFER3, timeout: 1e4 }
+          );
+          const allVolumes = stdout.trim().split("\n").filter(Boolean);
+          const sandboxVolumes = allVolumes.filter((v) => v.includes(`-${sandboxName}-`));
+          if (sandboxVolumes.length === 0) return;
+          const scopeMap = /* @__PURE__ */ new Map();
+          for (const vol of sandboxVolumes) {
+            const match = vol.match(/^visor-cache-(.+)-\w{8}$/);
+            if (match) {
+              const prefix = match[1].replace(`-${sandboxName}`, "");
+              if (!scopeMap.has(prefix)) scopeMap.set(prefix, []);
+              scopeMap.get(prefix).push(vol);
+            }
+          }
+          const now = Date.now();
+          const inspectResults = await Promise.allSettled(
+            sandboxVolumes.map(async (vol) => {
+              const { stdout: inspectOut } = await execFileAsync3(
+                "docker",
+                ["volume", "inspect", vol, "--format", "{{.CreatedAt}}"],
+                { maxBuffer: EXEC_MAX_BUFFER3, timeout: 1e4 }
+              );
+              return { vol, createdAt: new Date(inspectOut.trim()).getTime() };
+            })
+          );
+          for (const result of inspectResults) {
+            if (result.status !== "fulfilled") continue;
+            const { vol, createdAt } = result.value;
+            if (now - createdAt > ttlMs) {
+              try {
+                logger.info(`Evicting expired cache volume: ${vol}`);
+                await execFileAsync3("docker", ["volume", "rm", vol], {
+                  maxBuffer: EXEC_MAX_BUFFER3,
+                  timeout: 1e4
+                });
+              } catch {
+              }
+            }
+          }
+          if (scopeMap.size > maxScopesLimit) {
+            const scopes = Array.from(scopeMap.keys());
+            const toRemove = scopes.slice(0, scopes.length - maxScopesLimit);
+            for (const scope of toRemove) {
+              const vols = scopeMap.get(scope) || [];
+              for (const vol of vols) {
+                try {
+                  logger.info(`Evicting cache volume (max_scopes exceeded): ${vol}`);
+                  await execFileAsync3("docker", ["volume", "rm", vol], {
+                    maxBuffer: EXEC_MAX_BUFFER3,
+                    timeout: 1e4
+                  });
+                } catch {
+                }
+              }
+            }
+          }
+        } catch {
+        }
+      }
+    };
+  }
+});
+
+// src/sandbox/compose-generator.ts
+function inferPort(serviceName, image) {
+  const name = serviceName.toLowerCase();
+  if (DEFAULT_PORTS[name]) return DEFAULT_PORTS[name];
+  const imageBase = image.split(":")[0].split("/").pop()?.toLowerCase() ?? "";
+  return DEFAULT_PORTS[imageBase];
+}
+async function generateComposeFile(options) {
+  return withActiveSpan2(
+    "visor.compose.generate",
+    {
+      "visor.project.id": options.projectId,
+      "visor.compose.service_count": Object.keys(options.services).length,
+      "visor.compose.services": Object.keys(options.services).join(",")
+    },
+    async () => {
+      const sessionPrefix = options.sessionId.slice(0, 8);
+      const projectName = `visor-${options.projectId}-${sessionPrefix}`;
+      const serviceName = "workspace";
+      const composeServices = {};
+      const serviceEndpoints = {};
+      const dependsOn = [];
+      for (const [name, svcConfig] of Object.entries(options.services)) {
+        const svcDef = { image: svcConfig.image };
+        if (svcConfig.environment && Object.keys(svcConfig.environment).length > 0) {
+          svcDef.environment = svcConfig.environment;
+        }
+        if (svcConfig.volumes && svcConfig.volumes.length > 0) {
+          svcDef.volumes = svcConfig.volumes;
+        }
+        if (svcConfig.healthcheck) {
+          svcDef.healthcheck = {
+            test: svcConfig.healthcheck.test,
+            ...svcConfig.healthcheck.interval && { interval: svcConfig.healthcheck.interval },
+            ...svcConfig.healthcheck.timeout && { timeout: svcConfig.healthcheck.timeout },
+            ...svcConfig.healthcheck.retries && { retries: svcConfig.healthcheck.retries }
+          };
+        }
+        composeServices[name] = svcDef;
+        dependsOn.push(name);
+        const port = svcConfig.ports?.[0] ?? inferPort(name, svcConfig.image);
+        if (port) {
+          serviceEndpoints[name] = { host: name, port };
+        }
+      }
+      const workspaceImage = options.workspaceSandbox?.image ?? "ubuntu:22.04";
+      const workspaceWorkdir = options.workspaceSandbox?.workdir ?? "/workspace";
+      const workspaceDef = {
+        image: workspaceImage,
+        working_dir: workspaceWorkdir,
+        volumes: [
+          `${options.workspacePath}:${workspaceWorkdir}`,
+          `${options.visorDistPath}:/opt/visor:ro`
+        ],
+        command: "sleep infinity"
+      };
+      if (dependsOn.length > 0) {
+        workspaceDef.depends_on = dependsOn;
+      }
+      composeServices[serviceName] = workspaceDef;
+      const composeDoc = {
+        name: projectName,
+        services: composeServices
+      };
+      if (!(0, import_fs2.existsSync)(options.outputDir)) {
+        (0, import_fs2.mkdirSync)(options.outputDir, { recursive: true });
+      }
+      const filePath = (0, import_path4.join)(options.outputDir, `docker-compose-${options.projectId}.yml`);
+      const yamlContent = yaml.dump(composeDoc, { lineWidth: 120, noRefs: true });
+      (0, import_fs2.writeFileSync)(filePath, yamlContent, "utf8");
+      addEvent2("visor.compose.generated", {
+        "visor.project.id": options.projectId,
+        "visor.compose.file": filePath,
+        "visor.compose.project_name": projectName,
+        "visor.compose.endpoints": JSON.stringify(serviceEndpoints)
+      });
+      logger.info(`Generated compose file for project '${options.projectId}' at ${filePath}`);
+      return { filePath, projectName, serviceName, serviceEndpoints };
+    }
+  );
+}
+var import_fs2, import_path4, yaml, DEFAULT_PORTS;
+var init_compose_generator = __esm({
+  "src/sandbox/compose-generator.ts"() {
+    "use strict";
+    import_fs2 = require("fs");
+    import_path4 = require("path");
+    yaml = __toESM(require("js-yaml"));
+    init_logger();
+    init_sandbox_telemetry();
+    DEFAULT_PORTS = {
+      redis: 6379,
+      postgres: 5432,
+      mysql: 3306,
+      mariadb: 3306,
+      mongo: 27017,
+      mongodb: 27017,
+      rabbitmq: 5672,
+      elasticsearch: 9200,
+      memcached: 11211,
+      minio: 9e3,
+      nats: 4222
+    };
+  }
+});
+
+// src/sandbox/bubblewrap-sandbox.ts
+var bubblewrap_sandbox_exports = {};
+__export(bubblewrap_sandbox_exports, {
+  BubblewrapSandbox: () => BubblewrapSandbox
+});
+var import_util4, import_child_process4, import_fs3, import_path5, execFileAsync4, EXEC_MAX_BUFFER4, BubblewrapSandbox;
+var init_bubblewrap_sandbox = __esm({
+  "src/sandbox/bubblewrap-sandbox.ts"() {
+    "use strict";
+    import_util4 = require("util");
+    import_child_process4 = require("child_process");
+    import_fs3 = require("fs");
+    import_path5 = require("path");
+    init_logger();
+    init_sandbox_telemetry();
+    execFileAsync4 = (0, import_util4.promisify)(import_child_process4.execFile);
+    EXEC_MAX_BUFFER4 = 50 * 1024 * 1024;
+    BubblewrapSandbox = class {
+      name;
+      config;
+      repoPath;
+      visorDistPath;
+      constructor(name, config, repoPath, visorDistPath) {
+        this.name = name;
+        this.config = config;
+        this.repoPath = (0, import_path5.resolve)(repoPath);
+        this.visorDistPath = (0, import_path5.resolve)(visorDistPath);
+      }
+      /**
+       * Check if bwrap binary is available on the system.
+       */
+      static async isAvailable() {
+        try {
+          await execFileAsync4("which", ["bwrap"], { timeout: 5e3 });
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      /**
+       * Execute a command inside a bubblewrap sandbox.
+       * Each exec creates a fresh namespace — no persistent container.
+       */
+      async exec(options) {
+        const args = this.buildArgs(options);
+        args.push("--", "/bin/sh", "-c", options.command);
+        logger.debug(
+          `[BubblewrapSandbox] Executing in sandbox '${this.name}': ${options.command.slice(0, 100)}`
+        );
+        try {
+          const { stdout, stderr } = await execFileAsync4("bwrap", args, {
+            maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER4,
+            timeout: options.timeoutMs || 6e5
+          });
+          addEvent2("visor.sandbox.bwrap.exec", {
+            "visor.sandbox.name": this.name,
+            "visor.sandbox.exit_code": 0
+          });
+          return { stdout, stderr, exitCode: 0 };
+        } catch (err) {
+          const execErr = err;
+          const exitCode = typeof execErr.code === "number" ? execErr.code : 1;
+          addEvent2("visor.sandbox.bwrap.exec", {
+            "visor.sandbox.name": this.name,
+            "visor.sandbox.exit_code": exitCode
+          });
+          return {
+            stdout: execErr.stdout || "",
+            stderr: execErr.stderr || "",
+            exitCode
+          };
+        }
+      }
+      /**
+       * No-op: bubblewrap processes are ephemeral (no persistent container to stop).
+       */
+      async stop() {
+      }
+      /**
+       * Build the bwrap command-line arguments.
+       */
+      buildArgs(options) {
+        const workdir = this.config.workdir === "host" ? this.repoPath : this.config.workdir || "/workspace";
+        const args = [];
+        args.push("--ro-bind", "/usr", "/usr");
+        args.push("--ro-bind", "/bin", "/bin");
+        if ((0, import_fs3.existsSync)("/lib")) {
+          args.push("--ro-bind", "/lib", "/lib");
+        }
+        if ((0, import_fs3.existsSync)("/lib64")) {
+          args.push("--ro-bind", "/lib64", "/lib64");
+        }
+        if ((0, import_fs3.existsSync)("/etc/resolv.conf")) {
+          args.push("--ro-bind", "/etc/resolv.conf", "/etc/resolv.conf");
+        }
+        if ((0, import_fs3.existsSync)("/etc/ssl")) {
+          args.push("--ro-bind", "/etc/ssl", "/etc/ssl");
+        }
+        args.push("--dev", "/dev");
+        args.push("--proc", "/proc");
+        args.push("--tmpfs", "/tmp");
+        args.push("--tmpfs", "/root");
+        if (this.config.read_only) {
+          args.push("--ro-bind", this.repoPath, workdir);
+        } else {
+          args.push("--bind", this.repoPath, workdir);
+        }
+        const visorPath = this.config.visor_path || "/opt/visor";
+        args.push("--ro-bind", this.visorDistPath, visorPath);
+        if (this.config.bind_paths) {
+          for (const bp of this.config.bind_paths) {
+            const hostPath = bp.host.startsWith("~") ? (0, import_path5.resolve)((process.env.HOME || "/root") + bp.host.slice(1)) : (0, import_path5.resolve)(bp.host);
+            const containerPath = bp.container || hostPath;
+            const readOnly = bp.read_only !== false;
+            args.push(readOnly ? "--ro-bind" : "--bind", hostPath, containerPath);
+          }
+        }
+        args.push("--chdir", workdir);
+        args.push("--unshare-pid");
+        args.push("--new-session");
+        args.push("--die-with-parent");
+        if (this.config.network === false) {
+          args.push("--unshare-net");
+        }
+        args.push("--clearenv");
+        for (const [key, value] of Object.entries(options.env)) {
+          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+            throw new Error(`Invalid environment variable name: '${key}'`);
+          }
+          args.push("--setenv", key, value);
+        }
+        return args;
+      }
+    };
+  }
+});
+
+// src/sandbox/seatbelt-sandbox.ts
+var seatbelt_sandbox_exports = {};
+__export(seatbelt_sandbox_exports, {
+  SeatbeltSandbox: () => SeatbeltSandbox
+});
+var import_util5, import_child_process5, import_path6, import_fs4, execFileAsync5, EXEC_MAX_BUFFER5, SeatbeltSandbox;
+var init_seatbelt_sandbox = __esm({
+  "src/sandbox/seatbelt-sandbox.ts"() {
+    "use strict";
+    import_util5 = require("util");
+    import_child_process5 = require("child_process");
+    import_path6 = require("path");
+    import_fs4 = require("fs");
+    init_logger();
+    init_sandbox_telemetry();
+    execFileAsync5 = (0, import_util5.promisify)(import_child_process5.execFile);
+    EXEC_MAX_BUFFER5 = 50 * 1024 * 1024;
+    SeatbeltSandbox = class {
+      name;
+      config;
+      repoPath;
+      visorDistPath;
+      constructor(name, config, repoPath, visorDistPath) {
+        this.name = name;
+        this.config = config;
+        this.repoPath = (0, import_fs4.realpathSync)((0, import_path6.resolve)(repoPath));
+        this.visorDistPath = (0, import_fs4.realpathSync)((0, import_path6.resolve)(visorDistPath));
+      }
+      /**
+       * Check if sandbox-exec binary is available on the system.
+       */
+      static async isAvailable() {
+        try {
+          await execFileAsync5("which", ["sandbox-exec"], { timeout: 5e3 });
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      /**
+       * Execute a command inside a macOS seatbelt sandbox.
+       * Each exec creates a fresh sandbox process — no persistent container.
+       */
+      async exec(options) {
+        const profile = this.buildProfile();
+        for (const key of Object.keys(options.env)) {
+          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+            throw new Error(`Invalid environment variable name: '${key}'`);
+          }
+        }
+        const args = ["-p", profile];
+        args.push("/usr/bin/env", "-i");
+        for (const [key, value] of Object.entries(options.env)) {
+          args.push(`${key}=${value}`);
+        }
+        args.push("/bin/sh", "-c", options.command);
+        logger.debug(
+          `[SeatbeltSandbox] Executing in sandbox '${this.name}': ${options.command.slice(0, 100)}`
+        );
+        try {
+          const { stdout, stderr } = await execFileAsync5("sandbox-exec", args, {
+            maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER5,
+            timeout: options.timeoutMs || 6e5,
+            cwd: this.repoPath
+          });
+          addEvent2("visor.sandbox.seatbelt.exec", {
+            "visor.sandbox.name": this.name,
+            "visor.sandbox.exit_code": 0
+          });
+          return { stdout, stderr, exitCode: 0 };
+        } catch (err) {
+          const execErr = err;
+          const exitCode = typeof execErr.code === "number" ? execErr.code : 1;
+          addEvent2("visor.sandbox.seatbelt.exec", {
+            "visor.sandbox.name": this.name,
+            "visor.sandbox.exit_code": exitCode
+          });
+          return {
+            stdout: execErr.stdout || "",
+            stderr: execErr.stderr || "",
+            exitCode
+          };
+        }
+      }
+      /**
+       * No-op: sandbox-exec processes are ephemeral (no persistent container to stop).
+       */
+      async stop() {
+      }
+      /**
+       * Escape a path for use inside an SBPL profile string.
+       * Escapes backslashes and double quotes.
+       */
+      escapePath(p) {
+        return p.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      }
+      /**
+       * Build the SBPL (Seatbelt Profile Language) profile string.
+       */
+      buildProfile() {
+        const repoPath = this.escapePath(this.repoPath);
+        const lines = [];
+        lines.push("(version 1)");
+        lines.push("(deny default)");
+        lines.push("(allow process-exec)");
+        lines.push("(allow process-fork)");
+        lines.push("(allow file-read*");
+        lines.push('  (literal "/")');
+        lines.push('  (subpath "/usr")');
+        lines.push('  (subpath "/bin")');
+        lines.push('  (subpath "/sbin")');
+        lines.push('  (subpath "/Library")');
+        lines.push('  (subpath "/System")');
+        lines.push('  (subpath "/private")');
+        lines.push('  (subpath "/var")');
+        lines.push('  (subpath "/etc")');
+        lines.push('  (subpath "/dev")');
+        lines.push('  (subpath "/tmp"))');
+        lines.push("(allow file-write*");
+        lines.push('  (subpath "/tmp")');
+        lines.push('  (subpath "/private/tmp")');
+        lines.push('  (subpath "/dev"))');
+        lines.push('(allow file-write* (regex #"/private/var/folders/.*/T/xcrun_db"))');
+        lines.push(`(allow file-read* (subpath "${repoPath}"))`);
+        if (!this.config.read_only) {
+          lines.push(`(allow file-write* (subpath "${repoPath}"))`);
+        }
+        const visorDistPath = this.escapePath(this.visorDistPath);
+        lines.push(`(allow file-read* (subpath "${visorDistPath}"))`);
+        if (this.config.bind_paths) {
+          for (const bp of this.config.bind_paths) {
+            const hostPath = bp.host.startsWith("~") ? (0, import_path6.resolve)((process.env.HOME || "/root") + bp.host.slice(1)) : (0, import_path6.resolve)(bp.host);
+            const escapedPath = this.escapePath(hostPath);
+            lines.push(`(allow file-read* (subpath "${escapedPath}"))`);
+            if (bp.read_only === false) {
+              lines.push(`(allow file-write* (subpath "${escapedPath}"))`);
+            }
+          }
+        }
+        if (this.config.network !== false) {
+          lines.push("(allow network*)");
+        }
+        lines.push("(allow sysctl-read)");
+        lines.push("(allow mach-lookup)");
+        lines.push("(allow signal)");
+        return lines.join("\n");
+      }
+    };
+  }
+});
+
+// src/sandbox/sandbox-manager.ts
+var sandbox_manager_exports = {};
+__export(sandbox_manager_exports, {
+  SandboxManager: () => SandboxManager
+});
+var import_path7, import_fs5, SandboxManager;
+var init_sandbox_manager = __esm({
+  "src/sandbox/sandbox-manager.ts"() {
+    "use strict";
+    import_path7 = require("path");
+    import_fs5 = require("fs");
+    init_docker_image_sandbox();
+    init_docker_compose_sandbox();
+    init_cache_volume_manager();
+    init_compose_generator();
+    init_logger();
+    init_sandbox_telemetry();
+    SandboxManager = class {
+      sandboxDefs;
+      repoPath;
+      gitBranch;
+      instances = /* @__PURE__ */ new Map();
+      projectEnvironments = /* @__PURE__ */ new Map();
+      cacheManager;
+      visorDistPath;
+      /** Get the resolved repository path (used by trace file relay) */
+      getRepoPath() {
+        return this.repoPath;
+      }
+      constructor(sandboxDefs, repoPath, gitBranch) {
+        this.sandboxDefs = sandboxDefs;
+        this.repoPath = (0, import_path7.resolve)(repoPath);
+        this.gitBranch = gitBranch;
+        this.cacheManager = new CacheVolumeManager();
+        this.visorDistPath = (0, import_fs5.existsSync)((0, import_path7.join)(__dirname, "index.js")) ? __dirname : (0, import_path7.resolve)((0, import_path7.dirname)(__dirname));
+      }
+      /**
+       * Resolve which sandbox a check should use.
+       * Returns null if the check should run on the host.
+       *
+       * Resolution order:
+       * 1. Check-level sandbox: (explicit override)
+       * 2. Workspace-level sandbox: (default)
+       * 3. null → run on host
+       */
+      resolveSandbox(checkSandbox, workspaceDefault) {
+        const name = checkSandbox || workspaceDefault;
+        if (!name) return null;
+        if (!this.sandboxDefs[name]) {
+          throw new Error(`Sandbox '${name}' is not defined in sandboxes configuration`);
+        }
+        return name;
+      }
+      /**
+       * Get or lazily start a sandbox instance by name.
+       */
+      async getOrStart(name) {
+        const existing = this.instances.get(name);
+        if (existing) return existing;
+        const config = this.sandboxDefs[name];
+        if (!config) {
+          throw new Error(`Sandbox '${name}' is not defined`);
+        }
+        const mode = config.compose ? "compose" : "image";
+        if (config.engine === "bubblewrap") {
+          const { BubblewrapSandbox: BubblewrapSandbox2 } = (init_bubblewrap_sandbox(), __toCommonJS(bubblewrap_sandbox_exports));
+          const instance = new BubblewrapSandbox2(name, config, this.repoPath, this.visorDistPath);
+          this.instances.set(name, instance);
+          return instance;
+        }
+        if (config.engine === "seatbelt") {
+          const { SeatbeltSandbox: SeatbeltSandbox2 } = (init_seatbelt_sandbox(), __toCommonJS(seatbelt_sandbox_exports));
+          const instance = new SeatbeltSandbox2(name, config, this.repoPath, this.visorDistPath);
+          this.instances.set(name, instance);
+          return instance;
+        }
+        return withActiveSpan2(
+          "visor.sandbox.start",
+          {
+            "visor.sandbox.name": name,
+            "visor.sandbox.mode": mode
+          },
+          async () => {
+            let instance;
+            if (config.compose) {
+              const composeSandbox = new DockerComposeSandbox(name, config);
+              await composeSandbox.start();
+              instance = composeSandbox;
+            } else {
+              let cacheVolumeMounts = [];
+              if (config.cache) {
+                const volumes = await this.cacheManager.resolveVolumes(
+                  name,
+                  config.cache,
+                  this.gitBranch
+                );
+                cacheVolumeMounts = volumes.map((v) => v.mountSpec);
+              }
+              const imageSandbox = new DockerImageSandbox(
+                name,
+                config,
+                this.repoPath,
+                this.visorDistPath,
+                cacheVolumeMounts
+              );
+              await imageSandbox.start();
+              instance = imageSandbox;
+            }
+            this.instances.set(name, instance);
+            return instance;
+          }
+        );
+      }
+      /**
+       * Execute a command inside a named sandbox
+       */
+      async exec(name, options) {
+        const instance = await this.getOrStart(name);
+        return withActiveSpan2(
+          "visor.sandbox.exec",
+          {
+            "visor.sandbox.name": name
+          },
+          async (span) => {
+            const result = await instance.exec(options);
+            try {
+              span.setAttribute("visor.sandbox.exit_code", result.exitCode);
+            } catch {
+            }
+            return result;
+          }
+        );
+      }
+      /**
+       * Start project-level services (redis, postgres, etc.) via docker-compose.
+       * Generates a compose file, starts services, and returns endpoint info.
+       */
+      async startProjectServices(projectId, services, sandboxName, sessionId, workspacePath) {
+        const existing = this.projectEnvironments.get(projectId);
+        if (existing?.started) return existing;
+        return withActiveSpan2(
+          "visor.sandbox.startProjectServices",
+          { "visor.project.id": projectId },
+          async () => {
+            const outputDir = (0, import_path7.join)(workspacePath, ".visor");
+            const sandboxConfig = sandboxName ? this.sandboxDefs[sandboxName] : void 0;
+            const result = await generateComposeFile({
+              projectId,
+              sessionId,
+              services,
+              workspaceSandbox: sandboxConfig,
+              workspacePath,
+              visorDistPath: this.visorDistPath,
+              outputDir
+            });
+            const composeSandbox = new DockerComposeSandbox(`project-${projectId}`, {
+              compose: result.filePath,
+              service: result.serviceName
+            });
+            await composeSandbox.start();
+            this.instances.set(`project-${projectId}`, composeSandbox);
+            const env = {
+              projectId,
+              composeFilePath: result.filePath,
+              projectName: result.projectName,
+              serviceName: result.serviceName,
+              serviceEndpoints: result.serviceEndpoints,
+              started: true
+            };
+            this.projectEnvironments.set(projectId, env);
+            addEvent2("visor.sandbox.projectServices.started", {
+              "visor.project.id": projectId,
+              "visor.project.services": Object.keys(services).join(",")
+            });
+            logger.info(
+              `Started project services for '${projectId}': ${Object.keys(services).join(", ")}`
+            );
+            return env;
+          }
+        );
+      }
+      /**
+       * Stop services for a specific project
+       */
+      async stopProjectServices(projectId) {
+        const env = this.projectEnvironments.get(projectId);
+        if (!env?.started) return;
+        return withActiveSpan2(
+          "visor.sandbox.stopProjectServices",
+          { "visor.project.id": projectId },
+          async () => {
+            const instanceKey = `project-${projectId}`;
+            const instance = this.instances.get(instanceKey);
+            if (instance) {
+              try {
+                await instance.stop();
+                this.instances.delete(instanceKey);
+              } catch (err) {
+                setSpanError2(err);
+                logger.warn(`Failed to stop project services for '${projectId}': ${err}`);
+              }
+            }
+            try {
+              (0, import_fs5.unlinkSync)(env.composeFilePath);
+            } catch {
+            }
+            env.started = false;
+            this.projectEnvironments.delete(projectId);
+            addEvent2("visor.sandbox.projectServices.stopped", { "visor.project.id": projectId });
+            logger.info(`Stopped project services for '${projectId}'`);
+          }
+        );
+      }
+      /**
+       * Get the project environment (if started) for env var injection
+       */
+      getProjectEnvironment(projectId) {
+        return this.projectEnvironments.get(projectId);
+      }
+      /**
+       * Generate environment variables from a ProjectEnvironment's service endpoints.
+       * Produces {SERVICE_NAME}_HOST and {SERVICE_NAME}_PORT for each service.
+       * E.g., redis → REDIS_HOST=redis, REDIS_PORT=6379
+       */
+      static generateServiceEnvVars(env) {
+        const vars = {};
+        for (const [serviceName, endpoint] of Object.entries(env.serviceEndpoints)) {
+          const prefix = serviceName.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase();
+          vars[`${prefix}_HOST`] = endpoint.host;
+          vars[`${prefix}_PORT`] = String(endpoint.port);
+        }
+        return vars;
+      }
+      /**
+       * Stop all running sandbox instances and run cache eviction
+       */
+      async stopAll() {
+        return withActiveSpan2("visor.sandbox.stopAll", void 0, async () => {
+          const projectStopPromises = Array.from(this.projectEnvironments.keys()).map(
+            async (projectId) => {
+              try {
+                await this.stopProjectServices(projectId);
+              } catch (err) {
+                logger.warn(`Failed to stop project services for '${projectId}': ${err}`);
+              }
+            }
+          );
+          await Promise.allSettled(projectStopPromises);
+          const stopPromises = Array.from(this.instances.entries()).map(async ([name, instance]) => {
+            try {
+              await instance.stop();
+              addEvent2("visor.sandbox.stopped", { "visor.sandbox.name": name });
+              logger.info(`Stopped sandbox '${name}'`);
+            } catch (err) {
+              logger.warn(`Failed to stop sandbox '${name}': ${err}`);
+            }
+            const config = this.sandboxDefs[name];
+            if (config?.cache) {
+              try {
+                await this.cacheManager.evictExpired(name, config.cache.ttl, config.cache.max_scopes);
+              } catch {
+              }
+            }
+          });
+          await Promise.allSettled(stopPromises);
+          this.instances.clear();
+        });
+      }
+    };
+  }
+});
+
+// src/sandbox/env-filter.ts
+function matchesPattern(name, pattern) {
+  if (pattern === name) return true;
+  if (pattern.endsWith("*")) {
+    const prefix = pattern.slice(0, -1);
+    return name.startsWith(prefix);
+  }
+  return false;
+}
+function filterEnvForSandbox(checkEnv, hostEnv, passthroughPatterns, defaultPatterns) {
+  const result = {};
+  const defaults = defaultPatterns !== void 0 ? defaultPatterns : BUILTIN_PASSTHROUGH;
+  const patterns = [...defaults, ...passthroughPatterns || []];
+  for (const [key, value] of Object.entries(hostEnv)) {
+    if (value === void 0) continue;
+    if (patterns.some((pattern) => matchesPattern(key, pattern))) {
+      result[key] = value;
+    }
+  }
+  if (checkEnv) {
+    for (const [key, value] of Object.entries(checkEnv)) {
+      result[key] = String(value);
+    }
+  }
+  return result;
+}
+var BUILTIN_PASSTHROUGH;
+var init_env_filter = __esm({
+  "src/sandbox/env-filter.ts"() {
+    "use strict";
+    BUILTIN_PASSTHROUGH = ["PATH", "HOME", "USER", "CI", "NODE_ENV", "LANG"];
+  }
+});
+
 // src/sandbox/trace-ingester.ts
 function getTracer2() {
   try {
@@ -6098,7 +7262,7 @@ function getOtelContext() {
 function ingestChildTrace(filePath) {
   let content;
   try {
-    content = (0, import_fs.readFileSync)(filePath, "utf8");
+    content = (0, import_fs6.readFileSync)(filePath, "utf8");
   } catch {
     return;
   }
@@ -6163,11 +7327,11 @@ function ingestChildTrace(filePath) {
     }
   }
 }
-var import_fs;
+var import_fs6;
 var init_trace_ingester = __esm({
   "src/sandbox/trace-ingester.ts"() {
     "use strict";
-    import_fs = require("fs");
+    import_fs6 = require("fs");
     init_logger();
   }
 });
@@ -6203,13 +7367,13 @@ function serializePRInfo(prInfo) {
     eventContext: prInfo.eventContext
   };
 }
-var import_fs2, import_path3, import_crypto, CheckRunner;
+var import_fs7, import_path8, import_crypto4, CheckRunner;
 var init_check_runner = __esm({
   "src/sandbox/check-runner.ts"() {
     "use strict";
-    import_fs2 = require("fs");
-    import_path3 = require("path");
-    import_crypto = require("crypto");
+    import_fs7 = require("fs");
+    import_path8 = require("path");
+    import_crypto4 = require("crypto");
     init_env_filter();
     init_logger();
     init_sandbox_telemetry();
@@ -6224,7 +7388,7 @@ var init_check_runner = __esm({
        * 4. Parse CheckRunResult from stdout JSON
        * 5. Return as ReviewSummary
        */
-      static async runCheck(sandboxManager, sandboxName, sandboxConfig, checkConfig, prInfo, dependencyResults, timeoutMs, workspaceDefaults) {
+      static async runCheck(sandboxManager, sandboxName, sandboxConfig, checkConfig, prInfo, dependencyResults, timeoutMs, workspaceDefaults, serviceEnvVars) {
         return withActiveSpan2(
           "visor.sandbox.runCheck",
           {
@@ -6249,14 +7413,17 @@ var init_check_runner = __esm({
               sandboxConfig.env_passthrough,
               workspaceDefaults?.env_passthrough
             );
+            if (serviceEnvVars) {
+              Object.assign(env, serviceEnvVars);
+            }
             const workdir = sandboxConfig.workdir === "host" ? sandboxManager.getRepoPath() : sandboxConfig.workdir || "/workspace";
             let hostTracePath;
             if (!sandboxConfig.read_only) {
-              const traceFileName = `.visor-trace-${(0, import_crypto.randomUUID)().slice(0, 8)}.ndjson`;
-              hostTracePath = (0, import_path3.join)(sandboxManager.getRepoPath(), traceFileName);
+              const traceFileName = `.visor-trace-${(0, import_crypto4.randomUUID)().slice(0, 8)}.ndjson`;
+              hostTracePath = (0, import_path8.join)(sandboxManager.getRepoPath(), traceFileName);
               const containerTracePath = `${workdir}/${traceFileName}`;
               try {
-                (0, import_fs2.writeFileSync)(hostTracePath, "", "utf8");
+                (0, import_fs7.writeFileSync)(hostTracePath, "", "utf8");
               } catch {
                 hostTracePath = void 0;
               }
@@ -6288,13 +7455,13 @@ var init_check_runner = __esm({
             });
             if (hostTracePath) {
               try {
-                if ((0, import_fs2.existsSync)(hostTracePath)) {
+                if ((0, import_fs7.existsSync)(hostTracePath)) {
                   ingestChildTrace(hostTracePath);
-                  (0, import_fs2.unlinkSync)(hostTracePath);
+                  (0, import_fs7.unlinkSync)(hostTracePath);
                 }
               } catch {
                 try {
-                  if ((0, import_fs2.existsSync)(hostTracePath)) (0, import_fs2.unlinkSync)(hostTracePath);
+                  if ((0, import_fs7.existsSync)(hostTracePath)) (0, import_fs7.unlinkSync)(hostTracePath);
                 } catch {
                 }
               }
@@ -6376,13 +7543,36 @@ var init_check_runner = __esm({
 });
 
 // src/state-machine/dispatch/sandbox-routing.ts
-async function executeWithSandboxRouting(checkId, checkConfig, context2, prInfo, dependencyResults, timeout, hostExecute) {
+function extractProjectMeta(dependencyResults) {
+  const result = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const [, depResult] of dependencyResults) {
+    const output = depResult?.output;
+    const candidates = Array.isArray(output) ? output : Array.isArray(output?.checkout_projects) ? output.checkout_projects : null;
+    if (!candidates) continue;
+    for (const item of candidates) {
+      if (!item || typeof item !== "object") continue;
+      const projectId = item.project_id;
+      if (!projectId || typeof projectId !== "string" || seen.has(projectId)) continue;
+      seen.add(projectId);
+      if (item.services && typeof item.services === "object" && Object.keys(item.services).length > 0) {
+        result.push({
+          projectId,
+          services: item.services,
+          workspacePath: item.path || void 0
+        });
+      }
+    }
+  }
+  return result;
+}
+async function executeWithSandboxRouting(checkId, checkConfig, context2, prInfo, dependencyResults, timeout, hostExecute, projectMeta) {
   const sandboxManager = context2.sandboxManager;
   if (!sandboxManager) {
     return hostExecute();
   }
   const sandboxName = sandboxManager.resolveSandbox(
-    checkConfig.sandbox,
+    checkConfig.sandbox || checkConfig.workflowInputs?.sandbox || void 0,
     context2.config.sandbox
   );
   if (!sandboxName) {
@@ -6391,6 +7581,36 @@ async function executeWithSandboxRouting(checkId, checkConfig, context2, prInfo,
   const sandboxConfig = context2.config.sandboxes?.[sandboxName];
   if (!sandboxConfig) {
     throw new Error(`Sandbox '${sandboxName}' not found in sandboxes configuration`);
+  }
+  const projectMetas = projectMeta ? Array.isArray(projectMeta) ? projectMeta : [projectMeta] : extractProjectMeta(dependencyResults);
+  let serviceEnvVars;
+  for (const meta of projectMetas) {
+    if (!meta.services || Object.keys(meta.services).length === 0) continue;
+    if (sandboxConfig.engine && sandboxConfig.engine !== "docker") {
+      logger.warn(
+        `[SandboxRouting] Project '${meta.projectId}' defines services (${Object.keys(meta.services).join(", ")}), but sandbox '${sandboxName}' uses engine '${sandboxConfig.engine}'. Services require Docker networking and will not be available in '${sandboxConfig.engine}' sandboxes.`
+      );
+      continue;
+    }
+    try {
+      const { SandboxManager: SM } = (init_sandbox_manager(), __toCommonJS(sandbox_manager_exports));
+      const projectEnv = await sandboxManager.startProjectServices(
+        meta.projectId,
+        meta.services,
+        sandboxName,
+        context2.sessionId,
+        meta.workspacePath || sandboxManager.getRepoPath()
+      );
+      const envVars = SM.generateServiceEnvVars(projectEnv);
+      serviceEnvVars = { ...serviceEnvVars || {}, ...envVars };
+      logger.info(
+        `[SandboxRouting] Started services for project '${meta.projectId}': ${Object.keys(envVars || {}).join(", ")}`
+      );
+    } catch (err) {
+      logger.warn(
+        `[SandboxRouting] Failed to start project services for '${meta.projectId}': ${err}`
+      );
+    }
   }
   logger.info(`[SandboxRouting] Routing check '${checkId}' to sandbox '${sandboxName}'`);
   const { CheckRunner: CheckRunner2 } = (init_check_runner(), __toCommonJS(check_runner_exports));
@@ -6402,7 +7622,8 @@ async function executeWithSandboxRouting(checkId, checkConfig, context2, prInfo,
     prInfo,
     dependencyResults.size > 0 ? dependencyResults : void 0,
     timeout,
-    context2.config.sandbox_defaults
+    context2.config.sandbox_defaults,
+    serviceEnvVars
   );
 }
 var init_sandbox_routing = __esm({
@@ -7169,7 +8390,7 @@ async function renderMermaidToPng(mermaidCode) {
       env.PUPPETEER_EXECUTABLE_PATH = chromiumPath;
     }
     const result = await new Promise((resolve17) => {
-      const proc = (0, import_child_process.spawn)(
+      const proc = (0, import_child_process6.spawn)(
         "npx",
         [
           "--yes",
@@ -7328,11 +8549,11 @@ function replaceFileSections(text, sections, replacement = (idx) => `_(See file:
 function formatSlackText(text) {
   return markdownToSlack(text);
 }
-var import_child_process, fs5, path7, os;
+var import_child_process6, fs5, path7, os;
 var init_markdown = __esm({
   "src/slack/markdown.ts"() {
     "use strict";
-    import_child_process = require("child_process");
+    import_child_process6 = require("child_process");
     fs5 = __toESM(require("fs"));
     path7 = __toESM(require("path"));
     os = __toESM(require("os"));
@@ -9910,12 +11131,12 @@ __export(command_executor_exports, {
   CommandExecutor: () => CommandExecutor,
   commandExecutor: () => commandExecutor
 });
-var import_child_process2, import_util, CommandExecutor, commandExecutor;
+var import_child_process7, import_util6, CommandExecutor, commandExecutor;
 var init_command_executor = __esm({
   "src/utils/command-executor.ts"() {
     "use strict";
-    import_child_process2 = require("child_process");
-    import_util = require("util");
+    import_child_process7 = require("child_process");
+    import_util6 = require("util");
     init_logger();
     CommandExecutor = class _CommandExecutor {
       static instance;
@@ -9931,7 +11152,7 @@ var init_command_executor = __esm({
        * Execute a shell command with optional stdin, environment, and timeout
        */
       async execute(command, options = {}) {
-        const execAsync = (0, import_util.promisify)(import_child_process2.exec);
+        const execAsync = (0, import_util6.promisify)(import_child_process7.exec);
         const timeout = options.timeout || 3e4;
         if (options.stdin) {
           return this.executeWithStdin(command, options);
@@ -9956,7 +11177,7 @@ var init_command_executor = __esm({
        */
       executeWithStdin(command, options) {
         return new Promise((resolve17, reject) => {
-          const childProcess = (0, import_child_process2.exec)(
+          const childProcess = (0, import_child_process7.exec)(
             command,
             {
               cwd: options.cwd,
@@ -10217,11 +11438,11 @@ function toOverlaySourceArray(value) {
 }
 function resolvePathOrUrl(candidate, baseDir) {
   if (isHttpUrl(candidate)) return candidate;
-  if (import_path4.default.isAbsolute(candidate)) return candidate;
+  if (import_path9.default.isAbsolute(candidate)) return candidate;
   if (isHttpUrl(baseDir)) {
     return new URL(candidate, baseDir).toString();
   }
-  return import_path4.default.resolve(baseDir, candidate);
+  return import_path9.default.resolve(baseDir, candidate);
 }
 async function readTextFromPathOrUrl(location) {
   if (isHttpUrl(location)) {
@@ -10234,7 +11455,7 @@ async function readTextFromPathOrUrl(location) {
   return await import_promises2.default.readFile(location, "utf8");
 }
 function parseJsonOrYaml(raw, location) {
-  const ext = import_path4.default.extname(location).toLowerCase();
+  const ext = import_path9.default.extname(location).toLowerCase();
   if (ext === ".yaml" || ext === ".yml") {
     return import_js_yaml.default.load(raw);
   }
@@ -10474,13 +11695,13 @@ async function loadOpenApiDocument(tool) {
   const configuredBaseDir = tool.__baseDir;
   const baseDir = (() => {
     if (tool.cwd) {
-      if (import_path4.default.isAbsolute(tool.cwd) || isHttpUrl(tool.cwd)) {
+      if (import_path9.default.isAbsolute(tool.cwd) || isHttpUrl(tool.cwd)) {
         return tool.cwd;
       }
       if (configuredBaseDir) {
         return resolvePathOrUrl(tool.cwd, configuredBaseDir);
       }
-      return import_path4.default.resolve(tool.cwd);
+      return import_path9.default.resolve(tool.cwd);
     }
     return configuredBaseDir || process.cwd();
   })();
@@ -10893,12 +12114,12 @@ async function executeMappedApiTool(mappedTool, args) {
     clearTimeout(timeout);
   }
 }
-var import_promises2, import_path4, import_js_yaml, import_swagger_parser, import_deepmerge, import_jsonpath_plus, import_minimatch, HTTP_METHODS, ApiToolRegistry;
+var import_promises2, import_path9, import_js_yaml, import_swagger_parser, import_deepmerge, import_jsonpath_plus, import_minimatch, HTTP_METHODS, ApiToolRegistry;
 var init_api_tool_executor = __esm({
   "src/providers/api-tool-executor.ts"() {
     "use strict";
     import_promises2 = __toESM(require("fs/promises"));
-    import_path4 = __toESM(require("path"));
+    import_path9 = __toESM(require("path"));
     import_js_yaml = __toESM(require("js-yaml"));
     import_swagger_parser = __toESM(require("@apidevtools/swagger-parser"));
     import_deepmerge = __toESM(require("deepmerge"));
@@ -11255,13 +12476,13 @@ var workflow_registry_exports = {};
 __export(workflow_registry_exports, {
   WorkflowRegistry: () => WorkflowRegistry
 });
-var import_fs3, path10, yaml, import_ajv2, import_ajv_formats, WorkflowRegistry;
+var import_fs8, path10, yaml2, import_ajv2, import_ajv_formats, WorkflowRegistry;
 var init_workflow_registry = __esm({
   "src/workflow-registry.ts"() {
     "use strict";
-    import_fs3 = require("fs");
+    import_fs8 = require("fs");
     path10 = __toESM(require("path"));
-    yaml = __toESM(require("js-yaml"));
+    yaml2 = __toESM(require("js-yaml"));
     init_logger();
     init_dependency_resolver();
     import_ajv2 = __toESM(require("ajv"));
@@ -11393,7 +12614,7 @@ var init_workflow_registry = __esm({
               const basePath = importBasePath || path10.dirname(resolvedSource || source);
               const baseResolved = path10.isAbsolute(raw.extends) ? raw.extends : path10.resolve(basePath, raw.extends);
               try {
-                const baseContent = await import_fs3.promises.readFile(baseResolved, "utf-8");
+                const baseContent = await import_fs8.promises.readFile(baseResolved, "utf-8");
                 const baseData = this.parseWorkflowContent(baseContent, baseResolved);
                 const { extends: _extends, ...rest } = raw;
                 void _extends;
@@ -11522,12 +12743,15 @@ var init_workflow_registry = __esm({
         for (const [stepId, step] of Object.entries(workflow.steps || {})) {
           if (step.depends_on) {
             for (const dep of step.depends_on) {
-              if (!workflow.steps[dep]) {
-                errors.push({
-                  path: `steps.${stepId}.depends_on`,
-                  message: `Step '${stepId}' depends on non-existent step '${dep}'`,
-                  value: dep
-                });
+              const orParts = typeof dep === "string" && dep.includes("|") ? dep.split("|").map((s) => s.trim()).filter(Boolean) : [dep];
+              for (const part of orParts) {
+                if (!workflow.steps[part]) {
+                  errors.push({
+                    path: `steps.${stepId}.depends_on`,
+                    message: `Step '${stepId}' depends on non-existent step '${part}'`,
+                    value: dep
+                  });
+                }
               }
             }
           }
@@ -11614,7 +12838,7 @@ var init_workflow_registry = __esm({
           if (!filePath2.startsWith(defaultsDir + path10.sep)) {
             throw new Error(`Invalid visor:// path: resolved path escapes defaults directory`);
           }
-          const content2 = await import_fs3.promises.readFile(filePath2, "utf-8");
+          const content2 = await import_fs8.promises.readFile(filePath2, "utf-8");
           return { content: content2, resolvedSource: filePath2, importBasePath: path10.dirname(filePath2) };
         }
         if (source.startsWith("http://") || source.startsWith("https://")) {
@@ -11635,7 +12859,7 @@ var init_workflow_registry = __esm({
           return { content: await response.text(), resolvedSource: resolvedUrl, importBasePath };
         }
         const filePath = path10.isAbsolute(source) ? source : path10.resolve(basePath || process.cwd(), source);
-        const content = await import_fs3.promises.readFile(filePath, "utf-8");
+        const content = await import_fs8.promises.readFile(filePath, "utf-8");
         return { content, resolvedSource: filePath, importBasePath: path10.dirname(filePath) };
       }
       /**
@@ -11646,7 +12870,7 @@ var init_workflow_registry = __esm({
           return JSON.parse(content);
         } catch {
           try {
-            return yaml.load(content);
+            return yaml2.load(content);
           } catch (error) {
             throw new Error(
               `Failed to parse workflow file ${source}: ${error instanceof Error ? error.message : String(error)}`
@@ -12442,13 +13666,13 @@ var init_config_merger = __esm({
 });
 
 // src/utils/config-loader.ts
-var fs9, path11, yaml2, ConfigLoader;
+var fs9, path11, yaml3, ConfigLoader;
 var init_config_loader = __esm({
   "src/utils/config-loader.ts"() {
     "use strict";
     fs9 = __toESM(require("fs"));
     path11 = __toESM(require("path"));
-    yaml2 = __toESM(require("js-yaml"));
+    yaml3 = __toESM(require("js-yaml"));
     ConfigLoader = class {
       constructor(options = {}) {
         this.options = options;
@@ -12555,7 +13779,7 @@ var init_config_loader = __esm({
         this.validateLocalPath(resolvedPath);
         try {
           const content = fs9.readFileSync(resolvedPath, "utf8");
-          const config = yaml2.load(content);
+          const config = yaml3.load(content);
           if (!config || typeof config !== "object") {
             throw new Error(`Invalid YAML in configuration file: ${resolvedPath}`);
           }
@@ -12618,7 +13842,7 @@ var init_config_loader = __esm({
             throw new Error(`Failed to fetch config: ${response.status} ${response.statusText}`);
           }
           const content = await response.text();
-          const config = yaml2.load(content);
+          const config = yaml3.load(content);
           if (!config || typeof config !== "object") {
             throw new Error(`Invalid YAML in remote configuration: ${url}`);
           }
@@ -12674,7 +13898,7 @@ var init_config_loader = __esm({
         if (defaultConfigPath) {
           console.error(`\u{1F4E6} Loading bundled default configuration from ${defaultConfigPath}`);
           const content = fs9.readFileSync(defaultConfigPath, "utf8");
-          let config = yaml2.load(content);
+          let config = yaml3.load(content);
           if (!config || typeof config !== "object") {
             throw new Error("Invalid default configuration");
           }
@@ -16593,11 +17817,11 @@ __export(config_exports, {
   ConfigManager: () => ConfigManager,
   VALID_EVENT_TRIGGERS: () => VALID_EVENT_TRIGGERS
 });
-var yaml3, fs10, path12, import_simple_git, import_ajv3, import_ajv_formats2, VALID_EVENT_TRIGGERS, ConfigManager, __ajvValidate, __ajvErrors;
+var yaml4, fs10, path12, import_simple_git, import_ajv3, import_ajv_formats2, VALID_EVENT_TRIGGERS, ConfigManager, __ajvValidate, __ajvErrors;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
-    yaml3 = __toESM(require("js-yaml"));
+    yaml4 = __toESM(require("js-yaml"));
     fs10 = __toESM(require("fs"));
     path12 = __toESM(require("path"));
     init_logger();
@@ -16677,7 +17901,7 @@ var init_config = __esm({
           }
           let parsedConfig;
           try {
-            parsedConfig = yaml3.load(configContent);
+            parsedConfig = yaml4.load(configContent);
           } catch (yamlError) {
             const errorMessage = yamlError instanceof Error ? yamlError.message : String(yamlError);
             throw new Error(`Invalid YAML syntax in ${resolvedPath}: ${errorMessage}`);
@@ -16887,7 +18111,7 @@ var init_config = __esm({
             console.error(`\u{1F4E6} Loading bundled default configuration from ${bundledConfigPath}`);
             const readAndParse = (p) => {
               const raw = fs10.readFileSync(p, "utf8");
-              const obj = yaml3.load(raw);
+              const obj = yaml4.load(raw);
               if (!obj || typeof obj !== "object") return {};
               if (obj.include && !obj.extends) {
                 const inc = obj.include;
@@ -17218,7 +18442,7 @@ ${errors}`);
           }
           if (checksToValidate) {
             for (const [checkName, checkConfig] of Object.entries(checksToValidate)) {
-              if (checkConfig.sandbox && !sandboxNames.includes(checkConfig.sandbox)) {
+              if (checkConfig.sandbox && !checkConfig.sandbox.includes("{{") && !sandboxNames.includes(checkConfig.sandbox)) {
                 errors.push({
                   field: `checks.${checkName}.sandbox`,
                   message: `Check '${checkName}' references sandbox '${checkConfig.sandbox}' which is not defined. Available: ${sandboxNames.join(", ")}`,
@@ -17228,7 +18452,7 @@ ${errors}`);
             }
           }
         } else {
-          if (config.sandbox) {
+          if (config.sandbox && !String(config.sandbox).includes("{{")) {
             errors.push({
               field: "sandbox",
               message: `Top-level sandbox '${config.sandbox}' is set but no sandboxes are defined`,
@@ -17237,7 +18461,7 @@ ${errors}`);
           }
           if (checksToValidate) {
             for (const [checkName, checkConfig] of Object.entries(checksToValidate)) {
-              if (checkConfig.sandbox) {
+              if (checkConfig.sandbox && !checkConfig.sandbox.includes("{{")) {
                 errors.push({
                   field: `checks.${checkName}.sandbox`,
                   message: `Check '${checkName}' references sandbox '${checkConfig.sandbox}' but no sandboxes are defined`,
@@ -18295,7 +19519,7 @@ var workflow_check_provider_exports = {};
 __export(workflow_check_provider_exports, {
   WorkflowCheckProvider: () => WorkflowCheckProvider
 });
-var path13, yaml4, WorkflowCheckProvider;
+var path13, yaml5, WorkflowCheckProvider;
 var init_workflow_check_provider = __esm({
   "src/providers/workflow-check-provider.ts"() {
     "use strict";
@@ -18308,7 +19532,7 @@ var init_workflow_check_provider = __esm({
     init_human_id();
     init_liquid_extensions();
     path13 = __toESM(require("path"));
-    yaml4 = __toESM(require("js-yaml"));
+    yaml5 = __toESM(require("js-yaml"));
     WorkflowCheckProvider = class extends CheckProvider {
       registry;
       executor;
@@ -18632,7 +19856,7 @@ var init_workflow_check_provider = __esm({
             const renderedContent = loadConfigLiquid.parseAndRenderSync(rawContent, {
               basePath: configDir
             });
-            const parsed = yaml4.load(renderedContent, { schema: yaml4.JSON_SCHEMA });
+            const parsed = yaml5.load(renderedContent, { schema: yaml5.JSON_SCHEMA });
             return resolveExpressions(parsed, 0);
           } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
@@ -18761,6 +19985,12 @@ var init_workflow_check_provider = __esm({
           inputs,
           config.checkName || workflow.id
         );
+        if (parentContext?.config?.sandboxes && !workflowConfig.sandboxes) {
+          workflowConfig.sandboxes = { ...parentContext.config.sandboxes };
+        }
+        if (parentContext?.config?.sandbox_defaults && !workflowConfig.sandbox_defaults) {
+          workflowConfig.sandbox_defaults = { ...parentContext.config.sandbox_defaults };
+        }
         const parentTimeout = config.timeout || config.ai?.timeout;
         if (parentTimeout && workflowConfig.checks) {
           for (const stepCfg of Object.values(workflowConfig.checks)) {
@@ -19091,13 +20321,13 @@ var init_workflow_check_provider = __esm({
       async loadWorkflowFromConfigPath(sourcePath, baseDir) {
         const path30 = require("path");
         const fs27 = require("fs");
-        const yaml5 = require("js-yaml");
+        const yaml6 = require("js-yaml");
         const resolved = path30.isAbsolute(sourcePath) ? sourcePath : path30.resolve(baseDir, sourcePath);
         if (!fs27.existsSync(resolved)) {
           throw new Error(`Workflow config not found at: ${resolved}`);
         }
         const rawContent = fs27.readFileSync(resolved, "utf8");
-        const rawData = yaml5.load(rawContent);
+        const rawData = yaml6.load(rawContent);
         if (rawData.imports && Array.isArray(rawData.imports)) {
           const configDir = path30.dirname(resolved);
           for (const source of rawData.imports) {
@@ -19415,12 +20645,12 @@ function fromTriggerRow(row) {
     createdAt: row.created_at
   };
 }
-var import_path5, import_fs4, import_uuid, SqliteStoreBackend;
+var import_path10, import_fs9, import_uuid, SqliteStoreBackend;
 var init_sqlite_store = __esm({
   "src/scheduler/store/sqlite-store.ts"() {
     "use strict";
-    import_path5 = __toESM(require("path"));
-    import_fs4 = __toESM(require("fs"));
+    import_path10 = __toESM(require("path"));
+    import_fs9 = __toESM(require("fs"));
     import_uuid = require("uuid");
     init_logger();
     SqliteStoreBackend = class {
@@ -19432,9 +20662,9 @@ var init_sqlite_store = __esm({
         this.dbPath = filename || ".visor/schedules.db";
       }
       async initialize() {
-        const resolvedPath = import_path5.default.resolve(process.cwd(), this.dbPath);
-        const dir = import_path5.default.dirname(resolvedPath);
-        import_fs4.default.mkdirSync(dir, { recursive: true });
+        const resolvedPath = import_path10.default.resolve(process.cwd(), this.dbPath);
+        const dir = import_path10.default.dirname(resolvedPath);
+        import_fs9.default.mkdirSync(dir, { recursive: true });
         const { createRequire } = require("module");
         const runtimeRequire = createRequire(__filename);
         let Database;
@@ -19963,7 +21193,7 @@ var init_store = __esm({
 
 // src/scheduler/store/json-migrator.ts
 async function migrateJsonToBackend(jsonPath, backend) {
-  const resolvedPath = import_path6.default.resolve(process.cwd(), jsonPath);
+  const resolvedPath = import_path11.default.resolve(process.cwd(), jsonPath);
   let content;
   try {
     content = await import_promises3.default.readFile(resolvedPath, "utf-8");
@@ -20021,12 +21251,12 @@ async function renameToMigrated(resolvedPath) {
     );
   }
 }
-var import_promises3, import_path6;
+var import_promises3, import_path11;
 var init_json_migrator = __esm({
   "src/scheduler/store/json-migrator.ts"() {
     "use strict";
     import_promises3 = __toESM(require("fs/promises"));
-    import_path6 = __toESM(require("path"));
+    import_path11 = __toESM(require("path"));
     init_logger();
   }
 });
@@ -20553,15 +21783,15 @@ __export(track_execution_exports, {
 });
 async function trackExecution(opts, executor) {
   const { taskStore, source, configPath, metadata, messageText } = opts;
-  const configName = configPath ? import_path7.default.basename(configPath, import_path7.default.extname(configPath)) : void 0;
+  const configName = configPath ? import_path12.default.basename(configPath, import_path12.default.extname(configPath)) : void 0;
   const workflowId = configName && opts.workflowId ? `${configName}#${opts.workflowId}` : opts.workflowId;
   const requestMessage = {
-    message_id: import_crypto2.default.randomUUID(),
+    message_id: import_crypto5.default.randomUUID(),
     role: "user",
     parts: [{ text: messageText }]
   };
   const task = taskStore.createTask({
-    contextId: import_crypto2.default.randomUUID(),
+    contextId: import_crypto5.default.randomUUID(),
     requestMessage,
     workflowId,
     requestMetadata: {
@@ -20600,7 +21830,7 @@ async function trackExecution(opts, executor) {
     } catch {
     }
     const completedMsg = {
-      message_id: import_crypto2.default.randomUUID(),
+      message_id: import_crypto5.default.randomUUID(),
       role: "agent",
       parts: [{ text: responseText }]
     };
@@ -20610,7 +21840,7 @@ async function trackExecution(opts, executor) {
   } catch (err) {
     const errorText = err instanceof Error ? err.message : String(err);
     const failMessage = {
-      message_id: import_crypto2.default.randomUUID(),
+      message_id: import_crypto5.default.randomUUID(),
       role: "agent",
       parts: [{ text: errorText }]
     };
@@ -20622,12 +21852,12 @@ async function trackExecution(opts, executor) {
     throw err;
   }
 }
-var import_crypto2, import_path7;
+var import_crypto5, import_path12;
 var init_track_execution = __esm({
   "src/agent-protocol/track-execution.ts"() {
     "use strict";
-    import_crypto2 = __toESM(require("crypto"));
-    import_path7 = __toESM(require("path"));
+    import_crypto5 = __toESM(require("crypto"));
+    import_path12 = __toESM(require("path"));
     init_logger();
     init_lazy_otel();
     init_instance_id();
@@ -28944,13 +30174,13 @@ function isHttpClientTool(tool) {
 function isUtcpTool(tool) {
   return Boolean(tool && tool.type === "utcp" && tool.__utcpManual);
 }
-var import_fs5, import_http, import_events, CustomToolsSSEServer;
+var import_fs10, import_http, import_events, CustomToolsSSEServer;
 var init_mcp_custom_sse_server = __esm({
   "src/providers/mcp-custom-sse-server.ts"() {
     "use strict";
     init_custom_tool_executor();
     init_logger();
-    import_fs5 = __toESM(require("fs"));
+    import_fs10 = __toESM(require("fs"));
     import_http = __toESM(require("http"));
     import_events = require("events");
     init_workflow_tool_executor();
@@ -29758,7 +30988,7 @@ var init_mcp_custom_sse_server = __esm({
             const contentType = r.content_type || r.output?.content_type || r.result?.content_type || "";
             if (filePath && typeof filePath === "string" && contentType.startsWith("image/")) {
               try {
-                const imageBuffer = import_fs5.default.readFileSync(filePath);
+                const imageBuffer = import_fs10.default.readFileSync(filePath);
                 contentBlocks.push({
                   type: "image",
                   data: imageBuffer.toString("base64"),
@@ -29962,8 +31192,9 @@ var init_mcp_custom_sse_server = __esm({
         } else if (tool.workflow) {
           const workflowId = tool.workflow;
           const workflow = registry.get(workflowId);
+          const skillInputOverrides = tool.inputs && !Array.isArray(tool.inputs) ? tool.inputs : void 0;
           if (workflow) {
-            return createWorkflowToolDefinition(workflow, void 0, tool.name || name);
+            return createWorkflowToolDefinition(workflow, skillInputOverrides, tool.name || name);
           }
           const inputSchema = tool.inputs ? workflowInputsToJsonSchema(tool.inputs) : { type: "object", properties: {}, required: [] };
           if (this.debug) {
@@ -29977,7 +31208,8 @@ var init_mcp_custom_sse_server = __esm({
             inputSchema,
             exec: "",
             __isWorkflowTool: true,
-            __workflowId: workflowId
+            __workflowId: workflowId,
+            __argsOverrides: skillInputOverrides
           };
         }
         logger.warn(
@@ -30058,7 +31290,7 @@ var init_tool_resolver = __esm({
 });
 
 // src/providers/ai-check-provider.ts
-var import_promises4, import_path8, AICheckProvider;
+var import_promises4, import_path13, AICheckProvider;
 var init_ai_check_provider = __esm({
   "src/providers/ai-check-provider.ts"() {
     "use strict";
@@ -30068,7 +31300,7 @@ var init_ai_check_provider = __esm({
     init_issue_filter();
     init_liquid_extensions();
     import_promises4 = __toESM(require("fs/promises"));
-    import_path8 = __toESM(require("path"));
+    import_path13 = __toESM(require("path"));
     init_lazy_otel();
     init_state_capture();
     init_mcp_custom_sse_server();
@@ -30236,7 +31468,7 @@ var init_ai_check_provider = __esm({
         const hasFileExtension = /\.[a-zA-Z0-9]{1,10}$/i.test(str);
         const hasPathSeparators = /[\/\\]/.test(str);
         const isRelativePath = /^\.{1,2}\//.test(str);
-        const isAbsolutePath = import_path8.default.isAbsolute(str);
+        const isAbsolutePath = import_path13.default.isAbsolute(str);
         const hasTypicalFileChars = /^[a-zA-Z0-9._\-\/\\:~]+$/.test(str);
         if (!(hasFileExtension || isRelativePath || isAbsolutePath || hasPathSeparators)) {
           return false;
@@ -30246,10 +31478,10 @@ var init_ai_check_provider = __esm({
         }
         try {
           let resolvedPath;
-          if (import_path8.default.isAbsolute(str)) {
-            resolvedPath = import_path8.default.normalize(str);
+          if (import_path13.default.isAbsolute(str)) {
+            resolvedPath = import_path13.default.normalize(str);
           } else {
-            resolvedPath = import_path8.default.resolve(process.cwd(), str);
+            resolvedPath = import_path13.default.resolve(process.cwd(), str);
           }
           const fs27 = require("fs").promises;
           try {
@@ -30270,14 +31502,14 @@ var init_ai_check_provider = __esm({
           throw new Error("Prompt file must have .liquid extension");
         }
         let resolvedPath;
-        if (import_path8.default.isAbsolute(promptPath)) {
+        if (import_path13.default.isAbsolute(promptPath)) {
           resolvedPath = promptPath;
         } else {
-          resolvedPath = import_path8.default.resolve(process.cwd(), promptPath);
+          resolvedPath = import_path13.default.resolve(process.cwd(), promptPath);
         }
-        if (!import_path8.default.isAbsolute(promptPath)) {
-          const normalizedPath = import_path8.default.normalize(resolvedPath);
-          const currentDir = import_path8.default.resolve(process.cwd());
+        if (!import_path13.default.isAbsolute(promptPath)) {
+          const normalizedPath = import_path13.default.normalize(resolvedPath);
+          const currentDir = import_path13.default.resolve(process.cwd());
           if (!normalizedPath.startsWith(currentDir)) {
             throw new Error("Invalid prompt file path: path traversal detected");
           }
@@ -33809,7 +35041,7 @@ var init_claude_code_types = __esm({
 function isClaudeCodeConstructor(value) {
   return typeof value === "function";
 }
-var import_promises5, import_path9, ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError, ClaudeCodeCheckProvider;
+var import_promises5, import_path14, ClaudeCodeSDKNotInstalledError, ClaudeCodeAPIKeyMissingError, ClaudeCodeCheckProvider;
 var init_claude_code_check_provider = __esm({
   "src/providers/claude-code-check-provider.ts"() {
     "use strict";
@@ -33818,7 +35050,7 @@ var init_claude_code_check_provider = __esm({
     init_issue_filter();
     init_liquid_extensions();
     import_promises5 = __toESM(require("fs/promises"));
-    import_path9 = __toESM(require("path"));
+    import_path14 = __toESM(require("path"));
     init_claude_code_types();
     ClaudeCodeSDKNotInstalledError = class extends Error {
       constructor() {
@@ -33966,7 +35198,7 @@ var init_claude_code_check_provider = __esm({
         const hasFileExtension = /\.[a-zA-Z0-9]{1,10}$/i.test(str);
         const hasPathSeparators = /[\/\\]/.test(str);
         const isRelativePath = /^\.{1,2}\//.test(str);
-        const isAbsolutePath = import_path9.default.isAbsolute(str);
+        const isAbsolutePath = import_path14.default.isAbsolute(str);
         const hasTypicalFileChars = /^[a-zA-Z0-9._\-\/\\:~]+$/.test(str);
         if (!(hasFileExtension || isRelativePath || isAbsolutePath || hasPathSeparators)) {
           return false;
@@ -33976,10 +35208,10 @@ var init_claude_code_check_provider = __esm({
         }
         try {
           let resolvedPath;
-          if (import_path9.default.isAbsolute(str)) {
-            resolvedPath = import_path9.default.normalize(str);
+          if (import_path14.default.isAbsolute(str)) {
+            resolvedPath = import_path14.default.normalize(str);
           } else {
-            resolvedPath = import_path9.default.resolve(process.cwd(), str);
+            resolvedPath = import_path14.default.resolve(process.cwd(), str);
           }
           try {
             const stat2 = await import_promises5.default.stat(resolvedPath);
@@ -33999,14 +35231,14 @@ var init_claude_code_check_provider = __esm({
           throw new Error("Prompt file must have .liquid extension");
         }
         let resolvedPath;
-        if (import_path9.default.isAbsolute(promptPath)) {
+        if (import_path14.default.isAbsolute(promptPath)) {
           resolvedPath = promptPath;
         } else {
-          resolvedPath = import_path9.default.resolve(process.cwd(), promptPath);
+          resolvedPath = import_path14.default.resolve(process.cwd(), promptPath);
         }
-        if (!import_path9.default.isAbsolute(promptPath)) {
-          const normalizedPath = import_path9.default.normalize(resolvedPath);
-          const currentDir = import_path9.default.resolve(process.cwd());
+        if (!import_path14.default.isAbsolute(promptPath)) {
+          const normalizedPath = import_path14.default.normalize(resolvedPath);
+          const currentDir = import_path14.default.resolve(process.cwd());
           if (!normalizedPath.startsWith(currentDir)) {
             throw new Error("Invalid prompt file path: path traversal detected");
           }
@@ -61870,948 +63102,6 @@ var init_runner = __esm({
   }
 });
 
-// src/sandbox/docker-image-sandbox.ts
-var import_util5, import_child_process3, import_fs6, import_path10, import_os, import_crypto3, execFileAsync, EXEC_MAX_BUFFER, DockerImageSandbox;
-var init_docker_image_sandbox = __esm({
-  "src/sandbox/docker-image-sandbox.ts"() {
-    "use strict";
-    import_util5 = require("util");
-    import_child_process3 = require("child_process");
-    import_fs6 = require("fs");
-    import_path10 = require("path");
-    import_os = require("os");
-    import_crypto3 = require("crypto");
-    init_logger();
-    init_sandbox_telemetry();
-    execFileAsync = (0, import_util5.promisify)(import_child_process3.execFile);
-    EXEC_MAX_BUFFER = 50 * 1024 * 1024;
-    DockerImageSandbox = class {
-      name;
-      config;
-      containerId = null;
-      containerName;
-      repoPath;
-      visorDistPath;
-      cacheVolumeMounts;
-      constructor(name, config, repoPath, visorDistPath, cacheVolumeMounts = []) {
-        this.name = name;
-        this.config = config;
-        this.repoPath = repoPath;
-        this.visorDistPath = visorDistPath;
-        this.containerName = `visor-${name}-${(0, import_crypto3.randomUUID)().slice(0, 8)}`;
-        this.cacheVolumeMounts = cacheVolumeMounts;
-      }
-      /**
-       * Build the Docker image if needed (dockerfile or dockerfile_inline mode)
-       */
-      async buildImageIfNeeded() {
-        if (this.config.image) {
-          return this.config.image;
-        }
-        const imageName = `visor-sandbox-${this.name}`;
-        const buildMode = this.config.dockerfile_inline ? "inline" : "dockerfile";
-        return withActiveSpan2(
-          "visor.sandbox.build",
-          {
-            "visor.sandbox.name": this.name,
-            "visor.sandbox.build.mode": buildMode
-          },
-          async () => {
-            if (this.config.dockerfile_inline) {
-              if (!/^\s*FROM\s+/im.test(this.config.dockerfile_inline)) {
-                throw new Error(
-                  `Sandbox '${this.name}' has invalid dockerfile_inline: must contain a FROM instruction`
-                );
-              }
-              const tmpDir = (0, import_fs6.mkdtempSync)((0, import_path10.join)((0, import_os.tmpdir)(), "visor-build-"));
-              const dockerfilePath = (0, import_path10.join)(tmpDir, "Dockerfile");
-              (0, import_fs6.writeFileSync)(dockerfilePath, this.config.dockerfile_inline, "utf8");
-              try {
-                logger.info(`Building sandbox image '${imageName}' from inline Dockerfile`);
-                await execFileAsync(
-                  "docker",
-                  ["build", "-t", imageName, "-f", dockerfilePath, this.repoPath],
-                  {
-                    maxBuffer: EXEC_MAX_BUFFER,
-                    timeout: 3e5
-                  }
-                );
-              } finally {
-                try {
-                  (0, import_fs6.unlinkSync)(dockerfilePath);
-                } catch {
-                }
-              }
-              return imageName;
-            }
-            if (this.config.dockerfile) {
-              logger.info(`Building sandbox image '${imageName}' from ${this.config.dockerfile}`);
-              await execFileAsync(
-                "docker",
-                ["build", "-t", imageName, "-f", this.config.dockerfile, this.repoPath],
-                { maxBuffer: EXEC_MAX_BUFFER, timeout: 3e5 }
-              );
-              return imageName;
-            }
-            throw new Error(`Sandbox '${this.name}' has no image, dockerfile, or dockerfile_inline`);
-          }
-        );
-      }
-      /**
-       * Start the sandbox container
-       */
-      async start() {
-        const image = await this.buildImageIfNeeded();
-        const workdir = this.config.workdir === "host" ? this.repoPath : this.config.workdir || "/workspace";
-        const visorPath = this.config.visor_path || "/opt/visor";
-        const readOnlySuffix = this.config.read_only ? ":ro" : "";
-        const args = [
-          "docker",
-          "run",
-          "-d",
-          "--name",
-          this.containerName,
-          "-v",
-          `${this.repoPath}:${workdir}${readOnlySuffix}`,
-          "-v",
-          `${this.visorDistPath}:${visorPath}:ro`,
-          "-w",
-          workdir
-        ];
-        if (this.config.network === false) {
-          args.push("--network", "none");
-        }
-        if (this.config.resources?.memory) {
-          args.push("--memory", this.config.resources.memory);
-        }
-        if (this.config.resources?.cpu) {
-          args.push("--cpus", String(this.config.resources.cpu));
-        }
-        for (const mount of this.cacheVolumeMounts) {
-          args.push("-v", mount);
-        }
-        if (this.config.bind_paths) {
-          for (const bp of this.config.bind_paths) {
-            const hostPath = bp.host.startsWith("~") ? (0, import_path10.resolve)((process.env.HOME || "/root") + bp.host.slice(1)) : (0, import_path10.resolve)(bp.host);
-            const containerPath = bp.container || hostPath;
-            const readOnly = bp.read_only !== false;
-            args.push("-v", `${hostPath}:${containerPath}${readOnly ? ":ro" : ""}`);
-          }
-        }
-        args.push(image, "sleep", "infinity");
-        logger.info(`Starting sandbox container '${this.containerName}'`);
-        const { stdout } = await execFileAsync(args[0], args.slice(1), {
-          maxBuffer: EXEC_MAX_BUFFER,
-          timeout: 6e4
-        });
-        this.containerId = stdout.trim();
-        addEvent2("visor.sandbox.container.started", {
-          container_name: this.containerName,
-          image
-        });
-      }
-      /**
-       * Execute a command inside the running container
-       */
-      async exec(options) {
-        if (!this.containerId) {
-          throw new Error(`Sandbox '${this.name}' is not started`);
-        }
-        const args = ["docker", "exec"];
-        for (const [key, value] of Object.entries(options.env)) {
-          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
-            throw new Error(`Invalid environment variable name: '${key}'`);
-          }
-          args.push("-e", `${key}=${value}`);
-        }
-        args.push(this.containerName, "sh", "-c", options.command);
-        try {
-          const { stdout, stderr } = await execFileAsync(args[0], args.slice(1), {
-            maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER,
-            timeout: options.timeoutMs || 6e5
-          });
-          return { stdout, stderr, exitCode: 0 };
-        } catch (err) {
-          const execErr = err;
-          return {
-            stdout: execErr.stdout || "",
-            stderr: execErr.stderr || "",
-            exitCode: typeof execErr.code === "number" ? execErr.code : 1
-          };
-        }
-      }
-      /**
-       * Stop and remove the container
-       */
-      async stop() {
-        if (this.containerName) {
-          try {
-            await execFileAsync("docker", ["rm", "-f", this.containerName], {
-              maxBuffer: EXEC_MAX_BUFFER,
-              timeout: 3e4
-            });
-          } catch {
-          }
-          addEvent2("visor.sandbox.container.stopped", {
-            container_name: this.containerName
-          });
-          this.containerId = null;
-        }
-      }
-    };
-  }
-});
-
-// src/sandbox/docker-compose-sandbox.ts
-var import_util6, import_child_process4, import_crypto4, execFileAsync2, EXEC_MAX_BUFFER2, DockerComposeSandbox;
-var init_docker_compose_sandbox = __esm({
-  "src/sandbox/docker-compose-sandbox.ts"() {
-    "use strict";
-    import_util6 = require("util");
-    import_child_process4 = require("child_process");
-    import_crypto4 = require("crypto");
-    init_logger();
-    execFileAsync2 = (0, import_util6.promisify)(import_child_process4.execFile);
-    EXEC_MAX_BUFFER2 = 50 * 1024 * 1024;
-    DockerComposeSandbox = class {
-      name;
-      config;
-      projectName;
-      started = false;
-      constructor(name, config) {
-        this.name = name;
-        this.config = config;
-        this.projectName = `visor-${name}-${(0, import_crypto4.randomUUID)().slice(0, 8)}`;
-      }
-      /**
-       * Start the compose services
-       */
-      async start() {
-        if (!this.config.compose) {
-          throw new Error(`Sandbox '${this.name}' has no compose file specified`);
-        }
-        if (!this.config.service) {
-          throw new Error(`Sandbox '${this.name}' requires a 'service' field for compose mode`);
-        }
-        logger.info(`Starting compose sandbox '${this.name}' (project: ${this.projectName})`);
-        await execFileAsync2(
-          "docker",
-          ["compose", "-f", this.config.compose, "-p", this.projectName, "up", "-d"],
-          {
-            maxBuffer: EXEC_MAX_BUFFER2,
-            timeout: 12e4
-          }
-        );
-        this.started = true;
-      }
-      /**
-       * Execute a command inside the compose service
-       */
-      async exec(options) {
-        if (!this.started) {
-          throw new Error(`Compose sandbox '${this.name}' is not started`);
-        }
-        const service = this.config.service;
-        const args = [
-          "docker",
-          "compose",
-          "-f",
-          this.config.compose,
-          "-p",
-          this.projectName,
-          "exec",
-          "-T"
-          // non-interactive
-        ];
-        for (const [key, value] of Object.entries(options.env)) {
-          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
-            throw new Error(`Invalid environment variable name: '${key}'`);
-          }
-          args.push("-e", `${key}=${value}`);
-        }
-        if (this.config.workdir) {
-          args.push("-w", this.config.workdir);
-        }
-        args.push(service, "sh", "-c", options.command);
-        try {
-          const { stdout, stderr } = await execFileAsync2(args[0], args.slice(1), {
-            maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER2,
-            timeout: options.timeoutMs || 6e5
-          });
-          return { stdout, stderr, exitCode: 0 };
-        } catch (err) {
-          const execErr = err;
-          return {
-            stdout: execErr.stdout || "",
-            stderr: execErr.stderr || "",
-            exitCode: typeof execErr.code === "number" ? execErr.code : 1
-          };
-        }
-      }
-      /**
-       * Stop and tear down the compose project
-       */
-      async stop() {
-        if (this.started && this.config.compose) {
-          try {
-            await execFileAsync2(
-              "docker",
-              ["compose", "-f", this.config.compose, "-p", this.projectName, "down"],
-              {
-                maxBuffer: EXEC_MAX_BUFFER2,
-                timeout: 6e4
-              }
-            );
-          } catch {
-          }
-          this.started = false;
-        }
-      }
-    };
-  }
-});
-
-// src/sandbox/cache-volume-manager.ts
-function pathHash(containerPath) {
-  return (0, import_crypto5.createHash)("sha256").update(containerPath).digest("hex").slice(0, 8);
-}
-function parseTtl(ttl) {
-  let ms = 0;
-  const dayMatch = ttl.match(/(\d+)d/);
-  const hourMatch = ttl.match(/(\d+)h/);
-  const minMatch = ttl.match(/(\d+)m/);
-  if (dayMatch) ms += parseInt(dayMatch[1], 10) * 864e5;
-  if (hourMatch) ms += parseInt(hourMatch[1], 10) * 36e5;
-  if (minMatch) ms += parseInt(minMatch[1], 10) * 6e4;
-  return ms || 6048e5;
-}
-var import_util7, import_child_process5, import_crypto5, execFileAsync3, EXEC_MAX_BUFFER3, CacheVolumeManager;
-var init_cache_volume_manager = __esm({
-  "src/sandbox/cache-volume-manager.ts"() {
-    "use strict";
-    import_util7 = require("util");
-    import_child_process5 = require("child_process");
-    import_crypto5 = require("crypto");
-    init_logger();
-    execFileAsync3 = (0, import_util7.promisify)(import_child_process5.execFile);
-    EXEC_MAX_BUFFER3 = 10 * 1024 * 1024;
-    CacheVolumeManager = class {
-      /**
-       * Resolve cache config into Docker volume mount specs.
-       *
-       * Volume naming: visor-cache-<prefix>-<sandboxName>-<pathHash>
-       *
-       * @param sandboxName - Name of the sandbox
-       * @param cacheConfig - Cache configuration from sandbox config
-       * @param gitBranch - Current git branch (used as default prefix)
-       * @returns Array of volume mount specs for docker run -v
-       */
-      async resolveVolumes(sandboxName, cacheConfig, gitBranch) {
-        const prefix = (cacheConfig.prefix || gitBranch).replace(/[^a-zA-Z0-9._-]/g, "-");
-        const volumes = [];
-        for (const containerPath of cacheConfig.paths) {
-          if (/\.\./.test(containerPath)) {
-            throw new Error(`Cache path '${containerPath}' must not contain '..' path traversal`);
-          }
-          const hash = pathHash(containerPath);
-          const volumeName = `visor-cache-${prefix}-${sandboxName}-${hash}`;
-          const exists = await this.volumeExists(volumeName);
-          if (!exists && cacheConfig.fallback_prefix) {
-            const fallbackPrefix = cacheConfig.fallback_prefix.replace(/[^a-zA-Z0-9._-]/g, "-");
-            const fallbackVolume = `visor-cache-${fallbackPrefix}-${sandboxName}-${hash}`;
-            const fallbackExists = await this.volumeExists(fallbackVolume);
-            if (fallbackExists) {
-              logger.info(`Cache miss for '${volumeName}', copying from fallback '${fallbackVolume}'`);
-              await this.copyVolume(fallbackVolume, volumeName);
-            } else {
-              await this.createVolume(volumeName);
-            }
-          } else if (!exists) {
-            await this.createVolume(volumeName);
-          }
-          await this.touchVolume(volumeName);
-          volumes.push({
-            volumeName,
-            mountSpec: `${volumeName}:${containerPath}`
-          });
-        }
-        return volumes;
-      }
-      /**
-       * Check if a Docker volume exists
-       */
-      async volumeExists(name) {
-        try {
-          await execFileAsync3("docker", ["volume", "inspect", name], {
-            maxBuffer: EXEC_MAX_BUFFER3,
-            timeout: 1e4
-          });
-          return true;
-        } catch {
-          return false;
-        }
-      }
-      /**
-       * Create a Docker named volume
-       */
-      async createVolume(name) {
-        const now = (/* @__PURE__ */ new Date()).toISOString();
-        await execFileAsync3("docker", ["volume", "create", "--label", `visor.last-used=${now}`, name], {
-          maxBuffer: EXEC_MAX_BUFFER3,
-          timeout: 1e4
-        });
-      }
-      /**
-       * Copy data from one volume to another using a temp container
-       */
-      async copyVolume(source, target) {
-        await this.createVolume(target);
-        try {
-          await execFileAsync3(
-            "docker",
-            [
-              "run",
-              "--rm",
-              "-v",
-              `${source}:/src:ro`,
-              "-v",
-              `${target}:/dst`,
-              "alpine",
-              "sh",
-              "-c",
-              "cp -a /src/. /dst/"
-            ],
-            { maxBuffer: EXEC_MAX_BUFFER3, timeout: 6e4 }
-          );
-        } catch (err) {
-          logger.warn(`Failed to copy cache volume ${source} -> ${target}: ${err}`);
-        }
-      }
-      /**
-       * Update the last-used label on a volume.
-       * Docker doesn't support updating labels in-place, so we record via a temp file approach
-       * by simply re-creating volumes with updated labels if they don't exist.
-       * For existing volumes, we track usage time via the volume name pattern.
-       */
-      async touchVolume(_name) {
-      }
-      /**
-       * Evict expired cache volumes for a sandbox
-       */
-      async evictExpired(sandboxName, ttl, maxScopes) {
-        const ttlMs = ttl ? parseTtl(ttl) : 6048e5;
-        const maxScopesLimit = maxScopes || 10;
-        try {
-          const { stdout } = await execFileAsync3(
-            "docker",
-            ["volume", "ls", "--filter", "name=visor-cache-", "--format", "{{.Name}}"],
-            { maxBuffer: EXEC_MAX_BUFFER3, timeout: 1e4 }
-          );
-          const allVolumes = stdout.trim().split("\n").filter(Boolean);
-          const sandboxVolumes = allVolumes.filter((v) => v.includes(`-${sandboxName}-`));
-          if (sandboxVolumes.length === 0) return;
-          const scopeMap = /* @__PURE__ */ new Map();
-          for (const vol of sandboxVolumes) {
-            const match = vol.match(/^visor-cache-(.+)-\w{8}$/);
-            if (match) {
-              const prefix = match[1].replace(`-${sandboxName}`, "");
-              if (!scopeMap.has(prefix)) scopeMap.set(prefix, []);
-              scopeMap.get(prefix).push(vol);
-            }
-          }
-          const now = Date.now();
-          const inspectResults = await Promise.allSettled(
-            sandboxVolumes.map(async (vol) => {
-              const { stdout: inspectOut } = await execFileAsync3(
-                "docker",
-                ["volume", "inspect", vol, "--format", "{{.CreatedAt}}"],
-                { maxBuffer: EXEC_MAX_BUFFER3, timeout: 1e4 }
-              );
-              return { vol, createdAt: new Date(inspectOut.trim()).getTime() };
-            })
-          );
-          for (const result of inspectResults) {
-            if (result.status !== "fulfilled") continue;
-            const { vol, createdAt } = result.value;
-            if (now - createdAt > ttlMs) {
-              try {
-                logger.info(`Evicting expired cache volume: ${vol}`);
-                await execFileAsync3("docker", ["volume", "rm", vol], {
-                  maxBuffer: EXEC_MAX_BUFFER3,
-                  timeout: 1e4
-                });
-              } catch {
-              }
-            }
-          }
-          if (scopeMap.size > maxScopesLimit) {
-            const scopes = Array.from(scopeMap.keys());
-            const toRemove = scopes.slice(0, scopes.length - maxScopesLimit);
-            for (const scope of toRemove) {
-              const vols = scopeMap.get(scope) || [];
-              for (const vol of vols) {
-                try {
-                  logger.info(`Evicting cache volume (max_scopes exceeded): ${vol}`);
-                  await execFileAsync3("docker", ["volume", "rm", vol], {
-                    maxBuffer: EXEC_MAX_BUFFER3,
-                    timeout: 1e4
-                  });
-                } catch {
-                }
-              }
-            }
-          }
-        } catch {
-        }
-      }
-    };
-  }
-});
-
-// src/sandbox/bubblewrap-sandbox.ts
-var bubblewrap_sandbox_exports = {};
-__export(bubblewrap_sandbox_exports, {
-  BubblewrapSandbox: () => BubblewrapSandbox
-});
-var import_util8, import_child_process6, import_fs7, import_path11, execFileAsync4, EXEC_MAX_BUFFER4, BubblewrapSandbox;
-var init_bubblewrap_sandbox = __esm({
-  "src/sandbox/bubblewrap-sandbox.ts"() {
-    "use strict";
-    import_util8 = require("util");
-    import_child_process6 = require("child_process");
-    import_fs7 = require("fs");
-    import_path11 = require("path");
-    init_logger();
-    init_sandbox_telemetry();
-    execFileAsync4 = (0, import_util8.promisify)(import_child_process6.execFile);
-    EXEC_MAX_BUFFER4 = 50 * 1024 * 1024;
-    BubblewrapSandbox = class {
-      name;
-      config;
-      repoPath;
-      visorDistPath;
-      constructor(name, config, repoPath, visorDistPath) {
-        this.name = name;
-        this.config = config;
-        this.repoPath = (0, import_path11.resolve)(repoPath);
-        this.visorDistPath = (0, import_path11.resolve)(visorDistPath);
-      }
-      /**
-       * Check if bwrap binary is available on the system.
-       */
-      static async isAvailable() {
-        try {
-          await execFileAsync4("which", ["bwrap"], { timeout: 5e3 });
-          return true;
-        } catch {
-          return false;
-        }
-      }
-      /**
-       * Execute a command inside a bubblewrap sandbox.
-       * Each exec creates a fresh namespace — no persistent container.
-       */
-      async exec(options) {
-        const args = this.buildArgs(options);
-        args.push("--", "/bin/sh", "-c", options.command);
-        logger.debug(
-          `[BubblewrapSandbox] Executing in sandbox '${this.name}': ${options.command.slice(0, 100)}`
-        );
-        try {
-          const { stdout, stderr } = await execFileAsync4("bwrap", args, {
-            maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER4,
-            timeout: options.timeoutMs || 6e5
-          });
-          addEvent2("visor.sandbox.bwrap.exec", {
-            "visor.sandbox.name": this.name,
-            "visor.sandbox.exit_code": 0
-          });
-          return { stdout, stderr, exitCode: 0 };
-        } catch (err) {
-          const execErr = err;
-          const exitCode = typeof execErr.code === "number" ? execErr.code : 1;
-          addEvent2("visor.sandbox.bwrap.exec", {
-            "visor.sandbox.name": this.name,
-            "visor.sandbox.exit_code": exitCode
-          });
-          return {
-            stdout: execErr.stdout || "",
-            stderr: execErr.stderr || "",
-            exitCode
-          };
-        }
-      }
-      /**
-       * No-op: bubblewrap processes are ephemeral (no persistent container to stop).
-       */
-      async stop() {
-      }
-      /**
-       * Build the bwrap command-line arguments.
-       */
-      buildArgs(options) {
-        const workdir = this.config.workdir === "host" ? this.repoPath : this.config.workdir || "/workspace";
-        const args = [];
-        args.push("--ro-bind", "/usr", "/usr");
-        args.push("--ro-bind", "/bin", "/bin");
-        if ((0, import_fs7.existsSync)("/lib")) {
-          args.push("--ro-bind", "/lib", "/lib");
-        }
-        if ((0, import_fs7.existsSync)("/lib64")) {
-          args.push("--ro-bind", "/lib64", "/lib64");
-        }
-        if ((0, import_fs7.existsSync)("/etc/resolv.conf")) {
-          args.push("--ro-bind", "/etc/resolv.conf", "/etc/resolv.conf");
-        }
-        if ((0, import_fs7.existsSync)("/etc/ssl")) {
-          args.push("--ro-bind", "/etc/ssl", "/etc/ssl");
-        }
-        args.push("--dev", "/dev");
-        args.push("--proc", "/proc");
-        args.push("--tmpfs", "/tmp");
-        args.push("--tmpfs", "/root");
-        if (this.config.read_only) {
-          args.push("--ro-bind", this.repoPath, workdir);
-        } else {
-          args.push("--bind", this.repoPath, workdir);
-        }
-        const visorPath = this.config.visor_path || "/opt/visor";
-        args.push("--ro-bind", this.visorDistPath, visorPath);
-        if (this.config.bind_paths) {
-          for (const bp of this.config.bind_paths) {
-            const hostPath = bp.host.startsWith("~") ? (0, import_path11.resolve)((process.env.HOME || "/root") + bp.host.slice(1)) : (0, import_path11.resolve)(bp.host);
-            const containerPath = bp.container || hostPath;
-            const readOnly = bp.read_only !== false;
-            args.push(readOnly ? "--ro-bind" : "--bind", hostPath, containerPath);
-          }
-        }
-        args.push("--chdir", workdir);
-        args.push("--unshare-pid");
-        args.push("--new-session");
-        args.push("--die-with-parent");
-        if (this.config.network === false) {
-          args.push("--unshare-net");
-        }
-        args.push("--clearenv");
-        for (const [key, value] of Object.entries(options.env)) {
-          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
-            throw new Error(`Invalid environment variable name: '${key}'`);
-          }
-          args.push("--setenv", key, value);
-        }
-        return args;
-      }
-    };
-  }
-});
-
-// src/sandbox/seatbelt-sandbox.ts
-var seatbelt_sandbox_exports = {};
-__export(seatbelt_sandbox_exports, {
-  SeatbeltSandbox: () => SeatbeltSandbox
-});
-var import_util9, import_child_process7, import_path12, import_fs8, execFileAsync5, EXEC_MAX_BUFFER5, SeatbeltSandbox;
-var init_seatbelt_sandbox = __esm({
-  "src/sandbox/seatbelt-sandbox.ts"() {
-    "use strict";
-    import_util9 = require("util");
-    import_child_process7 = require("child_process");
-    import_path12 = require("path");
-    import_fs8 = require("fs");
-    init_logger();
-    init_sandbox_telemetry();
-    execFileAsync5 = (0, import_util9.promisify)(import_child_process7.execFile);
-    EXEC_MAX_BUFFER5 = 50 * 1024 * 1024;
-    SeatbeltSandbox = class {
-      name;
-      config;
-      repoPath;
-      visorDistPath;
-      constructor(name, config, repoPath, visorDistPath) {
-        this.name = name;
-        this.config = config;
-        this.repoPath = (0, import_fs8.realpathSync)((0, import_path12.resolve)(repoPath));
-        this.visorDistPath = (0, import_fs8.realpathSync)((0, import_path12.resolve)(visorDistPath));
-      }
-      /**
-       * Check if sandbox-exec binary is available on the system.
-       */
-      static async isAvailable() {
-        try {
-          await execFileAsync5("which", ["sandbox-exec"], { timeout: 5e3 });
-          return true;
-        } catch {
-          return false;
-        }
-      }
-      /**
-       * Execute a command inside a macOS seatbelt sandbox.
-       * Each exec creates a fresh sandbox process — no persistent container.
-       */
-      async exec(options) {
-        const profile = this.buildProfile();
-        for (const key of Object.keys(options.env)) {
-          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
-            throw new Error(`Invalid environment variable name: '${key}'`);
-          }
-        }
-        const args = ["-p", profile];
-        args.push("/usr/bin/env", "-i");
-        for (const [key, value] of Object.entries(options.env)) {
-          args.push(`${key}=${value}`);
-        }
-        args.push("/bin/sh", "-c", options.command);
-        logger.debug(
-          `[SeatbeltSandbox] Executing in sandbox '${this.name}': ${options.command.slice(0, 100)}`
-        );
-        try {
-          const { stdout, stderr } = await execFileAsync5("sandbox-exec", args, {
-            maxBuffer: options.maxBuffer || EXEC_MAX_BUFFER5,
-            timeout: options.timeoutMs || 6e5,
-            cwd: this.repoPath
-          });
-          addEvent2("visor.sandbox.seatbelt.exec", {
-            "visor.sandbox.name": this.name,
-            "visor.sandbox.exit_code": 0
-          });
-          return { stdout, stderr, exitCode: 0 };
-        } catch (err) {
-          const execErr = err;
-          const exitCode = typeof execErr.code === "number" ? execErr.code : 1;
-          addEvent2("visor.sandbox.seatbelt.exec", {
-            "visor.sandbox.name": this.name,
-            "visor.sandbox.exit_code": exitCode
-          });
-          return {
-            stdout: execErr.stdout || "",
-            stderr: execErr.stderr || "",
-            exitCode
-          };
-        }
-      }
-      /**
-       * No-op: sandbox-exec processes are ephemeral (no persistent container to stop).
-       */
-      async stop() {
-      }
-      /**
-       * Escape a path for use inside an SBPL profile string.
-       * Escapes backslashes and double quotes.
-       */
-      escapePath(p) {
-        return p.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-      }
-      /**
-       * Build the SBPL (Seatbelt Profile Language) profile string.
-       */
-      buildProfile() {
-        const repoPath = this.escapePath(this.repoPath);
-        const lines = [];
-        lines.push("(version 1)");
-        lines.push("(deny default)");
-        lines.push("(allow process-exec)");
-        lines.push("(allow process-fork)");
-        lines.push("(allow file-read*");
-        lines.push('  (literal "/")');
-        lines.push('  (subpath "/usr")');
-        lines.push('  (subpath "/bin")');
-        lines.push('  (subpath "/sbin")');
-        lines.push('  (subpath "/Library")');
-        lines.push('  (subpath "/System")');
-        lines.push('  (subpath "/private")');
-        lines.push('  (subpath "/var")');
-        lines.push('  (subpath "/etc")');
-        lines.push('  (subpath "/dev")');
-        lines.push('  (subpath "/tmp"))');
-        lines.push("(allow file-write*");
-        lines.push('  (subpath "/tmp")');
-        lines.push('  (subpath "/private/tmp")');
-        lines.push('  (subpath "/dev"))');
-        lines.push('(allow file-write* (regex #"/private/var/folders/.*/T/xcrun_db"))');
-        lines.push(`(allow file-read* (subpath "${repoPath}"))`);
-        if (!this.config.read_only) {
-          lines.push(`(allow file-write* (subpath "${repoPath}"))`);
-        }
-        const visorDistPath = this.escapePath(this.visorDistPath);
-        lines.push(`(allow file-read* (subpath "${visorDistPath}"))`);
-        if (this.config.bind_paths) {
-          for (const bp of this.config.bind_paths) {
-            const hostPath = bp.host.startsWith("~") ? (0, import_path12.resolve)((process.env.HOME || "/root") + bp.host.slice(1)) : (0, import_path12.resolve)(bp.host);
-            const escapedPath = this.escapePath(hostPath);
-            lines.push(`(allow file-read* (subpath "${escapedPath}"))`);
-            if (bp.read_only === false) {
-              lines.push(`(allow file-write* (subpath "${escapedPath}"))`);
-            }
-          }
-        }
-        if (this.config.network !== false) {
-          lines.push("(allow network*)");
-        }
-        lines.push("(allow sysctl-read)");
-        lines.push("(allow mach-lookup)");
-        lines.push("(allow signal)");
-        return lines.join("\n");
-      }
-    };
-  }
-});
-
-// src/sandbox/sandbox-manager.ts
-var import_path13, import_fs9, SandboxManager;
-var init_sandbox_manager = __esm({
-  "src/sandbox/sandbox-manager.ts"() {
-    "use strict";
-    import_path13 = require("path");
-    import_fs9 = require("fs");
-    init_docker_image_sandbox();
-    init_docker_compose_sandbox();
-    init_cache_volume_manager();
-    init_logger();
-    init_sandbox_telemetry();
-    SandboxManager = class {
-      sandboxDefs;
-      repoPath;
-      gitBranch;
-      instances = /* @__PURE__ */ new Map();
-      cacheManager;
-      visorDistPath;
-      /** Get the resolved repository path (used by trace file relay) */
-      getRepoPath() {
-        return this.repoPath;
-      }
-      constructor(sandboxDefs, repoPath, gitBranch) {
-        this.sandboxDefs = sandboxDefs;
-        this.repoPath = (0, import_path13.resolve)(repoPath);
-        this.gitBranch = gitBranch;
-        this.cacheManager = new CacheVolumeManager();
-        this.visorDistPath = (0, import_fs9.existsSync)((0, import_path13.join)(__dirname, "index.js")) ? __dirname : (0, import_path13.resolve)((0, import_path13.dirname)(__dirname));
-      }
-      /**
-       * Resolve which sandbox a check should use.
-       * Returns null if the check should run on the host.
-       *
-       * Resolution order:
-       * 1. Check-level sandbox: (explicit override)
-       * 2. Workspace-level sandbox: (default)
-       * 3. null → run on host
-       */
-      resolveSandbox(checkSandbox, workspaceDefault) {
-        const name = checkSandbox || workspaceDefault;
-        if (!name) return null;
-        if (!this.sandboxDefs[name]) {
-          throw new Error(`Sandbox '${name}' is not defined in sandboxes configuration`);
-        }
-        return name;
-      }
-      /**
-       * Get or lazily start a sandbox instance by name.
-       */
-      async getOrStart(name) {
-        const existing = this.instances.get(name);
-        if (existing) return existing;
-        const config = this.sandboxDefs[name];
-        if (!config) {
-          throw new Error(`Sandbox '${name}' is not defined`);
-        }
-        const mode = config.compose ? "compose" : "image";
-        if (config.engine === "bubblewrap") {
-          const { BubblewrapSandbox: BubblewrapSandbox2 } = (init_bubblewrap_sandbox(), __toCommonJS(bubblewrap_sandbox_exports));
-          const instance = new BubblewrapSandbox2(name, config, this.repoPath, this.visorDistPath);
-          this.instances.set(name, instance);
-          return instance;
-        }
-        if (config.engine === "seatbelt") {
-          const { SeatbeltSandbox: SeatbeltSandbox2 } = (init_seatbelt_sandbox(), __toCommonJS(seatbelt_sandbox_exports));
-          const instance = new SeatbeltSandbox2(name, config, this.repoPath, this.visorDistPath);
-          this.instances.set(name, instance);
-          return instance;
-        }
-        return withActiveSpan2(
-          "visor.sandbox.start",
-          {
-            "visor.sandbox.name": name,
-            "visor.sandbox.mode": mode
-          },
-          async () => {
-            let instance;
-            if (config.compose) {
-              const composeSandbox = new DockerComposeSandbox(name, config);
-              await composeSandbox.start();
-              instance = composeSandbox;
-            } else {
-              let cacheVolumeMounts = [];
-              if (config.cache) {
-                const volumes = await this.cacheManager.resolveVolumes(
-                  name,
-                  config.cache,
-                  this.gitBranch
-                );
-                cacheVolumeMounts = volumes.map((v) => v.mountSpec);
-              }
-              const imageSandbox = new DockerImageSandbox(
-                name,
-                config,
-                this.repoPath,
-                this.visorDistPath,
-                cacheVolumeMounts
-              );
-              await imageSandbox.start();
-              instance = imageSandbox;
-            }
-            this.instances.set(name, instance);
-            return instance;
-          }
-        );
-      }
-      /**
-       * Execute a command inside a named sandbox
-       */
-      async exec(name, options) {
-        const instance = await this.getOrStart(name);
-        return withActiveSpan2(
-          "visor.sandbox.exec",
-          {
-            "visor.sandbox.name": name
-          },
-          async (span) => {
-            const result = await instance.exec(options);
-            try {
-              span.setAttribute("visor.sandbox.exit_code", result.exitCode);
-            } catch {
-            }
-            return result;
-          }
-        );
-      }
-      /**
-       * Stop all running sandbox instances and run cache eviction
-       */
-      async stopAll() {
-        return withActiveSpan2("visor.sandbox.stopAll", void 0, async () => {
-          const stopPromises = Array.from(this.instances.entries()).map(async ([name, instance]) => {
-            try {
-              await instance.stop();
-              addEvent2("visor.sandbox.stopped", { "visor.sandbox.name": name });
-              logger.info(`Stopped sandbox '${name}'`);
-            } catch (err) {
-              logger.warn(`Failed to stop sandbox '${name}': ${err}`);
-            }
-            const config = this.sandboxDefs[name];
-            if (config?.cache) {
-              try {
-                await this.cacheManager.evictExpired(name, config.cache.ttl, config.cache.max_scopes);
-              } catch {
-              }
-            }
-          });
-          await Promise.allSettled(stopPromises);
-          this.instances.clear();
-        });
-      }
-    };
-  }
-});
-
 // src/utils/file-exclusion.ts
 var import_ignore, fs21, path24, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
 var init_file_exclusion = __esm({
@@ -64402,12 +64692,12 @@ var ndjson_sink_exports = {};
 __export(ndjson_sink_exports, {
   NdjsonSink: () => NdjsonSink
 });
-var import_fs10, import_path14, NdjsonSink;
+var import_fs11, import_path15, NdjsonSink;
 var init_ndjson_sink = __esm({
   "src/frontends/ndjson-sink.ts"() {
     "use strict";
-    import_fs10 = __toESM(require("fs"));
-    import_path14 = __toESM(require("path"));
+    import_fs11 = __toESM(require("fs"));
+    import_path15 = __toESM(require("path"));
     NdjsonSink = class {
       name = "ndjson-sink";
       cfg;
@@ -64428,7 +64718,7 @@ var init_ndjson_sink = __esm({
               payload: envelope && envelope.payload || envelope,
               safe: true
             });
-            await import_fs10.default.promises.appendFile(this.filePath, line + "\n");
+            await import_fs11.default.promises.appendFile(this.filePath, line + "\n");
           } catch (err) {
             ctx.logger.error("[ndjson-sink] Failed to write event:", err);
           }
@@ -64439,8 +64729,8 @@ var init_ndjson_sink = __esm({
         this.unsub = void 0;
       }
       resolveFile(p) {
-        if (import_path14.default.isAbsolute(p)) return p;
-        return import_path14.default.join(process.cwd(), p);
+        if (import_path15.default.isAbsolute(p)) return p;
+        return import_path15.default.join(process.cwd(), p);
       }
     };
   }
@@ -77019,12 +77309,12 @@ function taskRowToAgentTask(row) {
     workflow_id: row.workflow_id ?? void 0
   };
 }
-var import_path15, import_fs11, import_crypto8, SqliteTaskStore;
+var import_path16, import_fs12, import_crypto8, SqliteTaskStore;
 var init_task_store = __esm({
   "src/agent-protocol/task-store.ts"() {
     "use strict";
-    import_path15 = __toESM(require("path"));
-    import_fs11 = __toESM(require("fs"));
+    import_path16 = __toESM(require("path"));
+    import_fs12 = __toESM(require("fs"));
     import_crypto8 = __toESM(require("crypto"));
     init_logger();
     init_types2();
@@ -77036,9 +77326,9 @@ var init_task_store = __esm({
         this.dbPath = filename || ".visor/agent-tasks.db";
       }
       async initialize() {
-        const resolvedPath = import_path15.default.resolve(process.cwd(), this.dbPath);
-        const dir = import_path15.default.dirname(resolvedPath);
-        import_fs11.default.mkdirSync(dir, { recursive: true });
+        const resolvedPath = import_path16.default.resolve(process.cwd(), this.dbPath);
+        const dir = import_path16.default.dirname(resolvedPath);
+        import_fs12.default.mkdirSync(dir, { recursive: true });
         const { createRequire } = require("module");
         const runtimeRequire = createRequire(__filename);
         let Database;
@@ -77911,13 +78201,13 @@ function resultToArtifacts(checkResults) {
   }
   return artifacts;
 }
-var import_http2, import_https, import_fs12, import_crypto11, A2AFrontend;
+var import_http2, import_https, import_fs13, import_crypto11, A2AFrontend;
 var init_a2a_frontend = __esm({
   "src/agent-protocol/a2a-frontend.ts"() {
     "use strict";
     import_http2 = __toESM(require("http"));
     import_https = __toESM(require("https"));
-    import_fs12 = __toESM(require("fs"));
+    import_fs13 = __toESM(require("fs"));
     import_crypto11 = __toESM(require("crypto"));
     init_logger();
     init_task_store();
@@ -77969,7 +78259,7 @@ var init_a2a_frontend = __esm({
         if (ctx.visorConfig) this._visorConfig = ctx.visorConfig;
         if (this.config.agent_card) {
           const cardPath = this.config.agent_card;
-          const raw = import_fs12.default.readFileSync(cardPath, "utf8");
+          const raw = import_fs13.default.readFileSync(cardPath, "utf8");
           this.agentCard = JSON.parse(raw);
         } else if (this.config.agent_card_inline) {
           this.agentCard = { ...this.config.agent_card_inline };
@@ -77977,8 +78267,8 @@ var init_a2a_frontend = __esm({
         const handler = this.handleRequest.bind(this);
         if (this.config.tls) {
           const tlsOptions = {
-            cert: import_fs12.default.readFileSync(this.config.tls.cert),
-            key: import_fs12.default.readFileSync(this.config.tls.key)
+            cert: import_fs13.default.readFileSync(this.config.tls.cert),
+            key: import_fs13.default.readFileSync(this.config.tls.key)
           };
           this.server = import_https.default.createServer(tlsOptions, handler);
         } else {

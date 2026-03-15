@@ -1,0 +1,489 @@
+# =============================================================================
+# project-setup: Shared project routing and checkout workflow
+# =============================================================================
+#
+# Reusable workflow that handles:
+#   1. Docs checkout
+#   2. AI-based project routing (or pre-selected projects)
+#   3. Project checkout with metadata (services, setup, knowledge)
+#
+# Used by code-talk and engineer workflows.
+#
+# Usage:
+#   imports:
+#     - ./project-setup.yaml
+#
+#   checks:
+#     setup:
+#       type: workflow
+#       workflow: project-setup
+#       args:
+#         question: "How does auth work?"
+#         architecture: ./ARCHITECTURE.md
+#         docs_repo: my-org/docs
+#         projects:
+#           - id: backend
+#             repo: my-org/backend
+#             description: Backend API services
+#
+# =============================================================================
+
+id: project-setup
+name: Project Setup
+description: Shared project routing and checkout with metadata propagation
+version: "1.0.0"
+
+inputs:
+  - name: question
+    required: true
+    description: The question or task driving project selection
+    schema:
+      type: string
+
+  - name: architecture
+    required: true
+    description: |
+      Architecture model - file path or inline markdown describing
+      project topology and routing rules
+    schema:
+      type: string
+
+  - name: docs_repo
+    required: true
+    description: Documentation repository (owner/name format)
+    schema:
+      type: string
+
+  - name: projects
+    required: true
+    description: |
+      Array of available code projects for AI routing:
+        - id: unique identifier for routing
+        - repo: GitHub repository (owner/name)
+        - description: used by AI for routing decisions
+    schema:
+      type: array
+      items:
+        type: object
+        properties:
+          id: { type: string }
+          repo: { type: string }
+          description: { type: string }
+          sandbox: { type: string }
+          services:
+            type: object
+            additionalProperties:
+              type: object
+              properties:
+                image: { type: string }
+                ports:
+                  type: array
+                  items: { type: number }
+                environment:
+                  type: object
+                  additionalProperties: { type: string }
+                volumes:
+                  type: array
+                  items: { type: string }
+                healthcheck:
+                  type: object
+                  properties:
+                    test:
+                      type: array
+                      items: { type: string }
+                    interval: { type: string }
+                    timeout: { type: string }
+                    retries: { type: number }
+              required: [image]
+          setup:
+            type: array
+            items: { type: string }
+          knowledge: { type: string }
+        required: [id, repo, description]
+
+  - name: max_projects
+    default: 3
+    description: Maximum code projects to checkout (excludes docs)
+    schema:
+      type: number
+
+  - name: docs_ref
+    default: main
+    description: Git ref for docs repository
+    schema:
+      type: string
+
+  - name: routing_prompt
+    required: false
+    description: Additional routing instructions (appended to built-in)
+    schema:
+      type: string
+
+  - name: selected_projects
+    required: false
+    description: |
+      Pre-selected project IDs to skip AI routing. When provided,
+      route-projects is skipped and these projects are used directly.
+    default: []
+    schema:
+      type: array
+      items:
+        type: string
+
+outputs:
+  - name: docs_path
+    description: Path where docs repo was checked out
+    value_js: |
+      return outputs?.['checkout-docs']?.path ?? null;
+
+  - name: project_items
+    description: Routed project descriptors with metadata
+    value_js: |
+      const historyItems = outputs?.history?.['project-items'];
+      const lastItems = Array.isArray(historyItems) ? historyItems[historyItems.length - 1] : historyItems;
+      return Array.isArray(lastItems) ? lastItems : (Array.isArray(outputs?.['project-items']) ? outputs['project-items'] : []);
+
+  - name: routing_decision
+    description: Raw routing output from AI (or null if pre-selected)
+    value_js: |
+      return outputs?.['route-projects'] ?? null;
+
+  - name: checkout_projects
+    description: Checked-out project paths aligned with routed projects
+    value_js: |
+      const historyItems = outputs?.history?.['project-items'];
+      const lastHistory = Array.isArray(historyItems) ? historyItems[historyItems.length - 1] : historyItems;
+      const items = Array.isArray(outputs?.['project-items'])
+        ? outputs['project-items']
+        : Array.isArray(lastHistory)
+          ? lastHistory
+          : [];
+
+      const checkoutOutput = outputs?.['checkout-projects'];
+      const checkouts = Array.isArray(checkoutOutput?.forEachItems)
+        ? checkoutOutput.forEachItems
+        : Array.isArray(checkoutOutput)
+          ? checkoutOutput
+          : [];
+
+      const result = [];
+      if (!Array.isArray(items) || !Array.isArray(checkouts)) return result;
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (!item?.project_id) continue;
+        const checkout = checkouts[i] ?? {};
+        result.push({
+          project_id: item.project_id,
+          repository: item.repository ?? item.repo ?? '',
+          description: item.description ?? '',
+          path: checkout.path ?? checkout.workspace_path ?? '',
+          sandbox: item.sandbox ?? null,
+          services: item.services ?? null,
+          setup: item.setup ?? null,
+          knowledge: item.knowledge ?? null
+        });
+      }
+      return result;
+
+steps:
+  # ===========================================================================
+  # Step 1: Checkout documentation (always first)
+  # ===========================================================================
+  checkout-docs:
+    type: git-checkout
+    criticality: internal
+    assume:
+      - "true"
+    repository: "{{ inputs.docs_repo }}"
+    ref: "{{ inputs.docs_ref }}"
+    fetch_depth: 1
+    description: "Documentation"
+
+  # ===========================================================================
+  # Step 2: Route to relevant projects (AI-based)
+  # Skipped when selected_projects are provided.
+  # ===========================================================================
+  route-projects:
+    type: ai
+    criticality: internal
+    depends_on: [checkout-docs]
+    continue_on_failure: true
+    if: "!inputs.selected_projects || inputs.selected_projects.length === 0"
+    assume:
+      - "true"
+    guarantee: "(output?.projects?.length ?? 0) > 0 || (output?.notes?.length ?? 0) > 0"
+    fail_if: "(output?.projects?.length ?? 0) === 0 && !(output?.notes?.length > 0)"
+    ai:
+      skip_code_context: true
+      prompt_type: general
+      system_prompt: |
+        <role>
+        You are a project routing planner. Given a question, you decide which
+        code repositories need to be queried. You do NOT answer questions
+        directly - you only plan which projects to consult.
+        </role>
+
+        <context_handling>
+        The full conversation context (e.g., Slack thread) may be available in
+        <slack_context>. Use it to understand the real question. If the latest
+        message is a correction, reconstruct the original question from earlier
+        messages. Questions may include appended ticket/page context.
+        </context_handling>
+
+        <architecture>
+        {{ inputs.architecture }}
+        </architecture>
+
+        <docs_context>
+        The documentation has been checked out and is available for reference.
+        Use it to understand feature behavior, configuration options, and
+        cross-component interactions before deciding which code projects to query.
+        Path: {{ outputs['checkout-docs'].path }}
+        </docs_context>
+
+        <available_projects>
+        {% for p in inputs.projects %}
+        - id: {{ p.id }}
+          repo: {{ p.repo }}
+          description: {{ p.description }}
+        {% endfor %}
+        </available_projects>
+    schema: |
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "projects": {
+            "type": "array",
+            "description": "Projects to query for this question",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "project_id": {
+                  "type": "string",
+                  "description": "One of the available project IDs",
+                  "enum": [{% for p in inputs.projects %}"{{ p.id }}"{% unless forloop.last %}, {% endunless %}{% endfor %}]
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "Brief explanation of why this project is relevant"
+                }
+              },
+              "required": ["project_id"]
+            }
+          },
+          "notes": {
+            "type": "string",
+            "description": "Optional planner notes"
+          }
+        },
+        "required": ["projects"]
+      }
+    prompt: |
+      <question>{{ inputs.question }}</question>
+
+      <task>
+      Determine which projects are needed to answer this question.
+      Consider all parts of the stack that the functionality touches, then
+      select the smallest set that covers the behavior.
+
+      Return a "projects" array with:
+      - "project_id": from the available project IDs listed above
+      - "reason" (optional): brief explanation of relevance
+      - If you cannot determine the relevant projects from the context,
+        return an empty "projects" array and include a "notes" string
+        asking for the missing details you need.
+
+      Routing guidelines:
+      - When functionality spans multiple components, include ALL affected projects
+      - It's better to include a small superset than to miss a relevant project
+      - Typical plans contain 1-3 projects, but include more when necessary
+      - Consider how data/config flows between services
+      - Maximum projects: {{ inputs.max_projects }}
+      </task>
+
+      {% if inputs.routing_prompt %}
+      <additional_routing_rules>
+      {{ inputs.routing_prompt }}
+      </additional_routing_rules>
+      {% endif %}
+
+  # ===========================================================================
+  # Step 3: Map routed projects to checkout descriptors
+  # Uses AI routing output when available, falls back to selected_projects.
+  # Depends on checkout-docs (not route-projects) to avoid skip cascade.
+  # ===========================================================================
+  project-items:
+    type: script
+    criticality: internal
+    depends_on: [checkout-docs, route-projects]
+    assume:
+      - "true"
+    guarantee: "Array.isArray(output)"
+    schema:
+      type: array
+    content: |
+      // Build a map of project ID -> project info from inputs
+      const projectMap = {};
+      const inputProjects = Array.isArray(inputs?.projects) ? inputs.projects : [];
+      for (let i = 0; i < inputProjects.length; i++) {
+        const p = inputProjects[i];
+        if (p?.id) {
+          projectMap[p.id] = {
+            repo: p.repo,
+            description: p.description ?? p.id,
+            sandbox: p.sandbox ?? null,
+            services: p.services ?? null,
+            setup: p.setup ?? null,
+            knowledge: p.knowledge ?? null
+          };
+        }
+      }
+
+      // Determine routed projects: AI output or pre-selected
+      let routedProjects = [];
+      const routeOutput = outputs?.['route-projects'];
+      if (routeOutput && Array.isArray(routeOutput.projects)) {
+        routedProjects = routeOutput.projects;
+      } else {
+        // Fall back to selected_projects input
+        const selected = Array.isArray(inputs?.selected_projects) ? inputs.selected_projects : [];
+        for (let s = 0; s < selected.length; s++) {
+          routedProjects.push({ project_id: selected[s], reason: 'pre-selected' });
+        }
+      }
+
+      // Map to checkout descriptors
+      const result = [];
+      const maxProjects = inputs?.max_projects ?? 3;
+
+      for (let j = 0; j < routedProjects.length && result.length < maxProjects; j++) {
+        const routed = routedProjects[j];
+        if (!routed?.project_id) continue;
+
+        const info = projectMap[routed.project_id];
+        // Skip unknown project IDs (not in inputs.projects)
+        if (!info?.repo) continue;
+
+        result.push({
+          project_id: routed.project_id,
+          reason: routed.reason ?? '',
+          repository: info.repo,
+          description: info.description,
+          sandbox: info.sandbox,
+          services: info.services,
+          setup: info.setup,
+          knowledge: info.knowledge
+        });
+      }
+
+      return result;
+    forEach: true
+
+  # ===========================================================================
+  # Step 4: Checkout each selected project
+  # ===========================================================================
+  checkout-projects:
+    type: git-checkout
+    criticality: internal
+    depends_on: [project-items]
+    assume:
+      - "output != null"
+    repository: "{{ outputs['project-items'].repository }}"
+    ref: main
+    fetch_depth: 1
+    description: "{{ outputs['project-items'].description }}"
+
+# =============================================================================
+# Tests
+# =============================================================================
+tests:
+  defaults:
+    strict: true
+    ai_provider: mock
+
+  cases:
+    - name: basic-routing
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "How does authentication work?"
+        architecture: |
+          # Architecture
+          ## Projects
+          - gateway: API Gateway
+          - backend: Backend services
+        docs_repo: org/docs
+        projects:
+          - id: gateway
+            repo: org/gateway
+            description: API Gateway
+          - id: backend
+            repo: org/backend
+            description: Backend services
+      mocks:
+        checkout-docs:
+          path: "/tmp/visor/docs"
+          repository: "org/docs"
+          ref: "main"
+        checkout-projects:
+          path: "/tmp/visor/project"
+          repository: "org/gateway"
+          ref: "main"
+        route-projects:
+          projects:
+            - project_id: "gateway"
+              reason: "Gateway handles authentication"
+      expect:
+        calls:
+          - step: checkout-docs
+            exactly: 1
+          - step: route-projects
+            exactly: 1
+          - step: project-items
+            exactly: 1
+          - step: checkout-projects
+            exactly: 1
+        prompts:
+          - step: route-projects
+            contains:
+              - "How does authentication work?"
+              - "Maximum projects:"
+
+    - name: pre-selected-projects
+      event: manual
+      fixture: local.minimal
+      workflow_input:
+        question: "Fix the auth bug"
+        architecture: "# Arch"
+        docs_repo: org/docs
+        projects:
+          - id: gateway
+            repo: org/gateway
+            description: API Gateway
+          - id: backend
+            repo: org/backend
+            description: Backend services
+        selected_projects:
+          - gateway
+      mocks:
+        checkout-docs:
+          path: "/tmp/visor/docs"
+          repository: "org/docs"
+          ref: "main"
+        checkout-projects:
+          path: "/tmp/visor/project"
+          repository: "org/gateway"
+          ref: "main"
+      expect:
+        calls:
+          - step: checkout-docs
+            exactly: 1
+          - step: route-projects
+            exactly: 0
+          - step: project-items
+            exactly: 1
+          - step: checkout-projects
+            exactly: 1
