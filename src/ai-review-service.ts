@@ -575,7 +575,9 @@ export class AIReviewService {
         response,
         effectiveSchema,
         sessionId: usedSessionId,
-      } = timeoutMs > 0 ? await this.withTimeout(call, timeoutMs, 'AI review') : await call;
+      } = timeoutMs > 0
+        ? await this.withTimeout(call, timeoutMs, 'AI review', sessionId)
+        : await call;
       const processingTime = Date.now() - startTime;
 
       if (debugInfo) {
@@ -738,7 +740,9 @@ export class AIReviewService {
       );
       const timeoutMs = Math.max(0, this.config.timeout || 0);
       const { response, effectiveSchema } =
-        timeoutMs > 0 ? await this.withTimeout(call, timeoutMs, 'AI review (session)') : await call;
+        timeoutMs > 0
+          ? await this.withTimeout(call, timeoutMs, 'AI review (session)', currentSessionId)
+          : await call;
       const processingTime = Date.now() - startTime;
 
       if (debugInfo) {
@@ -790,13 +794,35 @@ export class AIReviewService {
   }
 
   /**
-   * Promise timeout helper that rejects after ms if unresolved
+   * Promise timeout helper that rejects after ms if unresolved.
+   * When a sessionId is provided, triggers graceful wind-down on the
+   * ProbeAgent before rejecting, giving it a chance to summarize.
    */
-  private async withTimeout<T>(p: Promise<T>, ms: number, label = 'operation'): Promise<T> {
+  private async withTimeout<T>(
+    p: Promise<T>,
+    ms: number,
+    label = 'operation',
+    sessionId?: string
+  ): Promise<T> {
     let timer: NodeJS.Timeout | undefined;
     try {
       const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+        timer = setTimeout(() => {
+          // Signal the agent to wind down before the hard kill.
+          // This gives the agent a chance to produce partial results
+          // in its bonus wind-down steps before we reject the promise.
+          if (sessionId) {
+            try {
+              const agent = this.sessionRegistry.getSession(sessionId);
+              if (agent && typeof (agent as any).triggerGracefulWindDown === 'function') {
+                (agent as any).triggerGracefulWindDown();
+              }
+            } catch {
+              // Best-effort: don't let registry errors block the timeout
+            }
+          }
+          reject(new Error(`${label} timed out after ${ms}ms`));
+        }, ms);
       });
       return (await Promise.race([p, timeout])) as T;
     } finally {
@@ -1528,18 +1554,29 @@ ${this.escapeXml(processedFallbackDiff)}
     if (reuseAiTimeout > 0) {
       (agent as any).maxOperationTimeout = reuseAiTimeout;
     }
-    // Update negotiated timeout / graceful stop options on session reuse
+    // Update negotiated timeout / graceful stop options on session reuse.
+    // Cap budget/per-request so extensions never push past visor_timeout.
     if (this.config.timeoutBehavior) {
       (agent as any).timeoutBehavior = this.config.timeoutBehavior;
     }
+    const reuseHeadroomMs =
+      reuseTimeoutMs > 0 && reuseAiTimeout > 0 ? reuseTimeoutMs - reuseAiTimeout : 0;
     if (this.config.negotiatedTimeoutBudget !== undefined) {
-      (agent as any).negotiatedTimeoutBudget = this.config.negotiatedTimeoutBudget;
+      let budget = this.config.negotiatedTimeoutBudget;
+      if (reuseHeadroomMs > 0 && budget > reuseHeadroomMs) {
+        budget = reuseHeadroomMs;
+      }
+      (agent as any).negotiatedTimeoutBudget = budget;
     }
     if (this.config.negotiatedTimeoutMaxRequests !== undefined) {
       (agent as any).negotiatedTimeoutMaxRequests = this.config.negotiatedTimeoutMaxRequests;
     }
     if (this.config.negotiatedTimeoutMaxPerRequest !== undefined) {
-      (agent as any).negotiatedTimeoutMaxPerRequest = this.config.negotiatedTimeoutMaxPerRequest;
+      let maxPerReq = this.config.negotiatedTimeoutMaxPerRequest;
+      if (reuseHeadroomMs > 0 && maxPerReq > reuseHeadroomMs) {
+        maxPerReq = reuseHeadroomMs;
+      }
+      (agent as any).negotiatedTimeoutMaxPerRequest = maxPerReq;
     }
     if (this.config.gracefulStopDeadline !== undefined) {
       (agent as any).gracefulStopDeadline = this.config.gracefulStopDeadline;
@@ -2073,19 +2110,31 @@ ${'='.repeat(60)}
         (options as any).maxOperationTimeout = aiTimeout;
       }
 
-      // Pass negotiated timeout / graceful stop options to ProbeAgent
+      // Pass negotiated timeout / graceful stop options to ProbeAgent.
+      // Cap the budget and per-request values so extensions can never push
+      // ai_timeout + extension past visor_timeout. Without this cap, the
+      // observer grants useless extensions past the hard kill ceiling — the
+      // agent thinks it has more time but gets hard-killed with no wind-down.
       if (this.config.timeoutBehavior) {
         (options as any).timeoutBehavior = this.config.timeoutBehavior;
       }
+      const headroomMs = visorTimeout > 0 && aiTimeout > 0 ? visorTimeout - aiTimeout : 0;
       if (this.config.negotiatedTimeoutBudget !== undefined) {
-        (options as any).negotiatedTimeoutBudget = this.config.negotiatedTimeoutBudget;
+        let budget = this.config.negotiatedTimeoutBudget;
+        if (headroomMs > 0 && budget > headroomMs) {
+          budget = headroomMs;
+        }
+        (options as any).negotiatedTimeoutBudget = budget;
       }
       if (this.config.negotiatedTimeoutMaxRequests !== undefined) {
         (options as any).negotiatedTimeoutMaxRequests = this.config.negotiatedTimeoutMaxRequests;
       }
       if (this.config.negotiatedTimeoutMaxPerRequest !== undefined) {
-        (options as any).negotiatedTimeoutMaxPerRequest =
-          this.config.negotiatedTimeoutMaxPerRequest;
+        let maxPerReq = this.config.negotiatedTimeoutMaxPerRequest;
+        if (headroomMs > 0 && maxPerReq > headroomMs) {
+          maxPerReq = headroomMs;
+        }
+        (options as any).negotiatedTimeoutMaxPerRequest = maxPerReq;
       }
       if (this.config.gracefulStopDeadline !== undefined) {
         (options as any).gracefulStopDeadline = this.config.gracefulStopDeadline;
