@@ -37,6 +37,11 @@ export class CLI {
       .option('--whatsapp', 'Enable WhatsApp webhook runner (uses WHATSAPP_ACCESS_TOKEN)')
       .option('--teams', 'Enable Microsoft Teams webhook runner (uses TEAMS_APP_ID)')
       .option('--a2a', 'Enable A2A Agent Protocol server mode')
+      .option('--mcp', 'Enable MCP HTTP server runner (composable, requires --mcp-auth-token)')
+      .option('--mcp-port <port>', 'Port for MCP HTTP server (default: 8080)', value =>
+        parseInt(value, 10)
+      )
+      .option('--mcp-auth-token <token>', 'Bearer token for MCP HTTP server authentication')
       .option(
         '-c, --check <type>',
         'Specify check type (can be used multiple times)',
@@ -232,6 +237,9 @@ export class CLI {
         whatsapp: Boolean(options.whatsapp),
         teams: Boolean(options.teams),
         a2a: Boolean(options.a2a),
+        mcp: Boolean(options.mcp),
+        mcpPort: options.mcpPort,
+        mcpAuthToken: options.mcpAuthToken,
         tui: Boolean(options.tui),
         keepWorkspace: Boolean(options.keepWorkspace),
         workspacePath: options.workspacePath,
@@ -401,7 +409,9 @@ Examples:
   visor --check all --fail-fast --output json                # Stop on first failure
   visor --tags local,fast --output table                      # Run checks tagged as 'local' or 'fast'
   visor --exclude-tags slow,experimental --output json        # Skip checks tagged as 'slow' or 'experimental'
-  visor --tags security --exclude-tags slow                   # Run security checks but skip slow ones`;
+  visor --tags security --exclude-tags slow                   # Run security checks but skip slow ones
+  visor --slack --mcp --mcp-auth-token secret                 # Run Slack + MCP HTTP in parallel
+  visor --slack --a2a --telegram                              # Run multiple frontends in parallel`;
   }
 
   /**

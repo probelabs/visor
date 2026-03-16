@@ -5,6 +5,7 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http';
 import { createHash } from 'crypto';
 import { logger } from '../logger';
+import type { Runner } from '../runners/runner';
 import type { VisorConfig } from '../types/config';
 import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
 import { WhatsAppClient } from './client';
@@ -23,7 +24,8 @@ export type WhatsAppWebhookConfig = {
   workflow?: string;
 };
 
-export class WhatsAppWebhookRunner {
+export class WhatsAppWebhookRunner implements Runner {
+  readonly name = 'whatsapp';
   private client: WhatsAppClient;
   private adapter: WhatsAppAdapter;
   private engine: StateMachineExecutionEngine;

@@ -60,6 +60,8 @@ describe('CLI options consistency', () => {
       'github-app-id': '123',
       'github-private-key': 'key',
       'github-installation-id': '456',
+      'mcp-port': '8080',
+      'mcp-auth-token': 'test-token',
     };
 
     // Skip negated options (--no-*) and version/help (handled by commander internally)

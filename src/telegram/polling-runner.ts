@@ -5,6 +5,7 @@
 // - Dispatches engine runs with injected webhook context
 
 import { logger } from '../logger';
+import type { Runner } from '../runners/runner';
 import type { VisorConfig } from '../types/config';
 import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
 import { TelegramClient } from './client';
@@ -21,7 +22,8 @@ export type TelegramPollingConfig = {
   workflow?: string;
 };
 
-export class TelegramPollingRunner {
+export class TelegramPollingRunner implements Runner {
+  readonly name = 'telegram';
   private client: TelegramClient;
   private adapter: TelegramAdapter;
   private engine: StateMachineExecutionEngine;

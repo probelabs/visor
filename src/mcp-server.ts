@@ -526,9 +526,70 @@ function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
 }
 
 /**
- * Start the MCP server over HTTP/HTTPS with StreamableHTTPServerTransport.
+ * Handle returned by createHttpMcpServer for non-blocking lifecycle management.
  */
-async function startHttpMcpServer(server: McpServer, options: McpServerOptions): Promise<void> {
+export interface McpServerHandle {
+  close(): void;
+}
+
+/**
+ * Create and start an MCP HTTP/HTTPS server, returning a handle for lifecycle control.
+ *
+ * Unlike startHttpMcpServer (used internally by startMcpServer), this function
+ * does NOT register process signal handlers — the caller is responsible for
+ * calling handle.close() during shutdown.
+ */
+export async function createHttpMcpServer(options: McpServerOptions): Promise<McpServerHandle> {
+  // If fixed workflow mode, validate config path at startup
+  let resolvedWorkflowPath: string | undefined;
+  if (options.configPath) {
+    resolvedWorkflowPath = resolveWorkflowPath(options.configPath);
+  }
+
+  const server = new McpServer(
+    { name: SERVER_INFO.name, version: SERVER_INFO.version },
+    { capabilities: { tools: {} } }
+  );
+
+  const toolName = options.toolName || 'run_workflow';
+  const toolDescription = options.toolDescription || RUN_WORKFLOW_DESCRIPTION;
+
+  if (resolvedWorkflowPath) {
+    (server as any).tool(
+      toolName,
+      toolDescription,
+      {
+        message: FixedWorkflowSchema.shape.message,
+        checks: FixedWorkflowSchema.shape.checks,
+        format: FixedWorkflowSchema.shape.format,
+      },
+      async (args: any) => executeFixedWorkflow(args as FixedWorkflowArgs, resolvedWorkflowPath!)
+    );
+  } else {
+    (server as any).tool(
+      toolName,
+      toolDescription,
+      {
+        workflow: RunWorkflowSchema.shape.workflow,
+        message: RunWorkflowSchema.shape.message,
+        checks: RunWorkflowSchema.shape.checks,
+        format: RunWorkflowSchema.shape.format,
+      },
+      async (args: any) => executeWorkflow(args as RunWorkflowArgs)
+    );
+  }
+
+  return startHttpMcpServerInternal(server, options);
+}
+
+/**
+ * Start the MCP server over HTTP/HTTPS with StreamableHTTPServerTransport.
+ * Returns a handle for non-blocking shutdown.
+ */
+async function startHttpMcpServerInternal(
+  server: McpServer,
+  options: McpServerOptions
+): Promise<McpServerHandle> {
   const port = options.port || 8080;
   const host = options.host || '0.0.0.0';
 
@@ -642,16 +703,15 @@ async function startHttpMcpServer(server: McpServer, options: McpServerOptions):
 
   httpServer.listen(port, host);
 
-  // Graceful shutdown
-  const shutdown = () => {
-    console.error('Shutting down MCP server...');
-    for (const transport of transports.values()) {
-      transport.close();
-    }
-    httpServer.close();
+  return {
+    close() {
+      console.error('Shutting down MCP server...');
+      for (const transport of transports.values()) {
+        transport.close();
+      }
+      httpServer.close();
+    },
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
 }
 
 /**
@@ -726,7 +786,11 @@ export async function startMcpServer(options: McpServerOptions = {}): Promise<vo
 
     // Connect via selected transport
     if (options.transport === 'http') {
-      await startHttpMcpServer(server, options);
+      const handle = await startHttpMcpServerInternal(server, options);
+      // Register signal handlers for standalone mode (visor mcp-server subcommand)
+      const shutdown = () => handle.close();
+      process.on('SIGINT', shutdown);
+      process.on('SIGTERM', shutdown);
     } else {
       const transport = new StdioServerTransport();
       await server.connect(transport);

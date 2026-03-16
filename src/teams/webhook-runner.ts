@@ -6,6 +6,7 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { createHash } from 'crypto';
 import { ActivityTypes, TurnContext } from 'botbuilder';
 import { logger } from '../logger';
+import type { Runner } from '../runners/runner';
 import type { VisorConfig } from '../types/config';
 import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
 import { TeamsClient } from './client';
@@ -22,7 +23,8 @@ export type TeamsWebhookConfig = {
   workflow?: string;
 };
 
-export class TeamsWebhookRunner {
+export class TeamsWebhookRunner implements Runner {
+  readonly name = 'teams';
   private client: TeamsClient;
   private adapter: TeamsAdapter;
   private engine: StateMachineExecutionEngine;

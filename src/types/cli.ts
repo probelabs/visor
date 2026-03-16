@@ -71,6 +71,12 @@ export interface CliOptions {
   teams?: boolean;
   /** Enable A2A Agent Protocol server mode */
   a2a?: boolean;
+  /** Enable MCP HTTP server runner (composable with other frontends) */
+  mcp?: boolean;
+  /** Port for MCP HTTP server (default: 8080) */
+  mcpPort?: number;
+  /** Bearer token for MCP HTTP server authentication */
+  mcpAuthToken?: string;
   /** Enable interactive TUI (chat + logs tabs) */
   tui?: boolean;
   /** Keep workspace folders after execution (for debugging) */

@@ -7,6 +7,7 @@
 // - Dispatches engine runs with injected webhook context
 
 import { logger } from '../logger';
+import type { Runner } from '../runners/runner';
 import type { VisorConfig } from '../types/config';
 import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
 import { EmailClient, type EmailMessage } from './client';
@@ -40,7 +41,8 @@ export type EmailPollingConfig = {
   workflow?: string;
 };
 
-export class EmailPollingRunner {
+export class EmailPollingRunner implements Runner {
+  readonly name = 'email';
   private client: EmailClient;
   private adapter: EmailAdapter;
   private engine: StateMachineExecutionEngine;
