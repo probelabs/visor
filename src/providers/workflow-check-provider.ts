@@ -585,6 +585,39 @@ export class WorkflowCheckProvider extends CheckProvider {
       }
     }
 
+    // Resolve `extends` on inline array items (e.g. skills defined directly in args).
+    // loadConfig() already handles extends internally, but inline arrays bypass it.
+    // This allows skills to use `extends: "visor://skills/..."` without loadConfig.
+    for (const [key, value] of Object.entries(inputs)) {
+      if (!Array.isArray(value)) continue;
+      let resolved = false;
+      const resolvedArray = value.map((item: any) => {
+        if (
+          item &&
+          typeof item === 'object' &&
+          !Array.isArray(item) &&
+          typeof item.extends === 'string'
+        ) {
+          try {
+            const baseConfig = loadConfig(item.extends);
+            const overrideObj = { ...item };
+            delete overrideObj.extends;
+            resolved = true;
+            return deepMerge(baseConfig, overrideObj);
+          } catch (err) {
+            logger.warn(
+              `[WorkflowProvider] Failed to resolve extends '${item.extends}' in input '${key}': ${err}`
+            );
+            return item;
+          }
+        }
+        return item;
+      });
+      if (resolved) {
+        inputs[key] = resolvedArray;
+      }
+    }
+
     // Debug: log all input keys and types for troubleshooting
     const inputSummary = Object.entries(inputs)
       .map(([k, v]) => `${k}:${Array.isArray(v) ? `array[${v.length}]` : typeof v}`)
