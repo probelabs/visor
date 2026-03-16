@@ -583,6 +583,149 @@ describe('CustomToolsSSEServer', () => {
     });
   });
 
+  describe('MCP Protocol - graceful_stop session filtering', () => {
+    let server: CustomToolsSSEServer;
+
+    afterEach(async () => {
+      if (server) {
+        await server.stop();
+      }
+      // Clean up any sessions we registered
+      const { SessionRegistry } = require('../../src/session-registry');
+      SessionRegistry.getInstance().clearAllSessions();
+    });
+
+    it('should NOT signal the parent/caller session during graceful_stop', async () => {
+      // Scenario: generate-response (parent) calls a workflow tool via MCP bridge.
+      // The MCP bridge's graceful_stop is triggered by the parent's timeout observer.
+      // The bridge should signal ONLY child sessions, NOT the parent, because:
+      //   1. The parent is waiting for the MCP tool to return
+      //   2. If the parent is signaled to wind down simultaneously, it gets
+      //      gracefulTimeoutState.triggered=true while still blocked on the tool call
+      //   3. When the hard abort fires 30s later, the parent has history_length=0
+      //      (tool never returned) and produces the generic timeout message
+      //   4. The intended flow: signal children → children wind down and return
+      //      partial results → parent receives results → THEN parent winds down
+      //      with actual data to summarize
+
+      const { SessionRegistry } = require('../../src/session-registry');
+      const registry = SessionRegistry.getInstance();
+
+      // Register a "parent" session (the generate-response agent) and a "child" session
+      // (the code-explorer workflow agent spawned via MCP tool call)
+      const parentWindDown = jest.fn();
+      const childWindDown = jest.fn();
+
+      const parentAgent = { triggerGracefulWindDown: parentWindDown };
+      const childAgent = { triggerGracefulWindDown: childWindDown };
+
+      const parentSessionId = 'visor-generate-response';
+      const childSessionId = 'visor-explore-code';
+
+      registry.registerSession(parentSessionId, parentAgent as any);
+      registry.registerSession(childSessionId, childAgent as any);
+
+      // Create the MCP server — the sessionId here identifies which parent agent
+      // owns this MCP bridge. The server should know to exclude this caller.
+      // We use the parent session ID to associate the bridge with its owner.
+      server = new CustomToolsSSEServer(
+        testTools,
+        parentSessionId, // The MCP bridge's session is owned by the parent
+        false
+      );
+      const port = await server.start();
+
+      // Call graceful_stop (as the timeout observer would)
+      await sendMCPRequest(port, {
+        jsonrpc: '2.0',
+        id: 200,
+        method: 'tools/call',
+        params: { name: 'graceful_stop', arguments: {} },
+      });
+
+      // The child session SHOULD be signaled to wind down
+      expect(childWindDown).toHaveBeenCalled();
+
+      // The parent session should NOT be signaled — it needs to wait for
+      // the child's MCP tool response before it can wind down with data
+      expect(parentWindDown).not.toHaveBeenCalled();
+    });
+
+    it('should signal all child sessions but not the owning session', async () => {
+      const { SessionRegistry } = require('../../src/session-registry');
+      const registry = SessionRegistry.getInstance();
+
+      const parentWindDown = jest.fn();
+      const child1WindDown = jest.fn();
+      const child2WindDown = jest.fn();
+
+      const parentSessionId = 'visor-generate-response';
+
+      registry.registerSession(parentSessionId, { triggerGracefulWindDown: parentWindDown } as any);
+      registry.registerSession('visor-explore-code', {
+        triggerGracefulWindDown: child1WindDown,
+      } as any);
+      registry.registerSession('visor-engineer-task', {
+        triggerGracefulWindDown: child2WindDown,
+      } as any);
+
+      server = new CustomToolsSSEServer(testTools, parentSessionId, false);
+      const port = await server.start();
+
+      await sendMCPRequest(port, {
+        jsonrpc: '2.0',
+        id: 201,
+        method: 'tools/call',
+        params: { name: 'graceful_stop', arguments: {} },
+      });
+
+      // Both children should be signaled
+      expect(child1WindDown).toHaveBeenCalled();
+      expect(child2WindDown).toHaveBeenCalled();
+
+      // Parent should NOT be signaled
+      expect(parentWindDown).not.toHaveBeenCalled();
+    });
+
+    it('parent should receive child results before its own wind-down', async () => {
+      // This test verifies the sequencing: after graceful_stop, child sessions
+      // should complete and return their results via the MCP tool response,
+      // so the parent has actual data in its conversation history before
+      // it winds down. If the parent is signaled simultaneously, it winds
+      // down with history_length=0 and produces a generic timeout message.
+
+      const { SessionRegistry } = require('../../src/session-registry');
+      const registry = SessionRegistry.getInstance();
+
+      const signalOrder: string[] = [];
+
+      const parentAgent = {
+        triggerGracefulWindDown: jest.fn(() => signalOrder.push('parent')),
+      };
+      const childAgent = {
+        triggerGracefulWindDown: jest.fn(() => signalOrder.push('child')),
+      };
+
+      const parentSessionId = 'visor-main-agent';
+      registry.registerSession(parentSessionId, parentAgent as any);
+      registry.registerSession('visor-sub-agent', childAgent as any);
+
+      server = new CustomToolsSSEServer(testTools, parentSessionId, false);
+      const port = await server.start();
+
+      await sendMCPRequest(port, {
+        jsonrpc: '2.0',
+        id: 202,
+        method: 'tools/call',
+        params: { name: 'graceful_stop', arguments: {} },
+      });
+
+      // Only child should appear in signal order — parent should not be signaled at all
+      expect(signalOrder).toEqual(['child']);
+      expect(parentAgent.triggerGracefulWindDown).not.toHaveBeenCalled();
+    });
+  });
+
   describe('MCP Protocol - Tool Execution (isolated)', () => {
     let server: CustomToolsSSEServer;
 
