@@ -19912,6 +19912,30 @@ var init_workflow_check_provider = __esm({
             }
           }
         }
+        for (const [key, value] of Object.entries(inputs)) {
+          if (!Array.isArray(value)) continue;
+          let resolved = false;
+          const resolvedArray = value.map((item) => {
+            if (item && typeof item === "object" && !Array.isArray(item) && typeof item.extends === "string") {
+              try {
+                const baseConfig = loadConfig2(item.extends);
+                const overrideObj = { ...item };
+                delete overrideObj.extends;
+                resolved = true;
+                return deepMerge(baseConfig, overrideObj);
+              } catch (err) {
+                logger.warn(
+                  `[WorkflowProvider] Failed to resolve extends '${item.extends}' in input '${key}': ${err}`
+                );
+                return item;
+              }
+            }
+            return item;
+          });
+          if (resolved) {
+            inputs[key] = resolvedArray;
+          }
+        }
         const inputSummary = Object.entries(inputs).map(([k, v]) => `${k}:${Array.isArray(v) ? `array[${v.length}]` : typeof v}`).join(", ");
         logger.debug(`[WorkflowProvider] Final inputs: ${inputSummary}`);
         return inputs;
