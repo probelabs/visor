@@ -102,11 +102,28 @@ export const DEFAULT_WORKFLOWS = [
 ] as const;
 
 /**
+ * Resolve the Visor version from package.json or environment.
+ */
+function getVisorVersion(): string {
+  if (process.env.VISOR_VERSION) return process.env.VISOR_VERSION;
+  try {
+    const pkgPath = path.join(__dirname, '..', 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      if (pkg.version) return pkg.version;
+    }
+  } catch {}
+  return 'unknown';
+}
+
+/**
  * Server metadata for MCP protocol.
  */
 export const SERVER_INFO = {
   name: 'visor',
-  version: '1.0.0',
+  get version() {
+    return getVisorVersion();
+  },
   description:
     'Visor is an AI-powered code review and workflow automation tool. ' +
     'It analyzes code for security vulnerabilities, performance issues, architectural problems, ' +
@@ -510,11 +527,15 @@ export function validateBearerToken(req: http.IncomingMessage, expectedToken: st
 /**
  * Read and parse JSON body from an HTTP request.
  */
-function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+function readBody(req: http.IncomingMessage): Promise<Record<string, unknown> | undefined> {
   return new Promise((resolve, reject) => {
     let data = '';
     req.on('data', (chunk: Buffer) => (data += chunk));
     req.on('end', () => {
+      if (!data.trim()) {
+        resolve(undefined);
+        return;
+      }
       try {
         resolve(JSON.parse(data));
       } catch {
@@ -607,6 +628,18 @@ async function startHttpMcpServerInternal(
   const transports = new Map<string, StreamableHTTPServerTransport>();
 
   const handleRequest = async (req: http.IncomingMessage, res: http.ServerResponse) => {
+    try {
+      await handleRequestInner(req, res);
+    } catch (err) {
+      console.error(`[MCP] Request handler error: ${err}`);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Internal server error' }));
+      }
+    }
+  };
+
+  const handleRequestInner = async (req: http.IncomingMessage, res: http.ServerResponse) => {
     // CORS preflight
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
@@ -618,10 +651,26 @@ async function startHttpMcpServerInternal(
       return;
     }
 
-    // Auth check on all requests
+    // Auth check on all requests (per MCP spec → OAuth 2.1 § 5.3 → RFC 6750 § 3)
     if (!validateBearerToken(req, authToken)) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Unauthorized' }));
+      const hasAuthHeader = !!req.headers['authorization'];
+      // RFC 6750 §3.1: invalid_token when a token is present but wrong;
+      // omit error param when no credentials are provided at all.
+      const wwwAuth = hasAuthHeader
+        ? 'Bearer error="invalid_token", error_description="The access token is invalid or expired"'
+        : 'Bearer';
+      res.writeHead(401, {
+        'WWW-Authenticate': wwwAuth,
+        'Content-Type': 'application/json',
+      });
+      res.end(
+        JSON.stringify({
+          error: hasAuthHeader ? 'invalid_token' : 'unauthorized',
+          error_description: hasAuthHeader
+            ? 'The access token is invalid or expired'
+            : 'Authentication required. Provide a Bearer token in the Authorization header.',
+        })
+      );
       return;
     }
 
@@ -636,23 +685,32 @@ async function startHttpMcpServerInternal(
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
     if (req.method === 'POST' && !sessionId) {
-      // New session
+      // New session — sessionId is assigned during handleRequest (not connect)
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => crypto.randomUUID(),
       });
       transport.onclose = () => {
-        if (transport.sessionId) transports.delete(transport.sessionId);
+        if (transport.sessionId) {
+          console.error(`[MCP] Session closed: ${transport.sessionId}`);
+          transports.delete(transport.sessionId);
+        }
       };
       await server.connect(transport);
-      if (transport.sessionId) transports.set(transport.sessionId, transport);
       const body = await readBody(req);
       await transport.handleRequest(req, res, body);
+      if (transport.sessionId) {
+        transports.set(transport.sessionId, transport);
+        console.error(`[MCP] New session created: ${transport.sessionId}`);
+      }
       return;
     }
 
     if (sessionId) {
       const transport = transports.get(sessionId);
       if (!transport) {
+        console.error(
+          `[MCP] Session ${sessionId} not found, active: [${[...transports.keys()].join(', ')}]`
+        );
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Session not found' }));
         return;

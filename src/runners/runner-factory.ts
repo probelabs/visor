@@ -132,17 +132,18 @@ export async function createRunner(
     case 'mcp': {
       const { McpServerRunner } = await import('./mcp-server-runner');
       const mcpAny: any = (config as any).mcp_server || {};
-      return new McpServerRunner({
-        configPath: options.configPath || mcpAny.config_path,
-        toolName: mcpAny.tool_name,
-        toolDescription: mcpAny.tool_description,
-        transport: 'http',
-        port: options.mcpPort || mcpAny.port || 8080,
-        host: mcpAny.host || '0.0.0.0',
-        authToken: options.mcpAuthToken || mcpAny.auth_token,
+      return new McpServerRunner(engine, config, {
+        port:
+          options.mcpPort ||
+          mcpAny.port ||
+          (process.env.VISOR_MCP_PORT ? parseInt(process.env.VISOR_MCP_PORT) : 8080),
+        host: mcpAny.host || process.env.VISOR_MCP_HOST || '0.0.0.0',
+        authToken: options.mcpAuthToken || mcpAny.auth_token || process.env.VISOR_MCP_AUTH_TOKEN,
         authTokenEnv: mcpAny.auth_token_env,
-        tlsCert: mcpAny.tls_cert,
-        tlsKey: mcpAny.tls_key,
+        tlsCert: mcpAny.tls_cert || process.env.VISOR_MCP_TLS_CERT,
+        tlsKey: mcpAny.tls_key || process.env.VISOR_MCP_TLS_KEY,
+        toolName: mcpAny.tool_name || process.env.VISOR_MCP_TOOL_NAME,
+        toolDescription: mcpAny.tool_description || process.env.VISOR_MCP_TOOL_DESCRIPTION,
       });
     }
 
