@@ -132,9 +132,13 @@ export class GitHubFrontend implements Frontend {
               ? failureResults.some((r: any) => r && r.failed)
               : false;
             const group = this.getGroupForCheck(ctx, ev.checkId);
-            // Extract text from JSON-like content if template didn't unwrap it properly
+            // Extract text from JSON-like content if template didn't unwrap it properly.
+            // Fall back to output.text / output.response when template rendering failed
+            // (e.g., template file not found in ncc bundle) — this is the primary path
+            // for schema-based checks like comment-assistant / issue-assistant.
             const rawContent = (ev?.result as any)?.content;
-            const extractedContent = extractTextFromJson(rawContent);
+            const extractedContent =
+              extractTextFromJson(rawContent) ?? extractTextFromJson((ev?.result as any)?.output);
             this.upsertSectionState(group, ev.checkId, {
               status: 'completed',
               conclusion: failed ? 'failure' : 'success',
