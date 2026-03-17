@@ -823,7 +823,7 @@ var require_package = __commonJS({
         "@opentelemetry/sdk-node": "^0.203.0",
         "@opentelemetry/sdk-trace-base": "^1.30.1",
         "@opentelemetry/semantic-conventions": "^1.30.1",
-        "@probelabs/probe": "0.6.0-rc296",
+        "@probelabs/probe": "^0.6.0-rc297",
         "@types/commander": "^2.12.0",
         "@types/uuid": "^10.0.0",
         "@utcp/file": "^1.1.0",
@@ -68113,7 +68113,7 @@ var require_request3 = __commonJS({
     exports2.SvixRequest = exports2.HttpMethod = exports2.LIB_VERSION = void 0;
     var util_1 = require_util8();
     var uuid_1 = require("uuid");
-    exports2.LIB_VERSION = "1.84.1";
+    exports2.LIB_VERSION = "1.86.0";
     var USER_AGENT = `svix-libs/${exports2.LIB_VERSION}/javascript`;
     var HttpMethod;
     (function(HttpMethod2) {
@@ -68388,7 +68388,7 @@ var require_appPortalAccessIn = __commonJS({
       _fromJsonObject(object) {
         var _a;
         return {
-          application: object["application"] ? applicationIn_1.ApplicationInSerializer._fromJsonObject(object["application"]) : void 0,
+          application: object["application"] != null ? applicationIn_1.ApplicationInSerializer._fromJsonObject(object["application"]) : void 0,
           capabilities: (_a = object["capabilities"]) === null || _a === void 0 ? void 0 : _a.map((item) => appPortalCapability_1.AppPortalCapabilitySerializer._fromJsonObject(item)),
           expiry: object["expiry"],
           featureFlags: object["featureFlags"],
@@ -68399,7 +68399,7 @@ var require_appPortalAccessIn = __commonJS({
       _toJsonObject(self) {
         var _a;
         return {
-          application: self.application ? applicationIn_1.ApplicationInSerializer._toJsonObject(self.application) : void 0,
+          application: self.application != null ? applicationIn_1.ApplicationInSerializer._toJsonObject(self.application) : void 0,
           capabilities: (_a = self.capabilities) === null || _a === void 0 ? void 0 : _a.map((item) => appPortalCapability_1.AppPortalCapabilitySerializer._toJsonObject(item)),
           expiry: self.expiry,
           featureFlags: self.featureFlags,
@@ -68817,10 +68817,10 @@ var require_connectorIn = __commonJS({
           description: object["description"],
           featureFlags: object["featureFlags"],
           instructions: object["instructions"],
-          kind: object["kind"] ? connectorKind_1.ConnectorKindSerializer._fromJsonObject(object["kind"]) : void 0,
+          kind: object["kind"] != null ? connectorKind_1.ConnectorKindSerializer._fromJsonObject(object["kind"]) : void 0,
           logo: object["logo"],
           name: object["name"],
-          productType: object["productType"] ? connectorProduct_1.ConnectorProductSerializer._fromJsonObject(object["productType"]) : void 0,
+          productType: object["productType"] != null ? connectorProduct_1.ConnectorProductSerializer._fromJsonObject(object["productType"]) : void 0,
           transformation: object["transformation"],
           uid: object["uid"]
         };
@@ -68831,10 +68831,10 @@ var require_connectorIn = __commonJS({
           description: self.description,
           featureFlags: self.featureFlags,
           instructions: self.instructions,
-          kind: self.kind ? connectorKind_1.ConnectorKindSerializer._toJsonObject(self.kind) : void 0,
+          kind: self.kind != null ? connectorKind_1.ConnectorKindSerializer._toJsonObject(self.kind) : void 0,
           logo: self.logo,
           name: self.name,
-          productType: self.productType ? connectorProduct_1.ConnectorProductSerializer._toJsonObject(self.productType) : void 0,
+          productType: self.productType != null ? connectorProduct_1.ConnectorProductSerializer._toJsonObject(self.productType) : void 0,
           transformation: self.transformation,
           uid: self.uid
         };
@@ -68908,7 +68908,7 @@ var require_connectorPatch = __commonJS({
           description: object["description"],
           featureFlags: object["featureFlags"],
           instructions: object["instructions"],
-          kind: object["kind"] ? connectorKind_1.ConnectorKindSerializer._fromJsonObject(object["kind"]) : void 0,
+          kind: object["kind"] != null ? connectorKind_1.ConnectorKindSerializer._fromJsonObject(object["kind"]) : void 0,
           logo: object["logo"],
           name: object["name"],
           transformation: object["transformation"]
@@ -68920,7 +68920,7 @@ var require_connectorPatch = __commonJS({
           description: self.description,
           featureFlags: self.featureFlags,
           instructions: self.instructions,
-          kind: self.kind ? connectorKind_1.ConnectorKindSerializer._toJsonObject(self.kind) : void 0,
+          kind: self.kind != null ? connectorKind_1.ConnectorKindSerializer._toJsonObject(self.kind) : void 0,
           logo: self.logo,
           name: self.name,
           transformation: self.transformation
@@ -68944,7 +68944,7 @@ var require_connectorUpdate = __commonJS({
           description: object["description"],
           featureFlags: object["featureFlags"],
           instructions: object["instructions"],
-          kind: object["kind"] ? connectorKind_1.ConnectorKindSerializer._fromJsonObject(object["kind"]) : void 0,
+          kind: object["kind"] != null ? connectorKind_1.ConnectorKindSerializer._fromJsonObject(object["kind"]) : void 0,
           logo: object["logo"],
           name: object["name"],
           transformation: object["transformation"]
@@ -68956,7 +68956,7 @@ var require_connectorUpdate = __commonJS({
           description: self.description,
           featureFlags: self.featureFlags,
           instructions: self.instructions,
-          kind: self.kind ? connectorKind_1.ConnectorKindSerializer._toJsonObject(self.kind) : void 0,
+          kind: self.kind != null ? connectorKind_1.ConnectorKindSerializer._toJsonObject(self.kind) : void 0,
           logo: self.logo,
           name: self.name,
           transformation: self.transformation
@@ -72300,6 +72300,50 @@ var require_listResponseMessageOut = __commonJS({
   }
 });
 
+// node_modules/svix/dist/models/messagePrecheckIn.js
+var require_messagePrecheckIn = __commonJS({
+  "node_modules/svix/dist/models/messagePrecheckIn.js"(exports2) {
+    "use strict";
+    Object.defineProperty(exports2, "__esModule", { value: true });
+    exports2.MessagePrecheckInSerializer = void 0;
+    exports2.MessagePrecheckInSerializer = {
+      _fromJsonObject(object) {
+        return {
+          channels: object["channels"],
+          eventType: object["eventType"]
+        };
+      },
+      _toJsonObject(self) {
+        return {
+          channels: self.channels,
+          eventType: self.eventType
+        };
+      }
+    };
+  }
+});
+
+// node_modules/svix/dist/models/messagePrecheckOut.js
+var require_messagePrecheckOut = __commonJS({
+  "node_modules/svix/dist/models/messagePrecheckOut.js"(exports2) {
+    "use strict";
+    Object.defineProperty(exports2, "__esModule", { value: true });
+    exports2.MessagePrecheckOutSerializer = void 0;
+    exports2.MessagePrecheckOutSerializer = {
+      _fromJsonObject(object) {
+        return {
+          active: object["active"]
+        };
+      },
+      _toJsonObject(self) {
+        return {
+          active: self.active
+        };
+      }
+    };
+  }
+});
+
 // node_modules/svix/dist/models/pollingEndpointConsumerSeekIn.js
 var require_pollingEndpointConsumerSeekIn = __commonJS({
   "node_modules/svix/dist/models/pollingEndpointConsumerSeekIn.js"(exports2) {
@@ -72467,7 +72511,7 @@ var require_messageIn = __commonJS({
     exports2.MessageInSerializer = {
       _fromJsonObject(object) {
         return {
-          application: object["application"] ? applicationIn_1.ApplicationInSerializer._fromJsonObject(object["application"]) : void 0,
+          application: object["application"] != null ? applicationIn_1.ApplicationInSerializer._fromJsonObject(object["application"]) : void 0,
           channels: object["channels"],
           deliverAt: object["deliverAt"] ? new Date(object["deliverAt"]) : null,
           eventId: object["eventId"],
@@ -72481,7 +72525,7 @@ var require_messageIn = __commonJS({
       },
       _toJsonObject(self) {
         return {
-          application: self.application ? applicationIn_1.ApplicationInSerializer._toJsonObject(self.application) : void 0,
+          application: self.application != null ? applicationIn_1.ApplicationInSerializer._toJsonObject(self.application) : void 0,
           channels: self.channels,
           deliverAt: self.deliverAt,
           eventId: self.eventId,
@@ -72506,6 +72550,8 @@ var require_message = __commonJS({
     var expungeAllContentsOut_1 = require_expungeAllContentsOut();
     var listResponseMessageOut_1 = require_listResponseMessageOut();
     var messageOut_1 = require_messageOut();
+    var messagePrecheckIn_1 = require_messagePrecheckIn();
+    var messagePrecheckOut_1 = require_messagePrecheckOut();
     var messagePoller_1 = require_messagePoller();
     var request_1 = require_request3();
     var messageIn_1 = require_messageIn();
@@ -72546,6 +72592,13 @@ var require_message = __commonJS({
         request.setPathParam("app_id", appId);
         request.setHeaderParam("idempotency-key", options === null || options === void 0 ? void 0 : options.idempotencyKey);
         return request.send(this.requestCtx, expungeAllContentsOut_1.ExpungeAllContentsOutSerializer._fromJsonObject);
+      }
+      precheck(appId, messagePrecheckIn, options) {
+        const request = new request_1.SvixRequest(request_1.HttpMethod.POST, "/api/v1/app/{app_id}/msg/precheck/active");
+        request.setPathParam("app_id", appId);
+        request.setHeaderParam("idempotency-key", options === null || options === void 0 ? void 0 : options.idempotencyKey);
+        request.setBody(messagePrecheckIn_1.MessagePrecheckInSerializer._toJsonObject(messagePrecheckIn));
+        return request.send(this.requestCtx, messagePrecheckOut_1.MessagePrecheckOutSerializer._fromJsonObject);
       }
       get(appId, msgId, options) {
         const request = new request_1.SvixRequest(request_1.HttpMethod.GET, "/api/v1/app/{app_id}/msg/{msg_id}");
@@ -72752,7 +72805,7 @@ var require_messageAttemptOut = __commonJS({
         return {
           endpointId: object["endpointId"],
           id: object["id"],
-          msg: object["msg"] ? messageOut_1.MessageOutSerializer._fromJsonObject(object["msg"]) : void 0,
+          msg: object["msg"] != null ? messageOut_1.MessageOutSerializer._fromJsonObject(object["msg"]) : void 0,
           msgId: object["msgId"],
           response: object["response"],
           responseDurationMs: object["responseDurationMs"],
@@ -72768,7 +72821,7 @@ var require_messageAttemptOut = __commonJS({
         return {
           endpointId: self.endpointId,
           id: self.id,
-          msg: self.msg ? messageOut_1.MessageOutSerializer._toJsonObject(self.msg) : void 0,
+          msg: self.msg != null ? messageOut_1.MessageOutSerializer._toJsonObject(self.msg) : void 0,
           msgId: self.msgId,
           response: self.response,
           responseDurationMs: self.responseDurationMs,
@@ -73709,13 +73762,13 @@ var require_createStreamEventsIn = __commonJS({
       _fromJsonObject(object) {
         return {
           events: object["events"].map((item) => eventIn_1.EventInSerializer._fromJsonObject(item)),
-          stream: object["stream"] ? streamIn_1.StreamInSerializer._fromJsonObject(object["stream"]) : void 0
+          stream: object["stream"] != null ? streamIn_1.StreamInSerializer._fromJsonObject(object["stream"]) : void 0
         };
       },
       _toJsonObject(self) {
         return {
           events: self.events.map((item) => eventIn_1.EventInSerializer._toJsonObject(item)),
-          stream: self.stream ? streamIn_1.StreamInSerializer._toJsonObject(self.stream) : void 0
+          stream: self.stream != null ? streamIn_1.StreamInSerializer._toJsonObject(self.stream) : void 0
         };
       }
     };
@@ -74199,7 +74252,7 @@ var require_streamSinkIn = __commonJS({
           eventTypes: object["eventTypes"],
           maxWaitSecs: object["maxWaitSecs"],
           metadata: object["metadata"],
-          status: object["status"] ? sinkStatusIn_1.SinkStatusInSerializer._fromJsonObject(object["status"]) : void 0,
+          status: object["status"] != null ? sinkStatusIn_1.SinkStatusInSerializer._fromJsonObject(object["status"]) : void 0,
           uid: object["uid"]
         };
       },
@@ -74232,7 +74285,7 @@ var require_streamSinkIn = __commonJS({
           eventTypes: self.eventTypes,
           maxWaitSecs: self.maxWaitSecs,
           metadata: self.metadata,
-          status: self.status ? sinkStatusIn_1.SinkStatusInSerializer._toJsonObject(self.status) : void 0,
+          status: self.status != null ? sinkStatusIn_1.SinkStatusInSerializer._toJsonObject(self.status) : void 0,
           uid: self.uid
         };
       }
@@ -74397,7 +74450,7 @@ var require_streamSinkPatch = __commonJS({
           eventTypes: object["eventTypes"],
           maxWaitSecs: object["maxWaitSecs"],
           metadata: object["metadata"],
-          status: object["status"] ? sinkStatusIn_1.SinkStatusInSerializer._fromJsonObject(object["status"]) : void 0,
+          status: object["status"] != null ? sinkStatusIn_1.SinkStatusInSerializer._fromJsonObject(object["status"]) : void 0,
           uid: object["uid"]
         };
       },
@@ -74430,7 +74483,7 @@ var require_streamSinkPatch = __commonJS({
           eventTypes: self.eventTypes,
           maxWaitSecs: self.maxWaitSecs,
           metadata: self.metadata,
-          status: self.status ? sinkStatusIn_1.SinkStatusInSerializer._toJsonObject(self.status) : void 0,
+          status: self.status != null ? sinkStatusIn_1.SinkStatusInSerializer._toJsonObject(self.status) : void 0,
           uid: self.uid
         };
       }
