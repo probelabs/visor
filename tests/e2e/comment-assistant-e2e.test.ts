@@ -24,7 +24,7 @@ import type { VisorConfig } from '../../src/types/config';
 // ---------------------------------------------------------------------------
 
 const MOCK_AI_TEXT =
-  'Here is my analysis of the code.\n\n## Security\n\nThe path.Join call does not sanitise user-supplied segments.';
+  'Here is my analysis of the code. The path.Join call does not sanitise user-supplied segments.';
 
 /** Minimal PRInfo that the engine accepts */
 const prInfo: PRInfo = {
@@ -235,7 +235,7 @@ describe('comment-assistant E2E pipeline', () => {
     // CRITICAL: The comment body must contain the actual analysis text
     // In production, this was EMPTY (only section markers, no content)
     expect(visorComment.body).toContain('Here is my analysis');
-    expect(visorComment.body).toContain('Security');
+    expect(visorComment.body).toContain('path.Join');
   });
 
   // ---------------------------------------------------------------------------
