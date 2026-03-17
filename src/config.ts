@@ -1889,6 +1889,7 @@ export class ConfigManager {
             const allowedTopLevelKeys = new Set([
               'tests',
               'slack',
+              'mcp_server',
               'sandboxes',
               'sandbox',
               'sandbox_defaults',

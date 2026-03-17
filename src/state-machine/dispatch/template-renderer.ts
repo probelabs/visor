@@ -22,10 +22,12 @@ export async function renderTemplateContent(
 
     if (checkConfig.template && checkConfig.template.content) {
       templateContent = String(checkConfig.template.content);
+      logger.debug(`[TemplateRenderer] Using inline template for ${checkId}`);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
       const resolved = path.resolve(process.cwd(), file);
       templateContent = await fs.readFile(resolved, 'utf-8');
+      logger.debug(`[TemplateRenderer] Using template file for ${checkId}: ${resolved}`);
     } else if (schema && schema !== 'plain') {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, '');
       if (sanitized) {
@@ -40,10 +42,18 @@ export async function renderTemplateContent(
         for (const p of candidatePaths) {
           try {
             templateContent = await fs.readFile(p, 'utf-8');
-            if (templateContent) break;
+            if (templateContent) {
+              logger.debug(`[TemplateRenderer] Using schema template for ${checkId}: ${p}`);
+              break;
+            }
           } catch {
             // try next
           }
+        }
+        if (!templateContent) {
+          logger.warn(
+            `[TemplateRenderer] No template found for schema '${sanitized}' in ${checkId}. __dirname=${__dirname}, cwd=${process.cwd()}, tried ${candidatePaths.length} paths: ${candidatePaths.join(', ')}`
+          );
         }
       }
     }
@@ -78,8 +88,20 @@ export async function renderTemplateContent(
       output,
     };
 
+    logger.debug(
+      `[TemplateRenderer] Rendering template for ${checkId} with output type=${typeof output}, keys=${output && typeof output === 'object' ? Object.keys(output).join(',') : 'n/a'}`
+    );
+
     const rendered = await liquid.parseAndRender(templateContent, templateData);
-    return rendered.trim();
+    const trimmed = rendered.trim();
+
+    if (!trimmed) {
+      logger.warn(
+        `[TemplateRenderer] Template rendered EMPTY for ${checkId}. output=${JSON.stringify(output)?.substring(0, 200)}`
+      );
+    }
+
+    return trimmed;
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     logger.error(`[LevelDispatch] Failed to render template for ${checkId}: ${msg}`);

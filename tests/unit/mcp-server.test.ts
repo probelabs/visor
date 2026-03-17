@@ -9,6 +9,7 @@ import {
   formatResults,
   executeWorkflow,
   executeFixedWorkflow,
+  validateBearerToken,
   DEFAULT_WORKFLOWS,
   SERVER_INFO,
   RUN_WORKFLOW_DESCRIPTION,
@@ -36,7 +37,7 @@ describe('MCP Server', () => {
 
     it('should export SERVER_INFO with name and version', () => {
       expect(SERVER_INFO.name).toBe('visor');
-      expect(SERVER_INFO.version).toBe('1.0.0');
+      expect(SERVER_INFO.version).toBeTruthy();
       expect(SERVER_INFO.description).toBeTruthy();
       expect(SERVER_INFO.description).toContain('AI-powered');
     });
@@ -651,6 +652,76 @@ describe('MCP Server', () => {
 
       expect(result.content[0].text).toContain('# Visor Workflow Results');
       expect(result.content[0].text).toContain('## test-check');
+    });
+  });
+
+  describe('validateBearerToken', () => {
+    function makeRequest(authHeader?: string): import('http').IncomingMessage {
+      return { headers: authHeader !== undefined ? { authorization: authHeader } : {} } as any;
+    }
+
+    it('should return true for a valid Bearer token', () => {
+      const req = makeRequest('Bearer my-secret-token');
+      expect(validateBearerToken(req, 'my-secret-token')).toBe(true);
+    });
+
+    it('should return false when authorization header is missing', () => {
+      const req = makeRequest();
+      expect(validateBearerToken(req, 'my-secret-token')).toBe(false);
+    });
+
+    it('should return false for wrong token', () => {
+      const req = makeRequest('Bearer wrong-token-here');
+      expect(validateBearerToken(req, 'my-secret-token')).toBe(false);
+    });
+
+    it('should return false for non-Bearer auth scheme', () => {
+      const req = makeRequest('Basic dXNlcjpwYXNz');
+      expect(validateBearerToken(req, 'my-secret-token')).toBe(false);
+    });
+
+    it('should return false for token with different length', () => {
+      const req = makeRequest('Bearer short');
+      expect(validateBearerToken(req, 'my-secret-token')).toBe(false);
+    });
+
+    it('should return false for empty Bearer value', () => {
+      const req = makeRequest('Bearer ');
+      expect(validateBearerToken(req, 'my-secret-token')).toBe(false);
+    });
+  });
+
+  describe('startMcpServer HTTP transport', () => {
+    let exitSpy: jest.SpyInstance;
+    let errorSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      exitSpy = jest.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+      errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      exitSpy.mockRestore();
+      errorSpy.mockRestore();
+    });
+
+    it('should exit with error when no auth token is provided for HTTP transport', async () => {
+      const { startMcpServer } = await import('../../src/mcp-server');
+      await startMcpServer({ transport: 'http', authToken: undefined, authTokenEnv: undefined });
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('HTTP transport requires --auth-token or --auth-token-env')
+      );
+    });
+
+    it('should exit with error when auth-token-env points to unset env var', async () => {
+      delete process.env['VISOR_TEST_NONEXISTENT_TOKEN'];
+      const { startMcpServer } = await import('../../src/mcp-server');
+      await startMcpServer({ transport: 'http', authTokenEnv: 'VISOR_TEST_NONEXISTENT_TOKEN' });
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('HTTP transport requires --auth-token or --auth-token-env')
+      );
     });
   });
 });

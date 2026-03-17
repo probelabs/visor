@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { logger } from '../logger';
+import type { Runner } from '../runners/runner';
 import type { VisorConfig, SchedulerConfig } from '../types/config';
 import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
 import { SlackClient } from './client';
@@ -27,7 +28,8 @@ type SlackSocketConfig = {
   allowGuests?: boolean; // allow guest users (single/multi-channel guests) (default: false)
 };
 
-export class SlackSocketRunner {
+export class SlackSocketRunner implements Runner {
+  readonly name = 'slack';
   private appToken: string;
   private endpoint: string;
   private mentions: 'direct' | 'all' = 'direct';

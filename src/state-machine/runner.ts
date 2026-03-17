@@ -485,8 +485,11 @@ export class StateMachineRunner {
       let debug: any = undefined;
 
       if (checkConfig.forEach && entries.length > 1) {
-        // Aggregate all forEach iterations
+        // Aggregate all forEach iterations.
+        // forEach producers have both an unscoped entry (with the full array output)
+        // and scoped per-item entries. Prefer the unscoped entry's output.
         const contents: string[] = [];
+        let unscopedOutput: unknown = undefined;
         for (const entry of entries) {
           if (entry.result.content) {
             contents.push(entry.result.content);
@@ -497,18 +500,28 @@ export class StateMachineRunner {
           if (entry.result.debug) {
             debug = entry.result.debug;
           }
-          // For forEach, output is typically an array from the last iteration
-          if (entry.result.output !== undefined) {
+          // Prefer the unscoped (scope=[]) entry which has the full array output
+          if (entry.scope.length === 0 && entry.result.output !== undefined) {
+            unscopedOutput = entry.result.output;
+          }
+          if (entry.result.output !== undefined && unscopedOutput === undefined) {
             output = entry.result.output;
           }
         }
+        output = unscopedOutput !== undefined ? unscopedOutput : output;
         content = contents.join('\n');
       } else {
-        // For non-forEach or single-entry forEach, take the latest entry
+        // For non-forEach or single-entry forEach, take the latest entry.
+        // For forEach consumers (aggregated results from executeCheckWithForEachItems),
+        // the aggregated result stores per-item outputs in .forEachItems instead of .output.
         const latestEntry = entries[entries.length - 1];
         if (latestEntry) {
           content = latestEntry.result.content || '';
           output = latestEntry.result.output;
+          // Fall back to forEachItems for aggregated forEach consumer results
+          if (output === undefined && (latestEntry.result as any).forEachItems) {
+            output = { forEachItems: (latestEntry.result as any).forEachItems };
+          }
           if (latestEntry.result.issues) {
             allIssues.push(...latestEntry.result.issues);
           }

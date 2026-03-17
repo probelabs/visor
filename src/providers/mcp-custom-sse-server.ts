@@ -898,6 +898,18 @@ export class CustomToolsSSEServer implements CustomMCPServer {
           const registry = SessionRegistry.getInstance();
           const activeIds = registry.getActiveSessionIds();
           for (const sid of activeIds) {
+            // Skip the parent/caller session — it must wait for child tool
+            // responses before winding down, otherwise it has empty history
+            // and produces a generic timeout message instead of summarizing
+            // the actual work done by child workflows.
+            if (sid === this.sessionId) {
+              if (this.debug) {
+                logger.debug(
+                  `[CustomToolsSSEServer:${this.sessionId}] Skipping parent session ${sid} during graceful stop`
+                );
+              }
+              continue;
+            }
             const agent = registry.getSession(sid);
             if (agent && typeof (agent as any).triggerGracefulWindDown === 'function') {
               (agent as any).triggerGracefulWindDown();

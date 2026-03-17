@@ -828,11 +828,12 @@ async function executeCheckWithForEachItems(
           );
         }
         if (webhookData && webhookData.size > 0) {
-          // Find the payload with slack_conversation or telegram_conversation
+          // Find the payload with slack_conversation, telegram_conversation, or mcp_conversation
           for (const payload of webhookData.values()) {
             const slackConv = (payload as any)?.slack_conversation;
             const telegramConv = (payload as any)?.telegram_conversation;
-            const conv = slackConv || telegramConv;
+            const mcpConv = (payload as any)?.mcp_conversation;
+            const conv = slackConv || telegramConv || mcpConv;
             if (conv) {
               const event = (payload as any)?.event;
               const messageCount = Array.isArray(conv?.messages) ? conv.messages.length : 0;
@@ -844,10 +845,12 @@ async function executeCheckWithForEachItems(
               // Build transport-specific context
               const transportCtx = slackConv
                 ? { slack: { event: event || {}, conversation: slackConv } }
-                : {
-                    telegram: { event: event || {}, conversation: telegramConv },
-                    webhook: payload,
-                  };
+                : telegramConv
+                  ? {
+                      telegram: { event: event || {}, conversation: telegramConv },
+                      webhook: payload,
+                    }
+                  : { mcp: { event: event || {}, conversation: mcpConv }, webhook: payload };
               (providerConfig as any).eventContext = {
                 ...(providerConfig as any).eventContext,
                 ...transportCtx,
@@ -2283,11 +2286,12 @@ async function executeSingleCheck(
         );
       }
       if (webhookData && webhookData.size > 0) {
-        // Find the payload with slack_conversation or telegram_conversation
+        // Find the payload with slack_conversation, telegram_conversation, or mcp_conversation
         for (const payload of webhookData.values()) {
           const slackConv = (payload as any)?.slack_conversation;
           const telegramConv = (payload as any)?.telegram_conversation;
-          const conv = slackConv || telegramConv;
+          const mcpConv = (payload as any)?.mcp_conversation;
+          const conv = slackConv || telegramConv || mcpConv;
           if (conv) {
             const event = (payload as any)?.event;
             const messageCount = Array.isArray(conv?.messages) ? conv.messages.length : 0;

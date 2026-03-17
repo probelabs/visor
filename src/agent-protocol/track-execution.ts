@@ -24,6 +24,7 @@ export type TaskSource =
   | 'whatsapp'
   | 'teams'
   | 'a2a'
+  | 'mcp'
   | 'tui'
   | 'scheduler'
   | 'webhook';

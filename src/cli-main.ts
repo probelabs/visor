@@ -1310,6 +1310,13 @@ export async function main(): Promise<void> {
         configPath: getArg('--config'),
         toolName: getArg('--mcp-tool-name'),
         toolDescription: getArg('--mcp-tool-description'),
+        transport: (getArg('--transport') as 'stdio' | 'http') || 'stdio',
+        port: getArg('--port') ? Number(getArg('--port')) : 8080,
+        host: getArg('--host') || '0.0.0.0',
+        authToken: getArg('--auth-token'),
+        authTokenEnv: getArg('--auth-token-env'),
+        tlsCert: getArg('--tls-cert'),
+        tlsKey: getArg('--tls-key'),
       };
 
       const { startMcpServer } = await import('./mcp-server');
@@ -1741,130 +1748,39 @@ export async function main(): Promise<void> {
       }
     }
 
-    // ---- A2A Agent Protocol Server ----
-    let a2aFrontendInstance: { stop(): Promise<void> } | null = null;
-    let sharedEngine: StateMachineExecutionEngine | null = null;
+    // ---- Parallel Runner Mode (--slack, --telegram, --a2a, --mcp, etc.) ----
+    const requestedRunners: string[] = [];
+    if (options.a2a || config.agent_protocol?.enabled) requestedRunners.push('a2a');
+    if (options.slack) requestedRunners.push('slack');
+    if (options.mcp) requestedRunners.push('mcp');
+    if (options.telegram) requestedRunners.push('telegram');
+    if (options.email) requestedRunners.push('email');
+    if (options.whatsapp) requestedRunners.push('whatsapp');
+    if (options.teams) requestedRunners.push('teams');
 
-    if ((options as any).a2a || config.agent_protocol?.enabled) {
-      const { StateMachineExecutionEngine: SMEngine } = await import(
-        './state-machine-execution-engine'
-      );
-      const { A2AFrontend } = await import('./agent-protocol/a2a-frontend');
-      const { EventBus } = await import('./event-bus/event-bus');
+    if (requestedRunners.length > 0) {
+      const { RunnerHost } = await import('./runners/runner-host');
+      const { createRunner } = await import('./runners/runner-factory');
+      const { initTelemetryFromConfig } = await import('./runners/telemetry-init');
 
-      const agentConfig = config.agent_protocol;
-      if (!agentConfig) {
-        console.error('Error: agent_protocol configuration is required for --a2a mode');
-        process.exit(1);
+      await initTelemetryFromConfig(config);
+
+      const engine = new StateMachineExecutionEngine();
+      const host = new RunnerHost();
+
+      for (const name of requestedRunners) {
+        host.addRunner(await createRunner(name, engine, config, options));
       }
+      if (sharedTaskStore) host.setTaskStore(sharedTaskStore, options.configPath);
 
-      const engine = new SMEngine();
-      const frontend = new A2AFrontend(agentConfig, sharedTaskStore ?? undefined);
-      frontend.setEngine(engine);
-      frontend.setVisorConfig(config);
+      await host.startAll();
+      const names = requestedRunners.join(', ');
+      console.log(`✅ Runner(s) started: ${names}. Press Ctrl+C to exit.`);
 
-      const eventBus = new EventBus();
-      const ctx = {
-        eventBus,
-        logger,
-        config,
-        run: { runId: crypto.randomUUID() },
-        engine,
-        visorConfig: config,
-      };
-
-      await frontend.start(ctx);
-
-      const port = agentConfig.port ?? 9000;
-      const host = agentConfig.host ?? '0.0.0.0';
-      console.log(`A2A server running on ${host}:${port}`);
-
-      if ((options as any).slack === true) {
-        // Both --a2a and --slack: keep references and fall through to Slack startup
-        a2aFrontendInstance = frontend;
-        sharedEngine = engine;
-      } else {
-        // Standalone --a2a mode: block here with shutdown handlers
-        let shuttingDown = false;
-        const onShutdown = async (sig: NodeJS.Signals) => {
-          if (shuttingDown) {
-            process.exit(1);
-            return;
-          }
-          shuttingDown = true;
-          logger.info(`[A2A] Received ${sig}, shutting down gracefully...`);
-          const forceTimer = setTimeout(() => {
-            logger.error('[A2A] Shutdown timed out, forcing exit');
-            process.exit(1);
-          }, 5000);
-          forceTimer.unref();
-          try {
-            await frontend.stop();
-          } catch {}
-          process.exit(0);
-        };
-        process.on('SIGINT', sig => {
-          onShutdown(sig);
-        });
-        process.on('SIGTERM', sig => {
-          onShutdown(sig);
-        });
-
-        process.stdin.resume();
-        return;
-      }
-    }
-
-    // Socket Mode runner: visor --slack [--config file]
-    if ((options as any).slack === true) {
-      const { SlackSocketRunner } = await import('./slack/socket-runner');
-      const engine = sharedEngine ?? new StateMachineExecutionEngine();
-      const slackAny: any = (config as any).slack || {};
-      const endpoint = slackAny.endpoint || '/bots/slack/support';
-      const mentions = slackAny.mentions || 'direct';
-      const threads = slackAny.threads || 'any';
-      const allow = Array.isArray(slackAny.channel_allowlist) ? slackAny.channel_allowlist : [];
-      const appToken = slackAny.app_token || process.env.SLACK_APP_TOKEN;
-
-      // Initialize telemetry for Slack mode (normally done later for CLI runs).
-      if ((config as any)?.telemetry) {
-        const t = (config as any).telemetry as {
-          enabled?: boolean;
-          sink?: 'otlp' | 'file' | 'console';
-          file?: { dir?: string; ndjson?: boolean };
-          tracing?: { auto_instrumentations?: boolean; trace_report?: { enabled?: boolean } };
-        };
-        await initTelemetry({
-          enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true' || !!t?.enabled,
-          sink:
-            (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || t?.sink || 'file',
-          file: { dir: process.env.VISOR_TRACE_DIR || t?.file?.dir, ndjson: !!t?.file?.ndjson },
-          autoInstrument: !!t?.tracing?.auto_instrumentations,
-          traceReport: !!t?.tracing?.trace_report?.enabled,
-        });
-      } else {
-        await initTelemetry({
-          enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true',
-          sink: (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || 'file',
-          file: { dir: process.env.VISOR_TRACE_DIR },
-        });
-      }
-
-      const runner = new SlackSocketRunner(engine, config, {
-        appToken,
-        endpoint,
-        mentions,
-        threads,
-        channel_allowlist: allow,
-      });
-      if (sharedTaskStore) runner.setTaskStore(sharedTaskStore, options.configPath);
-      await runner.start();
-      console.log('✅ Slack Socket Mode is running. Press Ctrl+C to exit.');
-
-      // Start config file watcher if --watch is enabled
+      // Config watcher (shared, broadcasts to all runners)
       let configWatcher: { stop(): void } | undefined;
       let configWatchStore: { shutdown(): Promise<void> } | undefined;
-      if ((options as any).watch) {
+      if (options.watch) {
         if (!options.configPath) {
           console.error('❌ --watch requires --config <path>');
           process.exit(1);
@@ -1881,7 +1797,7 @@ export async function main(): Promise<void> {
             snapshotStore: watchStore,
             onSwap: newConfig => {
               config = newConfig;
-              runner.updateConfig(newConfig);
+              host.broadcastConfigUpdate(newConfig);
               logger.info('[Watch] Config updated');
             },
           });
@@ -1891,508 +1807,36 @@ export async function main(): Promise<void> {
           configWatchStore = watchStore;
           logger.info('Config watching enabled');
         } catch (watchErr: unknown) {
-          logger.warn(`Config watch setup failed (Slack mode continues without it): ${watchErr}`);
+          logger.warn(`Config watch setup failed (runners continue without it): ${watchErr}`);
         }
       }
 
-      // Graceful shutdown: notify active threads before exiting
+      // Unified graceful shutdown
       let shuttingDown = false;
       const onShutdown = async (sig: NodeJS.Signals) => {
         if (shuttingDown) {
-          // Second signal — force exit immediately
-          logger.warn(`[Slack] Received ${sig} again, forcing exit`);
           process.exit(1);
           return;
         }
         shuttingDown = true;
-        logger.info(`[Slack] Received ${sig}, shutting down gracefully…`);
-
-        // Force exit after 5s if graceful shutdown hangs
+        logger.info(`[RunnerHost] Received ${sig}, shutting down gracefully…`);
         const forceTimer = setTimeout(() => {
-          logger.error('[Slack] Graceful shutdown timed out after 5s, forcing exit');
+          logger.error('[RunnerHost] Shutdown timed out after 5s, forcing exit');
           process.exit(1);
         }, 5000);
         forceTimer.unref();
-
         try {
           if (configWatcher) configWatcher.stop();
           if (configWatchStore) configWatchStore.shutdown().catch(() => {});
-          if (a2aFrontendInstance) {
-            try {
-              await a2aFrontendInstance.stop();
-            } catch {
-              /* ignore */
-            }
-          }
-          await runner.stop();
+          await host.stopAll();
           if (sharedTaskStore) {
             try {
               await sharedTaskStore.shutdown();
             } catch {}
           }
         } catch (err) {
-          logger.warn(`[Slack] Error during shutdown: ${err}`);
+          logger.warn(`[RunnerHost] Error during shutdown: ${err}`);
         }
-        process.exit(0);
-      };
-      process.on('SIGINT', sig => {
-        onShutdown(sig);
-      });
-      process.on('SIGTERM', sig => {
-        onShutdown(sig);
-      });
-
-      process.stdin.resume();
-      return;
-    }
-
-    // Long-polling runner: visor --telegram [--config file]
-    if ((options as any).telegram === true) {
-      const { TelegramPollingRunner } = await import('./telegram/polling-runner');
-      const engine = sharedEngine ?? new StateMachineExecutionEngine();
-      const telegramAny: any = (config as any).telegram || {};
-
-      // Initialize telemetry for Telegram mode
-      if ((config as any)?.telemetry) {
-        const t = (config as any).telemetry as {
-          enabled?: boolean;
-          sink?: 'otlp' | 'file' | 'console';
-          file?: { dir?: string; ndjson?: boolean };
-          tracing?: { auto_instrumentations?: boolean; trace_report?: { enabled?: boolean } };
-        };
-        await initTelemetry({
-          enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true' || !!t?.enabled,
-          sink:
-            (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || t?.sink || 'file',
-          file: { dir: process.env.VISOR_TRACE_DIR || t?.file?.dir, ndjson: !!t?.file?.ndjson },
-          autoInstrument: !!t?.tracing?.auto_instrumentations,
-          traceReport: !!t?.tracing?.trace_report?.enabled,
-        });
-      } else {
-        await initTelemetry({
-          enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true',
-          sink: (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || 'file',
-          file: { dir: process.env.VISOR_TRACE_DIR },
-        });
-      }
-
-      const runner = new TelegramPollingRunner(engine, config, {
-        botToken: telegramAny.bot_token || process.env.TELEGRAM_BOT_TOKEN,
-        pollingTimeout: telegramAny.polling_timeout || 30,
-        chatAllowlist: telegramAny.chat_allowlist,
-        requireMention: telegramAny.require_mention ?? true,
-        workflow: telegramAny.workflow,
-      });
-      if (sharedTaskStore) runner.setTaskStore(sharedTaskStore, options.configPath);
-      await runner.start();
-      console.log('✅ Telegram long-polling is running. Press Ctrl+C to exit.');
-
-      // Config watcher (same pattern as Slack)
-      let configWatcher: { stop(): void } | undefined;
-      let configWatchStore: { shutdown(): Promise<void> } | undefined;
-      if ((options as any).watch) {
-        if (!options.configPath) {
-          console.error('❌ --watch requires --config <path>');
-          process.exit(1);
-        }
-        try {
-          const { ConfigSnapshotStore } = await import('./config/config-snapshot-store');
-          const { ConfigReloader } = await import('./config/config-reloader');
-          const { ConfigWatcher } = await import('./config/config-watcher');
-          const watchStore = new ConfigSnapshotStore();
-          await watchStore.initialize();
-          const reloader = new ConfigReloader({
-            configPath: options.configPath,
-            configManager,
-            snapshotStore: watchStore,
-            onSwap: newConfig => {
-              config = newConfig;
-              runner.updateConfig(newConfig);
-              logger.info('[Watch] Config updated');
-            },
-          });
-          const watcher = new ConfigWatcher(options.configPath, reloader);
-          watcher.start();
-          configWatcher = watcher;
-          configWatchStore = watchStore;
-          logger.info('Config watching enabled');
-        } catch (watchErr: unknown) {
-          logger.warn(
-            `Config watch setup failed (Telegram mode continues without it): ${watchErr}`
-          );
-        }
-      }
-
-      // Graceful shutdown
-      let shuttingDown = false;
-      const onShutdown = async (sig: NodeJS.Signals) => {
-        if (shuttingDown) {
-          process.exit(1);
-          return;
-        }
-        shuttingDown = true;
-        logger.info(`[Telegram] Received ${sig}, shutting down gracefully…`);
-        const forceTimer = setTimeout(() => {
-          logger.error('[Telegram] Shutdown timed out, forcing exit');
-          process.exit(1);
-        }, 5000);
-        forceTimer.unref();
-        try {
-          if (configWatcher) configWatcher.stop();
-          if (configWatchStore) configWatchStore.shutdown().catch(() => {});
-          await runner.stop();
-          if (sharedTaskStore) {
-            try {
-              await sharedTaskStore.shutdown();
-            } catch {}
-          }
-        } catch {}
-        process.exit(0);
-      };
-      process.on('SIGINT', sig => {
-        onShutdown(sig);
-      });
-      process.on('SIGTERM', sig => {
-        onShutdown(sig);
-      });
-
-      process.stdin.resume();
-      return;
-    }
-
-    // Email polling runner: visor --email [--config file]
-    if (options.email === true) {
-      const { EmailPollingRunner } = await import('./email/polling-runner');
-      const engine = sharedEngine ?? new StateMachineExecutionEngine();
-      const emailAny: any = (config as any).email || {};
-
-      // Initialize telemetry for Email mode
-      if ((config as any)?.telemetry) {
-        const t = (config as any).telemetry as {
-          enabled?: boolean;
-          sink?: 'otlp' | 'file' | 'console';
-          file?: { dir?: string; ndjson?: boolean };
-          tracing?: { auto_instrumentations?: boolean; trace_report?: { enabled?: boolean } };
-        };
-        await initTelemetry({
-          enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true' || !!t?.enabled,
-          sink:
-            (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || t?.sink || 'file',
-          file: { dir: process.env.VISOR_TRACE_DIR || t?.file?.dir, ndjson: !!t?.file?.ndjson },
-          autoInstrument: !!t?.tracing?.auto_instrumentations,
-          traceReport: !!t?.tracing?.trace_report?.enabled,
-        });
-      } else {
-        await initTelemetry({
-          enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true',
-          sink: (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || 'file',
-          file: { dir: process.env.VISOR_TRACE_DIR },
-        });
-      }
-
-      const runner = new EmailPollingRunner(engine, config, {
-        receive: emailAny.receive || {},
-        send: emailAny.send || {},
-        allowlist: emailAny.allowlist,
-        workflow: emailAny.workflow,
-      });
-      if (sharedTaskStore) runner.setTaskStore(sharedTaskStore, options.configPath);
-      await runner.start();
-      const receiveType = emailAny.receive?.type || 'imap';
-      console.log(`✅ Email runner (${receiveType}) is running. Press Ctrl+C to exit.`);
-
-      // Config watcher (same pattern as Telegram)
-      let configWatcher: { stop(): void } | undefined;
-      let configWatchStore: { shutdown(): Promise<void> } | undefined;
-      if ((options as any).watch) {
-        if (!options.configPath) {
-          console.error('❌ --watch requires --config <path>');
-          process.exit(1);
-        }
-        try {
-          const { ConfigSnapshotStore } = await import('./config/config-snapshot-store');
-          const { ConfigReloader } = await import('./config/config-reloader');
-          const { ConfigWatcher } = await import('./config/config-watcher');
-          const watchStore = new ConfigSnapshotStore();
-          await watchStore.initialize();
-          const reloader = new ConfigReloader({
-            configPath: options.configPath,
-            configManager,
-            snapshotStore: watchStore,
-            onSwap: newConfig => {
-              config = newConfig;
-              runner.updateConfig(newConfig);
-              logger.info('[Watch] Config updated');
-            },
-          });
-          const watcher = new ConfigWatcher(options.configPath, reloader);
-          watcher.start();
-          configWatcher = watcher;
-          configWatchStore = watchStore;
-          logger.info('Config watching enabled');
-        } catch (watchErr: unknown) {
-          logger.warn(`Config watch setup failed (Email mode continues without it): ${watchErr}`);
-        }
-      }
-
-      // Graceful shutdown
-      let shuttingDown = false;
-      const onShutdown = async (sig: NodeJS.Signals) => {
-        if (shuttingDown) {
-          process.exit(1);
-          return;
-        }
-        shuttingDown = true;
-        logger.info(`[Email] Received ${sig}, shutting down gracefully…`);
-        const forceTimer = setTimeout(() => {
-          logger.error('[Email] Shutdown timed out, forcing exit');
-          process.exit(1);
-        }, 5000);
-        forceTimer.unref();
-        try {
-          if (configWatcher) configWatcher.stop();
-          if (configWatchStore) configWatchStore.shutdown().catch(() => {});
-          await runner.stop();
-          if (sharedTaskStore) {
-            try {
-              await sharedTaskStore.shutdown();
-            } catch {}
-          }
-        } catch {}
-        process.exit(0);
-      };
-      process.on('SIGINT', sig => {
-        onShutdown(sig);
-      });
-      process.on('SIGTERM', sig => {
-        onShutdown(sig);
-      });
-
-      process.stdin.resume();
-      return;
-    }
-
-    // WhatsApp webhook runner: visor --whatsapp [--config file]
-    if ((options as any).whatsapp === true) {
-      const { WhatsAppWebhookRunner } = await import('./whatsapp/webhook-runner');
-      const engine = sharedEngine ?? new StateMachineExecutionEngine();
-      const waAny: any = (config as any).whatsapp || {};
-
-      // Initialize telemetry for WhatsApp mode
-      if ((config as any)?.telemetry) {
-        const t = (config as any).telemetry as {
-          enabled?: boolean;
-          sink?: 'otlp' | 'file' | 'console';
-          file?: { dir?: string; ndjson?: boolean };
-          tracing?: { auto_instrumentations?: boolean; trace_report?: { enabled?: boolean } };
-        };
-        await initTelemetry({
-          enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true' || !!t?.enabled,
-          sink:
-            (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || t?.sink || 'file',
-          file: { dir: process.env.VISOR_TRACE_DIR || t?.file?.dir, ndjson: !!t?.file?.ndjson },
-          autoInstrument: !!t?.tracing?.auto_instrumentations,
-          traceReport: !!t?.tracing?.trace_report?.enabled,
-        });
-      } else {
-        await initTelemetry({
-          enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true',
-          sink: (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || 'file',
-          file: { dir: process.env.VISOR_TRACE_DIR },
-        });
-      }
-
-      const runner = new WhatsAppWebhookRunner(engine, config, {
-        accessToken: waAny.access_token || process.env.WHATSAPP_ACCESS_TOKEN,
-        phoneNumberId: waAny.phone_number_id || process.env.WHATSAPP_PHONE_NUMBER_ID,
-        appSecret: waAny.app_secret || process.env.WHATSAPP_APP_SECRET,
-        verifyToken: waAny.verify_token || process.env.WHATSAPP_VERIFY_TOKEN,
-        apiVersion: waAny.api_version || 'v21.0',
-        port: waAny.port || parseInt(process.env.WHATSAPP_WEBHOOK_PORT || '8443'),
-        host: waAny.host || '0.0.0.0',
-        phoneAllowlist: waAny.phone_allowlist,
-        workflow: waAny.workflow,
-      });
-      if (sharedTaskStore) runner.setTaskStore(sharedTaskStore, options.configPath);
-      await runner.start();
-      const port = waAny.port || parseInt(process.env.WHATSAPP_WEBHOOK_PORT || '8443');
-      console.log(`✅ WhatsApp webhook server running on port ${port}. Press Ctrl+C to exit.`);
-
-      // Config watcher (same pattern as Telegram/Email)
-      let configWatcher: { stop(): void } | undefined;
-      let configWatchStore: { shutdown(): Promise<void> } | undefined;
-      if ((options as any).watch) {
-        if (!options.configPath) {
-          console.error('❌ --watch requires --config <path>');
-          process.exit(1);
-        }
-        try {
-          const { ConfigSnapshotStore } = await import('./config/config-snapshot-store');
-          const { ConfigReloader } = await import('./config/config-reloader');
-          const { ConfigWatcher } = await import('./config/config-watcher');
-          const watchStore = new ConfigSnapshotStore();
-          await watchStore.initialize();
-          const reloader = new ConfigReloader({
-            configPath: options.configPath,
-            configManager,
-            snapshotStore: watchStore,
-            onSwap: newConfig => {
-              config = newConfig;
-              runner.updateConfig(newConfig);
-              logger.info('[Watch] Config updated');
-            },
-          });
-          const watcher = new ConfigWatcher(options.configPath, reloader);
-          watcher.start();
-          configWatcher = watcher;
-          configWatchStore = watchStore;
-          logger.info('Config watching enabled');
-        } catch (watchErr: unknown) {
-          logger.warn(
-            `Config watch setup failed (WhatsApp mode continues without it): ${watchErr}`
-          );
-        }
-      }
-
-      // Graceful shutdown
-      let shuttingDown = false;
-      const onShutdown = async (sig: NodeJS.Signals) => {
-        if (shuttingDown) {
-          process.exit(1);
-          return;
-        }
-        shuttingDown = true;
-        logger.info(`[WhatsApp] Received ${sig}, shutting down gracefully…`);
-        const forceTimer = setTimeout(() => {
-          logger.error('[WhatsApp] Shutdown timed out, forcing exit');
-          process.exit(1);
-        }, 5000);
-        forceTimer.unref();
-        try {
-          if (configWatcher) configWatcher.stop();
-          if (configWatchStore) configWatchStore.shutdown().catch(() => {});
-          await runner.stop();
-          if (sharedTaskStore) {
-            try {
-              await sharedTaskStore.shutdown();
-            } catch {}
-          }
-        } catch {}
-        process.exit(0);
-      };
-      process.on('SIGINT', sig => {
-        onShutdown(sig);
-      });
-      process.on('SIGTERM', sig => {
-        onShutdown(sig);
-      });
-
-      process.stdin.resume();
-      return;
-    }
-
-    // ── Microsoft Teams webhook runner ──────────────────────────────
-    if ((options as any).teams === true) {
-      const { TeamsWebhookRunner } = await import('./teams/webhook-runner');
-      const engine = sharedEngine ?? new StateMachineExecutionEngine();
-      const teamsAny: any = (config as any).teams || {};
-
-      // Initialize telemetry for Teams mode
-      if ((config as any)?.telemetry) {
-        const t = (config as any).telemetry as {
-          enabled?: boolean;
-          sink?: 'otlp' | 'file' | 'console';
-          file?: { dir?: string; ndjson?: boolean };
-          tracing?: { auto_instrumentations?: boolean; trace_report?: { enabled?: boolean } };
-        };
-        await initTelemetry({
-          enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true' || !!t?.enabled,
-          sink:
-            (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || t?.sink || 'file',
-          file: { dir: process.env.VISOR_TRACE_DIR || t?.file?.dir, ndjson: !!t?.file?.ndjson },
-          autoInstrument: !!t?.tracing?.auto_instrumentations,
-          traceReport: !!t?.tracing?.trace_report?.enabled,
-        });
-      } else {
-        await initTelemetry({
-          enabled: process.env.VISOR_TELEMETRY_ENABLED === 'true',
-          sink: (process.env.VISOR_TELEMETRY_SINK as 'otlp' | 'file' | 'console') || 'file',
-          file: { dir: process.env.VISOR_TRACE_DIR },
-        });
-      }
-
-      const runner = new TeamsWebhookRunner(engine, config, {
-        appId: teamsAny.app_id || process.env.TEAMS_APP_ID,
-        appPassword: teamsAny.app_password || process.env.TEAMS_APP_PASSWORD,
-        tenantId: teamsAny.tenant_id || process.env.TEAMS_TENANT_ID,
-        port: teamsAny.port || parseInt(process.env.TEAMS_WEBHOOK_PORT || '3978'),
-        host: teamsAny.host || '0.0.0.0',
-        userAllowlist: teamsAny.user_allowlist,
-        workflow: teamsAny.workflow,
-      });
-      if (sharedTaskStore) runner.setTaskStore(sharedTaskStore, options.configPath);
-      await runner.start();
-      const port = teamsAny.port || parseInt(process.env.TEAMS_WEBHOOK_PORT || '3978');
-      console.log(`✅ Teams webhook server running on port ${port}. Press Ctrl+C to exit.`);
-
-      // Config watcher (same pattern as WhatsApp/Telegram/Email)
-      let configWatcher: { stop(): void } | undefined;
-      let configWatchStore: { shutdown(): Promise<void> } | undefined;
-      if ((options as any).watch) {
-        if (!options.configPath) {
-          console.error('❌ --watch requires --config <path>');
-          process.exit(1);
-        }
-        try {
-          const { ConfigSnapshotStore } = await import('./config/config-snapshot-store');
-          const { ConfigReloader } = await import('./config/config-reloader');
-          const { ConfigWatcher } = await import('./config/config-watcher');
-          const watchStore = new ConfigSnapshotStore();
-          await watchStore.initialize();
-          const reloader = new ConfigReloader({
-            configPath: options.configPath,
-            configManager,
-            snapshotStore: watchStore,
-            onSwap: newConfig => {
-              config = newConfig;
-              runner.updateConfig(newConfig);
-              logger.info('[Watch] Config updated');
-            },
-          });
-          const watcher = new ConfigWatcher(options.configPath, reloader);
-          watcher.start();
-          configWatcher = watcher;
-          configWatchStore = watchStore;
-          logger.info('Config watching enabled');
-        } catch (watchErr: unknown) {
-          logger.warn(`Config watch setup failed (Teams mode continues without it): ${watchErr}`);
-        }
-      }
-
-      // Graceful shutdown
-      let shuttingDown = false;
-      const onShutdown = async (sig: NodeJS.Signals) => {
-        if (shuttingDown) {
-          process.exit(1);
-          return;
-        }
-        shuttingDown = true;
-        logger.info(`[Teams] Received ${sig}, shutting down gracefully…`);
-        const forceTimer = setTimeout(() => {
-          logger.error('[Teams] Shutdown timed out, forcing exit');
-          process.exit(1);
-        }, 5000);
-        forceTimer.unref();
-        try {
-          if (configWatcher) configWatcher.stop();
-          if (configWatchStore) configWatchStore.shutdown().catch(() => {});
-          await runner.stop();
-          if (sharedTaskStore) {
-            try {
-              await sharedTaskStore.shutdown();
-            } catch {}
-          }
-        } catch {}
         process.exit(0);
       };
       process.on('SIGINT', sig => {

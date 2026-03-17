@@ -27,6 +27,18 @@ const PROBE_GRACEFUL_MARGIN_MS = 90_000;
 const MIN_TIMEOUT_FOR_MARGIN_MS = PROBE_GRACEFUL_MARGIN_MS + 30_000; // 120 000
 
 /**
+ * Lightweight callback bridge for dynamically extending a withTimeout deadline.
+ * Created per-call, wired to ProbeAgent's `timeout.extended` event so the
+ * parent's Promise.race deadline tracks the child's negotiated extensions.
+ */
+class TimeoutExtender {
+  _listener?: (extraMs: number) => void;
+  extend(extraMs: number): void {
+    this._listener?.(extraMs);
+  }
+}
+
+/**
  * Helper function to log debug messages using the centralized logger
  */
 function log(...args: unknown[]): void {
@@ -569,13 +581,18 @@ export class AIReviewService {
     }
 
     try {
-      const call = this.callProbeAgent(prompt, schema, debugInfo, checkName, sessionId);
+      // Create an extender so withTimeout can be dynamically extended when the
+      // agent's negotiated timeout observer grants more time (timeout.extended event).
+      const extender = new TimeoutExtender();
+      const call = this.callProbeAgent(prompt, schema, debugInfo, checkName, sessionId, extender);
       const timeoutMs = Math.max(0, this.config.timeout || 0);
       const {
         response,
         effectiveSchema,
         sessionId: usedSessionId,
-      } = timeoutMs > 0 ? await this.withTimeout(call, timeoutMs, 'AI review') : await call;
+      } = timeoutMs > 0
+        ? await this.withTimeout(call, timeoutMs, 'AI review', sessionId, extender)
+        : await call;
       const processingTime = Date.now() - startTime;
 
       if (debugInfo) {
@@ -728,17 +745,28 @@ export class AIReviewService {
     }
 
     try {
+      // Create an extender so withTimeout tracks agent's negotiated extensions
+      const extender = new TimeoutExtender();
       // Use the determined agent (cloned or original)
       const call = this.callProbeAgentWithExistingSession(
         agentToUse,
         prompt,
         schema,
         debugInfo,
-        checkName
+        checkName,
+        extender
       );
       const timeoutMs = Math.max(0, this.config.timeout || 0);
       const { response, effectiveSchema } =
-        timeoutMs > 0 ? await this.withTimeout(call, timeoutMs, 'AI review (session)') : await call;
+        timeoutMs > 0
+          ? await this.withTimeout(
+              call,
+              timeoutMs,
+              'AI review (session)',
+              currentSessionId,
+              extender
+            )
+          : await call;
       const processingTime = Date.now() - startTime;
 
       if (debugInfo) {
@@ -790,17 +818,126 @@ export class AIReviewService {
   }
 
   /**
-   * Promise timeout helper that rejects after ms if unresolved
+   * Promise timeout helper that rejects after ms if unresolved.
+   * When a sessionId is provided, triggers graceful wind-down on the
+   * ProbeAgent before rejecting, giving it a chance to summarize.
+   *
+   * When an extender is provided, the deadline can be dynamically pushed
+   * forward (e.g. when the agent's negotiated timeout observer grants an
+   * extension and emits a `timeout.extended` event).
    */
-  private async withTimeout<T>(p: Promise<T>, ms: number, label = 'operation'): Promise<T> {
+  private async withTimeout<T>(
+    p: Promise<T>,
+    ms: number,
+    label = 'operation',
+    sessionId?: string,
+    extender?: TimeoutExtender
+  ): Promise<T> {
     let timer: NodeJS.Timeout | undefined;
+    const startTime = Date.now();
+    let deadlineMs = ms; // total ms from startTime
+
     try {
       const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+        const scheduleTimer = () => {
+          if (timer) clearTimeout(timer);
+          const remaining = deadlineMs - (Date.now() - startTime);
+          if (remaining <= 0) {
+            fireTimeout(reject);
+            return;
+          }
+          timer = setTimeout(() => fireTimeout(reject), remaining);
+        };
+
+        const fireTimeout = (rej: (reason: Error) => void) => {
+          // Signal the agent to wind down before the hard kill.
+          // This gives the agent a chance to produce partial results
+          // in its bonus wind-down steps before we reject the promise.
+          if (sessionId) {
+            try {
+              const agent = this.sessionRegistry.getSession(sessionId);
+              if (agent && typeof (agent as any).triggerGracefulWindDown === 'function') {
+                (agent as any).triggerGracefulWindDown();
+              }
+            } catch {
+              // Best-effort: don't let registry errors block the timeout
+            }
+          }
+          rej(new Error(`${label} timed out after ${deadlineMs}ms`));
+        };
+
+        // Allow the deadline to be extended dynamically
+        if (extender) {
+          extender._listener = (extraMs: number) => {
+            deadlineMs += extraMs;
+            try {
+              const { addEvent } = require('./telemetry/trace-helpers');
+              addEvent('visor.timeout_extended', {
+                extra_ms: extraMs,
+                new_deadline_ms: deadlineMs,
+                elapsed_ms: Date.now() - startTime,
+              });
+            } catch {}
+            log(
+              `⏱️ Timeout extended by ${Math.round(extraMs / 60000)}min → new deadline ${Math.round(deadlineMs / 60000)}min`
+            );
+            scheduleTimer(); // Reset the timer with the new deadline
+          };
+        }
+
+        scheduleTimer();
       });
       return (await Promise.race([p, timeout])) as T;
     } finally {
       if (timer) clearTimeout(timer);
+      if (extender) extender._listener = undefined;
+    }
+  }
+
+  /**
+   * Wire ProbeAgent's timeout events to a TimeoutExtender so the parent's
+   * withTimeout deadline dynamically tracks the agent's negotiated extensions.
+   *
+   * - `timeout.extended`: observer granted more time → push deadline forward
+   * - `timeout.windingDown`: observer declined → agent is finishing, log it
+   *
+   * Safe to call on older Probe versions that don't emit these events.
+   */
+  private wireTimeoutEvents(agent: ProbeAgent, extender?: TimeoutExtender): void {
+    try {
+      const events = (agent as any).events;
+      if (!events || typeof events.on !== 'function') return;
+
+      if (extender) {
+        events.on(
+          'timeout.extended',
+          (data: { grantedMs: number; reason?: string; extensionsUsed?: number }) => {
+            log(
+              `⏱️ Agent extended timeout: +${Math.round(data.grantedMs / 60000)}min (${data.reason || 'work in progress'})`
+            );
+            extender.extend(data.grantedMs);
+          }
+        );
+      }
+
+      events.on(
+        'timeout.windingDown',
+        (data: { reason?: string; extensionsUsed?: number; totalExtraTimeMs?: number }) => {
+          log(
+            `⏱️ Agent winding down: ${data.reason || 'observer declined'} (extensions used: ${data.extensionsUsed ?? 0}, total extra: ${Math.round((data.totalExtraTimeMs ?? 0) / 60000)}min)`
+          );
+          try {
+            const { addEvent } = require('./telemetry/trace-helpers');
+            addEvent('visor.agent_winding_down', {
+              reason: data.reason || 'observer declined',
+              extensions_used: data.extensionsUsed ?? 0,
+              total_extra_time_ms: data.totalExtraTimeMs ?? 0,
+            });
+          } catch {}
+        }
+      );
+    } catch {
+      // Best-effort: older Probe versions may not have events
     }
   }
 
@@ -1504,7 +1641,8 @@ ${this.escapeXml(processedFallbackDiff)}
     prompt: string,
     schema?: string | Record<string, unknown>,
     debugInfo?: AIDebugInfo,
-    _checkName?: string
+    _checkName?: string,
+    extender?: TimeoutExtender
   ): Promise<{ response: string; effectiveSchema?: string }> {
     // Handle mock model/provider for testing
     if (this.config.model === 'mock' || this.config.provider === 'mock') {
@@ -1528,7 +1666,10 @@ ${this.escapeXml(processedFallbackDiff)}
     if (reuseAiTimeout > 0) {
       (agent as any).maxOperationTimeout = reuseAiTimeout;
     }
-    // Update negotiated timeout / graceful stop options on session reuse
+    // Update negotiated timeout / graceful stop options on session reuse.
+    // Budget/per-request values are passed through without capping — the agent's
+    // observer now emits `timeout.extended` events and the parent dynamically
+    // extends its withTimeout deadline to stay in sync (Probe #524).
     if (this.config.timeoutBehavior) {
       (agent as any).timeoutBehavior = this.config.timeoutBehavior;
     }
@@ -1544,6 +1685,9 @@ ${this.escapeXml(processedFallbackDiff)}
     if (this.config.gracefulStopDeadline !== undefined) {
       (agent as any).gracefulStopDeadline = this.config.gracefulStopDeadline;
     }
+
+    // Wire agent timeout events to the extender so withTimeout tracks extensions
+    this.wireTimeoutEvents(agent, extender);
 
     try {
       log('🚀 Calling existing ProbeAgent with answer()...');
@@ -1915,7 +2059,8 @@ ${'='.repeat(60)}
     schema?: string | Record<string, unknown>,
     debugInfo?: AIDebugInfo,
     _checkName?: string,
-    providedSessionId?: string
+    providedSessionId?: string,
+    extender?: TimeoutExtender
   ): Promise<{ response: string; effectiveSchema?: string; sessionId: string }> {
     // Derive a stable session ID for this call so the engine can reuse it later
     const sessionId =
@@ -2073,7 +2218,10 @@ ${'='.repeat(60)}
         (options as any).maxOperationTimeout = aiTimeout;
       }
 
-      // Pass negotiated timeout / graceful stop options to ProbeAgent
+      // Pass negotiated timeout / graceful stop options to ProbeAgent.
+      // Budget/per-request values are passed through without capping — the
+      // agent's observer emits `timeout.extended` events and withTimeout
+      // dynamically extends its deadline to stay in sync (Probe #524).
       if (this.config.timeoutBehavior) {
         (options as any).timeoutBehavior = this.config.timeoutBehavior;
       }
@@ -2220,6 +2368,9 @@ ${'='.repeat(60)}
       if (typeof (agent as any).initialize === 'function') {
         await (agent as any).initialize();
       }
+
+      // Wire agent timeout events to the extender so withTimeout tracks extensions
+      this.wireTimeoutEvents(agent, extender);
 
       log('🚀 Calling ProbeAgent...');
       // Load and pass the actual schema content if provided (skip for plain schema)
