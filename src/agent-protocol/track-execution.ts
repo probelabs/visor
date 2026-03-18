@@ -16,6 +16,14 @@ import { getInstanceId } from '../utils/instance-id';
 import type { TaskStore } from './task-store';
 import type { AgentMessage, AgentTask } from './types';
 
+function getPackageVersion(): string {
+  try {
+    return require('../../package.json')?.version || 'dev';
+  } catch {
+    return 'dev';
+  }
+}
+
 export type TaskSource =
   | 'cli'
   | 'slack'
@@ -74,6 +82,8 @@ export async function trackExecution<T>(
     requestMetadata: {
       source,
       instance_id: getInstanceId(),
+      visor_version: process.env.VISOR_VERSION || getPackageVersion(),
+      ...(process.env.VISOR_COMMIT_SHORT ? { visor_commit: process.env.VISOR_COMMIT_SHORT } : {}),
       trace_id: trace.getActiveSpan()?.spanContext().traceId || undefined,
       ...(traceFile ? { trace_file: traceFile } : {}),
       ...metadata,

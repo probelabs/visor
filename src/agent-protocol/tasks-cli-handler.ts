@@ -128,57 +128,112 @@ function stateColor(state: string): string {
   }
 }
 
-function formatTable(rows: TaskQueueRow[], total: number, filter?: ListTasksFilter): string {
+// ---------------------------------------------------------------------------
+// ANSI helpers
+// ---------------------------------------------------------------------------
+
+const DIM = '\x1b[2m';
+const BOLD = '\x1b[1m';
+const RESET = '\x1b[0m';
+
+/** Strip ANSI escape sequences for length calculations */
+function stripAnsi(s: string): number {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[\d*(;\d+)*m/g, '').length;
+}
+
+/** State icon */
+function stateIcon(state: string): string {
+  switch (state) {
+    case 'working':
+      return '⟳';
+    case 'completed':
+      return '✓';
+    case 'failed':
+      return '✗';
+    case 'canceled':
+    case 'rejected':
+      return '⊘';
+    case 'submitted':
+      return '◦';
+    case 'input_required':
+    case 'auth_required':
+      return '⏎';
+    default:
+      return '?';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Card formatting
+// ---------------------------------------------------------------------------
+
+function formatCards(rows: TaskQueueRow[], total: number, filter?: ListTasksFilter): string {
   if (rows.length === 0) return 'No tasks found.';
 
-  // Adapt Input column truncation to terminal width
-  // Fixed columns take ~100 chars; rest goes to Input
-  const termWidth = process.stdout.columns || 120;
-  const fixedColsWidth = 105; // ID+Source+State+Workflow+Created+Duration+Instance+Meta + borders
-  const inputMaxLen = Math.max(20, Math.min(80, termWidth - fixedColsWidth));
+  const termWidth = process.stdout.columns || 80;
+  const lines: string[] = [];
 
-  const table = new CliTable3({
-    head: ['ID', 'Source', 'State', 'Workflow', 'Created', 'Duration', 'Instance', 'Meta', 'Input'],
-    style: {
-      head: ['cyan', 'bold'],
-      border: ['grey'],
-    },
-    wordWrap: false,
-  });
-
-  for (const r of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
     const duration = isTerminalState(r.state as TaskState)
       ? formatDuration(r.created_at, r.updated_at)
       : formatDuration(r.claimed_at || r.created_at);
 
-    const input =
-      r.request_message.length > inputMaxLen
-        ? r.request_message.slice(0, inputMaxLen - 3) + '...'
-        : r.request_message || '-';
+    const icon = stateIcon(r.state);
+    const colorState = stateColor(r.state);
 
-    table.push([
-      r.id.slice(0, 8),
-      r.source || '-',
-      stateColor(r.state),
-      r.workflow_id || '-',
-      formatTimeAgo(r.created_at),
-      duration,
-      r.claimed_by || '-',
-      formatMeta(r.metadata),
-      input,
-    ]);
+    // Line 1: state icon + ID + state + duration + time ago (right-aligned)
+    const left1 = `${icon} ${BOLD}${r.id.slice(0, 8)}${RESET} ${colorState}`;
+    const right1 = `${DIM}${duration} · ${formatTimeAgo(r.created_at)}${RESET}`;
+    const pad1 = Math.max(1, termWidth - stripAnsi(left1) - stripAnsi(right1));
+    lines.push(left1 + ' '.repeat(pad1) + right1);
+
+    // Line 2: input text (truncated to terminal width with indent)
+    const indent = '  ';
+    const inputMax = termWidth - indent.length;
+    const inputText = r.request_message || '-';
+    const inputDisplay =
+      inputText.length > inputMax ? inputText.slice(0, inputMax - 1) + '…' : inputText;
+    lines.push(`${indent}${inputDisplay}`);
+
+    // Line 3: metadata tags
+    const tags: string[] = [];
+    if (r.source) tags.push(r.source);
+    if (r.workflow_id) tags.push(r.workflow_id);
+    if (r.claimed_by) tags.push(`on:${r.claimed_by}`);
+    const meta = r.metadata;
+    if (meta.visor_version) {
+      const ver = meta.visor_commit
+        ? `v${meta.visor_version} (${meta.visor_commit})`
+        : `v${meta.visor_version}`;
+      tags.push(ver);
+    }
+    if (meta.slack_user) tags.push(`user:${meta.slack_user}`);
+    if (meta.slack_channel) tags.push(`ch:${meta.slack_channel}`);
+    if (meta.trace_id) tags.push(`trace:${String(meta.trace_id).slice(0, 8)}`);
+    if (meta.schedule_id) tags.push(`sched:${meta.schedule_id}`);
+
+    if (tags.length > 0) {
+      lines.push(`${indent}${DIM}${tags.join(' · ')}${RESET}`);
+    }
+
+    // Separator between cards (except after last)
+    if (i < rows.length - 1) {
+      lines.push('');
+    }
   }
 
-  let output = table.toString();
   // Pagination info
   const limit = filter?.limit ?? 20;
   const offset = filter?.offset ?? 0;
   const page = Math.floor(offset / limit) + 1;
   const totalPages = Math.ceil(total / limit);
   if (total > rows.length) {
-    output += `\n(${total} total, page ${page}/${totalPages}, --page N to navigate)`;
+    lines.push('');
+    lines.push(`${DIM}(${total} total, page ${page}/${totalPages}, --page N to navigate)${RESET}`);
   }
-  return output;
+  return lines.join('\n');
 }
 
 function formatMarkdown(rows: TaskQueueRow[], total: number): string {
@@ -315,7 +370,7 @@ async function handleList(flags: Record<string, string | boolean>): Promise<void
         console.log(
           `Instance: ${instanceId}${activeOnly ? ' (active tasks only, use --all for history)' : ''}\n`
         );
-        console.log(formatTable(rows, total, filter));
+        console.log(formatCards(rows, total, filter));
       }
     });
   };
@@ -323,7 +378,7 @@ async function handleList(flags: Record<string, string | boolean>): Promise<void
   if (flags.watch) {
     const watchRender = async () => {
       process.stdout.write('\x1Bc'); // clear terminal
-      console.log(`visor tasks list (instance: ${instanceId}, watching, Ctrl+C to exit)\n`);
+      console.log(`visor tasks (instance: ${instanceId}, watching, Ctrl+C to exit)\n`);
       try {
         await render();
       } catch (err) {
