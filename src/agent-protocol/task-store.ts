@@ -163,8 +163,10 @@ export interface TaskStore {
   listTasksRaw?(filter: ListTasksFilter): { rows: TaskQueueRow[]; total: number };
 
   // Cleanup & recovery
-  /** Mark all 'working' tasks as 'failed' (crash recovery on startup). */
-  failStaleTasks(reason?: string): number;
+  /** Mark 'working' tasks as 'failed' (crash recovery on startup).
+   *  When `claimedBy` is provided, only fails tasks owned by that instance.
+   *  Without it, only fails **unclaimed** working tasks (safe default). */
+  failStaleTasks(reason?: string, claimedBy?: string): number;
   /** Mark 'working' tasks older than the given age as 'failed' (runtime stale detection). */
   failStaleTasksByAge(olderThanMs: number, reason?: string): number;
   /** Delete completed/failed/canceled tasks older than the given age. */
@@ -550,7 +552,7 @@ export class SqliteTaskStore implements TaskStore {
   // Cleanup
   // -------------------------------------------------------------------------
 
-  failStaleTasks(reason?: string): number {
+  failStaleTasks(reason?: string, claimedBy?: string): number {
     const db = this.getDb();
     const now = nowISO();
     const msg = reason || 'Process terminated while task was running';
@@ -559,11 +561,26 @@ export class SqliteTaskStore implements TaskStore {
       role: 'agent',
       parts: [{ text: msg }],
     });
+
+    if (claimedBy) {
+      // Only fail tasks owned by this specific instance
+      const result = db
+        .prepare(
+          `UPDATE agent_tasks
+           SET state = 'failed', updated_at = ?, status_message = ?
+           WHERE state = 'working' AND claimed_by = ?`
+        )
+        .run(now, statusMessage, claimedBy);
+      return result.changes;
+    }
+
+    // No instance specified: only fail unclaimed working tasks (safe default).
+    // Claimed tasks belong to potentially-running instances and must not be touched.
     const result = db
       .prepare(
         `UPDATE agent_tasks
          SET state = 'failed', updated_at = ?, status_message = ?
-         WHERE state = 'working'`
+         WHERE state = 'working' AND claimed_by IS NULL`
       )
       .run(now, statusMessage);
     return result.changes;

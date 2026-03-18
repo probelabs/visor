@@ -1735,12 +1735,24 @@ export async function main(): Promise<void> {
         const { SqliteTaskStore } = await import('./agent-protocol/task-store');
         sharedTaskStore = new SqliteTaskStore();
         await sharedTaskStore.initialize();
-        // Recover stale tasks from previous crashed runs
+        // Recover orphan tasks: only fail unclaimed working tasks (no instance owns them).
+        // Claimed tasks belong to potentially-running instances and are handled by
+        // the periodic stale sweep (failStaleTasksByAge) instead.
         const recovered = sharedTaskStore.failStaleTasks('Process terminated unexpectedly');
         if (recovered > 0) {
           logger.info(`[TaskTracking] Recovered ${recovered} stale working task(s) → failed`);
         }
         logger.info('[TaskTracking] Shared task store initialized');
+        // Propagate task_evaluate config to env so track-execution can pick it up
+        const evalCfg = (config as any).task_evaluate;
+        if (evalCfg === true || (typeof evalCfg === 'object' && evalCfg?.enabled !== false)) {
+          process.env.VISOR_TASK_EVALUATE = 'true';
+          if (typeof evalCfg === 'object') {
+            if (evalCfg.model) process.env.VISOR_EVAL_MODEL = evalCfg.model;
+            if (evalCfg.provider) process.env.VISOR_EVAL_PROVIDER = evalCfg.provider;
+            if (evalCfg.prompt) process.env.VISOR_EVAL_PROMPT = evalCfg.prompt;
+          }
+        }
       } catch (err: unknown) {
         logger.warn(
           `[TaskTracking] Failed to initialize task store: ${err instanceof Error ? err.message : err}`

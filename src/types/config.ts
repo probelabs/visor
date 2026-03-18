@@ -1666,6 +1666,24 @@ export interface VisorConfig {
   task_tracking?: boolean;
   /** Graceful restart configuration */
   graceful_restart?: GracefulRestartConfig;
+  /** Automatically evaluate completed tasks using an LLM judge.
+   *  Requires task_tracking to be enabled. Runs asynchronously after task completion.
+   *  Set to `true` for defaults, or provide an object to configure. */
+  task_evaluate?: boolean | TaskEvaluateConfig;
+}
+
+/**
+ * Configuration for automatic task evaluation via LLM judge.
+ */
+export interface TaskEvaluateConfig {
+  /** Enable auto-evaluation (default: true when config object is present) */
+  enabled?: boolean;
+  /** LLM model to use for evaluation (e.g. "gemini-2.5-flash", "claude-sonnet-4-5") */
+  model?: string;
+  /** AI provider: google, openai, anthropic */
+  provider?: string;
+  /** Custom system prompt for the evaluator (overrides the default evaluation prompt) */
+  prompt?: string;
 }
 
 /**

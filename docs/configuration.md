@@ -430,6 +430,8 @@ The following global configuration options are available and documented in detai
 | `sandbox` | Default sandbox name for all steps | [Sandbox Engines](./sandbox-engines.md) |
 | `sandboxes` | Named sandbox definitions (Docker, Bubblewrap, Seatbelt) | [Sandbox Engines](./sandbox-engines.md) |
 | `workspace` | Workspace isolation configuration | [Workspace Isolation RFC](./rfc/workspace-isolation.md) |
+| `task_tracking` | Enable cross-frontend task tracking (`true`/`false`) | [Observability](./observability.md) |
+| `task_evaluate` | Auto-evaluate completed tasks with LLM judge (`true` or object) | [Observability](./observability.md) |
 
 Example combining several options:
 

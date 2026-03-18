@@ -223,6 +223,75 @@ When using `--output json`, full `executionStatistics` object is included with:
 | `totalDuration` | Total execution time in milliseconds |
 | Issue counts | By severity: critical, error, warning, info |
 
+## Task Tracking & Evaluation
+
+Task tracking records every workflow execution (CLI, Slack, TUI, Scheduler) in a shared SQLite store, making them visible via `visor tasks`.
+
+### Enabling Task Tracking
+
+```yaml
+# .visor.yaml
+task_tracking: true
+```
+
+Or via CLI flag: `visor --task-tracking --slack --config .visor.yaml`
+
+### Automatic Task Evaluation
+
+When enabled, every completed task is automatically evaluated by an LLM judge that scores response quality and execution efficiency. Evaluations run asynchronously (non-blocking) after task completion and are stored as task artifacts.
+
+```yaml
+# Simple — enable with defaults
+task_evaluate: true
+
+# With configuration
+task_evaluate:
+  enabled: true
+  model: gemini-2.5-flash        # LLM model (default: auto-detect from API keys)
+  provider: google                # google, openai, anthropic
+  prompt: "Custom evaluation..."  # Override default evaluation prompt
+```
+
+Environment variables (override config):
+- `VISOR_TASK_EVALUATE=true` — enable auto-evaluation
+- `VISOR_EVAL_MODEL` — evaluation model
+- `VISOR_EVAL_PROVIDER` — evaluation provider
+- `VISOR_EVAL_PROMPT` — custom system prompt
+
+### Execution Traces
+
+Each task captures an OpenTelemetry trace that records the full execution pipeline: check ordering, AI model calls with token counts, tool calls with result sizes, and delegation chains. View traces with:
+
+```bash
+visor tasks trace <task-id>          # Compact YAML tree
+visor tasks trace <task-id> --full   # Full untruncated output
+```
+
+The trace tree shows:
+- **visor.run** — root span with metadata (trace_id, version, source, duration)
+- **Checks** — named steps with type (ai/script/workflow), duration, input context, and output
+- **AI blocks** — LLM calls with model, token counts, and intent
+- **Tool calls** — search, extract, listFiles with input queries and result sizes (or "no results")
+- **Delegations** — sub-agent searches with nested AI/tool chains
+
+Traces are also included in the LLM evaluation prompt, allowing the judge to assess execution efficiency alongside response quality.
+
+### Evaluation Results
+
+Evaluations rate tasks on two axes:
+
+| Axis | Rating | Categories |
+|------|--------|------------|
+| **Response quality** | 1-5 | excellent, good, adequate, poor, off-topic, error |
+| **Execution quality** | 1-5 | efficient, adequate, wasteful, error |
+
+View stored evaluations:
+```bash
+visor tasks show <task-id>               # Includes evaluation inline
+visor tasks show <task-id> --output json # Full evaluation object
+visor tasks evaluate --last 10           # Batch evaluate recent tasks
+```
+
 ## Related Documentation
 
 - [Output Formats](./output-formats.md) - Detailed format specifications
