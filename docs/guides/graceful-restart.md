@@ -86,12 +86,29 @@ Visor automatically detects how it was invoked and spawns the new process accord
 
 The `VISOR_RESTART_GENERATION` environment variable is incremented on each restart, letting you track restart generations in logs.
 
+## Graceful Restart vs Config Reload
+
+Visor supports two complementary mechanisms for applying changes without disruption:
+
+| Mechanism | Signal | Use case | Process lifecycle |
+|---|---|---|---|
+| **Graceful restart** (`SIGUSR1`) | `kill -USR1` | New code, binary updates, dependency changes | Old process drains, new process spawns |
+| **Hot config reload** (`SIGUSR2` / `--watch`) | `kill -USR2` | Config-only changes (thresholds, checks, routing) | Same process, config reloaded in-place |
+
+**When to use `--watch`:** If you only need to update `.visor.yaml` (e.g., add a check, change a threshold, adjust routing), use `--watch` to auto-reload on file changes — no restart needed:
+
+```bash
+visor --slack --config .visor.yaml --watch
+```
+
+The `--watch` flag monitors the config file for changes and applies them without restarting. This is faster and lighter than a full graceful restart. Use graceful restart (`SIGUSR1`) when you need to pick up new code or binary changes.
+
 ## Signal Reference
 
 | Signal | Behavior |
 |---|---|
-| `SIGUSR1` | Graceful restart (this feature) |
-| `SIGUSR2` | Hot config reload (no restart) |
+| `SIGUSR1` | Graceful restart — spawns new process, drains old |
+| `SIGUSR2` | Hot config reload — reloads `.visor.yaml` in-place (also triggered by `--watch`) |
 | `SIGTERM` | Graceful shutdown (stop + exit) |
 | `SIGINT` | Graceful shutdown (stop + exit) |
 
