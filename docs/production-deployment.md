@@ -527,6 +527,23 @@ visor config restore 1 --output restored.yaml
 
 ## Upgrading
 
+### Graceful Restart (Zero-Disruption)
+
+Visor supports zero-disruption restarts via `SIGUSR1`. The old process stops accepting new work, a new process spawns, and the old process waits for all in-flight work to complete before exiting. Both processes run in parallel during the transition.
+
+```bash
+# Deploy new code, then trigger graceful restart
+kill -USR1 $(pgrep -f visor)
+
+# Kubernetes
+kubectl exec -n visor deploy/visor -- kill -USR1 1
+
+# Docker
+docker kill --signal=USR1 visor
+```
+
+By default, the old process waits **indefinitely** for active conversations and requests to complete. See [Graceful Restart Guide](./guides/graceful-restart.md) for full configuration options.
+
 ### Rolling Update (Kubernetes)
 
 ```bash

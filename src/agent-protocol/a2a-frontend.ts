@@ -399,6 +399,45 @@ export class A2AFrontend implements ActiveFrontend {
     }
   }
 
+  /**
+   * Stop listening for new connections and free the port.
+   * In-flight tasks continue processing.
+   */
+  async stopListening(): Promise<void> {
+    if (this.server) {
+      const srv = this.server;
+      if (typeof (srv as any).closeAllConnections === 'function') {
+        (srv as any).closeAllConnections();
+      }
+      await new Promise<void>(resolve => srv.close(() => resolve()));
+      this.server = null;
+    }
+  }
+
+  /**
+   * Drain: stop accepting new tasks, wait for in-flight tasks to complete.
+   * @param timeoutMs - Max wait time. 0 = unlimited (default).
+   */
+  async drain(timeoutMs = 0): Promise<void> {
+    await this.stopListening();
+
+    // Wait for the task queue to finish active tasks
+    if (this.taskQueue) {
+      this.taskQueue.stop();
+      const startedAt = Date.now();
+      while (this.taskQueue.getActiveCount() > 0) {
+        if (timeoutMs > 0 && Date.now() - startedAt >= timeoutMs) {
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      this.taskQueue = null;
+    }
+
+    this.stopCleanupSweep();
+    this.streamManager.shutdown();
+  }
+
   async stop(): Promise<void> {
     this.stopCleanupSweep();
     if (this.taskQueue) {

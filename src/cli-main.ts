@@ -1846,6 +1846,29 @@ export async function main(): Promise<void> {
         onShutdown(sig);
       });
 
+      // Graceful restart via SIGUSR1
+      if (process.platform !== 'win32') {
+        const { GracefulRestartManager } = await import('./runners/graceful-restart');
+        const restartManager = new GracefulRestartManager(host, config.graceful_restart);
+        // Register cleanup callbacks for resources outside RunnerHost
+        restartManager.onCleanup(async () => {
+          if (configWatcher) configWatcher.stop();
+          if (configWatchStore) await configWatchStore.shutdown().catch(() => {});
+          if (sharedTaskStore) await sharedTaskStore.shutdown().catch(() => {});
+        });
+        process.on('SIGUSR1', () => {
+          restartManager.initiateRestart().catch(err => {
+            logger.error(`[GracefulRestart] Failed: ${err}`);
+          });
+        });
+        logger.info('[GracefulRestart] Send SIGUSR1 to gracefully restart');
+      }
+
+      // If spawned by a previous instance for graceful restart, signal readiness
+      if (process.send) {
+        process.send({ type: 'ready' });
+      }
+
       process.stdin.resume();
       return;
     }

@@ -62,6 +62,7 @@ export class SlackSocketRunner implements Runner {
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private lastPong = 0;
   private closing = false; // prevent duplicate reconnects
+  private draining = false; // drain mode: reject new work, wait for in-flight
   private taskStore?: import('../agent-protocol/task-store').TaskStore;
   private configPath?: string;
   private staleTaskTimer?: ReturnType<typeof setInterval>;
@@ -488,6 +489,28 @@ export class SlackSocketRunner implements Runner {
     }
     if (env.type === 'hello') return;
     if (env.envelope_id) this.send({ envelope_id: env.envelope_id }); // ack ASAP
+
+    // In drain mode, acknowledge messages but don't process new work
+    if (this.draining) {
+      // Still allow disconnect handling for clean shutdown
+      if (env.type === 'disconnect') {
+        // Don't reconnect during drain
+        return;
+      }
+      // Optionally notify the user that the bot is restarting
+      const ev = env.payload?.event;
+      if (ev?.channel && ev?.ts) {
+        try {
+          await this.ensureClient();
+          await this.client?.chat.postMessage({
+            channel: String(ev.channel),
+            thread_ts: String(ev.thread_ts || ev.ts),
+            text: ':hourglass: The bot is restarting. Please retry your message shortly.',
+          });
+        } catch {}
+      }
+      return;
+    }
 
     // Handle Slack disconnect events — proactively reconnect before the connection dies
     if (env.type === 'disconnect') {
@@ -1344,6 +1367,64 @@ export class SlackSocketRunner implements Runner {
     }
 
     return blocks;
+  }
+
+  /**
+   * Stop listening for new messages. Closes the WebSocket and stops the scheduler,
+   * but does NOT wait for in-flight work to complete. Frees the connection so
+   * a new process can connect to Slack immediately.
+   */
+  async stopListening(): Promise<void> {
+    this.draining = true;
+    logger.info(
+      `[SlackSocket] Stopping listener (${this.activeThreads.size} active thread(s) will continue)`
+    );
+
+    // Stop the scheduler — no new scheduled jobs
+    if (this.genericScheduler) {
+      try {
+        await this.genericScheduler.stop();
+      } catch {}
+    }
+
+    // Stop stale task sweep timer
+    if (this.staleTaskTimer) {
+      clearInterval(this.staleTaskTimer);
+      this.staleTaskTimer = undefined;
+    }
+
+    // Close WebSocket so new process can connect to Slack
+    this.closing = true;
+    this.closeWebSocket();
+  }
+
+  /**
+   * Enter drain mode: stop accepting new messages, wait for active threads to complete.
+   * @param timeoutMs - Max wait time. 0 = unlimited (default).
+   */
+  async drain(timeoutMs = 0): Promise<void> {
+    // If stopListening wasn't called yet, do it now
+    if (!this.draining) {
+      await this.stopListening();
+    }
+
+    logger.info(
+      `[SlackSocket] Draining (${this.activeThreads.size} active thread(s), timeout=${timeoutMs || 'unlimited'})`
+    );
+
+    // Wait for all active threads to complete
+    const startedAt = Date.now();
+    while (this.activeThreads.size > 0) {
+      if (timeoutMs > 0 && Date.now() - startedAt >= timeoutMs) {
+        logger.warn(
+          `[SlackSocket] Drain timeout reached with ${this.activeThreads.size} active thread(s) remaining`
+        );
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    logger.info('[SlackSocket] Drain complete');
   }
 
   /**

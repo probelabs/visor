@@ -37,6 +37,7 @@ export class WhatsAppWebhookRunner implements Runner {
   private host: string;
   private taskStore?: import('../agent-protocol/task-store').TaskStore;
   private configPath?: string;
+  private activeRequests = 0;
 
   constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: WhatsAppWebhookConfig) {
     const token = opts.accessToken || process.env.WHATSAPP_ACCESS_TOKEN || '';
@@ -129,6 +130,37 @@ export class WhatsAppWebhookRunner implements Runner {
     });
   }
 
+  async stopListening(): Promise<void> {
+    if (this.server) {
+      const srv = this.server;
+      if (typeof (srv as any).closeAllConnections === 'function') {
+        (srv as any).closeAllConnections();
+      }
+      await new Promise<void>(resolve => srv.close(() => resolve()));
+      this.server = undefined;
+    }
+    logger.info('[WhatsAppWebhook] Server closed');
+  }
+
+  async drain(timeoutMs = 0): Promise<void> {
+    if (this.server) {
+      this.server.close();
+      this.server = undefined;
+    }
+    logger.info(`[WhatsAppWebhook] Draining (${this.activeRequests} active)`);
+    const startedAt = Date.now();
+    while (this.activeRequests > 0) {
+      if (timeoutMs > 0 && Date.now() - startedAt >= timeoutMs) {
+        logger.warn(
+          `[WhatsAppWebhook] Drain timeout with ${this.activeRequests} active request(s)`
+        );
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    logger.info('[WhatsAppWebhook] Drain complete');
+  }
+
   async stop(): Promise<void> {
     if (this.server) {
       return new Promise<void>(resolve => {
@@ -186,6 +218,15 @@ export class WhatsAppWebhookRunner implements Runner {
   }
 
   private async handleMessage(msg: WhatsAppMessageInfo): Promise<void> {
+    this.activeRequests++;
+    try {
+      await this.handleMessageInner(msg);
+    } finally {
+      this.activeRequests--;
+    }
+  }
+
+  private async handleMessageInner(msg: WhatsAppMessageInfo): Promise<void> {
     // 1. Skip messages without text content
     if (!msg.text && !msg.caption) return;
 

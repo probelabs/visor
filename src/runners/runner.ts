@@ -22,4 +22,18 @@ export interface Runner {
 
   /** Optionally attach a shared cross-frontend task store. */
   setTaskStore?(store: TaskStore, configPath?: string): void;
+
+  /**
+   * Enter drain mode: stop accepting new work but let in-flight work complete.
+   * Resolves when all in-flight work finishes.
+   * @param timeoutMs - Max wait time in ms. 0 means wait indefinitely (default).
+   */
+  drain?(timeoutMs?: number): Promise<void>;
+
+  /**
+   * Stop listening for new connections/messages (close servers, stop polling).
+   * Does NOT wait for in-flight work to complete — use drain() for that.
+   * This frees ports so a new process can bind immediately.
+   */
+  stopListening?(): Promise<void>;
 }
