@@ -198,6 +198,10 @@ export declare const configSchema: {
                     readonly type: "boolean";
                     readonly description: "Enable cross-frontend task tracking (default: false). When true, all workflow executions (CLI, Slack, TUI, Scheduler) are recorded in a shared SQLite TaskStore visible via `visor tasks`.";
                 };
+                readonly graceful_restart: {
+                    readonly $ref: "#/definitions/GracefulRestartConfig";
+                    readonly description: "Graceful restart configuration";
+                };
             };
             readonly required: readonly ["version"];
             readonly patternProperties: {
@@ -1029,7 +1033,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -1045,7 +1049,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -1730,7 +1734,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1745,13 +1749,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584>': {
+        readonly 'Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };
@@ -3609,6 +3613,32 @@ export declare const configSchema: {
                 };
             };
             readonly additionalProperties: false;
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly GracefulRestartConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly drain_timeout_ms: {
+                    readonly type: "number";
+                    readonly description: "Max time in ms to wait for in-flight work to complete. 0 = unlimited (default).";
+                };
+                readonly child_ready_timeout_ms: {
+                    readonly type: "number";
+                    readonly description: "Max time in ms to wait for the new child process to become ready. Default: 15000.";
+                };
+                readonly notify_users: {
+                    readonly type: "boolean";
+                    readonly description: "Send \"restarting\" messages to active conversations. Default: true.";
+                };
+                readonly restart_command: {
+                    readonly type: "string";
+                    readonly description: "Override the command used to spawn the new process. If not set, auto-detects: npx re-invokes npx, direct execution re-spawns same binary.";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Graceful restart configuration";
             readonly patternProperties: {
                 readonly '^x-': {};
             };

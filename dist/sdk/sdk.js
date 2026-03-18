@@ -14409,6 +14409,10 @@ var init_config_schema = __esm({
             task_tracking: {
               type: "boolean",
               description: "Enable cross-frontend task tracking (default: false). When true, all workflow executions (CLI, Slack, TUI, Scheduler) are recorded in a shared SQLite TaskStore visible via `visor tasks`."
+            },
+            graceful_restart: {
+              $ref: "#/definitions/GracefulRestartConfig",
+              description: "Graceful restart configuration"
             }
           },
           required: ["version"],
@@ -15281,7 +15285,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -15297,7 +15301,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -16025,7 +16029,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -16040,13 +16044,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584>>": {
+        "Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-59584>": {
+        "Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281>": {
           type: "object",
           additionalProperties: false
         },
@@ -17923,6 +17927,32 @@ var init_config_schema = __esm({
             }
           },
           additionalProperties: false,
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        GracefulRestartConfig: {
+          type: "object",
+          properties: {
+            drain_timeout_ms: {
+              type: "number",
+              description: "Max time in ms to wait for in-flight work to complete. 0 = unlimited (default)."
+            },
+            child_ready_timeout_ms: {
+              type: "number",
+              description: "Max time in ms to wait for the new child process to become ready. Default: 15000."
+            },
+            notify_users: {
+              type: "boolean",
+              description: 'Send "restarting" messages to active conversations. Default: true.'
+            },
+            restart_command: {
+              type: "string",
+              description: "Override the command used to spawn the new process. If not set, auto-detects: npx re-invokes npx, direct execution re-spawns same binary."
+            }
+          },
+          additionalProperties: false,
+          description: "Graceful restart configuration",
           patternProperties: {
             "^x-": {}
           }
@@ -72859,6 +72889,40 @@ var init_a2a_frontend = __esm({
             }
           }
         }
+      }
+      /**
+       * Stop listening for new connections and free the port.
+       * In-flight tasks continue processing.
+       */
+      async stopListening() {
+        if (this.server) {
+          const srv = this.server;
+          if (typeof srv.closeAllConnections === "function") {
+            srv.closeAllConnections();
+          }
+          await new Promise((resolve17) => srv.close(() => resolve17()));
+          this.server = null;
+        }
+      }
+      /**
+       * Drain: stop accepting new tasks, wait for in-flight tasks to complete.
+       * @param timeoutMs - Max wait time. 0 = unlimited (default).
+       */
+      async drain(timeoutMs = 0) {
+        await this.stopListening();
+        if (this.taskQueue) {
+          this.taskQueue.stop();
+          const startedAt = Date.now();
+          while (this.taskQueue.getActiveCount() > 0) {
+            if (timeoutMs > 0 && Date.now() - startedAt >= timeoutMs) {
+              break;
+            }
+            await new Promise((resolve17) => setTimeout(resolve17, 500));
+          }
+          this.taskQueue = null;
+        }
+        this.stopCleanupSweep();
+        this.streamManager.shutdown();
       }
       async stop() {
         this.stopCleanupSweep();
