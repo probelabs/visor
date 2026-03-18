@@ -216,6 +216,18 @@ export const configSchema = {
           $ref: '#/definitions/GracefulRestartConfig',
           description: 'Graceful restart configuration',
         },
+        task_evaluate: {
+          anyOf: [
+            {
+              type: 'boolean',
+            },
+            {
+              $ref: '#/definitions/TaskEvaluateConfig',
+            },
+          ],
+          description:
+            'Automatically evaluate completed tasks using an LLM judge. Requires task_tracking to be enabled. Runs asynchronously after task completion. Set to `true` for defaults, or provide an object to configure.',
+        },
       },
       required: ['version'],
       patternProperties: {
@@ -1123,7 +1135,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1140,7 +1152,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1884,7 +1896,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1899,14 +1911,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281>>':
+    'Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281>': {
+    'Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047>': {
       type: 'object',
       additionalProperties: false,
     },
@@ -3828,6 +3840,34 @@ export const configSchema = {
       },
       additionalProperties: false,
       description: 'Graceful restart configuration',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    TaskEvaluateConfig: {
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'boolean',
+          description: 'Enable auto-evaluation (default: true when config object is present)',
+        },
+        model: {
+          type: 'string',
+          description:
+            'LLM model to use for evaluation (e.g. "gemini-2.5-flash", "claude-sonnet-4-5")',
+        },
+        provider: {
+          type: 'string',
+          description: 'AI provider: google, openai, anthropic',
+        },
+        prompt: {
+          type: 'string',
+          description:
+            'Custom system prompt for the evaluator (overrides the default evaluation prompt)',
+        },
+      },
+      additionalProperties: false,
+      description: 'Configuration for automatic task evaluation via LLM judge.',
       patternProperties: {
         '^x-': {},
       },

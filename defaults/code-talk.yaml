@@ -136,18 +136,59 @@ outputs:
     value_js: |
       const result = outputs?.['explore-code'];
       if (result?.answer) return result.answer;
-      const routeOutput = outputs?.['setup-projects']?.routing_decision;
-      // Handle proper notes field
-      const routeNotes = routeOutput?.notes;
-      if (typeof routeNotes === 'string' && routeNotes.trim().length > 0) {
-        return { text: routeNotes };
+      const resultText = typeof result?.text === 'string' ? result.text.trim() : '';
+      if (resultText.length > 0) {
+        return { text: resultText };
       }
-      // Fallback: if AI returned {text: "..."} instead of proper schema
-      const routeText = routeOutput?.text;
-      if (typeof routeText === 'string' && routeText.trim().length > 0) {
-        return { text: routeText };
+      const routeNotes = outputs?.['setup-projects']?.routing_decision?.notes;
+      const checkoutProjects = outputs?.['setup-projects']?.checkout_projects;
+      if (
+        (!Array.isArray(checkoutProjects) || checkoutProjects.length === 0) &&
+        typeof routeNotes === 'string' &&
+        routeNotes.trim().length > 0
+      ) {
+        return { text: routeNotes.trim() };
       }
-      return null;
+      return { text: 'Code exploration did not produce an answer.' };
+
+  - name: exploration_status
+    description: Outcome of the exploration step
+    value_js: |
+      const result = outputs?.['explore-code'];
+      if (result?.answer?.text) return 'success';
+      const resultText = typeof result?.text === 'string' ? result.text.trim() : '';
+      if (resultText.length > 0) {
+        if (/timed out/i.test(resultText)) return 'timeout';
+        return 'failed';
+      }
+      const routeNotes = outputs?.['setup-projects']?.routing_decision?.notes;
+      const checkoutProjects = outputs?.['setup-projects']?.checkout_projects;
+      if (
+        (!Array.isArray(checkoutProjects) || checkoutProjects.length === 0) &&
+        typeof routeNotes === 'string' &&
+        routeNotes.trim().length > 0
+      ) {
+        return 'no_projects';
+      }
+      return 'failed';
+
+  - name: exploration_error
+    description: Timeout or failure detail when exploration did not return a real answer
+    value_js: |
+      const result = outputs?.['explore-code'];
+      if (result?.answer?.text) return '';
+      const resultText = typeof result?.text === 'string' ? result.text.trim() : '';
+      if (resultText.length > 0) return resultText;
+      const routeNotes = outputs?.['setup-projects']?.routing_decision?.notes;
+      const checkoutProjects = outputs?.['setup-projects']?.checkout_projects;
+      if (
+        (!Array.isArray(checkoutProjects) || checkoutProjects.length === 0) &&
+        typeof routeNotes === 'string' &&
+        routeNotes.trim().length > 0
+      ) {
+        return routeNotes.trim();
+      }
+      return 'Code exploration did not produce an answer.';
 
   - name: references
     description: Code/doc references from exploration
@@ -174,11 +215,20 @@ outputs:
       const result = outputs?.['explore-code'];
       const confidence = result?.confidence;
       const reason = result?.confidence_reason;
-      if (typeof reason === 'string') return reason;
+      if (typeof reason === 'string' && reason.trim().length > 0) return reason;
       if (confidence === 'high') return '';
+      const resultText = typeof result?.text === 'string' ? result.text.trim() : '';
+      if (resultText.length > 0) return resultText;
       const routeNotes = outputs?.['setup-projects']?.routing_decision?.notes;
-      if (typeof routeNotes === 'string' && routeNotes.trim().length > 0) return routeNotes;
-      return 'No confidence explanation was provided by explore-code.';
+      const checkoutProjects = outputs?.['setup-projects']?.checkout_projects;
+      if (
+        (!Array.isArray(checkoutProjects) || checkoutProjects.length === 0) &&
+        typeof routeNotes === 'string' &&
+        routeNotes.trim().length > 0
+      ) {
+        return routeNotes.trim();
+      }
+      return 'Code exploration did not produce an answer.';
 
   - name: projects_explored
     description: Which project IDs were checked out
@@ -261,7 +311,7 @@ steps:
       skip_code_context: true
       enableDelegate: true
       enableExecutePlan: false
-      max_iterations: 50
+      max_iterations: 100
       prompt_type: code-explorer
       allowBash: true
       bashConfig:
@@ -415,8 +465,17 @@ steps:
       - Each delegate should answer ONE specific question (not "look at the code")
       - Run multiple delegates in PARALLEL for different hypotheses or components
       - Ask delegates to return specific file paths and line numbers
+      - Do NOT delegate or re-search the same question twice in one investigation
+      - If a delegate returns enough evidence for the current claim, stop and use it
 
       Relay complete data from tools — do not summarize or compress tool output.
+
+      Investigation scope:
+      - Stop once you have enough evidence to answer the question accurately
+      - If this is an implementation handoff for engineer, optimize for the minimum
+        sufficient handoff: repo, branch/ref, target files, relevant tests, and the
+        key evidence explaining why those files matter
+      - Prefer one search followed by targeted extract over repeated broad searches
       </instructions>
 
       {% if inputs.exploration_prompt %}
@@ -467,6 +526,13 @@ steps:
       For each project in <projects>, use search/extract tools to find the relevant
       implementation, then consult docs to confirm semantics. When multiple projects
       are involved, trace data and config flow across them.
+
+      Efficiency rules for this investigation:
+      - Reuse evidence already found in earlier tool results
+      - If the question is narrow and the relevant files are already identified,
+        stop exploring and answer
+      - If the next consumer is engineer, avoid broad code archaeology once the
+        implementation target and validation path are clear
 
       Synthesize a single answer:
       - Ground everything in code/docs evidence

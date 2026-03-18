@@ -29,6 +29,11 @@ knowledge: |
   - If confidence "high", trust the answer — do NOT re-call with rephrased question
   - Only call again for a genuinely DIFFERENT aspect of the codebase
   - If confidence "medium" or "low", check confidence_reason for what to refine
+  - If `exploration_status` is `timeout`, `failed`, or `no_projects`, do NOT re-call
+    with a paraphrase of the same question. Report the failure honestly and only retry
+    if you can narrow the question or change the scope.
+  - If `references` is empty and confidence is low, treat that as "not answered yet",
+    not as a usable code answer.
 
   ## Usage Instructions
   1. Call the `code-explorer` tool with the user's question — do NOT try to answer code questions yourself

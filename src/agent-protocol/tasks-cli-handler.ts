@@ -1,51 +1,15 @@
 /**
- * CLI command handlers for A2A task monitoring
+ * CLI command handlers for A2A task monitoring.
  *
- * Commands:
- *   visor tasks                            - List all tasks (alias for list)
- *   visor tasks list [--state X] [--agent] - List tasks with filters
- *   visor tasks stats                      - Queue summary stats
- *   visor tasks cancel <task-id>           - Cancel a task
- *   visor tasks help                       - Show usage
+ * Uses Commander.js for proper --help, error reporting, and option parsing.
  */
+import { Command } from 'commander';
 import CliTable3 from 'cli-table3';
 import { configureLoggerFromCli } from '../logger';
 import { getInstanceId } from '../utils/instance-id';
 import { SqliteTaskStore, type ListTasksFilter, type TaskQueueRow } from './task-store';
 import type { TaskState } from './types';
 import { isValidTaskState, isTerminalState } from './state-transitions';
-
-// ---------------------------------------------------------------------------
-// Arg parser (same pattern as config/cli-handler.ts)
-// ---------------------------------------------------------------------------
-
-function parseArgs(argv: string[]): {
-  subcommand: string;
-  positional: string[];
-  flags: Record<string, string | boolean>;
-} {
-  const subcommand = argv[0] || 'list';
-  const positional: string[] = [];
-  const flags: Record<string, string | boolean> = {};
-
-  for (let i = 1; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg.startsWith('--')) {
-      const key = arg.slice(2);
-      const next = argv[i + 1];
-      if (next && !next.startsWith('--')) {
-        flags[key] = next;
-        i++;
-      } else {
-        flags[key] = true;
-      }
-    } else if (!arg.startsWith('-')) {
-      positional.push(arg);
-    }
-  }
-
-  return { subcommand, positional, flags };
-}
 
 // ---------------------------------------------------------------------------
 // DB wrapper
@@ -275,6 +239,15 @@ async function handleList(flags: Record<string, string | boolean>): Promise<void
   const filter = buildFilter(flags);
   const output = typeof flags.output === 'string' ? flags.output : 'table';
 
+  // Interactive TUI mode: --tui flag or auto-detect when stdout is a TTY and no output format specified
+  const useTUI = flags.tui === true || (process.stdout.isTTY && !flags.output && !flags.watch);
+
+  if (useTUI) {
+    const { runTasksTUI } = await import('./tasks-tui');
+    await runTasksTUI(filter);
+    return;
+  }
+
   const instanceId = getInstanceId();
 
   const render = async () => {
@@ -283,9 +256,52 @@ async function handleList(flags: Record<string, string | boolean>): Promise<void
 
       const activeOnly = !flags.all && !flags.state;
       if (output === 'json') {
+        // Enhanced JSON: include pagination info and response data for each task
+        const limit = filter.limit ?? 20;
+        const offset = filter.offset ?? 0;
+        const page = Math.floor(offset / limit) + 1;
+        const totalPages = Math.ceil(total / limit);
+
+        // Enrich tasks with response data from the full task record
+        const enrichedTasks = rows.map(row => {
+          const fullTask = store.getTask(row.id);
+          const enriched: Record<string, unknown> = { ...row };
+
+          // Add response text from status_message
+          if (fullTask?.status?.message) {
+            const parts = fullTask.status.message.parts ?? [];
+            const textPart = parts.find((p: any) => typeof p.text === 'string');
+            if (textPart) {
+              enriched.response = (textPart as any).text;
+            }
+            enriched.status_message = fullTask.status.message;
+          }
+
+          // Add history and artifacts counts
+          if (fullTask) {
+            enriched.history_count = fullTask.history?.length ?? 0;
+            enriched.artifacts_count = fullTask.artifacts?.length ?? 0;
+          }
+
+          return enriched;
+        });
+
         console.log(
           JSON.stringify(
-            { instance_id: instanceId, active_only: activeOnly, tasks: rows, total },
+            {
+              instance_id: instanceId,
+              active_only: activeOnly,
+              tasks: enrichedTasks,
+              total,
+              pagination: {
+                page,
+                per_page: limit,
+                total_pages: totalPages,
+                offset,
+                has_next: page < totalPages,
+                has_prev: page > 1,
+              },
+            },
             null,
             2
           )
@@ -474,7 +490,38 @@ async function handleShow(
     }
 
     if (output === 'json') {
-      console.log(JSON.stringify(match, null, 2));
+      // Enhanced JSON: include full task data with response, history, artifacts
+      const fullTask = store.getTask(match.id);
+      const enriched: Record<string, unknown> = { ...match };
+
+      if (fullTask) {
+        // Add response text from status_message
+        if (fullTask.status?.message) {
+          const parts = fullTask.status.message.parts ?? [];
+          const textPart = parts.find((p: any) => typeof p.text === 'string');
+          if (textPart) {
+            enriched.response = (textPart as any).text;
+          }
+          enriched.status_message = fullTask.status.message;
+        }
+
+        // Add full history and artifacts
+        enriched.history = fullTask.history ?? [];
+        enriched.artifacts = fullTask.artifacts ?? [];
+
+        // Include stored evaluation if present
+        const evalArtifact = (fullTask.artifacts ?? []).find((a: any) => a.name === 'evaluation');
+        if (evalArtifact) {
+          try {
+            const textPart = evalArtifact.parts?.find((p: any) => typeof p.text === 'string');
+            if (textPart) {
+              enriched.evaluation = JSON.parse((textPart as any).text);
+            }
+          } catch {}
+        }
+      }
+
+      console.log(JSON.stringify(enriched, null, 2));
       return;
     }
 
@@ -515,6 +562,32 @@ async function handleShow(
       }
     }
 
+    // Show stored evaluation if present
+    const evalArtifact = (fullTask?.artifacts ?? []).find((a: any) => a.name === 'evaluation');
+    if (evalArtifact) {
+      try {
+        const evalTextPart = evalArtifact.parts?.find((p: any) => typeof p.text === 'string');
+        if (evalTextPart) {
+          const evaluation = JSON.parse((evalTextPart as any).text);
+          const rq = evaluation.response_quality;
+          detailTable.push({
+            Evaluation: `${evaluation.overall_rating}/5 — ${evaluation.summary}`,
+          });
+          if (rq) {
+            detailTable.push({
+              'Response Quality': `${rq.rating}/5 (${rq.category}) — ${rq.reasoning}`,
+            });
+          }
+          if (evaluation.execution_quality) {
+            const eq = evaluation.execution_quality;
+            detailTable.push({
+              'Execution Quality': `${eq.rating}/5 (${eq.category}) — ${eq.reasoning}`,
+            });
+          }
+        }
+      } catch {}
+    }
+
     // Show metadata
     const meta = match.metadata;
     const metaKeys = Object.keys(meta).filter(k => k !== 'source');
@@ -550,92 +623,386 @@ async function handlePurge(flags: Record<string, string | boolean>): Promise<voi
 }
 
 // ---------------------------------------------------------------------------
-// Help
+// Subcommand: evaluate
 // ---------------------------------------------------------------------------
 
-function printHelp(): void {
-  console.log(`
-Visor Tasks - Monitor and manage agent tasks
+async function handleEvaluate(
+  positional: string[],
+  flags: Record<string, string | boolean>
+): Promise<void> {
+  const output = typeof flags.output === 'string' ? flags.output : 'table';
 
-USAGE:
-  visor tasks [command] [options]
+  // Batch mode: --last N
+  if (typeof flags.last === 'string') {
+    const n = parseInt(flags.last, 10);
+    if (isNaN(n) || n < 1) {
+      console.error('Invalid --last value. Use a positive integer.');
+      process.exitCode = 1;
+      return;
+    }
 
-COMMANDS:
-  list                            List active tasks (default)
-  show <task-id>                  Show task details (supports prefix match)
-  stats                           Queue summary statistics
-  cancel <task-id>                Cancel a task
-  purge [--age 7d]                Delete old completed/failed tasks
-  help                            Show this help
+    await withTaskStore(async store => {
+      const filter: ListTasksFilter = {
+        state:
+          typeof flags.state === 'string' && isValidTaskState(flags.state)
+            ? [flags.state as TaskState]
+            : ['completed'],
+        limit: n,
+      };
+      const { rows } = store.listTasksRaw(filter);
 
-OPTIONS:
-  --all                           Show all tasks including completed/failed history
-  --state <state>                 Filter by state: submitted, working, completed, failed, canceled
-  --search <text>                 Search tasks by input text
-  --instance <id>                 Filter by visor instance ID
-  --agent <workflow-id>           Filter by agent/workflow
-  --limit <n>                     Number of tasks per page (default: 20)
-  --page <n>                      Page number for pagination
-  --output <format>               Output format: table (default), json, markdown
-  --watch                         Refresh every 2 seconds
+      if (rows.length === 0) {
+        console.log('No tasks found to evaluate.');
+        return;
+      }
 
-EXAMPLES:
-  visor tasks                     List active tasks only
-  visor tasks --all               List all tasks including history
-  visor tasks --state failed      Show failed tasks
-  visor tasks --search "auth"     Search tasks by text
-  visor tasks show abc123         Show full task details
-  visor tasks list --watch        Live monitoring
-  visor tasks stats               Show queue statistics
-  visor tasks cancel abc123       Cancel a task
-  visor tasks purge --age 30d     Delete tasks older than 30 days
-`);
+      const { evaluateAndStore } = await import('./task-evaluator');
+      const evalConfig = buildEvalConfig(flags);
+
+      const results: Array<{ id: string; rating: number; category: string; summary: string }> = [];
+
+      for (const row of rows) {
+        try {
+          console.error(`Evaluating ${row.id.slice(0, 8)}...`);
+          const result = await evaluateAndStore(row.id, store, evalConfig);
+          results.push({
+            id: row.id.slice(0, 8),
+            rating: result.overall_rating,
+            category: result.response_quality.category,
+            summary: result.summary,
+          });
+        } catch (err) {
+          results.push({
+            id: row.id.slice(0, 8),
+            rating: 0,
+            category: 'error',
+            summary: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      if (output === 'json') {
+        console.log(JSON.stringify(results, null, 2));
+      } else {
+        const CliTable3 = (await import('cli-table3')).default;
+        const table = new CliTable3({
+          head: ['ID', 'Rating', 'Category', 'Summary'],
+          style: { head: ['cyan', 'bold'], border: ['grey'] },
+          colWidths: [10, 8, 12, 60],
+          wordWrap: true,
+        });
+        for (const r of results) {
+          table.push([r.id, ratingDisplay(r.rating), r.category, r.summary]);
+        }
+        console.log(table.toString());
+      }
+    });
+    return;
+  }
+
+  // Single task mode
+  const taskId = positional[0];
+  if (!taskId) {
+    console.error('Usage: visor tasks evaluate <task-id> [--model X] [--provider Y]');
+    console.error('       visor tasks evaluate --last N [--state completed]');
+    process.exitCode = 1;
+    return;
+  }
+
+  await withTaskStore(async store => {
+    const { evaluateAndStore } = await import('./task-evaluator');
+    const evalConfig = buildEvalConfig(flags);
+
+    try {
+      const result = await evaluateAndStore(taskId, store, evalConfig);
+
+      if (output === 'json') {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        const CliTable3 = (await import('cli-table3')).default;
+        const table = new CliTable3({
+          style: { head: ['cyan', 'bold'], border: ['grey'] },
+          wordWrap: true,
+        });
+
+        table.push(
+          { 'Overall Rating': ratingDisplay(result.overall_rating) },
+          { Summary: result.summary },
+          {
+            'Response Rating': `${ratingDisplay(result.response_quality.rating)} (${result.response_quality.category})`,
+          },
+          { Relevance: result.response_quality.relevance ? '✓' : '✗' },
+          { Completeness: result.response_quality.completeness ? '✓' : '✗' },
+          { Actionable: result.response_quality.actionable ? '✓' : '✗' },
+          { 'Response Reasoning': result.response_quality.reasoning }
+        );
+
+        if (result.execution_quality) {
+          table.push(
+            {
+              'Execution Rating': `${ratingDisplay(result.execution_quality.rating)} (${result.execution_quality.category})`,
+            },
+            { 'Execution Reasoning': result.execution_quality.reasoning }
+          );
+          if (result.execution_quality.unnecessary_tool_calls !== undefined) {
+            table.push({
+              'Unnecessary Tool Calls': String(result.execution_quality.unnecessary_tool_calls),
+            });
+          }
+        }
+
+        console.log(table.toString());
+      }
+    } catch (err) {
+      console.error(`Evaluation failed: ${err instanceof Error ? err.message : err}`);
+      process.exitCode = 1;
+    }
+  });
+}
+
+function buildEvalConfig(flags: Record<string, string | boolean>) {
+  return {
+    model: typeof flags.model === 'string' ? flags.model : undefined,
+    provider: typeof flags.provider === 'string' ? flags.provider : undefined,
+    prompt: typeof flags.prompt === 'string' ? flags.prompt : undefined,
+  };
+}
+
+function ratingDisplay(rating: number): string {
+  if (rating <= 0) return '-';
+  const stars = '★'.repeat(rating) + '☆'.repeat(5 - rating);
+  return `${rating}/5 ${stars}`;
 }
 
 // ---------------------------------------------------------------------------
-// Entry point
+// Subcommand: trace
 // ---------------------------------------------------------------------------
 
-export async function handleTasksCommand(argv: string[]): Promise<void> {
-  const { subcommand, positional, flags } = parseArgs(argv);
+async function handleTrace(
+  positional: string[],
+  flags: Record<string, string | boolean>
+): Promise<void> {
+  const taskId = positional[0];
+  if (!taskId) {
+    console.error('Usage: visor tasks trace <task-id>');
+    process.exitCode = 1;
+    return;
+  }
 
+  const output = typeof flags.output === 'string' ? flags.output : 'tree';
+
+  await withTaskStore(async store => {
+    const match = findTaskByPrefix(store, taskId);
+    if (!match) {
+      console.error(`Task not found: ${taskId}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const traceId = match.metadata?.trace_id as string | undefined;
+    const traceFile = match.metadata?.trace_file as string | undefined;
+
+    if (!traceId && !traceFile) {
+      console.error('No trace information available for this task.');
+      process.exitCode = 1;
+      return;
+    }
+
+    const { serializeTraceForPrompt, fetchTraceSpans } = await import('./trace-serializer');
+
+    // Use trace file path if available, otherwise use trace ID
+    // (auto-detects backend: Grafana Tempo, Jaeger, or local files)
+    const traceRef = traceFile || traceId!;
+
+    if (output === 'json') {
+      const spans = await fetchTraceSpans(traceId!, {
+        traceDir: typeof flags['trace-dir'] === 'string' ? flags['trace-dir'] : undefined,
+      });
+      if (spans.length === 0) {
+        console.error(`No trace data found for trace_id=${traceId?.slice(0, 16)}`);
+        console.error('Tried: Grafana Tempo, Jaeger, local NDJSON files');
+        process.exitCode = 1;
+        return;
+      }
+      const totalDuration =
+        Math.max(...spans.map(s => s.endTimeMs)) - Math.min(...spans.map(s => s.startTimeMs));
+      console.log(
+        JSON.stringify(
+          {
+            trace_id: traceId,
+            total_spans: spans.length,
+            duration_ms: Math.round(totalDuration),
+            spans: spans.map(s => ({
+              name: s.name,
+              duration_ms: Math.round(s.durationMs),
+              parent: s.parentSpanId?.slice(0, 8) || null,
+              attributes: s.attributes,
+            })),
+          },
+          null,
+          2
+        )
+      );
+    } else {
+      const maxChars = flags.full ? 1_000_000 : 8000;
+
+      // Get the task's final response from the task store (not truncated by OTEL)
+      const fullTask = store.getTask(match.id);
+      let taskResponse: string | undefined;
+      if (fullTask?.status?.message) {
+        const parts = fullTask.status.message.parts ?? [];
+        const textPart = parts.find((p: any) => typeof p.text === 'string');
+        if (textPart) taskResponse = (textPart as any).text;
+      }
+
+      const tree = await serializeTraceForPrompt(traceRef, maxChars, undefined, taskResponse);
+      if (tree === '(no trace data available)') {
+        console.error(`No trace data found for trace_id=${traceId?.slice(0, 16)}`);
+        console.error('Tried: Grafana Tempo, Jaeger, local NDJSON files');
+        console.error('Set GRAFANA_URL, JAEGER_URL, or VISOR_TRACE_BACKEND to configure.');
+        process.exitCode = 1;
+        return;
+      }
+      console.log(tree);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Commander-based entry point
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert Commander options object → legacy flags Record for handler compatibility.
+ */
+function optsToFlags(opts: Record<string, any>): Record<string, string | boolean> {
+  const flags: Record<string, string | boolean> = {};
+  for (const [k, v] of Object.entries(opts)) {
+    if (v === undefined) continue;
+    flags[k] = v;
+  }
+  return flags;
+}
+
+function configureLogger(opts: Record<string, any>): void {
   configureLoggerFromCli({
     output: 'table',
-    debug: flags.debug === true || process.env.VISOR_DEBUG === 'true',
-    verbose: flags.verbose === true,
+    debug: opts.debug === true || process.env.VISOR_DEBUG === 'true',
+    verbose: opts.verbose === true,
     quiet: true, // suppress logger noise for CLI output
   });
+}
 
-  switch (subcommand) {
-    case 'list':
-      await handleList(flags);
-      break;
-    case 'show':
-      await handleShow(positional, flags);
-      break;
-    case 'stats':
-      await handleStats(flags);
-      break;
-    case 'cancel':
-      await handleCancel(positional, flags);
-      break;
-    case 'purge':
-      await handlePurge(flags);
-      break;
-    case 'help':
-      printHelp();
-      break;
-    default:
-      // Default: if first arg looks like a flag, treat as 'list' with flags
-      if (subcommand.startsWith('--')) {
-        const mergedFlags = { ...flags };
-        // Re-parse with 'list' as subcommand
-        const reparsed = parseArgs(['list', ...argv]);
-        Object.assign(mergedFlags, reparsed.flags);
-        await handleList(mergedFlags);
-      } else {
-        printHelp();
+export async function handleTasksCommand(argv: string[]): Promise<void> {
+  const program = new Command('tasks')
+    .description('Monitor and manage agent tasks')
+    .option('--debug', 'Enable debug logging')
+    .option('--verbose', 'Enable verbose logging');
+
+  // --- list (default) ---
+  program
+    .command('list', { isDefault: true })
+    .description('List tasks (interactive TUI in TTY)')
+    .option('--all', 'Show all tasks including completed/failed history')
+    .option('--state <state>', 'Filter by state: submitted, working, completed, failed, canceled')
+    .option('--search <text>', 'Search tasks by input text')
+    .option('--instance <id>', 'Filter by visor instance ID')
+    .option('--agent <workflow-id>', 'Filter by agent/workflow')
+    .option('--limit <n>', 'Number of tasks per page (default: 20)')
+    .option('--page <n>', 'Page number')
+    .option('--output <format>', 'Output format: table, json, markdown')
+    .option('--tui', 'Force interactive TUI mode')
+    .option('--watch', 'Refresh every 2 seconds (non-interactive)')
+    .action(async opts => {
+      configureLogger(opts);
+      await handleList(optsToFlags(opts));
+    });
+
+  // --- show ---
+  program
+    .command('show <task-id>')
+    .description('Show task details (supports prefix match)')
+    .option('--output <format>', 'Output format: table, json')
+    .action(async (taskId, opts) => {
+      configureLogger(opts);
+      await handleShow([taskId], optsToFlags(opts));
+    });
+
+  // --- stats ---
+  program
+    .command('stats')
+    .description('Queue summary statistics')
+    .option('--output <format>', 'Output format: table, json')
+    .action(async opts => {
+      configureLogger(opts);
+      await handleStats(optsToFlags(opts));
+    });
+
+  // --- cancel ---
+  program
+    .command('cancel <task-id>')
+    .description('Cancel a running task')
+    .action(async (taskId, opts) => {
+      configureLogger(opts);
+      await handleCancel([taskId], optsToFlags(opts));
+    });
+
+  // --- evaluate ---
+  program
+    .command('evaluate [task-id]')
+    .description('Evaluate task response quality with LLM judge')
+    .option('--model <model>', 'LLM model for evaluation')
+    .option('--provider <provider>', 'AI provider (google, openai, anthropic)')
+    .option('--last <n>', 'Batch evaluate last N tasks')
+    .option('--state <state>', 'Filter by state for batch mode (default: completed)')
+    .option('--prompt <text>', 'Custom evaluation prompt')
+    .option('--output <format>', 'Output format: table, json')
+    .action(async (taskId, opts) => {
+      configureLogger(opts);
+      const flags = optsToFlags(opts);
+      if (!taskId && !flags.last) {
+        console.error('Error: specify a <task-id> or use --last <n> for batch mode');
+        process.exitCode = 1;
+        return;
       }
-      break;
+      await handleEvaluate(taskId ? [taskId] : [], flags);
+    });
+
+  // --- trace ---
+  program
+    .command('trace <task-id>')
+    .description('Show execution trace tree')
+    .option('--full', 'Show full output without truncation')
+    .option('--output <format>', 'Output format: tree, json')
+    .action(async (taskId, opts) => {
+      configureLogger(opts);
+      await handleTrace([taskId], optsToFlags(opts));
+    });
+
+  // --- purge ---
+  program
+    .command('purge')
+    .description('Delete old completed/failed tasks')
+    .option('--age <duration>', 'Maximum age (e.g. 24h, 7d, 30d)', '7d')
+    .action(async opts => {
+      configureLogger(opts);
+      await handlePurge(optsToFlags(opts));
+    });
+
+  // Commander writes help/errors to stdout/stderr and calls process.exit
+  // by default, which is the behavior we want for a CLI tool.
+  program.exitOverride(); // throw instead of process.exit so we can handle it
+  try {
+    await program.parseAsync(argv, { from: 'user' });
+  } catch (err: any) {
+    // Commander throws on --help and --version (exit code 0) and on errors
+    if (err?.exitCode === 0) return; // --help
+    if (err?.code === 'commander.helpDisplayed') return;
+    if (err?.code === 'commander.unknownCommand' || err?.code === 'commander.missingArgument') {
+      // Commander already printed the error
+      process.exitCode = 1;
+      return;
+    }
+    throw err;
   }
 }

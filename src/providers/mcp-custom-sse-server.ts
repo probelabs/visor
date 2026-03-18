@@ -129,6 +129,16 @@ interface SSEConnection {
   id: string;
 }
 
+interface InFlightToolCall {
+  toolName: string;
+  startedAt: number;
+  workspace?: {
+    release(): void;
+  };
+  counted: boolean;
+  released: boolean;
+}
+
 /**
  * Custom MCP Server interface
  */
@@ -155,6 +165,7 @@ export class CustomToolsSSEServer implements CustomMCPServer {
   private workflowContext?: WorkflowToolContext;
   private keepaliveInterval: NodeJS.Timeout | null = null;
   private activeToolCalls: number = 0;
+  private inFlightToolCalls: Set<InFlightToolCall> = new Set();
   private lastActivityAt: number = Date.now();
   private gracefulStopRequested: boolean = false;
   private static readonly KEEPALIVE_INTERVAL_MS = 30000; // 30 seconds
@@ -321,6 +332,69 @@ export class CustomToolsSSEServer implements CustomMCPServer {
     }
   }
 
+  private beginToolCall(
+    toolName: string,
+    workspace?: {
+      acquire(): void;
+      release(): void;
+    }
+  ): InFlightToolCall {
+    if (workspace) {
+      workspace.acquire();
+    }
+
+    const toolCall: InFlightToolCall = {
+      toolName,
+      startedAt: Date.now(),
+      workspace,
+      counted: true,
+      released: false,
+    };
+
+    this.inFlightToolCalls.add(toolCall);
+    this.activeToolCalls++;
+    this.lastActivityAt = Date.now();
+
+    return toolCall;
+  }
+
+  private finalizeToolCall(toolCall: InFlightToolCall, reason: 'completed' | 'forced-stop'): void {
+    if (toolCall.counted) {
+      this.activeToolCalls = Math.max(0, this.activeToolCalls - 1);
+      toolCall.counted = false;
+    }
+
+    if (toolCall.workspace && !toolCall.released) {
+      toolCall.workspace.release();
+      toolCall.released = true;
+    }
+
+    this.inFlightToolCalls.delete(toolCall);
+    this.lastActivityAt = Date.now();
+
+    if (reason === 'forced-stop') {
+      logger.warn(
+        `[CustomToolsSSEServer:${this.sessionId}] Force-released stranded tool call '${toolCall.toolName}' after ${Date.now() - toolCall.startedAt}ms`
+      );
+    }
+  }
+
+  private forceDrainToolCalls(): void {
+    if (this.inFlightToolCalls.size === 0) {
+      if (this.activeToolCalls > 0) {
+        logger.warn(
+          `[CustomToolsSSEServer:${this.sessionId}] Resetting active tool counter with no in-flight records (${this.activeToolCalls})`
+        );
+        this.activeToolCalls = 0;
+      }
+      return;
+    }
+
+    for (const toolCall of Array.from(this.inFlightToolCalls)) {
+      this.finalizeToolCall(toolCall, 'forced-stop');
+    }
+  }
+
   /**
    * Stop the server and cleanup resources
    */
@@ -353,6 +427,7 @@ export class CustomToolsSSEServer implements CustomMCPServer {
         logger.warn(
           `[CustomToolsSSEServer:${this.sessionId}] Drain timeout reached; stopping with ${this.activeToolCalls} active tool call(s)`
         );
+        this.forceDrainToolCalls();
       }
     }
 
@@ -841,14 +916,8 @@ export class CustomToolsSSEServer implements CustomMCPServer {
     toolName: string,
     args: Record<string, unknown>
   ): Promise<MCPToolCallResponse> {
-    // Acquire workspace reference to prevent premature cleanup during tool execution
     const workspace = this.workflowContext?.workspace;
-    if (workspace) {
-      workspace.acquire();
-    }
-
-    this.activeToolCalls++;
-    this.lastActivityAt = Date.now();
+    const toolCall = this.beginToolCall(toolName, workspace);
 
     try {
       if (this.debug) {
@@ -1219,12 +1288,7 @@ export class CustomToolsSSEServer implements CustomMCPServer {
         },
       };
     } finally {
-      this.activeToolCalls = Math.max(0, this.activeToolCalls - 1);
-      this.lastActivityAt = Date.now();
-      // Release workspace reference after tool execution completes
-      if (workspace) {
-        workspace.release();
-      }
+      this.finalizeToolCall(toolCall, 'completed');
     }
   }
 

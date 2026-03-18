@@ -38,6 +38,8 @@ export interface TrackExecutionOptions {
   metadata?: Record<string, unknown>;
   /** Human-readable description of what's being executed */
   messageText: string;
+  /** Run LLM evaluation after task completion (non-blocking). */
+  autoEvaluate?: boolean;
 }
 
 /**
@@ -62,6 +64,9 @@ export async function trackExecution<T>(
     parts: [{ text: messageText }],
   };
 
+  // Capture trace file path if telemetry is writing to a file
+  const traceFile = process.env.VISOR_FALLBACK_TRACE_FILE || undefined;
+
   const task = taskStore.createTask({
     contextId: crypto.randomUUID(),
     requestMessage,
@@ -70,6 +75,7 @@ export async function trackExecution<T>(
       source,
       instance_id: getInstanceId(),
       trace_id: trace.getActiveSpan()?.spanContext().traceId || undefined,
+      ...(traceFile ? { trace_file: traceFile } : {}),
       ...metadata,
     },
   });
@@ -119,8 +125,22 @@ export async function trackExecution<T>(
       role: 'agent',
       parts: [{ text: responseText }],
     };
-    taskStore.updateTaskState(task.id, 'completed', completedMsg);
-    logger.info(`[TaskTracking] Task ${task.id} completed`);
+    try {
+      taskStore.updateTaskState(task.id, 'completed', completedMsg);
+      logger.info(`[TaskTracking] Task ${task.id} completed`);
+    } catch (stateErr) {
+      // Another process (e.g. stale sweep) may have already marked this task as failed.
+      // Log a warning but do NOT re-throw — the execution itself succeeded.
+      logger.warn(
+        `[TaskTracking] Task ${task.id} completed but state transition failed: ${stateErr instanceof Error ? stateErr.message : stateErr}`
+      );
+    }
+
+    // Fire-and-forget LLM evaluation (non-blocking)
+    // Enabled via opts.autoEvaluate (from config.task_evaluate) or VISOR_TASK_EVALUATE env var
+    if (opts.autoEvaluate || process.env.VISOR_TASK_EVALUATE === 'true') {
+      scheduleEvaluation(task.id, taskStore);
+    }
 
     return { task, result };
   } catch (err) {
@@ -138,4 +158,23 @@ export async function trackExecution<T>(
     }
     throw err; // re-throw to preserve original behavior
   }
+}
+
+// ---------------------------------------------------------------------------
+// Non-blocking auto-evaluation
+// ---------------------------------------------------------------------------
+
+function scheduleEvaluation(taskId: string, taskStore: TaskStore): void {
+  // Delay slightly to let OTEL spans flush before we try to read the trace
+  setTimeout(async () => {
+    try {
+      const { evaluateAndStore } = await import('./task-evaluator');
+      await evaluateAndStore(taskId, taskStore as any);
+      logger.info(`[TaskEvaluator] Auto-evaluation completed for task ${taskId}`);
+    } catch (err) {
+      logger.warn(
+        `[TaskEvaluator] Auto-evaluation failed for task ${taskId}: ${err instanceof Error ? err.message : err}`
+      );
+    }
+  }, 5000);
 }

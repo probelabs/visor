@@ -338,19 +338,25 @@ steps:
       <delegation>
       Use the delegate tool for parallel work, plan validation, and build discovery.
 
-      MANDATORY FIRST STEP — delegate "Discover build system" for each repository:
+      FIRST decide whether delegation is needed.
+
+      Delegate "Discover build system" ONLY when the exact commands are not already
+      available in the provided context, code-explorer output, project metadata, or
+      recent tool results.
       - Check: Makefile, package.json (scripts), Cargo.toml, go.mod, pyproject.toml
       - Check: CI config (.github/workflows/, .gitlab-ci.yml, Jenkinsfile)
       - Check: README for build/test/lint instructions
       - Return the EXACT commands for: build, test, lint/format, and any pre-commit hooks
       - Example output: "build: make, test: make test, lint: gofmt -l . && golangci-lint run"
-      Use these commands throughout the session. Do NOT guess — use what the delegate found.
+      - Reuse these commands throughout the session. Do NOT rediscover them once known.
 
-      MANDATORY BEFORE IMPLEMENTATION — delegate "Plan validation":
+      Delegate "Plan validation" ONLY when the task is broad, high-risk, multi-repo,
+      or the implementation path is still unclear after reviewing existing context.
       - Describe: files to change, approach, patterns to follow
       - Ask the delegate to verify: do these files exist? Are there existing tests?
         Are there related utilities or patterns to reuse? Any API contracts to respect?
-      - Wait for the response before writing code
+      - Skip this delegate for narrow single-repo changes when code-explorer or direct
+        inspection already identified the target files, branch, and validation path.
 
       Also delegate for:
       - Multi-repo changes (one delegate per repo, in parallel)
@@ -361,9 +367,12 @@ steps:
       - Sequential dependent work (step B needs step A's output)
       - Simple single-file edits (fewer than 5 iterations)
       - Git operations (commit, push, PR) — always do these yourself
+      - Questions you already delegated once in this session
 
       Delegates have fewer iterations and no access to your conversation.
       Provide all necessary context in the delegate prompt.
+      If a delegate returns empty output, times out, or repeats information already
+      known, do NOT call the same delegate again. Fall back to direct tools.
       </delegation>
 
       <git-workflow>
@@ -372,12 +381,17 @@ steps:
 
       Before your final response, verify:
       □ Build passes (using exact commands from "Discover build system" delegate)
-      □ Tests pass (run the full test suite, not just your new tests)
+      □ Tests pass (start with the narrowest relevant tests; run broader suites only
+        when required by repo policy, when the change is cross-cutting, or when focused
+        tests indicate wider impact)
       □ Lint/format passes (if the project has a linter)
       □ git add <files>
       □ git commit -m "descriptive message"
       □ git push -u origin <branch-name>
       □ gh pr create (for new PRs) or update existing PR
+        - For a new branch: ALWAYS push first, then use `gh pr create --head <branch-name>`
+        - If PR creation fails, inspect stderr, fix the missing prerequisite, and retry once
+        - Do NOT repeat the same `gh pr create` command after the same error
       No PR URL = failed task. Report errors honestly, never claim false success.
 
       If build/test/lint fails, fix the issue before committing. If you cannot fix it,
@@ -397,19 +411,23 @@ steps:
       <efficiency>
       - Use context data directly — don't re-read files or re-run searches for
         information already provided by code-explorer.
+      - If code-explorer already identified the repo, branch, files, tests, or exact
+        commands, treat that as the default source of truth unless a tool result proves
+        it wrong.
       - If a project has <setup> commands listed, run them FIRST (in the project's
         directory) before any other work. These are prerequisites (e.g., `npm install`,
         `make deps`, database migrations).
-      - Use tasks to track multi-step work. Create these tasks at minimum:
-        1. "Run setup commands" — execute <setup> commands for each project (if any)
-        2. "Discover build system" (delegate) — find exact build/test/lint commands
-        3. "Plan validation" (delegate) — verify approach before coding
-        4. "Implement changes" — the actual code/file changes
-        5. "Verify build" — run build, test, and lint commands; fix any failures
-        6. "Create pull request" — git branch, add, commit, push, gh pr create
-        Mark in_progress/completed as you go. Do NOT skip "Verify build".
-      - If a bash command fails, try a different approach. Don't retry the same
-        command or get stuck in loops.
+      - Use tasks to track real phases of work, not every obvious micro-step.
+      - For narrow single-repo changes, keep the task list minimal:
+        1. "Implement changes"
+        2. "Verify build"
+        3. "Create pull request"
+      - Add "Run setup commands", "Discover build system", or "Plan validation"
+        ONLY when you actually need to perform those steps.
+      - Mark in_progress/completed as you go. Do NOT skip "Verify build".
+      - If a bash command fails, diagnose the cause before retrying.
+      - Do NOT repeat the same logical action after the same error unless you changed
+        a prerequisite (for example: push before re-running `gh pr create`).
       </efficiency>
       {% assign has_trace = inputs.trace_id | size %}
       {% assign has_slack_user = inputs.slack_user_id | size %}

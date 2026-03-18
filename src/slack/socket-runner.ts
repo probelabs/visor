@@ -28,6 +28,24 @@ type SlackSocketConfig = {
   allowGuests?: boolean; // allow guest users (single/multi-channel guests) (default: false)
 };
 
+/**
+ * Build enriched message text for task tracking.
+ * Includes Slack thread context when available so evaluators have full conversation context.
+ */
+function buildSlackMessageText(ev: any, payloadForContext: any): string {
+  let messageText = String(ev.text || 'Slack message');
+  try {
+    const messages = payloadForContext?.slack_conversation?.messages;
+    if (Array.isArray(messages) && messages.length > 1) {
+      const threadMessages = messages
+        .map((m: any) => `[${m.user || 'unknown'}]: ${m.text || ''}`)
+        .join('\n');
+      messageText = `Thread context:\n${threadMessages}\n\nCurrent message: ${ev.text}`;
+    }
+  } catch {}
+  return messageText;
+}
+
 export class SlackSocketRunner implements Runner {
   readonly name = 'slack';
   private appToken: string;
@@ -915,7 +933,7 @@ export class SlackSocketRunner implements Runner {
                   source: 'slack',
                   workflowId: allChecks.join(','),
                   configPath: this.configPath,
-                  messageText: String(ev.text || 'Slack message'),
+                  messageText: buildSlackMessageText(ev, payloadForContext),
                   metadata: {
                     slack_channel: channelId,
                     slack_thread_ts: threadTs,

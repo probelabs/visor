@@ -556,7 +556,7 @@ describe('SqliteTaskStore', () => {
   // -------------------------------------------------------------------------
 
   describe('failStaleTasks', () => {
-    it('should mark all working tasks as failed', () => {
+    it('should only fail unclaimed working tasks by default', () => {
       const msg = makeMessage();
       const t1 = store.createTask({ contextId: 'ctx1', requestMessage: msg });
       const t2 = store.createTask({ contextId: 'ctx2', requestMessage: msg });
@@ -566,12 +566,39 @@ describe('SqliteTaskStore', () => {
       store.updateTaskState(t1.id, 'working');
       store.updateTaskState(t2.id, 'working');
 
+      // Claim t2 by an instance — simulates a running instance owning this task
+      store.claimTask(t2.id, 'instance-A');
+
       const count = store.failStaleTasks('crash recovery');
+      // Only t1 (unclaimed) should be failed; t2 (claimed) is left alone
+      expect(count).toBe(1);
+
+      expect(store.getTask(t1.id)!.status.state).toBe('failed');
+      expect(store.getTask(t2.id)!.status.state).toBe('working');
+      expect(store.getTask(t3.id)!.status.state).toBe('submitted');
+    });
+
+    it('should fail only tasks owned by the specified instance', () => {
+      const msg = makeMessage();
+      const t1 = store.createTask({ contextId: 'ctx1', requestMessage: msg });
+      const t2 = store.createTask({ contextId: 'ctx2', requestMessage: msg });
+      const t3 = store.createTask({ contextId: 'ctx3', requestMessage: msg });
+
+      store.updateTaskState(t1.id, 'working');
+      store.updateTaskState(t2.id, 'working');
+      store.updateTaskState(t3.id, 'working');
+
+      store.claimTask(t1.id, 'instance-A');
+      store.claimTask(t2.id, 'instance-B');
+      store.claimTask(t3.id, 'instance-A');
+
+      // Only fail tasks owned by instance-A
+      const count = store.failStaleTasks('crash recovery', 'instance-A');
       expect(count).toBe(2);
 
       expect(store.getTask(t1.id)!.status.state).toBe('failed');
-      expect(store.getTask(t2.id)!.status.state).toBe('failed');
-      expect(store.getTask(t3.id)!.status.state).toBe('submitted');
+      expect(store.getTask(t2.id)!.status.state).toBe('working'); // instance-B untouched
+      expect(store.getTask(t3.id)!.status.state).toBe('failed');
     });
 
     it('should return 0 when no working tasks exist', () => {
@@ -584,11 +611,32 @@ describe('SqliteTaskStore', () => {
       const msg = makeMessage();
       const task = store.createTask({ contextId: 'ctx', requestMessage: msg });
       store.updateTaskState(task.id, 'working');
-
+      // unclaimed task — will be failed by default call
       store.failStaleTasks('Process killed');
       const updated = store.getTask(task.id)!;
       expect(updated.status.state).toBe('failed');
       expect(updated.status.message?.parts?.[0]).toHaveProperty('text', 'Process killed');
+    });
+
+    it('should not fail claimed tasks from other instances on startup', () => {
+      // Simulates the production bug: instance-B starts up and calls failStaleTasks()
+      // while instance-A still has a running task
+      const msg = makeMessage();
+      const taskA = store.createTask({ contextId: 'ctx1', requestMessage: msg });
+      const taskB = store.createTask({ contextId: 'ctx2', requestMessage: msg });
+
+      store.updateTaskState(taskA.id, 'working');
+      store.updateTaskState(taskB.id, 'working');
+      store.claimTask(taskA.id, 'instance-A');
+      store.claimTask(taskB.id, 'instance-B');
+
+      // Instance-B restarts and calls failStaleTasks() without specifying an instance
+      const count = store.failStaleTasks('Process terminated unexpectedly');
+      expect(count).toBe(0); // Both are claimed, neither should be failed
+
+      // Both tasks should still be working
+      expect(store.getTask(taskA.id)!.status.state).toBe('working');
+      expect(store.getTask(taskB.id)!.status.state).toBe('working');
     });
   });
 

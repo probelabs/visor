@@ -798,6 +798,44 @@ describe('CustomToolsSSEServer', () => {
         'Invalid tool parameters: Invalid workflow inputs: repo: is required, branch: must be a string'
       );
     });
+
+    it('should release stranded workspace refs when stop times out on a hung tool call', async () => {
+      const workspace = {
+        acquire: jest.fn(),
+        release: jest.fn(),
+      };
+      const workflowContext = {
+        workspace,
+        executionContext: undefined,
+      };
+
+      server = new CustomToolsSSEServer(testTools, testSessionId, false, workflowContext as any);
+      await server.start();
+
+      const executor = (server as any).toolExecutor as CustomToolExecutor;
+      jest.spyOn(executor, 'execute').mockImplementation(
+        () =>
+          new Promise(() => {
+            // Intentionally never resolves to simulate a stuck tool call.
+          })
+      );
+
+      const toolCallPromise = (server as any).handleToolCall(21, 'echo-tool', {
+        message: 'stuck',
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      expect(workspace.acquire).toHaveBeenCalledTimes(1);
+      expect((server as any).activeToolCalls).toBe(1);
+
+      await server.stop({ drainTimeoutMs: 10 });
+
+      expect(workspace.release).toHaveBeenCalledTimes(1);
+      expect((server as any).activeToolCalls).toBe(0);
+
+      void toolCallPromise;
+    });
   });
 });
 

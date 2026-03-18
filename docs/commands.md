@@ -148,35 +148,78 @@ visor mcp-server --transport http --config defaults/code-review.yaml \
 
 #### `visor tasks`
 
-Monitor and manage A2A agent tasks.
+Monitor, inspect, and evaluate agent tasks. Requires `task_tracking: true` (or `--task-tracking` CLI flag).
 
 ```bash
 visor tasks [command] [options]
 ```
 
 **Subcommands:**
-- `list` (default) — List tasks with optional filters
+- `list` (default) — List tasks (interactive TUI in TTY, table otherwise)
+- `show <task-id>` — Show full task details including response and evaluation
+- `trace <task-id>` — Show execution trace tree (YAML-formatted span hierarchy)
+- `evaluate <task-id>` — Evaluate task quality with LLM judge
 - `stats` — Queue summary statistics
 - `cancel <task-id>` — Cancel a running task
-- `help` — Show usage
+- `purge` — Delete old completed/failed tasks
 
-**Options:**
-- `--state <state>` — Filter by state: `submitted`, `working`, `completed`, `failed`, `canceled`
+Task IDs support prefix matching — use the first 8 characters.
+
+**List options:**
+- `--all` — Show all tasks including completed/failed history
+- `--state <state>` — Filter: `submitted`, `working`, `completed`, `failed`, `canceled`
+- `--search <text>` — Full-text search on task input
 - `--agent <workflow-id>` — Filter by workflow
-- `--limit <n>` — Number of tasks to show (default: 20)
-- `--output <format>` — Output format: `table` (default), `json`, `markdown`
-- `--watch` — Live refresh every 2 seconds
+- `--instance <id>` — Filter by visor instance
+- `--limit <n>` — Tasks per page (default: 20)
+- `--page <n>` — Page number
+- `--output <format>` — Output: `table`, `json`, `markdown` (disables TUI)
+- `--tui` — Force interactive TUI mode
+- `--watch` — Auto-refresh every 2 seconds
+
+**Trace options:**
+- `--full` — Show full output without truncation
+- `--output <format>` — Output: `tree` (default), `json`
+
+**Evaluate options:**
+- `--model <model>` — LLM model for evaluation (default: from config or env)
+- `--provider <provider>` — AI provider: `google`, `openai`, `anthropic`
+- `--last <n>` — Batch evaluate last N tasks
+- `--state <state>` — Filter for batch mode (default: `completed`)
+- `--prompt <text>` — Custom evaluation system prompt
+- `--output <format>` — Output: `table`, `json`
+
+**Purge options:**
+- `--age <duration>` — Maximum age, e.g. `24h`, `7d`, `30d` (default: `7d`)
 
 **Examples:**
 ```bash
-visor tasks                                  # List all tasks
-visor tasks list --state working             # Show only working tasks
-visor tasks list --agent security-review     # Tasks for a specific workflow
-visor tasks list --output json               # JSON output
-visor tasks list --watch                     # Live monitoring
+# Browsing tasks
+visor tasks                                  # Interactive TUI browser
+visor tasks --output table                   # Plain table output
+visor tasks --all                            # Include completed/failed history
+visor tasks --state failed                   # Show only failed tasks
+visor tasks --search "auth middleware"        # Search by input text
+
+# Inspecting individual tasks
+visor tasks show abc123                      # Task details with response
+visor tasks show abc123 --output json        # Full JSON with evaluation data
+
+# Execution traces
+visor tasks trace abc123                     # Compact trace tree
+visor tasks trace abc123 --full              # Full trace with untruncated outputs
+
+# Quality evaluation
+visor tasks evaluate abc123                  # Evaluate a single task
+visor tasks evaluate abc123 --output json    # Evaluation as JSON
+visor tasks evaluate --last 10               # Batch evaluate last 10 tasks
+visor tasks evaluate --last 5 --model gpt-4o # Use specific model
+
+# Administration
 visor tasks stats                            # Queue summary
 visor tasks stats --output json              # Stats as JSON
-visor tasks cancel abc123                    # Cancel a task
+visor tasks cancel abc123                    # Cancel a running task
+visor tasks purge --age 30d                  # Delete tasks older than 30 days
 ```
 
 ### Common CLI Options
