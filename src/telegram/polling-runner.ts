@@ -182,7 +182,7 @@ export class TelegramPollingRunner implements Runner {
       if (!isMentioned && !isReplyToBot) return;
     }
 
-    // 6. Build conversation context
+    // 6. Build conversation context (includes chat history)
     const conversation = this.adapter.buildConversationContext(msg);
 
     // 7. Build webhook data map (same pattern as Slack)
@@ -217,11 +217,15 @@ export class TelegramPollingRunner implements Runner {
     const allChecks = Object.keys(this.cfg.checks || {});
     if (allChecks.length === 0) return;
 
-    const chatTrackKey = this.trackChat(String(msg.chat.id));
+    // Derive thread ID for history tracking
+    const chatId = String(msg.chat.id);
+    const threadId = msg.message_thread_id ? `${chatId}:${msg.message_thread_id}` : chatId;
+
+    const chatTrackKey = this.trackChat(chatId);
     try {
       const runEngine = new StateMachineExecutionEngine();
 
-      // Inject Telegram client into execution context
+      // Inject Telegram client and conversation into execution context
       try {
         const parentCtx: any = (this.engine as any).getExecutionContext?.() || {};
         const prevCtx: any = (runEngine as any).getExecutionContext?.() || {};
@@ -230,11 +234,12 @@ export class TelegramPollingRunner implements Runner {
           ...prevCtx,
           telegram: this.client,
           telegramClient: this.client,
+          conversation,
         });
       } catch {}
 
       logger.info(
-        `[TelegramPolling] Dispatching engine run for chat ${msg.chat.id} (${msg.chat.type})`
+        `[TelegramPolling] Dispatching engine run for chat ${msg.chat.id} (${msg.chat.type}), history: ${conversation.messages.length} messages`
       );
 
       const execFn = () =>
@@ -247,9 +252,10 @@ export class TelegramPollingRunner implements Runner {
           debug: process.env.VISOR_DEBUG === 'true',
         } as any);
 
+      let result: any;
       if (this.taskStore) {
         const { trackExecution } = await import('../agent-protocol/track-execution');
-        await trackExecution(
+        result = await trackExecution(
           {
             taskStore: this.taskStore,
             source: 'telegram',
@@ -257,7 +263,7 @@ export class TelegramPollingRunner implements Runner {
             configPath: this.configPath,
             messageText: String(msg.text || msg.caption || 'Telegram message'),
             metadata: {
-              telegram_chat_id: String(msg.chat.id),
+              telegram_chat_id: chatId,
               telegram_chat_type: msg.chat.type,
               telegram_user: msg.from ? String(msg.from.id) : 'unknown',
             },
@@ -265,8 +271,21 @@ export class TelegramPollingRunner implements Runner {
           execFn
         );
       } else {
-        await execFn();
+        result = await execFn();
       }
+
+      // Capture bot response and add to conversation history
+      try {
+        const botResponse = this.extractBotResponse(result);
+        if (botResponse) {
+          this.adapter.addToHistory(threadId, {
+            role: 'bot',
+            text: botResponse,
+            timestamp: String(Math.floor(Date.now() / 1000)),
+            origin: 'visor',
+          });
+        }
+      } catch {}
     } catch (e) {
       logger.error(
         `[TelegramPolling] Engine execution failed: ${e instanceof Error ? e.message : String(e)}`
@@ -289,6 +308,28 @@ export class TelegramPollingRunner implements Runner {
     } catch {
       return this.cfg;
     }
+  }
+
+  /** Extract bot response text from engine execution result */
+  private extractBotResponse(result: any): string | null {
+    if (!result) return null;
+    try {
+      // Try workflow output 'text' field from history
+      const history = result?.reviewSummary?.history;
+      if (history) {
+        for (const entry of Object.values(history) as any[]) {
+          if (entry?.text && typeof entry.text === 'string') return entry.text;
+        }
+      }
+      // Try parsing from formatted issue message
+      const msg = result?.reviewSummary?.issues?.[0]?.message || '';
+      const textMatch = msg.match(/^text:\s*(.+?)(?:\nintent:|\ntags:|\ntopic:|\n\n|$)/ms);
+      if (textMatch?.[1]) return textMatch[1].trim();
+      // Try raw response
+      const raw = result?.reviewSummary?.debug?.rawResponse;
+      if (raw && typeof raw === 'string') return raw;
+    } catch {}
+    return null;
   }
 
   /** Deduplication: track processed updates by chat_id:message_id */
