@@ -61,6 +61,7 @@ jobs:
           auto-review: ${{ (github.event_name == 'pull_request_target' || github.event_name == 'pull_request') && 'true' || 'false' }}
           debug: 'true'
           fail-fast: 'true'
+          max-parallelism: '1'
         env:
           GITHUB_CONTEXT: ${{ toJson(github) }}
           VISOR_TELEMETRY_ENABLED: 'true'
