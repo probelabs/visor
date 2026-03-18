@@ -36,6 +36,7 @@ export class TeamsWebhookRunner implements Runner {
   private host: string;
   private taskStore?: import('../agent-protocol/task-store').TaskStore;
   private configPath?: string;
+  private activeRequests = 0;
 
   constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: TeamsWebhookConfig) {
     const appId = opts.appId || process.env.TEAMS_APP_ID || '';
@@ -138,6 +139,35 @@ export class TeamsWebhookRunner implements Runner {
     });
   }
 
+  async stopListening(): Promise<void> {
+    if (this.server) {
+      const srv = this.server;
+      if (typeof (srv as any).closeAllConnections === 'function') {
+        (srv as any).closeAllConnections();
+      }
+      await new Promise<void>(resolve => srv.close(() => resolve()));
+      this.server = undefined;
+    }
+    logger.info('[TeamsWebhook] Server closed');
+  }
+
+  async drain(timeoutMs = 0): Promise<void> {
+    if (this.server) {
+      this.server.close();
+      this.server = undefined;
+    }
+    logger.info(`[TeamsWebhook] Draining (${this.activeRequests} active)`);
+    const startedAt = Date.now();
+    while (this.activeRequests > 0) {
+      if (timeoutMs > 0 && Date.now() - startedAt >= timeoutMs) {
+        logger.warn(`[TeamsWebhook] Drain timeout with ${this.activeRequests} active request(s)`);
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    logger.info('[TeamsWebhook] Drain complete');
+  }
+
   async stop(): Promise<void> {
     if (this.server) {
       return new Promise<void>(resolve => {
@@ -150,6 +180,15 @@ export class TeamsWebhookRunner implements Runner {
   }
 
   private async handleMessage(msg: TeamsMessageInfo): Promise<void> {
+    this.activeRequests++;
+    try {
+      await this.handleMessageInner(msg);
+    } finally {
+      this.activeRequests--;
+    }
+  }
+
+  private async handleMessageInner(msg: TeamsMessageInfo): Promise<void> {
     // 1. Skip empty text
     if (!msg.text) return;
 

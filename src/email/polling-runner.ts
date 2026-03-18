@@ -58,6 +58,7 @@ export class EmailPollingRunner implements Runner {
   private sendConfig?: EmailPollingConfig['send'];
   private resendLastSeenId?: string; // cursor for Resend polling
   private hasWebhookSecret: boolean;
+  private activeProcessing = 0;
 
   constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: EmailPollingConfig) {
     this.receiveType = (opts.receive?.type as 'imap' | 'resend') || 'imap';
@@ -105,6 +106,34 @@ export class EmailPollingRunner implements Runner {
 
     // Clean up stale workspace directories
     WorkspaceManager.cleanupStale().catch(() => {});
+  }
+
+  async stopListening(): Promise<void> {
+    this.stopped = true;
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = undefined;
+    }
+    logger.info('[EmailPolling] Polling stopped');
+  }
+
+  async drain(timeoutMs = 0): Promise<void> {
+    if (!this.stopped) {
+      await this.stopListening();
+    }
+    logger.info(`[EmailPolling] Draining (${this.activeProcessing} active)`);
+
+    const startedAt = Date.now();
+    while (this.activeProcessing > 0) {
+      if (timeoutMs > 0 && Date.now() - startedAt >= timeoutMs) {
+        logger.warn(`[EmailPolling] Drain timeout with ${this.activeProcessing} active processing`);
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    await this.client.disconnectImap();
+    logger.info('[EmailPolling] Drain complete');
   }
 
   async stop(): Promise<void> {
@@ -266,6 +295,15 @@ export class EmailPollingRunner implements Runner {
   // ─── Shared Message Processing ───
 
   private async handleMessage(msg: EmailMessage): Promise<void> {
+    this.activeProcessing++;
+    try {
+      await this.handleMessageInner(msg);
+    } finally {
+      this.activeProcessing--;
+    }
+  }
+
+  private async handleMessageInner(msg: EmailMessage): Promise<void> {
     // 1. Skip empty messages
     if (!msg.text && !msg.html) return;
 

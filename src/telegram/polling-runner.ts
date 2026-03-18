@@ -125,6 +125,28 @@ export class TelegramPollingRunner implements Runner {
     WorkspaceManager.cleanupStale().catch(() => {});
   }
 
+  async stopListening(): Promise<void> {
+    if (this.runnerHandle) {
+      this.runnerHandle.stop();
+      logger.info('[TelegramPolling] Polling stopped');
+    }
+  }
+
+  async drain(timeoutMs = 0): Promise<void> {
+    if (this.runnerHandle) {
+      this.runnerHandle.stop();
+    }
+    const startedAt = Date.now();
+    while (this.activeChats.size > 0) {
+      if (timeoutMs > 0 && Date.now() - startedAt >= timeoutMs) {
+        logger.warn(`[TelegramPolling] Drain timeout with ${this.activeChats.size} active chat(s)`);
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    logger.info('[TelegramPolling] Drain complete');
+  }
+
   async stop(): Promise<void> {
     if (this.runnerHandle) {
       this.runnerHandle.stop();

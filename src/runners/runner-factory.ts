@@ -119,6 +119,12 @@ export async function createRunner(
         async stop() {
           await frontend.stop();
         },
+        async stopListening() {
+          await frontend.stopListening();
+        },
+        async drain(timeoutMs?: number) {
+          await frontend.drain(timeoutMs);
+        },
         updateConfig(cfg: VisorConfig) {
           frontend.setVisorConfig(cfg);
         },

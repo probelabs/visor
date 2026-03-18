@@ -72,4 +72,69 @@ export class RunnerHost {
       }
     }
   }
+
+  /**
+   * Phase 1 of graceful restart: stop listening for new connections/messages.
+   * Frees ports so a new process can bind immediately.
+   * Does NOT wait for in-flight work — call drainAll() after for that.
+   */
+  async stopListeningAll(): Promise<void> {
+    const results = await Promise.allSettled(
+      this.runners.map(async runner => {
+        if (runner.stopListening) {
+          await runner.stopListening();
+        }
+      })
+    );
+    for (let i = 0; i < results.length; i++) {
+      if (results[i].status === 'rejected') {
+        const reason = (results[i] as PromiseRejectedResult).reason;
+        logger.warn(
+          `[RunnerHost] Failed to stop listening on runner "${this.runners[i].name}": ${reason}`
+        );
+      }
+    }
+  }
+
+  /**
+   * Drain all runners: stop accepting new work, wait for in-flight work to complete.
+   * Runners without drain() fall back to stop().
+   * @param timeoutMs - Max wait time in ms. 0 means wait indefinitely (default).
+   */
+  async drainAll(timeoutMs = 0): Promise<void> {
+    const drainPromise = Promise.allSettled(
+      this.runners.map(async runner => {
+        if (runner.drain) {
+          await runner.drain(timeoutMs);
+        } else {
+          await runner.stop();
+        }
+      })
+    );
+
+    let results: PromiseSettledResult<void>[];
+    if (timeoutMs > 0) {
+      results = await Promise.race([
+        drainPromise,
+        new Promise<PromiseSettledResult<void>[]>(resolve =>
+          setTimeout(() => {
+            logger.warn(
+              `[RunnerHost] Drain timeout (${timeoutMs}ms) exceeded, force-stopping remaining runners`
+            );
+            // Force-stop all runners that may still be draining
+            Promise.allSettled(this.runners.map(r => r.stop())).then(() => resolve([]));
+          }, timeoutMs)
+        ),
+      ]);
+    } else {
+      results = await drainPromise;
+    }
+
+    for (let i = 0; i < results.length; i++) {
+      if (results[i]?.status === 'rejected') {
+        const reason = (results[i] as PromiseRejectedResult).reason;
+        logger.warn(`[RunnerHost] Failed to drain runner "${this.runners[i].name}": ${reason}`);
+      }
+    }
+  }
 }

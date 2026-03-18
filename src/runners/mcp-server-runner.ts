@@ -67,6 +67,8 @@ export class McpServerRunner implements Runner {
   private transports = new Map<string, StreamableHTTPServerTransport>();
   private taskStore?: TaskStore;
   private configPath?: string;
+  private activeRequests = 0;
+  private draining = false;
 
   constructor(
     private engine: StateMachineExecutionEngine,
@@ -262,6 +264,51 @@ export class McpServerRunner implements Runner {
     this.httpServer.listen(port, host);
   }
 
+  /**
+   * Stop listening for new connections and free the port so a new process can bind.
+   * Existing in-flight requests continue processing (tracked via activeRequests).
+   */
+  async stopListening(): Promise<void> {
+    this.draining = true;
+    if (this.httpServer) {
+      const server = this.httpServer;
+      // Drop idle keep-alive connections so the port is freed quickly
+      if (typeof (server as any).closeAllConnections === 'function') {
+        (server as any).closeAllConnections();
+      }
+      // Wait for the server to fully close and release the port
+      await new Promise<void>(resolve => {
+        server.close(() => resolve());
+      });
+      this.httpServer = null;
+    }
+  }
+
+  /**
+   * Enter drain mode: stop accepting new connections, wait for active requests to finish.
+   * @param timeoutMs - Max wait time. 0 = unlimited (default).
+   */
+  async drain(timeoutMs = 0): Promise<void> {
+    if (!this.draining) {
+      await this.stopListening();
+    }
+
+    const startedAt = Date.now();
+    while (this.activeRequests > 0) {
+      if (timeoutMs > 0 && Date.now() - startedAt >= timeoutMs) {
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    // Clean up transports
+    for (const transport of this.transports.values()) {
+      transport.close();
+    }
+    this.transports.clear();
+    this.httpServer = null;
+  }
+
   async stop(): Promise<void> {
     for (const transport of this.transports.values()) {
       transport.close();
@@ -290,6 +337,15 @@ export class McpServerRunner implements Runner {
     message: string,
     sessionId?: string
   ): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }> {
+    if (this.draining) {
+      return {
+        content: [
+          { type: 'text' as const, text: 'The server is restarting. Please retry shortly.' },
+        ],
+        isError: true,
+      };
+    }
+    this.activeRequests++;
     try {
       const { StateMachineExecutionEngine: SMEngine } = await import(
         '../state-machine-execution-engine'
@@ -431,6 +487,8 @@ export class McpServerRunner implements Runner {
         content: [{ type: 'text' as const, text: `Error: ${errorMessage}` }],
         isError: true,
       };
+    } finally {
+      this.activeRequests--;
     }
   }
 

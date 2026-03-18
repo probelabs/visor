@@ -1559,6 +1559,21 @@ export interface SchedulerConfig {
 }
 
 /**
+ * Graceful restart configuration
+ */
+export interface GracefulRestartConfig {
+  /** Max time in ms to wait for in-flight work to complete. 0 = unlimited (default). */
+  drain_timeout_ms?: number;
+  /** Max time in ms to wait for the new child process to become ready. Default: 15000. */
+  child_ready_timeout_ms?: number;
+  /** Send "restarting" messages to active conversations. Default: true. */
+  notify_users?: boolean;
+  /** Override the command used to spawn the new process.
+   *  If not set, auto-detects: npx re-invokes npx, direct execution re-spawns same binary. */
+  restart_command?: string;
+}
+
+/**
  * Main Visor configuration
  */
 export interface VisorConfig {
@@ -1649,6 +1664,8 @@ export interface VisorConfig {
    *  When true, all workflow executions (CLI, Slack, TUI, Scheduler) are recorded
    *  in a shared SQLite TaskStore visible via `visor tasks`. */
   task_tracking?: boolean;
+  /** Graceful restart configuration */
+  graceful_restart?: GracefulRestartConfig;
 }
 
 /**
