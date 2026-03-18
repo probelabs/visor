@@ -823,7 +823,7 @@ var require_package = __commonJS({
         "@opentelemetry/sdk-node": "^0.203.0",
         "@opentelemetry/sdk-trace-base": "^1.30.1",
         "@opentelemetry/semantic-conventions": "^1.30.1",
-        "@probelabs/probe": "^0.6.0-rc297",
+        "@probelabs/probe": "^0.6.0-rc300",
         "@types/commander": "^2.12.0",
         "@types/uuid": "^10.0.0",
         "@utcp/file": "^1.1.0",
@@ -1285,19 +1285,19 @@ function __getOrCreateNdjsonPath() {
   try {
     if (process.env.VISOR_TELEMETRY_SINK && process.env.VISOR_TELEMETRY_SINK !== "file")
       return null;
-    const path30 = require("path");
-    const fs27 = require("fs");
+    const path31 = require("path");
+    const fs29 = require("fs");
     if (process.env.VISOR_FALLBACK_TRACE_FILE) {
       __ndjsonPath = process.env.VISOR_FALLBACK_TRACE_FILE;
-      const dir = path30.dirname(__ndjsonPath);
-      if (!fs27.existsSync(dir)) fs27.mkdirSync(dir, { recursive: true });
+      const dir = path31.dirname(__ndjsonPath);
+      if (!fs29.existsSync(dir)) fs29.mkdirSync(dir, { recursive: true });
       return __ndjsonPath;
     }
-    const outDir = process.env.VISOR_TRACE_DIR || path30.join(process.cwd(), "output", "traces");
-    if (!fs27.existsSync(outDir)) fs27.mkdirSync(outDir, { recursive: true });
+    const outDir = process.env.VISOR_TRACE_DIR || path31.join(process.cwd(), "output", "traces");
+    if (!fs29.existsSync(outDir)) fs29.mkdirSync(outDir, { recursive: true });
     if (!__ndjsonPath) {
       const ts = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-      __ndjsonPath = path30.join(outDir, `${ts}.ndjson`);
+      __ndjsonPath = path31.join(outDir, `${ts}.ndjson`);
     }
     return __ndjsonPath;
   } catch {
@@ -1306,11 +1306,11 @@ function __getOrCreateNdjsonPath() {
 }
 function _appendRunMarker() {
   try {
-    const fs27 = require("fs");
+    const fs29 = require("fs");
     const p = __getOrCreateNdjsonPath();
     if (!p) return;
     const line = { name: "visor.run", attributes: { started: true } };
-    fs27.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
+    fs29.appendFileSync(p, JSON.stringify(line) + "\n", "utf8");
   } catch {
   }
 }
@@ -1956,14 +1956,14 @@ async function handleWavePlanning(context2, state, transition) {
     for (const request of forwardRunRequests) {
       const { target, gotoEvent } = request;
       const scopeKey = request.scope && Array.isArray(request.scope) ? JSON.stringify(request.scope) : "root";
-      const dedupeKey = `${target}:${gotoEvent || "default"}:${state.wave}:${scopeKey}`;
-      if (state.forwardRunGuards.has(dedupeKey)) {
+      const dedupeKey2 = `${target}:${gotoEvent || "default"}:${state.wave}:${scopeKey}`;
+      if (state.forwardRunGuards.has(dedupeKey2)) {
         if (context2.debug) {
           logger.info(`[WavePlanning] Skipping duplicate forward run: ${target}`);
         }
         continue;
       }
-      state.forwardRunGuards.add(dedupeKey);
+      state.forwardRunGuards.add(dedupeKey2);
       checksToRun.add(target);
       try {
         const scope = request.scope;
@@ -3938,9 +3938,9 @@ function configureLiquidWithExtensions(liquid) {
   });
   liquid.registerFilter("get", (obj, pathExpr) => {
     if (obj == null) return void 0;
-    const path30 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
-    if (!path30) return obj;
-    const parts = path30.split(".");
+    const path31 = typeof pathExpr === "string" ? pathExpr : String(pathExpr || "");
+    if (!path31) return obj;
+    const parts = path31.split(".");
     let cur = obj;
     for (const p of parts) {
       if (cur == null) return void 0;
@@ -4059,9 +4059,9 @@ function configureLiquidWithExtensions(liquid) {
           }
         }
         const defaultRole = typeof rolesCfg.default === "string" && rolesCfg.default.trim() ? rolesCfg.default.trim() : void 0;
-        const getNested = (obj, path30) => {
-          if (!obj || !path30) return void 0;
-          const parts = path30.split(".");
+        const getNested = (obj, path31) => {
+          if (!obj || !path31) return void 0;
+          const parts = path31.split(".");
           let cur = obj;
           for (const p of parts) {
             if (cur == null) return void 0;
@@ -7834,8 +7834,8 @@ var init_dependency_gating = __esm({
 async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs27 = await import("fs/promises");
-    const path30 = await import("path");
+    const fs29 = await import("fs/promises");
+    const path31 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" ? schemaRaw : "code-review";
     let templateContent;
@@ -7844,25 +7844,25 @@ async function renderTemplateContent(checkId, checkConfig, reviewSummary) {
       logger.debug(`[TemplateRenderer] Using inline template for ${checkId}`);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path30.resolve(process.cwd(), file);
-      templateContent = await fs27.readFile(resolved, "utf-8");
+      const resolved = path31.resolve(process.cwd(), file);
+      templateContent = await fs29.readFile(resolved, "utf-8");
       logger.debug(`[TemplateRenderer] Using template file for ${checkId}: ${resolved}`);
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path30.join(__dirname, "output", sanitized, "template.liquid"),
+          path31.join(__dirname, "output", sanitized, "template.liquid"),
           // bundled: dist/output/
-          path30.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path31.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // source: output/
-          path30.join(process.cwd(), "output", sanitized, "template.liquid"),
+          path31.join(process.cwd(), "output", sanitized, "template.liquid"),
           // fallback: cwd/output/
-          path30.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          path31.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
           // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs27.readFile(p, "utf-8");
+            templateContent = await fs29.readFile(p, "utf-8");
             if (templateContent) {
               logger.debug(`[TemplateRenderer] Using schema template for ${checkId}: ${p}`);
               break;
@@ -8284,7 +8284,7 @@ async function processDiffWithOutline(diffContent) {
   }
   try {
     const originalProbePath = process.env.PROBE_PATH;
-    const fs27 = require("fs");
+    const fs29 = require("fs");
     const possiblePaths = [
       // Relative to current working directory (most common in production)
       path6.join(process.cwd(), "node_modules/@probelabs/probe/bin/probe-binary"),
@@ -8295,7 +8295,7 @@ async function processDiffWithOutline(diffContent) {
     ];
     let probeBinaryPath;
     for (const candidatePath of possiblePaths) {
-      if (fs27.existsSync(candidatePath)) {
+      if (fs29.existsSync(candidatePath)) {
         probeBinaryPath = candidatePath;
         break;
       }
@@ -9810,8 +9810,8 @@ ${schemaString}`);
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs27 = require("fs");
-              const path30 = require("path");
+              const fs29 = require("fs");
+              const path31 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const provider = this.config.provider || "auto";
               const model = this.config.model || "default";
@@ -9925,20 +9925,20 @@ ${"=".repeat(60)}
 `;
               readableVersion += `${"=".repeat(60)}
 `;
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path30.join(process.cwd(), "debug-artifacts");
-              if (!fs27.existsSync(debugArtifactsDir)) {
-                fs27.mkdirSync(debugArtifactsDir, { recursive: true });
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path31.join(process.cwd(), "debug-artifacts");
+              if (!fs29.existsSync(debugArtifactsDir)) {
+                fs29.mkdirSync(debugArtifactsDir, { recursive: true });
               }
-              const debugFile = path30.join(
+              const debugFile = path31.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.json`
               );
-              fs27.writeFileSync(debugFile, debugJson, "utf-8");
-              const readableFile = path30.join(
+              fs29.writeFileSync(debugFile, debugJson, "utf-8");
+              const readableFile = path31.join(
                 debugArtifactsDir,
                 `prompt-${_checkName || "unknown"}-${timestamp}.txt`
               );
-              fs27.writeFileSync(readableFile, readableVersion, "utf-8");
+              fs29.writeFileSync(readableFile, readableVersion, "utf-8");
               log(`
 \u{1F4BE} Full debug info saved to:`);
               log(`   JSON: ${debugFile}`);
@@ -9976,8 +9976,8 @@ ${"=".repeat(60)}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs27 = require("fs");
-              const path30 = require("path");
+              const fs29 = require("fs");
+              const path31 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny2 = agent;
               let fullHistory = [];
@@ -9988,8 +9988,8 @@ ${"=".repeat(60)}
               } else if (agentAny2._messages) {
                 fullHistory = agentAny2._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path30.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path30.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path31.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path31.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -10001,7 +10001,7 @@ ${"=".repeat(60)}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs27.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs29.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -10028,7 +10028,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs27.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs29.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -10037,11 +10037,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs27 = require("fs");
-              const path30 = require("path");
+              const fs29 = require("fs");
+              const path31 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path30.join(process.cwd(), "debug-artifacts");
-              const responseFile = path30.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path31.join(process.cwd(), "debug-artifacts");
+              const responseFile = path31.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -10074,7 +10074,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs27.writeFileSync(responseFile, responseContent, "utf-8");
+              fs29.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -10090,9 +10090,9 @@ ${"=".repeat(60)}
                 await agentAny._telemetryConfig.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${agentAny._traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs27 = require("fs");
-                  if (fs27.existsSync(agentAny._traceFilePath)) {
-                    const stats = fs27.statSync(agentAny._traceFilePath);
+                  const fs29 = require("fs");
+                  if (fs29.existsSync(agentAny._traceFilePath)) {
+                    const stats = fs29.statSync(agentAny._traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::${agentAny._traceFilePath} (${stats.size} bytes)`
                     );
@@ -10353,8 +10353,8 @@ ${schemaString}`);
           const model = this.config.model || "default";
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs27 = require("fs");
-              const path30 = require("path");
+              const fs29 = require("fs");
+              const path31 = require("path");
               const os2 = require("os");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const debugData = {
@@ -10428,18 +10428,18 @@ ${"=".repeat(60)}
               readableVersion += `${"=".repeat(60)}
 `;
               const tempDir = os2.tmpdir();
-              const promptFile = path30.join(tempDir, `visor-prompt-${timestamp}.txt`);
-              fs27.writeFileSync(promptFile, prompt, "utf-8");
+              const promptFile = path31.join(tempDir, `visor-prompt-${timestamp}.txt`);
+              fs29.writeFileSync(promptFile, prompt, "utf-8");
               log(`
 \u{1F4BE} Prompt saved to: ${promptFile}`);
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path30.join(process.cwd(), "debug-artifacts");
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path31.join(process.cwd(), "debug-artifacts");
               try {
-                const base = path30.join(
+                const base = path31.join(
                   debugArtifactsDir,
                   `prompt-${_checkName || "unknown"}-${timestamp}`
                 );
-                fs27.writeFileSync(base + ".json", debugJson, "utf-8");
-                fs27.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
+                fs29.writeFileSync(base + ".json", debugJson, "utf-8");
+                fs29.writeFileSync(base + ".summary.txt", readableVersion, "utf-8");
                 log(`
 \u{1F4BE} Full debug info saved to directory: ${debugArtifactsDir}`);
               } catch {
@@ -10489,8 +10489,8 @@ $ ${cliCommand}
           log(`\u{1F4E4} Response length: ${response.length} characters`);
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs27 = require("fs");
-              const path30 = require("path");
+              const fs29 = require("fs");
+              const path31 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
               const agentAny = agent;
               let fullHistory = [];
@@ -10501,8 +10501,8 @@ $ ${cliCommand}
               } else if (agentAny._messages) {
                 fullHistory = agentAny._messages;
               }
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path30.join(process.cwd(), "debug-artifacts");
-              const sessionBase = path30.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path31.join(process.cwd(), "debug-artifacts");
+              const sessionBase = path31.join(
                 debugArtifactsDir,
                 `session-${_checkName || "unknown"}-${timestamp}`
               );
@@ -10514,7 +10514,7 @@ $ ${cliCommand}
                 schema: effectiveSchema,
                 totalMessages: fullHistory.length
               };
-              fs27.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
+              fs29.writeFileSync(sessionBase + ".json", JSON.stringify(sessionData, null, 2), "utf-8");
               let readable = `=============================================================
 `;
               readable += `COMPLETE AI SESSION HISTORY (AFTER RESPONSE)
@@ -10541,7 +10541,7 @@ ${"=".repeat(60)}
 `;
                 readable += content + "\n";
               });
-              fs27.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
+              fs29.writeFileSync(sessionBase + ".summary.txt", readable, "utf-8");
               log(`\u{1F4BE} Complete session history saved:`);
               log(`   - Contains ALL ${fullHistory.length} messages (prompts + responses)`);
             } catch (error) {
@@ -10550,11 +10550,11 @@ ${"=".repeat(60)}
           }
           if (process.env.VISOR_DEBUG_AI_SESSIONS === "true") {
             try {
-              const fs27 = require("fs");
-              const path30 = require("path");
+              const fs29 = require("fs");
+              const path31 = require("path");
               const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path30.join(process.cwd(), "debug-artifacts");
-              const responseFile = path30.join(
+              const debugArtifactsDir = process.env.VISOR_DEBUG_ARTIFACTS || path31.join(process.cwd(), "debug-artifacts");
+              const responseFile = path31.join(
                 debugArtifactsDir,
                 `response-${_checkName || "unknown"}-${timestamp}.txt`
               );
@@ -10587,7 +10587,7 @@ ${"=".repeat(60)}
 `;
               responseContent += `${"=".repeat(60)}
 `;
-              fs27.writeFileSync(responseFile, responseContent, "utf-8");
+              fs29.writeFileSync(responseFile, responseContent, "utf-8");
               log(`\u{1F4BE} Response saved to: ${responseFile}`);
             } catch (error) {
               log(`\u26A0\uFE0F Could not save response file: ${error}`);
@@ -10605,9 +10605,9 @@ ${"=".repeat(60)}
                 await telemetry.shutdown();
                 log(`\u{1F4CA} OpenTelemetry trace saved to: ${traceFilePath}`);
                 if (process.env.GITHUB_ACTIONS) {
-                  const fs27 = require("fs");
-                  if (fs27.existsSync(traceFilePath)) {
-                    const stats = fs27.statSync(traceFilePath);
+                  const fs29 = require("fs");
+                  if (fs29.existsSync(traceFilePath)) {
+                    const stats = fs29.statSync(traceFilePath);
                     console.log(
                       `::notice title=AI Trace Saved::OpenTelemetry trace file size: ${stats.size} bytes`
                     );
@@ -10645,8 +10645,8 @@ ${"=".repeat(60)}
        * Load schema content from schema files or inline definitions
        */
       async loadSchemaContent(schema) {
-        const fs27 = require("fs").promises;
-        const path30 = require("path");
+        const fs29 = require("fs").promises;
+        const path31 = require("path");
         if (typeof schema === "object" && schema !== null) {
           log("\u{1F4CB} Using inline schema object from configuration");
           return JSON.stringify(schema);
@@ -10659,14 +10659,14 @@ ${"=".repeat(60)}
           }
         } catch {
         }
-        if ((schema.startsWith("./") || schema.includes(".json")) && !path30.isAbsolute(schema)) {
+        if ((schema.startsWith("./") || schema.includes(".json")) && !path31.isAbsolute(schema)) {
           if (schema.includes("..") || schema.includes("\0")) {
             throw new Error("Invalid schema path: path traversal not allowed");
           }
           try {
-            const schemaPath = path30.resolve(process.cwd(), schema);
+            const schemaPath = path31.resolve(process.cwd(), schema);
             log(`\u{1F4CB} Loading custom schema from file: ${schemaPath}`);
-            const schemaContent = await fs27.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs29.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch (error) {
             throw new Error(
@@ -10680,22 +10680,22 @@ ${"=".repeat(60)}
         }
         const candidatePaths = [
           // GitHub Action bundle location
-          path30.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
+          path31.join(__dirname, "output", sanitizedSchemaName, "schema.json"),
           // Historical fallback when src/output was inadvertently bundled as output1/
-          path30.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
+          path31.join(__dirname, "output1", sanitizedSchemaName, "schema.json"),
           // Local dev (repo root)
-          path30.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
+          path31.join(process.cwd(), "output", sanitizedSchemaName, "schema.json")
         ];
         for (const schemaPath of candidatePaths) {
           try {
-            const schemaContent = await fs27.readFile(schemaPath, "utf-8");
+            const schemaContent = await fs29.readFile(schemaPath, "utf-8");
             return schemaContent.trim();
           } catch {
           }
         }
-        const distPath = path30.join(__dirname, "output", sanitizedSchemaName, "schema.json");
-        const distAltPath = path30.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
-        const cwdPath = path30.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
+        const distPath = path31.join(__dirname, "output", sanitizedSchemaName, "schema.json");
+        const distAltPath = path31.join(__dirname, "output1", sanitizedSchemaName, "schema.json");
+        const cwdPath = path31.join(process.cwd(), "output", sanitizedSchemaName, "schema.json");
         throw new Error(
           `Failed to load schema '${sanitizedSchemaName}'. Tried: ${distPath}, ${distAltPath}, and ${cwdPath}. Ensure build copies 'output/' into dist (build:cli), or provide a custom schema file/path.`
         );
@@ -14413,6 +14413,17 @@ var init_config_schema = __esm({
             graceful_restart: {
               $ref: "#/definitions/GracefulRestartConfig",
               description: "Graceful restart configuration"
+            },
+            task_evaluate: {
+              anyOf: [
+                {
+                  type: "boolean"
+                },
+                {
+                  $ref: "#/definitions/TaskEvaluateConfig"
+                }
+              ],
+              description: "Automatically evaluate completed tasks using an LLM judge. Requires task_tracking to be enabled. Runs asynchronously after task completion. Set to `true` for defaults, or provide an object to configure."
             }
           },
           required: ["version"],
@@ -15285,7 +15296,7 @@ var init_config_schema = __esm({
               description: "Arguments/inputs for the workflow"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047%3E%3E",
               description: "Override specific step configurations in the workflow"
             },
             output_mapping: {
@@ -15301,7 +15312,7 @@ var init_config_schema = __esm({
               description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)"
             },
             workflow_overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047%3E%3E",
               description: "Alias for overrides - workflow step overrides (backward compatibility)"
             },
             ref: {
@@ -16029,7 +16040,7 @@ var init_config_schema = __esm({
               description: "Custom output name (defaults to workflow name)"
             },
             overrides: {
-              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E%3E",
+              $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047%3E%3E",
               description: "Step overrides"
             },
             output_mapping: {
@@ -16044,13 +16055,13 @@ var init_config_schema = __esm({
             "^x-": {}
           }
         },
-        "Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281>>": {
+        "Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047>>": {
           type: "object",
           additionalProperties: {
-            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E"
+            $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047%3E"
           }
         },
-        "Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281>": {
+        "Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047>": {
           type: "object",
           additionalProperties: false
         },
@@ -17953,6 +17964,32 @@ var init_config_schema = __esm({
           },
           additionalProperties: false,
           description: "Graceful restart configuration",
+          patternProperties: {
+            "^x-": {}
+          }
+        },
+        TaskEvaluateConfig: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+              description: "Enable auto-evaluation (default: true when config object is present)"
+            },
+            model: {
+              type: "string",
+              description: 'LLM model to use for evaluation (e.g. "gemini-2.5-flash", "claude-sonnet-4-5")'
+            },
+            provider: {
+              type: "string",
+              description: "AI provider: google, openai, anthropic"
+            },
+            prompt: {
+              type: "string",
+              description: "Custom system prompt for the evaluator (overrides the default evaluation prompt)"
+            }
+          },
+          additionalProperties: false,
+          description: "Configuration for automatic task evaluation via LLM judge.",
           patternProperties: {
             "^x-": {}
           }
@@ -20496,17 +20533,17 @@ var init_workflow_check_provider = __esm({
        * so it can be executed by the state machine as a nested workflow.
        */
       async loadWorkflowFromConfigPath(sourcePath, baseDir) {
-        const path30 = require("path");
-        const fs27 = require("fs");
+        const path31 = require("path");
+        const fs29 = require("fs");
         const yaml6 = require("js-yaml");
-        const resolved = path30.isAbsolute(sourcePath) ? sourcePath : path30.resolve(baseDir, sourcePath);
-        if (!fs27.existsSync(resolved)) {
+        const resolved = path31.isAbsolute(sourcePath) ? sourcePath : path31.resolve(baseDir, sourcePath);
+        if (!fs29.existsSync(resolved)) {
           throw new Error(`Workflow config not found at: ${resolved}`);
         }
-        const rawContent = fs27.readFileSync(resolved, "utf8");
+        const rawContent = fs29.readFileSync(resolved, "utf8");
         const rawData = yaml6.load(rawContent);
         if (rawData.imports && Array.isArray(rawData.imports)) {
-          const configDir = path30.dirname(resolved);
+          const configDir = path31.dirname(resolved);
           for (const source of rawData.imports) {
             const results = await this.registry.import(source, {
               basePath: configDir,
@@ -20536,8 +20573,8 @@ ${errors}`);
         if (!steps || Object.keys(steps).length === 0) {
           throw new Error(`Config '${resolved}' does not contain any steps to execute as a workflow`);
         }
-        const id = path30.basename(resolved).replace(/\.(ya?ml)$/i, "");
-        const name = loaded.name || `Workflow from ${path30.basename(resolved)}`;
+        const id = path31.basename(resolved).replace(/\.(ya?ml)$/i, "");
+        const name = loaded.name || `Workflow from ${path31.basename(resolved)}`;
         const workflowDef = {
           id,
           name,
@@ -21953,28 +21990,1572 @@ var init_github_auth = __esm({
   }
 });
 
+// src/debug-visualizer/trace-reader.ts
+var trace_reader_exports = {};
+__export(trace_reader_exports, {
+  buildExecutionTree: () => buildExecutionTree,
+  computeTimeline: () => computeTimeline,
+  extractStateSnapshots: () => extractStateSnapshots,
+  parseNDJSONTrace: () => parseNDJSONTrace
+});
+async function parseNDJSONTrace(filePath) {
+  const spans = [];
+  let lineNumber = 0;
+  const fileStream = fs14.createReadStream(filePath);
+  const rl = readline.createInterface({
+    input: fileStream,
+    crlfDelay: Infinity
+  });
+  for await (const line of rl) {
+    lineNumber++;
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const rawSpan = JSON.parse(line);
+      const processedSpan = processRawSpan(rawSpan);
+      spans.push(processedSpan);
+    } catch (error) {
+      console.warn(`[trace-reader] Malformed JSON at line ${lineNumber}: ${error}`);
+    }
+  }
+  if (spans.length === 0) {
+    throw new Error("No valid spans found in trace file");
+  }
+  const tree = buildExecutionTree(spans);
+  const snapshots = extractStateSnapshots(spans);
+  const timeline = computeTimeline(spans);
+  const sortedSpans = [...spans].sort((a, b) => compareTimeValues(a.startTime, b.startTime));
+  const firstSpan = sortedSpans[0];
+  const lastSpan = sortedSpans[sortedSpans.length - 1];
+  const startTimeMs = timeValueToMillis(firstSpan.startTime);
+  const endTimeMs = timeValueToMillis(lastSpan.endTime);
+  return {
+    runId: tree.checkId,
+    traceId: firstSpan.traceId,
+    spans,
+    tree,
+    timeline,
+    snapshots,
+    metadata: {
+      startTime: timeValueToISO(firstSpan.startTime),
+      endTime: timeValueToISO(lastSpan.endTime),
+      duration: endTimeMs - startTimeMs,
+      totalSpans: spans.length,
+      totalSnapshots: snapshots.length
+    }
+  };
+}
+function processRawSpan(rawSpan) {
+  const traceId = rawSpan.traceId || "";
+  const spanId = rawSpan.spanId || "";
+  const parentSpanId = rawSpan.parentSpanId || void 0;
+  const name = rawSpan.name || "unknown";
+  const startTime = rawSpan.startTime || [0, 0];
+  const endTime = rawSpan.endTime || rawSpan.startTime || [0, 0];
+  const startMs = timeValueToMillis(startTime);
+  const endMs = timeValueToMillis(endTime);
+  const duration = endMs - startMs;
+  const attributes = rawSpan.attributes || {};
+  const events = (rawSpan.events || []).map((evt) => ({
+    name: evt.name || "unknown",
+    time: evt.time || [0, 0],
+    timestamp: evt.timestamp || timeValueToISO(evt.time || [0, 0]),
+    attributes: evt.attributes || {}
+  }));
+  const status = rawSpan.status?.code === 2 ? "error" : "ok";
+  return {
+    traceId,
+    spanId,
+    parentSpanId,
+    name,
+    startTime,
+    endTime,
+    duration,
+    attributes,
+    events,
+    status
+  };
+}
+function buildExecutionTree(spans) {
+  const nodeMap = /* @__PURE__ */ new Map();
+  for (const span of spans) {
+    const node = createExecutionNode(span);
+    nodeMap.set(span.spanId, node);
+  }
+  let rootNode;
+  for (const span of spans) {
+    const node = nodeMap.get(span.spanId);
+    if (!span.parentSpanId) {
+      rootNode = node;
+    } else {
+      const parent = nodeMap.get(span.parentSpanId);
+      if (parent) {
+        parent.children.push(node);
+      } else {
+        console.warn(`[trace-reader] Orphaned span: ${span.spanId} (parent: ${span.parentSpanId})`);
+      }
+    }
+  }
+  if (!rootNode) {
+    console.warn("[trace-reader] No root span found, creating synthetic root");
+    rootNode = {
+      checkId: "synthetic-root",
+      type: "run",
+      status: "completed",
+      children: Array.from(nodeMap.values()).filter((n) => !n.span.parentSpanId),
+      span: spans[0],
+      // Use first span as placeholder
+      state: {}
+    };
+  }
+  return rootNode;
+}
+function createExecutionNode(span) {
+  const attrs = span.attributes;
+  const checkId = attrs["visor.check.id"] || attrs["visor.run.id"] || span.spanId;
+  let type = "unknown";
+  if (span.name === "visor.run") {
+    type = "run";
+  } else if (span.name === "visor.check") {
+    type = "check";
+  } else if (span.name.startsWith("visor.provider.")) {
+    type = "provider";
+  }
+  let status = "completed";
+  if (span.status === "error") {
+    status = "error";
+  } else if (attrs["visor.check.skipped"] === true) {
+    status = "skipped";
+  }
+  const state = {};
+  if (attrs["visor.check.input.context"]) {
+    try {
+      state.inputContext = JSON.parse(attrs["visor.check.input.context"]);
+    } catch {
+      state.inputContext = attrs["visor.check.input.context"];
+    }
+  }
+  if (attrs["visor.check.output"]) {
+    try {
+      state.output = JSON.parse(attrs["visor.check.output"]);
+    } catch {
+      state.output = attrs["visor.check.output"];
+    }
+  }
+  if (span.status === "error" || attrs["visor.check.error"]) {
+    state.errors = [attrs["visor.check.error"] || "Unknown error"];
+  }
+  state.metadata = {
+    type: attrs["visor.check.type"],
+    duration: span.duration,
+    provider: attrs["visor.provider.type"]
+  };
+  return {
+    checkId,
+    type,
+    status,
+    children: [],
+    span,
+    state
+  };
+}
+function extractStateSnapshots(spans) {
+  const snapshots = [];
+  for (const span of spans) {
+    for (const event of span.events) {
+      if (event.name === "state.snapshot") {
+        const attrs = event.attributes || {};
+        const snapshot = {
+          checkId: attrs["visor.snapshot.check_id"] || span.attributes["visor.check.id"] || "unknown",
+          timestamp: attrs["visor.snapshot.timestamp"] || event.timestamp || timeValueToISO(event.time),
+          timestampNanos: event.time,
+          outputs: parseJSON(attrs["visor.snapshot.outputs"], {}),
+          memory: parseJSON(attrs["visor.snapshot.memory"], {})
+        };
+        snapshots.push(snapshot);
+      }
+    }
+  }
+  snapshots.sort((a, b) => compareTimeValues(a.timestampNanos, b.timestampNanos));
+  return snapshots;
+}
+function computeTimeline(spans) {
+  const events = [];
+  for (const span of spans) {
+    const checkId = span.attributes["visor.check.id"] || span.spanId;
+    events.push({
+      type: "check.started",
+      checkId,
+      timestamp: timeValueToISO(span.startTime),
+      timestampNanos: span.startTime,
+      metadata: {
+        name: span.name,
+        type: span.attributes["visor.check.type"]
+      }
+    });
+    events.push({
+      type: span.status === "error" ? "check.failed" : "check.completed",
+      checkId,
+      timestamp: timeValueToISO(span.endTime),
+      timestampNanos: span.endTime,
+      duration: span.duration,
+      status: span.status,
+      metadata: {
+        name: span.name
+      }
+    });
+    for (const evt of span.events) {
+      events.push({
+        type: evt.name === "state.snapshot" ? "state.snapshot" : "event",
+        checkId: evt.attributes?.["visor.snapshot.check_id"] || checkId,
+        timestamp: evt.timestamp || timeValueToISO(evt.time),
+        timestampNanos: evt.time,
+        metadata: {
+          eventName: evt.name,
+          attributes: evt.attributes
+        }
+      });
+    }
+  }
+  events.sort((a, b) => compareTimeValues(a.timestampNanos, b.timestampNanos));
+  return events;
+}
+function timeValueToMillis(timeValue) {
+  const [seconds, nanos] = timeValue;
+  return seconds * 1e3 + nanos / 1e6;
+}
+function timeValueToISO(timeValue) {
+  const millis = timeValueToMillis(timeValue);
+  return new Date(millis).toISOString();
+}
+function compareTimeValues(a, b) {
+  if (a[0] !== b[0]) {
+    return a[0] - b[0];
+  }
+  return a[1] - b[1];
+}
+function parseJSON(value, defaultValue) {
+  if (typeof value !== "string") {
+    return defaultValue;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return defaultValue;
+  }
+}
+var fs14, readline;
+var init_trace_reader = __esm({
+  "src/debug-visualizer/trace-reader.ts"() {
+    "use strict";
+    fs14 = __toESM(require("fs"));
+    readline = __toESM(require("readline"));
+  }
+});
+
+// src/agent-protocol/trace-serializer.ts
+function resolveBackendConfig(overrides) {
+  const explicit = process.env.VISOR_TRACE_BACKEND;
+  return {
+    type: overrides?.type || explicit || "auto",
+    grafanaUrl: overrides?.grafanaUrl || process.env.GRAFANA_URL,
+    grafanaDatasourceId: overrides?.grafanaDatasourceId || process.env.GRAFANA_TEMPO_DATASOURCE_ID,
+    jaegerUrl: overrides?.jaegerUrl || process.env.JAEGER_URL,
+    traceDir: overrides?.traceDir || process.env.VISOR_TRACE_DIR || "output/traces",
+    authToken: overrides?.authToken || process.env.GRAFANA_TOKEN
+  };
+}
+function parseOTLPResponse(data) {
+  const spans = [];
+  if (data.batches) {
+    for (const batch of data.batches) {
+      for (const ss of batch.scopeSpans || []) {
+        for (const s of ss.spans || []) {
+          spans.push(normalizeOTLPSpan(s));
+        }
+      }
+    }
+    return spans;
+  }
+  if (data.data && Array.isArray(data.data)) {
+    for (const trace2 of data.data) {
+      for (const s of trace2.spans || []) {
+        spans.push(normalizeJaegerSpan(s, trace2.traceID));
+      }
+    }
+    return spans;
+  }
+  return spans;
+}
+function normalizeOTLPSpan(s) {
+  const startNs = parseInt(s.startTimeUnixNano || "0", 10);
+  const endNs = parseInt(s.endTimeUnixNano || "0", 10);
+  const traceId = decodeOTLPId(s.traceId);
+  const spanId = decodeOTLPId(s.spanId);
+  const parentSpanId = s.parentSpanId ? decodeOTLPId(s.parentSpanId) : void 0;
+  const attributes = {};
+  for (const attr of s.attributes || []) {
+    const val = attr.value;
+    if (val.stringValue !== void 0) attributes[attr.key] = val.stringValue;
+    else if (val.intValue !== void 0) attributes[attr.key] = parseInt(val.intValue, 10);
+    else if (val.boolValue !== void 0) attributes[attr.key] = val.boolValue;
+    else if (val.doubleValue !== void 0) attributes[attr.key] = val.doubleValue;
+  }
+  const events = [];
+  for (const evt of s.events || []) {
+    const evtAttrs = {};
+    for (const a of evt.attributes || []) {
+      const v = a.value;
+      if (v.stringValue !== void 0) evtAttrs[a.key] = v.stringValue;
+      else if (v.intValue !== void 0) evtAttrs[a.key] = parseInt(v.intValue, 10);
+    }
+    events.push({ name: evt.name, attributes: evtAttrs });
+  }
+  return {
+    traceId,
+    spanId,
+    parentSpanId,
+    name: s.name || "unknown",
+    startTimeMs: startNs / 1e6,
+    endTimeMs: endNs / 1e6,
+    durationMs: (endNs - startNs) / 1e6,
+    attributes,
+    events,
+    status: s.status?.code === 2 ? "error" : "ok"
+  };
+}
+function normalizeJaegerSpan(s, traceId) {
+  const attributes = {};
+  for (const tag of s.tags || []) {
+    attributes[tag.key] = tag.value;
+  }
+  const events = [];
+  for (const log2 of s.logs || []) {
+    const evtAttrs = {};
+    for (const f of log2.fields || []) evtAttrs[f.key] = f.value;
+    events.push({ name: evtAttrs["event"] || "log", attributes: evtAttrs });
+  }
+  const startUs = s.startTime || 0;
+  const durationUs = s.duration || 0;
+  return {
+    traceId,
+    spanId: s.spanID,
+    parentSpanId: s.references?.find((r) => r.refType === "CHILD_OF")?.spanID,
+    name: s.operationName || "unknown",
+    startTimeMs: startUs / 1e3,
+    endTimeMs: (startUs + durationUs) / 1e3,
+    durationMs: durationUs / 1e3,
+    attributes,
+    events,
+    status: attributes["otel.status_code"] === "ERROR" || attributes["error"] === true ? "error" : "ok"
+  };
+}
+function decodeOTLPId(id) {
+  if (!id) return "";
+  if (/^[0-9a-f]+$/i.test(id)) return id.toLowerCase();
+  try {
+    return Buffer.from(id, "base64").toString("hex");
+  } catch {
+    return id;
+  }
+}
+function parseLocalNDJSONSpans(spans) {
+  return spans.map((s) => {
+    const startMs = timeValueToMs(s.startTime || [0, 0]);
+    const endMs = timeValueToMs(s.endTime || s.startTime || [0, 0]);
+    const events = (s.events || []).map((e) => ({
+      name: e.name,
+      attributes: e.attributes || {}
+    }));
+    return {
+      traceId: s.traceId || "",
+      spanId: s.spanId || "",
+      parentSpanId: s.parentSpanId || void 0,
+      name: s.name || "unknown",
+      startTimeMs: startMs,
+      endTimeMs: endMs,
+      durationMs: endMs - startMs,
+      attributes: s.attributes || {},
+      events,
+      status: s.status?.code === 2 ? "error" : "ok"
+    };
+  });
+}
+function timeValueToMs(tv) {
+  return tv[0] * 1e3 + tv[1] / 1e6;
+}
+async function fetchTraceSpans(traceId, config) {
+  const cfg = resolveBackendConfig(config);
+  const tryGrafana = cfg.type === "grafana" || cfg.type === "auto";
+  const tryJaeger = cfg.type === "jaeger" || cfg.type === "auto";
+  const tryFile = cfg.type === "file" || cfg.type === "auto";
+  if (tryGrafana) {
+    const spans = await fetchFromGrafanaTempo(traceId, cfg);
+    if (spans && spans.length > 0) return spans;
+  }
+  if (tryJaeger) {
+    const spans = await fetchFromJaeger(traceId, cfg);
+    if (spans && spans.length > 0) return spans;
+  }
+  if (tryFile) {
+    const spans = await fetchFromLocalFiles(traceId, cfg);
+    if (spans && spans.length > 0) return spans;
+  }
+  return [];
+}
+async function fetchFromGrafanaTempo(traceId, cfg) {
+  let grafanaUrl = cfg.grafanaUrl;
+  if (!grafanaUrl) {
+    const otlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    if (otlpEndpoint) {
+      const url = new URL(otlpEndpoint);
+      const host = url.hostname;
+      for (const port of ["3000", "8001", "80"]) {
+        try {
+          const testUrl = `http://${host}:${port}/api/health`;
+          const resp = await httpGet(testUrl, cfg.authToken, 2e3);
+          if (resp && resp.includes('"database"')) {
+            grafanaUrl = `http://${host}:${port}`;
+            break;
+          }
+        } catch {
+        }
+      }
+    }
+  }
+  if (!grafanaUrl) return null;
+  try {
+    let dsId = cfg.grafanaDatasourceId;
+    if (!dsId) {
+      const dsResp = await httpGet(`${grafanaUrl}/api/datasources`, cfg.authToken);
+      if (dsResp) {
+        const datasources = JSON.parse(dsResp);
+        const tempo = datasources.find((d) => d.type === "tempo");
+        if (tempo) dsId = tempo.id;
+      }
+    }
+    if (!dsId) return null;
+    const traceUrl = `${grafanaUrl}/api/datasources/proxy/${dsId}/api/traces/${traceId}`;
+    const resp = await httpGet(traceUrl, cfg.authToken);
+    if (!resp) return null;
+    const data = JSON.parse(resp);
+    return parseOTLPResponse(data);
+  } catch (err) {
+    logger.debug(`[TraceSerializer] Grafana Tempo fetch failed: ${err}`);
+    return null;
+  }
+}
+async function fetchFromJaeger(traceId, cfg) {
+  let jaegerUrl = cfg.jaegerUrl;
+  if (!jaegerUrl) {
+    const otlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    const host = otlpEndpoint ? new URL(otlpEndpoint).hostname : "localhost";
+    for (const port of ["16686"]) {
+      try {
+        const testUrl = `http://${host}:${port}/api/services`;
+        const resp = await httpGet(testUrl, void 0, 2e3);
+        if (resp && resp.includes('"data"')) {
+          jaegerUrl = `http://${host}:${port}`;
+          break;
+        }
+      } catch {
+      }
+    }
+  }
+  if (!jaegerUrl) return null;
+  try {
+    const traceUrl = `${jaegerUrl}/api/traces/${traceId}`;
+    const resp = await httpGet(traceUrl, cfg.authToken);
+    if (!resp) return null;
+    const data = JSON.parse(resp);
+    return parseOTLPResponse(data);
+  } catch (err) {
+    logger.debug(`[TraceSerializer] Jaeger fetch failed: ${err}`);
+    return null;
+  }
+}
+async function fetchFromLocalFiles(traceId, cfg) {
+  const traceFile = await findTraceFile(traceId, cfg.traceDir);
+  if (!traceFile) return null;
+  try {
+    const { parseNDJSONTrace: parseNDJSONTrace2 } = await Promise.resolve().then(() => (init_trace_reader(), trace_reader_exports));
+    const trace2 = await parseNDJSONTrace2(traceFile);
+    return parseLocalNDJSONSpans(trace2.spans);
+  } catch (err) {
+    logger.debug(`[TraceSerializer] Local file parse failed: ${err}`);
+    return null;
+  }
+}
+async function httpGet(url, authToken, timeoutMs) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs || 1e4);
+    const headers = {};
+    if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      headers
+    });
+    clearTimeout(timeout);
+    if (!resp.ok) return null;
+    return await resp.text();
+  } catch {
+    return null;
+  }
+}
+async function findTraceFile(traceId, traceDir) {
+  const dir = traceDir || process.env.VISOR_TRACE_DIR || "output/traces";
+  if (!fs15.existsSync(dir)) return null;
+  const files = fs15.readdirSync(dir).filter((f) => f.endsWith(".ndjson"));
+  for (const file of files) {
+    const filePath = path17.join(dir, file);
+    try {
+      const firstLine = await readFirstLine(filePath);
+      if (!firstLine) continue;
+      const parsed = JSON.parse(firstLine);
+      if (parsed.traceId === traceId) return filePath;
+    } catch {
+    }
+  }
+  return null;
+}
+async function readFirstLine(filePath) {
+  return new Promise((resolve17, reject) => {
+    const stream = fs15.createReadStream(filePath, { encoding: "utf-8" });
+    const rl = readline2.createInterface({ input: stream, crlfDelay: Infinity });
+    let resolved = false;
+    rl.on("line", (line) => {
+      if (!resolved) {
+        resolved = true;
+        rl.close();
+        stream.destroy();
+        resolve17(line.trim() || null);
+      }
+    });
+    rl.on("close", () => {
+      if (!resolved) resolve17(null);
+    });
+    rl.on("error", reject);
+  });
+}
+function isNoiseSpan(span) {
+  return NOISE_SPAN_NAMES.has(span.name);
+}
+function isWrapperSpan(span) {
+  return WRAPPER_SPAN_NAMES.has(span.name);
+}
+function buildSpanTree(spans) {
+  const filtered = spans.filter((s) => !isNoiseSpan(s));
+  const nodeMap = /* @__PURE__ */ new Map();
+  for (const span of filtered) {
+    nodeMap.set(span.spanId, { span, children: [] });
+  }
+  let root;
+  for (const span of filtered) {
+    const node = nodeMap.get(span.spanId);
+    if (!span.parentSpanId) {
+      root = node;
+    } else {
+      let parentId = span.parentSpanId;
+      while (parentId && !nodeMap.has(parentId)) {
+        const parentSpan = spans.find((s) => s.spanId === parentId);
+        parentId = parentSpan?.parentSpanId;
+      }
+      if (parentId) {
+        const parent = nodeMap.get(parentId);
+        if (parent) parent.children.push(node);
+      } else if (!root) {
+        root = node;
+      }
+    }
+  }
+  if (!root) {
+    const sorted = [...nodeMap.values()].sort((a, b) => b.span.durationMs - a.span.durationMs);
+    root = sorted[0] || { span: filtered[0], children: [] };
+  }
+  const sortChildren = (node) => {
+    node.children.sort((a, b) => a.span.startTimeMs - b.span.startTimeMs);
+    node.children.forEach(sortChildren);
+  };
+  sortChildren(root);
+  const unwrap = (node) => {
+    node.children = node.children.map(unwrap);
+    const newChildren = [];
+    for (const child of node.children) {
+      if (isWrapperSpan(child.span)) {
+        newChildren.push(...child.children);
+      } else {
+        newChildren.push(child);
+      }
+    }
+    node.children = newChildren;
+    return node;
+  };
+  unwrap(root);
+  const removeDelegateEchos = (node) => {
+    const hasDelegateChild = node.children.some((c) => c.span.name === "search.delegate");
+    if (hasDelegateChild) {
+      node.children = node.children.filter((c) => {
+        if (c.span.name !== "probe.event.tool.result") return true;
+        const toolName = c.span.attributes["tool.name"];
+        return toolName !== "search";
+      });
+    }
+    node.children.forEach(removeDelegateEchos);
+  };
+  removeDelegateEchos(root);
+  return root;
+}
+function dedupeKey(text) {
+  return text.replace(/\s+/g, " ").trim().slice(0, 100).toLowerCase();
+}
+function dedupeOrRegister(ctx, kind, text, spanName) {
+  if (!text || text.length < 20) return null;
+  const key = dedupeKey(text);
+  if (!key) return null;
+  const map = ctx[kind];
+  const existing = map.get(key);
+  if (existing && existing !== spanName) {
+    return existing;
+  }
+  const otherMap = kind === "outputs" ? ctx.intents : ctx.outputs;
+  const crossRef = otherMap.get(key);
+  if (crossRef && crossRef !== spanName) {
+    map.set(key, spanName);
+    return crossRef;
+  }
+  map.set(key, spanName);
+  return null;
+}
+async function serializeTraceForPrompt(traceIdOrPath, maxChars, backendConfig, taskResponse) {
+  let spans;
+  if (traceIdOrPath.includes("/") || traceIdOrPath.endsWith(".ndjson")) {
+    const { parseNDJSONTrace: parseNDJSONTrace2 } = await Promise.resolve().then(() => (init_trace_reader(), trace_reader_exports));
+    const trace2 = await parseNDJSONTrace2(traceIdOrPath);
+    spans = parseLocalNDJSONSpans(trace2.spans);
+  } else {
+    spans = await fetchTraceSpans(traceIdOrPath, backendConfig);
+  }
+  if (spans.length === 0) {
+    return "(no trace data available)";
+  }
+  const tree = buildSpanTree(spans);
+  const routeIntentTopic = extractRouteIntentTopic(spans);
+  const fullOutput = (maxChars ?? 4e3) > 1e5;
+  return renderSpanYaml(tree, spans, {
+    maxChars: maxChars ?? 4e3,
+    fallbackIntent: routeIntentTopic,
+    fullOutput,
+    taskResponse
+  });
+}
+function renderSpanYaml(tree, allSpans, opts) {
+  const fullOutput = opts?.fullOutput ?? false;
+  const maxLen = fullOutput ? 1e5 : 120;
+  const dedup = { outputs: /* @__PURE__ */ new Map(), intents: /* @__PURE__ */ new Map() };
+  const lines = [];
+  renderYamlNode(tree, 0, lines, dedup, opts?.fallbackIntent, fullOutput, maxLen);
+  if (opts?.taskResponse) {
+    while (lines.length > 0 && /^\s*output:\s*=\s*\S+/.test(lines[lines.length - 1])) {
+      lines.pop();
+    }
+    const ml = fullOutput ? 1e5 : 500;
+    const text = opts.taskResponse.replace(/\*\*/g, "").replace(/`/g, "").trim();
+    if (fullOutput) {
+      lines.push("  response: |");
+      for (const line of text.split("\n")) {
+        lines.push(`    ${line}`);
+      }
+    } else {
+      const truncated = truncate(text.replace(/\n/g, " "), ml);
+      lines.push(`  response: ${truncated}`);
+      if (text.length > ml) {
+        lines.push("  # use --full for complete response");
+      }
+    }
+  }
+  return lines.join("\n");
+}
+function renderYamlNode(node, indent, lines, dedup, fallbackIntent, fullOutput, maxLen, parentSpan) {
+  const pad = "  ".repeat(indent);
+  const attrs = node.span.attributes;
+  const duration = formatDurationMs(node.span.durationMs);
+  const name = node.span.name;
+  const ml = maxLen ?? 120;
+  const parentCheckId = parentSpan?.attributes["visor.check.id"];
+  const parentCheckName = parentCheckId ? String(parentCheckId).replace(/^visor\.check\./, "") : void 0;
+  const displayName = name === "ai.request" && parentCheckName ? parentCheckName : String(attrs["visor.check.id"] || name).replace(/^visor\.check\./, "");
+  const toolName = attrs["tool.name"] || attrs["visor.tool.name"];
+  if (toolName) {
+    const toolInput = extractToolInput(String(toolName), attrs);
+    const toolResultLen = attrs["tool.result.length"] || attrs["tool.result.count"];
+    const tn = String(toolName);
+    const isSearchTool = tn === "search" || tn === "searchCode" || tn === "search_code";
+    const numLen = toolResultLen ? Number(toolResultLen) : -1;
+    const noResults = isSearchTool && numLen >= 0 && numLen < 500;
+    const resultSize = noResults ? " \u2192 no results" : toolResultLen ? ` \u2192 ${formatSize(numLen)}` : "";
+    const successMark = attrs["tool.success"] === false ? " \u2717" : "";
+    lines.push(`${pad}- ${tn}(${toolInput})${resultSize}${successMark}`);
+    return;
+  }
+  if (name === "search.delegate") {
+    const query = attrs["search.query"] || "";
+    lines.push(`${pad}search.delegate("${truncate(String(query), 80)}") \u2014 ${duration}:`);
+    for (const child of node.children) {
+      renderYamlNode(
+        child,
+        indent + 1,
+        lines,
+        dedup,
+        fallbackIntent,
+        fullOutput,
+        maxLen,
+        node.span
+      );
+    }
+    return;
+  }
+  if (name === "ai.request") {
+    const model = attrs["ai.model"] || attrs["gen_ai.request.model"] || "?";
+    const tokensIn = attrs["ai.input_length"] || attrs["gen_ai.usage.input_tokens"] || "";
+    const tokensOut = attrs["gen_ai.usage.output_tokens"] || "";
+    const tokenParts = [];
+    if (tokensIn) tokenParts.push(`${tokensIn} in`);
+    if (tokensOut) tokenParts.push(`${tokensOut} out`);
+    const tokenStr = tokenParts.length > 0 ? ` \u2014 ${tokenParts.join(", ")}` : "";
+    const hasChildren2 = node.children.length > 0;
+    lines.push(`${pad}ai: ${model} \u2014 ${duration}${tokenStr}${hasChildren2 ? ":" : ""}`);
+    const aiInput = String(attrs["ai.input"] || "");
+    let intent = extractAIIntent(aiInput, ml);
+    if (!intent && parentSpan) {
+      const promptPreview = String(
+        parentSpan.attributes["visor.provider.request.prompt.preview"] || ""
+      );
+      if (promptPreview) intent = extractAIIntent(promptPreview, ml);
+      if (!intent) {
+        const inputOutputs = String(parentSpan.attributes["visor.check.input.outputs"] || "");
+        if (inputOutputs) {
+          try {
+            const o = JSON.parse(inputOutputs);
+            const t = o["route-intent"]?.topic;
+            if (t) intent = truncate(String(t), ml);
+          } catch {
+          }
+        }
+      }
+    }
+    if (!intent && fallbackIntent && parentSpan?.name !== "search.delegate") {
+      intent = fallbackIntent;
+    }
+    if (intent) {
+      const intentRef = dedupeOrRegister(dedup, "intents", intent, displayName);
+      if (intentRef) {
+        lines.push(`${pad}  intent: = ${intentRef}`);
+      } else {
+        lines.push(`${pad}  intent: ${intent}`);
+      }
+    }
+    for (const child of node.children) {
+      renderYamlNode(
+        child,
+        indent + 1,
+        lines,
+        dedup,
+        fallbackIntent,
+        fullOutput,
+        maxLen,
+        node.span
+      );
+    }
+    if (parentSpan) {
+      const checkOutput = String(parentSpan.attributes["visor.check.output"] || "");
+      if (checkOutput) {
+        renderYamlOutput(
+          checkOutput,
+          `${pad}  `,
+          "output",
+          displayName,
+          dedup,
+          lines,
+          fullOutput,
+          ml
+        );
+      }
+    }
+    return;
+  }
+  if (name === "visor.run") {
+    const source = attrs["visor.run.source"] || "";
+    const visorVersion = attrs["visor.version"] || "";
+    const probeVersion = attrs["probe.version"] || "";
+    const slackUser = attrs["slack.user_id"] || "";
+    lines.push(`${pad}visor.run:`);
+    lines.push(`${pad}  trace_id: ${node.span.traceId}`);
+    if (visorVersion) lines.push(`${pad}  visor: ${visorVersion}`);
+    if (probeVersion) lines.push(`${pad}  probe: ${probeVersion}`);
+    if (source) lines.push(`${pad}  source: ${source}`);
+    if (slackUser) lines.push(`${pad}  slack_user: ${slackUser}`);
+    lines.push(`${pad}  duration: ${duration}`);
+    for (const child of node.children) {
+      renderYamlNode(
+        child,
+        indent + 1,
+        lines,
+        dedup,
+        fallbackIntent,
+        fullOutput,
+        maxLen,
+        node.span
+      );
+    }
+    return;
+  }
+  const checkId = attrs["visor.check.id"];
+  const checkType = attrs["visor.check.type"];
+  if (checkId || name.startsWith("visor.check.")) {
+    const cleanName = String(checkId || name).replace(/^visor\.check\./, "");
+    const errMark2 = node.span.status === "error" ? " \u2717" : "";
+    lines.push(`${pad}${cleanName}:${errMark2}`);
+    if (checkType) lines.push(`${pad}  type: ${checkType}`);
+    lines.push(`${pad}  duration: ${duration}`);
+    const inputContext = String(attrs["visor.check.input.context"] || "");
+    const inputOutputs = String(attrs["visor.check.input.outputs"] || "");
+    const question = extractQuestionFromContext(inputContext, inputOutputs);
+    if (question || inputOutputs && inputOutputs !== "{}") {
+      renderYamlInput(inputOutputs, `${pad}  `, lines, fullOutput, ml, question);
+    }
+    for (const child of node.children) {
+      renderYamlNode(
+        child,
+        indent + 1,
+        lines,
+        dedup,
+        fallbackIntent,
+        fullOutput,
+        maxLen,
+        node.span
+      );
+    }
+    const hasDirectAiChild = node.children.some((c) => c.span.name === "ai.request");
+    if (!hasDirectAiChild) {
+      const output = String(attrs["visor.check.output"] || "");
+      if (output) {
+        renderYamlOutput(output, `${pad}  `, "output", cleanName, dedup, lines, fullOutput, ml);
+      }
+    }
+    return;
+  }
+  const errMark = node.span.status === "error" ? " \u2717" : "";
+  const hasChildren = node.children.length > 0;
+  lines.push(`${pad}${name} \u2014 ${duration}${errMark}${hasChildren ? ":" : ""}`);
+  for (const child of node.children) {
+    renderYamlNode(child, indent + 1, lines, dedup, fallbackIntent, fullOutput, maxLen, node.span);
+  }
+}
+function renderYamlOutput(rawOutput, pad, label, spanName, dedup, lines, fullOutput, maxLen) {
+  const ml = maxLen ?? 120;
+  let obj;
+  try {
+    obj = JSON.parse(rawOutput);
+  } catch {
+    obj = parseTruncatedJson(rawOutput);
+    if (!obj || typeof obj !== "object") return;
+  }
+  if (typeof obj === "object" && !Array.isArray(obj)) {
+    const keys = Object.keys(obj);
+    if (keys.length === 1 && typeof obj[keys[0]] === "object" && obj[keys[0]] !== null) {
+      obj = obj[keys[0]];
+    }
+    const objKeys = Object.keys(obj);
+    if (objKeys.length === 1 && objKeys[0] === "text" && typeof obj.text === "string") {
+      const text = obj.text.replace(/\*\*/g, "").replace(/`/g, "").trim();
+      const flat = text.replace(/\n/g, " ");
+      const preview2 = fullOutput ? flat : truncate(flat, ml);
+      const ref2 = dedupeOrRegister(dedup, "outputs", truncate(flat, 100), spanName);
+      if (ref2) {
+        lines.push(`${pad}${label}: = ${ref2}`);
+      } else {
+        lines.push(`${pad}${label}: ${preview2}`);
+      }
+      return;
+    }
+  }
+  const preview = formatJsonPreview(obj, 200);
+  if (!preview) return;
+  const ref = dedupeOrRegister(dedup, "outputs", preview, spanName);
+  if (ref) {
+    lines.push(`${pad}${label}: = ${ref}`);
+    return;
+  }
+  renderYamlValue(obj, pad, label, lines, fullOutput, ml);
+}
+function renderYamlValue(val, pad, key, lines, fullOutput, maxLen, depth) {
+  const ml = maxLen ?? 120;
+  const d = depth ?? 0;
+  if (val === null || val === void 0) return;
+  if (typeof val === "boolean" || typeof val === "number") {
+    lines.push(`${pad}${key}: ${val}`);
+    return;
+  }
+  if (typeof val === "string") {
+    if (val.startsWith("{") || val.startsWith("[")) return;
+    const clean = val.replace(/\*\*/g, "").replace(/`/g, "").trim();
+    if (fullOutput && clean.length > 100 && clean.includes("\n")) {
+      lines.push(`${pad}${key}: |`);
+      for (const line of clean.split("\n").slice(0, fullOutput ? 500 : 5)) {
+        lines.push(`${pad}  ${line}`);
+      }
+    } else {
+      const flat = clean.replace(/\n/g, " ");
+      const truncVal = fullOutput ? flat : truncate(flat, ml);
+      lines.push(`${pad}${key}: ${truncVal}`);
+    }
+    return;
+  }
+  if (Array.isArray(val)) {
+    if (val.length === 0) {
+      lines.push(`${pad}${key}: []`);
+      return;
+    }
+    const maxItems = fullOutput ? 20 : 3;
+    lines.push(`${pad}${key}:`);
+    for (let i = 0; i < Math.min(val.length, maxItems); i++) {
+      const item = val[i];
+      if (typeof item === "object" && item !== null) {
+        const entries = Object.entries(item).filter(
+          ([k]) => k !== "raw" && k !== "skills" && k !== "tags"
+        );
+        if (entries.length > 0) {
+          const [firstKey, firstVal] = entries[0];
+          if (firstVal === null || firstVal === void 0 || typeof firstVal !== "object") {
+            const sv = typeof firstVal === "string" ? fullOutput ? firstVal.split("\n")[0] : truncate(firstVal.split("\n")[0], ml) : String(firstVal ?? "");
+            lines.push(`${pad}  - ${firstKey}: ${sv}`);
+          } else {
+            lines.push(`${pad}  - ${firstKey}:`);
+            for (const [ck, cv] of Object.entries(firstVal)) {
+              if (ck === "raw" || ck === "skills" || ck === "tags") continue;
+              renderYamlValue(cv, `${pad}      `, ck, lines, fullOutput, ml, d + 2);
+            }
+          }
+          for (let j = 1; j < entries.length; j++) {
+            const [k, v] = entries[j];
+            renderYamlValue(v, `${pad}    `, k, lines, fullOutput, ml, d + 1);
+          }
+        }
+      } else {
+        lines.push(`${pad}  - ${truncate(String(item), ml)}`);
+      }
+    }
+    if (val.length > maxItems) {
+      lines.push(`${pad}  # ... ${val.length - maxItems} more`);
+    }
+    return;
+  }
+  if (typeof val === "object") {
+    if (d > 3) {
+      const keys = Object.keys(val);
+      lines.push(`${pad}${key}: {${keys.slice(0, 4).join(", ")}${keys.length > 4 ? ", ..." : ""}}`);
+      return;
+    }
+    lines.push(`${pad}${key}:`);
+    for (const [k, v] of Object.entries(val)) {
+      if (k === "raw" || k === "skills" || k === "tags") continue;
+      renderYamlValue(v, `${pad}  `, k, lines, fullOutput, ml, d + 1);
+    }
+  }
+}
+function extractQuestionFromContext(contextStr, inputOutputsStr) {
+  if (!contextStr) return void 0;
+  try {
+    const ctx = JSON.parse(contextStr);
+    const outputs = ctx.outputs || {};
+    const routeIntent = outputs["route-intent"];
+    if (routeIntent) {
+      const topic = routeIntent.topic || routeIntent.intent || routeIntent.question;
+      if (topic && typeof topic === "string") return topic;
+      if (typeof routeIntent === "string") return routeIntent;
+    }
+    const args = ctx.args || {};
+    if (args.topic && typeof args.topic === "string") return args.topic;
+    if (args.question && typeof args.question === "string") return args.question;
+    if (args.intent && typeof args.intent === "string") return args.intent;
+    for (const key of Object.keys(outputs)) {
+      const val = outputs[key];
+      if (typeof val === "object" && val !== null) {
+        if (val.topic && typeof val.topic === "string") {
+          try {
+            const depOutputs = JSON.parse(inputOutputsStr);
+            if (depOutputs[key]) continue;
+          } catch {
+          }
+          return val.topic;
+        }
+      }
+    }
+  } catch {
+    const topicMatch = contextStr.match(/"topic"\s*:\s*"([^"]+)"/);
+    if (topicMatch) return topicMatch[1];
+  }
+  return void 0;
+}
+function renderYamlInput(inputOutputsStr, pad, lines, fullOutput, maxLen, question) {
+  const ml = maxLen ?? 120;
+  if (question) {
+    lines.push(`${pad}input: ${truncate(question, fullOutput ? 1e5 : ml)}`);
+  }
+  try {
+    const inputs = JSON.parse(inputOutputsStr);
+    if (typeof inputs !== "object" || inputs === null) return;
+    const keys = Object.keys(inputs);
+    if (keys.length === 0) return;
+    if (!question) lines.push(`${pad}input:`);
+    for (const key of keys) {
+      const val = inputs[key];
+      if (typeof val === "object" && val !== null) {
+        renderYamlValue(val, `${pad}  `, key, lines, fullOutput, ml, 0);
+      } else {
+        lines.push(`${pad}  ${key}: ${truncate(String(val), ml)}`);
+      }
+    }
+  } catch {
+  }
+}
+function extractToolInput(toolName, attrs) {
+  const result = String(attrs["tool.result"] || "");
+  const explicitInput = String(attrs["tool.input"] || "");
+  if (explicitInput) return truncate(explicitInput, 80);
+  switch (toolName) {
+    case "search": {
+      const patMatch = result.match(/Pattern: (.+)/);
+      const pathMatch = result.match(/Path: \S+\/([^\s/]+)\s/);
+      const pattern = patMatch ? patMatch[1].trim() : "";
+      const inPath = pathMatch ? pathMatch[1] : "";
+      if (pattern && inPath) return `"${truncate(pattern, 50)}" in ${inPath}`;
+      if (pattern) return `"${truncate(pattern, 60)}"`;
+      return "";
+    }
+    case "extract": {
+      const fileMatch = result.match(/Files to extract:\n\s*(\S+)/);
+      if (fileMatch) {
+        const filePath = fileMatch[1];
+        const parts = filePath.split("/");
+        return parts.length > 2 ? parts.slice(-2).join("/") : parts[parts.length - 1];
+      }
+      return "";
+    }
+    case "listFiles": {
+      const pathMatch = result.match(/^(\S+):/);
+      if (pathMatch) {
+        const parts = pathMatch[1].split("/");
+        return parts[parts.length - 1] || "";
+      }
+      return "";
+    }
+    default:
+      return truncate(explicitInput, 60);
+  }
+}
+function extractAIIntent(input, maxLen = 150) {
+  if (!input || input.length < 20) return "";
+  const qMatch = input.match(/<question>([\s\S]*?)<\/question>/);
+  if (qMatch) return truncate(qMatch[1].trim(), maxLen);
+  const crMatch = input.match(/## Current Request\s*\n(?:User: )?(.+)/);
+  if (crMatch) return truncate(crMatch[1].trim(), maxLen);
+  const userMatch = input.match(/(?:^|\n)User: (.+)/);
+  if (userMatch) return truncate(userMatch[1].trim(), maxLen);
+  const pmMatch = input.match(/Primary message[^:]*:\s*\n(.+)/);
+  if (pmMatch) return truncate(pmMatch[1].trim(), maxLen);
+  return "";
+}
+function formatJsonPreview(obj, maxLen) {
+  if (obj === null || obj === void 0) return "";
+  if (typeof obj !== "object") return truncate(String(obj), maxLen);
+  if (Array.isArray(obj)) {
+    if (obj.length === 0) return "[]";
+    const first = typeof obj[0] === "object" && obj[0] !== null ? obj[0].project_id || obj[0].id || obj[0].name || Object.keys(obj[0])[0] || "..." : String(obj[0]);
+    return `[${obj.length}] ${truncate(String(first), 30)}${obj.length > 1 ? ", ..." : ""}`;
+  }
+  const parts = [];
+  let len = 2;
+  for (const [key, val] of Object.entries(obj)) {
+    if (key === "raw" || key === "skills" || key === "tags") continue;
+    let valStr;
+    if (val === null || val === void 0) continue;
+    if (typeof val === "boolean") valStr = String(val);
+    else if (typeof val === "number") valStr = String(val);
+    else if (typeof val === "string") {
+      if (val.startsWith("{") || val.startsWith("[")) continue;
+      const clean = val.replace(/\*\*/g, "").replace(/^#+\s*/gm, "").replace(/`/g, "").trim();
+      valStr = `"${truncate(clean.split("\n")[0], Math.min(80, maxLen / 3))}"`;
+    } else if (Array.isArray(val)) valStr = `[${val.length}]`;
+    else if (typeof val === "object") valStr = `{${Object.keys(val).length} keys}`;
+    else valStr = "...";
+    const part = `${key}: ${valStr}`;
+    if (len + part.length + 2 > maxLen) {
+      parts.push("...");
+      break;
+    }
+    parts.push(part);
+    len += part.length + 2;
+  }
+  return `{${parts.join(", ")}}`;
+}
+function parseTruncatedJson(input) {
+  let pos = 0;
+  const len = input.length;
+  function skipWhitespace() {
+    while (pos < len && " 	\n\r".includes(input[pos])) pos++;
+  }
+  function parseString() {
+    if (input[pos] !== '"') return "";
+    pos++;
+    let result = "";
+    while (pos < len) {
+      const ch = input[pos];
+      if (ch === "\\" && pos + 1 < len) {
+        const next = input[pos + 1];
+        if (next === "n") {
+          result += "\n";
+          pos += 2;
+          continue;
+        }
+        if (next === "t") {
+          result += "	";
+          pos += 2;
+          continue;
+        }
+        if (next === '"') {
+          result += '"';
+          pos += 2;
+          continue;
+        }
+        if (next === "\\") {
+          result += "\\";
+          pos += 2;
+          continue;
+        }
+        result += next;
+        pos += 2;
+        continue;
+      }
+      if (ch === '"') {
+        pos++;
+        return result;
+      }
+      result += ch;
+      pos++;
+    }
+    return result;
+  }
+  function parseNumber() {
+    const start = pos;
+    if (input[pos] === "-") pos++;
+    while (pos < len && input[pos] >= "0" && input[pos] <= "9") pos++;
+    if (pos < len && input[pos] === ".") {
+      pos++;
+      while (pos < len && input[pos] >= "0" && input[pos] <= "9") pos++;
+    }
+    return Number(input.slice(start, pos));
+  }
+  function parseValue() {
+    skipWhitespace();
+    if (pos >= len) return void 0;
+    const ch = input[pos];
+    if (ch === '"') return parseString();
+    if (ch === "{") return parseObject();
+    if (ch === "[") return parseArray();
+    if (ch === "t" && input.slice(pos, pos + 4) === "true") {
+      pos += 4;
+      return true;
+    }
+    if (ch === "f" && input.slice(pos, pos + 5) === "false") {
+      pos += 5;
+      return false;
+    }
+    if (ch === "n" && input.slice(pos, pos + 4) === "null") {
+      pos += 4;
+      return null;
+    }
+    if (ch === "-" || ch >= "0" && ch <= "9") return parseNumber();
+    return void 0;
+  }
+  function parseObject() {
+    const obj = {};
+    pos++;
+    skipWhitespace();
+    while (pos < len && input[pos] !== "}") {
+      skipWhitespace();
+      if (pos >= len || input[pos] !== '"') break;
+      const key = parseString();
+      skipWhitespace();
+      if (pos >= len || input[pos] !== ":") {
+        obj[key] = void 0;
+        break;
+      }
+      pos++;
+      const val = parseValue();
+      if (val !== void 0) obj[key] = val;
+      skipWhitespace();
+      if (pos < len && input[pos] === ",") pos++;
+    }
+    if (pos < len && input[pos] === "}") pos++;
+    return obj;
+  }
+  function parseArray() {
+    const arr = [];
+    pos++;
+    skipWhitespace();
+    while (pos < len && input[pos] !== "]") {
+      const val = parseValue();
+      if (val !== void 0) arr.push(val);
+      else break;
+      skipWhitespace();
+      if (pos < len && input[pos] === ",") pos++;
+      skipWhitespace();
+    }
+    if (pos < len && input[pos] === "]") pos++;
+    return arr;
+  }
+  return parseValue();
+}
+function extractRouteIntentTopic(spans) {
+  const riSpan = spans.find((s) => s.attributes["visor.check.id"] === "route-intent");
+  if (riSpan) {
+    const output = String(riSpan.attributes["visor.check.output"] || "");
+    if (output) {
+      try {
+        const obj = JSON.parse(output);
+        if (obj.topic) return truncate(String(obj.topic), 150);
+      } catch {
+      }
+    }
+  }
+  const classifySpan = spans.find((s) => s.attributes["visor.check.id"] === "classify");
+  if (classifySpan) {
+    const output = String(classifySpan.attributes["visor.check.output"] || "");
+    if (output) {
+      try {
+        const obj = JSON.parse(output);
+        if (obj.topic) return truncate(String(obj.topic), 150);
+      } catch {
+      }
+    }
+  }
+  return void 0;
+}
+function formatSize(chars) {
+  if (chars < 1e3) return `${chars} chars`;
+  return `${(chars / 1e3).toFixed(1)}k chars`;
+}
+function formatDurationMs(ms) {
+  if (ms < 0) return "0ms";
+  if (ms < 1e3) return `${Math.round(ms)}ms`;
+  if (ms < 6e4) return `${(ms / 1e3).toFixed(1)}s`;
+  const mins = Math.floor(ms / 6e4);
+  const secs = Math.round(ms % 6e4 / 1e3);
+  return `${mins}m ${secs}s`;
+}
+function truncate(str, max) {
+  if (typeof str !== "string") return "";
+  if (str.length <= max) return str;
+  const tail = Math.min(100, Math.floor(max / 3));
+  const head = max - tail - 19;
+  if (head < 10) return str.slice(0, max - 3) + "...";
+  return str.slice(0, head) + " ...[truncated]... " + str.slice(-tail);
+}
+var fs15, readline2, path17, NOISE_SPAN_NAMES, WRAPPER_SPAN_NAMES;
+var init_trace_serializer = __esm({
+  "src/agent-protocol/trace-serializer.ts"() {
+    "use strict";
+    fs15 = __toESM(require("fs"));
+    readline2 = __toESM(require("readline"));
+    path17 = __toESM(require("path"));
+    init_logger();
+    NOISE_SPAN_NAMES = /* @__PURE__ */ new Set([
+      "engine.state.init",
+      "engine.state.waveplanning",
+      "engine.state.planready",
+      "visor.sandbox.stopAll"
+    ]);
+    WRAPPER_SPAN_NAMES = /* @__PURE__ */ new Set([
+      "engine.state.leveldispatch",
+      "visor.ai_check",
+      "probe.delegation"
+    ]);
+  }
+});
+
+// src/agent-protocol/task-evaluator.ts
+var task_evaluator_exports = {};
+__export(task_evaluator_exports, {
+  DEFAULT_EVALUATION_PROMPT: () => DEFAULT_EVALUATION_PROMPT,
+  evaluateAndStore: () => evaluateAndStore,
+  evaluateTask: () => evaluateTask
+});
+function buildEvaluationSchema(includeExecution) {
+  const schema = {
+    type: "object",
+    required: ["response_quality", "overall_rating", "summary"],
+    properties: {
+      response_quality: {
+        type: "object",
+        required: ["rating", "category", "relevance", "completeness", "actionable", "reasoning"],
+        properties: {
+          rating: { type: "integer", minimum: 1, maximum: 5 },
+          category: {
+            type: "string",
+            enum: ["excellent", "good", "adequate", "poor", "off-topic", "error"]
+          },
+          relevance: { type: "boolean" },
+          completeness: { type: "boolean" },
+          actionable: { type: "boolean" },
+          reasoning: { type: "string" }
+        }
+      },
+      overall_rating: { type: "integer", minimum: 1, maximum: 5 },
+      summary: { type: "string" }
+    }
+  };
+  if (includeExecution) {
+    schema.required.push("execution_quality");
+    schema.properties.execution_quality = {
+      type: "object",
+      required: ["rating", "category", "reasoning"],
+      properties: {
+        rating: { type: "integer", minimum: 1, maximum: 5 },
+        category: { type: "string", enum: ["efficient", "adequate", "wasteful", "error"] },
+        unnecessary_tool_calls: { type: "integer" },
+        reasoning: { type: "string" }
+      }
+    };
+  }
+  return schema;
+}
+async function evaluateTask(taskId, store, config) {
+  const { rows } = store.listTasksRaw({ limit: 500 });
+  const match = rows.find((r) => r.id === taskId || r.id.startsWith(taskId));
+  if (!match) {
+    throw new Error(`Task not found: ${taskId}`);
+  }
+  const fullTask = store.getTask(match.id);
+  if (!fullTask) {
+    throw new Error(`Task data not found: ${match.id}`);
+  }
+  const requestText = match.request_message || "No request text available";
+  let responseText = "No response available";
+  if (fullTask.status?.message) {
+    const parts = fullTask.status.message.parts ?? [];
+    const textPart = parts.find((p) => typeof p.text === "string");
+    if (textPart) {
+      responseText = textPart.text;
+    }
+  }
+  if (fullTask.status.state === "failed" && responseText === "No response available") {
+    return {
+      response_quality: {
+        rating: 1,
+        category: "error",
+        relevance: false,
+        completeness: false,
+        actionable: false,
+        reasoning: "Task failed without producing a response."
+      },
+      overall_rating: 1,
+      summary: "Task failed without producing a response."
+    };
+  }
+  let traceTree;
+  const traceId = match.metadata?.trace_id;
+  const traceFile = match.metadata?.trace_file;
+  if (traceFile || traceId) {
+    try {
+      const traceRef = traceFile || traceId;
+      traceTree = await serializeTraceForPrompt(
+        traceRef,
+        1e6,
+        { traceDir: config?.traceDir },
+        responseText !== "No response available" ? responseText : void 0
+      );
+      if (traceTree === "(no trace data available)") {
+        traceTree = void 0;
+      }
+    } catch (err) {
+      logger.debug(
+        `[TaskEvaluator] Failed to load trace: ${err instanceof Error ? err.message : err}`
+      );
+    }
+  }
+  const systemPrompt = config?.prompt || process.env.VISOR_EVAL_PROMPT || DEFAULT_EVALUATION_PROMPT;
+  const hasTrace = !!traceTree;
+  let userPrompt;
+  if (traceTree) {
+    userPrompt = `<user_request>
+${requestText}
+</user_request>
+
+<execution_trace>
+${traceTree}
+</execution_trace>`;
+  } else {
+    userPrompt = `<user_request>
+${requestText}
+</user_request>
+
+<agent_response>
+${responseText}
+</agent_response>`;
+  }
+  const { ProbeAgent: ProbeAgent2 } = require("@probelabs/probe");
+  const model = config?.model || process.env.VISOR_EVAL_MODEL || process.env.VISOR_JUDGE_MODEL || void 0;
+  const provider = config?.provider || process.env.VISOR_EVAL_PROVIDER || void 0;
+  const agentOptions = {
+    sessionId: `visor-task-eval-${Date.now()}`,
+    systemPrompt,
+    maxIterations: 1,
+    disableTools: true
+  };
+  if (model) agentOptions.model = model;
+  if (provider) agentOptions.provider = provider;
+  if (config?.apiKey) {
+    const envKey = provider === "openai" ? "OPENAI_API_KEY" : provider === "anthropic" ? "ANTHROPIC_API_KEY" : "GOOGLE_API_KEY";
+    process.env[envKey] = config.apiKey;
+  }
+  const agent = new ProbeAgent2(agentOptions);
+  if (typeof agent.initialize === "function") {
+    await agent.initialize();
+  }
+  const jsonSchema = buildEvaluationSchema(hasTrace);
+  const schemaStr = JSON.stringify(jsonSchema);
+  const response = await agent.answer(userPrompt, void 0, { schema: schemaStr });
+  let result;
+  try {
+    const cleaned = response.replace(/^```(?:json)?\s*\n?/m, "").replace(/\n?```\s*$/m, "").trim();
+    result = JSON.parse(cleaned);
+  } catch {
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      result = JSON.parse(jsonMatch[0]);
+    } else {
+      throw new Error(`Failed to parse evaluation response as JSON: ${response.slice(0, 200)}`);
+    }
+  }
+  return result;
+}
+async function evaluateAndStore(taskId, store, config) {
+  const result = await evaluateTask(taskId, store, config);
+  const { rows } = store.listTasksRaw({ limit: 500 });
+  const match = rows.find((r) => r.id === taskId || r.id.startsWith(taskId));
+  if (match) {
+    store.addArtifact(match.id, {
+      artifact_id: import_crypto5.default.randomUUID(),
+      name: "evaluation",
+      parts: [{ text: JSON.stringify(result), media_type: "application/json" }]
+    });
+  }
+  return result;
+}
+var import_crypto5, DEFAULT_EVALUATION_PROMPT;
+var init_task_evaluator = __esm({
+  "src/agent-protocol/task-evaluator.ts"() {
+    "use strict";
+    import_crypto5 = __toESM(require("crypto"));
+    init_logger();
+    init_trace_serializer();
+    DEFAULT_EVALUATION_PROMPT = `You are a task response quality evaluator for an AI agent system called Visor.
+
+You will receive the user's original request and an execution trace inside <execution_trace> tags. The trace is a YAML-formatted view of the entire agent execution, including the final response. When no trace is available, the agent response is provided directly.
+
+## How to Read the Execution Trace
+
+The trace is a tree of spans representing the agent's execution pipeline:
+
+**Top-level: \`visor.run\`** \u2014 The root span with metadata:
+- \`trace_id\`: Unique execution identifier
+- \`visor\` / \`probe\`: Software versions
+- \`source\`: Where the request came from (e.g., "slack", "cli")
+- \`duration\`: Total wall-clock time
+
+**Checks** \u2014 Named processing steps (e.g., \`route-intent\`, \`explore-code\`, \`generate-response\`):
+- \`type\`: "ai" (LLM-powered), "script" (deterministic), or "workflow" (sub-pipeline)
+- \`duration\`: How long this step took
+- \`input\`: What was passed to this check \u2014 may include an \`intent\` (the user's question as understood by the router) and dependency outputs
+- \`output\`: The check's result \u2014 may be structured JSON or plain text
+
+**AI blocks** (\`ai: model-name\`) \u2014 Individual LLM calls within checks:
+- Shows model used, duration, and token counts (input/output)
+- \`intent\`: The question or instruction sent to the LLM
+
+**Tool calls** \u2014 Listed as \`- toolName(input) \u2192 size\`:
+- \`search("query" in repo)\`: Code search. "\u2192 no results" means nothing was found; otherwise shows result size
+- \`extract(file/path)\`: File content extraction with result size
+- \`listFiles(dir)\`: Directory listing
+- \`bash()\`: Shell command execution
+
+**Delegations** (\`search.delegate("query")\`) \u2014 Sub-agent searches:
+- Contains their own AI blocks and tool calls
+- Used for complex multi-step code exploration
+
+**The \`response\` field** at the end of the trace is the final answer sent back to the user. This is the primary output to evaluate.
+
+**Symbols:**
+- \`\u2717\` marks failed/error spans
+- \`= check-name\` means output is identical to that check's output (deduplication)
+
+## Evaluation Criteria
+
+**Response Quality** (1-5):
+- **Relevance**: Does the response directly address what the user asked? A response about the wrong topic or that misunderstands the question scores low.
+- **Completeness**: Does it fully answer the question? Partial answers, missing key details, or surface-level responses score lower.
+- **Actionable**: Can the user act on this information? Vague or generic advice scores lower than specific, concrete answers with code references.
+- Rating: 5=excellent (thorough, specific, directly useful), 4=good (answers well but minor gaps), 3=adequate (addresses question but lacks depth), 2=poor (partially relevant or very incomplete), 1=off-topic or error
+
+**Execution Quality** (1-5, only when trace is provided):
+- **Efficiency**: Were tool calls necessary and well-targeted? Good search queries that find results on the first try score high.
+- **Redundancy**: Were there duplicate searches, unnecessary re-searches with slightly different queries, or tools called for information already available?
+- **Delegation quality**: Were search delegations productive? Did they explore relevant code paths?
+- **Token usage**: Was input context kept reasonable, or did the agent load excessive amounts of code?
+- Rating: 5=efficient (minimal, targeted tool use), 4=adequate (minor redundancy), 3=some waste (noticeable unnecessary calls), 2=wasteful (many redundant searches or delegations), 1=error/broken execution
+
+**Overall Rating** (1-5): Weighted combination \u2014 response quality matters most, execution quality is secondary. A perfect response from a wasteful execution still scores 3-4 overall.
+
+You MUST respond with valid JSON matching the provided schema. Be specific in your reasoning \u2014 reference actual check names, tool calls, or response content.`;
+  }
+});
+
 // src/agent-protocol/track-execution.ts
 var track_execution_exports = {};
 __export(track_execution_exports, {
   trackExecution: () => trackExecution
 });
+function getPackageVersion() {
+  try {
+    return require_package()?.version || "dev";
+  } catch {
+    return "dev";
+  }
+}
 async function trackExecution(opts, executor) {
   const { taskStore, source, configPath, metadata, messageText } = opts;
   const configName = configPath ? import_path12.default.basename(configPath, import_path12.default.extname(configPath)) : void 0;
   const workflowId = configName && opts.workflowId ? `${configName}#${opts.workflowId}` : opts.workflowId;
   const requestMessage = {
-    message_id: import_crypto5.default.randomUUID(),
+    message_id: import_crypto6.default.randomUUID(),
     role: "user",
     parts: [{ text: messageText }]
   };
+  const traceFile = process.env.VISOR_FALLBACK_TRACE_FILE || void 0;
   const task = taskStore.createTask({
-    contextId: import_crypto5.default.randomUUID(),
+    contextId: import_crypto6.default.randomUUID(),
     requestMessage,
     workflowId,
     requestMetadata: {
       source,
       instance_id: getInstanceId(),
+      visor_version: process.env.VISOR_VERSION || getPackageVersion(),
+      ...process.env.VISOR_COMMIT_SHORT ? { visor_commit: process.env.VISOR_COMMIT_SHORT } : {},
       trace_id: trace.getActiveSpan()?.spanContext().traceId || void 0,
+      ...traceFile ? { trace_file: traceFile } : {},
       ...metadata
     }
   });
@@ -22007,17 +23588,26 @@ async function trackExecution(opts, executor) {
     } catch {
     }
     const completedMsg = {
-      message_id: import_crypto5.default.randomUUID(),
+      message_id: import_crypto6.default.randomUUID(),
       role: "agent",
       parts: [{ text: responseText }]
     };
-    taskStore.updateTaskState(task.id, "completed", completedMsg);
-    logger.info(`[TaskTracking] Task ${task.id} completed`);
+    try {
+      taskStore.updateTaskState(task.id, "completed", completedMsg);
+      logger.info(`[TaskTracking] Task ${task.id} completed`);
+    } catch (stateErr) {
+      logger.warn(
+        `[TaskTracking] Task ${task.id} completed but state transition failed: ${stateErr instanceof Error ? stateErr.message : stateErr}`
+      );
+    }
+    if (opts.autoEvaluate || process.env.VISOR_TASK_EVALUATE === "true") {
+      scheduleEvaluation(task.id, taskStore);
+    }
     return { task, result };
   } catch (err) {
     const errorText = err instanceof Error ? err.message : String(err);
     const failMessage = {
-      message_id: import_crypto5.default.randomUUID(),
+      message_id: import_crypto6.default.randomUUID(),
       role: "agent",
       parts: [{ text: errorText }]
     };
@@ -22029,11 +23619,24 @@ async function trackExecution(opts, executor) {
     throw err;
   }
 }
-var import_crypto5, import_path12;
+function scheduleEvaluation(taskId, taskStore) {
+  setTimeout(async () => {
+    try {
+      const { evaluateAndStore: evaluateAndStore2 } = await Promise.resolve().then(() => (init_task_evaluator(), task_evaluator_exports));
+      await evaluateAndStore2(taskId, taskStore);
+      logger.info(`[TaskEvaluator] Auto-evaluation completed for task ${taskId}`);
+    } catch (err) {
+      logger.warn(
+        `[TaskEvaluator] Auto-evaluation failed for task ${taskId}: ${err instanceof Error ? err.message : err}`
+      );
+    }
+  }, 5e3);
+}
+var import_crypto6, import_path12;
 var init_track_execution = __esm({
   "src/agent-protocol/track-execution.ts"() {
     "use strict";
-    import_crypto5 = __toESM(require("crypto"));
+    import_crypto6 = __toESM(require("crypto"));
     import_path12 = __toESM(require("path"));
     init_logger();
     init_lazy_otel();
@@ -24173,7 +25776,7 @@ var utcp_check_provider_exports = {};
 __export(utcp_check_provider_exports, {
   UtcpCheckProvider: () => UtcpCheckProvider
 });
-var fs14, path18, UtcpCheckProvider;
+var fs16, path19, UtcpCheckProvider;
 var init_utcp_check_provider = __esm({
   "src/providers/utcp-check-provider.ts"() {
     "use strict";
@@ -24183,8 +25786,8 @@ var init_utcp_check_provider = __esm({
     init_sandbox();
     init_env_resolver();
     init_issue_normalizer();
-    fs14 = __toESM(require("fs"));
-    path18 = __toESM(require("path"));
+    fs16 = __toESM(require("fs"));
+    path19 = __toESM(require("path"));
     UtcpCheckProvider = class _UtcpCheckProvider extends CheckProvider {
       liquid;
       sandbox;
@@ -24428,29 +26031,29 @@ var init_utcp_check_provider = __esm({
         if (manual.includes("\0")) {
           throw new Error("Invalid UTCP manual path: null bytes are not allowed");
         }
-        const resolvedPath = path18.resolve(manual);
-        const cwd = path18.resolve(process.cwd());
-        const normalizedResolved = path18.normalize(resolvedPath);
-        const cwdPrefix = cwd.endsWith(path18.sep) ? cwd : cwd + path18.sep;
+        const resolvedPath = path19.resolve(manual);
+        const cwd = path19.resolve(process.cwd());
+        const normalizedResolved = path19.normalize(resolvedPath);
+        const cwdPrefix = cwd.endsWith(path19.sep) ? cwd : cwd + path19.sep;
         if (normalizedResolved !== cwd && !normalizedResolved.startsWith(cwdPrefix)) {
           throw new Error(
             `Path traversal detected: "${manual}" resolves outside the project directory. UTCP manual paths must be within the project directory.`
           );
         }
-        if (fs14.existsSync(resolvedPath)) {
-          const realPath = fs14.realpathSync(resolvedPath);
+        if (fs16.existsSync(resolvedPath)) {
+          const realPath = fs16.realpathSync(resolvedPath);
           if (realPath !== cwd && !realPath.startsWith(cwdPrefix)) {
             throw new Error(
               `Symlink traversal detected: "${manual}" points outside the project directory via symlink.`
             );
           }
         }
-        if (!fs14.existsSync(resolvedPath)) {
+        if (!fs16.existsSync(resolvedPath)) {
           throw new Error(`UTCP manual file not found: ${resolvedPath}`);
         }
         let content;
         try {
-          content = fs14.readFileSync(resolvedPath, "utf-8");
+          content = fs16.readFileSync(resolvedPath, "utf-8");
         } catch (err) {
           throw new Error(
             `Failed to read UTCP manual file: ${resolvedPath}: ${err instanceof Error ? err.message : "Unknown error"}`
@@ -24466,7 +26069,7 @@ var init_utcp_check_provider = __esm({
         }
         if (parsed.call_template_type) {
           if (!parsed.name) {
-            parsed.name = path18.basename(resolvedPath, path18.extname(resolvedPath));
+            parsed.name = path19.basename(resolvedPath, path19.extname(resolvedPath));
           }
           return parsed;
         }
@@ -24476,7 +26079,7 @@ var init_utcp_check_provider = __esm({
           logger.debug("UTCP @utcp/file plugin not available, attempting direct parse");
         }
         return {
-          name: parsed.name || path18.basename(resolvedPath, path18.extname(resolvedPath)),
+          name: parsed.name || path19.basename(resolvedPath, path19.extname(resolvedPath)),
           call_template_type: "file",
           file_path: resolvedPath,
           allowed_communication_protocols: ["file", "http", "https"]
@@ -24668,6 +26271,7 @@ var init_mcp_custom_sse_server = __esm({
       workflowContext;
       keepaliveInterval = null;
       activeToolCalls = 0;
+      inFlightToolCalls = /* @__PURE__ */ new Set();
       lastActivityAt = Date.now();
       gracefulStopRequested = false;
       static KEEPALIVE_INTERVAL_MS = 3e4;
@@ -24798,6 +26402,53 @@ var init_mcp_custom_sse_server = __esm({
           this.keepaliveInterval = null;
         }
       }
+      beginToolCall(toolName, workspace) {
+        if (workspace) {
+          workspace.acquire();
+        }
+        const toolCall = {
+          toolName,
+          startedAt: Date.now(),
+          workspace,
+          counted: true,
+          released: false
+        };
+        this.inFlightToolCalls.add(toolCall);
+        this.activeToolCalls++;
+        this.lastActivityAt = Date.now();
+        return toolCall;
+      }
+      finalizeToolCall(toolCall, reason) {
+        if (toolCall.counted) {
+          this.activeToolCalls = Math.max(0, this.activeToolCalls - 1);
+          toolCall.counted = false;
+        }
+        if (toolCall.workspace && !toolCall.released) {
+          toolCall.workspace.release();
+          toolCall.released = true;
+        }
+        this.inFlightToolCalls.delete(toolCall);
+        this.lastActivityAt = Date.now();
+        if (reason === "forced-stop") {
+          logger.warn(
+            `[CustomToolsSSEServer:${this.sessionId}] Force-released stranded tool call '${toolCall.toolName}' after ${Date.now() - toolCall.startedAt}ms`
+          );
+        }
+      }
+      forceDrainToolCalls() {
+        if (this.inFlightToolCalls.size === 0) {
+          if (this.activeToolCalls > 0) {
+            logger.warn(
+              `[CustomToolsSSEServer:${this.sessionId}] Resetting active tool counter with no in-flight records (${this.activeToolCalls})`
+            );
+            this.activeToolCalls = 0;
+          }
+          return;
+        }
+        for (const toolCall of Array.from(this.inFlightToolCalls)) {
+          this.finalizeToolCall(toolCall, "forced-stop");
+        }
+      }
       /**
        * Stop the server and cleanup resources
        */
@@ -24828,6 +26479,7 @@ var init_mcp_custom_sse_server = __esm({
             logger.warn(
               `[CustomToolsSSEServer:${this.sessionId}] Drain timeout reached; stopping with ${this.activeToolCalls} active tool call(s)`
             );
+            this.forceDrainToolCalls();
           }
         }
         if (this.debug) {
@@ -25212,11 +26864,7 @@ var init_mcp_custom_sse_server = __esm({
        */
       async handleToolCall(id, toolName, args) {
         const workspace = this.workflowContext?.workspace;
-        if (workspace) {
-          workspace.acquire();
-        }
-        this.activeToolCalls++;
-        this.lastActivityAt = Date.now();
+        const toolCall = this.beginToolCall(toolName, workspace);
         try {
           if (this.debug) {
             logger.debug(
@@ -25503,11 +27151,7 @@ var init_mcp_custom_sse_server = __esm({
             }
           };
         } finally {
-          this.activeToolCalls = Math.max(0, this.activeToolCalls - 1);
-          this.lastActivityAt = Date.now();
-          if (workspace) {
-            workspace.release();
-          }
+          this.finalizeToolCall(toolCall, "completed");
         }
       }
       /**
@@ -25956,9 +27600,9 @@ var init_ai_check_provider = __esm({
           } else {
             resolvedPath = import_path13.default.resolve(process.cwd(), str);
           }
-          const fs27 = require("fs").promises;
+          const fs29 = require("fs").promises;
           try {
-            const stat2 = await fs27.stat(resolvedPath);
+            const stat2 = await fs29.stat(resolvedPath);
             return stat2.isFile();
           } catch {
             return hasFileExtension && (isRelativePath || isAbsolutePath || hasPathSeparators);
@@ -28361,7 +30005,7 @@ var init_oauth2_token_cache = __esm({
 });
 
 // src/providers/http-client-provider.ts
-var fs17, path20, HttpClientProvider;
+var fs19, path21, HttpClientProvider;
 var init_http_client_provider = __esm({
   "src/providers/http-client-provider.ts"() {
     "use strict";
@@ -28373,8 +30017,8 @@ var init_http_client_provider = __esm({
     init_oauth2_token_cache();
     init_logger();
     init_rate_limiter();
-    fs17 = __toESM(require("fs"));
-    path20 = __toESM(require("path"));
+    fs19 = __toESM(require("fs"));
+    path21 = __toESM(require("path"));
     HttpClientProvider = class extends CheckProvider {
       liquid;
       sandbox;
@@ -28501,14 +30145,14 @@ var init_http_client_provider = __esm({
             const parentContext = context2?._parentContext;
             const workingDirectory = parentContext?.workingDirectory;
             const workspaceEnabled = parentContext?.workspace?.isEnabled?.();
-            if (workspaceEnabled && workingDirectory && !path20.isAbsolute(resolvedOutputFile)) {
-              resolvedOutputFile = path20.join(workingDirectory, resolvedOutputFile);
+            if (workspaceEnabled && workingDirectory && !path21.isAbsolute(resolvedOutputFile)) {
+              resolvedOutputFile = path21.join(workingDirectory, resolvedOutputFile);
               logger.debug(
                 `[http_client] Resolved relative output_file to workspace: ${resolvedOutputFile}`
               );
             }
-            if (skipIfExists && fs17.existsSync(resolvedOutputFile)) {
-              const stats = fs17.statSync(resolvedOutputFile);
+            if (skipIfExists && fs19.existsSync(resolvedOutputFile)) {
+              const stats = fs19.statSync(resolvedOutputFile);
               logger.verbose(`[http_client] File cached: ${resolvedOutputFile} (${stats.size} bytes)`);
               return {
                 issues: [],
@@ -28738,13 +30382,13 @@ var init_http_client_provider = __esm({
               ]
             };
           }
-          const parentDir = path20.dirname(outputFile);
-          if (parentDir && !fs17.existsSync(parentDir)) {
-            fs17.mkdirSync(parentDir, { recursive: true });
+          const parentDir = path21.dirname(outputFile);
+          if (parentDir && !fs19.existsSync(parentDir)) {
+            fs19.mkdirSync(parentDir, { recursive: true });
           }
           const arrayBuffer = await response.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
-          fs17.writeFileSync(outputFile, buffer);
+          fs19.writeFileSync(outputFile, buffer);
           const contentType = response.headers.get("content-type") || "application/octet-stream";
           logger.verbose(`[http_client] Downloaded: ${outputFile} (${buffer.length} bytes)`);
           return {
@@ -32230,14 +33874,14 @@ var require_util = __commonJS({
         }
         const port = url.port != null ? url.port : url.protocol === "https:" ? 443 : 80;
         let origin = url.origin != null ? url.origin : `${url.protocol}//${url.hostname}:${port}`;
-        let path30 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
+        let path31 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
         if (origin.endsWith("/")) {
           origin = origin.substring(0, origin.length - 1);
         }
-        if (path30 && !path30.startsWith("/")) {
-          path30 = `/${path30}`;
+        if (path31 && !path31.startsWith("/")) {
+          path31 = `/${path31}`;
         }
-        url = new URL(origin + path30);
+        url = new URL(origin + path31);
       }
       return url;
     }
@@ -33851,20 +35495,20 @@ var require_parseParams = __commonJS({
 var require_basename = __commonJS({
   "node_modules/@fastify/busboy/lib/utils/basename.js"(exports2, module2) {
     "use strict";
-    module2.exports = function basename5(path30) {
-      if (typeof path30 !== "string") {
+    module2.exports = function basename5(path31) {
+      if (typeof path31 !== "string") {
         return "";
       }
-      for (var i = path30.length - 1; i >= 0; --i) {
-        switch (path30.charCodeAt(i)) {
+      for (var i = path31.length - 1; i >= 0; --i) {
+        switch (path31.charCodeAt(i)) {
           case 47:
           // '/'
           case 92:
-            path30 = path30.slice(i + 1);
-            return path30 === ".." || path30 === "." ? "" : path30;
+            path31 = path31.slice(i + 1);
+            return path31 === ".." || path31 === "." ? "" : path31;
         }
       }
-      return path30 === ".." || path30 === "." ? "" : path30;
+      return path31 === ".." || path31 === "." ? "" : path31;
     };
   }
 });
@@ -34868,11 +36512,11 @@ var require_util2 = __commonJS({
     var assert = require("assert");
     var { isUint8Array } = require("util/types");
     var supportedHashes = [];
-    var crypto7;
+    var crypto8;
     try {
-      crypto7 = require("crypto");
+      crypto8 = require("crypto");
       const possibleRelevantHashes = ["sha256", "sha384", "sha512"];
-      supportedHashes = crypto7.getHashes().filter((hash) => possibleRelevantHashes.includes(hash));
+      supportedHashes = crypto8.getHashes().filter((hash) => possibleRelevantHashes.includes(hash));
     } catch {
     }
     function responseURL(response) {
@@ -35149,7 +36793,7 @@ var require_util2 = __commonJS({
       }
     }
     function bytesMatch(bytes, metadataList) {
-      if (crypto7 === void 0) {
+      if (crypto8 === void 0) {
         return true;
       }
       const parsedMetadata = parseMetadata(metadataList);
@@ -35164,7 +36808,7 @@ var require_util2 = __commonJS({
       for (const item of metadata) {
         const algorithm = item.algo;
         const expectedValue = item.hash;
-        let actualValue = crypto7.createHash(algorithm).update(bytes).digest("base64");
+        let actualValue = crypto8.createHash(algorithm).update(bytes).digest("base64");
         if (actualValue[actualValue.length - 1] === "=") {
           if (actualValue[actualValue.length - 2] === "=") {
             actualValue = actualValue.slice(0, -2);
@@ -36511,8 +38155,8 @@ var require_body = __commonJS({
     var { parseMIMEType, serializeAMimeType } = require_dataURL();
     var random;
     try {
-      const crypto7 = require("crypto");
-      random = (max) => crypto7.randomInt(0, max);
+      const crypto8 = require("crypto");
+      random = (max) => crypto8.randomInt(0, max);
     } catch {
       random = (max) => Math.floor(Math.random(max));
     }
@@ -36895,7 +38539,7 @@ var require_request = __commonJS({
     }
     var Request2 = class _Request {
       constructor(origin, {
-        path: path30,
+        path: path31,
         method,
         body,
         headers,
@@ -36909,11 +38553,11 @@ var require_request = __commonJS({
         throwOnError,
         expectContinue
       }, handler) {
-        if (typeof path30 !== "string") {
+        if (typeof path31 !== "string") {
           throw new InvalidArgumentError("path must be a string");
-        } else if (path30[0] !== "/" && !(path30.startsWith("http://") || path30.startsWith("https://")) && method !== "CONNECT") {
+        } else if (path31[0] !== "/" && !(path31.startsWith("http://") || path31.startsWith("https://")) && method !== "CONNECT") {
           throw new InvalidArgumentError("path must be an absolute URL or start with a slash");
-        } else if (invalidPathRegex.exec(path30) !== null) {
+        } else if (invalidPathRegex.exec(path31) !== null) {
           throw new InvalidArgumentError("invalid request path");
         }
         if (typeof method !== "string") {
@@ -36976,7 +38620,7 @@ var require_request = __commonJS({
         this.completed = false;
         this.aborted = false;
         this.upgrade = upgrade || null;
-        this.path = query ? util.buildURL(path30, query) : path30;
+        this.path = query ? util.buildURL(path31, query) : path31;
         this.origin = origin;
         this.idempotent = idempotent == null ? method === "HEAD" || method === "GET" : idempotent;
         this.blocking = blocking == null ? false : blocking;
@@ -37984,9 +39628,9 @@ var require_RedirectHandler = __commonJS({
           return this.handler.onHeaders(statusCode, headers, resume, statusText);
         }
         const { origin, pathname, search } = util.parseURL(new URL(this.location, this.opts.origin && new URL(this.opts.path, this.opts.origin)));
-        const path30 = search ? `${pathname}${search}` : pathname;
+        const path31 = search ? `${pathname}${search}` : pathname;
         this.opts.headers = cleanRequestHeaders(this.opts.headers, statusCode === 303, this.opts.origin !== origin);
-        this.opts.path = path30;
+        this.opts.path = path31;
         this.opts.origin = origin;
         this.opts.maxRedirections = 0;
         this.opts.query = null;
@@ -39228,7 +40872,7 @@ var require_client = __commonJS({
         writeH2(client, client[kHTTP2Session], request);
         return;
       }
-      const { body, method, path: path30, host, upgrade, headers, blocking, reset } = request;
+      const { body, method, path: path31, host, upgrade, headers, blocking, reset } = request;
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
         body.read(0);
@@ -39278,7 +40922,7 @@ var require_client = __commonJS({
       if (blocking) {
         socket[kBlocking] = true;
       }
-      let header = `${method} ${path30} HTTP/1.1\r
+      let header = `${method} ${path31} HTTP/1.1\r
 `;
       if (typeof host === "string") {
         header += `host: ${host}\r
@@ -39341,7 +40985,7 @@ upgrade: ${upgrade}\r
       return true;
     }
     function writeH2(client, session, request) {
-      const { body, method, path: path30, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
+      const { body, method, path: path31, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
       let headers;
       if (typeof reqHeaders === "string") headers = Request2[kHTTP2CopyHeaders](reqHeaders.trim());
       else headers = reqHeaders;
@@ -39384,7 +41028,7 @@ upgrade: ${upgrade}\r
         });
         return true;
       }
-      headers[HTTP2_HEADER_PATH] = path30;
+      headers[HTTP2_HEADER_PATH] = path31;
       headers[HTTP2_HEADER_SCHEME] = "https";
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
@@ -41627,20 +43271,20 @@ var require_mock_utils = __commonJS({
       }
       return true;
     }
-    function safeUrl(path30) {
-      if (typeof path30 !== "string") {
-        return path30;
+    function safeUrl(path31) {
+      if (typeof path31 !== "string") {
+        return path31;
       }
-      const pathSegments = path30.split("?");
+      const pathSegments = path31.split("?");
       if (pathSegments.length !== 2) {
-        return path30;
+        return path31;
       }
       const qp = new URLSearchParams(pathSegments.pop());
       qp.sort();
       return [...pathSegments, qp.toString()].join("?");
     }
-    function matchKey(mockDispatch2, { path: path30, method, body, headers }) {
-      const pathMatch = matchValue(mockDispatch2.path, path30);
+    function matchKey(mockDispatch2, { path: path31, method, body, headers }) {
+      const pathMatch = matchValue(mockDispatch2.path, path31);
       const methodMatch = matchValue(mockDispatch2.method, method);
       const bodyMatch = typeof mockDispatch2.body !== "undefined" ? matchValue(mockDispatch2.body, body) : true;
       const headersMatch = matchHeaders(mockDispatch2, headers);
@@ -41658,7 +43302,7 @@ var require_mock_utils = __commonJS({
     function getMockDispatch(mockDispatches, key) {
       const basePath = key.query ? buildURL(key.path, key.query) : key.path;
       const resolvedPath = typeof basePath === "string" ? safeUrl(basePath) : basePath;
-      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path30 }) => matchValue(safeUrl(path30), resolvedPath));
+      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path31 }) => matchValue(safeUrl(path31), resolvedPath));
       if (matchedMockDispatches.length === 0) {
         throw new MockNotMatchedError(`Mock dispatch not matched for path '${resolvedPath}'`);
       }
@@ -41695,9 +43339,9 @@ var require_mock_utils = __commonJS({
       }
     }
     function buildKey(opts) {
-      const { path: path30, method, body, headers, query } = opts;
+      const { path: path31, method, body, headers, query } = opts;
       return {
-        path: path30,
+        path: path31,
         method,
         body,
         headers,
@@ -42146,10 +43790,10 @@ var require_pending_interceptors_formatter = __commonJS({
       }
       format(pendingInterceptors) {
         const withPrettyHeaders = pendingInterceptors.map(
-          ({ method, path: path30, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
+          ({ method, path: path31, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
             Method: method,
             Origin: origin,
-            Path: path30,
+            Path: path31,
             "Status code": statusCode,
             Persistent: persist ? "\u2705" : "\u274C",
             Invocations: timesInvoked,
@@ -46770,8 +48414,8 @@ var require_util6 = __commonJS({
         }
       }
     }
-    function validateCookiePath(path30) {
-      for (const char of path30) {
+    function validateCookiePath(path31) {
+      for (const char of path31) {
         const code = char.charCodeAt(0);
         if (code < 33 || char === ";") {
           throw new Error("Invalid cookie path");
@@ -47568,9 +49212,9 @@ var require_connection = __commonJS({
     channels.open = diagnosticsChannel.channel("undici:websocket:open");
     channels.close = diagnosticsChannel.channel("undici:websocket:close");
     channels.socketError = diagnosticsChannel.channel("undici:websocket:socket_error");
-    var crypto7;
+    var crypto8;
     try {
-      crypto7 = require("crypto");
+      crypto8 = require("crypto");
     } catch {
     }
     function establishWebSocketConnection(url, protocols, ws, onEstablish, options) {
@@ -47589,7 +49233,7 @@ var require_connection = __commonJS({
         const headersList = new Headers(options.headers)[kHeadersList];
         request.headersList = headersList;
       }
-      const keyValue = crypto7.randomBytes(16).toString("base64");
+      const keyValue = crypto8.randomBytes(16).toString("base64");
       request.headersList.append("sec-websocket-key", keyValue);
       request.headersList.append("sec-websocket-version", "13");
       for (const protocol of protocols) {
@@ -47618,7 +49262,7 @@ var require_connection = __commonJS({
             return;
           }
           const secWSAccept = response.headersList.get("Sec-WebSocket-Accept");
-          const digest = crypto7.createHash("sha1").update(keyValue + uid).digest("base64");
+          const digest = crypto8.createHash("sha1").update(keyValue + uid).digest("base64");
           if (secWSAccept !== digest) {
             failWebsocketConnection(ws, "Incorrect hash received in Sec-WebSocket-Accept header.");
             return;
@@ -47698,9 +49342,9 @@ var require_frame = __commonJS({
   "node_modules/undici/lib/websocket/frame.js"(exports2, module2) {
     "use strict";
     var { maxUnsigned16Bit } = require_constants5();
-    var crypto7;
+    var crypto8;
     try {
-      crypto7 = require("crypto");
+      crypto8 = require("crypto");
     } catch {
     }
     var WebsocketFrameSend = class {
@@ -47709,7 +49353,7 @@ var require_frame = __commonJS({
        */
       constructor(data) {
         this.frameData = data;
-        this.maskKey = crypto7.randomBytes(4);
+        this.maskKey = crypto8.randomBytes(4);
       }
       createFrame(opcode) {
         const bodyLength = this.frameData?.byteLength ?? 0;
@@ -48451,11 +50095,11 @@ var require_undici = __commonJS({
           if (typeof opts.path !== "string") {
             throw new InvalidArgumentError("invalid opts.path");
           }
-          let path30 = opts.path;
+          let path31 = opts.path;
           if (!opts.path.startsWith("/")) {
-            path30 = `/${path30}`;
+            path31 = `/${path31}`;
           }
-          url = new URL(util.parseOrigin(url).origin + path30);
+          url = new URL(util.parseOrigin(url).origin + path31);
         } else {
           if (!opts) {
             opts = typeof url === "object" ? url : {};
@@ -49330,7 +50974,7 @@ async function interactivePrompt(options) {
     } catch {
     }
     if (multiline) {
-      rl = readline.createInterface({
+      rl = readline3.createInterface({
         input: process.stdin,
         output: process.stdout,
         terminal: true
@@ -49443,7 +51087,7 @@ async function interactivePrompt(options) {
 }
 async function simplePrompt(prompt) {
   return new Promise((resolve17) => {
-    const rl = readline.createInterface({
+    const rl = readline3.createInterface({
       input: process.stdin,
       output: process.stdout
     });
@@ -49462,11 +51106,11 @@ async function simplePrompt(prompt) {
     });
   });
 }
-var readline, activePrompt, waiters;
+var readline3, activePrompt, waiters;
 var init_interactive_prompt = __esm({
   "src/utils/interactive-prompt.ts"() {
     "use strict";
-    readline = __toESM(require("readline"));
+    readline3 = __toESM(require("readline"));
     activePrompt = false;
     waiters = [];
   }
@@ -49683,7 +51327,7 @@ var init_stdin_reader = __esm({
 });
 
 // src/providers/human-input-check-provider.ts
-var fs19, path22, HumanInputCheckProvider;
+var fs21, path23, HumanInputCheckProvider;
 var init_human_input_check_provider = __esm({
   "src/providers/human-input-check-provider.ts"() {
     "use strict";
@@ -49692,8 +51336,8 @@ var init_human_input_check_provider = __esm({
     init_prompt_state();
     init_liquid_extensions();
     init_stdin_reader();
-    fs19 = __toESM(require("fs"));
-    path22 = __toESM(require("path"));
+    fs21 = __toESM(require("fs"));
+    path23 = __toESM(require("path"));
     HumanInputCheckProvider = class _HumanInputCheckProvider extends CheckProvider {
       liquid;
       /**
@@ -49867,19 +51511,19 @@ var init_human_input_check_provider = __esm({
        */
       async tryReadFile(filePath) {
         try {
-          const absolutePath = path22.isAbsolute(filePath) ? filePath : path22.resolve(process.cwd(), filePath);
-          const normalizedPath = path22.normalize(absolutePath);
+          const absolutePath = path23.isAbsolute(filePath) ? filePath : path23.resolve(process.cwd(), filePath);
+          const normalizedPath = path23.normalize(absolutePath);
           const cwd = process.cwd();
-          if (!normalizedPath.startsWith(cwd + path22.sep) && normalizedPath !== cwd) {
+          if (!normalizedPath.startsWith(cwd + path23.sep) && normalizedPath !== cwd) {
             return null;
           }
           try {
-            await fs19.promises.access(normalizedPath, fs19.constants.R_OK);
-            const stats = await fs19.promises.stat(normalizedPath);
+            await fs21.promises.access(normalizedPath, fs21.constants.R_OK);
+            const stats = await fs21.promises.stat(normalizedPath);
             if (!stats.isFile()) {
               return null;
             }
-            const content = await fs19.promises.readFile(normalizedPath, "utf-8");
+            const content = await fs21.promises.readFile(normalizedPath, "utf-8");
             return content.trim();
           } catch {
             return null;
@@ -51032,14 +52676,14 @@ var init_script_check_provider = __esm({
 });
 
 // src/utils/worktree-manager.ts
-var fs20, fsp, path23, crypto2, WorktreeManager, worktreeManager;
+var fs22, fsp, path24, crypto3, WorktreeManager, worktreeManager;
 var init_worktree_manager = __esm({
   "src/utils/worktree-manager.ts"() {
     "use strict";
-    fs20 = __toESM(require("fs"));
+    fs22 = __toESM(require("fs"));
     fsp = __toESM(require("fs/promises"));
-    path23 = __toESM(require("path"));
-    crypto2 = __toESM(require("crypto"));
+    path24 = __toESM(require("path"));
+    crypto3 = __toESM(require("crypto"));
     init_command_executor();
     init_logger();
     WorktreeManager = class _WorktreeManager {
@@ -51054,7 +52698,7 @@ var init_worktree_manager = __esm({
         } catch {
           cwd = "/tmp";
         }
-        const defaultBasePath = process.env.VISOR_WORKTREE_PATH || path23.join(cwd, ".visor", "worktrees");
+        const defaultBasePath = process.env.VISOR_WORKTREE_PATH || path24.join(cwd, ".visor", "worktrees");
         this.config = {
           enabled: true,
           base_path: defaultBasePath,
@@ -51091,20 +52735,20 @@ var init_worktree_manager = __esm({
         }
         const reposDir = this.getReposDir();
         const worktreesDir = this.getWorktreesDir();
-        if (!fs20.existsSync(reposDir)) {
-          fs20.mkdirSync(reposDir, { recursive: true });
+        if (!fs22.existsSync(reposDir)) {
+          fs22.mkdirSync(reposDir, { recursive: true });
           logger.debug(`Created repos directory: ${reposDir}`);
         }
-        if (!fs20.existsSync(worktreesDir)) {
-          fs20.mkdirSync(worktreesDir, { recursive: true });
+        if (!fs22.existsSync(worktreesDir)) {
+          fs22.mkdirSync(worktreesDir, { recursive: true });
           logger.debug(`Created worktrees directory: ${worktreesDir}`);
         }
       }
       getReposDir() {
-        return path23.join(this.config.base_path, "repos");
+        return path24.join(this.config.base_path, "repos");
       }
       getWorktreesDir() {
-        return path23.join(this.config.base_path, "worktrees");
+        return path24.join(this.config.base_path, "worktrees");
       }
       /**
        * Generate a worktree ID based on repository, ref, and session.
@@ -51120,7 +52764,7 @@ var init_worktree_manager = __esm({
         const sanitizedRepo = repository.replace(/[^a-zA-Z0-9-]/g, "-");
         const sanitizedRef = ref.replace(/[^a-zA-Z0-9-]/g, "-");
         const hashInput = sessionId ? `${repository}:${ref}:${sessionId}` : `${repository}:${ref}`;
-        const hash = crypto2.createHash("md5").update(hashInput).digest("hex").substring(0, 8);
+        const hash = crypto3.createHash("md5").update(hashInput).digest("hex").substring(0, 8);
         return `${sanitizedRepo}-${sanitizedRef}-${hash}`;
       }
       /**
@@ -51129,8 +52773,8 @@ var init_worktree_manager = __esm({
       async getOrCreateBareRepo(repository, repoUrl, _token, fetchDepth, cloneTimeoutMs) {
         const reposDir = this.getReposDir();
         const repoName = repository.replace(/\//g, "-");
-        const bareRepoPath = path23.join(reposDir, `${repoName}.git`);
-        if (fs20.existsSync(bareRepoPath)) {
+        const bareRepoPath = path24.join(reposDir, `${repoName}.git`);
+        if (fs22.existsSync(bareRepoPath)) {
           logger.debug(`Bare repository already exists: ${bareRepoPath}`);
           const verifyResult = await this.verifyBareRepoRemote(bareRepoPath, repoUrl);
           if (verifyResult === "timeout") {
@@ -51299,12 +52943,12 @@ var init_worktree_manager = __esm({
           options.cloneTimeoutMs
         );
         const worktreeId = this.generateWorktreeId(repository, ref, options.sessionId);
-        let worktreePath = options.workingDirectory || path23.join(this.getWorktreesDir(), worktreeId);
+        let worktreePath = options.workingDirectory || path24.join(this.getWorktreesDir(), worktreeId);
         if (options.workingDirectory) {
           worktreePath = this.validatePath(options.workingDirectory);
         }
         let refreshFailedNeedsRecreate = false;
-        if (fs20.existsSync(worktreePath)) {
+        if (fs22.existsSync(worktreePath)) {
           logger.debug(`Worktree already exists: ${worktreePath}`);
           const metadata2 = await this.loadMetadata(worktreePath);
           if (metadata2) {
@@ -51644,15 +53288,15 @@ var init_worktree_manager = __esm({
         const result = await this.executeGitCommand(removeCmd, { timeout: 3e4 });
         if (result.exitCode !== 0) {
           logger.warn(`Failed to remove worktree via git: ${result.stderr}`);
-          if (fs20.existsSync(worktree_path)) {
+          if (fs22.existsSync(worktree_path)) {
             logger.debug(`Manually removing worktree directory`);
-            fs20.rmSync(worktree_path, { recursive: true, force: true });
+            fs22.rmSync(worktree_path, { recursive: true, force: true });
           }
         }
         const metadataPath = this.getMetadataPath(worktree_path);
         try {
-          if (fs20.existsSync(metadataPath)) {
-            fs20.unlinkSync(metadataPath);
+          if (fs22.existsSync(metadataPath)) {
+            fs22.unlinkSync(metadataPath);
           }
         } catch {
         }
@@ -51672,20 +53316,20 @@ var init_worktree_manager = __esm({
        */
       async saveMetadata(worktreePath, metadata) {
         const metadataPath = this.getMetadataPath(worktreePath);
-        fs20.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
+        fs22.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf8");
       }
       /**
        * Load worktree metadata
        */
       async loadMetadata(worktreePath) {
         const metadataPath = this.getMetadataPath(worktreePath);
-        const legacyPath = path23.join(worktreePath, ".visor-metadata.json");
-        const pathToRead = fs20.existsSync(metadataPath) ? metadataPath : fs20.existsSync(legacyPath) ? legacyPath : null;
+        const legacyPath = path24.join(worktreePath, ".visor-metadata.json");
+        const pathToRead = fs22.existsSync(metadataPath) ? metadataPath : fs22.existsSync(legacyPath) ? legacyPath : null;
         if (!pathToRead) {
           return null;
         }
         try {
-          const content = fs20.readFileSync(pathToRead, "utf8");
+          const content = fs22.readFileSync(pathToRead, "utf8");
           return JSON.parse(content);
         } catch (error) {
           logger.warn(`Failed to load metadata: ${error}`);
@@ -51697,14 +53341,14 @@ var init_worktree_manager = __esm({
        */
       async listWorktrees() {
         const worktreesDir = this.getWorktreesDir();
-        if (!fs20.existsSync(worktreesDir)) {
+        if (!fs22.existsSync(worktreesDir)) {
           return [];
         }
-        const entries = fs20.readdirSync(worktreesDir, { withFileTypes: true });
+        const entries = fs22.readdirSync(worktreesDir, { withFileTypes: true });
         const worktrees = [];
         for (const entry of entries) {
           if (!entry.isDirectory()) continue;
-          const worktreePath = path23.join(worktreesDir, entry.name);
+          const worktreePath = path24.join(worktreesDir, entry.name);
           const metadata = await this.loadMetadata(worktreePath);
           if (metadata) {
             worktrees.push({
@@ -51836,8 +53480,8 @@ var init_worktree_manager = __esm({
        * Validate path to prevent directory traversal
        */
       validatePath(userPath) {
-        const resolvedPath = path23.resolve(userPath);
-        if (!path23.isAbsolute(resolvedPath)) {
+        const resolvedPath = path24.resolve(userPath);
+        if (!path24.isAbsolute(resolvedPath)) {
           throw new Error("Path must be absolute");
         }
         const sensitivePatterns = [
@@ -54471,23 +56115,23 @@ __export(renderer_schema_exports, {
 });
 async function loadRendererSchema(name) {
   try {
-    const fs27 = await import("fs/promises");
-    const path30 = await import("path");
+    const fs29 = await import("fs/promises");
+    const path31 = await import("path");
     const sanitized = String(name).replace(/[^a-zA-Z0-9-]/g, "");
     if (!sanitized) return void 0;
     const candidates = [
       // When bundled with ncc, __dirname is dist/ and output/ is at dist/output/
-      path30.join(__dirname, "output", sanitized, "schema.json"),
+      path31.join(__dirname, "output", sanitized, "schema.json"),
       // When running from source, __dirname is src/state-machine/dispatch/ and output/ is at output/
-      path30.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
+      path31.join(__dirname, "..", "..", "output", sanitized, "schema.json"),
       // When running from a checkout with output/ folder copied to CWD
-      path30.join(process.cwd(), "output", sanitized, "schema.json"),
+      path31.join(process.cwd(), "output", sanitized, "schema.json"),
       // Fallback: cwd/dist/output/
-      path30.join(process.cwd(), "dist", "output", sanitized, "schema.json")
+      path31.join(process.cwd(), "dist", "output", sanitized, "schema.json")
     ];
     for (const p of candidates) {
       try {
-        const raw = await fs27.readFile(p, "utf-8");
+        const raw = await fs29.readFile(p, "utf-8");
         return JSON.parse(raw);
       } catch {
       }
@@ -56941,8 +58585,8 @@ function updateStats2(results, state, isForEachIteration = false) {
 async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
   try {
     const { createExtendedLiquid: createExtendedLiquid2 } = await Promise.resolve().then(() => (init_liquid_extensions(), liquid_extensions_exports));
-    const fs27 = await import("fs/promises");
-    const path30 = await import("path");
+    const fs29 = await import("fs/promises");
+    const path31 = await import("path");
     const schemaRaw = checkConfig.schema || "plain";
     const schema = typeof schemaRaw === "string" && !schemaRaw.includes("{{") && !schemaRaw.includes("{%") ? schemaRaw : typeof schemaRaw === "object" ? "code-review" : "plain";
     let templateContent;
@@ -56951,27 +58595,27 @@ async function renderTemplateContent2(checkId, checkConfig, reviewSummary) {
       logger.debug(`[LevelDispatch] Using inline template for ${checkId}`);
     } else if (checkConfig.template && checkConfig.template.file) {
       const file = String(checkConfig.template.file);
-      const resolved = path30.resolve(process.cwd(), file);
-      templateContent = await fs27.readFile(resolved, "utf-8");
+      const resolved = path31.resolve(process.cwd(), file);
+      templateContent = await fs29.readFile(resolved, "utf-8");
       logger.debug(`[LevelDispatch] Using template file for ${checkId}: ${resolved}`);
     } else if (schema && schema !== "plain") {
       const sanitized = String(schema).replace(/[^a-zA-Z0-9-]/g, "");
       if (sanitized) {
         const candidatePaths = [
-          path30.join(__dirname, "output", sanitized, "template.liquid"),
+          path31.join(__dirname, "output", sanitized, "template.liquid"),
           // bundled: dist/output/
-          path30.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
+          path31.join(__dirname, "..", "..", "output", sanitized, "template.liquid"),
           // source (from state-machine/states)
-          path30.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
+          path31.join(__dirname, "..", "..", "..", "output", sanitized, "template.liquid"),
           // source (alternate)
-          path30.join(process.cwd(), "output", sanitized, "template.liquid"),
+          path31.join(process.cwd(), "output", sanitized, "template.liquid"),
           // fallback: cwd/output/
-          path30.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
+          path31.join(process.cwd(), "dist", "output", sanitized, "template.liquid")
           // fallback: cwd/dist/output/
         ];
         for (const p of candidatePaths) {
           try {
-            templateContent = await fs27.readFile(p, "utf-8");
+            templateContent = await fs29.readFile(p, "utf-8");
             if (templateContent) {
               logger.debug(`[LevelDispatch] Using schema template for ${checkId}: ${p}`);
               break;
@@ -57586,13 +59230,13 @@ var init_runner = __esm({
 });
 
 // src/utils/file-exclusion.ts
-var import_ignore, fs21, path24, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
+var import_ignore, fs23, path25, DEFAULT_EXCLUSION_PATTERNS, FileExclusionHelper;
 var init_file_exclusion = __esm({
   "src/utils/file-exclusion.ts"() {
     "use strict";
     import_ignore = __toESM(require("ignore"));
-    fs21 = __toESM(require("fs"));
-    path24 = __toESM(require("path"));
+    fs23 = __toESM(require("fs"));
+    path25 = __toESM(require("path"));
     DEFAULT_EXCLUSION_PATTERNS = [
       "dist/",
       "build/",
@@ -57611,7 +59255,7 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to include (optional, defaults to common build artifacts)
        */
       constructor(workingDirectory = process.cwd(), additionalPatterns = DEFAULT_EXCLUSION_PATTERNS) {
-        const normalizedPath = path24.resolve(workingDirectory);
+        const normalizedPath = path25.resolve(workingDirectory);
         if (normalizedPath.includes("\0")) {
           throw new Error("Invalid workingDirectory: contains null bytes");
         }
@@ -57623,11 +59267,11 @@ var init_file_exclusion = __esm({
        * @param additionalPatterns - Additional patterns to add to gitignore rules
        */
       loadGitignore(additionalPatterns) {
-        const gitignorePath = path24.resolve(this.workingDirectory, ".gitignore");
-        const resolvedWorkingDir = path24.resolve(this.workingDirectory);
+        const gitignorePath = path25.resolve(this.workingDirectory, ".gitignore");
+        const resolvedWorkingDir = path25.resolve(this.workingDirectory);
         try {
-          const relativePath = path24.relative(resolvedWorkingDir, gitignorePath);
-          if (relativePath.startsWith("..") || path24.isAbsolute(relativePath)) {
+          const relativePath = path25.relative(resolvedWorkingDir, gitignorePath);
+          if (relativePath.startsWith("..") || path25.isAbsolute(relativePath)) {
             throw new Error("Invalid gitignore path: path traversal detected");
           }
           if (relativePath !== ".gitignore") {
@@ -57637,8 +59281,8 @@ var init_file_exclusion = __esm({
           if (additionalPatterns && additionalPatterns.length > 0) {
             this.gitignore.add(additionalPatterns);
           }
-          if (fs21.existsSync(gitignorePath)) {
-            const rawContent = fs21.readFileSync(gitignorePath, "utf8");
+          if (fs23.existsSync(gitignorePath)) {
+            const rawContent = fs23.readFileSync(gitignorePath, "utf8");
             const gitignoreContent = rawContent.replace(/[\r\n]+/g, "\n").replace(/[\x00-\x09\x0B-\x1F\x7F]/g, "").split("\n").filter((line) => line.length < 1e3).join("\n").trim();
             this.gitignore.add(gitignoreContent);
             if (process.env.VISOR_DEBUG === "true") {
@@ -57670,13 +59314,13 @@ var git_repository_analyzer_exports = {};
 __export(git_repository_analyzer_exports, {
   GitRepositoryAnalyzer: () => GitRepositoryAnalyzer
 });
-var import_simple_git2, path25, fs22, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
+var import_simple_git2, path26, fs24, MAX_PATCH_SIZE, GitRepositoryAnalyzer;
 var init_git_repository_analyzer = __esm({
   "src/git-repository-analyzer.ts"() {
     "use strict";
     import_simple_git2 = require("simple-git");
-    path25 = __toESM(require("path"));
-    fs22 = __toESM(require("fs"));
+    path26 = __toESM(require("path"));
+    fs24 = __toESM(require("fs"));
     init_file_exclusion();
     MAX_PATCH_SIZE = 50 * 1024;
     GitRepositoryAnalyzer = class {
@@ -57865,7 +59509,7 @@ ${file.patch}`).join("\n\n");
               console.error(`\u23ED\uFE0F  Skipping excluded file: ${file}`);
               continue;
             }
-            const filePath = path25.join(this.cwd, file);
+            const filePath = path26.join(this.cwd, file);
             const fileChange = await this.analyzeFileChange(file, status2, filePath, includeContext);
             changes.push(fileChange);
           }
@@ -57972,7 +59616,7 @@ ${file.patch}`).join("\n\n");
         let content;
         let truncated = false;
         try {
-          if (includeContext && status !== "added" && fs22.existsSync(filePath)) {
+          if (includeContext && status !== "added" && fs24.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const result = this.truncatePatch(diff, filename);
@@ -57982,7 +59626,7 @@ ${file.patch}`).join("\n\n");
               additions = lines.filter((line) => line.startsWith("+")).length;
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
-          } else if (status !== "added" && fs22.existsSync(filePath)) {
+          } else if (status !== "added" && fs24.existsSync(filePath)) {
             const diff = await this.git.diff(["--", filename]).catch(() => "");
             if (diff) {
               const lines = diff.split("\n");
@@ -57990,17 +59634,17 @@ ${file.patch}`).join("\n\n");
               deletions = lines.filter((line) => line.startsWith("-")).length;
             }
           }
-          if (status === "added" && fs22.existsSync(filePath)) {
+          if (status === "added" && fs24.existsSync(filePath)) {
             try {
-              const stats = fs22.statSync(filePath);
+              const stats = fs24.statSync(filePath);
               if (stats.isFile() && stats.size < 1024 * 1024) {
                 if (includeContext) {
-                  content = fs22.readFileSync(filePath, "utf8");
+                  content = fs24.readFileSync(filePath, "utf8");
                   const result = this.truncatePatch(content, filename);
                   patch = result.patch;
                   truncated = result.truncated;
                 }
-                const fileContent = includeContext ? content : fs22.readFileSync(filePath, "utf8");
+                const fileContent = includeContext ? content : fs24.readFileSync(filePath, "utf8");
                 additions = fileContent.split("\n").length;
               }
             } catch {
@@ -58091,12 +59735,12 @@ function shellEscape(str) {
 function sanitizePathComponent(name) {
   return name.replace(/\.\./g, "").replace(/[\/\\]/g, "-").replace(/^\.+/, "").trim() || "unnamed";
 }
-var fsp2, path26, WorkspaceManager;
+var fsp2, path27, WorkspaceManager;
 var init_workspace_manager = __esm({
   "src/utils/workspace-manager.ts"() {
     "use strict";
     fsp2 = __toESM(require("fs/promises"));
-    path26 = __toESM(require("path"));
+    path27 = __toESM(require("path"));
     init_command_executor();
     init_logger();
     WorkspaceManager = class _WorkspaceManager {
@@ -58130,7 +59774,7 @@ var init_workspace_manager = __esm({
         };
         this.basePath = this.config.basePath;
         const workspaceDirName = sanitizePathComponent(this.config.name || this.sessionId);
-        this.workspacePath = path26.join(this.basePath, workspaceDirName);
+        this.workspacePath = path27.join(this.basePath, workspaceDirName);
       }
       /**
        * Get or create a WorkspaceManager instance for a session
@@ -58225,7 +59869,7 @@ var init_workspace_manager = __esm({
           configuredMainProjectName || this.extractProjectName(this.originalPath)
         );
         this.usedNames.add(mainProjectName);
-        let mainProjectPath = path26.join(this.workspacePath, mainProjectName);
+        let mainProjectPath = path27.join(this.workspacePath, mainProjectName);
         const isGitRepo = await this.isGitRepository(this.originalPath);
         if (isGitRepo) {
           try {
@@ -58243,10 +59887,10 @@ var init_workspace_manager = __esm({
           );
           if (gitRootResult.exitCode === 0) {
             const gitRoot = gitRootResult.stdout.trim();
-            const normalizedOriginal = path26.resolve(this.originalPath);
-            const normalizedRoot = path26.resolve(gitRoot);
+            const normalizedOriginal = path27.resolve(this.originalPath);
+            const normalizedRoot = path27.resolve(gitRoot);
             if (normalizedOriginal !== normalizedRoot) {
-              subdirOffset = path26.relative(normalizedRoot, normalizedOriginal);
+              subdirOffset = path27.relative(normalizedRoot, normalizedOriginal);
               logger.info(`[Workspace] Original path is a subdirectory of git repo: ${subdirOffset}`);
             }
           }
@@ -58286,14 +59930,14 @@ var init_workspace_manager = __esm({
         }
         const worktreeRootPath = mainProjectPath;
         if (subdirOffset) {
-          mainProjectPath = path26.join(mainProjectPath, subdirOffset);
+          mainProjectPath = path27.join(mainProjectPath, subdirOffset);
           logger.info(`[Workspace] Adjusted main project path to subdirectory: ${mainProjectPath}`);
           const subdirExists = await this.pathExists(mainProjectPath);
           if (!subdirExists) {
             logger.warn(
               `[Workspace] Subdirectory '${subdirOffset}' not found in worktree \u2014 falling back to worktree root`
             );
-            mainProjectPath = path26.join(this.workspacePath, mainProjectName);
+            mainProjectPath = path27.join(this.workspacePath, mainProjectName);
           }
         }
         try {
@@ -58348,7 +59992,7 @@ var init_workspace_manager = __esm({
         let projectName = sanitizePathComponent(description || this.extractRepoName(repository));
         projectName = this.getUniqueName(projectName);
         this.usedNames.add(projectName);
-        const workspacePath = path26.join(this.workspacePath, projectName);
+        const workspacePath = path27.join(this.workspacePath, projectName);
         await fsp2.rm(workspacePath, { recursive: true, force: true });
         try {
           await fsp2.symlink(worktreePath, workspacePath);
@@ -58458,7 +60102,7 @@ var init_workspace_manager = __esm({
           const now = Date.now();
           for (const entry of entries) {
             if (!entry.isDirectory()) continue;
-            const dirPath = path26.join(basePath, entry.name);
+            const dirPath = path27.join(basePath, entry.name);
             try {
               const stat2 = await fsp2.stat(dirPath);
               if (now - stat2.mtimeMs > maxAgeMs) {
@@ -58466,8 +60110,8 @@ var init_workspace_manager = __esm({
                   const subdirs = await fsp2.readdir(dirPath, { withFileTypes: true });
                   for (const sub of subdirs) {
                     if (!sub.isDirectory()) continue;
-                    const subPath = path26.join(dirPath, sub.name);
-                    const gitFilePath = path26.join(subPath, ".git");
+                    const subPath = path27.join(dirPath, sub.name);
+                    const gitFilePath = path27.join(subPath, ".git");
                     try {
                       const gitContent = await fsp2.readFile(gitFilePath, "utf-8");
                       const match = gitContent.match(/gitdir:\s*(.+)/);
@@ -58713,7 +60357,7 @@ var init_workspace_manager = __esm({
        * Extract project name from path
        */
       extractProjectName(dirPath) {
-        return path26.basename(dirPath);
+        return path27.basename(dirPath);
       }
       /**
        * Extract repository name from owner/repo format
@@ -62587,9 +64231,9 @@ var require_request3 = __commonJS({
       HttpMethod2["PATCH"] = "PATCH";
     })(HttpMethod = exports2.HttpMethod || (exports2.HttpMethod = {}));
     var SvixRequest = class {
-      constructor(method, path30) {
+      constructor(method, path31) {
         this.method = method;
-        this.path = path30;
+        this.path = path31;
         this.queryParams = {};
         this.headerParams = {};
       }
@@ -70404,11 +72048,11 @@ var require_dist2 = __commonJS({
 });
 
 // src/email/client.ts
-var import_crypto6, EmailClient;
+var import_crypto7, EmailClient;
 var init_client3 = __esm({
   "src/email/client.ts"() {
     "use strict";
-    import_crypto6 = require("crypto");
+    import_crypto7 = require("crypto");
     EmailClient = class {
       receiveBackend;
       sendBackend;
@@ -70513,7 +72157,7 @@ var init_client3 = __esm({
           const messages = [];
           for await (const msg of this.imapClient.fetch({ seen: false }, { source: true, uid: true })) {
             const parsed = await simpleParser(msg.source);
-            const messageId = parsed.messageId || `<${(0, import_crypto6.randomUUID)()}@visor>`;
+            const messageId = parsed.messageId || `<${(0, import_crypto7.randomUUID)()}@visor>`;
             const inReplyTo = typeof parsed.inReplyTo === "string" ? parsed.inReplyTo : void 0;
             const references = parsed.references ? Array.isArray(parsed.references) ? parsed.references : [parsed.references] : void 0;
             messages.push({
@@ -70654,7 +72298,7 @@ var init_client3 = __esm({
       // ─── Send ───
       /** Send an email via configured backend (SMTP or Resend) */
       async sendEmail(opts) {
-        const messageId = opts.messageId || `<${(0, import_crypto6.randomUUID)()}@visor>`;
+        const messageId = opts.messageId || `<${(0, import_crypto7.randomUUID)()}@visor>`;
         if (this.sendBackend === "resend") {
           return this.sendViaResend(opts, messageId);
         }
@@ -70737,7 +72381,7 @@ var init_client3 = __esm({
       }
       /** Generate a deterministic thread ID from a Message-ID chain */
       static deriveThreadId(rootMessageId) {
-        return (0, import_crypto6.createHash)("sha256").update(rootMessageId).digest("hex").slice(0, 16);
+        return (0, import_crypto7.createHash)("sha256").update(rootMessageId).digest("hex").slice(0, 16);
       }
     };
   }
@@ -71231,11 +72875,11 @@ var init_markdown4 = __esm({
 });
 
 // src/whatsapp/client.ts
-var import_crypto7, WhatsAppClient;
+var import_crypto8, WhatsAppClient;
 var init_client4 = __esm({
   "src/whatsapp/client.ts"() {
     "use strict";
-    import_crypto7 = require("crypto");
+    import_crypto8 = require("crypto");
     init_markdown4();
     WhatsAppClient = class {
       accessToken;
@@ -71341,7 +72985,7 @@ var init_client4 = __esm({
       verifyWebhookSignature(rawBody, signatureHeader) {
         if (!this.appSecret) return true;
         if (!signatureHeader) return false;
-        const expected = "sha256=" + (0, import_crypto7.createHmac)("sha256", this.appSecret).update(rawBody).digest("hex");
+        const expected = "sha256=" + (0, import_crypto8.createHmac)("sha256", this.appSecret).update(rawBody).digest("hex");
         return signatureHeader === expected;
       }
       /**
@@ -71845,13 +73489,13 @@ function taskRowToAgentTask(row) {
     workflow_id: row.workflow_id ?? void 0
   };
 }
-var import_path16, import_fs12, import_crypto8, SqliteTaskStore;
+var import_path16, import_fs12, import_crypto9, SqliteTaskStore;
 var init_task_store = __esm({
   "src/agent-protocol/task-store.ts"() {
     "use strict";
     import_path16 = __toESM(require("path"));
     import_fs12 = __toESM(require("fs"));
-    import_crypto8 = __toESM(require("crypto"));
+    import_crypto9 = __toESM(require("crypto"));
     init_logger();
     init_types();
     init_state_transitions();
@@ -71932,7 +73576,7 @@ var init_task_store = __esm({
       // -------------------------------------------------------------------------
       createTask(params) {
         const db = this.getDb();
-        const id = import_crypto8.default.randomUUID();
+        const id = import_crypto9.default.randomUUID();
         const now = nowISO();
         const contextId = this.resolveContextId(params.requestMessage, params.contextId);
         const expiresAt = params.expiresAt ?? null;
@@ -72148,19 +73792,27 @@ var init_task_store = __esm({
       // -------------------------------------------------------------------------
       // Cleanup
       // -------------------------------------------------------------------------
-      failStaleTasks(reason) {
+      failStaleTasks(reason, claimedBy) {
         const db = this.getDb();
         const now = nowISO();
         const msg = reason || "Process terminated while task was running";
         const statusMessage = JSON.stringify({
-          message_id: import_crypto8.default.randomUUID(),
+          message_id: import_crypto9.default.randomUUID(),
           role: "agent",
           parts: [{ text: msg }]
         });
+        if (claimedBy) {
+          const result2 = db.prepare(
+            `UPDATE agent_tasks
+           SET state = 'failed', updated_at = ?, status_message = ?
+           WHERE state = 'working' AND claimed_by = ?`
+          ).run(now, statusMessage, claimedBy);
+          return result2.changes;
+        }
         const result = db.prepare(
           `UPDATE agent_tasks
          SET state = 'failed', updated_at = ?, status_message = ?
-         WHERE state = 'working'`
+         WHERE state = 'working' AND claimed_by IS NULL`
         ).run(now, statusMessage);
         return result.changes;
       }
@@ -72170,7 +73822,7 @@ var init_task_store = __esm({
         const cutoff = new Date(Date.now() - olderThanMs).toISOString();
         const msg = reason || "Task exceeded maximum working duration";
         const statusMessage = JSON.stringify({
-          message_id: import_crypto8.default.randomUUID(),
+          message_id: import_crypto9.default.randomUUID(),
           role: "agent",
           parts: [{ text: msg }]
         });
@@ -72339,11 +73991,11 @@ var init_task_stream_manager = __esm({
 });
 
 // src/agent-protocol/push-notification-manager.ts
-var import_crypto9, PushNotificationManager;
+var import_crypto10, PushNotificationManager;
 var init_push_notification_manager = __esm({
   "src/agent-protocol/push-notification-manager.ts"() {
     "use strict";
-    import_crypto9 = __toESM(require("crypto"));
+    import_crypto10 = __toESM(require("crypto"));
     init_logger();
     PushNotificationManager = class {
       db = null;
@@ -72388,7 +74040,7 @@ var init_push_notification_manager = __esm({
       // -------------------------------------------------------------------------
       create(config) {
         const db = this.getDb();
-        const id = config.id ?? import_crypto9.default.randomUUID();
+        const id = config.id ?? import_crypto10.default.randomUUID();
         const now = (/* @__PURE__ */ new Date()).toISOString();
         db.prepare(
           `INSERT INTO agent_push_configs (id, task_id, url, token, auth_scheme, auth_credentials, created_at)
@@ -72486,11 +74138,11 @@ var init_push_notification_manager = __esm({
 });
 
 // src/agent-protocol/task-queue.ts
-var import_crypto10, DEFAULT_CONFIG, TaskQueue;
+var import_crypto11, DEFAULT_CONFIG, TaskQueue;
 var init_task_queue = __esm({
   "src/agent-protocol/task-queue.ts"() {
     "use strict";
-    import_crypto10 = __toESM(require("crypto"));
+    import_crypto11 = __toESM(require("crypto"));
     init_logger();
     init_trace_helpers();
     DEFAULT_CONFIG = {
@@ -72503,7 +74155,7 @@ var init_task_queue = __esm({
         this.taskStore = taskStore;
         this.executor = executor;
         this.config = { ...DEFAULT_CONFIG, ...config };
-        this.workerId = workerId ?? import_crypto10.default.randomUUID();
+        this.workerId = workerId ?? import_crypto11.default.randomUUID();
       }
       running = false;
       timer = null;
@@ -72577,7 +74229,7 @@ var init_task_queue = __esm({
           }
           if (result.success) {
             const completedMsg = {
-              message_id: import_crypto10.default.randomUUID(),
+              message_id: import_crypto11.default.randomUUID(),
               role: "agent",
               parts: [
                 {
@@ -72589,7 +74241,7 @@ var init_task_queue = __esm({
             this.taskStore.updateTaskState(task.id, "completed", completedMsg);
           } else {
             this.taskStore.updateTaskState(task.id, "failed", {
-              message_id: import_crypto10.default.randomUUID(),
+              message_id: import_crypto11.default.randomUUID(),
               role: "agent",
               parts: [{ text: result.error ?? "Task execution failed" }]
             });
@@ -72600,7 +74252,7 @@ var init_task_queue = __esm({
           );
           try {
             this.taskStore.updateTaskState(task.id, "failed", {
-              message_id: import_crypto10.default.randomUUID(),
+              message_id: import_crypto11.default.randomUUID(),
               role: "agent",
               parts: [{ text: err instanceof Error ? err.message : "Unknown error" }]
             });
@@ -72654,7 +74306,7 @@ function timingSafeEqual(a, b) {
   if (!a || !b) return false;
   if (a.length !== b.length) return false;
   try {
-    return import_crypto11.default.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+    return import_crypto12.default.timingSafeEqual(Buffer.from(a), Buffer.from(b));
   } catch {
     return false;
   }
@@ -72728,7 +74380,7 @@ function resultToArtifacts(checkResults) {
     }
     if (parts.length > 0) {
       artifacts.push({
-        artifact_id: import_crypto11.default.randomUUID(),
+        artifact_id: import_crypto12.default.randomUUID(),
         name: checkId,
         description: `Output from check: ${checkId}`,
         parts
@@ -72737,14 +74389,14 @@ function resultToArtifacts(checkResults) {
   }
   return artifacts;
 }
-var import_http2, import_https, import_fs13, import_crypto11, A2AFrontend;
+var import_http2, import_https, import_fs13, import_crypto12, A2AFrontend;
 var init_a2a_frontend = __esm({
   "src/agent-protocol/a2a-frontend.ts"() {
     "use strict";
     import_http2 = __toESM(require("http"));
     import_https = __toESM(require("https"));
     import_fs13 = __toESM(require("fs"));
-    import_crypto11 = __toESM(require("crypto"));
+    import_crypto12 = __toESM(require("crypto"));
     init_logger();
     init_task_store();
     init_types();
@@ -72838,7 +74490,7 @@ var init_a2a_frontend = __esm({
           if (!taskId) return;
           try {
             const statusMessage = {
-              message_id: import_crypto11.default.randomUUID(),
+              message_id: import_crypto12.default.randomUUID(),
               role: "agent",
               parts: [{ text: envelope.payload?.prompt ?? "Agent requires input" }]
             };
@@ -73044,7 +74696,7 @@ var init_a2a_frontend = __esm({
           const response = await this.handleFollowUpMessage(existingTaskId, body);
           return sendJson(res, 200, response);
         }
-        const contextId = body.message.context_id ?? import_crypto11.default.randomUUID();
+        const contextId = body.message.context_id ?? import_crypto12.default.randomUUID();
         const workflowId = resolveWorkflow(body, this.config);
         const blocking = body.configuration?.blocking ?? false;
         await withActiveSpan(
@@ -73157,7 +74809,7 @@ var init_a2a_frontend = __esm({
         if (!body.message?.parts?.length) {
           throw new InvalidRequestError("Message must contain at least one part");
         }
-        const contextId = body.message.context_id ?? import_crypto11.default.randomUUID();
+        const contextId = body.message.context_id ?? import_crypto12.default.randomUUID();
         const workflowId = resolveWorkflow(body, this.config);
         const task = this.taskStore.createTask({
           contextId,
@@ -73291,7 +74943,7 @@ var init_a2a_frontend = __esm({
             await this.executeTaskViaEngine(task, message);
           } else {
             const agentResponse = {
-              message_id: import_crypto11.default.randomUUID(),
+              message_id: import_crypto12.default.randomUUID(),
               role: "agent",
               parts: [{ text: `Task ${task.id} received and processed.`, media_type: "text/markdown" }]
             };
@@ -73303,7 +74955,7 @@ var init_a2a_frontend = __esm({
           logger.error(`[A2A] Task ${task.id} execution failed: ${errorMsg}`);
           try {
             const failMessage = {
-              message_id: import_crypto11.default.randomUUID(),
+              message_id: import_crypto12.default.randomUUID(),
               role: "agent",
               parts: [{ text: errorMsg }]
             };
@@ -73346,7 +74998,7 @@ ${issueText}`, media_type: "text/markdown" });
           }
           if (summaryParts.length > 0) {
             artifacts.push({
-              artifact_id: import_crypto11.default.randomUUID(),
+              artifact_id: import_crypto12.default.randomUUID(),
               name: "review-summary",
               description: "Review summary with issues found",
               parts: summaryParts
@@ -73366,7 +75018,7 @@ ${issueText}`, media_type: "text/markdown" });
               }
               if (parts.length > 0) {
                 artifacts.push({
-                  artifact_id: import_crypto11.default.randomUUID(),
+                  artifact_id: import_crypto12.default.randomUUID(),
                   name: cr.checkName ?? groupName,
                   description: `Output from check: ${cr.checkName ?? groupName}`,
                   parts
@@ -73377,7 +75029,7 @@ ${issueText}`, media_type: "text/markdown" });
         }
         if (artifacts.length === 0) {
           artifacts.push({
-            artifact_id: import_crypto11.default.randomUUID(),
+            artifact_id: import_crypto12.default.randomUUID(),
             name: "result",
             description: "Execution result",
             parts: [
@@ -73399,7 +75051,7 @@ ${issueText}`, media_type: "text/markdown" });
           );
         }
         const agentResponse = {
-          message_id: import_crypto11.default.randomUUID(),
+          message_id: import_crypto12.default.randomUUID(),
           role: "agent",
           parts: [
             {
@@ -73452,7 +75104,7 @@ ${issueText}`, media_type: "text/markdown" });
         }
         if (parts.length === 0) return null;
         return {
-          artifact_id: import_crypto11.default.randomUUID(),
+          artifact_id: import_crypto12.default.randomUUID(),
           name: p.checkId ?? "check-result",
           parts
         };
@@ -73650,15 +75302,15 @@ function serializeRunState(state) {
     ])
   };
 }
-var path29, fs26, StateMachineExecutionEngine;
+var path30, fs28, StateMachineExecutionEngine;
 var init_state_machine_execution_engine = __esm({
   "src/state-machine-execution-engine.ts"() {
     "use strict";
     init_runner();
     init_logger();
     init_sandbox_manager();
-    path29 = __toESM(require("path"));
-    fs26 = __toESM(require("fs"));
+    path30 = __toESM(require("path"));
+    fs28 = __toESM(require("fs"));
     StateMachineExecutionEngine = class _StateMachineExecutionEngine {
       workingDirectory;
       executionContext;
@@ -74046,9 +75698,9 @@ var init_state_machine_execution_engine = __esm({
                   }
                   const checkId = String(ev?.checkId || "unknown");
                   const threadKey = ev?.threadKey || (channel && threadTs ? `${channel}:${threadTs}` : "session");
-                  const baseDir = process.env.VISOR_SNAPSHOT_DIR || path29.resolve(process.cwd(), ".visor", "snapshots");
-                  fs26.mkdirSync(baseDir, { recursive: true });
-                  const filePath = path29.join(baseDir, `${threadKey}-${checkId}.json`);
+                  const baseDir = process.env.VISOR_SNAPSHOT_DIR || path30.resolve(process.cwd(), ".visor", "snapshots");
+                  fs28.mkdirSync(baseDir, { recursive: true });
+                  const filePath = path30.join(baseDir, `${threadKey}-${checkId}.json`);
                   await this.saveSnapshotToFile(filePath);
                   logger.info(`[Snapshot] Saved run snapshot: ${filePath}`);
                   try {
@@ -74189,7 +75841,7 @@ var init_state_machine_execution_engine = __esm({
        * Does not include secrets. Intended for debugging and future resume support.
        */
       async saveSnapshotToFile(filePath) {
-        const fs27 = await import("fs/promises");
+        const fs29 = await import("fs/promises");
         const ctx = this._lastContext;
         const runner = this._lastRunner;
         if (!ctx || !runner) {
@@ -74209,14 +75861,14 @@ var init_state_machine_execution_engine = __esm({
           journal: entries,
           requestedChecks: ctx.requestedChecks || []
         };
-        await fs27.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+        await fs29.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
       }
       /**
        * Load a snapshot JSON from file and return it. Resume support can build on this.
        */
       async loadSnapshotFromFile(filePath) {
-        const fs27 = await import("fs/promises");
-        const raw = await fs27.readFile(filePath, "utf8");
+        const fs29 = await import("fs/promises");
+        const raw = await fs29.readFile(filePath, "utf8");
         return JSON.parse(raw);
       }
       /**

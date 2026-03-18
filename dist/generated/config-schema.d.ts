@@ -202,6 +202,14 @@ export declare const configSchema: {
                     readonly $ref: "#/definitions/GracefulRestartConfig";
                     readonly description: "Graceful restart configuration";
                 };
+                readonly task_evaluate: {
+                    readonly anyOf: readonly [{
+                        readonly type: "boolean";
+                    }, {
+                        readonly $ref: "#/definitions/TaskEvaluateConfig";
+                    }];
+                    readonly description: "Automatically evaluate completed tasks using an LLM judge. Requires task_tracking to be enabled. Runs asynchronously after task completion. Set to `true` for defaults, or provide an object to configure.";
+                };
             };
             readonly required: readonly ["version"];
             readonly patternProperties: {
@@ -1033,7 +1041,7 @@ export declare const configSchema: {
                     readonly description: "Arguments/inputs for the workflow";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047%3E%3E";
                     readonly description: "Override specific step configurations in the workflow";
                 };
                 readonly output_mapping: {
@@ -1049,7 +1057,7 @@ export declare const configSchema: {
                     readonly description: "Config file path - alternative to workflow ID (loads a Visor config file as workflow)";
                 };
                 readonly workflow_overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047%3E%3E";
                     readonly description: "Alias for overrides - workflow step overrides (backward compatibility)";
                 };
                 readonly ref: {
@@ -1734,7 +1742,7 @@ export declare const configSchema: {
                     readonly description: "Custom output name (defaults to workflow name)";
                 };
                 readonly overrides: {
-                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E%3E";
+                    readonly $ref: "#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047%3E%3E";
                     readonly description: "Step overrides";
                 };
                 readonly output_mapping: {
@@ -1749,13 +1757,13 @@ export declare const configSchema: {
                 readonly '^x-': {};
             };
         };
-        readonly 'Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281>>': {
+        readonly 'Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047>>': {
             readonly type: "object";
             readonly additionalProperties: {
-                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281%3E";
+                readonly $ref: "#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047%3E";
             };
         };
-        readonly 'Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-60281>': {
+        readonly 'Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047>': {
             readonly type: "object";
             readonly additionalProperties: false;
         };
@@ -3639,6 +3647,32 @@ export declare const configSchema: {
             };
             readonly additionalProperties: false;
             readonly description: "Graceful restart configuration";
+            readonly patternProperties: {
+                readonly '^x-': {};
+            };
+        };
+        readonly TaskEvaluateConfig: {
+            readonly type: "object";
+            readonly properties: {
+                readonly enabled: {
+                    readonly type: "boolean";
+                    readonly description: "Enable auto-evaluation (default: true when config object is present)";
+                };
+                readonly model: {
+                    readonly type: "string";
+                    readonly description: "LLM model to use for evaluation (e.g. \"gemini-2.5-flash\", \"claude-sonnet-4-5\")";
+                };
+                readonly provider: {
+                    readonly type: "string";
+                    readonly description: "AI provider: google, openai, anthropic";
+                };
+                readonly prompt: {
+                    readonly type: "string";
+                    readonly description: "Custom system prompt for the evaluator (overrides the default evaluation prompt)";
+                };
+            };
+            readonly additionalProperties: false;
+            readonly description: "Configuration for automatic task evaluation via LLM judge.";
             readonly patternProperties: {
                 readonly '^x-': {};
             };
