@@ -639,15 +639,25 @@ export async function serializeTraceForPrompt(
   maxChars?: number,
   backendConfig?: Partial<TraceBackendConfig>,
   /** Final task response from the task store (not truncated by OTEL) */
-  taskResponse?: string
+  taskResponse?: string,
+  /** Trace ID to try remote backends when local file has no real OTEL spans */
+  fallbackTraceId?: string
 ): Promise<string> {
   let spans: NormalizedSpan[];
 
-  // If it looks like a file path, read it directly
+  // If it looks like a file path, try reading the local file first
   if (traceIdOrPath.includes('/') || traceIdOrPath.endsWith('.ndjson')) {
     const { parseNDJSONTrace } = await import('../debug-visualizer/trace-reader');
     const trace = await parseNDJSONTrace(traceIdOrPath);
     spans = parseLocalNDJSONSpans(trace.spans as any[]);
+
+    // Fallback: if local file only has event stubs (no real OTEL spans with traceId/spanId),
+    // the real spans were sent to an OTLP backend. Try fetching remotely.
+    const hasRealSpans = spans.some(s => s.traceId && s.spanId);
+    if (!hasRealSpans && fallbackTraceId) {
+      const remoteSpans = await fetchTraceSpans(fallbackTraceId, backendConfig);
+      if (remoteSpans.length > 0) spans = remoteSpans;
+    }
   } else {
     // It's a trace ID — fetch from backends
     spans = await fetchTraceSpans(traceIdOrPath, backendConfig);

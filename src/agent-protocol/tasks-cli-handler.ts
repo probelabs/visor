@@ -931,7 +931,7 @@ async function handleTrace(
         if (textPart) taskResponse = (textPart as any).text;
       }
 
-      const tree = await serializeTraceForPrompt(traceRef, maxChars, undefined, taskResponse);
+      const tree = await serializeTraceForPrompt(traceRef, maxChars, undefined, taskResponse, traceId);
       if (tree === '(no trace data available)') {
         console.error(`No trace data found for trace_id=${traceId?.slice(0, 16)}`);
         console.error('Tried: Grafana Tempo, Jaeger, local NDJSON files');

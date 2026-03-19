@@ -230,7 +230,8 @@ export async function evaluateTask(
         traceRef,
         1_000_000,
         { traceDir: config?.traceDir },
-        responseText !== 'No response available' ? responseText : undefined
+        responseText !== 'No response available' ? responseText : undefined,
+        traceId
       );
       if (traceTree === '(no trace data available)') {
         traceTree = undefined;
