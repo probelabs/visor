@@ -23021,6 +23021,18 @@ function renderYamlInput(inputOutputsStr, pad, lines, fullOutput, maxLen, questi
   } catch {
   }
 }
+function parseWorkspacePath(fullPath) {
+  const wsMatch = fullPath.match(/\/visor-workspaces\/[^/]+\/([^/]+)(?:\/(.+))?/);
+  if (wsMatch) {
+    return { repo: wsMatch[1], filePath: wsMatch[2] };
+  }
+  const wtMatch = fullPath.match(/\.visor\/worktrees\/worktrees\/[^/]+\/(.+)/);
+  if (wtMatch) {
+    const segs = wtMatch[1].split("/");
+    return { repo: segs[0], filePath: segs.length > 1 ? segs.slice(1).join("/") : void 0 };
+  }
+  return null;
+}
 function extractToolInput(toolName, attrs) {
   const result = String(attrs["tool.result"] || "");
   const explicitInput = String(attrs["tool.input"] || "");
@@ -23028,19 +23040,27 @@ function extractToolInput(toolName, attrs) {
   switch (toolName) {
     case "search": {
       const patMatch = result.match(/Pattern: (.+)/);
-      const pathMatch = result.match(/Path: \S+\/([^\s/]+)\s/);
+      const pathMatch = result.match(/Path: (\S+)/);
       const pattern = patMatch ? patMatch[1].trim() : "";
-      const inPath = pathMatch ? pathMatch[1] : "";
-      if (pattern && inPath) return `"${truncate(pattern, 50)}" in ${inPath}`;
-      if (pattern) return `"${truncate(pattern, 60)}"`;
-      return "";
+      const workspace = pathMatch ? parseWorkspacePath(pathMatch[1]) : null;
+      const parts = [];
+      if (pattern) parts.push(`"${truncate(pattern, 50)}"`);
+      if (workspace?.repo) parts.push(workspace.repo);
+      return parts.join(", ");
     }
     case "extract": {
       const fileMatch = result.match(/Files to extract:\n\s*(\S+)/);
       if (fileMatch) {
-        const filePath = fileMatch[1];
-        const parts = filePath.split("/");
-        return parts.length > 2 ? parts.slice(-2).join("/") : parts[parts.length - 1];
+        const fullPath = fileMatch[1];
+        const workspace = parseWorkspacePath(fullPath);
+        if (workspace) {
+          const parts = [];
+          parts.push(workspace.filePath || workspace.repo || fullPath.split("/").pop() || "");
+          if (workspace.repo) parts.push(workspace.repo);
+          return parts.join(", ");
+        }
+        const segs = fullPath.split("/");
+        return segs.length > 2 ? segs.slice(-2).join("/") : segs[segs.length - 1];
       }
       return "";
     }
