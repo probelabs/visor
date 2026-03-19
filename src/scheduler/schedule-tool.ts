@@ -251,6 +251,8 @@ export interface ScheduleToolContext {
    * - From group DM: only 'dm' allowed (targeting the group)
    */
   allowedScheduleType?: ScheduleType;
+  /** Origin of the current execution, used to prevent scheduler recursion. */
+  executionSource?: 'user' | 'scheduler';
 }
 
 /**
@@ -411,6 +413,15 @@ async function handleCreate(
   context: ScheduleToolContext,
   store: ScheduleStore
 ): Promise<ScheduleToolResult> {
+  if (context.executionSource === 'scheduler') {
+    return {
+      success: false,
+      message: 'Scheduled runs cannot create new schedules',
+      error:
+        'Creating schedules from a scheduler-triggered execution is not allowed to prevent recursive scheduling.',
+    };
+  }
+
   // Validate: need either reminder_text or workflow
   if (!args.reminder_text && !args.workflow) {
     return {
@@ -765,6 +776,15 @@ async function handleCreateTrigger(
   context: ScheduleToolContext,
   store: ScheduleStore
 ): Promise<ScheduleToolResult> {
+  if (context.executionSource === 'scheduler') {
+    return {
+      success: false,
+      message: 'Scheduled runs cannot create new triggers',
+      error:
+        'Creating message triggers from a scheduler-triggered execution is not allowed to prevent recursive scheduling.',
+    };
+  }
+
   // Default workflow to "default" if not specified
   const workflow = args.workflow || 'default';
 
@@ -1311,11 +1331,14 @@ export function buildScheduleToolContext(
     };
     cliContext?: { userId?: string };
     githubContext?: { login: string };
+    schedulerContext?: { scheduleId?: string };
   },
   availableWorkflows?: string[],
   permissions?: SchedulePermissions,
   outputInfo?: { outputType?: 'slack' | 'github' | 'webhook' | 'none'; outputTarget?: string }
 ): ScheduleToolContext {
+  const executionSource = sources.schedulerContext ? 'scheduler' : 'user';
+
   // Prefer Slack context, then GitHub, then CLI
   if (sources.slackContext) {
     const contextType = `slack:${sources.slackContext.userId}`;
@@ -1347,6 +1370,7 @@ export function buildScheduleToolContext(
       scheduleType: finalScheduleType,
       permissions,
       allowedScheduleType,
+      executionSource,
     };
   }
 
@@ -1359,6 +1383,7 @@ export function buildScheduleToolContext(
       scheduleType: 'personal',
       permissions,
       allowedScheduleType: 'personal', // GitHub context only allows personal schedules
+      executionSource,
     };
   }
 
@@ -1371,5 +1396,6 @@ export function buildScheduleToolContext(
     scheduleType: 'personal',
     permissions,
     allowedScheduleType: 'personal', // CLI context only allows personal schedules
+    executionSource,
   };
 }

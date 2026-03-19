@@ -554,6 +554,8 @@ export function buildBuiltinGlobals(opts: BuildBuiltinGlobalsOptions): ToolGloba
 
       const parentCtx = (opts.sessionInfo as any)?._parentContext;
       const webhookData = parentCtx?.prInfo?.eventContext?.webhookData;
+      const webhookEventType =
+        parentCtx?.webhookContext?.eventType || parentCtx?.prInfo?.eventContext?.eventType;
       const visorCfg = parentCtx?.config;
       const slackContext = webhookData
         ? extractSlackContext(webhookData as Map<string, unknown>)
@@ -565,6 +567,10 @@ export function buildBuiltinGlobals(opts: BuildBuiltinGlobalsOptions): ToolGloba
         {
           slackContext: slackContext || undefined,
           cliContext: slackContext ? undefined : { userId: 'script' },
+          schedulerContext:
+            webhookEventType === 'schedule'
+              ? { scheduleId: parentCtx?.inputs?.schedule?.id as string | undefined }
+              : undefined,
         },
         availableWorkflows,
         permissions

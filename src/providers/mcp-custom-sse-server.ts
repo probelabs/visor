@@ -1031,6 +1031,8 @@ export class CustomToolsSSEServer implements CustomMCPServer {
           if (isScheduleTool(toolName)) {
             // Extract context from various sources
             const webhookData = this.workflowContext?.executionContext?.webhookContext?.webhookData;
+            const webhookEventType =
+              this.workflowContext?.executionContext?.webhookContext?.eventType;
             const slackContext = webhookData
               ? extractSlackContext(webhookData as Map<string, unknown>)
               : null;
@@ -1062,6 +1064,14 @@ export class CustomToolsSSEServer implements CustomMCPServer {
                       channelType: slackContext.channelType,
                     }
                   : undefined,
+                schedulerContext:
+                  webhookEventType === 'schedule'
+                    ? {
+                        scheduleId: (
+                          this.workflowContext?.executionContext as any
+                        )?.inputs?.schedule?.id as string | undefined,
+                      }
+                    : undefined,
               },
               availableWorkflows,
               permissions,
