@@ -301,9 +301,6 @@ async function handleList(flags: Record<string, string | boolean>): Promise<void
     return;
   }
 
-  // Auto-watch: when TTY and no explicit output format, auto-refresh with cards
-  const autoWatch = !flags.watch && process.stdout.isTTY && !flags.output;
-
   const instanceId = getInstanceId();
 
   const render = async () => {
@@ -376,7 +373,7 @@ async function handleList(flags: Record<string, string | boolean>): Promise<void
     });
   };
 
-  if (flags.watch || autoWatch) {
+  if (flags.watch) {
     const watchRender = async () => {
       process.stdout.write('\x1Bc'); // clear terminal
       const activeOnly = !flags.all && !flags.state;
