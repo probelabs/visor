@@ -1485,6 +1485,27 @@ function formatSpanLine(
 
 /**
  * Extract a meaningful input description for a tool call.
+ * Parse a workspace path like /tmp/visor-workspaces/<session>/<repo>/path/to/file
+ * into { repo, filePath } components.
+ */
+function parseWorkspacePath(
+  fullPath: string
+): { repo: string; filePath?: string } | null {
+  // Match /tmp/visor-workspaces/<session-id>/<repo>/...
+  const wsMatch = fullPath.match(/\/visor-workspaces\/[^/]+\/([^/]+)(?:\/(.+))?/);
+  if (wsMatch) {
+    return { repo: wsMatch[1], filePath: wsMatch[2] };
+  }
+  // Match .visor/worktrees/worktrees/<worktree-id>/<path>
+  const wtMatch = fullPath.match(/\.visor\/worktrees\/worktrees\/[^/]+\/(.+)/);
+  if (wtMatch) {
+    const segs = wtMatch[1].split('/');
+    return { repo: segs[0], filePath: segs.length > 1 ? segs.slice(1).join('/') : undefined };
+  }
+  return null;
+}
+
+/**
  * Parses the Pattern/Path from tool.result for search tools,
  * and file paths for extract tools.
  */
@@ -1499,23 +1520,32 @@ function extractToolInput(
 
   switch (toolName) {
     case 'search': {
-      // Parse "Pattern: ..." from Probe search output
+      // Parse "Pattern: ..." and "Path: ..." from Probe search output
       const patMatch = result.match(/Pattern: (.+)/);
-      const pathMatch = result.match(/Path: \S+\/([^\s/]+)\s/);
+      const pathMatch = result.match(/Path: (\S+)/);
       const pattern = patMatch ? patMatch[1].trim() : '';
-      const inPath = pathMatch ? pathMatch[1] : '';
-      if (pattern && inPath) return `"${truncate(pattern, 50)}" in ${inPath}`;
-      if (pattern) return `"${truncate(pattern, 60)}"`;
-      return '';
+      const workspace = pathMatch ? parseWorkspacePath(pathMatch[1]) : null;
+      const parts: string[] = [];
+      if (pattern) parts.push(`"${truncate(pattern, 50)}"`);
+      if (workspace?.repo) parts.push(workspace.repo);
+      return parts.join(', ');
     }
     case 'extract': {
       // Parse file paths from "Files to extract:" block
+      // Full path looks like: /tmp/visor-workspaces/<session>/<repo>/path/to/file (lines N-M)
       const fileMatch = result.match(/Files to extract:\n\s*(\S+)/);
       if (fileMatch) {
-        const filePath = fileMatch[1];
-        // Show just filename with parent dir for context
-        const parts = filePath.split('/');
-        return parts.length > 2 ? parts.slice(-2).join('/') : parts[parts.length - 1];
+        const fullPath = fileMatch[1];
+        const workspace = parseWorkspacePath(fullPath);
+        if (workspace) {
+          const parts: string[] = [];
+          parts.push(workspace.filePath || workspace.repo || fullPath.split('/').pop() || '');
+          if (workspace.repo) parts.push(workspace.repo);
+          return parts.join(', ');
+        }
+        // Fallback: show last 2 segments
+        const segs = fullPath.split('/');
+        return segs.length > 2 ? segs.slice(-2).join('/') : segs[segs.length - 1];
       }
       return '';
     }
