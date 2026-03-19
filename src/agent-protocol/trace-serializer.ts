@@ -1119,15 +1119,18 @@ function renderYamlValue(
       lines.push(`${pad}${key}: []`);
       return;
     }
+    // Short string arrays: render inline like [a, b, c]
+    if (val.every((v: any) => typeof v === 'string') && val.join(', ').length < ml) {
+      lines.push(`${pad}${key}: [${val.join(', ')}]`);
+      return;
+    }
     // Limit array depth
     const maxItems = fullOutput ? 20 : 3;
     lines.push(`${pad}${key}:`);
     for (let i = 0; i < Math.min(val.length, maxItems); i++) {
       const item = val[i];
       if (typeof item === 'object' && item !== null) {
-        const entries = Object.entries(item).filter(
-          ([k]) => k !== 'raw' && k !== 'skills' && k !== 'tags'
-        );
+        const entries = Object.entries(item).filter(([k]) => k !== 'raw' && k !== 'tags');
         if (entries.length > 0) {
           // Put first key on same line as dash
           const [firstKey, firstVal] = entries[0];
@@ -1171,7 +1174,7 @@ function renderYamlValue(
     }
     lines.push(`${pad}${key}:`);
     for (const [k, v] of Object.entries(val)) {
-      if (k === 'raw' || k === 'skills' || k === 'tags') continue;
+      if (k === 'raw' || k === 'tags') continue;
       renderYamlValue(v, `${pad}  `, k, lines, fullOutput, ml, d + 1);
     }
   }
