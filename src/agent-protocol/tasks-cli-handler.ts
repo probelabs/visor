@@ -629,7 +629,6 @@ async function handleShow(
     lines.push(
       inputText.length > maxInputLen ? inputText.slice(0, maxInputLen) + '...' : inputText
     );
-
     // Response
     const fullTask = store.getTask(match.id);
     if (fullTask?.status?.message) {
