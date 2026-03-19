@@ -23513,6 +23513,8 @@ The trace is a tree of spans representing the agent's execution pipeline:
 **Execution Quality** (1-5, only when trace is provided):
 - **Efficiency**: Were tool calls necessary and well-targeted? Good search queries that find results on the first try score high.
 - **Redundancy**: Were there duplicate searches, unnecessary re-searches with slightly different queries, or tools called for information already available?
+- **Extract-then-search anti-pattern**: If a file was already extracted (e.g., \`extract(docs/config.mdx) \u2192 3.3k chars\`), then a subsequent \`search("term" in config.mdx)\` is redundant \u2014 the agent already has the file content and should parse it from context instead of making another tool call. Flag every instance of this pattern.
+- **Search-reformulation waste**: If a search returns "no results" and the agent immediately retries with a minor query variation (e.g., \`"audit store_type"\` \u2192 \`"audit "store_type""\` \u2192 \`"store_type"\`), that's usually wasteful. A single well-crafted query should suffice; reformulating 3+ times for the same concept is a red flag.
 - **Delegation quality**: Were search delegations productive? Did they explore relevant code paths?
 - **Token usage**: Was input context kept reasonable, or did the agent load excessive amounts of code?
 - Rating: 5=efficient (minimal, targeted tool use), 4=adequate (minor redundancy), 3=some waste (noticeable unnecessary calls), 2=wasteful (many redundant searches or delegations), 1=error/broken execution
