@@ -640,24 +640,28 @@ export async function serializeTraceForPrompt(
   backendConfig?: Partial<TraceBackendConfig>,
   /** Final task response from the task store (not truncated by OTEL) */
   taskResponse?: string,
-  /** Trace ID to try remote backends when local file has no real OTEL spans */
+  /** Trace ID to try remote backends first (preferred over local file) */
   fallbackTraceId?: string
 ): Promise<string> {
   let spans: NormalizedSpan[];
 
-  // If it looks like a file path, try reading the local file first
-  if (traceIdOrPath.includes('/') || traceIdOrPath.endsWith('.ndjson')) {
+  // If we have a trace ID, try remote backends first (Grafana Tempo, Jaeger).
+  // This respects the user's OTLP/telemetry config rather than reading stale local files.
+  if (fallbackTraceId) {
+    spans = await fetchTraceSpans(fallbackTraceId, backendConfig);
+    if (spans.length > 0) {
+      // Got real spans from remote — use them
+    } else if (traceIdOrPath.includes('/') || traceIdOrPath.endsWith('.ndjson')) {
+      // Remote failed, fall back to local file
+      const { parseNDJSONTrace } = await import('../debug-visualizer/trace-reader');
+      const trace = await parseNDJSONTrace(traceIdOrPath);
+      spans = parseLocalNDJSONSpans(trace.spans as any[]);
+    }
+  } else if (traceIdOrPath.includes('/') || traceIdOrPath.endsWith('.ndjson')) {
+    // No trace ID — read local file directly
     const { parseNDJSONTrace } = await import('../debug-visualizer/trace-reader');
     const trace = await parseNDJSONTrace(traceIdOrPath);
     spans = parseLocalNDJSONSpans(trace.spans as any[]);
-
-    // Fallback: if local file only has event stubs (no real OTEL spans with traceId/spanId),
-    // the real spans were sent to an OTLP backend. Try fetching remotely.
-    const hasRealSpans = spans.some(s => s.traceId && s.spanId);
-    if (!hasRealSpans && fallbackTraceId) {
-      const remoteSpans = await fetchTraceSpans(fallbackTraceId, backendConfig);
-      if (remoteSpans.length > 0) spans = remoteSpans;
-    }
   } else {
     // It's a trace ID — fetch from backends
     spans = await fetchTraceSpans(traceIdOrPath, backendConfig);
