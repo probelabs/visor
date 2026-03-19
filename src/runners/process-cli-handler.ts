@@ -91,7 +91,7 @@ function handleReload(targetPid?: string): void {
   }
 }
 
-function handleRestart(targetPid?: string): void {
+async function handleRestart(targetPid?: string, wait?: boolean): Promise<void> {
   const procs = resolveTargets(targetPid);
   if (!procs) return;
 
@@ -102,7 +102,43 @@ function handleRestart(targetPid?: string): void {
     } else {
       console.error(`✗ Failed to signal PID ${proc.pid}`);
       process.exitCode = 1;
+      return;
     }
+  }
+
+  if (wait) {
+    const oldPids = new Set(procs.map(p => p.pid));
+    console.log(`${DIM}Waiting for restart to complete...${RESET}`);
+
+    const timeout = 300_000; // 5 minutes max
+    const start = Date.now();
+
+    while (Date.now() - start < timeout) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      const current = findVisorProcesses();
+      // Old PIDs should be gone and at least one new process should exist
+      const oldStillAlive = current.filter(p => oldPids.has(p.pid));
+      const newOnes = current.filter(p => !oldPids.has(p.pid));
+
+      if (oldStillAlive.length === 0 && newOnes.length > 0) {
+        console.log(
+          `${GREEN}✓${RESET} Restart complete — new PID ${newOnes.map(p => p.pid).join(', ')} (took ${Math.round((Date.now() - start) / 1000)}s)`
+        );
+        return;
+      }
+
+      // Show progress
+      if (oldStillAlive.length > 0) {
+        const elapsed = Math.round((Date.now() - start) / 1000);
+        process.stdout.write(
+          `\r${DIM}  ${oldStillAlive.length} old process(es) still draining... ${elapsed}s${RESET}`
+        );
+      }
+    }
+
+    console.log(`\n${YELLOW}⚠${RESET} Timed out after 5m — old process(es) may still be draining`);
+    process.exitCode = 1;
   }
 }
 
@@ -191,8 +227,9 @@ Signals:
     .command('restart')
     .description('Graceful restart (SIGUSR1)')
     .option('--pid <pid>', 'Target a specific process by PID')
-    .action(opts => {
-      handleRestart(opts.pid);
+    .option('--wait', 'Block until old process exits and new one is running')
+    .action(async opts => {
+      await handleRestart(opts.pid, opts.wait);
     });
 
   program
