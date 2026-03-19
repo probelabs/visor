@@ -585,78 +585,93 @@ async function handleShow(
       ? formatDuration(match.created_at, match.updated_at)
       : formatDuration(match.claimed_at || match.created_at);
 
-    const detailTable = new CliTable3({
-      style: { head: ['cyan', 'bold'], border: ['grey'] },
-      wordWrap: false,
-    });
+    const termWidth = process.stdout.columns || 80;
+    const sep = DIM + '─'.repeat(termWidth) + RESET;
+    const lines: string[] = [];
 
-    detailTable.push(
-      { 'Task ID': match.id },
-      { State: stateColor(match.state) },
-      { Source: match.source },
-      { Workflow: match.workflow_id || '-' },
-      { Instance: match.claimed_by || '-' },
-      { Duration: duration },
-      { Created: match.created_at },
-      { Updated: match.updated_at }
+    // Header: icon + ID + state + duration
+    const icon = stateIcon(match.state);
+    const colorState = stateColor(match.state);
+    const left = `${icon} ${BOLD}${match.id}${RESET} ${colorState}`;
+    const right = `${DIM}${duration} · ${formatTimeAgo(match.created_at)}${RESET}`;
+    const pad = Math.max(1, termWidth - stripAnsi(left) - stripAnsi(right));
+    lines.push(left + ' '.repeat(pad) + right);
+
+    // Tags line
+    const tags: string[] = [];
+    if (match.source) tags.push(match.source);
+    if (match.workflow_id) tags.push(match.workflow_id);
+    if (match.claimed_by) tags.push(`on:${match.claimed_by}`);
+    if (match.run_id) tags.push(`run:${match.run_id}`);
+    const meta = match.metadata;
+    if (meta.visor_version) {
+      const ver = meta.visor_commit
+        ? `v${meta.visor_version} (${meta.visor_commit})`
+        : `v${meta.visor_version}`;
+      tags.push(ver);
+    }
+    if (meta.slack_user) tags.push(`user:${meta.slack_user}`);
+    if (meta.slack_channel) tags.push(`ch:${meta.slack_channel}`);
+    if (meta.trace_id) tags.push(`trace:${String(meta.trace_id).slice(0, 16)}`);
+    if (meta.schedule_id) tags.push(`sched:${meta.schedule_id}`);
+    if (tags.length > 0) {
+      lines.push(`  ${DIM}${tags.join(' · ')}${RESET}`);
+    }
+    lines.push(`  ${DIM}created ${match.created_at} · updated ${match.updated_at}${RESET}`);
+
+    // Input
+    lines.push('');
+    lines.push(sep);
+    lines.push(`${BOLD}Input${RESET}`);
+    lines.push(sep);
+    const inputText = match.request_message || '(empty)';
+    const maxInputLen = 2000;
+    lines.push(
+      inputText.length > maxInputLen ? inputText.slice(0, maxInputLen) + '...' : inputText
     );
-    if (match.run_id) detailTable.push({ 'Run ID': match.run_id });
-    const inputMaxLen = 500;
-    const inputDisplay =
-      match.request_message.length > inputMaxLen
-        ? match.request_message.slice(0, inputMaxLen) + '...'
-        : match.request_message || '-';
-    detailTable.push({ Input: inputDisplay });
 
-    // Show AI response from status_message (recorded on completion/failure)
+    // Response
     const fullTask = store.getTask(match.id);
     if (fullTask?.status?.message) {
       const parts = fullTask.status.message.parts ?? [];
       const textPart = parts.find((p: any) => typeof p.text === 'string');
       if (textPart) {
         const responseText = (textPart as any).text as string;
-        // Truncate long responses for display
-        const maxLen = 500;
-        const display =
-          responseText.length > maxLen ? responseText.slice(0, maxLen) + '...' : responseText;
-        detailTable.push({ Response: display });
+        lines.push('');
+        lines.push(sep);
+        lines.push(`${BOLD}Response${RESET}`);
+        lines.push(sep);
+        const maxLen = 2000;
+        lines.push(
+          responseText.length > maxLen ? responseText.slice(0, maxLen) + '...' : responseText
+        );
       }
     }
 
-    // Show stored evaluation if present
+    // Evaluation
     const evalArtifact = (fullTask?.artifacts ?? []).find((a: any) => a.name === 'evaluation');
     if (evalArtifact) {
       try {
         const evalTextPart = evalArtifact.parts?.find((p: any) => typeof p.text === 'string');
         if (evalTextPart) {
           const evaluation = JSON.parse((evalTextPart as any).text);
+          lines.push('');
+          lines.push(sep);
+          lines.push(`${BOLD}Evaluation${RESET}  ${evaluation.overall_rating}/5 — ${evaluation.summary}`);
+          lines.push(sep);
           const rq = evaluation.response_quality;
-          detailTable.push({
-            Evaluation: `${evaluation.overall_rating}/5 — ${evaluation.summary}`,
-          });
           if (rq) {
-            detailTable.push({
-              'Response Quality': `${rq.rating}/5 (${rq.category}) — ${rq.reasoning}`,
-            });
+            lines.push(`  Response:  ${rq.rating}/5 (${rq.category}) — ${rq.reasoning}`);
           }
           if (evaluation.execution_quality) {
             const eq = evaluation.execution_quality;
-            detailTable.push({
-              'Execution Quality': `${eq.rating}/5 (${eq.category}) — ${eq.reasoning}`,
-            });
+            lines.push(`  Execution: ${eq.rating}/5 (${eq.category}) — ${eq.reasoning}`);
           }
         }
       } catch {}
     }
 
-    // Show metadata
-    const meta = match.metadata;
-    const metaKeys = Object.keys(meta).filter(k => k !== 'source');
-    for (const key of metaKeys) {
-      detailTable.push({ [key]: String(meta[key]) });
-    }
-
-    console.log(detailTable.toString());
+    console.log(lines.join('\n'));
   });
 }
 
