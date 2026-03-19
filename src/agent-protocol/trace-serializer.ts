@@ -1388,11 +1388,24 @@ function formatSpanLine(
     const numLen = toolResultLen ? Number(toolResultLen) : -1;
     const noResults = isSearchTool && numLen >= 0 && numLen < 500;
     const resultSize = noResults ? 'no results' : toolResultLen ? formatSize(numLen) : '';
-    const successMark = toolSuccess === false ? ' ✗' : '';
     const durStr =
       Number(attrs['tool.duration_ms']) > 0
         ? ` (${formatDurationMs(Number(attrs['tool.duration_ms']))})`
         : '';
+
+    // Bash: show exit code / signal instead of generic success mark
+    let successMark = toolSuccess === false ? ' ✗' : '';
+    if (tn === 'bash') {
+      const toolResult = String(attrs['tool.result'] || '');
+      const exitMatch = toolResult.match(/Exit Code: (\S+)/);
+      const sigMatch = toolResult.match(/Signal: (\S+)/);
+      if (sigMatch && sigMatch[1] !== 'null') {
+        successMark = ` [${sigMatch[1]}]`;
+      } else if (exitMatch && exitMatch[1] !== '0' && exitMatch[1] !== 'null') {
+        successMark = ` [exit ${exitMatch[1]}]`;
+      }
+    }
+
     return {
       line: `${toolName}(${toolInput})${durStr}${resultSize ? ` → ${resultSize}` : ''}${successMark}`,
     };
@@ -1560,6 +1573,25 @@ function extractToolInput(
         // Fallback: show last 2 segments
         const segs = fullPath.split('/');
         return segs.length > 2 ? segs.slice(-2).join('/') : segs[segs.length - 1];
+      }
+      return '';
+    }
+    case 'bash': {
+      // tool.result starts with "Command: <cmd>\nWorking directory: ..."
+      const cmdMatch = result.match(/^Command: (.+)/);
+      if (cmdMatch) {
+        let cmd = cmdMatch[1].trim();
+        // Strip long pipes — show first command + pipe count
+        const pipes = cmd.split(/\s*\|\s*/);
+        if (pipes.length > 2) {
+          cmd = `${pipes[0]} | ... (${pipes.length} stages)`;
+        }
+        return truncate(cmd, 80);
+      }
+      // Blocked commands: "Permission denied: Component "<cmd>" not allowed: ..."
+      const deniedMatch = result.match(/^Permission denied: Component "([^"]+)"/);
+      if (deniedMatch) {
+        return truncate(deniedMatch[1], 60) + ' [denied]';
       }
       return '';
     }
