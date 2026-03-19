@@ -629,6 +629,7 @@ async function handleShow(
     lines.push(
       inputText.length > maxInputLen ? inputText.slice(0, maxInputLen) + '...' : inputText
     );
+
     // Response
     const fullTask = store.getTask(match.id);
     if (fullTask?.status?.message) {
@@ -880,7 +881,7 @@ async function handleTrace(
       return;
     }
 
-    const traceId = match.metadata?.trace_id as string | undefined;
+    let traceId = match.metadata?.trace_id as string | undefined;
     const traceFile = match.metadata?.trace_file as string | undefined;
 
     if (!traceId && !traceFile) {
@@ -889,22 +890,33 @@ async function handleTrace(
       return;
     }
 
-    const { serializeTraceForPrompt, fetchTraceSpans } = await import('./trace-serializer');
+    const { serializeTraceForPrompt, fetchTraceSpans, readTraceIdFromFile } = await import(
+      './trace-serializer'
+    );
 
-    // Always prefer remote trace backends (Grafana Tempo, Jaeger) over local
-    // NDJSON files. The local fallback exporter writes minimal event markers
-    // without span IDs or timestamps, so remote is the authoritative source.
-    // Fall back to local file only when remote returns nothing.
+    if (!traceId && traceFile) {
+      traceId = (await readTraceIdFromFile(traceFile)) || undefined;
+      if (traceId) {
+        try {
+          store.updateMetadata(match.id, { trace_id: traceId });
+        } catch {
+          // best-effort cache repair for older tasks
+        }
+      }
+    }
+
+    // Resolve traces using the current backend configuration/environment.
+    // In OTLP/Grafana setups we prefer remote backends first; in file-mode
+    // setups we prefer the local NDJSON trace first. Missing trace_id values
+    // are repaired from the stored trace file so older tasks can still use
+    // remote backends when available.
     if (output === 'json') {
       const traceDir = typeof flags['trace-dir'] === 'string' ? flags['trace-dir'] : undefined;
-      // Try remote first via trace ID, fall back to file-based lookup
-      let spans = traceId ? await fetchTraceSpans(traceId, { traceDir }) : [];
-      if (spans.length === 0 && traceFile) {
-        spans = await fetchTraceSpans(traceFile, { traceDir, type: 'file' as any });
-      }
+      const traceRef = traceId || traceFile!;
+      const spans = await fetchTraceSpans(traceRef, { traceDir });
       if (spans.length === 0) {
         console.error(`No trace data found for trace_id=${traceId?.slice(0, 16)}`);
-        console.error('Tried: Grafana Tempo, Jaeger, local NDJSON files');
+        console.error('Tried current configured backends plus local NDJSON fallback');
         process.exitCode = 1;
         return;
       }
@@ -960,8 +972,7 @@ async function handleTrace(
       }
       if (tree === '(no trace data available)') {
         console.error(`No trace data found for trace_id=${traceId?.slice(0, 16)}`);
-        console.error('Tried: Grafana Tempo, Jaeger, local NDJSON files');
-        console.error('Set GRAFANA_URL, JAEGER_URL, or VISOR_TRACE_BACKEND to configure.');
+        console.error('Tried current configured backends plus local NDJSON fallback');
         process.exitCode = 1;
         return;
       }
