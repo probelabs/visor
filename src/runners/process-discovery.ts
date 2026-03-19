@@ -137,8 +137,11 @@ function isVisorCommand(cmd: string): boolean {
   const basename = firstToken.split('/').pop() || '';
   if (!['node', 'npx', 'visor'].includes(basename)) return false;
 
-  // Exclude our own CLI invocation
-  if (cmd.includes('visor process')) return false;
+  // Exclude CLI subcommands — these are tools, not long-running servers
+  const cliSubcommands = ['process', 'tasks', 'config', 'code-review', 'review', 'policy-check'];
+  for (const sub of cliSubcommands) {
+    if (cmd.includes(`index.js ${sub}`) || cmd.includes(`visor ${sub}`)) return false;
+  }
 
   // Must be a node process running visor's dist/index.js
   if (/visor[^/]*\/dist\/index\.js/.test(cmd)) return true;
