@@ -601,7 +601,12 @@ async function handleShow(
       { Updated: match.updated_at }
     );
     if (match.run_id) detailTable.push({ 'Run ID': match.run_id });
-    detailTable.push({ Input: match.request_message });
+    const inputMaxLen = 500;
+    const inputDisplay =
+      match.request_message.length > inputMaxLen
+        ? match.request_message.slice(0, inputMaxLen) + '...'
+        : match.request_message || '-';
+    detailTable.push({ Input: inputDisplay });
 
     // Show AI response from status_message (recorded on completion/failure)
     const fullTask = store.getTask(match.id);

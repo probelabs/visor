@@ -1345,13 +1345,13 @@ export async function main(): Promise<void> {
     if (filteredArgv.length > 2 && filteredArgv[2] === 'process') {
       const { handleProcessCommand } = await import('./runners/process-cli-handler');
       await handleProcessCommand(filteredArgv.slice(3));
-      return;
+      process.exit(process.exitCode ?? 0);
     }
     // Check for tasks subcommand (A2A task monitoring)
     if (filteredArgv.length > 2 && filteredArgv[2] === 'tasks') {
       const { handleTasksCommand } = await import('./agent-protocol/tasks-cli-handler');
       await handleTasksCommand(filteredArgv.slice(3));
-      return;
+      process.exit(process.exitCode ?? 0);
     }
     // Check for config subcommand
     if (filteredArgv.length > 2 && filteredArgv[2] === 'config') {
