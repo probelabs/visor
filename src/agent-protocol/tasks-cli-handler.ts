@@ -294,14 +294,15 @@ async function handleList(flags: Record<string, string | boolean>): Promise<void
   const filter = buildFilter(flags);
   const output = typeof flags.output === 'string' ? flags.output : 'table';
 
-  // Interactive TUI mode: --tui flag or auto-detect when stdout is a TTY and no output format specified
-  const useTUI = flags.tui === true || (process.stdout.isTTY && !flags.output && !flags.watch);
-
-  if (useTUI) {
+  // Blessed TUI only when explicitly requested
+  if (flags.tui === true) {
     const { runTasksTUI } = await import('./tasks-tui');
     await runTasksTUI(filter);
     return;
   }
+
+  // Auto-watch: when TTY and no explicit output format, auto-refresh with cards
+  const autoWatch = !flags.watch && process.stdout.isTTY && !flags.output;
 
   const instanceId = getInstanceId();
 
@@ -375,10 +376,13 @@ async function handleList(flags: Record<string, string | boolean>): Promise<void
     });
   };
 
-  if (flags.watch) {
+  if (flags.watch || autoWatch) {
     const watchRender = async () => {
       process.stdout.write('\x1Bc'); // clear terminal
-      console.log(`visor tasks (instance: ${instanceId}, watching, Ctrl+C to exit)\n`);
+      const activeOnly = !flags.all && !flags.state;
+      console.log(
+        `${BOLD}visor tasks${RESET} ${DIM}(instance: ${instanceId}${activeOnly ? ', active only' : ''}, Ctrl+C to exit)${RESET}\n`
+      );
       try {
         await render();
       } catch (err) {
@@ -957,7 +961,7 @@ export async function handleTasksCommand(argv: string[]): Promise<void> {
   // --- list (default) ---
   program
     .command('list', { isDefault: true })
-    .description('List tasks (interactive TUI in TTY)')
+    .description('List tasks (auto-refreshes in TTY)')
     .option('--all', 'Show all tasks including completed/failed history')
     .option('--state <state>', 'Filter by state: submitted, working, completed, failed, canceled')
     .option('--search <text>', 'Search tasks by input text')
@@ -966,8 +970,8 @@ export async function handleTasksCommand(argv: string[]): Promise<void> {
     .option('--limit <n>', 'Number of tasks per page (default: 20)')
     .option('--page <n>', 'Page number')
     .option('--output <format>', 'Output format: table, json, markdown')
-    .option('--tui', 'Force interactive TUI mode')
-    .option('--watch', 'Refresh every 2 seconds (non-interactive)')
+    .option('--tui', 'Use interactive blessed TUI (table view, keyboard nav)')
+    .option('--watch', 'Refresh every 2 seconds (same as default TTY behavior)')
     .action(async opts => {
       configureLogger(opts);
       await handleList(optsToFlags(opts));
