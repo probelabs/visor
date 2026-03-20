@@ -248,6 +248,7 @@ export function buildExecutionTree(spans: ProcessedSpan[]): ExecutionNode {
 
   // Second pass: build parent-child relationships
   let rootNode: ExecutionNode | undefined;
+  const orphans: ExecutionNode[] = [];
 
   for (const span of spans) {
     const node = nodeMap.get(span.spanId)!;
@@ -261,8 +262,8 @@ export function buildExecutionTree(spans: ProcessedSpan[]): ExecutionNode {
       if (parent) {
         parent.children.push(node);
       } else {
-        // Orphaned span - parent not found
-        console.warn(`[trace-reader] Orphaned span: ${span.spanId} (parent: ${span.parentSpanId})`);
+        // Orphaned span — parent not in this trace; attach to root later
+        orphans.push(node);
       }
     }
   }
@@ -278,6 +279,12 @@ export function buildExecutionTree(spans: ProcessedSpan[]): ExecutionNode {
       span: spans[0], // Use first span as placeholder
       state: {},
     };
+  }
+
+  // Attach orphaned spans (e.g. probe-internal spans whose parent is outside
+  // this trace) to the root so they appear in the visualization.
+  if (orphans.length > 0 && rootNode) {
+    rootNode.children.push(...orphans);
   }
 
   return rootNode;

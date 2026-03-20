@@ -499,6 +499,7 @@ function buildSpanTree(spans: NormalizedSpan[]): SpanTree {
 
   // Build parent-child relationships
   let root: SpanTree | undefined;
+  const orphans: SpanTree[] = [];
   for (const span of filtered) {
     const node = nodeMap.get(span.spanId)!;
     if (!span.parentSpanId) {
@@ -516,6 +517,9 @@ function buildSpanTree(spans: NormalizedSpan[]): SpanTree {
         if (parent) parent.children.push(node);
       } else if (!root) {
         root = node;
+      } else {
+        // Orphaned span — parent not in this trace; attach to root later
+        orphans.push(node);
       }
     }
   }
@@ -524,6 +528,11 @@ function buildSpanTree(spans: NormalizedSpan[]): SpanTree {
   if (!root) {
     const sorted = [...nodeMap.values()].sort((a, b) => b.span.durationMs - a.span.durationMs);
     root = sorted[0] || { span: filtered[0], children: [] };
+  }
+
+  // Attach orphaned spans to root so they appear in the tree
+  if (orphans.length > 0) {
+    root.children.push(...orphans);
   }
 
   // Sort children by start time
@@ -838,10 +847,65 @@ function renderYamlNode(
     return;
   }
 
+  // --- Search delegate dedup decision ---
+  if (name === 'search.delegate.dedup') {
+    const query = attrs['dedup.query'] || '';
+    const action = attrs['dedup.action'] || '?';
+    const reason = attrs['dedup.reason'] || '';
+    const rewritten = attrs['dedup.rewritten'] || '';
+    const prevCount = attrs['dedup.previous_count'] || '0';
+    let detail = `${action}`;
+    if (rewritten) detail += ` → "${truncate(String(rewritten), 60)}"`;
+    if (reason) detail += ` (${truncate(String(reason), 80)})`;
+    lines.push(
+      `${pad}dedup("${truncate(String(query), 60)}") [${prevCount} prior]: ${detail} — ${duration}`
+    );
+    return;
+  }
+
   // --- Search delegate ---
   if (name === 'search.delegate') {
     const query = attrs['search.query'] || '';
-    lines.push(`${pad}search.delegate("${truncate(String(query), 80)}") — ${duration}:`);
+    const rewritten = attrs['search.query.rewritten'] || '';
+    const output = attrs['search.delegate.output'] || '';
+    const outputLen = attrs['search.delegate.output_length'] || '';
+
+    let header = `search.delegate("${truncate(String(query), 80)}")`;
+    if (rewritten) header += ` → rewritten: "${truncate(String(rewritten), 60)}"`;
+    header += ` — ${duration}`;
+    lines.push(`${pad}${header}:`);
+
+    // Parse structured output to show confidence, searches, and groups summary
+    if (output) {
+      try {
+        const parsed = JSON.parse(String(output));
+        if (parsed.confidence) {
+          let confLine = `confidence: ${parsed.confidence}`;
+          if (parsed.reason) confLine += ` — ${truncate(String(parsed.reason), 100)}`;
+          lines.push(`${pad}  ${confLine}`);
+        }
+        if (parsed.searches && Array.isArray(parsed.searches) && parsed.searches.length > 0) {
+          lines.push(`${pad}  searches (${parsed.searches.length}):`);
+          for (const s of parsed.searches) {
+            const outcome = s.had_results ? '✓' : '✗';
+            lines.push(
+              `${pad}    ${outcome} "${truncate(String(s.query || ''), 60)}" in ${truncate(String(s.path || '.'), 40)}`
+            );
+          }
+        }
+        if (parsed.groups && Array.isArray(parsed.groups) && parsed.groups.length > 0) {
+          lines.push(`${pad}  groups (${parsed.groups.length}):`);
+          for (const g of parsed.groups) {
+            const fileCount = g.files?.length || 0;
+            lines.push(`${pad}    - ${truncate(String(g.reason || ''), 80)} (${fileCount} files)`);
+          }
+        }
+      } catch {
+        // Not JSON — show raw output length
+        if (outputLen) lines.push(`${pad}  output: ${outputLen} chars`);
+      }
+    }
+
     for (const child of node.children) {
       renderYamlNode(
         child,
@@ -1417,10 +1481,37 @@ function formatSpanLine(
     };
   }
 
-  // --- Search delegate: show the search query ---
+  // --- Search delegate dedup ---
+  if (name === 'search.delegate.dedup') {
+    const query = attrs['dedup.query'] || '';
+    const action = attrs['dedup.action'] || '?';
+    const reason = attrs['dedup.reason'] || '';
+    const rewritten = attrs['dedup.rewritten'] || '';
+    let detail = `${action}`;
+    if (rewritten) detail += ` → "${truncate(String(rewritten), 50)}"`;
+    if (reason) detail += ` — ${truncate(String(reason), 60)}`;
+    return { line: `dedup("${truncate(String(query), 50)}") ${detail} (${duration})` };
+  }
+
+  // --- Search delegate: show the search query + confidence ---
   if (name === 'search.delegate') {
     const query = attrs['search.query'] || '';
-    return { line: `search.delegate(${truncate(String(query), 80)}) (${duration})` };
+    const rewritten = attrs['search.query.rewritten'] || '';
+    const output = attrs['search.delegate.output'] || '';
+    let suffix = '';
+    // Try to extract confidence and group/search counts from output
+    try {
+      const parsed = JSON.parse(String(output));
+      const parts: string[] = [];
+      if (parsed.confidence) parts.push(parsed.confidence);
+      if (parsed.groups?.length) parts.push(`${parsed.groups.length} groups`);
+      if (parsed.searches?.length) parts.push(`${parsed.searches.length} searches`);
+      if (parts.length > 0) suffix = ` → ${parts.join(', ')}`;
+    } catch {}
+    const rewriteStr = rewritten ? ` → "${truncate(String(rewritten), 40)}"` : '';
+    return {
+      line: `search.delegate("${truncate(String(query), 60)}"${rewriteStr}) (${duration})${suffix}`,
+    };
   }
 
   // --- AI request: show model + input summary ---
