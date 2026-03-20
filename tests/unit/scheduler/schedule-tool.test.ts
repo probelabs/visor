@@ -76,6 +76,27 @@ describe('Schedule Tool Permissions', () => {
   });
 
   describe('Personal schedule permissions', () => {
+    it('should deny creating schedules from scheduler-triggered executions', async () => {
+      const args: ScheduleToolArgs = {
+        action: 'create',
+        workflow: 'daily-report',
+        is_recurring: false,
+        run_at: new Date(Date.now() + 3600000).toISOString(),
+      };
+
+      const context: ScheduleToolContext = {
+        userId: 'user123',
+        contextType: 'cli',
+        scheduleType: 'personal',
+        executionSource: 'scheduler',
+      };
+
+      const result = await handleScheduleAction(args, context);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('prevent recursive scheduling');
+      expect(mockStore.createAsync).not.toHaveBeenCalled();
+    });
+
     it('should allow personal schedule when allow_personal is true', async () => {
       const args: ScheduleToolArgs = {
         action: 'create',
@@ -446,7 +467,7 @@ describe('Schedule Tool Permissions', () => {
   });
 });
 
-describe('buildScheduleToolContext', () => {
+  describe('buildScheduleToolContext', () => {
   describe('Slack context', () => {
     it('should build context from Slack source', () => {
       const context = buildScheduleToolContext(
@@ -556,6 +577,20 @@ describe('buildScheduleToolContext', () => {
 
       expect(context.userId).toBe('custom-user');
     });
+
+    it('should mark scheduler-triggered CLI context as scheduler-sourced', () => {
+      const context = buildScheduleToolContext({
+        cliContext: {
+          userId: 'custom-user',
+        },
+        schedulerContext: {
+          scheduleId: 'sched-123',
+        },
+      });
+
+      expect(context.executionSource).toBe('scheduler');
+      expect(context.userId).toBe('custom-user');
+    });
   });
 
   describe('Priority order', () => {
@@ -640,6 +675,28 @@ describe('Schedule Tool Actions', () => {
 
       expect(result.success).toBe(true);
       expect(result.message).toContain("don't have any active schedules");
+    });
+  });
+
+  describe('trigger actions', () => {
+    it('should deny creating triggers from scheduler-triggered executions', async () => {
+      const args: ScheduleToolArgs = {
+        action: 'create_trigger',
+        workflow: 'daily-report',
+        trigger_channels: ['C123'],
+      };
+
+      const context: ScheduleToolContext = {
+        userId: 'user123',
+        contextType: 'cli',
+        scheduleType: 'personal',
+        executionSource: 'scheduler',
+      };
+
+      const result = await handleScheduleAction(args, context);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('prevent recursive scheduling');
+      expect(mockStore.createTriggerAsync).not.toHaveBeenCalled();
     });
   });
 

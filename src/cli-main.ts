@@ -1341,6 +1341,12 @@ export async function main(): Promise<void> {
       await handlePolicyCheckCommand(filteredArgv);
       return;
     }
+    // Check for process subcommand (process management)
+    if (filteredArgv.length > 2 && filteredArgv[2] === 'process') {
+      const { handleProcessCommand } = await import('./runners/process-cli-handler');
+      await handleProcessCommand(filteredArgv.slice(3));
+      return;
+    }
     // Check for tasks subcommand (A2A task monitoring)
     if (filteredArgv.length > 2 && filteredArgv[2] === 'tasks') {
       const { handleTasksCommand } = await import('./agent-protocol/tasks-cli-handler');
