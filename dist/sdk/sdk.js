@@ -823,7 +823,7 @@ var require_package = __commonJS({
         "@opentelemetry/sdk-node": "^0.203.0",
         "@opentelemetry/sdk-trace-base": "^1.30.1",
         "@opentelemetry/semantic-conventions": "^1.30.1",
-        "@probelabs/probe": "^0.6.0-rc300",
+        "@probelabs/probe": "^0.6.0-rc301",
         "@types/commander": "^2.12.0",
         "@types/uuid": "^10.0.0",
         "@utcp/file": "^1.1.0",
@@ -24684,6 +24684,13 @@ async function handleScheduleAction(args, context2) {
   }
 }
 async function handleCreate(args, context2, store) {
+  if (context2.executionSource === "scheduler") {
+    return {
+      success: false,
+      message: "Scheduled runs cannot create new schedules",
+      error: "Creating schedules from a scheduler-triggered execution is not allowed to prevent recursive scheduling."
+    };
+  }
   if (!args.reminder_text && !args.workflow) {
     return {
       success: false,
@@ -24933,6 +24940,13 @@ function formatTrigger(trigger) {
   return `\`${trigger.id.substring(0, 8)}\` - channels: ${channels} \u2192 workflow: "${trigger.workflow}"${filterStr}${status}`;
 }
 async function handleCreateTrigger(args, context2, store) {
+  if (context2.executionSource === "scheduler") {
+    return {
+      success: false,
+      message: "Scheduled runs cannot create new triggers",
+      error: "Creating message triggers from a scheduler-triggered execution is not allowed to prevent recursive scheduling."
+    };
+  }
   const workflow = args.workflow || "default";
   if (context2.availableWorkflows && !context2.availableWorkflows.includes(workflow)) {
     return {
@@ -25370,6 +25384,7 @@ function slackChannelTypeToScheduleType(channelType) {
   }
 }
 function buildScheduleToolContext(sources, availableWorkflows, permissions, outputInfo) {
+  const executionSource = sources.schedulerContext ? "scheduler" : "user";
   if (sources.slackContext) {
     const contextType = `slack:${sources.slackContext.userId}`;
     const scheduleType = determineScheduleType(
@@ -25393,7 +25408,8 @@ function buildScheduleToolContext(sources, availableWorkflows, permissions, outp
       availableWorkflows,
       scheduleType: finalScheduleType,
       permissions,
-      allowedScheduleType
+      allowedScheduleType,
+      executionSource
     };
   }
   if (sources.githubContext) {
@@ -25405,8 +25421,9 @@ function buildScheduleToolContext(sources, availableWorkflows, permissions, outp
       availableWorkflows,
       scheduleType: "personal",
       permissions,
-      allowedScheduleType: "personal"
+      allowedScheduleType: "personal",
       // GitHub context only allows personal schedules
+      executionSource
     };
   }
   return {
@@ -25416,8 +25433,9 @@ function buildScheduleToolContext(sources, availableWorkflows, permissions, outp
     availableWorkflows,
     scheduleType: "personal",
     permissions,
-    allowedScheduleType: "personal"
+    allowedScheduleType: "personal",
     // CLI context only allows personal schedules
+    executionSource
   };
 }
 var init_schedule_tool = __esm({
@@ -26979,6 +26997,7 @@ var init_mcp_custom_sse_server = __esm({
             try {
               if (isScheduleTool(toolName)) {
                 const webhookData = this.workflowContext?.executionContext?.webhookContext?.webhookData;
+                const webhookEventType = this.workflowContext?.executionContext?.webhookContext?.eventType;
                 const slackContext = webhookData ? extractSlackContext(webhookData) : null;
                 const visorCfg = this.workflowContext?.visorConfig;
                 const availableWorkflows = visorCfg?.checks ? Object.keys(visorCfg.checks) : void 0;
@@ -26997,6 +27016,9 @@ var init_mcp_custom_sse_server = __esm({
                       userName: slackContext.userName,
                       timezone: slackContext.timezone,
                       channelType: slackContext.channelType
+                    } : void 0,
+                    schedulerContext: webhookEventType === "schedule" ? {
+                      scheduleId: this.workflowContext?.executionContext?.inputs?.schedule?.id
                     } : void 0
                   },
                   availableWorkflows,
@@ -52115,6 +52137,7 @@ function buildBuiltinGlobals(opts) {
       const { extractSlackContext: extractSlackContext2 } = await Promise.resolve().then(() => (init_schedule_tool_handler(), schedule_tool_handler_exports));
       const parentCtx = opts.sessionInfo?._parentContext;
       const webhookData = parentCtx?.prInfo?.eventContext?.webhookData;
+      const webhookEventType = parentCtx?.webhookContext?.eventType || parentCtx?.prInfo?.eventContext?.eventType;
       const visorCfg = parentCtx?.config;
       const slackContext = webhookData ? extractSlackContext2(webhookData) : null;
       const availableWorkflows = visorCfg?.checks ? Object.keys(visorCfg.checks) : void 0;
@@ -52122,7 +52145,8 @@ function buildBuiltinGlobals(opts) {
       const context2 = buildScheduleToolContext2(
         {
           slackContext: slackContext || void 0,
-          cliContext: slackContext ? void 0 : { userId: "script" }
+          cliContext: slackContext ? void 0 : { userId: "script" },
+          schedulerContext: webhookEventType === "schedule" ? { scheduleId: parentCtx?.inputs?.schedule?.id } : void 0
         },
         availableWorkflows,
         permissions
