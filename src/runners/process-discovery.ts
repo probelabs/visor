@@ -54,10 +54,7 @@ export function findVisorProcesses(targetDir?: string): VisorProcess[] {
 /**
  * Send a signal to a Visor process.
  */
-export function signalProcess(
-  pid: number,
-  signal: 'SIGUSR1' | 'SIGUSR2' | 'SIGTERM'
-): boolean {
+export function signalProcess(pid: number, signal: 'SIGUSR1' | 'SIGUSR2' | 'SIGTERM'): boolean {
   try {
     process.kill(pid, signal);
     return true;

@@ -38,6 +38,7 @@ export interface TaskEvaluationResult {
   execution_quality?: ExecutionQuality;
   overall_rating: number; // 1-5
   summary: string;
+  trace_available?: boolean; // false when evaluation was done without execution trace
 }
 
 export interface TaskEvaluatorConfig {
@@ -306,6 +307,19 @@ export async function evaluateTask(
     } else {
       throw new Error(`Failed to parse evaluation response as JSON: ${response.slice(0, 200)}`);
     }
+  }
+
+  // 8. When no trace was available, cap overall rating and flag the evaluation
+  //    as incomplete — response text alone can't verify execution quality.
+  if (!hasTrace) {
+    const MAX_RATING_WITHOUT_TRACE = 4;
+    if (result.overall_rating > MAX_RATING_WITHOUT_TRACE) {
+      result.overall_rating = MAX_RATING_WITHOUT_TRACE;
+    }
+    result.trace_available = false;
+    result.summary = `[No trace available — execution quality not assessed, rating capped at ${MAX_RATING_WITHOUT_TRACE}/5] ${result.summary}`;
+  } else {
+    result.trace_available = true;
   }
 
   return result;

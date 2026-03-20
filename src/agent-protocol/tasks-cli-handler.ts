@@ -657,7 +657,9 @@ async function handleShow(
           const evaluation = JSON.parse((evalTextPart as any).text);
           lines.push('');
           lines.push(sep);
-          lines.push(`${BOLD}Evaluation${RESET}  ${evaluation.overall_rating}/5 — ${evaluation.summary}`);
+          lines.push(
+            `${BOLD}Evaluation${RESET}  ${evaluation.overall_rating}/5 — ${evaluation.summary}`
+          );
           lines.push(sep);
           const rq = evaluation.response_quality;
           if (rq) {
@@ -801,8 +803,12 @@ async function handleEvaluate(
           wordWrap: true,
         });
 
+        const overallLabel =
+          result.trace_available === false
+            ? `${ratingDisplay(result.overall_rating)} (no trace — capped)`
+            : ratingDisplay(result.overall_rating);
         table.push(
-          { 'Overall Rating': ratingDisplay(result.overall_rating) },
+          { 'Overall Rating': overallLabel },
           { Summary: result.summary },
           {
             'Response Rating': `${ratingDisplay(result.response_quality.rating)} (${result.response_quality.category})`,
@@ -886,14 +892,17 @@ async function handleTrace(
 
     const { serializeTraceForPrompt, fetchTraceSpans } = await import('./trace-serializer');
 
-    // Use trace file path if available, otherwise use trace ID
-    // (auto-detects backend: Grafana Tempo, Jaeger, or local files)
-    const traceRef = traceFile || traceId!;
-
+    // Always prefer remote trace backends (Grafana Tempo, Jaeger) over local
+    // NDJSON files. The local fallback exporter writes minimal event markers
+    // without span IDs or timestamps, so remote is the authoritative source.
+    // Fall back to local file only when remote returns nothing.
     if (output === 'json') {
-      const spans = await fetchTraceSpans(traceId!, {
-        traceDir: typeof flags['trace-dir'] === 'string' ? flags['trace-dir'] : undefined,
-      });
+      const traceDir = typeof flags['trace-dir'] === 'string' ? flags['trace-dir'] : undefined;
+      // Try remote first via trace ID, fall back to file-based lookup
+      let spans = traceId ? await fetchTraceSpans(traceId, { traceDir }) : [];
+      if (spans.length === 0 && traceFile) {
+        spans = await fetchTraceSpans(traceFile, { traceDir, type: 'file' as any });
+      }
       if (spans.length === 0) {
         console.error(`No trace data found for trace_id=${traceId?.slice(0, 16)}`);
         console.error('Tried: Grafana Tempo, Jaeger, local NDJSON files');
@@ -931,7 +940,25 @@ async function handleTrace(
         if (textPart) taskResponse = (textPart as any).text;
       }
 
-      const tree = await serializeTraceForPrompt(traceRef, maxChars, undefined, taskResponse, traceId);
+      let tree: string;
+      try {
+        // Pass traceId as both primary ref (for remote lookup) and fallback.
+        // serializeTraceForPrompt tries remote first when fallbackTraceId is set,
+        // then falls back to local file.
+        tree = await serializeTraceForPrompt(
+          traceFile || traceId!,
+          maxChars,
+          undefined,
+          taskResponse,
+          traceId
+        );
+      } catch (traceErr) {
+        console.error(
+          `Trace rendering failed: ${traceErr instanceof Error ? traceErr.stack : traceErr}`
+        );
+        process.exitCode = 1;
+        return;
+      }
       if (tree === '(no trace data available)') {
         console.error(`No trace data found for trace_id=${traceId?.slice(0, 16)}`);
         console.error('Tried: Grafana Tempo, Jaeger, local NDJSON files');

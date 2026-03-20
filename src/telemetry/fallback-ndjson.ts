@@ -70,3 +70,29 @@ export function emitNdjsonSpanWithEvents(
     // ignore
   }
 }
+
+/**
+ * Emit a full span record to fallback NDJSON including traceId, spanId,
+ * parentSpanId, and timing — compatible with the trace serializer's
+ * parseLocalNDJSONSpans format.
+ */
+export function emitNdjsonFullSpan(record: {
+  name: string;
+  traceId?: string;
+  spanId?: string;
+  parentSpanId?: string;
+  startTime?: [number, number];
+  endTime?: [number, number];
+  attributes?: Record<string, unknown>;
+  events?: Array<{ name: string; attributes?: Record<string, unknown> }>;
+  status?: { code?: number };
+}): void {
+  try {
+    if (!isEnabled()) return;
+    const outDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), 'output', 'traces');
+    const line = JSON.stringify(record) + '\n';
+    appendAsync(outDir, line);
+  } catch {
+    // ignore
+  }
+}

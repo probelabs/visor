@@ -467,7 +467,7 @@ describe('Schedule Tool Permissions', () => {
   });
 });
 
-  describe('buildScheduleToolContext', () => {
+describe('buildScheduleToolContext', () => {
   describe('Slack context', () => {
     it('should build context from Slack source', () => {
       const context = buildScheduleToolContext(

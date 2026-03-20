@@ -100,6 +100,18 @@ export async function trackExecution<T>(
   try {
     const result = await executor();
 
+    // Now that execution is done, capture the trace ID from the active span.
+    // At task creation time the span may not have been active yet, so we
+    // update metadata post-execution to ensure trace_id is stored.
+    try {
+      const activeTraceId = trace.getActiveSpan()?.spanContext().traceId;
+      if (activeTraceId && activeTraceId !== '' && !task.metadata?.trace_id) {
+        taskStore.updateMetadata(task.id, { trace_id: activeTraceId });
+      }
+    } catch {
+      // best-effort — don't fail the task over metadata
+    }
+
     // Extract AI response text from the result.
     // result.reviewSummary.history is keyed by checkId with arrays of outputs.
     // We want the LAST check's text output (the final AI response), not the

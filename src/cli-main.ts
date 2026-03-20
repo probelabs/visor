@@ -1735,7 +1735,22 @@ export async function main(): Promise<void> {
 
     // ---- Shared Task Store (cross-frontend tracking) ----
     let sharedTaskStore: import('./agent-protocol/task-store').TaskStore | null = null;
-    const taskTrackingEnabled = options.taskTracking || (config as any).task_tracking === true;
+    // Enable task tracking when explicitly configured, or automatically for --message
+    // and runner modes (--slack, --watch) since these are user interactions worth tracking
+    const hasRunners = !!(
+      options.slack ||
+      options.a2a ||
+      options.mcp ||
+      options.telegram ||
+      options.email ||
+      options.whatsapp ||
+      options.teams
+    );
+    const taskTrackingEnabled =
+      options.taskTracking ||
+      (config as any).task_tracking === true ||
+      !!options.message ||
+      hasRunners;
     if (taskTrackingEnabled) {
       try {
         const { SqliteTaskStore } = await import('./agent-protocol/task-store');

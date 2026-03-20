@@ -153,6 +153,8 @@ export interface TaskStore {
   addArtifact(taskId: string, artifact: AgentArtifact): void;
   appendHistory(taskId: string, message: AgentMessage): void;
   setRunId(taskId: string, runId: string): void;
+  /** Merge additional key-value pairs into the task's metadata JSON. */
+  updateMetadata(taskId: string, extra: Record<string, unknown>): void;
 
   // Queue operations (Milestone 4)
   claimNextSubmitted(workerId: string): AgentTask | null;
@@ -487,6 +489,26 @@ export class SqliteTaskStore implements TaskStore {
       .run(runId, nowISO(), taskId);
 
     if (result.changes === 0) throw new TaskNotFoundError(taskId);
+  }
+
+  updateMetadata(taskId: string, extra: Record<string, unknown>): void {
+    const db = this.getDb();
+    const row = db.prepare('SELECT request_metadata FROM agent_tasks WHERE id = ?').get(taskId) as
+      | { request_metadata: string }
+      | undefined;
+    if (!row) throw new TaskNotFoundError(taskId);
+
+    let existing: Record<string, unknown> = {};
+    try {
+      existing = JSON.parse(row.request_metadata || '{}');
+    } catch {}
+
+    const merged = { ...existing, ...extra };
+    db.prepare('UPDATE agent_tasks SET request_metadata = ?, updated_at = ? WHERE id = ?').run(
+      JSON.stringify(merged),
+      nowISO(),
+      taskId
+    );
   }
 
   // -------------------------------------------------------------------------

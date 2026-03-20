@@ -1,4 +1,8 @@
-import { findVisorProcesses, isProcessAlive, signalProcess } from '../../../src/runners/process-discovery';
+import {
+  findVisorProcesses,
+  isProcessAlive,
+  signalProcess,
+} from '../../../src/runners/process-discovery';
 
 // We can't easily mock ps/proc in unit tests, so these test the pure logic
 // and basic process utilities.

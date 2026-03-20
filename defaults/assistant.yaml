@@ -751,6 +751,7 @@ steps:
       }
 
       return {
+        activated_skills: activatedSkills,
         mcp_servers: servers,
         knowledge_content: knowledgeParts.join('\n\n'),
         bash_enabled: bashEnabled,
@@ -834,7 +835,7 @@ steps:
       # ProbeAgent resolves "*" and "!" patterns natively.
     ai_allowed_tools_js: |
       // Start with wildcard — allow all tools by default
-      const excluded = ['search', 'query', 'extract', 'listFiles', 'searchFiles', 'delegate', 'analyze_all'];
+      const excluded = ['search', 'query', 'extract', 'listFiles', 'searchFiles', 'analyze_all'];
       const bashEnabled = outputs['build-config']?.bash_enabled === true;
       if (!bashEnabled) {
         excluded.push('bash');
