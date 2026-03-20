@@ -632,6 +632,7 @@ var init_instance_id = __esm({
 var fallback_ndjson_exports = {};
 __export(fallback_ndjson_exports, {
   emitNdjsonFallback: () => emitNdjsonFallback,
+  emitNdjsonFullSpan: () => emitNdjsonFullSpan,
   emitNdjsonSpanWithEvents: () => emitNdjsonSpanWithEvents,
   flushNdjson: () => flushNdjson
 });
@@ -683,6 +684,15 @@ function emitNdjsonSpanWithEvents(name, attrs, events) {
     if (!isEnabled()) return;
     const outDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), "output", "traces");
     const line = JSON.stringify({ name, attributes: attrs, events }) + "\n";
+    appendAsync(outDir, line);
+  } catch {
+  }
+}
+function emitNdjsonFullSpan(record) {
+  try {
+    if (!isEnabled()) return;
+    const outDir = process.env.VISOR_TRACE_DIR || path.join(process.cwd(), "output", "traces");
+    const line = JSON.stringify(record) + "\n";
     appendAsync(outDir, line);
   } catch {
   }
@@ -823,7 +833,7 @@ var require_package = __commonJS({
         "@opentelemetry/sdk-node": "^0.203.0",
         "@opentelemetry/sdk-trace-base": "^1.30.1",
         "@opentelemetry/semantic-conventions": "^1.30.1",
-        "@probelabs/probe": "^0.6.0-rc301",
+        "@probelabs/probe": "^0.6.0-rc304",
         "@types/commander": "^2.12.0",
         "@types/uuid": "^10.0.0",
         "@utcp/file": "^1.1.0",
@@ -8610,8 +8620,13 @@ function createProbeTracerAdapter(fallbackTracer) {
     "delegation.start",
     "delegation.complete",
     "graceful_stop.invoked",
+    "graceful_stop.initiated",
     "probe.timeout_configured",
-    "negotiated_timeout.observer"
+    "negotiated_timeout.observer",
+    "negotiated_timeout.observer_extended",
+    "negotiated_timeout.observer_declined",
+    "negotiated_timeout.observer_exhausted",
+    "negotiated_timeout.abort_summary"
   ]);
   const emitEvent = (name, attrs) => {
     try {
@@ -8634,12 +8649,64 @@ function createProbeTracerAdapter(fallbackTracer) {
     }
   };
   return {
-    withSpan: async (name, fn, attrs) => withActiveSpan(name, attrs, async (span) => {
-      if (fallback && typeof fallback.withSpan === "function") {
-        return await fallback.withSpan(name, async () => fn(span), attrs);
-      }
-      return await fn(span);
-    }),
+    withSpan: async (name, fn, attrs, onResult) => {
+      const startHr = process.hrtime();
+      return withActiveSpan(name, attrs, async (span) => {
+        let result;
+        if (fallback && typeof fallback.withSpan === "function") {
+          result = await fallback.withSpan(name, async () => fn(span), attrs);
+        } else {
+          result = await fn(span);
+        }
+        const extraAttrs = {};
+        if (onResult) {
+          try {
+            const capturingSpan = {
+              setAttributes: (a) => {
+                Object.assign(extraAttrs, a);
+                try {
+                  span.setAttributes(a);
+                } catch {
+                }
+              },
+              setAttribute: (k, v) => {
+                extraAttrs[k] = v;
+                try {
+                  span.setAttribute(k, v);
+                } catch {
+                }
+              },
+              addEvent: (...args) => {
+                try {
+                  span.addEvent(...args);
+                } catch {
+                }
+              }
+            };
+            onResult(capturingSpan, result);
+          } catch {
+          }
+        }
+        try {
+          const endHr = process.hrtime();
+          const ctx = span.spanContext?.() || {};
+          const parentCtx = span.parentSpanContext || span._parentSpanContext;
+          emitNdjsonFullSpan({
+            name,
+            traceId: ctx.traceId,
+            spanId: ctx.spanId,
+            parentSpanId: parentCtx?.spanId,
+            startTime: [startHr[0], startHr[1]],
+            endTime: [endHr[0], endHr[1]],
+            attributes: { ...flattenAttrs(attrs), ...flattenAttrs(extraAttrs) },
+            events: [],
+            status: { code: 1 }
+          });
+        } catch {
+        }
+        return result;
+      });
+    },
     recordEvent: (name, attrs) => {
       emitEvent(name, attrs);
       if (fallback && typeof fallback.recordEvent === "function") {
@@ -8743,10 +8810,19 @@ function createProbeTracerAdapter(fallbackTracer) {
       }
       if (!span && fallbackSpan) return fallbackSpan;
       if (!span) return null;
+      const accumulated = {
+        "delegation.session_id": sessionId,
+        "delegation.task": task
+      };
+      const delegStartHr = process.hrtime();
+      let delegStatus = 1;
       return {
         setAttributes: (attrs) => {
           try {
-            if (attrs) span.setAttributes(attrs);
+            if (attrs) {
+              Object.assign(accumulated, attrs);
+              span.setAttributes(attrs);
+            }
           } catch {
           }
           if (fallbackSpan && typeof fallbackSpan.setAttributes === "function") {
@@ -8758,6 +8834,8 @@ function createProbeTracerAdapter(fallbackTracer) {
         },
         setStatus: (status) => {
           try {
+            const code = status?.code;
+            if (code === 2) delegStatus = 2;
             span.setStatus(status);
           } catch {
           }
@@ -8778,6 +8856,23 @@ function createProbeTracerAdapter(fallbackTracer) {
               fallbackSpan.end();
             } catch {
             }
+          }
+          try {
+            const delegEndHr = process.hrtime();
+            const ctx = span.spanContext?.() || {};
+            emitNdjsonFullSpan({
+              name: "probe.delegation",
+              traceId: ctx.traceId,
+              spanId: ctx.spanId,
+              parentSpanId: void 0,
+              // delegation spans are roots within probe
+              startTime: [delegStartHr[0], delegStartHr[1]],
+              endTime: [delegEndHr[0], delegEndHr[1]],
+              attributes: flattenAttrs(accumulated) || {},
+              events: [],
+              status: { code: delegStatus }
+            });
+          } catch {
           }
         }
       };
@@ -8827,6 +8922,7 @@ var init_ai_review_service = __esm({
     init_logger();
     init_lazy_otel();
     init_trace_helpers();
+    init_fallback_ndjson();
     init_tracer_init();
     init_diff_processor();
     init_comment_metadata();
@@ -10162,6 +10258,15 @@ ${"=".repeat(60)}
           let systemPrompt = this.config.systemPrompt;
           if (!systemPrompt && schema !== "code-review" && !this.config.promptType) {
             systemPrompt = "You are general assistant, follow user instructions.";
+          }
+          if (systemPrompt && (this.config.aiTimeout || this.config.timeoutBehavior)) {
+            systemPrompt += `
+
+IMPORTANT \u2014 Time-limit behavior:
+If you receive a message that the time limit has been reached or your operation is being interrupted, this means YOUR ALLOCATED TIME BUDGET for this task has been exhausted. The system is NOT shutting down or going offline.
+- Frame it as: "I ran out of the allocated time for this task."
+- NEVER say "the system is shutting down", "try again when the system is back online", or similar misleading language.
+- Summarize what you accomplished, what you didn't finish, and any actionable recommendations the user can follow up on.`;
           }
           log(
             `\u{1F527} AIReviewService config: allowEdit=${this.config.allowEdit}, allowBash=${this.config.allowBash}, promptType=${this.config.promptType}`
@@ -22084,6 +22189,7 @@ function buildExecutionTree(spans) {
     nodeMap.set(span.spanId, node);
   }
   let rootNode;
+  const orphans = [];
   for (const span of spans) {
     const node = nodeMap.get(span.spanId);
     if (!span.parentSpanId) {
@@ -22093,7 +22199,7 @@ function buildExecutionTree(spans) {
       if (parent) {
         parent.children.push(node);
       } else {
-        console.warn(`[trace-reader] Orphaned span: ${span.spanId} (parent: ${span.parentSpanId})`);
+        orphans.push(node);
       }
     }
   }
@@ -22108,6 +22214,9 @@ function buildExecutionTree(spans) {
       // Use first span as placeholder
       state: {}
     };
+  }
+  if (orphans.length > 0 && rootNode) {
+    rootNode.children.push(...orphans);
   }
   return rootNode;
 }
@@ -22552,6 +22661,7 @@ function buildSpanTree(spans) {
     nodeMap.set(span.spanId, { span, children: [] });
   }
   let root;
+  const orphans = [];
   for (const span of filtered) {
     const node = nodeMap.get(span.spanId);
     if (!span.parentSpanId) {
@@ -22567,12 +22677,17 @@ function buildSpanTree(spans) {
         if (parent) parent.children.push(node);
       } else if (!root) {
         root = node;
+      } else {
+        orphans.push(node);
       }
     }
   }
   if (!root) {
     const sorted = [...nodeMap.values()].sort((a, b) => b.span.durationMs - a.span.durationMs);
     root = sorted[0] || { span: filtered[0], children: [] };
+  }
+  if (orphans.length > 0) {
+    root.children.push(...orphans);
   }
   const sortChildren = (node) => {
     node.children.sort((a, b) => a.span.startTimeMs - b.span.startTimeMs);
@@ -22628,13 +22743,22 @@ function dedupeOrRegister(ctx, kind, text, spanName) {
   map.set(key, spanName);
   return null;
 }
-async function serializeTraceForPrompt(traceIdOrPath, maxChars, backendConfig, taskResponse) {
-  let spans;
-  if (traceIdOrPath.includes("/") || traceIdOrPath.endsWith(".ndjson")) {
-    const { parseNDJSONTrace: parseNDJSONTrace2 } = await Promise.resolve().then(() => (init_trace_reader(), trace_reader_exports));
-    const trace2 = await parseNDJSONTrace2(traceIdOrPath);
-    spans = parseLocalNDJSONSpans(trace2.spans);
-  } else {
+async function serializeTraceForPrompt(traceIdOrPath, maxChars, backendConfig, taskResponse, fallbackTraceId) {
+  let spans = [];
+  const isFilePath = traceIdOrPath.includes("/") || traceIdOrPath.endsWith(".ndjson");
+  const remoteTraceId = fallbackTraceId || (!isFilePath ? traceIdOrPath : void 0);
+  if (remoteTraceId) {
+    spans = await fetchTraceSpans(remoteTraceId, backendConfig);
+  }
+  if (spans.length === 0 && isFilePath) {
+    try {
+      const { parseNDJSONTrace: parseNDJSONTrace2 } = await Promise.resolve().then(() => (init_trace_reader(), trace_reader_exports));
+      const trace2 = await parseNDJSONTrace2(traceIdOrPath);
+      spans = parseLocalNDJSONSpans(trace2.spans);
+    } catch {
+    }
+  }
+  if (spans.length === 0 && !remoteTraceId && !isFilePath) {
     spans = await fetchTraceSpans(traceIdOrPath, backendConfig);
   }
   if (spans.length === 0) {
@@ -22699,9 +22823,57 @@ function renderYamlNode(node, indent, lines, dedup, fallbackIntent, fullOutput, 
     lines.push(`${pad}- ${tn}(${toolInput})${resultSize}${successMark}`);
     return;
   }
+  if (name === "search.delegate.dedup") {
+    const query = attrs["dedup.query"] || "";
+    const action = attrs["dedup.action"] || "?";
+    const reason = attrs["dedup.reason"] || "";
+    const rewritten = attrs["dedup.rewritten"] || "";
+    const prevCount = attrs["dedup.previous_count"] || "0";
+    let detail = `${action}`;
+    if (rewritten) detail += ` \u2192 "${truncate(String(rewritten), 60)}"`;
+    if (reason) detail += ` (${truncate(String(reason), 80)})`;
+    lines.push(
+      `${pad}dedup("${truncate(String(query), 60)}") [${prevCount} prior]: ${detail} \u2014 ${duration}`
+    );
+    return;
+  }
   if (name === "search.delegate") {
     const query = attrs["search.query"] || "";
-    lines.push(`${pad}search.delegate("${truncate(String(query), 80)}") \u2014 ${duration}:`);
+    const rewritten = attrs["search.query.rewritten"] || "";
+    const output = attrs["search.delegate.output"] || "";
+    const outputLen = attrs["search.delegate.output_length"] || "";
+    let header = `search.delegate("${truncate(String(query), 80)}")`;
+    if (rewritten) header += ` \u2192 rewritten: "${truncate(String(rewritten), 60)}"`;
+    header += ` \u2014 ${duration}`;
+    lines.push(`${pad}${header}:`);
+    if (output) {
+      try {
+        const parsed = JSON.parse(String(output));
+        if (parsed.confidence) {
+          let confLine = `confidence: ${parsed.confidence}`;
+          if (parsed.reason) confLine += ` \u2014 ${truncate(String(parsed.reason), 100)}`;
+          lines.push(`${pad}  ${confLine}`);
+        }
+        if (parsed.searches && Array.isArray(parsed.searches) && parsed.searches.length > 0) {
+          lines.push(`${pad}  searches (${parsed.searches.length}):`);
+          for (const s of parsed.searches) {
+            const outcome = s.had_results ? "\u2713" : "\u2717";
+            lines.push(
+              `${pad}    ${outcome} "${truncate(String(s.query || ""), 60)}" in ${truncate(String(s.path || "."), 40)}`
+            );
+          }
+        }
+        if (parsed.groups && Array.isArray(parsed.groups) && parsed.groups.length > 0) {
+          lines.push(`${pad}  groups (${parsed.groups.length}):`);
+          for (const g of parsed.groups) {
+            const fileCount = g.files?.length || 0;
+            lines.push(`${pad}    - ${truncate(String(g.reason || ""), 80)} (${fileCount} files)`);
+          }
+        }
+      } catch {
+        if (outputLen) lines.push(`${pad}  output: ${outputLen} chars`);
+      }
+    }
     for (const child of node.children) {
       renderYamlNode(
         child,
@@ -22860,8 +23032,8 @@ function renderYamlOutput(rawOutput, pad, label, spanName, dedup, lines, fullOut
     obj = JSON.parse(rawOutput);
   } catch {
     obj = parseTruncatedJson(rawOutput);
-    if (!obj || typeof obj !== "object") return;
   }
+  if (obj === null || obj === void 0 || typeof obj !== "object") return;
   if (typeof obj === "object" && !Array.isArray(obj)) {
     const keys = Object.keys(obj);
     if (keys.length === 1 && typeof obj[keys[0]] === "object" && obj[keys[0]] !== null) {
@@ -22918,14 +23090,16 @@ function renderYamlValue(val, pad, key, lines, fullOutput, maxLen, depth) {
       lines.push(`${pad}${key}: []`);
       return;
     }
+    if (val.every((v) => typeof v === "string") && val.join(", ").length < ml) {
+      lines.push(`${pad}${key}: [${val.join(", ")}]`);
+      return;
+    }
     const maxItems = fullOutput ? 20 : 3;
     lines.push(`${pad}${key}:`);
     for (let i = 0; i < Math.min(val.length, maxItems); i++) {
       const item = val[i];
       if (typeof item === "object" && item !== null) {
-        const entries = Object.entries(item).filter(
-          ([k]) => k !== "raw" && k !== "skills" && k !== "tags"
-        );
+        const entries = Object.entries(item).filter(([k]) => k !== "raw" && k !== "tags");
         if (entries.length > 0) {
           const [firstKey, firstVal] = entries[0];
           if (firstVal === null || firstVal === void 0 || typeof firstVal !== "object") {
@@ -22960,7 +23134,7 @@ function renderYamlValue(val, pad, key, lines, fullOutput, maxLen, depth) {
     }
     lines.push(`${pad}${key}:`);
     for (const [k, v] of Object.entries(val)) {
-      if (k === "raw" || k === "skills" || k === "tags") continue;
+      if (k === "raw" || k === "tags") continue;
       renderYamlValue(v, `${pad}  `, k, lines, fullOutput, ml, d + 1);
     }
   }
@@ -23061,6 +23235,22 @@ function extractToolInput(toolName, attrs) {
         }
         const segs = fullPath.split("/");
         return segs.length > 2 ? segs.slice(-2).join("/") : segs[segs.length - 1];
+      }
+      return "";
+    }
+    case "bash": {
+      const cmdMatch = result.match(/^Command: (.+)/);
+      if (cmdMatch) {
+        let cmd = cmdMatch[1].trim();
+        const pipes = cmd.split(/\s*\|\s*/);
+        if (pipes.length > 2) {
+          cmd = `${pipes[0]} | ... (${pipes.length} stages)`;
+        }
+        return truncate(cmd, 80);
+      }
+      const deniedMatch = result.match(/^Permission denied: Component "([^"]+)"/);
+      if (deniedMatch) {
+        return truncate(deniedMatch[1], 60) + " [denied]";
       }
       return "";
     }
@@ -23395,7 +23585,8 @@ async function evaluateTask(taskId, store, config) {
         traceRef,
         1e6,
         { traceDir: config?.traceDir },
-        responseText !== "No response available" ? responseText : void 0
+        responseText !== "No response available" ? responseText : void 0,
+        traceId
       );
       if (traceTree === "(no trace data available)") {
         traceTree = void 0;
@@ -23459,6 +23650,16 @@ ${responseText}
     } else {
       throw new Error(`Failed to parse evaluation response as JSON: ${response.slice(0, 200)}`);
     }
+  }
+  if (!hasTrace) {
+    const MAX_RATING_WITHOUT_TRACE = 4;
+    if (result.overall_rating > MAX_RATING_WITHOUT_TRACE) {
+      result.overall_rating = MAX_RATING_WITHOUT_TRACE;
+    }
+    result.trace_available = false;
+    result.summary = `[No trace available \u2014 execution quality not assessed, rating capped at ${MAX_RATING_WITHOUT_TRACE}/5] ${result.summary}`;
+  } else {
+    result.trace_available = true;
   }
   return result;
 }
@@ -23589,6 +23790,13 @@ async function trackExecution(opts, executor) {
   );
   try {
     const result = await executor();
+    try {
+      const activeTraceId = trace.getActiveSpan()?.spanContext().traceId;
+      if (activeTraceId && activeTraceId !== "" && !task.metadata?.trace_id) {
+        taskStore.updateMetadata(task.id, { trace_id: activeTraceId });
+      }
+    } catch {
+    }
     let responseText = "Execution completed";
     try {
       const history = result?.reviewSummary?.history;
@@ -73792,6 +74000,22 @@ var init_task_store = __esm({
         const db = this.getDb();
         const result = db.prepare("UPDATE agent_tasks SET run_id = ?, updated_at = ? WHERE id = ?").run(runId, nowISO(), taskId);
         if (result.changes === 0) throw new TaskNotFoundError(taskId);
+      }
+      updateMetadata(taskId, extra) {
+        const db = this.getDb();
+        const row = db.prepare("SELECT request_metadata FROM agent_tasks WHERE id = ?").get(taskId);
+        if (!row) throw new TaskNotFoundError(taskId);
+        let existing = {};
+        try {
+          existing = JSON.parse(row.request_metadata || "{}");
+        } catch {
+        }
+        const merged = { ...existing, ...extra };
+        db.prepare("UPDATE agent_tasks SET request_metadata = ?, updated_at = ? WHERE id = ?").run(
+          JSON.stringify(merged),
+          nowISO(),
+          taskId
+        );
       }
       // -------------------------------------------------------------------------
       // Queue operations

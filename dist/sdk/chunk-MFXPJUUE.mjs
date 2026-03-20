@@ -1,0 +1,390 @@
+import {
+  __commonJS,
+  __esm
+} from "./chunk-J7LXIPZS.mjs";
+
+// src/utils/human-id.ts
+function randomSuffix() {
+  const chars = "abcdefghjkmnpqrstuvwxyz23456789";
+  let result = "";
+  for (let i = 0; i < 4; i++) {
+    result += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return result;
+}
+function generateHumanId() {
+  const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+  const noun = nouns[Math.floor(Math.random() * nouns.length)];
+  const suffix = randomSuffix();
+  return `${adj}-${noun}-${suffix}`;
+}
+function generateShortHumanId() {
+  const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+  const noun = nouns[Math.floor(Math.random() * nouns.length)];
+  return `${adj}-${noun}`;
+}
+var adjectives, nouns;
+var init_human_id = __esm({
+  "src/utils/human-id.ts"() {
+    "use strict";
+    adjectives = [
+      "bold",
+      "calm",
+      "cool",
+      "dark",
+      "fast",
+      "gold",
+      "green",
+      "happy",
+      "kind",
+      "loud",
+      "mild",
+      "neat",
+      "nice",
+      "pink",
+      "pure",
+      "quick",
+      "rare",
+      "rich",
+      "safe",
+      "slim",
+      "soft",
+      "tall",
+      "tidy",
+      "tiny",
+      "warm",
+      "wise",
+      "young",
+      "able",
+      "blue",
+      "brave",
+      "busy",
+      "clean",
+      "crisp",
+      "eager",
+      "fair",
+      "fresh",
+      "glad",
+      "grand",
+      "keen",
+      "lush",
+      "prime",
+      "proud",
+      "sharp",
+      "sleek",
+      "smart",
+      "solid",
+      "swift",
+      "vivid",
+      "wild",
+      "witty",
+      "zesty"
+    ];
+    nouns = [
+      "ant",
+      "bat",
+      "bear",
+      "bee",
+      "bird",
+      "bull",
+      "cat",
+      "cow",
+      "crab",
+      "crow",
+      "deer",
+      "dog",
+      "dove",
+      "duck",
+      "eagle",
+      "elk",
+      "fish",
+      "fox",
+      "frog",
+      "goat",
+      "hawk",
+      "hare",
+      "horse",
+      "jay",
+      "lark",
+      "lion",
+      "lynx",
+      "mole",
+      "moth",
+      "mouse",
+      "newt",
+      "owl",
+      "panda",
+      "pig",
+      "puma",
+      "rat",
+      "raven",
+      "seal",
+      "shark",
+      "sheep",
+      "sloth",
+      "snail",
+      "snake",
+      "spider",
+      "swan",
+      "tiger",
+      "toad",
+      "trout",
+      "viper",
+      "wasp",
+      "whale",
+      "wolf",
+      "wren",
+      "yak",
+      "zebra"
+    ];
+  }
+});
+
+// src/utils/instance-id.ts
+function getInstanceId() {
+  if (!_instanceId) {
+    _instanceId = generateHumanId();
+  }
+  return _instanceId;
+}
+var _instanceId;
+var init_instance_id = __esm({
+  "src/utils/instance-id.ts"() {
+    "use strict";
+    init_human_id();
+  }
+});
+
+// package.json
+var require_package = __commonJS({
+  "package.json"(exports, module) {
+    module.exports = {
+      name: "@probelabs/visor",
+      version: "0.1.42",
+      main: "dist/index.js",
+      bin: {
+        visor: "./dist/index.js"
+      },
+      exports: {
+        ".": {
+          require: "./dist/index.js",
+          import: "./dist/index.js"
+        },
+        "./sdk": {
+          types: "./dist/sdk/sdk.d.ts",
+          import: "./dist/sdk/sdk.mjs",
+          require: "./dist/sdk/sdk.js"
+        },
+        "./cli": {
+          require: "./dist/index.js"
+        }
+      },
+      files: [
+        "dist/",
+        "defaults/",
+        "action.yml",
+        "README.md",
+        "LICENSE"
+      ],
+      publishConfig: {
+        access: "public",
+        registry: "https://registry.npmjs.org/"
+      },
+      scripts: {
+        "build:cli": "ncc build src/index.ts -o dist && cp -r defaults dist/ && cp -r output dist/ && cp -r docs dist/ && cp -r examples dist/ && cp -r src/debug-visualizer/ui dist/debug-visualizer/ && node scripts/inject-version.js && echo '#!/usr/bin/env node' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js",
+        "build:sdk": "tsup src/sdk.ts --dts --sourcemap --format esm,cjs --out-dir dist/sdk",
+        build: "./scripts/build-oss.sh",
+        "build:ee": "npm run build:cli && npm run build:sdk",
+        test: "jest && npm run test:yaml",
+        "test:unit": "jest",
+        prepublishOnly: "npm run build",
+        "test:watch": "jest --watch",
+        "test:coverage": "jest --coverage",
+        "test:ee": "jest --testPathPatterns='tests/ee' --testPathIgnorePatterns='/node_modules/' --no-coverage",
+        "test:manual:bash": "RUN_MANUAL_TESTS=true jest tests/manual/bash-config-manual.test.ts",
+        lint: "eslint src tests --ext .ts",
+        "lint:fix": "eslint src tests --ext .ts --fix",
+        format: "prettier --write src tests",
+        "format:check": "prettier --check src tests",
+        clean: "",
+        "clean:traces": "node scripts/clean-traces.js",
+        prebuild: "npm run clean && node scripts/generate-config-schema.js",
+        pretest: "npm run clean:traces && node scripts/generate-config-schema.js && npm run build:cli",
+        "pretest:unit": "npm run clean:traces && node scripts/generate-config-schema.js && npm run build:cli",
+        "test:with-build": "npm run build:cli && jest",
+        "test:yaml": "node dist/index.js test --progress compact",
+        "test:yaml:parallel": "node dist/index.js test --progress compact --max-parallel 4",
+        prepare: "husky",
+        "pre-commit": "lint-staged",
+        "deploy:site": "cd site && npx wrangler pages deploy . --project-name=visor-site --commit-dirty=true",
+        "deploy:worker": "npx wrangler deploy",
+        deploy: "npm run deploy:site && npm run deploy:worker",
+        "publish:ee": "./scripts/publish-ee.sh",
+        release: "./scripts/release.sh",
+        "release:patch": "./scripts/release.sh patch",
+        "release:minor": "./scripts/release.sh minor",
+        "release:major": "./scripts/release.sh major",
+        "release:prerelease": "./scripts/release.sh prerelease",
+        "docs:validate": "node scripts/validate-readme-links.js",
+        "workshop:setup": "npm install -D reveal-md@6.1.2",
+        "workshop:serve": "cd workshop && reveal-md slides.md -w",
+        "workshop:export": "reveal-md workshop/slides.md --static workshop/build",
+        "workshop:pdf": "reveal-md workshop/slides.md --print workshop/Visor-Workshop.pdf --print-size letter",
+        "workshop:pdf:ci": 'reveal-md workshop/slides.md --print workshop/Visor-Workshop.pdf --print-size letter --puppeteer-launch-args="--no-sandbox --disable-dev-shm-usage"',
+        "workshop:pdf:a4": "reveal-md workshop/slides.md --print workshop/Visor-Workshop-A4.pdf --print-size A4",
+        "workshop:build": "npm run workshop:export && npm run workshop:pdf",
+        "simulate:issue": "TS_NODE_TRANSPILE_ONLY=1 ts-node scripts/simulate-gh-run.ts --event issues --action opened --debug",
+        "simulate:comment": "TS_NODE_TRANSPILE_ONLY=1 ts-node scripts/simulate-gh-run.ts --event issue_comment --action created --debug"
+      },
+      keywords: [
+        "code-review",
+        "ai",
+        "github-action",
+        "cli",
+        "pr-review",
+        "visor"
+      ],
+      author: "Probe Labs",
+      license: "MIT",
+      description: "AI workflow engine for code review, assistants, and automation \u2014 orchestrate checks, MCP tools, and AI providers with YAML-driven pipelines",
+      repository: {
+        type: "git",
+        url: "git+https://github.com/probelabs/visor.git"
+      },
+      bugs: {
+        url: "https://github.com/probelabs/visor/issues"
+      },
+      homepage: "https://github.com/probelabs/visor#readme",
+      dependencies: {
+        "@actions/core": "^1.11.1",
+        "@apidevtools/swagger-parser": "^12.1.0",
+        "@grammyjs/runner": "^2.0.3",
+        "@modelcontextprotocol/sdk": "^1.25.3",
+        "@nyariv/sandboxjs": "github:probelabs/SandboxJS#23c4bb611f7d05f3cb8c523917b5f57103e48108",
+        "@octokit/action": "^8.0.2",
+        "@octokit/auth-app": "^8.1.0",
+        "@octokit/core": "^7.0.3",
+        "@octokit/rest": "^22.0.0",
+        "@opentelemetry/api": "^1.9.0",
+        "@opentelemetry/api-logs": "^0.203.0",
+        "@opentelemetry/core": "^1.30.1",
+        "@opentelemetry/exporter-logs-otlp-http": "^0.203.0",
+        "@opentelemetry/exporter-metrics-otlp-http": "^0.203.0",
+        "@opentelemetry/exporter-trace-otlp-grpc": "^0.203.0",
+        "@opentelemetry/exporter-trace-otlp-http": "^0.203.0",
+        "@opentelemetry/instrumentation": "^0.203.0",
+        "@opentelemetry/resources": "^1.30.1",
+        "@opentelemetry/sdk-logs": "^0.203.0",
+        "@opentelemetry/sdk-metrics": "^1.30.1",
+        "@opentelemetry/sdk-node": "^0.203.0",
+        "@opentelemetry/sdk-trace-base": "^1.30.1",
+        "@opentelemetry/semantic-conventions": "^1.30.1",
+        "@probelabs/probe": "^0.6.0-rc304",
+        "@types/commander": "^2.12.0",
+        "@types/uuid": "^10.0.0",
+        "@utcp/file": "^1.1.0",
+        "@utcp/http": "^1.1.0",
+        "@utcp/sdk": "^1.1.0",
+        "@utcp/text": "^1.1.0",
+        acorn: "^8.16.0",
+        "acorn-walk": "^8.3.5",
+        ajv: "^8.17.1",
+        "ajv-formats": "^3.0.1",
+        "better-sqlite3": "^11.0.0",
+        blessed: "^0.1.81",
+        botbuilder: "^4.23.3",
+        "botframework-connector": "^4.23.3",
+        "cli-table3": "^0.6.5",
+        commander: "^14.0.0",
+        deepmerge: "^4.3.1",
+        dotenv: "^17.2.3",
+        grammy: "^1.41.1",
+        ignore: "^7.0.5",
+        imapflow: "^1.2.12",
+        "js-yaml": "^4.1.0",
+        "jsonpath-plus": "^10.4.0",
+        liquidjs: "^10.21.1",
+        mailparser: "^3.9.3",
+        minimatch: "^10.2.2",
+        "node-cron": "^3.0.3",
+        nodemailer: "^8.0.1",
+        open: "^9.1.0",
+        resend: "^6.9.3",
+        "simple-git": "^3.28.0",
+        uuid: "^11.1.0",
+        ws: "^8.18.3"
+      },
+      optionalDependencies: {
+        "@anthropic/claude-code-sdk": "npm:null@*",
+        "@open-policy-agent/opa-wasm": "^1.10.0",
+        knex: "^3.1.0",
+        mysql2: "^3.11.0",
+        pg: "^8.13.0",
+        tedious: "^19.0.0"
+      },
+      devDependencies: {
+        "@eslint/js": "^9.34.0",
+        "@kie/act-js": "^2.6.2",
+        "@kie/mock-github": "^2.0.1",
+        "@swc/core": "^1.13.2",
+        "@swc/jest": "^0.2.37",
+        "@types/better-sqlite3": "^7.6.0",
+        "@types/blessed": "^0.1.27",
+        "@types/jest": "^30.0.0",
+        "@types/js-yaml": "^4.0.9",
+        "@types/mailparser": "^3.4.6",
+        "@types/node": "^24.3.0",
+        "@types/node-cron": "^3.0.11",
+        "@types/nodemailer": "^7.0.11",
+        "@types/ws": "^8.18.1",
+        "@typescript-eslint/eslint-plugin": "^8.42.0",
+        "@typescript-eslint/parser": "^8.42.0",
+        "@vercel/ncc": "^0.38.4",
+        eslint: "^9.34.0",
+        "eslint-config-prettier": "^10.1.8",
+        "eslint-plugin-prettier": "^5.5.4",
+        husky: "^9.1.7",
+        jest: "^30.1.3",
+        "lint-staged": "^16.1.6",
+        prettier: "^3.6.2",
+        "reveal-md": "^6.1.2",
+        "ts-json-schema-generator": "^1.5.1",
+        "ts-node": "^10.9.2",
+        tsup: "^8.5.0",
+        typescript: "^5.9.2",
+        wrangler: "^3.0.0"
+      },
+      peerDependenciesMeta: {
+        "@anthropic/claude-code-sdk": {
+          optional: true
+        }
+      },
+      directories: {
+        test: "tests"
+      },
+      "lint-staged": {
+        "src/**/*.{ts,js}": [
+          "eslint --fix",
+          "prettier --write"
+        ],
+        "tests/**/*.{ts,js}": [
+          "eslint --fix",
+          "prettier --write"
+        ],
+        "*.{json,md,yml,yaml}": [
+          "prettier --write"
+        ]
+      }
+    };
+  }
+});
+
+export {
+  generateHumanId,
+  generateShortHumanId,
+  init_human_id,
+  getInstanceId,
+  init_instance_id,
+  require_package
+};
+//# sourceMappingURL=chunk-MFXPJUUE.mjs.map
