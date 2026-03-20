@@ -183,9 +183,7 @@ function resolveTargets(targetPid?: string): VisorProcess[] | null {
   }
 
   if (procs.length > 1) {
-    console.error(
-      `Multiple Visor processes found. Specify --pid to target one:`
-    );
+    console.error(`Multiple Visor processes found. Specify --pid to target one:`);
     for (const p of procs) {
       console.error(`  PID ${p.pid}  (up ${formatUptime(p.uptimeSecs)})`);
     }
@@ -201,16 +199,14 @@ function resolveTargets(targetPid?: string): VisorProcess[] | null {
 // ---------------------------------------------------------------------------
 
 export async function handleProcessCommand(argv: string[]): Promise<void> {
-  const program = new Command('process')
-    .description('Manage running Visor processes')
-    .addHelpText(
-      'after',
-      `
+  const program = new Command('process').description('Manage running Visor processes').addHelpText(
+    'after',
+    `
 Signals:
   reload   SIGUSR2  Hot-reload configuration without restart
   restart  SIGUSR1  Graceful restart (new process spawns, old drains)
   stop     SIGTERM  Graceful shutdown`
-    );
+  );
 
   program
     .command('list', { isDefault: true })
@@ -250,10 +246,7 @@ Signals:
   } catch (err: any) {
     if (err?.exitCode === 0) return;
     if (err?.code === 'commander.helpDisplayed') return;
-    if (
-      err?.code === 'commander.unknownCommand' ||
-      err?.code === 'commander.missingArgument'
-    ) {
+    if (err?.code === 'commander.unknownCommand' || err?.code === 'commander.missingArgument') {
       process.exitCode = 1;
       return;
     }

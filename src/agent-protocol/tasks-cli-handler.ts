@@ -294,10 +294,8 @@ async function handleList(flags: Record<string, string | boolean>): Promise<void
   const filter = buildFilter(flags);
   const output = typeof flags.output === 'string' ? flags.output : 'table';
 
-  // Interactive TUI mode: --tui flag or auto-detect when stdout is a TTY and no output format specified
-  const useTUI = flags.tui === true || (process.stdout.isTTY && !flags.output && !flags.watch);
-
-  if (useTUI) {
+  // Blessed TUI only when explicitly requested
+  if (flags.tui === true) {
     const { runTasksTUI } = await import('./tasks-tui');
     await runTasksTUI(filter);
     return;
@@ -378,7 +376,10 @@ async function handleList(flags: Record<string, string | boolean>): Promise<void
   if (flags.watch) {
     const watchRender = async () => {
       process.stdout.write('\x1Bc'); // clear terminal
-      console.log(`visor tasks (instance: ${instanceId}, watching, Ctrl+C to exit)\n`);
+      const activeOnly = !flags.all && !flags.state;
+      console.log(
+        `${BOLD}visor tasks${RESET} ${DIM}(instance: ${instanceId}${activeOnly ? ', active only' : ''}, Ctrl+C to exit)${RESET}\n`
+      );
       try {
         await render();
       } catch (err) {
@@ -584,73 +585,95 @@ async function handleShow(
       ? formatDuration(match.created_at, match.updated_at)
       : formatDuration(match.claimed_at || match.created_at);
 
-    const detailTable = new CliTable3({
-      style: { head: ['cyan', 'bold'], border: ['grey'] },
-      wordWrap: false,
-    });
+    const termWidth = process.stdout.columns || 80;
+    const sep = DIM + '─'.repeat(termWidth) + RESET;
+    const lines: string[] = [];
 
-    detailTable.push(
-      { 'Task ID': match.id },
-      { State: stateColor(match.state) },
-      { Source: match.source },
-      { Workflow: match.workflow_id || '-' },
-      { Instance: match.claimed_by || '-' },
-      { Duration: duration },
-      { Created: match.created_at },
-      { Updated: match.updated_at }
+    // Header: icon + ID + state + duration
+    const icon = stateIcon(match.state);
+    const colorState = stateColor(match.state);
+    const left = `${icon} ${BOLD}${match.id}${RESET} ${colorState}`;
+    const right = `${DIM}${duration} · ${formatTimeAgo(match.created_at)}${RESET}`;
+    const pad = Math.max(1, termWidth - stripAnsi(left) - stripAnsi(right));
+    lines.push(left + ' '.repeat(pad) + right);
+
+    // Tags line
+    const tags: string[] = [];
+    if (match.source) tags.push(match.source);
+    if (match.workflow_id) tags.push(match.workflow_id);
+    if (match.claimed_by) tags.push(`on:${match.claimed_by}`);
+    if (match.run_id) tags.push(`run:${match.run_id}`);
+    const meta = match.metadata;
+    if (meta.visor_version) {
+      const ver = meta.visor_commit
+        ? `v${meta.visor_version} (${meta.visor_commit})`
+        : `v${meta.visor_version}`;
+      tags.push(ver);
+    }
+    if (meta.slack_user) tags.push(`user:${meta.slack_user}`);
+    if (meta.slack_channel) tags.push(`ch:${meta.slack_channel}`);
+    if (meta.trace_id) tags.push(`trace:${String(meta.trace_id).slice(0, 16)}`);
+    if (meta.schedule_id) tags.push(`sched:${meta.schedule_id}`);
+    if (tags.length > 0) {
+      lines.push(`  ${DIM}${tags.join(' · ')}${RESET}`);
+    }
+    lines.push(`  ${DIM}created ${match.created_at} · updated ${match.updated_at}${RESET}`);
+
+    // Input
+    lines.push('');
+    lines.push(sep);
+    lines.push(`${BOLD}Input${RESET}`);
+    lines.push(sep);
+    const inputText = match.request_message || '(empty)';
+    const maxInputLen = 2000;
+    lines.push(
+      inputText.length > maxInputLen ? inputText.slice(0, maxInputLen) + '...' : inputText
     );
-    if (match.run_id) detailTable.push({ 'Run ID': match.run_id });
-    detailTable.push({ Input: match.request_message });
 
-    // Show AI response from status_message (recorded on completion/failure)
+    // Response
     const fullTask = store.getTask(match.id);
     if (fullTask?.status?.message) {
       const parts = fullTask.status.message.parts ?? [];
       const textPart = parts.find((p: any) => typeof p.text === 'string');
       if (textPart) {
         const responseText = (textPart as any).text as string;
-        // Truncate long responses for display
-        const maxLen = 500;
-        const display =
-          responseText.length > maxLen ? responseText.slice(0, maxLen) + '...' : responseText;
-        detailTable.push({ Response: display });
+        lines.push('');
+        lines.push(sep);
+        lines.push(`${BOLD}Response${RESET}`);
+        lines.push(sep);
+        const maxLen = 2000;
+        lines.push(
+          responseText.length > maxLen ? responseText.slice(0, maxLen) + '...' : responseText
+        );
       }
     }
 
-    // Show stored evaluation if present
+    // Evaluation
     const evalArtifact = (fullTask?.artifacts ?? []).find((a: any) => a.name === 'evaluation');
     if (evalArtifact) {
       try {
         const evalTextPart = evalArtifact.parts?.find((p: any) => typeof p.text === 'string');
         if (evalTextPart) {
           const evaluation = JSON.parse((evalTextPart as any).text);
+          lines.push('');
+          lines.push(sep);
+          lines.push(
+            `${BOLD}Evaluation${RESET}  ${evaluation.overall_rating}/5 — ${evaluation.summary}`
+          );
+          lines.push(sep);
           const rq = evaluation.response_quality;
-          detailTable.push({
-            Evaluation: `${evaluation.overall_rating}/5 — ${evaluation.summary}`,
-          });
           if (rq) {
-            detailTable.push({
-              'Response Quality': `${rq.rating}/5 (${rq.category}) — ${rq.reasoning}`,
-            });
+            lines.push(`  Response:  ${rq.rating}/5 (${rq.category}) — ${rq.reasoning}`);
           }
           if (evaluation.execution_quality) {
             const eq = evaluation.execution_quality;
-            detailTable.push({
-              'Execution Quality': `${eq.rating}/5 (${eq.category}) — ${eq.reasoning}`,
-            });
+            lines.push(`  Execution: ${eq.rating}/5 (${eq.category}) — ${eq.reasoning}`);
           }
         }
       } catch {}
     }
 
-    // Show metadata
-    const meta = match.metadata;
-    const metaKeys = Object.keys(meta).filter(k => k !== 'source');
-    for (const key of metaKeys) {
-      detailTable.push({ [key]: String(meta[key]) });
-    }
-
-    console.log(detailTable.toString());
+    console.log(lines.join('\n'));
   });
 }
 
@@ -780,8 +803,12 @@ async function handleEvaluate(
           wordWrap: true,
         });
 
+        const overallLabel =
+          result.trace_available === false
+            ? `${ratingDisplay(result.overall_rating)} (no trace — capped)`
+            : ratingDisplay(result.overall_rating);
         table.push(
-          { 'Overall Rating': ratingDisplay(result.overall_rating) },
+          { 'Overall Rating': overallLabel },
           { Summary: result.summary },
           {
             'Response Rating': `${ratingDisplay(result.response_quality.rating)} (${result.response_quality.category})`,
@@ -865,14 +892,17 @@ async function handleTrace(
 
     const { serializeTraceForPrompt, fetchTraceSpans } = await import('./trace-serializer');
 
-    // Use trace file path if available, otherwise use trace ID
-    // (auto-detects backend: Grafana Tempo, Jaeger, or local files)
-    const traceRef = traceFile || traceId!;
-
+    // Always prefer remote trace backends (Grafana Tempo, Jaeger) over local
+    // NDJSON files. The local fallback exporter writes minimal event markers
+    // without span IDs or timestamps, so remote is the authoritative source.
+    // Fall back to local file only when remote returns nothing.
     if (output === 'json') {
-      const spans = await fetchTraceSpans(traceId!, {
-        traceDir: typeof flags['trace-dir'] === 'string' ? flags['trace-dir'] : undefined,
-      });
+      const traceDir = typeof flags['trace-dir'] === 'string' ? flags['trace-dir'] : undefined;
+      // Try remote first via trace ID, fall back to file-based lookup
+      let spans = traceId ? await fetchTraceSpans(traceId, { traceDir }) : [];
+      if (spans.length === 0 && traceFile) {
+        spans = await fetchTraceSpans(traceFile, { traceDir, type: 'file' as any });
+      }
       if (spans.length === 0) {
         console.error(`No trace data found for trace_id=${traceId?.slice(0, 16)}`);
         console.error('Tried: Grafana Tempo, Jaeger, local NDJSON files');
@@ -910,7 +940,25 @@ async function handleTrace(
         if (textPart) taskResponse = (textPart as any).text;
       }
 
-      const tree = await serializeTraceForPrompt(traceRef, maxChars, undefined, taskResponse);
+      let tree: string;
+      try {
+        // Pass traceId as both primary ref (for remote lookup) and fallback.
+        // serializeTraceForPrompt tries remote first when fallbackTraceId is set,
+        // then falls back to local file.
+        tree = await serializeTraceForPrompt(
+          traceFile || traceId!,
+          maxChars,
+          undefined,
+          taskResponse,
+          traceId
+        );
+      } catch (traceErr) {
+        console.error(
+          `Trace rendering failed: ${traceErr instanceof Error ? traceErr.stack : traceErr}`
+        );
+        process.exitCode = 1;
+        return;
+      }
       if (tree === '(no trace data available)') {
         console.error(`No trace data found for trace_id=${traceId?.slice(0, 16)}`);
         console.error('Tried: Grafana Tempo, Jaeger, local NDJSON files');
@@ -957,7 +1005,7 @@ export async function handleTasksCommand(argv: string[]): Promise<void> {
   // --- list (default) ---
   program
     .command('list', { isDefault: true })
-    .description('List tasks (interactive TUI in TTY)')
+    .description('List tasks (auto-refreshes in TTY)')
     .option('--all', 'Show all tasks including completed/failed history')
     .option('--state <state>', 'Filter by state: submitted, working, completed, failed, canceled')
     .option('--search <text>', 'Search tasks by input text')
@@ -966,8 +1014,8 @@ export async function handleTasksCommand(argv: string[]): Promise<void> {
     .option('--limit <n>', 'Number of tasks per page (default: 20)')
     .option('--page <n>', 'Page number')
     .option('--output <format>', 'Output format: table, json, markdown')
-    .option('--tui', 'Force interactive TUI mode')
-    .option('--watch', 'Refresh every 2 seconds (non-interactive)')
+    .option('--tui', 'Use interactive blessed TUI (table view, keyboard nav)')
+    .option('--watch', 'Refresh every 2 seconds (same as default TTY behavior)')
     .action(async opts => {
       configureLogger(opts);
       await handleList(optsToFlags(opts));

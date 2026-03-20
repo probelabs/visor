@@ -1345,13 +1345,13 @@ export async function main(): Promise<void> {
     if (filteredArgv.length > 2 && filteredArgv[2] === 'process') {
       const { handleProcessCommand } = await import('./runners/process-cli-handler');
       await handleProcessCommand(filteredArgv.slice(3));
-      return;
+      process.exit(process.exitCode ?? 0);
     }
     // Check for tasks subcommand (A2A task monitoring)
     if (filteredArgv.length > 2 && filteredArgv[2] === 'tasks') {
       const { handleTasksCommand } = await import('./agent-protocol/tasks-cli-handler');
       await handleTasksCommand(filteredArgv.slice(3));
-      return;
+      process.exit(process.exitCode ?? 0);
     }
     // Check for config subcommand
     if (filteredArgv.length > 2 && filteredArgv[2] === 'config') {
@@ -1735,7 +1735,22 @@ export async function main(): Promise<void> {
 
     // ---- Shared Task Store (cross-frontend tracking) ----
     let sharedTaskStore: import('./agent-protocol/task-store').TaskStore | null = null;
-    const taskTrackingEnabled = options.taskTracking || (config as any).task_tracking === true;
+    // Enable task tracking when explicitly configured, or automatically for --message
+    // and runner modes (--slack, --watch) since these are user interactions worth tracking
+    const hasRunners = !!(
+      options.slack ||
+      options.a2a ||
+      options.mcp ||
+      options.telegram ||
+      options.email ||
+      options.whatsapp ||
+      options.teams
+    );
+    const taskTrackingEnabled =
+      options.taskTracking ||
+      (config as any).task_tracking === true ||
+      !!options.message ||
+      hasRunners;
     if (taskTrackingEnabled) {
       try {
         const { SqliteTaskStore } = await import('./agent-protocol/task-store');

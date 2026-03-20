@@ -6,6 +6,7 @@ import { SessionRegistry } from './session-registry';
 import { logger } from './logger';
 import { trace as otTrace } from './telemetry/lazy-otel';
 import { withActiveSpan } from './telemetry/trace-helpers';
+import { emitNdjsonFullSpan } from './telemetry/fallback-ndjson';
 import { initializeTracer } from './utils/tracer-init';
 import { processDiffWithOutline } from './utils/diff-processor';
 import { shouldFilterVisorReviewComment } from './utils/comment-metadata';
@@ -89,8 +90,13 @@ function createProbeTracerAdapter(fallbackTracer?: any) {
     'delegation.start',
     'delegation.complete',
     'graceful_stop.invoked',
+    'graceful_stop.initiated',
     'probe.timeout_configured',
     'negotiated_timeout.observer',
+    'negotiated_timeout.observer_extended',
+    'negotiated_timeout.observer_declined',
+    'negotiated_timeout.observer_exhausted',
+    'negotiated_timeout.abort_summary',
   ]);
 
   const emitEvent = (name: string, attrs?: Record<string, unknown>) => {
@@ -120,14 +126,63 @@ function createProbeTracerAdapter(fallbackTracer?: any) {
     withSpan: async (
       name: string,
       fn: (...args: any[]) => Promise<any>,
-      attrs?: Record<string, unknown>
-    ) =>
-      withActiveSpan(name, attrs as Record<string, unknown>, async span => {
+      attrs?: Record<string, unknown>,
+      onResult?: (span: any, result: any) => void
+    ) => {
+      const startHr = process.hrtime();
+      return withActiveSpan(name, attrs as Record<string, unknown>, async span => {
+        let result: any;
         if (fallback && typeof fallback.withSpan === 'function') {
-          return await fallback.withSpan(name, async () => fn(span), attrs);
+          result = await fallback.withSpan(name, async () => fn(span), attrs);
+        } else {
+          result = await fn(span);
         }
-        return await fn(span);
-      }),
+        // Collect extra attributes set by onResult callback
+        const extraAttrs: Record<string, unknown> = {};
+        if (onResult) {
+          try {
+            const capturingSpan = {
+              setAttributes: (a: Record<string, unknown>) => {
+                Object.assign(extraAttrs, a);
+                try {
+                  span.setAttributes(a);
+                } catch {}
+              },
+              setAttribute: (k: string, v: unknown) => {
+                extraAttrs[k] = v;
+                try {
+                  span.setAttribute(k, v as never);
+                } catch {}
+              },
+              addEvent: (...args: unknown[]) => {
+                try {
+                  (span as any).addEvent(...args);
+                } catch {}
+              },
+            };
+            onResult(capturingSpan, result);
+          } catch {}
+        }
+        // Emit probe-internal spans to fallback NDJSON with full span context
+        try {
+          const endHr = process.hrtime();
+          const ctx = span.spanContext?.() || {};
+          const parentCtx = (span as any).parentSpanContext || (span as any)._parentSpanContext;
+          emitNdjsonFullSpan({
+            name,
+            traceId: ctx.traceId,
+            spanId: ctx.spanId,
+            parentSpanId: parentCtx?.spanId,
+            startTime: [startHr[0], startHr[1]],
+            endTime: [endHr[0], endHr[1]],
+            attributes: { ...flattenAttrs(attrs), ...flattenAttrs(extraAttrs) },
+            events: [],
+            status: { code: 1 },
+          });
+        } catch {}
+        return result;
+      });
+    },
     recordEvent: (name: string, attrs?: Record<string, unknown>) => {
       emitEvent(name, attrs);
       if (fallback && typeof fallback.recordEvent === 'function') {
@@ -228,10 +283,20 @@ function createProbeTracerAdapter(fallbackTracer?: any) {
       } catch {}
       if (!span && fallbackSpan) return fallbackSpan;
       if (!span) return null;
+      // Accumulate attributes for fallback NDJSON emission on end()
+      const accumulated: Record<string, unknown> = {
+        'delegation.session_id': sessionId,
+        'delegation.task': task,
+      };
+      const delegStartHr = process.hrtime();
+      let delegStatus = 1; // OK
       return {
         setAttributes: (attrs?: Record<string, unknown>) => {
           try {
-            if (attrs) span.setAttributes(attrs as Record<string, unknown>);
+            if (attrs) {
+              Object.assign(accumulated, attrs);
+              span.setAttributes(attrs as Record<string, unknown>);
+            }
           } catch {}
           if (fallbackSpan && typeof fallbackSpan.setAttributes === 'function') {
             try {
@@ -241,6 +306,8 @@ function createProbeTracerAdapter(fallbackTracer?: any) {
         },
         setStatus: (status: unknown) => {
           try {
+            const code = (status as any)?.code;
+            if (code === 2) delegStatus = 2;
             span.setStatus(status as never);
           } catch {}
           if (fallbackSpan && typeof fallbackSpan.setStatus === 'function') {
@@ -258,6 +325,22 @@ function createProbeTracerAdapter(fallbackTracer?: any) {
               fallbackSpan.end();
             } catch {}
           }
+          // Emit to fallback NDJSON with full span context
+          try {
+            const delegEndHr = process.hrtime();
+            const ctx = span.spanContext?.() || {};
+            emitNdjsonFullSpan({
+              name: 'probe.delegation',
+              traceId: ctx.traceId,
+              spanId: ctx.spanId,
+              parentSpanId: undefined, // delegation spans are roots within probe
+              startTime: [delegStartHr[0], delegStartHr[1]],
+              endTime: [delegEndHr[0], delegEndHr[1]],
+              attributes: (flattenAttrs(accumulated) as Record<string, unknown>) || {},
+              events: [],
+              status: { code: delegStatus },
+            });
+          } catch {}
         },
       };
     },
@@ -2127,6 +2210,17 @@ ${'='.repeat(60)}
       let systemPrompt = this.config.systemPrompt;
       if (!systemPrompt && schema !== 'code-review' && !this.config.promptType) {
         systemPrompt = 'You are general assistant, follow user instructions.';
+      }
+
+      // When a timeout is configured, append instructions so the AI frames
+      // time-limit interruptions correctly instead of claiming "the system is
+      // shutting down" (which confuses users).
+      if (systemPrompt && (this.config.aiTimeout || this.config.timeoutBehavior)) {
+        systemPrompt += `\n\nIMPORTANT — Time-limit behavior:
+If you receive a message that the time limit has been reached or your operation is being interrupted, this means YOUR ALLOCATED TIME BUDGET for this task has been exhausted. The system is NOT shutting down or going offline.
+- Frame it as: "I ran out of the allocated time for this task."
+- NEVER say "the system is shutting down", "try again when the system is back online", or similar misleading language.
+- Summarize what you accomplished, what you didn't finish, and any actionable recommendations the user can follow up on.`;
       }
 
       log(

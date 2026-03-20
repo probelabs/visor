@@ -462,11 +462,17 @@ steps:
         switch to it FIRST before searching. Content may only exist on that branch.
 
       Delegate usage:
+
       - Each delegate should answer ONE specific question (not "look at the code")
       - Run multiple delegates in PARALLEL for different hypotheses or components
       - Ask delegates to return specific file paths and line numbers
       - Do NOT delegate or re-search the same question twice in one investigation
       - If a delegate returns enough evidence for the current claim, stop and use it
+      - NEVER spawn a new delegate for the same topic as a previous delegate.
+        If delegates 1-3 all searched for "session context metadata", do NOT spawn
+        delegate 4 for "session context metadata" again. Use the results you have.
+      - Before spawning a delegate, review results from ALL prior delegates.
+        If the information is already available, use it instead of re-delegating.
 
       Relay complete data from tools — do not summarize or compress tool output.
 

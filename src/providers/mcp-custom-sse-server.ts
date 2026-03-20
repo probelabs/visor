@@ -1067,9 +1067,8 @@ export class CustomToolsSSEServer implements CustomMCPServer {
                 schedulerContext:
                   webhookEventType === 'schedule'
                     ? {
-                        scheduleId: (
-                          this.workflowContext?.executionContext as any
-                        )?.inputs?.schedule?.id as string | undefined,
+                        scheduleId: (this.workflowContext?.executionContext as any)?.inputs
+                          ?.schedule?.id as string | undefined,
                       }
                     : undefined,
               },

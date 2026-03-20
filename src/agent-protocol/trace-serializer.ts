@@ -499,6 +499,7 @@ function buildSpanTree(spans: NormalizedSpan[]): SpanTree {
 
   // Build parent-child relationships
   let root: SpanTree | undefined;
+  const orphans: SpanTree[] = [];
   for (const span of filtered) {
     const node = nodeMap.get(span.spanId)!;
     if (!span.parentSpanId) {
@@ -516,6 +517,9 @@ function buildSpanTree(spans: NormalizedSpan[]): SpanTree {
         if (parent) parent.children.push(node);
       } else if (!root) {
         root = node;
+      } else {
+        // Orphaned span — parent not in this trace; attach to root later
+        orphans.push(node);
       }
     }
   }
@@ -524,6 +528,11 @@ function buildSpanTree(spans: NormalizedSpan[]): SpanTree {
   if (!root) {
     const sorted = [...nodeMap.values()].sort((a, b) => b.span.durationMs - a.span.durationMs);
     root = sorted[0] || { span: filtered[0], children: [] };
+  }
+
+  // Attach orphaned spans to root so they appear in the tree
+  if (orphans.length > 0) {
+    root.children.push(...orphans);
   }
 
   // Sort children by start time
@@ -639,17 +648,34 @@ export async function serializeTraceForPrompt(
   maxChars?: number,
   backendConfig?: Partial<TraceBackendConfig>,
   /** Final task response from the task store (not truncated by OTEL) */
-  taskResponse?: string
+  taskResponse?: string,
+  /** Trace ID to try remote backends first (preferred over local file) */
+  fallbackTraceId?: string
 ): Promise<string> {
-  let spans: NormalizedSpan[];
+  let spans: NormalizedSpan[] = [];
+  const isFilePath = traceIdOrPath.includes('/') || traceIdOrPath.endsWith('.ndjson');
 
-  // If it looks like a file path, read it directly
-  if (traceIdOrPath.includes('/') || traceIdOrPath.endsWith('.ndjson')) {
-    const { parseNDJSONTrace } = await import('../debug-visualizer/trace-reader');
-    const trace = await parseNDJSONTrace(traceIdOrPath);
-    spans = parseLocalNDJSONSpans(trace.spans as any[]);
-  } else {
-    // It's a trace ID — fetch from backends
+  // Always try remote backends first (Grafana Tempo, Jaeger) — they have
+  // full span structure with IDs, timestamps, and parent-child relationships.
+  // The local NDJSON fallback file only has minimal event markers.
+  const remoteTraceId = fallbackTraceId || (!isFilePath ? traceIdOrPath : undefined);
+  if (remoteTraceId) {
+    spans = await fetchTraceSpans(remoteTraceId, backendConfig);
+  }
+
+  // Fall back to local file only when remote returned nothing
+  if (spans.length === 0 && isFilePath) {
+    try {
+      const { parseNDJSONTrace } = await import('../debug-visualizer/trace-reader');
+      const trace = await parseNDJSONTrace(traceIdOrPath);
+      spans = parseLocalNDJSONSpans(trace.spans as any[]);
+    } catch {
+      // file may not exist or be malformed
+    }
+  }
+
+  // Last resort: if traceIdOrPath wasn't tried as a trace ID yet, try it
+  if (spans.length === 0 && !remoteTraceId && !isFilePath) {
     spans = await fetchTraceSpans(traceIdOrPath, backendConfig);
   }
 
@@ -821,10 +847,65 @@ function renderYamlNode(
     return;
   }
 
+  // --- Search delegate dedup decision ---
+  if (name === 'search.delegate.dedup') {
+    const query = attrs['dedup.query'] || '';
+    const action = attrs['dedup.action'] || '?';
+    const reason = attrs['dedup.reason'] || '';
+    const rewritten = attrs['dedup.rewritten'] || '';
+    const prevCount = attrs['dedup.previous_count'] || '0';
+    let detail = `${action}`;
+    if (rewritten) detail += ` → "${truncate(String(rewritten), 60)}"`;
+    if (reason) detail += ` (${truncate(String(reason), 80)})`;
+    lines.push(
+      `${pad}dedup("${truncate(String(query), 60)}") [${prevCount} prior]: ${detail} — ${duration}`
+    );
+    return;
+  }
+
   // --- Search delegate ---
   if (name === 'search.delegate') {
     const query = attrs['search.query'] || '';
-    lines.push(`${pad}search.delegate("${truncate(String(query), 80)}") — ${duration}:`);
+    const rewritten = attrs['search.query.rewritten'] || '';
+    const output = attrs['search.delegate.output'] || '';
+    const outputLen = attrs['search.delegate.output_length'] || '';
+
+    let header = `search.delegate("${truncate(String(query), 80)}")`;
+    if (rewritten) header += ` → rewritten: "${truncate(String(rewritten), 60)}"`;
+    header += ` — ${duration}`;
+    lines.push(`${pad}${header}:`);
+
+    // Parse structured output to show confidence, searches, and groups summary
+    if (output) {
+      try {
+        const parsed = JSON.parse(String(output));
+        if (parsed.confidence) {
+          let confLine = `confidence: ${parsed.confidence}`;
+          if (parsed.reason) confLine += ` — ${truncate(String(parsed.reason), 100)}`;
+          lines.push(`${pad}  ${confLine}`);
+        }
+        if (parsed.searches && Array.isArray(parsed.searches) && parsed.searches.length > 0) {
+          lines.push(`${pad}  searches (${parsed.searches.length}):`);
+          for (const s of parsed.searches) {
+            const outcome = s.had_results ? '✓' : '✗';
+            lines.push(
+              `${pad}    ${outcome} "${truncate(String(s.query || ''), 60)}" in ${truncate(String(s.path || '.'), 40)}`
+            );
+          }
+        }
+        if (parsed.groups && Array.isArray(parsed.groups) && parsed.groups.length > 0) {
+          lines.push(`${pad}  groups (${parsed.groups.length}):`);
+          for (const g of parsed.groups) {
+            const fileCount = g.files?.length || 0;
+            lines.push(`${pad}    - ${truncate(String(g.reason || ''), 80)} (${fileCount} files)`);
+          }
+        }
+      } catch {
+        // Not JSON — show raw output length
+        if (outputLen) lines.push(`${pad}  output: ${outputLen} chars`);
+      }
+    }
+
     for (const child of node.children) {
       renderYamlNode(
         child,
@@ -1021,8 +1102,8 @@ function renderYamlOutput(
   } catch {
     // Truncated JSON — use tolerant parser to extract what we can
     obj = parseTruncatedJson(rawOutput);
-    if (!obj || typeof obj !== 'object') return;
   }
+  if (obj === null || obj === undefined || typeof obj !== 'object') return;
 
   // Unwrap single-key wrapper objects: {answer: {text: "..."}} → {text: "..."}
   // and {text: "..."} → render text inline
@@ -1105,15 +1186,18 @@ function renderYamlValue(
       lines.push(`${pad}${key}: []`);
       return;
     }
+    // Short string arrays: render inline like [a, b, c]
+    if (val.every((v: any) => typeof v === 'string') && val.join(', ').length < ml) {
+      lines.push(`${pad}${key}: [${val.join(', ')}]`);
+      return;
+    }
     // Limit array depth
     const maxItems = fullOutput ? 20 : 3;
     lines.push(`${pad}${key}:`);
     for (let i = 0; i < Math.min(val.length, maxItems); i++) {
       const item = val[i];
       if (typeof item === 'object' && item !== null) {
-        const entries = Object.entries(item).filter(
-          ([k]) => k !== 'raw' && k !== 'skills' && k !== 'tags'
-        );
+        const entries = Object.entries(item).filter(([k]) => k !== 'raw' && k !== 'tags');
         if (entries.length > 0) {
           // Put first key on same line as dash
           const [firstKey, firstVal] = entries[0];
@@ -1157,7 +1241,7 @@ function renderYamlValue(
     }
     lines.push(`${pad}${key}:`);
     for (const [k, v] of Object.entries(val)) {
-      if (k === 'raw' || k === 'skills' || k === 'tags') continue;
+      if (k === 'raw' || k === 'tags') continue;
       renderYamlValue(v, `${pad}  `, k, lines, fullOutput, ml, d + 1);
     }
   }
@@ -1374,20 +1458,60 @@ function formatSpanLine(
     const numLen = toolResultLen ? Number(toolResultLen) : -1;
     const noResults = isSearchTool && numLen >= 0 && numLen < 500;
     const resultSize = noResults ? 'no results' : toolResultLen ? formatSize(numLen) : '';
-    const successMark = toolSuccess === false ? ' ✗' : '';
     const durStr =
       Number(attrs['tool.duration_ms']) > 0
         ? ` (${formatDurationMs(Number(attrs['tool.duration_ms']))})`
         : '';
+
+    // Bash: show exit code / signal instead of generic success mark
+    let successMark = toolSuccess === false ? ' ✗' : '';
+    if (tn === 'bash') {
+      const toolResult = String(attrs['tool.result'] || '');
+      const exitMatch = toolResult.match(/Exit Code: (\S+)/);
+      const sigMatch = toolResult.match(/Signal: (\S+)/);
+      if (sigMatch && sigMatch[1] !== 'null') {
+        successMark = ` [${sigMatch[1]}]`;
+      } else if (exitMatch && exitMatch[1] !== '0' && exitMatch[1] !== 'null') {
+        successMark = ` [exit ${exitMatch[1]}]`;
+      }
+    }
+
     return {
       line: `${toolName}(${toolInput})${durStr}${resultSize ? ` → ${resultSize}` : ''}${successMark}`,
     };
   }
 
-  // --- Search delegate: show the search query ---
+  // --- Search delegate dedup ---
+  if (name === 'search.delegate.dedup') {
+    const query = attrs['dedup.query'] || '';
+    const action = attrs['dedup.action'] || '?';
+    const reason = attrs['dedup.reason'] || '';
+    const rewritten = attrs['dedup.rewritten'] || '';
+    let detail = `${action}`;
+    if (rewritten) detail += ` → "${truncate(String(rewritten), 50)}"`;
+    if (reason) detail += ` — ${truncate(String(reason), 60)}`;
+    return { line: `dedup("${truncate(String(query), 50)}") ${detail} (${duration})` };
+  }
+
+  // --- Search delegate: show the search query + confidence ---
   if (name === 'search.delegate') {
     const query = attrs['search.query'] || '';
-    return { line: `search.delegate(${truncate(String(query), 80)}) (${duration})` };
+    const rewritten = attrs['search.query.rewritten'] || '';
+    const output = attrs['search.delegate.output'] || '';
+    let suffix = '';
+    // Try to extract confidence and group/search counts from output
+    try {
+      const parsed = JSON.parse(String(output));
+      const parts: string[] = [];
+      if (parsed.confidence) parts.push(parsed.confidence);
+      if (parsed.groups?.length) parts.push(`${parsed.groups.length} groups`);
+      if (parsed.searches?.length) parts.push(`${parsed.searches.length} searches`);
+      if (parts.length > 0) suffix = ` → ${parts.join(', ')}`;
+    } catch {}
+    const rewriteStr = rewritten ? ` → "${truncate(String(rewritten), 40)}"` : '';
+    return {
+      line: `search.delegate("${truncate(String(query), 60)}"${rewriteStr}) (${duration})${suffix}`,
+    };
   }
 
   // --- AI request: show model + input summary ---
@@ -1479,6 +1603,131 @@ function formatSpanLine(
     return { line: `visor.run${sourceStr} (${duration})` };
   }
 
+  // --- Negotiated timeout observer: show decision details ---
+  if (
+    name === 'probe.event.negotiated_timeout.observer' ||
+    name === 'negotiated_timeout.observer'
+  ) {
+    // Decision data lives in span events emitted by Probe inside the observer span.
+    // Look through span.events for observer_extended, observer_declined, observer_exhausted.
+    let detail = '';
+
+    // First try span attributes (future Probe versions may set these directly)
+    const attrDecision = attrs['observer.decision'] || attrs['decision_reason'];
+    if (attrDecision) {
+      const reason = attrs['observer.reason'] || attrs['decision_reason'] || '';
+      if (String(attrDecision) === 'extended' || attrs['granted_ms']) {
+        const grantedMin =
+          attrs['observer.granted_min'] ||
+          attrs['granted_min'] ||
+          (attrs['granted_ms'] ? Math.round(Number(attrs['granted_ms']) / 60000) : '?');
+        detail = `extended +${grantedMin}min`;
+        if (reason) detail += ` (${truncate(String(reason), 60)})`;
+        const used = attrs['observer.extensions_used'] || attrs['extensions_used'];
+        const max = attrs['observer.max_requests'] || attrs['max_requests'];
+        if (used) detail += ` [${used}/${max || '?'} used]`;
+      } else if (String(attrDecision) === 'exhausted') {
+        detail = 'budget exhausted';
+      } else {
+        detail = `declined`;
+        if (reason) detail += `: ${truncate(String(reason), 60)}`;
+      }
+    }
+
+    // Then try span events (current Probe versions emit these)
+    if (!detail && span.events.length > 0) {
+      for (const evt of span.events) {
+        const evtName = evt.name || '';
+        const ea = evt.attributes;
+        if (evtName.includes('observer_extended')) {
+          const grantedMin =
+            ea['granted_min'] ||
+            (ea['granted_ms'] ? Math.round(Number(ea['granted_ms']) / 60000) : '?');
+          detail = `extended +${grantedMin}min`;
+          if (ea['decision_reason']) detail += ` (${truncate(String(ea['decision_reason']), 60)})`;
+          if (ea['extensions_used'])
+            detail += ` [${ea['extensions_used']}/${ea['max_requests'] || '?'} used]`;
+          break;
+        }
+        if (evtName.includes('observer_declined')) {
+          detail = 'declined';
+          if (ea['decision_reason']) detail += `: ${truncate(String(ea['decision_reason']), 60)}`;
+          break;
+        }
+        if (evtName.includes('observer_exhausted')) {
+          const used = ea['extensions_used'] || '?';
+          const max = ea['max_requests'] || '?';
+          detail = `budget exhausted [${used}/${max} extensions]`;
+          break;
+        }
+        if (evtName.includes('observer_invoked') && !detail) {
+          // Show invocation context as fallback if no decision event follows
+          const elapsed = ea['elapsed_min'] || '?';
+          const tools = ea['active_tools_count'] || 0;
+          detail = `${elapsed}min elapsed, ${tools} active tools`;
+          // Don't break — keep looking for a decision event
+        }
+      }
+    }
+
+    // Final fallback: span attributes for elapsed/active tools
+    if (!detail) {
+      const elapsed = attrs['elapsed_min'];
+      const activeTools = attrs['active_tools_count'] || attrs['active_tools'];
+      if (elapsed) detail += `${elapsed}min elapsed`;
+      if (activeTools)
+        detail += detail ? `, ${activeTools} active tools` : `${activeTools} active tools`;
+    }
+
+    const label = detail ? `timeout.observer: ${detail}` : 'timeout.observer';
+    return { line: `${label} (${duration})` };
+  }
+
+  // --- Negotiated timeout sub-events (promoted to individual spans) ---
+  if (name.includes('negotiated_timeout.observer_')) {
+    const suffix = name.replace(/.*negotiated_timeout\.observer_/, '');
+    const reason = attrs['decision_reason'] || '';
+    if (suffix === 'extended') {
+      const grantedMin =
+        attrs['granted_min'] ||
+        (attrs['granted_ms'] ? Math.round(Number(attrs['granted_ms']) / 60000) : '?');
+      const used = attrs['extensions_used'] || '?';
+      const max = attrs['max_requests'] || '?';
+      const reasonStr = reason ? ` (${truncate(String(reason), 60)})` : '';
+      return { line: `timeout.extended: +${grantedMin}min${reasonStr} [${used}/${max} used]` };
+    }
+    if (suffix === 'declined') {
+      const reasonStr = reason ? `: ${truncate(String(reason), 60)}` : '';
+      return { line: `timeout.declined${reasonStr}` };
+    }
+    if (suffix === 'exhausted') {
+      const used = attrs['extensions_used'] || '?';
+      const max = attrs['max_requests'] || '?';
+      return { line: `timeout.exhausted [${used}/${max} extensions, budget depleted]` };
+    }
+    // observer_invoked, observer_response — less important, show compact
+    if (suffix === 'invoked') {
+      const elapsed = attrs['elapsed_min'] || '?';
+      const tools = attrs['active_tools_count'] || 0;
+      return { line: `timeout.observer invoked (${elapsed}min elapsed, ${tools} active tools)` };
+    }
+    return { line: `timeout.${suffix} (${duration})` };
+  }
+
+  // --- Negotiated timeout abort summary: show that final response was generated under timeout ---
+  if (name.includes('negotiated_timeout.abort_summary')) {
+    const summaryLen = attrs['summary_length'] || attrs['summary.length'];
+    const lenStr = summaryLen ? ` → ${formatSize(Number(summaryLen))}` : '';
+    return { line: `timeout.abort_summary (${duration})${lenStr}` };
+  }
+
+  // --- Graceful stop events ---
+  if (name.includes('graceful_stop.initiated') || name.includes('graceful_stop.invoked')) {
+    const reason = attrs['graceful_stop.reason'] || attrs['reason'] || '';
+    const reasonStr = reason ? `: ${truncate(String(reason), 80)}` : '';
+    return { line: `graceful_stop${reasonStr} (${duration})` };
+  }
+
   // --- Generic span ---
   return { line: `${name} (${duration})${span.status === 'error' ? ' ✗' : ''}` };
 }
@@ -1488,9 +1737,7 @@ function formatSpanLine(
  * Parse a workspace path like /tmp/visor-workspaces/<session>/<repo>/path/to/file
  * into { repo, filePath } components.
  */
-function parseWorkspacePath(
-  fullPath: string
-): { repo: string; filePath?: string } | null {
+function parseWorkspacePath(fullPath: string): { repo: string; filePath?: string } | null {
   // Match /tmp/visor-workspaces/<session-id>/<repo>/...
   const wsMatch = fullPath.match(/\/visor-workspaces\/[^/]+\/([^/]+)(?:\/(.+))?/);
   if (wsMatch) {
@@ -1546,6 +1793,25 @@ function extractToolInput(
         // Fallback: show last 2 segments
         const segs = fullPath.split('/');
         return segs.length > 2 ? segs.slice(-2).join('/') : segs[segs.length - 1];
+      }
+      return '';
+    }
+    case 'bash': {
+      // tool.result starts with "Command: <cmd>\nWorking directory: ..."
+      const cmdMatch = result.match(/^Command: (.+)/);
+      if (cmdMatch) {
+        let cmd = cmdMatch[1].trim();
+        // Strip long pipes — show first command + pipe count
+        const pipes = cmd.split(/\s*\|\s*/);
+        if (pipes.length > 2) {
+          cmd = `${pipes[0]} | ... (${pipes.length} stages)`;
+        }
+        return truncate(cmd, 80);
+      }
+      // Blocked commands: "Permission denied: Component "<cmd>" not allowed: ..."
+      const deniedMatch = result.match(/^Permission denied: Component "([^"]+)"/);
+      if (deniedMatch) {
+        return truncate(deniedMatch[1], 60) + ' [denied]';
       }
       return '';
     }

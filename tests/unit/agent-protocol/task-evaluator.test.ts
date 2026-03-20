@@ -175,7 +175,8 @@ describe('evaluateTask', () => {
       'trace-abc',
       1_000_000,
       expect.objectContaining({}),
-      'Found 3 issues...'
+      'Found 3 issues...',
+      'trace-abc'
     );
 
     expect(result.execution_quality).toBeDefined();
@@ -272,14 +273,16 @@ describe('evaluateAndStore', () => {
 
     const result = await evaluateAndStore('task-010', store as any);
 
-    expect(result.overall_rating).toBe(5);
+    // No trace available → overall rating capped at 4
+    expect(result.overall_rating).toBe(4);
+    expect(result.trace_available).toBe(false);
     expect(store.addArtifact).toHaveBeenCalledTimes(1);
 
     const artifactCall = store.addArtifact.mock.calls[0];
     expect(artifactCall[0]).toBe('task-010');
     expect(artifactCall[1].name).toBe('evaluation');
     const storedResult = JSON.parse(artifactCall[1].parts[0].text);
-    expect(storedResult.overall_rating).toBe(5);
+    expect(storedResult.overall_rating).toBe(4);
   });
 });
 
