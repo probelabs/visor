@@ -1580,6 +1580,65 @@ export class VisorTestRunner {
     const prompts: Record<string, string[]> = {};
     // Cumulative output history across flow stages (for cross-turn assertions)
     const cumulativeOutputHistory: Record<string, unknown[]> = {};
+
+    // If any stage uses background turns, create a shared task store so the
+    // task_progress tool can see active tasks across concurrent turns.
+    let sharedTaskStore: any = null;
+    const hasBackgroundStages = flowCase.flow.some((s: any) => s.background);
+    if (hasBackgroundStages) {
+      try {
+        const { SqliteTaskStore } = await import('../agent-protocol/task-store');
+        const os = await import('os');
+        const path = await import('path');
+        const storePath = path.join(os.tmpdir(), `visor-test-tasks-${flowName}-${Date.now()}.db`);
+        sharedTaskStore = new SqliteTaskStore(storePath);
+        await sharedTaskStore.initialize();
+
+        // Enable file-based OTEL tracing so background tasks produce trace files
+        // that the task_progress tool can read.
+        const fs = await import('fs');
+        const traceDir = path.join(os.tmpdir(), `visor-test-traces-${Date.now()}`);
+        fs.mkdirSync(traceDir, { recursive: true });
+        (sharedTaskStore as any).__traceDir = traceDir;
+        // Set env vars for telemetry init (will be cleaned up after flow)
+        const prevTelemetryEnabled = process.env.VISOR_TELEMETRY_ENABLED;
+        const prevTelemetrySink = process.env.VISOR_TELEMETRY_SINK;
+        const prevTraceDir = process.env.VISOR_TRACE_DIR;
+        const prevFallbackTrace = process.env.VISOR_FALLBACK_TRACE_FILE;
+        process.env.VISOR_TELEMETRY_ENABLED = 'true';
+        process.env.VISOR_TELEMETRY_SINK = 'file';
+        process.env.VISOR_TRACE_DIR = traceDir;
+        // Set fallback trace file so file-span-exporter and trackExecution
+        // both use the same known path — this lets task_progress read traces.
+        const traceFilePath = path.join(traceDir, `test-trace-${Date.now()}.ndjson`);
+        process.env.VISOR_FALLBACK_TRACE_FILE = traceFilePath;
+        (sharedTaskStore as any).__envRestore = () => {
+          if (prevTelemetryEnabled !== undefined)
+            process.env.VISOR_TELEMETRY_ENABLED = prevTelemetryEnabled;
+          else delete process.env.VISOR_TELEMETRY_ENABLED;
+          if (prevTelemetrySink !== undefined) process.env.VISOR_TELEMETRY_SINK = prevTelemetrySink;
+          else delete process.env.VISOR_TELEMETRY_SINK;
+          if (prevTraceDir !== undefined) process.env.VISOR_TRACE_DIR = prevTraceDir;
+          else delete process.env.VISOR_TRACE_DIR;
+          if (prevFallbackTrace !== undefined)
+            process.env.VISOR_FALLBACK_TRACE_FILE = prevFallbackTrace;
+          else delete process.env.VISOR_FALLBACK_TRACE_FILE;
+          // Clean up trace dir
+          try {
+            fs.rmSync(traceDir, { recursive: true, force: true });
+          } catch {}
+        };
+        try {
+          const { initTelemetry } = await import('../telemetry/opentelemetry');
+          await initTelemetry({ enabled: true, sink: 'file', file: { dir: traceDir } });
+        } catch {}
+      } catch (err) {
+        console.log(
+          `   ⚠️  Could not create shared task store: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+
     // Stage filter (by name substring or 1-based index)
     const sf = (stageFilter || '').trim().toLowerCase();
     const sfIndex = sf && /^\d+$/.test(sf) ? parseInt(sf, 10) : undefined;
@@ -1623,6 +1682,12 @@ export class VisorTestRunner {
         const suiteDefaults: any = (this as any).suiteDefaults || {};
         const defaultIncludeTags = parseTags(suiteDefaults?.tags);
         const defaultExcludeTags = parseTags(suiteDefaults?.exclude_tags);
+        // Optional delay before this stage (e.g., after a background turn)
+        if (typeof stage.delay_ms === 'number' && stage.delay_ms > 0) {
+          console.log(`   ⏳ Waiting ${stage.delay_ms}ms before turn...`);
+          await new Promise(resolve => setTimeout(resolve, stage.delay_ms));
+        }
+
         const stageRunner = new FlowStage(
           flowName,
           engine,
@@ -1641,6 +1706,91 @@ export class VisorTestRunner {
           suiteDefaults.llm_judge || undefined,
           cumulativeOutputHistory
         );
+
+        // Background stages fire without waiting — the next turn can run concurrently
+        if (stage.background) {
+          const bgName = `${flowName}#${stage.name || `stage-${i + 1}`}`;
+          console.log(`   🔄 Starting background turn: ${bgName}`);
+
+          // Background turns need a separate engine instance since the engine
+          // is stateful and can't handle concurrent executions.
+          const bgEngine = new StateMachineExecutionEngine(
+            undefined as any,
+            recorder as unknown as any
+          );
+          const bgStageRunner = new FlowStage(
+            flowName,
+            bgEngine,
+            recorder,
+            cfg,
+            prompts,
+            this.mapEventFromFixtureName.bind(this),
+            this.computeChecksToRun.bind(this),
+            this.printStageHeader.bind(this),
+            this.printSelectedChecks.bind(this),
+            this.warnUnmockedProviders.bind(this),
+            defaultIncludeTags,
+            defaultExcludeTags,
+            (suiteDefaults.frontends || undefined) as any[],
+            noMocks,
+            suiteDefaults.llm_judge || undefined,
+            cumulativeOutputHistory
+          );
+
+          // If we have a shared task store, wrap the background execution with
+          // trackExecution so the task_progress tool can see it from other turns.
+          if (sharedTaskStore) {
+            // Inject task store reference into the stage execution_context so
+            // flow-stage.ts can pass it through webhookData to the SSE server.
+            if (!stage.execution_context) stage.execution_context = {};
+            stage.execution_context.__taskStore = sharedTaskStore;
+
+            const { trackExecution } = await import('../agent-protocol/track-execution');
+            trackExecution(
+              {
+                taskStore: sharedTaskStore,
+                source: 'test',
+                workflowId: bgName,
+                messageText: stage.execution_context?.conversation?.current?.text || bgName,
+              },
+              () => bgStageRunner.run(stage, flowCase, strict)
+            )
+              .then(() => {
+                console.log(`   ✅ Background turn ${bgName} completed`);
+              })
+              .catch(err => {
+                console.log(
+                  `   ⚠️  Background turn ${bgName} failed: ${err instanceof Error ? err.message : String(err)}`
+                );
+              });
+          } else {
+            bgStageRunner
+              .run(stage, flowCase, strict)
+              .then(outcome => {
+                if (outcome.errors) {
+                  console.log(
+                    `   ⚠️  Background turn ${bgName} had errors: ${outcome.errors.join(', ')}`
+                  );
+                } else {
+                  console.log(`   ✅ Background turn ${bgName} completed`);
+                }
+              })
+              .catch(err => {
+                console.log(
+                  `   ⚠️  Background turn ${bgName} failed: ${err instanceof Error ? err.message : String(err)}`
+                );
+              });
+          }
+          stagesSummary.push({ name: stage.name || `stage-${i + 1}` });
+          continue;
+        }
+
+        // Inject shared task store into non-background stages too (for task_progress tool)
+        if (sharedTaskStore) {
+          if (!stage.execution_context) stage.execution_context = {};
+          stage.execution_context.__taskStore = sharedTaskStore;
+        }
+
         const outcome = await stageRunner.run(stage, flowCase, strict);
 
         // In conversation sugar + --no-mocks: replace mock assistant text in
@@ -1698,6 +1848,15 @@ export class VisorTestRunner {
     }
     if (!anyStageRan && stageFilter) {
       console.log(`⚠️  No stage matched filter '${stageFilter}' in flow '${flowName}'`);
+    }
+    // Clean up shared task store, env vars, and trace files
+    if (sharedTaskStore) {
+      try {
+        await sharedTaskStore.shutdown();
+      } catch {}
+      try {
+        (sharedTaskStore as any).__envRestore?.();
+      } catch {}
     }
     if (failures === 0)
       console.log(`${(this as any).tagPass ? (this as any).tagPass() : '✅ PASS'} ${flowName}`);

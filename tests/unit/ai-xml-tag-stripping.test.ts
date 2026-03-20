@@ -15,6 +15,7 @@ describe('AI Review Service - Plain Schema Handling', () => {
       expect(result.issues).toHaveLength(0);
       expect((result as any).output).toMatchObject({
         text: response,
+        content: response,
       });
     });
 
@@ -25,6 +26,7 @@ describe('AI Review Service - Plain Schema Handling', () => {
       expect(result.issues).toHaveLength(0);
       expect((result as any).output).toMatchObject({
         text: response,
+        content: response,
       });
     });
 
@@ -42,6 +44,7 @@ The changes look good overall.`;
       expect(result.issues).toHaveLength(0);
       expect((result as any).output).toMatchObject({
         text: response,
+        content: response,
       });
     });
 
@@ -52,6 +55,7 @@ The changes look good overall.`;
 
       expect(result.issues).toHaveLength(0);
       expect((result as any).output.text).toBe(response);
+      expect((result as any).output.content).toBe(response);
       expect(result.debug).toBe(debugInfo);
     });
   });

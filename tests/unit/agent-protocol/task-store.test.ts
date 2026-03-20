@@ -795,4 +795,58 @@ describe('SqliteTaskStore', () => {
       expect(rows[0].claimed_at).toBeTruthy();
     });
   });
+
+  describe('heartbeat', () => {
+    it('should update updated_at for working tasks', () => {
+      const msg = makeMessage();
+      const task = store.createTask({ contextId: 'ctx', requestMessage: msg });
+      store.updateTaskState(task.id, 'working');
+
+      // Small delay to ensure timestamp differs
+      store.heartbeat(task.id);
+      const after = store.getTask(task.id)!;
+
+      expect(after.status.timestamp).toBeDefined();
+      expect(after.status.state).toBe('working');
+    });
+  });
+
+  describe('metadata filter', () => {
+    it('should filter tasks by metadata fields', () => {
+      const sqlStore = store as SqliteTaskStore;
+      store.createTask({
+        contextId: 'ctx-1',
+        requestMessage: makeMessage(),
+        requestMetadata: { slack_channel: 'C123', slack_thread_ts: 'T100' },
+      });
+      store.createTask({
+        contextId: 'ctx-2',
+        requestMessage: makeMessage(),
+        requestMetadata: { slack_channel: 'C123', slack_thread_ts: 'T200' },
+      });
+      store.createTask({
+        contextId: 'ctx-3',
+        requestMessage: makeMessage(),
+        requestMetadata: { slack_channel: 'C999', slack_thread_ts: 'T100' },
+      });
+
+      // Filter by channel only
+      const byChannel = sqlStore.listTasksRaw({
+        metadata: { slack_channel: 'C123' },
+      });
+      expect(byChannel.rows.length).toBe(2);
+
+      // Filter by channel + thread
+      const byThread = sqlStore.listTasksRaw({
+        metadata: { slack_channel: 'C123', slack_thread_ts: 'T100' },
+      });
+      expect(byThread.rows.length).toBe(1);
+
+      // No match
+      const noMatch = sqlStore.listTasksRaw({
+        metadata: { slack_channel: 'CXXX' },
+      });
+      expect(noMatch.rows.length).toBe(0);
+    });
+  });
 });

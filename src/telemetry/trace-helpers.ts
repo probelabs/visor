@@ -40,6 +40,70 @@ export async function withActiveSpan<T>(
   });
 }
 
+export function emitImmediateSpan(
+  name: string,
+  attrs?: Record<string, unknown>,
+  options?: {
+    events?: Array<{ name: string; attrs?: Record<string, unknown> }>;
+    status?: { code?: number; message?: string };
+  }
+): void {
+  try {
+    const startHr = process.hrtime();
+    const tracer = getTracer();
+    const span = tracer.startSpan(name, attrs ? { attributes: attrs as Attributes } : undefined);
+    try {
+      for (const evt of options?.events || []) {
+        span.addEvent(evt.name, (evt.attrs || {}) as Attributes);
+      }
+      if (options?.status) {
+        span.setStatus(options.status as never);
+      }
+    } finally {
+      span.end();
+    }
+    try {
+      const { emitNdjsonFullSpan } = require('./fallback-ndjson');
+      const activeParent = trace.getSpan(otContext.active());
+      const parentCtx = activeParent?.spanContext?.();
+      const ctx = span.spanContext?.();
+      const endHr = process.hrtime();
+      emitNdjsonFullSpan({
+        name,
+        traceId: ctx?.traceId || parentCtx?.traceId || randomTraceId(),
+        spanId: ctx?.spanId || randomSpanId(),
+        parentSpanId: parentCtx?.spanId,
+        startTime: [startHr[0], startHr[1]],
+        endTime: [endHr[0], endHr[1]],
+        attributes: attrs || {},
+        events: (options?.events || []).map(evt => ({
+          name: evt.name,
+          attributes: evt.attrs || {},
+        })),
+        status: options?.status,
+      });
+    } catch {
+      // ignore fallback emission errors
+    }
+    try {
+      const { requestThrottledTelemetryFlush } = require('./opentelemetry');
+      requestThrottledTelemetryFlush();
+    } catch {
+      // ignore best-effort flush scheduling errors
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function randomSpanId(): string {
+  return require('crypto').randomBytes(8).toString('hex');
+}
+
+function randomTraceId(): string {
+  return require('crypto').randomBytes(16).toString('hex');
+}
+
 export function addEvent(name: string, attrs?: Record<string, unknown>): void {
   const span = trace.getSpan(otContext.active());
   if (span) {

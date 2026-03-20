@@ -28,6 +28,9 @@ export interface TelemetryInitOptions {
 let sdk: NodeSDKType | null = null;
 let patched = false;
 let loggerProvider: any = null;
+let flushTimer: NodeJS.Timeout | null = null;
+let flushInFlight = false;
+let lastFlushStartedAt = 0;
 
 /**
  * Reset telemetry state (for testing only).
@@ -321,10 +324,43 @@ export function getOtelLoggerProvider(): any {
 export async function forceFlushTelemetry(): Promise<void> {
   if (!sdk) return;
   try {
-    await sdk.forceFlush();
+    if (typeof sdk.forceFlush === 'function') {
+      await sdk.forceFlush();
+    }
   } catch {
     // ignore — best-effort flush
   }
+}
+
+/**
+ * Best-effort non-blocking flush for lifecycle/helper spans.
+ * Rate-limited to avoid exporter pressure in long-running processes.
+ */
+export function requestThrottledTelemetryFlush(): void {
+  if (!sdk || flushInFlight || flushTimer) return;
+
+  const minIntervalMs = Math.max(
+    250,
+    parseInt(process.env.VISOR_TELEMETRY_FLUSH_INTERVAL_MS || '1500', 10) || 1500
+  );
+  const elapsed = Date.now() - lastFlushStartedAt;
+  const delayMs = Math.max(0, minIntervalMs - elapsed);
+
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    if (!sdk || flushInFlight) return;
+    flushInFlight = true;
+    lastFlushStartedAt = Date.now();
+    void (typeof sdk.forceFlush === 'function' ? sdk.forceFlush() : Promise.resolve())
+      .catch(() => {
+        // ignore — best-effort flush
+      })
+      .finally(() => {
+        flushInFlight = false;
+      });
+  }, delayMs);
+
+  if (typeof flushTimer.unref === 'function') flushTimer.unref();
 }
 
 export async function shutdownTelemetry(): Promise<void> {

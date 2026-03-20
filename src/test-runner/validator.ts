@@ -326,6 +326,8 @@ const schema: any = {
         role: { type: 'string', enum: ['user', 'assistant'] },
         text: { type: 'string' },
         user: { type: 'string' },
+        background: { type: 'boolean' },
+        delay_ms: { type: 'number' },
         mocks: {
           type: 'object',
           additionalProperties: {

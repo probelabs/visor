@@ -283,15 +283,17 @@ export class SlackSocketRunner implements Runner {
     // Clean up stale workspace directories from previous runs
     WorkspaceManager.cleanupStale().catch(() => {});
 
-    // Periodic stale task sweep — fail 'working' tasks older than 2 hours
+    // Periodic stale task sweep — fail 'working' tasks with no heartbeat.
+    // Tasks send a heartbeat every 60s, so 5 minutes without an update means
+    // the owning process is dead. Works in multi-node deployments.
     if (this.taskStore) {
-      const STALE_TASK_SWEEP_INTERVAL = 600_000; // 10 minutes
-      const STALE_TASK_AGE = 7_200_000; // 2 hours
+      const STALE_TASK_SWEEP_INTERVAL = 120_000; // 2 minutes
+      const STALE_TASK_AGE = 120_000; // 2 minutes (2x the 60s heartbeat)
       this.staleTaskTimer = setInterval(() => {
         try {
           const failed = (this.taskStore as any).failStaleTasksByAge?.(
             STALE_TASK_AGE,
-            'Task exceeded maximum working duration (2h)'
+            'Owning process is no longer running (no heartbeat)'
           );
           if (failed > 0) {
             logger.info(`[SlackSocket] Marked ${failed} stale task(s) as failed`);
@@ -773,9 +775,41 @@ export class SlackSocketRunner implements Runner {
       }
     } catch {}
 
+    // Attach active tasks context so the AI knows what's already in progress
+    try {
+      if (this.taskStore) {
+        const channelId = String(ev.channel || '');
+        const threadTs = String(ev.thread_ts || ev.ts || ev.event_ts || '');
+        if (channelId && threadTs) {
+          const { rows } = (this.taskStore as any).listTasksRaw?.({
+            state: ['submitted', 'working'],
+            metadata: { slack_channel: channelId, slack_thread_ts: threadTs },
+            limit: 10,
+          }) || { rows: [] };
+          if (rows && rows.length > 0) {
+            payloadForContext = {
+              ...payloadForContext,
+              active_tasks: rows.map((r: any) => ({
+                id: r.id,
+                state: r.state,
+                created_at: r.created_at,
+                workflow_id: r.workflow_id,
+                trigger_message:
+                  r.metadata?.slack_trigger_text || (r.request_message || '').slice(0, 300),
+              })),
+            };
+          }
+        }
+      }
+    } catch {}
+
     // Prepare webhookContext map for http_input provider reuse
     const map = new Map<string, unknown>();
     map.set(this.endpoint, payloadForContext);
+    // Inject task store so built-in tools (task_progress) can access it
+    if (this.taskStore) {
+      map.set('__taskStore', this.taskStore);
+    }
 
     // Determine checks to run: run http_input checks bound to this endpoint plus dependents
     // For simplicity and to ensure dependents run, request all checks; config-driven assume/if will gate.
@@ -938,6 +972,7 @@ export class SlackSocketRunner implements Runner {
                     slack_channel: channelId,
                     slack_thread_ts: threadTs,
                     slack_user: userId,
+                    slack_trigger_text: String(ev.text || '').slice(0, 500),
                   },
                 },
                 execFn
@@ -1041,6 +1076,31 @@ export class SlackSocketRunner implements Runner {
         };
       }
 
+      // Attach active tasks context so the AI knows what's already in progress
+      let activeTasks: any[] | undefined;
+      try {
+        if (this.taskStore) {
+          const queryThreadTs = threadTs || ts;
+          if (channel && queryThreadTs) {
+            const { rows } = (this.taskStore as any).listTasksRaw?.({
+              state: ['submitted', 'working'],
+              metadata: { slack_channel: channel, slack_thread_ts: queryThreadTs },
+              limit: 10,
+            }) || { rows: [] };
+            if (rows && rows.length > 0) {
+              activeTasks = rows.map((r: any) => ({
+                id: r.id,
+                state: r.state,
+                created_at: r.created_at,
+                workflow_id: r.workflow_id,
+                trigger_message:
+                  r.metadata?.slack_trigger_text || (r.request_message || '').slice(0, 300),
+              }));
+            }
+          }
+        }
+      } catch {}
+
       // Build synthetic webhook payload
       const triggerPayload = {
         ...payload,
@@ -1050,10 +1110,15 @@ export class SlackSocketRunner implements Runner {
           workflow: trigger.workflow,
         },
         slack_conversation: conversationContext,
+        ...(activeTasks ? { active_tasks: activeTasks } : {}),
       };
 
       const webhookData = new Map<string, unknown>();
       webhookData.set(this.endpoint, triggerPayload);
+      // Inject task store so built-in tools (task_progress) can access it
+      if (this.taskStore) {
+        webhookData.set('__taskStore', this.taskStore);
+      }
 
       // Clone config for this run with Slack frontend
       const cfgForRun: VisorConfig = (() => {
@@ -1138,6 +1203,7 @@ export class SlackSocketRunner implements Runner {
                   slack_channel: channel,
                   slack_thread_ts: threadTs || ts,
                   slack_user: user,
+                  slack_trigger_text: String(ev.text || '').slice(0, 500),
                   trigger_id: id,
                 },
               },

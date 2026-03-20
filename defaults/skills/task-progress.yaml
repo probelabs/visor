@@ -1,0 +1,39 @@
+# =============================================================================
+# Task progress skill — lets the AI inspect its own running/recent tasks
+# =============================================================================
+#
+# When activated, the AI can use the `task_progress` tool to:
+# - List active and recent tasks in the current thread/channel
+# - Read execution traces to see detailed step-by-step progress
+#
+# Enable in your assistant config:
+#   skills:
+#     - extends: "visor://skills/task-progress.yaml"
+#
+# =============================================================================
+
+id: task-progress
+description: >
+  user asks about progress, status, or what you are currently working on.
+  Also useful when checking if a similar task is already running.
+  Examples: "what's your progress?", "how is it going?", "are you still working on it?",
+  "what have you done so far?", "show me the status"
+knowledge: |
+  ## Task Progress — Check Your Own Execution Status
+  The `task_progress` tool lets you inspect your own running and recent tasks.
+
+  **When to use:**
+  - User asks "what's your progress?" or "how is it going?"
+  - User asks "are you still working on X?"
+  - User asks "what have you done so far?"
+  - You want to check if a duplicate task is already running
+
+  **Usage:**
+  1. First call with `action: "list"` to see active and recent tasks
+  2. Then call with `action: "trace"` and a specific `task_id` to see detailed execution steps
+
+  The trace shows the full execution flow: workflow steps, AI decisions, tool calls,
+  search queries, and their results — giving you complete visibility into what was done.
+tools:
+  task_progress:
+    tool: task_progress

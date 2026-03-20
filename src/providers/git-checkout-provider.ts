@@ -160,9 +160,22 @@ export class GitCheckoutProvider extends CheckProvider {
       if (!resolvedRef || resolvedRef.trim().length === 0) {
         resolvedRef = 'HEAD';
       }
-      const resolvedRepository = checkoutConfig.repository
+      let resolvedRepository = checkoutConfig.repository
         ? await this.liquid.parseAndRender(checkoutConfig.repository, templateContext)
-        : process.env.GITHUB_REPOSITORY || 'unknown/unknown';
+        : process.env.GITHUB_REPOSITORY || '';
+      resolvedRepository = resolvedRepository.trim();
+      if (!resolvedRepository || resolvedRepository === 'unknown/unknown') {
+        logger.warn(
+          `[GitCheckout] Skipping checkout: repository resolved to empty (template: "${checkoutConfig.repository}")`
+        );
+        const output: GitCheckoutOutput = {
+          success: false,
+          skipped: true,
+          reason: 'repository not configured',
+          error: 'repository not configured',
+        };
+        return { issues: [], output };
+      }
       const resolvedToken = checkoutConfig.token
         ? await this.liquid.parseAndRender(checkoutConfig.token, templateContext)
         : undefined;

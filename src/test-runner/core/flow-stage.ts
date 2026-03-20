@@ -151,11 +151,33 @@ export class FlowStage {
       const webhookPayload = { event: slackEvent };
       const webhookData = new Map<string, unknown>();
       webhookData.set('/bots/slack/support', webhookPayload);
+      // Inject shared task store into webhookData so built-in tools can access it
+      if (stageExecCtx?.__taskStore) {
+        webhookData.set('__taskStore', stageExecCtx.__taskStore);
+      }
       const ctx: any = (this.engine as any).executionContext || {};
       this.engine.setExecutionContext({
         ...ctx,
         webhookContext: { webhookData, eventType: 'slack_message' },
       } as any);
+    }
+
+    // For non-slack events: inject task store into existing webhookData if available
+    if (stageExecCtx?.__taskStore) {
+      const ctx: any = (this.engine as any).executionContext || {};
+      if (ctx?.webhookContext?.webhookData instanceof Map) {
+        ctx.webhookContext.webhookData.set('__taskStore', stageExecCtx.__taskStore);
+      } else if (!ctx?.webhookContext) {
+        // Create minimal webhook context just for the task store
+        const webhookData = new Map<string, unknown>();
+        webhookData.set('__taskStore', stageExecCtx.__taskStore);
+        this.engine.setExecutionContext({
+          ...ctx,
+          webhookContext: { webhookData },
+        } as any);
+      }
+      // Also inject directly into execution context for providers
+      (this.engine as any).executionContext.taskStore = stageExecCtx.__taskStore;
     }
 
     // (debug cleanup) removed stage-debug prints

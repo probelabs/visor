@@ -1756,10 +1756,16 @@ export async function main(): Promise<void> {
         const { SqliteTaskStore } = await import('./agent-protocol/task-store');
         sharedTaskStore = new SqliteTaskStore();
         await sharedTaskStore.initialize();
-        // Recover orphan tasks: only fail unclaimed working tasks (no instance owns them).
-        // Claimed tasks belong to potentially-running instances and are handled by
-        // the periodic stale sweep (failStaleTasksByAge) instead.
-        const recovered = sharedTaskStore.failStaleTasks('Process terminated unexpectedly');
+        // Recover orphan tasks on startup:
+        // 1. Fail unclaimed working tasks (no instance owns them).
+        let recovered = sharedTaskStore.failStaleTasks('Process terminated unexpectedly');
+        // 2. Fail working tasks whose heartbeat has gone stale.
+        //    The heartbeat interval is 60s, so 5 minutes without an update
+        //    means the owning process is dead. Works across nodes.
+        recovered += sharedTaskStore.failStaleTasksByAge(
+          120_000, // 2 minutes — 2x the 60s heartbeat interval
+          'Owning process is no longer running (no heartbeat)'
+        );
         if (recovered > 0) {
           logger.info(`[TaskTracking] Recovered ${recovered} stale working task(s) → failed`);
         }

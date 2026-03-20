@@ -26,7 +26,12 @@ import type { CheckExecutionStats } from '../../types/execution';
 import type { CheckProviderConfig } from '../../providers/check-provider.interface';
 import type { CheckConfig } from '../../types/config';
 import { handleRouting, checkLoopBudget } from './routing';
-import { withActiveSpan, setSpanAttributes, addEvent } from '../../telemetry/trace-helpers';
+import {
+  withActiveSpan,
+  setSpanAttributes,
+  addEvent,
+  emitImmediateSpan,
+} from '../../telemetry/trace-helpers';
 import { captureCheckOutput } from '../../telemetry/state-capture';
 import { emitMermaidFromMarkdown } from '../../utils/mermaid-telemetry';
 import { emitNdjsonSpanWithEvents, emitNdjsonFallback } from '../../telemetry/fallback-ndjson';
@@ -35,6 +40,40 @@ import { resolveWorkflowInputs } from '../context/workflow-inputs';
 import { executeWithSandboxRouting } from '../dispatch/sandbox-routing';
 import { applyPolicyGate } from '../dispatch/policy-gate';
 import { createExtendedLiquid } from '../../liquid-extensions';
+
+function isEngineerCheck(checkId: string): boolean {
+  return checkId === 'engineer-task';
+}
+
+function startCheckProgressTelemetry(
+  checkId: string,
+  providerType: string,
+  attrs: Record<string, unknown>
+): ReturnType<typeof setInterval> | null {
+  const intervalMs = Math.max(
+    5000,
+    parseInt(process.env.VISOR_CHECK_PROGRESS_INTERVAL_MS || '30000', 10) || 30000
+  );
+  const startedAt = Date.now();
+  const timer = setInterval(() => {
+    const progressAttrs = {
+      'visor.check.id': checkId,
+      'visor.check.type': providerType,
+      'visor.check.elapsed_ms': Date.now() - startedAt,
+      ...attrs,
+    };
+    emitImmediateSpan(`visor.check.${checkId}.progress`, progressAttrs);
+    if (isEngineerCheck(checkId)) {
+      emitImmediateSpan('visor.engineer.progress', progressAttrs);
+    }
+  }, intervalMs);
+  if (typeof timer.unref === 'function') timer.unref();
+  return timer;
+}
+
+function stopCheckProgressTelemetry(timer: ReturnType<typeof setInterval> | null): void {
+  if (timer) clearInterval(timer);
+}
 
 /**
  * Render Liquid template expressions in 'with' arguments.
@@ -1036,31 +1075,83 @@ async function executeCheckWithForEachItems(
       } catch {}
 
       // Execute provider with telemetry (sandbox routing if configured)
-      const itemResult = await withActiveSpan(
-        `visor.check.${checkId}`,
-        {
+      emitImmediateSpan(`visor.check.${checkId}.started`, {
+        'visor.check.id': checkId,
+        'visor.check.type': providerType,
+        'visor.foreach.index': itemIndex,
+        session_id: context.sessionId,
+        wave: state.wave,
+      });
+      if (isEngineerCheck(checkId)) {
+        emitImmediateSpan('visor.engineer.started', {
           'visor.check.id': checkId,
           'visor.check.type': providerType,
           'visor.foreach.index': itemIndex,
-          session_id: context.sessionId,
-          wave: state.wave,
-        },
-        async span => {
-          const res = await executeWithSandboxRouting(
-            checkId,
-            checkConfig,
-            context,
-            prInfo,
-            dependencyResults,
-            checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
-            () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-          );
-          try {
-            captureCheckOutput(span, (res as any).output);
-          } catch {}
-          return res;
+        });
+      }
+      const progressTimer = startCheckProgressTelemetry(checkId, providerType, {
+        'visor.foreach.index': itemIndex,
+        session_id: context.sessionId,
+        wave: state.wave,
+      });
+      let itemResult;
+      try {
+        itemResult = await withActiveSpan(
+          `visor.check.${checkId}`,
+          {
+            'visor.check.id': checkId,
+            'visor.check.type': providerType,
+            'visor.foreach.index': itemIndex,
+            session_id: context.sessionId,
+            wave: state.wave,
+          },
+          async span => {
+            const res = await executeWithSandboxRouting(
+              checkId,
+              checkConfig,
+              context,
+              prInfo,
+              dependencyResults,
+              checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
+              () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+            );
+            try {
+              captureCheckOutput(span, (res as any).output);
+            } catch {}
+            return res;
+          }
+        );
+        emitImmediateSpan(`visor.check.${checkId}.completed`, {
+          'visor.check.id': checkId,
+          'visor.check.type': providerType,
+          'visor.foreach.index': itemIndex,
+        });
+        if (isEngineerCheck(checkId)) {
+          emitImmediateSpan('visor.engineer.completed', {
+            'visor.check.id': checkId,
+            'visor.check.type': providerType,
+            'visor.foreach.index': itemIndex,
+          });
         }
-      );
+      } catch (error) {
+        emitImmediateSpan(`visor.check.${checkId}.failed`, {
+          'visor.check.id': checkId,
+          'visor.check.type': providerType,
+          'visor.foreach.index': itemIndex,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        if (isEngineerCheck(checkId)) {
+          emitImmediateSpan('visor.engineer.failed', {
+            'visor.check.id': checkId,
+            'visor.check.type': providerType,
+            'visor.foreach.index': itemIndex,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        throw error;
+      } finally {
+        stopCheckProgressTelemetry(progressTimer);
+      }
 
       // Enrich issues
       const enrichedIssues = (itemResult.issues || []).map((issue: ReviewIssue) => ({
@@ -2450,30 +2541,75 @@ async function executeSingleCheck(
     } catch {}
 
     // Execute provider with telemetry (sandbox routing if configured)
-    const result = await withActiveSpan(
-      `visor.check.${checkId}`,
-      {
+    emitImmediateSpan(`visor.check.${checkId}.started`, {
+      'visor.check.id': checkId,
+      'visor.check.type': providerType,
+      session_id: context.sessionId,
+      wave: state.wave,
+    });
+    if (isEngineerCheck(checkId)) {
+      emitImmediateSpan('visor.engineer.started', {
         'visor.check.id': checkId,
         'visor.check.type': providerType,
-        session_id: context.sessionId,
-        wave: state.wave,
-      },
-      async span => {
-        const res = await executeWithSandboxRouting(
-          checkId,
-          checkConfig,
-          context,
-          prInfo,
-          dependencyResults,
-          checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
-          () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
-        );
-        try {
-          captureCheckOutput(span, (res as any).output);
-        } catch {}
-        return res;
+      });
+    }
+    const progressTimer = startCheckProgressTelemetry(checkId, providerType, {
+      session_id: context.sessionId,
+      wave: state.wave,
+    });
+    let result;
+    try {
+      result = await withActiveSpan(
+        `visor.check.${checkId}`,
+        {
+          'visor.check.id': checkId,
+          'visor.check.type': providerType,
+          session_id: context.sessionId,
+          wave: state.wave,
+        },
+        async span => {
+          const res = await executeWithSandboxRouting(
+            checkId,
+            checkConfig,
+            context,
+            prInfo,
+            dependencyResults,
+            checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
+            () => provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+          );
+          try {
+            captureCheckOutput(span, (res as any).output);
+          } catch {}
+          return res;
+        }
+      );
+      emitImmediateSpan(`visor.check.${checkId}.completed`, {
+        'visor.check.id': checkId,
+        'visor.check.type': providerType,
+      });
+      if (isEngineerCheck(checkId)) {
+        emitImmediateSpan('visor.engineer.completed', {
+          'visor.check.id': checkId,
+          'visor.check.type': providerType,
+        });
       }
-    );
+    } catch (error) {
+      emitImmediateSpan(`visor.check.${checkId}.failed`, {
+        'visor.check.id': checkId,
+        'visor.check.type': providerType,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      if (isEngineerCheck(checkId)) {
+        emitImmediateSpan('visor.engineer.failed', {
+          'visor.check.id': checkId,
+          'visor.check.type': providerType,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      throw error;
+    } finally {
+      stopCheckProgressTelemetry(progressTimer);
+    }
 
     // Special case: human-input style checks that intentionally pause the run
     // (e.g., Slack SocketMode awaiting a reply) surface a marker on the result.

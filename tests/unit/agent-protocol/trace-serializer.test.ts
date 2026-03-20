@@ -1,6 +1,8 @@
 import {
+  fetchTraceSpans,
   renderSpanYaml,
   findTraceFile,
+  readTraceIdFromFile,
   serializeTraceForPrompt,
 } from '../../../src/agent-protocol/trace-serializer';
 import * as fs from 'fs';
@@ -300,6 +302,222 @@ describe('renderSpanYaml', () => {
     // Second occurrence should reference the first
     expect(result).toContain('= first');
   });
+
+  it('suppresses lifecycle helper spans when the real check and ai spans exist', () => {
+    const checkStarted = makeTree({
+      name: 'visor.check.route-intent.started',
+      spanId: 's2',
+      parentSpanId: 's1',
+      durationMs: 0,
+      attributes: { 'visor.check.id': 'route-intent', 'visor.check.type': 'workflow' },
+    });
+    const aiStarted = makeTree({
+      name: 'ai.request.started',
+      spanId: 's3',
+      parentSpanId: 's4',
+      durationMs: 0,
+      attributes: { 'probe.lifecycle.target': 'ai.request' },
+    });
+    const aiCompleted = makeTree({
+      name: 'ai.request.completed',
+      spanId: 's5',
+      parentSpanId: 's4',
+      durationMs: 0,
+      attributes: { 'probe.lifecycle.target': 'ai.request' },
+    });
+    const ai = makeTree(
+      {
+        name: 'ai.request',
+        spanId: 's4',
+        parentSpanId: 's6',
+        durationMs: 1500,
+        attributes: { 'gen_ai.request.model': 'gemini-3-pro-preview' },
+      },
+      [aiStarted, aiCompleted]
+    );
+    const check = makeTree(
+      {
+        name: 'visor.check.route-intent',
+        spanId: 's6',
+        parentSpanId: 's1',
+        durationMs: 2000,
+        attributes: { 'visor.check.id': 'route-intent', 'visor.check.type': 'ai' },
+      },
+      [ai]
+    );
+    const root = makeTree({ name: 'visor.run', spanId: 's1', durationMs: 3000 }, [
+      checkStarted,
+      check,
+    ]);
+    const allSpans = [
+      root.span,
+      checkStarted.span,
+      check.span,
+      ai.span,
+      aiStarted.span,
+      aiCompleted.span,
+    ];
+    const result = renderSpanYaml(root, allSpans);
+
+    expect(result).toContain('route-intent:');
+    expect(result).toContain('ai: gemini-3-pro-preview');
+    expect(result).not.toContain('route-intent.started');
+    expect(result).not.toContain('ai.request.started');
+    expect(result).not.toContain('ai.request.completed');
+  });
+
+  it('suppresses probe lifecycle alias spans when the real ai/delegate spans exist', () => {
+    const probeAiStarted = makeTree({
+      name: 'probe.ai_request.started',
+      spanId: 's2',
+      parentSpanId: 's4',
+      durationMs: 0,
+      attributes: { 'probe.lifecycle.target': 'ai.request' },
+    });
+    const probeSearchStarted = makeTree({
+      name: 'probe.search_delegate.started',
+      spanId: 's3',
+      parentSpanId: 's5',
+      durationMs: 0,
+      attributes: { 'probe.lifecycle.target': 'search.delegate' },
+    });
+    const ai = makeTree({
+      name: 'ai.request',
+      spanId: 's4',
+      parentSpanId: 's1',
+      durationMs: 1200,
+      attributes: { 'gen_ai.request.model': 'gemini-3-pro-preview' },
+    });
+    const delegate = makeTree({
+      name: 'search.delegate',
+      spanId: 's5',
+      parentSpanId: 's1',
+      durationMs: 900,
+      attributes: { 'search.query': 'auth middleware' },
+    });
+    const root = makeTree({ name: 'visor.run', spanId: 's1', durationMs: 3000 }, [
+      probeAiStarted,
+      probeSearchStarted,
+      ai,
+      delegate,
+    ]);
+    const result = renderSpanYaml(root, [
+      root.span,
+      probeAiStarted.span,
+      probeSearchStarted.span,
+      ai.span,
+      delegate.span,
+    ]);
+
+    expect(result).toContain('ai: gemini-3-pro-preview');
+    expect(result).toContain('search.delegate("auth middleware")');
+    expect(result).not.toContain('probe.ai_request.started');
+    expect(result).not.toContain('probe.search_delegate.started');
+  });
+
+  it('renders child spans using real semantics instead of generic child names', () => {
+    const childAi = makeTree({
+      name: 'child: ai.request',
+      spanId: 's3',
+      parentSpanId: 's2',
+      durationMs: 1200,
+      attributes: {
+        'gen_ai.request.model': 'gemini-3-pro-preview',
+        'visor.sandbox.child_span': true,
+      },
+    });
+    const childCheck = makeTree(
+      {
+        name: 'child: visor.check.sandbox-probe',
+        spanId: 's2',
+        parentSpanId: 's1',
+        durationMs: 1500,
+        attributes: {
+          'visor.check.id': 'sandbox-probe',
+          'visor.check.type': 'ai',
+          'visor.sandbox.child_span': true,
+        },
+      },
+      [childAi]
+    );
+    const root = makeTree({ name: 'visor.run', spanId: 's1', durationMs: 2000 }, [childCheck]);
+    const result = renderSpanYaml(root, [root.span, childCheck.span, childAi.span]);
+
+    expect(result).toContain('sandbox-probe [child]:');
+    expect(result).toContain('ai: gemini-3-pro-preview [child]');
+    expect(result).not.toContain('child: ai.request');
+    expect(result).not.toContain('child: visor.check.sandbox-probe');
+  });
+
+  it('suppresses sandbox child lifecycle markers when streamed child spans exist', () => {
+    const childStarted = makeTree({
+      name: 'visor.sandbox.child.started',
+      spanId: 's2',
+      parentSpanId: 's1',
+      durationMs: 0,
+      attributes: { 'visor.check.name': 'sandbox-probe' },
+    });
+    const childWaiting = makeTree({
+      name: 'visor.sandbox.child.waiting',
+      spanId: 's3',
+      parentSpanId: 's1',
+      durationMs: 0,
+      attributes: { 'visor.check.name': 'sandbox-probe' },
+    });
+    const childCompleted = makeTree({
+      name: 'visor.sandbox.child.completed',
+      spanId: 's4',
+      parentSpanId: 's1',
+      durationMs: 0,
+      attributes: { 'visor.check.name': 'sandbox-probe' },
+    });
+    const childAi = makeTree({
+      name: 'child: ai.request',
+      spanId: 's5',
+      parentSpanId: 's1',
+      durationMs: 900,
+      attributes: {
+        'gen_ai.request.model': 'gemini-3-pro-preview',
+        'visor.sandbox.child_span': true,
+      },
+    });
+    const root = makeTree({ name: 'visor.run', spanId: 's1', durationMs: 1200 }, [
+      childStarted,
+      childWaiting,
+      childCompleted,
+      childAi,
+    ]);
+    const result = renderSpanYaml(root, [
+      root.span,
+      childStarted.span,
+      childWaiting.span,
+      childCompleted.span,
+      childAi.span,
+    ]);
+
+    expect(result).toContain('ai: gemini-3-pro-preview [child]');
+    expect(result).not.toContain('visor.sandbox.child.started');
+    expect(result).not.toContain('visor.sandbox.child.waiting');
+    expect(result).not.toContain('visor.sandbox.child.completed');
+    expect(result).not.toContain('sandbox.child sandbox-probe');
+  });
+
+  it('renders engineer lifecycle markers with dedicated labels', () => {
+    const engineer = makeTree({
+      name: 'visor.engineer.sandbox_resolved',
+      spanId: 's2',
+      parentSpanId: 's1',
+      durationMs: 0,
+      attributes: {
+        'visor.check.id': 'engineer-task',
+        'visor.sandbox.selected': 'bwrap',
+      },
+    });
+    const root = makeTree({ name: 'visor.run', spanId: 's1', durationMs: 1000 }, [engineer]);
+    const result = renderSpanYaml(root, [root.span, engineer.span]);
+
+    expect(result).toContain('engineer [sandbox_resolved] sandbox=bwrap');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -346,6 +564,41 @@ describe('findTraceFile', () => {
 
     const result = await findTraceFile('target', tmpDir);
     expect(result).toBe(path.join(tmpDir, 'good.ndjson'));
+  });
+
+  it('reads a trace id directly from a trace file', async () => {
+    const filePath = path.join(tmpDir, 'trace.ndjson');
+    fs.writeFileSync(
+      filePath,
+      `${JSON.stringify({ traceId: 'trace-123', spanId: 's1', name: 'visor.run' })}\n`
+    );
+
+    const result = await readTraceIdFromFile(filePath);
+    expect(result).toBe('trace-123');
+  });
+
+  it('parses spans directly from a file path when file backend is used', async () => {
+    const filePath = path.join(tmpDir, 'trace.ndjson');
+    fs.writeFileSync(
+      filePath,
+      [
+        JSON.stringify({
+          traceId: 'trace-456',
+          spanId: 'span-1',
+          name: 'visor.run',
+          startTime: [1000, 0],
+          endTime: [1002, 0],
+          attributes: {},
+          events: [],
+          status: { code: 0 },
+        }),
+      ].join('\n') + '\n'
+    );
+
+    const spans = await fetchTraceSpans(filePath, { type: 'file' });
+    expect(spans).toHaveLength(1);
+    expect(spans[0].traceId).toBe('trace-456');
+    expect(spans[0].name).toBe('visor.run');
   });
 });
 

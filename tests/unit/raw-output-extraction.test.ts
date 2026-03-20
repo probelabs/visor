@@ -126,6 +126,7 @@ describe('parseAIResponse RAW_OUTPUT extraction', () => {
 
     // Should fall back to plain text output
     expect(result.output.text).toBeDefined();
+    expect(result.output.content).toBe(result.output.text);
     expect(result.output._rawOutput).toBe('fallback raw data');
     // The text should NOT contain the RAW_OUTPUT delimiters
     expect(result.output.text).not.toContain('<<<RAW_OUTPUT>>>');

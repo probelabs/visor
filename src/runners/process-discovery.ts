@@ -134,17 +134,17 @@ function isVisorCommand(cmd: string): boolean {
   const basename = firstToken.split('/').pop() || '';
   if (!['node', 'npx', 'visor'].includes(basename)) return false;
 
-  // Exclude CLI subcommands — these are tools, not long-running servers
-  const cliSubcommands = ['process', 'tasks', 'config', 'code-review', 'review', 'policy-check'];
-  for (const sub of cliSubcommands) {
-    if (cmd.includes(`index.js ${sub}`) || cmd.includes(`visor ${sub}`)) return false;
-  }
+  // Exclude only the `process` subcommand itself (avoid self-detection)
+  if (cmd.includes('index.js process') || cmd.includes('visor process')) return false;
 
   // Must be a node process running visor's dist/index.js
   if (/visor[^/]*\/dist\/index\.js/.test(cmd)) return true;
 
-  // Match: npx visor, npx @probelabs/visor
+  // Match: npx visor, npx @probelabs/visor (including resolved npx cache paths)
   if (/npx\s+.*visor/.test(cmd) && !cmd.includes('probe')) return true;
+
+  // Match: node running a resolved npx visor binary (e.g. node /.../_npx/.../visor)
+  if (basename === 'node' && /\/node_modules\/\.bin\/visor\b/.test(cmd)) return true;
 
   // Match: direct visor binary (e.g. /usr/local/bin/visor)
   if (basename === 'visor') return true;

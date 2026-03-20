@@ -20,10 +20,12 @@ import {
   buildScheduleToolContext,
   ScheduleToolArgs,
 } from '../scheduler/schedule-tool';
+import { isTaskProgressTool, handleTaskProgressAction } from '../agent-protocol/task-progress-tool';
 // Legacy Slack-specific imports for backwards compatibility
 import { extractSlackContext } from '../slack/schedule-tool-handler';
 import { EnvironmentResolver } from '../utils/env-resolver';
 import { rateLimitedFetch, type RateLimitConfig } from '../utils/rate-limiter';
+import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 
 /**
  * Check if a tool definition is an http_client tool
@@ -1126,6 +1128,44 @@ export class CustomToolsSSEServer implements CustomMCPServer {
             break;
           }
 
+          // Check if this is the task_progress tool
+          if (isTaskProgressTool(toolName)) {
+            // Extract Slack context for filtering tasks to current thread
+            const webhookData = this.workflowContext?.executionContext?.webhookContext?.webhookData;
+            const slackCtx = webhookData
+              ? extractSlackContext(webhookData as Map<string, unknown>)
+              : null;
+
+            // Get the task store from workflow context, execution context, or webhook data
+            const taskStore =
+              (this.workflowContext as any)?.taskStore ||
+              (this.workflowContext?.executionContext as any)?.taskStore ||
+              (this.workflowContext?.executionContext as any)?._parentContext?.taskStore ||
+              (webhookData as Map<string, unknown>)?.get?.('__taskStore');
+
+            if (!taskStore) {
+              result = 'Error: Task store not available in this context';
+              break;
+            }
+
+            const progressResult = await handleTaskProgressAction(
+              {
+                action: (args.action as 'list' | 'trace') || 'list',
+                task_id: args.task_id as string | undefined,
+              },
+              {
+                channelId: slackCtx?.channel || undefined,
+                threadTs: slackCtx?.threadTs || undefined,
+              },
+              taskStore
+            );
+
+            result = progressResult.success
+              ? progressResult.message
+              : `Error: ${progressResult.error}`;
+            break;
+          }
+
           // Check if this is a workflow tool
           const tool = this.tools.get(toolName);
           if (tool && isWorkflowTool(tool)) {
@@ -1377,19 +1417,52 @@ export class CustomToolsSSEServer implements CustomMCPServer {
 
       // Parse response
       const contentType = response.headers.get('content-type');
+      let data: unknown;
       if (contentType && contentType.includes('application/json')) {
-        return await response.json();
-      }
-
-      const text = await response.text();
-      if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
-        try {
-          return JSON.parse(text);
-        } catch {
-          return text;
+        data = await response.json();
+      } else {
+        const text = await response.text();
+        if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
+          try {
+            data = JSON.parse(text);
+          } catch {
+            data = text;
+          }
+        } else {
+          data = text;
         }
       }
-      return text;
+
+      // Apply transform_js if configured on the tool definition
+      const transformJs = tool.transform_js as string | undefined;
+      if (transformJs && data !== undefined) {
+        try {
+          const sandbox = createSecureSandbox();
+          const jsScope: Record<string, unknown> = {
+            output: data,
+            path: apiPath,
+            method,
+            query: queryParams,
+            args,
+          };
+          data = compileAndRun(sandbox, transformJs, jsScope, {
+            injectLog: true,
+            logPrefix: `🔍 [${tool.type}:transform_js]`,
+            wrapFunction: true,
+          });
+          if (this.debug) {
+            logger.debug(
+              `[CustomToolsSSEServer:${this.sessionId}] Applied transform_js for http_client tool`
+            );
+          }
+        } catch (error) {
+          logger.error(
+            `[CustomToolsSSEServer:${this.sessionId}] transform_js failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+          );
+        }
+      }
+
+      return data;
     } catch (error: unknown) {
       clearTimeout(timeoutId);
       if (error instanceof Error && error.name === 'AbortError') {
