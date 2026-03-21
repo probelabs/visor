@@ -304,8 +304,10 @@ export class JobManager {
         try {
           this.taskStore.updateTaskState(task.id, 'failed', failMsg);
           logger.info(`[MCP-AsyncJob] Job ${task.id.slice(0, 8)} failed: ${errorText}`);
-        } catch {
-          // ignore
+        } catch (stateErr) {
+          logger.warn(
+            `[MCP-AsyncJob] Job ${task.id.slice(0, 8)} failed but could not update task state: ${stateErr}`
+          );
         }
       });
 

@@ -115,7 +115,7 @@ describe('JobManager', () => {
   });
 
   it('should long-poll and return result when job completes during wait', async () => {
-    // Job completes after 100ms — get_job should return as soon as it finishes
+    // Job completes near-instantly — get_job should return within the first poll interval (500ms)
     const response = manager.startJob(
       async () => ({ content: [{ type: 'text', text: 'All good' }] }),
       { messageText: 'test job' }
@@ -130,8 +130,8 @@ describe('JobManager', () => {
     expect(status.result).toBe('All good');
     expect(status.progress.percent).toBe(100);
     expect(status.polling.recommended_next_action).toBe('none');
-    // Should resolve quickly, not wait the full 59 seconds
-    expect(elapsed).toBeLessThan(5000);
+    // Should resolve within the first poll interval (~500ms), not wait the full timeout
+    expect(elapsed).toBeLessThan(2000);
   });
 
   it('should long-poll and return immediately for already-completed jobs', async () => {
@@ -282,10 +282,12 @@ describe('JobManager', () => {
   });
 
   it('should respect custom long poll timeout', async () => {
-    const shortManager = new JobManager(taskStore, { longPollTimeoutMs: 1000 });
+    const TIMEOUT_MS = 1000;
+    const shortManager = new JobManager(taskStore, { longPollTimeoutMs: TIMEOUT_MS });
     const response = shortManager.startJob(
       async () => {
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        // Job takes much longer than the poll timeout
+        await new Promise(resolve => setTimeout(resolve, 10_000));
         return 'late';
       },
       { messageText: 'slow job' }
@@ -295,10 +297,10 @@ describe('JobManager', () => {
     const status = await shortManager.getJob(response.job_id);
     const elapsed = Date.now() - start;
 
-    // Should timeout after ~1 second, not wait 59 seconds
+    // Should timeout near the configured 1000ms, with tolerance for poll interval (500ms)
     expect(status.done).toBe(false);
     expect(status.status).toBe('running');
-    expect(elapsed).toBeGreaterThanOrEqual(900);
-    expect(elapsed).toBeLessThan(3000);
+    expect(elapsed).toBeGreaterThanOrEqual(TIMEOUT_MS);
+    expect(elapsed).toBeLessThan(TIMEOUT_MS + 600); // at most one extra poll interval
   });
 });
