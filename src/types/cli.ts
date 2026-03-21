@@ -77,6 +77,8 @@ export interface CliOptions {
   mcpPort?: number;
   /** Bearer token for MCP HTTP server authentication */
   mcpAuthToken?: string;
+  /** Enable async job mode for MCP server (start_job/get_job pattern) */
+  mcpAsync?: boolean;
   /** Enable interactive TUI (chat + logs tabs) */
   tui?: boolean;
   /** Keep workspace folders after execution (for debugging) */

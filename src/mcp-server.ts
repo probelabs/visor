@@ -89,6 +89,9 @@ export interface McpServerOptions {
 
   /** Path to TLS private key PEM file. */
   tlsKey?: string;
+
+  /** Enable async job mode (start_job/get_job instead of blocking tool). */
+  asyncMode?: boolean;
 }
 
 /**
@@ -510,6 +513,88 @@ export async function executeFixedWorkflow(
 }
 
 /**
+ * Register async job tools (start_job / get_job) on an MCP server instance.
+ * Used by both standalone and createHttpMcpServer when asyncMode is enabled.
+ */
+function registerAsyncJobTools(
+  server: McpServer,
+  resolvedWorkflowPath: string | undefined,
+  toolName: string
+): void {
+  const { JobManager } = require('./mcp-job-manager') as typeof import('./mcp-job-manager');
+  const jobManager = new JobManager();
+
+  const startJobName =
+    toolName === 'run_workflow' || toolName === 'send_message' ? 'start_job' : `start_${toolName}`;
+  const getJobName = 'get_job';
+
+  // Build start_job schema based on whether we have a fixed workflow
+  if (resolvedWorkflowPath) {
+    (server as any).tool(
+      startJobName,
+      'Start a long-running job. Returns immediately with a job_id. ' +
+        'You MUST then call get_job with this job_id repeatedly (every 10 seconds) until done is true.',
+      {
+        message: FixedWorkflowSchema.shape.message,
+        checks: FixedWorkflowSchema.shape.checks,
+        format: FixedWorkflowSchema.shape.format,
+        idempotency_key: z
+          .string()
+          .optional()
+          .describe('Optional stable key to prevent duplicate jobs for the same request.'),
+      },
+      async (args: any) => {
+        const response = jobManager.startJob(async () => {
+          const result = await executeFixedWorkflow(
+            args as FixedWorkflowArgs,
+            resolvedWorkflowPath!
+          );
+          return result;
+        }, args.idempotency_key);
+        return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
+      }
+    );
+  } else {
+    (server as any).tool(
+      startJobName,
+      'Start a long-running job. Returns immediately with a job_id. ' +
+        'You MUST then call get_job with this job_id repeatedly (every 10 seconds) until done is true.',
+      {
+        workflow: RunWorkflowSchema.shape.workflow,
+        message: RunWorkflowSchema.shape.message,
+        checks: RunWorkflowSchema.shape.checks,
+        format: RunWorkflowSchema.shape.format,
+        idempotency_key: z
+          .string()
+          .optional()
+          .describe('Optional stable key to prevent duplicate jobs for the same request.'),
+      },
+      async (args: any) => {
+        const response = jobManager.startJob(async () => {
+          const result = await executeWorkflow(args as RunWorkflowArgs);
+          return result;
+        }, args.idempotency_key);
+        return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
+      }
+    );
+  }
+
+  // Register get_job tool
+  (server as any).tool(
+    getJobName,
+    'Check the status of a running job. Returns the current progress and, when done, the final result. ' +
+      'Call this every 10 seconds until done is true.',
+    {
+      job_id: z.string().describe('The job ID returned by start_job.'),
+    },
+    async (args: { job_id: string }) => {
+      const response = jobManager.getJob(args.job_id);
+      return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
+    }
+  );
+}
+
+/**
  * Validate a Bearer token from an HTTP request using timing-safe comparison.
  */
 export function validateBearerToken(req: http.IncomingMessage, expectedToken: string): boolean {
@@ -575,7 +660,9 @@ export async function createHttpMcpServer(options: McpServerOptions): Promise<Mc
   const toolName = options.toolName || 'run_workflow';
   const toolDescription = options.toolDescription || RUN_WORKFLOW_DESCRIPTION;
 
-  if (resolvedWorkflowPath) {
+  if (options.asyncMode) {
+    registerAsyncJobTools(server, resolvedWorkflowPath, toolName);
+  } else if (resolvedWorkflowPath) {
     (server as any).tool(
       toolName,
       toolDescription,
@@ -806,9 +893,14 @@ export async function startMcpServer(options: McpServerOptions = {}): Promise<vo
     const toolName = options.toolName || 'run_workflow';
     const toolDescription = options.toolDescription || RUN_WORKFLOW_DESCRIPTION;
 
-    // Check if we're in fixed workflow mode
-    if (resolvedWorkflowPath) {
-      // Register the tool without workflow parameter
+    // Register tools based on mode
+    if (options.asyncMode) {
+      registerAsyncJobTools(server, resolvedWorkflowPath, toolName);
+      console.error(
+        `Visor MCP server started in async mode${resolvedWorkflowPath ? ` with fixed workflow: ${resolvedWorkflowPath}` : ''}`
+      );
+    } else if (resolvedWorkflowPath) {
+      // Fixed workflow mode - tool without workflow parameter
       server.tool(
         toolName,
         toolDescription,

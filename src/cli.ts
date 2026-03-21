@@ -42,6 +42,7 @@ export class CLI {
         parseInt(value, 10)
       )
       .option('--mcp-auth-token <token>', 'Bearer token for MCP HTTP server authentication')
+      .option('--mcp-async', 'Enable async job mode for MCP (start_job/get_job pattern)')
       .option(
         '-c, --check <type>',
         'Specify check type (can be used multiple times)',
@@ -240,6 +241,7 @@ export class CLI {
         mcp: Boolean(options.mcp),
         mcpPort: options.mcpPort,
         mcpAuthToken: options.mcpAuthToken,
+        mcpAsync: Boolean(options.mcpAsync),
         tui: Boolean(options.tui),
         keepWorkspace: Boolean(options.keepWorkspace),
         workspacePath: options.workspacePath,

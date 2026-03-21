@@ -29,6 +29,8 @@ export interface McpFrontendOptions {
   toolName?: string;
   /** Tool description. */
   toolDescription?: string;
+  /** Enable async job mode (start_job/get_job instead of blocking tool). */
+  asyncMode?: boolean;
 }
 
 /**
@@ -104,23 +106,73 @@ export class McpServerRunner implements Runner {
         'through the configured workflow and return a response. Use this for conversations, ' +
         'questions, task requests, and any interaction with the assistant.';
 
-    (mcpServer as any).tool(
-      toolName,
-      toolDescription,
-      {
-        message: z.string().describe('The message to send to the assistant.'),
-        session_id: z
-          .string()
-          .optional()
-          .describe(
-            'Optional conversation session ID for maintaining context across messages. ' +
-              'If omitted, a new session is created. Re-use the same session_id for follow-up messages.'
-          ),
-      },
-      async (args: { message: string; session_id?: string }) => {
-        return this.handleMessage(args.message, args.session_id);
-      }
-    );
+    if (this.options.asyncMode) {
+      // Async job mode: register start_job and get_job instead of blocking tool
+      const { JobManager } = await import('../mcp-job-manager');
+      const jobManager = new JobManager();
+
+      const startJobName = toolName === 'send_message' ? 'start_job' : `start_${toolName}`;
+
+      (mcpServer as any).tool(
+        startJobName,
+        'Start a long-running job. Returns immediately with a job_id. ' +
+          'You MUST then call get_job with this job_id repeatedly (every 10 seconds) until done is true.',
+        {
+          message: z.string().describe('The message to send to the assistant.'),
+          session_id: z
+            .string()
+            .optional()
+            .describe(
+              'Optional conversation session ID for maintaining context across messages. ' +
+                'If omitted, a new session is created.'
+            ),
+          idempotency_key: z
+            .string()
+            .optional()
+            .describe('Optional stable key to prevent duplicate jobs for the same request.'),
+        },
+        async (args: { message: string; session_id?: string; idempotency_key?: string }) => {
+          const response = jobManager.startJob(
+            async () => this.handleMessage(args.message, args.session_id),
+            args.idempotency_key
+          );
+          return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
+        }
+      );
+
+      (mcpServer as any).tool(
+        'get_job',
+        'Check the status of a running job. Returns the current progress and, when done, the final result. ' +
+          'Call this every 10 seconds until done is true.',
+        {
+          job_id: z.string().describe('The job ID returned by start_job.'),
+        },
+        async (args: { job_id: string }) => {
+          const response = jobManager.getJob(args.job_id);
+          return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
+        }
+      );
+
+      console.error(`Visor MCP frontend started in async job mode`);
+    } else {
+      (mcpServer as any).tool(
+        toolName,
+        toolDescription,
+        {
+          message: z.string().describe('The message to send to the assistant.'),
+          session_id: z
+            .string()
+            .optional()
+            .describe(
+              'Optional conversation session ID for maintaining context across messages. ' +
+                'If omitted, a new session is created. Re-use the same session_id for follow-up messages.'
+            ),
+        },
+        async (args: { message: string; session_id?: string }) => {
+          return this.handleMessage(args.message, args.session_id);
+        }
+      );
+    }
 
     const { transports } = this;
 
