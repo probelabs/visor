@@ -150,6 +150,12 @@ export async function createRunner(
         tlsKey: mcpAny.tls_key || process.env.VISOR_MCP_TLS_KEY,
         toolName: mcpAny.tool_name || process.env.VISOR_MCP_TOOL_NAME,
         toolDescription: mcpAny.tool_description || process.env.VISOR_MCP_TOOL_DESCRIPTION,
+        asyncMode: options.mcpAsync || mcpAny.async_mode || process.env.VISOR_MCP_ASYNC === 'true',
+        longPollTimeout:
+          mcpAny.long_poll_timeout ||
+          (process.env.VISOR_MCP_POLL_TIMEOUT
+            ? parseInt(process.env.VISOR_MCP_POLL_TIMEOUT)
+            : undefined),
       });
     }
 

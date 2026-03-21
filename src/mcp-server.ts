@@ -89,6 +89,15 @@ export interface McpServerOptions {
 
   /** Path to TLS private key PEM file. */
   tlsKey?: string;
+
+  /** Enable async job mode (start_job/get_job instead of blocking tool). */
+  asyncMode?: boolean;
+
+  /** Long poll timeout in seconds for get_job (default: 59). */
+  longPollTimeout?: number;
+
+  /** TaskStore for async job mode persistence. If not provided, one will be created. */
+  taskStore?: import('./agent-protocol/task-store').TaskStore;
 }
 
 /**
@@ -510,6 +519,105 @@ export async function executeFixedWorkflow(
 }
 
 /**
+ * Get or create a TaskStore for async job mode.
+ * If one is provided in options, use it. Otherwise create a SQLite-backed store.
+ */
+async function getOrCreateTaskStore(
+  options: McpServerOptions
+): Promise<import('./agent-protocol/task-store').TaskStore> {
+  if (options.taskStore) return options.taskStore;
+  const { SqliteTaskStore } = await import('./agent-protocol/task-store');
+  const store = new SqliteTaskStore();
+  await store.initialize();
+  return store;
+}
+
+/**
+ * Register async job tools (start_job / get_job) on an MCP server instance.
+ * Used by both standalone and createHttpMcpServer when asyncMode is enabled.
+ *
+ * Requires a TaskStore for persistence — jobs are stored as regular Visor tasks,
+ * visible via `visor tasks list` and `visor tasks show`.
+ */
+async function registerAsyncJobTools(
+  server: McpServer,
+  resolvedWorkflowPath: string | undefined,
+  toolName: string,
+  taskStore: import('./agent-protocol/task-store').TaskStore,
+  longPollTimeoutMs?: number
+): Promise<void> {
+  const { JobManager } = await import('./mcp-job-manager');
+  const jobManager = new JobManager(taskStore, { longPollTimeoutMs });
+
+  const startJobName =
+    toolName === 'run_workflow' || toolName === 'send_message' ? 'start_job' : `start_${toolName}`;
+  const getJobName = 'get_job';
+
+  const workflowId = resolvedWorkflowPath
+    ? path.basename(resolvedWorkflowPath, path.extname(resolvedWorkflowPath))
+    : undefined;
+
+  // Build start_job schema based on whether we have a fixed workflow
+  if (resolvedWorkflowPath) {
+    (server as any).tool(
+      startJobName,
+      'Start a long-running job. Returns immediately with a job_id. ' +
+        'You MUST then call get_job with this job_id. get_job uses long polling (waits up to 59s). ' +
+        'If done is still false, call get_job again.',
+      {
+        message: FixedWorkflowSchema.shape.message,
+        checks: FixedWorkflowSchema.shape.checks,
+        format: FixedWorkflowSchema.shape.format,
+      },
+      async (args: any) => {
+        const response = jobManager.startJob(
+          async () => executeFixedWorkflow(args as FixedWorkflowArgs, resolvedWorkflowPath!),
+          {
+            messageText: args.message || `Run workflow: ${workflowId}`,
+            workflowId,
+          }
+        );
+        return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
+      }
+    );
+  } else {
+    (server as any).tool(
+      startJobName,
+      'Start a long-running job. Returns immediately with a job_id. ' +
+        'You MUST then call get_job with this job_id. get_job uses long polling (waits up to 59s). ' +
+        'If done is still false, call get_job again.',
+      {
+        workflow: RunWorkflowSchema.shape.workflow,
+        message: RunWorkflowSchema.shape.message,
+        checks: RunWorkflowSchema.shape.checks,
+        format: RunWorkflowSchema.shape.format,
+      },
+      async (args: any) => {
+        const response = jobManager.startJob(async () => executeWorkflow(args as RunWorkflowArgs), {
+          messageText: args.message || `Run workflow: ${args.workflow}`,
+          workflowId: args.workflow,
+        });
+        return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
+      }
+    );
+  }
+
+  // Register get_job tool
+  (server as any).tool(
+    getJobName,
+    'Check the status of a running job using long polling. Waits up to 59 seconds for the job to finish. ' +
+      'Returns immediately if the job is already done. If done is still false after the wait, call again.',
+    {
+      job_id: z.string().describe('The job ID returned by start_job.'),
+    },
+    async (args: { job_id: string }) => {
+      const response = await jobManager.getJob(args.job_id);
+      return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
+    }
+  );
+}
+
+/**
  * Validate a Bearer token from an HTTP request using timing-safe comparison.
  */
 export function validateBearerToken(req: http.IncomingMessage, expectedToken: string): boolean {
@@ -575,7 +683,11 @@ export async function createHttpMcpServer(options: McpServerOptions): Promise<Mc
   const toolName = options.toolName || 'run_workflow';
   const toolDescription = options.toolDescription || RUN_WORKFLOW_DESCRIPTION;
 
-  if (resolvedWorkflowPath) {
+  if (options.asyncMode) {
+    const taskStore = await getOrCreateTaskStore(options);
+    const longPollMs = options.longPollTimeout ? options.longPollTimeout * 1000 : undefined;
+    await registerAsyncJobTools(server, resolvedWorkflowPath, toolName, taskStore, longPollMs);
+  } else if (resolvedWorkflowPath) {
     (server as any).tool(
       toolName,
       toolDescription,
@@ -806,9 +918,16 @@ export async function startMcpServer(options: McpServerOptions = {}): Promise<vo
     const toolName = options.toolName || 'run_workflow';
     const toolDescription = options.toolDescription || RUN_WORKFLOW_DESCRIPTION;
 
-    // Check if we're in fixed workflow mode
-    if (resolvedWorkflowPath) {
-      // Register the tool without workflow parameter
+    // Register tools based on mode
+    if (options.asyncMode) {
+      const taskStore = await getOrCreateTaskStore(options);
+      const longPollMs = options.longPollTimeout ? options.longPollTimeout * 1000 : undefined;
+      await registerAsyncJobTools(server, resolvedWorkflowPath, toolName, taskStore, longPollMs);
+      console.error(
+        `Visor MCP server started in async mode${resolvedWorkflowPath ? ` with fixed workflow: ${resolvedWorkflowPath}` : ''}`
+      );
+    } else if (resolvedWorkflowPath) {
+      // Fixed workflow mode - tool without workflow parameter
       server.tool(
         toolName,
         toolDescription,

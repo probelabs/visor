@@ -1317,6 +1317,8 @@ export async function main(): Promise<void> {
         authTokenEnv: getArg('--auth-token-env'),
         tlsCert: getArg('--tls-cert'),
         tlsKey: getArg('--tls-key'),
+        asyncMode: mcpArgs.includes('--async'),
+        longPollTimeout: getArg('--poll-timeout') ? Number(getArg('--poll-timeout')) : undefined,
       };
 
       const { startMcpServer } = await import('./mcp-server');
