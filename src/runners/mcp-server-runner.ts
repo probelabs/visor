@@ -108,10 +108,18 @@ export class McpServerRunner implements Runner {
 
     if (this.options.asyncMode) {
       // Async job mode: register start_job and get_job instead of blocking tool
+      // Requires a TaskStore — jobs are stored as regular Visor tasks
+      if (!this.taskStore) {
+        const { SqliteTaskStore } = await import('../agent-protocol/task-store');
+        this.taskStore = new SqliteTaskStore();
+        await this.taskStore.initialize();
+      }
+
       const { JobManager } = await import('../mcp-job-manager');
-      const jobManager = new JobManager();
+      const jobManager = new JobManager(this.taskStore);
 
       const startJobName = toolName === 'send_message' ? 'start_job' : `start_${toolName}`;
+      const allChecks = Object.keys(this.cfg.checks || {});
 
       (mcpServer as any).tool(
         startJobName,
@@ -126,15 +134,14 @@ export class McpServerRunner implements Runner {
               'Optional conversation session ID for maintaining context across messages. ' +
                 'If omitted, a new session is created.'
             ),
-          idempotency_key: z
-            .string()
-            .optional()
-            .describe('Optional stable key to prevent duplicate jobs for the same request.'),
         },
-        async (args: { message: string; session_id?: string; idempotency_key?: string }) => {
+        async (args: { message: string; session_id?: string }) => {
           const response = jobManager.startJob(
             async () => this.handleMessage(args.message, args.session_id),
-            args.idempotency_key
+            {
+              messageText: args.message,
+              workflowId: allChecks.join(','),
+            }
           );
           return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
         }

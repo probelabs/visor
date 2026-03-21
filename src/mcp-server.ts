@@ -92,6 +92,9 @@ export interface McpServerOptions {
 
   /** Enable async job mode (start_job/get_job instead of blocking tool). */
   asyncMode?: boolean;
+
+  /** TaskStore for async job mode persistence. If not provided, one will be created. */
+  taskStore?: import('./agent-protocol/task-store').TaskStore;
 }
 
 /**
@@ -513,20 +516,42 @@ export async function executeFixedWorkflow(
 }
 
 /**
+ * Get or create a TaskStore for async job mode.
+ * If one is provided in options, use it. Otherwise create a SQLite-backed store.
+ */
+async function getOrCreateTaskStore(
+  options: McpServerOptions
+): Promise<import('./agent-protocol/task-store').TaskStore> {
+  if (options.taskStore) return options.taskStore;
+  const { SqliteTaskStore } = await import('./agent-protocol/task-store');
+  const store = new SqliteTaskStore();
+  await store.initialize();
+  return store;
+}
+
+/**
  * Register async job tools (start_job / get_job) on an MCP server instance.
  * Used by both standalone and createHttpMcpServer when asyncMode is enabled.
+ *
+ * Requires a TaskStore for persistence — jobs are stored as regular Visor tasks,
+ * visible via `visor tasks list` and `visor tasks show`.
  */
-function registerAsyncJobTools(
+async function registerAsyncJobTools(
   server: McpServer,
   resolvedWorkflowPath: string | undefined,
-  toolName: string
-): void {
-  const { JobManager } = require('./mcp-job-manager') as typeof import('./mcp-job-manager');
-  const jobManager = new JobManager();
+  toolName: string,
+  taskStore: import('./agent-protocol/task-store').TaskStore
+): Promise<void> {
+  const { JobManager } = await import('./mcp-job-manager');
+  const jobManager = new JobManager(taskStore);
 
   const startJobName =
     toolName === 'run_workflow' || toolName === 'send_message' ? 'start_job' : `start_${toolName}`;
   const getJobName = 'get_job';
+
+  const workflowId = resolvedWorkflowPath
+    ? path.basename(resolvedWorkflowPath, path.extname(resolvedWorkflowPath))
+    : undefined;
 
   // Build start_job schema based on whether we have a fixed workflow
   if (resolvedWorkflowPath) {
@@ -538,19 +563,15 @@ function registerAsyncJobTools(
         message: FixedWorkflowSchema.shape.message,
         checks: FixedWorkflowSchema.shape.checks,
         format: FixedWorkflowSchema.shape.format,
-        idempotency_key: z
-          .string()
-          .optional()
-          .describe('Optional stable key to prevent duplicate jobs for the same request.'),
       },
       async (args: any) => {
-        const response = jobManager.startJob(async () => {
-          const result = await executeFixedWorkflow(
-            args as FixedWorkflowArgs,
-            resolvedWorkflowPath!
-          );
-          return result;
-        }, args.idempotency_key);
+        const response = jobManager.startJob(
+          async () => executeFixedWorkflow(args as FixedWorkflowArgs, resolvedWorkflowPath!),
+          {
+            messageText: args.message || `Run workflow: ${workflowId}`,
+            workflowId,
+          }
+        );
         return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
       }
     );
@@ -564,16 +585,12 @@ function registerAsyncJobTools(
         message: RunWorkflowSchema.shape.message,
         checks: RunWorkflowSchema.shape.checks,
         format: RunWorkflowSchema.shape.format,
-        idempotency_key: z
-          .string()
-          .optional()
-          .describe('Optional stable key to prevent duplicate jobs for the same request.'),
       },
       async (args: any) => {
-        const response = jobManager.startJob(async () => {
-          const result = await executeWorkflow(args as RunWorkflowArgs);
-          return result;
-        }, args.idempotency_key);
+        const response = jobManager.startJob(async () => executeWorkflow(args as RunWorkflowArgs), {
+          messageText: args.message || `Run workflow: ${args.workflow}`,
+          workflowId: args.workflow,
+        });
         return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
       }
     );
@@ -661,7 +678,8 @@ export async function createHttpMcpServer(options: McpServerOptions): Promise<Mc
   const toolDescription = options.toolDescription || RUN_WORKFLOW_DESCRIPTION;
 
   if (options.asyncMode) {
-    registerAsyncJobTools(server, resolvedWorkflowPath, toolName);
+    const taskStore = await getOrCreateTaskStore(options);
+    await registerAsyncJobTools(server, resolvedWorkflowPath, toolName, taskStore);
   } else if (resolvedWorkflowPath) {
     (server as any).tool(
       toolName,
@@ -895,7 +913,8 @@ export async function startMcpServer(options: McpServerOptions = {}): Promise<vo
 
     // Register tools based on mode
     if (options.asyncMode) {
-      registerAsyncJobTools(server, resolvedWorkflowPath, toolName);
+      const taskStore = await getOrCreateTaskStore(options);
+      await registerAsyncJobTools(server, resolvedWorkflowPath, toolName, taskStore);
       console.error(
         `Visor MCP server started in async mode${resolvedWorkflowPath ? ` with fixed workflow: ${resolvedWorkflowPath}` : ''}`
       );
