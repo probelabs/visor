@@ -215,6 +215,72 @@ describe('JobManager', () => {
     expect(tasks[0].workflow_id).toBe('code-review');
   });
 
+  it('should extract result from plain string return', async () => {
+    const response = manager.startJob(async () => 'plain string result', {
+      messageText: 'test',
+    });
+
+    const status = await manager.getJob(response.job_id);
+    expect(status.status).toBe('completed');
+    expect(status.result).toBe('plain string result');
+  });
+
+  it('should handle non-Error thrown values', async () => {
+    const response = manager.startJob(
+      async () => {
+        throw 'string error message';
+      },
+      { messageText: 'test' }
+    );
+
+    const status = await manager.getJob(response.job_id);
+    expect(status.status).toBe('failed');
+    expect(status.error!.message).toBe('string error message');
+  });
+
+  it('should allow concurrent getJob calls on the same job', async () => {
+    const response = manager.startJob(
+      async () => {
+        await new Promise(resolve => setTimeout(resolve, 200));
+        return { content: [{ type: 'text', text: 'concurrent result' }] };
+      },
+      { messageText: 'test' }
+    );
+
+    // Both should resolve with the same result
+    const [status1, status2] = await Promise.all([
+      manager.getJob(response.job_id),
+      manager.getJob(response.job_id),
+    ]);
+
+    expect(status1.status).toBe('completed');
+    expect(status2.status).toBe('completed');
+    expect(status1.result).toBe('concurrent result');
+    expect(status2.result).toBe('concurrent result');
+  });
+
+  it('should include all response fields in completed status', async () => {
+    const response = manager.startJob(
+      async () => ({ content: [{ type: 'text', text: 'full response' }] }),
+      { messageText: 'test' }
+    );
+
+    const status = await manager.getJob(response.job_id);
+    expect(status).toEqual(
+      expect.objectContaining({
+        job_id: expect.stringMatching(/^[0-9a-f]{8}$/),
+        status: 'completed',
+        done: true,
+        progress: { percent: 100, step: 'completed', message: 'Job finished successfully' },
+        polling: { recommended_next_action: 'none', recommended_delay_seconds: 0 },
+        result: 'full response',
+        error: null,
+        user_message: 'The result is ready.',
+        next_instruction_for_model: 'Use the result to answer the user.',
+      })
+    );
+  });
+
   it('should respect custom long poll timeout', async () => {
     const shortManager = new JobManager(taskStore, { longPollTimeoutMs: 1000 });
     const response = shortManager.startJob(
