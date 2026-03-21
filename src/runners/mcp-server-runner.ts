@@ -31,6 +31,8 @@ export interface McpFrontendOptions {
   toolDescription?: string;
   /** Enable async job mode (start_job/get_job instead of blocking tool). */
   asyncMode?: boolean;
+  /** Long poll timeout in seconds for get_job (default: 59). */
+  longPollTimeout?: number;
 }
 
 /**
@@ -116,7 +118,10 @@ export class McpServerRunner implements Runner {
       }
 
       const { JobManager } = await import('../mcp-job-manager');
-      const jobManager = new JobManager(this.taskStore);
+      const longPollMs = this.options.longPollTimeout
+        ? this.options.longPollTimeout * 1000
+        : undefined;
+      const jobManager = new JobManager(this.taskStore, { longPollTimeoutMs: longPollMs });
 
       const startJobName = toolName === 'send_message' ? 'start_job' : `start_${toolName}`;
       const allChecks = Object.keys(this.cfg.checks || {});
@@ -124,7 +129,8 @@ export class McpServerRunner implements Runner {
       (mcpServer as any).tool(
         startJobName,
         'Start a long-running job. Returns immediately with a job_id. ' +
-          'You MUST then call get_job with this job_id repeatedly (every 10 seconds) until done is true.',
+          'You MUST then call get_job with this job_id. get_job uses long polling (waits up to 59s). ' +
+          'If done is still false, call get_job again.',
         {
           message: z.string().describe('The message to send to the assistant.'),
           session_id: z
@@ -149,13 +155,13 @@ export class McpServerRunner implements Runner {
 
       (mcpServer as any).tool(
         'get_job',
-        'Check the status of a running job. Returns the current progress and, when done, the final result. ' +
-          'Call this every 10 seconds until done is true.',
+        'Check the status of a running job using long polling. Waits up to 59 seconds for the job to finish. ' +
+          'Returns immediately if the job is already done. If done is still false after the wait, call again.',
         {
           job_id: z.string().describe('The job ID returned by start_job.'),
         },
         async (args: { job_id: string }) => {
-          const response = jobManager.getJob(args.job_id);
+          const response = await jobManager.getJob(args.job_id);
           return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
         }
       );

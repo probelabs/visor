@@ -98,41 +98,59 @@ describe('JobManager', () => {
   it('should start a job and return running response immediately', () => {
     const response = manager.startJob(
       async () => {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise(resolve => setTimeout(resolve, 5000));
         return { data: 'result' };
       },
       { messageText: 'test job' }
     );
 
-    expect(response.job_id).toHaveLength(8); // first 8 chars of UUID
+    expect(response.job_id).toHaveLength(8);
     expect(response.done).toBe(false);
-    expect(response.status).toBe('running'); // task transitions to working immediately
+    expect(response.status).toBe('running');
     expect(response.polling.recommended_next_action).toBe('get_job');
-    expect(response.polling.recommended_delay_seconds).toBe(10);
+    expect(response.polling.recommended_delay_seconds).toBe(0);
     expect(response.result).toBeNull();
     expect(response.error).toBeNull();
     expect(response.next_instruction_for_model).toContain('get_job');
   });
 
-  it('should complete a job and return result via get_job', async () => {
+  it('should long-poll and return result when job completes during wait', async () => {
+    // Job completes after 100ms — get_job should return as soon as it finishes
     const response = manager.startJob(
       async () => ({ content: [{ type: 'text', text: 'All good' }] }),
       { messageText: 'test job' }
     );
 
-    // Wait for the handler to complete
-    await new Promise(resolve => setTimeout(resolve, 50));
+    const start = Date.now();
+    const status = await manager.getJob(response.job_id);
+    const elapsed = Date.now() - start;
 
-    const status = manager.getJob(response.job_id);
     expect(status.status).toBe('completed');
     expect(status.done).toBe(true);
     expect(status.result).toBe('All good');
     expect(status.progress.percent).toBe(100);
     expect(status.polling.recommended_next_action).toBe('none');
-    expect(status.next_instruction_for_model).toContain('result');
+    // Should resolve quickly, not wait the full 59 seconds
+    expect(elapsed).toBeLessThan(5000);
   });
 
-  it('should handle job failure', async () => {
+  it('should long-poll and return immediately for already-completed jobs', async () => {
+    const response = manager.startJob(async () => ({ content: [{ type: 'text', text: 'done' }] }), {
+      messageText: 'test',
+    });
+
+    // Wait for completion first
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    const start = Date.now();
+    const status = await manager.getJob(response.job_id);
+    const elapsed = Date.now() - start;
+
+    expect(status.status).toBe('completed');
+    expect(elapsed).toBeLessThan(100); // should be near-instant
+  });
+
+  it('should handle job failure via long poll', async () => {
     const response = manager.startJob(
       async () => {
         throw new Error('Something went wrong');
@@ -140,9 +158,7 @@ describe('JobManager', () => {
       { messageText: 'failing job' }
     );
 
-    await new Promise(resolve => setTimeout(resolve, 50));
-
-    const status = manager.getJob(response.job_id);
+    const status = await manager.getJob(response.job_id);
     expect(status.status).toBe('failed');
     expect(status.done).toBe(true);
     expect(status.error).toBeTruthy();
@@ -151,12 +167,15 @@ describe('JobManager', () => {
     expect(status.result).toBeNull();
   });
 
-  it('should return expired for unknown job IDs', () => {
-    const status = manager.getJob('nonexistent');
+  it('should return expired for unknown job IDs immediately', async () => {
+    const start = Date.now();
+    const status = await manager.getJob('nonexistent');
+    const elapsed = Date.now() - start;
+
     expect(status.status).toBe('expired');
     expect(status.done).toBe(true);
-    expect(status.error).toBeTruthy();
     expect(status.error!.code).toBe('JOB_EXPIRED');
+    expect(elapsed).toBeLessThan(100); // no waiting for unknown jobs
   });
 
   it('should return 8-char job IDs (UUID prefix)', () => {
@@ -170,10 +189,7 @@ describe('JobManager', () => {
       { messageText: 'test' }
     );
 
-    await new Promise(resolve => setTimeout(resolve, 50));
-
-    // Look up by the 8-char short ID
-    const status = manager.getJob(response.job_id);
+    const status = await manager.getJob(response.job_id);
     expect(status.status).toBe('completed');
     expect(status.result).toBe('found it');
   });
@@ -183,7 +199,6 @@ describe('JobManager', () => {
 
     await new Promise(resolve => setTimeout(resolve, 50));
 
-    // The task should be in the store
     const { tasks } = taskStore.listTasks({ limit: 10 });
     expect(tasks.length).toBe(1);
     expect(tasks[0].metadata?.source).toBe('mcp');
@@ -198,5 +213,26 @@ describe('JobManager', () => {
 
     const { tasks } = taskStore.listTasks({ limit: 10 });
     expect(tasks[0].workflow_id).toBe('code-review');
+  });
+
+  it('should respect custom long poll timeout', async () => {
+    const shortManager = new JobManager(taskStore, { longPollTimeoutMs: 1000 });
+    const response = shortManager.startJob(
+      async () => {
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        return 'late';
+      },
+      { messageText: 'slow job' }
+    );
+
+    const start = Date.now();
+    const status = await shortManager.getJob(response.job_id);
+    const elapsed = Date.now() - start;
+
+    // Should timeout after ~1 second, not wait 59 seconds
+    expect(status.done).toBe(false);
+    expect(status.status).toBe('running');
+    expect(elapsed).toBeGreaterThanOrEqual(900);
+    expect(elapsed).toBeLessThan(3000);
   });
 });

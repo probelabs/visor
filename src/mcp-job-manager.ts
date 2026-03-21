@@ -66,7 +66,7 @@ function buildResponse(task: AgentTask): JobResponse {
 
   const polling = done
     ? { recommended_next_action: 'none' as const, recommended_delay_seconds: 0 }
-    : { recommended_next_action: 'get_job' as const, recommended_delay_seconds: 10 };
+    : { recommended_next_action: 'get_job' as const, recommended_delay_seconds: 0 };
 
   // Extract result text from task status message or artifacts
   let result: any = null;
@@ -125,12 +125,12 @@ function buildResponse(task: AgentTask): JobResponse {
     case 'queued':
       userMessage = 'The job has been queued.';
       nextInstruction =
-        'Call get_job with this job_id after 10 seconds. Continue calling get_job until done is true.';
+        'Call get_job with this job_id. It will wait up to 59 seconds for the result. If it returns with done still false, call get_job again.';
       break;
     case 'running':
       userMessage = 'The job is still running.';
       nextInstruction =
-        'Call get_job again with this job_id after 10 seconds. Continue calling get_job until done is true.';
+        'Call get_job again with this job_id. It will wait up to 59 seconds for the result. If it returns with done still false, call get_job again.';
       break;
     case 'completed':
       userMessage = 'The result is ready.';
@@ -180,7 +180,14 @@ function buildExpiredResponse(jobId: string): JobResponse {
  * Jobs created here are visible via `visor tasks list` and `visor tasks show`.
  */
 export class JobManager {
-  constructor(private taskStore: TaskStore) {}
+  private longPollTimeoutMs: number;
+
+  constructor(
+    private taskStore: TaskStore,
+    opts?: { longPollTimeoutMs?: number }
+  ) {
+    this.longPollTimeoutMs = opts?.longPollTimeoutMs ?? 59_000;
+  }
 
   /**
    * Start a new async job. Creates a task, runs the handler in the background,
@@ -307,8 +314,54 @@ export class JobManager {
 
   /**
    * Get the current state of a job by ID (supports both short and full IDs).
+   *
+   * Uses long polling: if the job is still running, waits up to 59 seconds
+   * for it to finish before responding. Returns immediately if the job is
+   * already in a terminal state (completed/failed).
    */
-  getJob(jobId: string): JobResponse {
+  async getJob(jobId: string): Promise<JobResponse> {
+    const resolvedTask = this.resolveTask(jobId);
+    if (!resolvedTask) {
+      return buildExpiredResponse(jobId);
+    }
+
+    // If already done, return immediately
+    const initialStatus = taskStateToJobStatus(resolvedTask.status.state);
+    if (initialStatus === 'completed' || initialStatus === 'failed') {
+      return buildResponse(resolvedTask);
+    }
+
+    // Long poll: check every 500ms for up to the configured timeout
+    const POLL_INTERVAL_MS = 500;
+    const MAX_WAIT_MS = this.longPollTimeoutMs;
+    const deadline = Date.now() + MAX_WAIT_MS;
+
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+
+      const task = this.resolveTask(jobId);
+      if (!task) {
+        return buildExpiredResponse(jobId);
+      }
+
+      const status = taskStateToJobStatus(task.status.state);
+      if (status === 'completed' || status === 'failed') {
+        return buildResponse(task);
+      }
+    }
+
+    // Timeout — return current state (still running)
+    const finalTask = this.resolveTask(jobId);
+    if (!finalTask) {
+      return buildExpiredResponse(jobId);
+    }
+    return buildResponse(finalTask);
+  }
+
+  /**
+   * Resolve a task by full UUID or short ID prefix.
+   */
+  private resolveTask(jobId: string): import('./agent-protocol/types').AgentTask | null {
     // Try direct lookup first (full UUID)
     let task = this.taskStore.getTask(jobId);
 
@@ -318,10 +371,6 @@ export class JobManager {
       task = tasks.find(t => t.id.startsWith(jobId)) || null;
     }
 
-    if (!task) {
-      return buildExpiredResponse(jobId);
-    }
-
-    return buildResponse(task);
+    return task;
   }
 }

@@ -93,6 +93,9 @@ export interface McpServerOptions {
   /** Enable async job mode (start_job/get_job instead of blocking tool). */
   asyncMode?: boolean;
 
+  /** Long poll timeout in seconds for get_job (default: 59). */
+  longPollTimeout?: number;
+
   /** TaskStore for async job mode persistence. If not provided, one will be created. */
   taskStore?: import('./agent-protocol/task-store').TaskStore;
 }
@@ -540,10 +543,11 @@ async function registerAsyncJobTools(
   server: McpServer,
   resolvedWorkflowPath: string | undefined,
   toolName: string,
-  taskStore: import('./agent-protocol/task-store').TaskStore
+  taskStore: import('./agent-protocol/task-store').TaskStore,
+  longPollTimeoutMs?: number
 ): Promise<void> {
   const { JobManager } = await import('./mcp-job-manager');
-  const jobManager = new JobManager(taskStore);
+  const jobManager = new JobManager(taskStore, { longPollTimeoutMs });
 
   const startJobName =
     toolName === 'run_workflow' || toolName === 'send_message' ? 'start_job' : `start_${toolName}`;
@@ -558,7 +562,8 @@ async function registerAsyncJobTools(
     (server as any).tool(
       startJobName,
       'Start a long-running job. Returns immediately with a job_id. ' +
-        'You MUST then call get_job with this job_id repeatedly (every 10 seconds) until done is true.',
+        'You MUST then call get_job with this job_id. get_job uses long polling (waits up to 59s). ' +
+        'If done is still false, call get_job again.',
       {
         message: FixedWorkflowSchema.shape.message,
         checks: FixedWorkflowSchema.shape.checks,
@@ -579,7 +584,8 @@ async function registerAsyncJobTools(
     (server as any).tool(
       startJobName,
       'Start a long-running job. Returns immediately with a job_id. ' +
-        'You MUST then call get_job with this job_id repeatedly (every 10 seconds) until done is true.',
+        'You MUST then call get_job with this job_id. get_job uses long polling (waits up to 59s). ' +
+        'If done is still false, call get_job again.',
       {
         workflow: RunWorkflowSchema.shape.workflow,
         message: RunWorkflowSchema.shape.message,
@@ -599,13 +605,13 @@ async function registerAsyncJobTools(
   // Register get_job tool
   (server as any).tool(
     getJobName,
-    'Check the status of a running job. Returns the current progress and, when done, the final result. ' +
-      'Call this every 10 seconds until done is true.',
+    'Check the status of a running job using long polling. Waits up to 59 seconds for the job to finish. ' +
+      'Returns immediately if the job is already done. If done is still false after the wait, call again.',
     {
       job_id: z.string().describe('The job ID returned by start_job.'),
     },
     async (args: { job_id: string }) => {
-      const response = jobManager.getJob(args.job_id);
+      const response = await jobManager.getJob(args.job_id);
       return { content: [{ type: 'text' as const, text: JSON.stringify(response, null, 2) }] };
     }
   );
@@ -679,7 +685,8 @@ export async function createHttpMcpServer(options: McpServerOptions): Promise<Mc
 
   if (options.asyncMode) {
     const taskStore = await getOrCreateTaskStore(options);
-    await registerAsyncJobTools(server, resolvedWorkflowPath, toolName, taskStore);
+    const longPollMs = options.longPollTimeout ? options.longPollTimeout * 1000 : undefined;
+    await registerAsyncJobTools(server, resolvedWorkflowPath, toolName, taskStore, longPollMs);
   } else if (resolvedWorkflowPath) {
     (server as any).tool(
       toolName,
@@ -914,7 +921,8 @@ export async function startMcpServer(options: McpServerOptions = {}): Promise<vo
     // Register tools based on mode
     if (options.asyncMode) {
       const taskStore = await getOrCreateTaskStore(options);
-      await registerAsyncJobTools(server, resolvedWorkflowPath, toolName, taskStore);
+      const longPollMs = options.longPollTimeout ? options.longPollTimeout * 1000 : undefined;
+      await registerAsyncJobTools(server, resolvedWorkflowPath, toolName, taskStore, longPollMs);
       console.error(
         `Visor MCP server started in async mode${resolvedWorkflowPath ? ` with fixed workflow: ${resolvedWorkflowPath}` : ''}`
       );
