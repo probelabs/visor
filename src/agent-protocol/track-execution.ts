@@ -9,6 +9,7 @@
  */
 
 import crypto from 'crypto';
+import fs from 'fs';
 import path from 'path';
 import { logger } from '../logger';
 import { trace } from '../telemetry/lazy-otel';
@@ -24,6 +25,17 @@ function getPackageVersion(): string {
   }
 }
 
+async function readTraceIdFromFallbackFile(traceFile?: string): Promise<string | undefined> {
+  if (!traceFile || !fs.existsSync(traceFile)) return undefined;
+
+  try {
+    const { readTraceIdFromFile } = await import('./trace-serializer');
+    return (await readTraceIdFromFile(traceFile)) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export type TaskSource =
   | 'cli'
   | 'slack'
@@ -35,7 +47,8 @@ export type TaskSource =
   | 'mcp'
   | 'tui'
   | 'scheduler'
-  | 'webhook';
+  | 'webhook'
+  | 'test';
 
 export interface TrackExecutionOptions {
   taskStore: TaskStore;
@@ -97,6 +110,17 @@ export async function trackExecution<T>(
     `[TaskTracking] Task ${task.id} started (source=${source}, workflow=${workflowId || '-'}, instance=${instanceId})`
   );
 
+  // Heartbeat: periodically touch updated_at so stale-task detection
+  // can distinguish live tasks from orphans (works across nodes).
+  const HEARTBEAT_INTERVAL = 60_000; // 1 minute
+  const heartbeatTimer = setInterval(() => {
+    try {
+      taskStore.heartbeat(task.id);
+    } catch {
+      // best-effort — don't crash the task over a heartbeat failure
+    }
+  }, HEARTBEAT_INTERVAL);
+
   try {
     const result = await executor();
 
@@ -105,8 +129,11 @@ export async function trackExecution<T>(
     // update metadata post-execution to ensure trace_id is stored.
     try {
       const activeTraceId = trace.getActiveSpan()?.spanContext().traceId;
-      if (activeTraceId && activeTraceId !== '' && !task.metadata?.trace_id) {
-        taskStore.updateMetadata(task.id, { trace_id: activeTraceId });
+      const persistedTraceId =
+        (activeTraceId && activeTraceId !== '' ? activeTraceId : undefined) ||
+        (await readTraceIdFromFallbackFile(traceFile));
+      if (persistedTraceId && !task.metadata?.trace_id) {
+        taskStore.updateMetadata(task.id, { trace_id: persistedTraceId });
       }
     } catch {
       // best-effort — don't fail the task over metadata
@@ -179,6 +206,8 @@ export async function trackExecution<T>(
       // ignore double-failure
     }
     throw err; // re-throw to preserve original behavior
+  } finally {
+    clearInterval(heartbeatTimer);
   }
 }
 

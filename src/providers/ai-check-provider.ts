@@ -26,6 +26,7 @@ import { resolveTools } from '../utils/tool-resolver';
 import { createSecureSandbox, compileAndRun } from '../utils/sandbox';
 import type Sandbox from '@nyariv/sandboxjs';
 import { getScheduleToolDefinition } from '../scheduler/schedule-tool';
+import { getTaskProgressToolDefinition } from '../agent-protocol/task-progress-tool';
 // Legacy Slack context extraction for backwards compatibility
 import { extractSlackContext } from '../slack/schedule-tool-handler';
 
@@ -91,6 +92,12 @@ export class AICheckProvider extends CheckProvider {
         } catch {
           // best-effort only
         }
+      }
+      // Attach active tasks for AI awareness of in-progress work
+      if (first.active_tasks && prInfo) {
+        try {
+          (prInfo as any).activeTasks = first.active_tasks;
+        } catch {}
       }
       // Build transport-specific context
       const transportCtx = slackConv
@@ -1404,6 +1411,27 @@ export class AICheckProvider extends CheckProvider {
       logger.debug(`[AICheckProvider] Schedule tool requested (${contextInfo})`);
     }
 
+    // Check if "task_progress" is requested in custom tools
+    const taskProgressToolRequested =
+      !config.ai?.disableTools &&
+      customToolsToLoad.some(
+        tool =>
+          tool === 'task_progress' ||
+          (typeof tool === 'object' && (tool as any).tool === 'task_progress')
+      );
+
+    if (taskProgressToolRequested) {
+      customToolsToLoad = customToolsToLoad.filter(
+        tool =>
+          tool !== 'task_progress' &&
+          !(typeof tool === 'object' && (tool as any).tool === 'task_progress')
+      );
+      if (!customToolsServerName) {
+        customToolsServerName = '__tools__';
+      }
+      logger.debug(`[AICheckProvider] Task progress tool requested`);
+    }
+
     // Legacy support: enable_scheduler: true also enables the schedule tool
     const scheduleToolEnabled =
       scheduleToolRequested || (config.ai?.enable_scheduler === true && !config.ai?.disableTools);
@@ -1411,8 +1439,12 @@ export class AICheckProvider extends CheckProvider {
     if (
       (customToolsToLoad.length > 0 ||
         scheduleToolEnabled ||
+        taskProgressToolRequested ||
         httpClientEntriesFromMcp.length > 0) &&
-      (customToolsServerName || scheduleToolEnabled || httpClientEntriesFromMcp.length > 0) &&
+      (customToolsServerName ||
+        scheduleToolEnabled ||
+        taskProgressToolRequested ||
+        httpClientEntriesFromMcp.length > 0) &&
       !config.ai?.disableTools
     ) {
       if (!customToolsServerName) {
@@ -1454,6 +1486,13 @@ export class AICheckProvider extends CheckProvider {
           const scheduleTool = getScheduleToolDefinition();
           customTools.set(scheduleTool.name, scheduleTool);
           logger.debug(`[AICheckProvider] Added built-in schedule tool`);
+        }
+
+        // Add task_progress tool if enabled (via ai_mcp_servers { tool: 'task_progress' })
+        if (taskProgressToolRequested) {
+          const taskProgressTool = getTaskProgressToolDefinition();
+          customTools.set(taskProgressTool.name, taskProgressTool);
+          logger.debug(`[AICheckProvider] Added built-in task_progress tool`);
         }
 
         // Add http_client tools extracted from ai_mcp_servers
@@ -1611,12 +1650,20 @@ export class AICheckProvider extends CheckProvider {
           // Build workflow context for workflow tools
           // Include workspace for reference counting during async MCP tool calls
           const parentCtxForTools = (sessionInfo as any)?._parentContext;
-          const workflowContext: WorkflowToolContext = {
+          const workflowContext: WorkflowToolContext & { taskStore?: unknown } = {
             prInfo,
             outputs: _dependencyResults,
             executionContext: sessionInfo as import('./check-provider.interface').ExecutionContext,
             workspace: parentCtxForTools?.workspace,
           };
+
+          // Propagate task store for built-in tools (task_progress)
+          if (taskProgressToolRequested) {
+            const taskStoreRef = parentCtxForTools?.taskStore || (sessionInfo as any)?.taskStore;
+            if (taskStoreRef) {
+              (workflowContext as any).taskStore = taskStoreRef;
+            }
+          }
 
           customToolsServer = new CustomToolsSSEServer(
             customTools,

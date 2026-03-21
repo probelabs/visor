@@ -46,6 +46,16 @@ export const trace = {
     if (!api) return undefined;
     return api.trace.getActiveSpan();
   },
+  setSpan(context: any, span: any) {
+    const api = getOtelApi();
+    if (!api?.trace?.setSpan) return context;
+    return api.trace.setSpan(context, span);
+  },
+  setSpanContext(context: any, spanContext: any) {
+    const api = getOtelApi();
+    if (!api?.trace?.setSpanContext) return context;
+    return api.trace.setSpanContext(context, spanContext);
+  },
 };
 
 // Export lazy-loaded context API

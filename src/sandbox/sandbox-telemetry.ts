@@ -12,6 +12,11 @@ let _traceHelpers: {
     attrs: Record<string, unknown> | undefined,
     fn: SpanFn<T>
   ) => Promise<T>;
+  emitImmediateSpan: (
+    name: string,
+    attrs?: Record<string, unknown>,
+    options?: { events?: Array<{ name: string; attrs?: Record<string, unknown> }>; status?: any }
+  ) => void;
   addEvent: (name: string, attrs?: Record<string, unknown>) => void;
   setSpanError: (err: unknown) => void;
 } | null = null;
@@ -46,6 +51,17 @@ export function addEvent(name: string, attrs?: Record<string, unknown>): void {
   const helpers = getTraceHelpers();
   if (helpers) {
     helpers.addEvent(name, attrs);
+  }
+}
+
+export function emitImmediateSpan(
+  name: string,
+  attrs?: Record<string, unknown>,
+  options?: { events?: Array<{ name: string; attrs?: Record<string, unknown> }>; status?: any }
+): void {
+  const helpers = getTraceHelpers();
+  if (helpers) {
+    helpers.emitImmediateSpan(name, attrs, options);
   }
 }
 

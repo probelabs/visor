@@ -54,6 +54,8 @@ export interface GitCheckoutOutput {
   /** Human-readable path within the workspace (when workspace isolation is enabled) */
   workspace_path?: string;
   error?: string;
+  skipped?: boolean;
+  reason?: string;
 }
 
 export interface WorktreeMetadata {

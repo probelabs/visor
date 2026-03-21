@@ -37,6 +37,8 @@ export interface TraceBackendConfig {
   authToken?: string;
 }
 
+type TraceBackendKind = Exclude<TraceBackendConfig['type'], 'auto'>;
+
 function resolveBackendConfig(overrides?: Partial<TraceBackendConfig>): TraceBackendConfig {
   const explicit = process.env.VISOR_TRACE_BACKEND as TraceBackendConfig['type'] | undefined;
 
@@ -48,6 +50,32 @@ function resolveBackendConfig(overrides?: Partial<TraceBackendConfig>): TraceBac
     traceDir: overrides?.traceDir || process.env.VISOR_TRACE_DIR || 'output/traces',
     authToken: overrides?.authToken || process.env.GRAFANA_TOKEN,
   };
+}
+
+function getAutoBackendOrder(): TraceBackendKind[] {
+  const sink = (process.env.VISOR_TELEMETRY_SINK || '').trim().toLowerCase();
+  const hasRemoteHints =
+    !!process.env.GRAFANA_URL ||
+    !!process.env.JAEGER_URL ||
+    !!process.env.GRAFANA_TEMPO_DATASOURCE_ID ||
+    !!process.env.OTEL_EXPORTER_OTLP_ENDPOINT ||
+    !!process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
+
+  if (sink === 'file') return ['file', 'grafana', 'jaeger'];
+  if (sink === 'otlp' || hasRemoteHints) return ['grafana', 'jaeger', 'file'];
+
+  return ['file', 'grafana', 'jaeger'];
+}
+
+function getBackendOrder(cfg: TraceBackendConfig): TraceBackendKind[] {
+  if (cfg.type === 'grafana') return ['grafana'];
+  if (cfg.type === 'jaeger') return ['jaeger'];
+  if (cfg.type === 'file') return ['file'];
+  return getAutoBackendOrder();
+}
+
+function isTraceFilePath(ref: string): boolean {
+  return ref.includes('/') || ref.endsWith('.ndjson');
 }
 
 // ---------------------------------------------------------------------------
@@ -243,31 +271,31 @@ function timeValueToMs(tv: [number, number]): number {
  * 4. Local NDJSON files
  */
 export async function fetchTraceSpans(
-  traceId: string,
+  traceRef: string,
   config?: Partial<TraceBackendConfig>
 ): Promise<NormalizedSpan[]> {
   const cfg = resolveBackendConfig(config);
+  const backendOrder = getBackendOrder(cfg);
+  const traceId = isTraceFilePath(traceRef) ? await readTraceIdFromFile(traceRef) : traceRef;
 
-  const tryGrafana = cfg.type === 'grafana' || cfg.type === 'auto';
-  const tryJaeger = cfg.type === 'jaeger' || cfg.type === 'auto';
-  const tryFile = cfg.type === 'file' || cfg.type === 'auto';
+  for (const backend of backendOrder) {
+    if (backend === 'grafana' && traceId) {
+      const spans = await fetchFromGrafanaTempo(traceId, cfg);
+      if (spans && spans.length > 0) return spans;
+      continue;
+    }
 
-  // 1. Grafana Tempo
-  if (tryGrafana) {
-    const spans = await fetchFromGrafanaTempo(traceId, cfg);
-    if (spans && spans.length > 0) return spans;
-  }
+    if (backend === 'jaeger' && traceId) {
+      const spans = await fetchFromJaeger(traceId, cfg);
+      if (spans && spans.length > 0) return spans;
+      continue;
+    }
 
-  // 2. Jaeger
-  if (tryJaeger) {
-    const spans = await fetchFromJaeger(traceId, cfg);
-    if (spans && spans.length > 0) return spans;
-  }
-
-  // 3. Local files
-  if (tryFile) {
-    const spans = await fetchFromLocalFiles(traceId, cfg);
-    if (spans && spans.length > 0) return spans;
+    if (backend === 'file') {
+      const spans = await fetchFromLocalFiles(traceRef, cfg);
+      if (spans && spans.length > 0) return spans;
+      continue;
+    }
   }
 
   return [];
@@ -362,10 +390,12 @@ async function fetchFromJaeger(
 }
 
 async function fetchFromLocalFiles(
-  traceId: string,
+  traceRef: string,
   cfg: TraceBackendConfig
 ): Promise<NormalizedSpan[] | null> {
-  const traceFile = await findTraceFile(traceId, cfg.traceDir);
+  const traceFile = isTraceFilePath(traceRef)
+    ? traceRef
+    : await findTraceFile(traceRef, cfg.traceDir);
   if (!traceFile) return null;
 
   try {
@@ -430,6 +460,33 @@ export async function findTraceFile(traceId: string, traceDir?: string): Promise
     } catch {
       // skip malformed files
     }
+  }
+
+  return null;
+}
+
+export async function readTraceIdFromFile(traceFile: string): Promise<string | null> {
+  try {
+    const rl = readline.createInterface({
+      input: fs.createReadStream(traceFile, { encoding: 'utf8' }),
+      crlfDelay: Infinity,
+    });
+
+    for await (const line of rl) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (typeof parsed.traceId === 'string' && parsed.traceId) {
+          rl.close();
+          return parsed.traceId;
+        }
+      } catch {
+        // skip malformed records and keep scanning
+      }
+    }
+  } catch {
+    return null;
   }
 
   return null;
@@ -608,6 +665,17 @@ interface DeduplicationContext {
   intents: Map<string, string>;
 }
 
+interface TraceRenderContext {
+  realSpanNames: Set<string>;
+  hasChildWorkSpans: boolean;
+}
+
+interface LifecycleSpanInfo {
+  baseName: string;
+  phase: string;
+  kind: 'check' | 'sandbox-child' | 'generic' | 'engineer';
+}
+
 /** Normalize text for dedup comparison: lowercase, collapse whitespace, take prefix */
 function dedupeKey(text: string): string {
   return text.replace(/\s+/g, ' ').trim().slice(0, 100).toLowerCase();
@@ -639,6 +707,120 @@ function dedupeOrRegister(
   return null;
 }
 
+function normalizeSpanName(name: string): string {
+  return name.replace(/^child:\s*/, '');
+}
+
+function isChildSpan(span: NormalizedSpan): boolean {
+  return span.name.startsWith('child: ') || span.attributes['visor.sandbox.child_span'] === true;
+}
+
+function getConcreteCheckName(
+  span:
+    | Pick<NormalizedSpan, 'name' | 'attributes'>
+    | { name: string; attributes?: Record<string, any> }
+): string | null {
+  const attrs = span.attributes || {};
+  const normalizedName = normalizeSpanName(span.name || '');
+  const checkId = attrs['visor.check.id'];
+  if (checkId) return `visor.check.${String(checkId).replace(/^visor\.check\./, '')}`;
+
+  const lifecycle = getLifecycleSpanInfo(normalizedName);
+  if (lifecycle?.kind === 'check') return lifecycle.baseName;
+
+  const match = normalizedName.match(/^visor\.check\.([^.]+)$/);
+  if (match) return `visor.check.${match[1]}`;
+  return null;
+}
+
+function getLifecycleSpanInfo(name: string): LifecycleSpanInfo | null {
+  const normalizedName = normalizeSpanName(name);
+
+  const checkMatch = normalizedName.match(
+    /^visor\.check\.([^.]+)\.(started|completed|failed|progress)$/
+  );
+  if (checkMatch) {
+    return {
+      baseName: `visor.check.${checkMatch[1]}`,
+      phase: checkMatch[2],
+      kind: 'check',
+    };
+  }
+
+  const sandboxChildMatch = normalizedName.match(
+    /^visor\.sandbox\.child\.(started|waiting|completed|failed)$/
+  );
+  if (sandboxChildMatch) {
+    return {
+      baseName: 'visor.sandbox.child',
+      phase: sandboxChildMatch[1],
+      kind: 'sandbox-child',
+    };
+  }
+
+  const engineerMatch = normalizedName.match(
+    /^visor\.engineer\.(started|sandbox_resolved|child_spawned|waiting_on_child|completed|failed|progress)$/
+  );
+  if (engineerMatch) {
+    return {
+      baseName: 'visor.engineer',
+      phase: engineerMatch[1],
+      kind: 'engineer',
+    };
+  }
+
+  const genericMatch = normalizedName.match(
+    /^(ai\.request|search\.delegate|visor\.ai_check|probe\.ai_request|probe\.search_delegate)\.(started|completed|failed)$/
+  );
+  if (genericMatch) {
+    const baseName =
+      genericMatch[1] === 'probe.ai_request'
+        ? 'ai.request'
+        : genericMatch[1] === 'probe.search_delegate'
+          ? 'search.delegate'
+          : genericMatch[1];
+    return {
+      baseName,
+      phase: genericMatch[2],
+      kind: 'generic',
+    };
+  }
+
+  return null;
+}
+
+function buildRenderContext(allSpans: NormalizedSpan[]): TraceRenderContext {
+  const realSpanNames = new Set<string>();
+  let hasChildWorkSpans = false;
+
+  for (const span of allSpans) {
+    const normalizedName = normalizeSpanName(span.name);
+    const lifecycle = getLifecycleSpanInfo(normalizedName);
+    if (!lifecycle) {
+      const checkName = getConcreteCheckName(span);
+      if (checkName) realSpanNames.add(checkName);
+      else realSpanNames.add(normalizedName);
+    }
+
+    if (isChildSpan(span) && !lifecycle) {
+      hasChildWorkSpans = true;
+    }
+  }
+
+  return { realSpanNames, hasChildWorkSpans };
+}
+
+function shouldSkipLifecycleSpan(span: NormalizedSpan, renderContext: TraceRenderContext): boolean {
+  const lifecycle = getLifecycleSpanInfo(span.name);
+  if (!lifecycle) return false;
+
+  if (lifecycle.kind === 'sandbox-child') {
+    return renderContext.hasChildWorkSpans;
+  }
+
+  return renderContext.realSpanNames.has(lifecycle.baseName);
+}
+
 /**
  * Serialize a trace (by ID) into a compact text tree for LLM prompts.
  * Auto-detects the backend (Grafana Tempo, Jaeger, local files).
@@ -653,30 +835,25 @@ export async function serializeTraceForPrompt(
   fallbackTraceId?: string
 ): Promise<string> {
   let spans: NormalizedSpan[] = [];
-  const isFilePath = traceIdOrPath.includes('/') || traceIdOrPath.endsWith('.ndjson');
+  const cfg = resolveBackendConfig(backendConfig);
+  const backendOrder = getBackendOrder(cfg);
+  const isFilePath = isTraceFilePath(traceIdOrPath);
+  const localTracePath = isFilePath ? traceIdOrPath : undefined;
+  const remoteTraceId =
+    fallbackTraceId ||
+    (!isFilePath ? traceIdOrPath : (await readTraceIdFromFile(traceIdOrPath)) || undefined);
+  const preferLocalFirst = backendOrder[0] === 'file';
 
-  // Always try remote backends first (Grafana Tempo, Jaeger) — they have
-  // full span structure with IDs, timestamps, and parent-child relationships.
-  // The local NDJSON fallback file only has minimal event markers.
-  const remoteTraceId = fallbackTraceId || (!isFilePath ? traceIdOrPath : undefined);
-  if (remoteTraceId) {
-    spans = await fetchTraceSpans(remoteTraceId, backendConfig);
+  if (preferLocalFirst && localTracePath) {
+    spans = await fetchTraceSpans(localTracePath, { ...cfg, type: 'file' });
   }
 
-  // Fall back to local file only when remote returned nothing
-  if (spans.length === 0 && isFilePath) {
-    try {
-      const { parseNDJSONTrace } = await import('../debug-visualizer/trace-reader');
-      const trace = await parseNDJSONTrace(traceIdOrPath);
-      spans = parseLocalNDJSONSpans(trace.spans as any[]);
-    } catch {
-      // file may not exist or be malformed
-    }
+  if (spans.length === 0 && remoteTraceId) {
+    spans = await fetchTraceSpans(remoteTraceId, cfg);
   }
 
-  // Last resort: if traceIdOrPath wasn't tried as a trace ID yet, try it
-  if (spans.length === 0 && !remoteTraceId && !isFilePath) {
-    spans = await fetchTraceSpans(traceIdOrPath, backendConfig);
+  if (spans.length === 0 && localTracePath) {
+    spans = await fetchTraceSpans(localTracePath, { ...cfg, type: 'file' });
   }
 
   if (spans.length === 0) {
@@ -771,9 +948,10 @@ export function renderSpanYaml(
   const fullOutput = opts?.fullOutput ?? false;
   const maxLen = fullOutput ? 100000 : 120;
   const dedup: DeduplicationContext = { outputs: new Map(), intents: new Map() };
+  const renderContext = buildRenderContext(allSpans);
   const lines: string[] = [];
 
-  renderYamlNode(tree, 0, lines, dedup, opts?.fallbackIntent, fullOutput, maxLen);
+  renderYamlNode(tree, 0, lines, dedup, renderContext, opts?.fallbackIntent, fullOutput, maxLen);
 
   // Append the final task response from the task store (not OTEL-truncated)
   if (opts?.taskResponse) {
@@ -805,15 +983,23 @@ function renderYamlNode(
   indent: number,
   lines: string[],
   dedup: DeduplicationContext,
+  renderContext: TraceRenderContext,
   fallbackIntent?: string,
   fullOutput?: boolean,
   maxLen?: number,
   parentSpan?: NormalizedSpan
 ): void {
+  if (shouldSkipLifecycleSpan(node.span, renderContext)) {
+    return;
+  }
+
   const pad = '  '.repeat(indent);
   const attrs = node.span.attributes;
   const duration = formatDurationMs(node.span.durationMs);
-  const name = node.span.name;
+  const rawName = node.span.name;
+  const name = normalizeSpanName(rawName);
+  const lifecycle = getLifecycleSpanInfo(name);
+  const childSuffix = isChildSpan(node.span) ? ' [child]' : '';
   const ml = maxLen ?? 120;
 
   // Helper: get display name — for AI spans, use parent check name
@@ -825,6 +1011,29 @@ function renderYamlNode(
     name === 'ai.request' && parentCheckName
       ? parentCheckName
       : String(attrs['visor.check.id'] || name).replace(/^visor\.check\./, '');
+
+  if (lifecycle) {
+    if (lifecycle.kind === 'check') {
+      const cleanName = lifecycle.baseName.replace(/^visor\.check\./, '');
+      lines.push(`${pad}${cleanName}${childSuffix} [${lifecycle.phase}] — ${duration}`);
+      return;
+    }
+    if (lifecycle.kind === 'sandbox-child') {
+      const checkName = attrs['visor.check.name'] ? ` ${String(attrs['visor.check.name'])}` : '';
+      lines.push(
+        `${pad}sandbox.child${checkName}${childSuffix} [${lifecycle.phase}] — ${duration}`
+      );
+      return;
+    }
+    if (lifecycle.kind === 'engineer') {
+      const sandbox = attrs['visor.sandbox.selected'] || attrs['visor.sandbox.name'];
+      const sandboxSuffix = sandbox ? ` sandbox=${String(sandbox)}` : '';
+      lines.push(`${pad}engineer${childSuffix} [${lifecycle.phase}]${sandboxSuffix} — ${duration}`);
+      return;
+    }
+    lines.push(`${pad}${lifecycle.baseName}${childSuffix} [${lifecycle.phase}] — ${duration}`);
+    return;
+  }
 
   // --- Tool calls ---
   const toolName = attrs['tool.name'] || attrs['visor.tool.name'];
@@ -843,7 +1052,7 @@ function renderYamlNode(
         ? ` → ${formatSize(numLen)}`
         : '';
     const successMark = attrs['tool.success'] === false ? ' ✗' : '';
-    lines.push(`${pad}- ${tn}(${toolInput})${resultSize}${successMark}`);
+    lines.push(`${pad}- ${tn}(${toolInput})${childSuffix}${resultSize}${successMark}`);
     return;
   }
 
@@ -870,7 +1079,7 @@ function renderYamlNode(
     const output = attrs['search.delegate.output'] || '';
     const outputLen = attrs['search.delegate.output_length'] || '';
 
-    let header = `search.delegate("${truncate(String(query), 80)}")`;
+    let header = `search.delegate("${truncate(String(query), 80)}")${childSuffix}`;
     if (rewritten) header += ` → rewritten: "${truncate(String(rewritten), 60)}"`;
     header += ` — ${duration}`;
     lines.push(`${pad}${header}:`);
@@ -912,6 +1121,7 @@ function renderYamlNode(
         indent + 1,
         lines,
         dedup,
+        renderContext,
         fallbackIntent,
         fullOutput,
         maxLen,
@@ -932,7 +1142,9 @@ function renderYamlNode(
     const tokenStr = tokenParts.length > 0 ? ` — ${tokenParts.join(', ')}` : '';
 
     const hasChildren = node.children.length > 0;
-    lines.push(`${pad}ai: ${model} — ${duration}${tokenStr}${hasChildren ? ':' : ''}`);
+    lines.push(
+      `${pad}ai: ${model}${childSuffix} — ${duration}${tokenStr}${hasChildren ? ':' : ''}`
+    );
 
     // Intent
     const aiInput = String(attrs['ai.input'] || '');
@@ -972,6 +1184,7 @@ function renderYamlNode(
         indent + 1,
         lines,
         dedup,
+        renderContext,
         fallbackIntent,
         fullOutput,
         maxLen,
@@ -1017,6 +1230,7 @@ function renderYamlNode(
         indent + 1,
         lines,
         dedup,
+        renderContext,
         fallbackIntent,
         fullOutput,
         maxLen,
@@ -1029,10 +1243,11 @@ function renderYamlNode(
   // --- Visor check ---
   const checkId = attrs['visor.check.id'];
   const checkType = attrs['visor.check.type'];
-  if (checkId || name.startsWith('visor.check.')) {
-    const cleanName = String(checkId || name).replace(/^visor\.check\./, '');
+  const concreteCheckName = getConcreteCheckName({ name, attributes: attrs });
+  if (checkId || concreteCheckName) {
+    const cleanName = String(checkId || concreteCheckName || name).replace(/^visor\.check\./, '');
     const errMark = node.span.status === 'error' ? ' ✗' : '';
-    lines.push(`${pad}${cleanName}:${errMark}`);
+    lines.push(`${pad}${cleanName}${childSuffix}:${errMark}`);
     if (checkType) lines.push(`${pad}  type: ${checkType}`);
     lines.push(`${pad}  duration: ${duration}`);
 
@@ -1051,6 +1266,7 @@ function renderYamlNode(
         indent + 1,
         lines,
         dedup,
+        renderContext,
         fallbackIntent,
         fullOutput,
         maxLen,
@@ -1073,9 +1289,19 @@ function renderYamlNode(
   // --- Generic span ---
   const errMark = node.span.status === 'error' ? ' ✗' : '';
   const hasChildren = node.children.length > 0;
-  lines.push(`${pad}${name} — ${duration}${errMark}${hasChildren ? ':' : ''}`);
+  lines.push(`${pad}${name}${childSuffix} — ${duration}${errMark}${hasChildren ? ':' : ''}`);
   for (const child of node.children) {
-    renderYamlNode(child, indent + 1, lines, dedup, fallbackIntent, fullOutput, maxLen, node.span);
+    renderYamlNode(
+      child,
+      indent + 1,
+      lines,
+      dedup,
+      renderContext,
+      fallbackIntent,
+      fullOutput,
+      maxLen,
+      node.span
+    );
   }
 }
 

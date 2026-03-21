@@ -15,8 +15,8 @@ import { SandboxManager } from './sandbox-manager';
 import { filterEnvForSandbox } from './env-filter';
 import { SandboxConfig } from './types';
 import { logger } from '../logger';
-import { withActiveSpan, setSpanError } from './sandbox-telemetry';
-import { ingestChildTrace } from './trace-ingester';
+import { withActiveSpan, setSpanError, emitImmediateSpan } from './sandbox-telemetry';
+import { ChildTraceTailer } from './trace-ingester';
 
 /**
  * Serialize PRInfo to a plain JSON-safe object
@@ -69,11 +69,13 @@ export class CheckRunner {
     workspaceDefaults?: { env_passthrough?: string[] },
     serviceEnvVars?: Record<string, string>
   ): Promise<ReviewSummary> {
+    const checkName = (checkConfig as any).name || 'unknown';
+    const engineerCheck = checkName === 'engineer-task';
     return withActiveSpan(
       'visor.sandbox.runCheck',
       {
         'visor.sandbox.name': sandboxName,
-        'visor.check.name': (checkConfig as any).name || 'unknown',
+        'visor.check.name': checkName,
       },
       async () => {
         // Build the payload
@@ -110,6 +112,7 @@ export class CheckRunner {
             ? sandboxManager.getRepoPath()
             : sandboxConfig.workdir || '/workspace';
         let hostTracePath: string | undefined;
+        let traceTailer: ChildTraceTailer | undefined;
         if (!sandboxConfig.read_only) {
           const traceFileName = `.visor-trace-${randomUUID().slice(0, 8)}.ndjson`;
           hostTracePath = join(sandboxManager.getRepoPath(), traceFileName);
@@ -149,23 +152,69 @@ export class CheckRunner {
         const command = `echo ${b64Payload} | base64 -d | node ${visorPath}/index.js --run-check -`;
 
         logger.info(`Executing check in sandbox '${sandboxName}'`);
-
-        const result = await sandboxManager.exec(sandboxName, {
-          command,
-          env,
-          timeoutMs: timeoutMs || 600000,
-          maxBuffer: 50 * 1024 * 1024,
+        emitImmediateSpan('visor.sandbox.child.started', {
+          'visor.sandbox.name': sandboxName,
+          'visor.check.name': checkName,
+          'visor.trace.relay': hostTracePath ? 'file-tail' : 'disabled',
         });
+        if (engineerCheck) {
+          emitImmediateSpan('visor.engineer.child_spawned', {
+            'visor.sandbox.name': sandboxName,
+            'visor.check.name': checkName,
+            'visor.trace.relay': hostTracePath ? 'file-tail' : 'disabled',
+          });
+        }
 
-        // Ingest child trace file if it exists
         if (hostTracePath) {
           try {
-            if (existsSync(hostTracePath)) {
-              ingestChildTrace(hostTracePath);
-              unlinkSync(hostTracePath);
-            }
+            const { context: otContext } = require('../telemetry/lazy-otel');
+            traceTailer = new ChildTraceTailer(hostTracePath, {
+              parentContext: otContext?.active?.(),
+            });
           } catch {
-            // Non-fatal: child trace ingestion failure shouldn't affect check result
+            traceTailer = new ChildTraceTailer(hostTracePath);
+          }
+          traceTailer.start();
+        }
+        emitImmediateSpan('visor.sandbox.child.waiting', {
+          'visor.sandbox.name': sandboxName,
+          'visor.check.name': checkName,
+        });
+        if (engineerCheck) {
+          emitImmediateSpan('visor.engineer.waiting_on_child', {
+            'visor.sandbox.name': sandboxName,
+            'visor.check.name': checkName,
+          });
+        }
+
+        let result;
+        try {
+          result = await sandboxManager.exec(sandboxName, {
+            command,
+            env,
+            timeoutMs: timeoutMs || 600000,
+            maxBuffer: 50 * 1024 * 1024,
+          });
+          emitImmediateSpan('visor.sandbox.child.completed', {
+            'visor.sandbox.name': sandboxName,
+            'visor.check.name': checkName,
+          });
+        } catch (error) {
+          emitImmediateSpan('visor.sandbox.child.failed', {
+            'visor.sandbox.name': sandboxName,
+            'visor.check.name': checkName,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        } finally {
+          if (traceTailer) {
+            try {
+              await traceTailer.stop();
+            } catch {
+              // best effort only
+            }
+          }
+          if (hostTracePath) {
             try {
               if (existsSync(hostTracePath)) unlinkSync(hostTracePath);
             } catch {}

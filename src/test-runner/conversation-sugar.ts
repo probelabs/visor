@@ -36,6 +36,13 @@ export interface ConversationTurn {
   /** Optional user identifier, exposed as `conversation.current.user` in Liquid templates.
    *  Useful for simulating multi-user (group chat) scenarios in tests. */
   user?: string;
+  /** Fire this turn in the background without waiting for the response.
+   *  The next turn will start immediately, useful for testing progress/status
+   *  queries while a long-running task is still executing. */
+  background?: boolean;
+  /** Delay in milliseconds before executing this turn.
+   *  Useful after a background turn to give it time to start. */
+  delay_ms?: number;
   mocks?: Record<string, unknown>;
   expect?: Record<string, unknown>;
 }
@@ -107,6 +114,8 @@ export function expandConversationToFlow(testCase: any): any {
       },
       ...(turn.mocks ? { mocks: turn.mocks } : {}),
       ...(expect ? { expect } : {}),
+      ...(turn.background ? { background: true } : {}),
+      ...(turn.delay_ms ? { delay_ms: turn.delay_ms } : {}),
     };
 
     flow.push(stage);

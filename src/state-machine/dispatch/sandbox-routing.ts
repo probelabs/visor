@@ -10,6 +10,7 @@ import type { CheckConfig } from '../../types/config';
 import type { ReviewSummary } from '../../reviewer';
 import type { PRInfo } from '../../pr-analyzer';
 import { logger } from '../../logger';
+import { emitImmediateSpan } from '../../telemetry/trace-helpers';
 
 /**
  * Optional project metadata for service startup and env injection.
@@ -94,6 +95,7 @@ export async function executeWithSandboxRouting(
   projectMeta?: ProjectMeta | ProjectMeta[]
 ): Promise<ReviewSummary> {
   const sandboxManager = context.sandboxManager;
+  const engineerCheck = checkId === 'engineer-task';
   if (!sandboxManager) {
     return hostExecute();
   }
@@ -106,7 +108,29 @@ export async function executeWithSandboxRouting(
   );
 
   if (!sandboxName) {
+    emitImmediateSpan('visor.sandbox.routing.host', {
+      'visor.check.id': checkId,
+      'visor.sandbox.selected': '',
+    });
+    if (engineerCheck) {
+      emitImmediateSpan('visor.engineer.sandbox_resolved', {
+        'visor.check.id': checkId,
+        'visor.sandbox.selected': '',
+        'visor.sandbox.mode': 'host',
+      });
+    }
     return hostExecute();
+  }
+  emitImmediateSpan('visor.sandbox.routing.selected', {
+    'visor.check.id': checkId,
+    'visor.sandbox.selected': sandboxName,
+  });
+  if (engineerCheck) {
+    emitImmediateSpan('visor.engineer.sandbox_resolved', {
+      'visor.check.id': checkId,
+      'visor.sandbox.selected': sandboxName,
+      'visor.sandbox.mode': 'sandbox',
+    });
   }
 
   // Get sandbox configuration

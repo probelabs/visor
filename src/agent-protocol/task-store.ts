@@ -112,6 +112,8 @@ export interface ListTasksFilter {
   workflowId?: string;
   search?: string; // text search in request_message
   claimedBy?: string; // filter by instance/worker
+  /** Filter by key-value pairs in request_metadata JSON (uses JSON_EXTRACT). */
+  metadata?: Record<string, string>;
   limit?: number; // default 50, max 200
   offset?: number;
 }
@@ -150,6 +152,8 @@ export interface TaskStore {
   updateTaskState(taskId: string, newState: TaskState, statusMessage?: AgentMessage): void;
   /** Set claimed_by/claimed_at on a task (used by trackExecution to record instance ID). */
   claimTask(taskId: string, workerId: string): void;
+  /** Touch updated_at to signal the task is still being actively worked on. */
+  heartbeat(taskId: string): void;
   addArtifact(taskId: string, artifact: AgentArtifact): void;
   appendHistory(taskId: string, message: AgentMessage): void;
   setRunId(taskId: string, runId: string): void;
@@ -342,6 +346,15 @@ export class SqliteTaskStore implements TaskStore {
       conditions.push('claimed_by = ?');
       params.push(filter.claimedBy);
     }
+    if (filter.metadata) {
+      for (const [key, value] of Object.entries(filter.metadata)) {
+        // Validate key to prevent JSON path injection
+        if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) {
+          conditions.push(`json_extract(request_metadata, '$.${key}') = ?`);
+          params.push(value);
+        }
+      }
+    }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     return { where, params };
@@ -444,6 +457,14 @@ export class SqliteTaskStore implements TaskStore {
     db.prepare(
       `UPDATE agent_tasks SET claimed_by = ?, claimed_at = ?, updated_at = ? WHERE id = ?`
     ).run(workerId, now, now, taskId);
+  }
+
+  heartbeat(taskId: string): void {
+    const db = this.getDb();
+    db.prepare(`UPDATE agent_tasks SET updated_at = ? WHERE id = ? AND state = 'working'`).run(
+      nowISO(),
+      taskId
+    );
   }
 
   addArtifact(taskId: string, artifact: AgentArtifact): void {

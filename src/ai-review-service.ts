@@ -5,7 +5,7 @@ import { ReviewSummary, ReviewIssue } from './reviewer';
 import { SessionRegistry } from './session-registry';
 import { logger } from './logger';
 import { trace as otTrace } from './telemetry/lazy-otel';
-import { withActiveSpan } from './telemetry/trace-helpers';
+import { emitImmediateSpan, withActiveSpan } from './telemetry/trace-helpers';
 import { emitNdjsonFullSpan } from './telemetry/fallback-ndjson';
 import { initializeTracer } from './utils/tracer-init';
 import { processDiffWithOutline } from './utils/diff-processor';
@@ -56,6 +56,11 @@ function getCurrentDateXml(): string {
 
 function createProbeTracerAdapter(fallbackTracer?: any) {
   const fallback = fallbackTracer && typeof fallbackTracer === 'object' ? fallbackTracer : null;
+  const LIVE_LIFECYCLE_SPANS = new Set(['visor.ai_check', 'ai.request', 'search.delegate']);
+  const PROBE_LIFECYCLE_ALIASES: Record<string, string> = {
+    'ai.request': 'probe.ai_request',
+    'search.delegate': 'probe.search_delegate',
+  };
   // OTel span event attributes only support primitive types (string, number, boolean)
   // and arrays of primitives. Complex values (objects, arrays of objects) are silently
   // dropped. Flatten them to JSON strings so they survive serialization.
@@ -122,6 +127,23 @@ function createProbeTracerAdapter(fallbackTracer?: any) {
       }
     } catch {}
   };
+  const emitLifecycle = (
+    name: string,
+    phase: 'started' | 'completed' | 'failed',
+    attrs?: Record<string, unknown>
+  ) => {
+    emitImmediateSpan(`${name}.${phase}`, {
+      'probe.lifecycle.target': name,
+      ...(flattenAttrs(attrs) as Record<string, unknown>),
+    });
+    const alias = PROBE_LIFECYCLE_ALIASES[name];
+    if (alias) {
+      emitImmediateSpan(`${alias}.${phase}`, {
+        'probe.lifecycle.target': name,
+        ...(flattenAttrs(attrs) as Record<string, unknown>),
+      });
+    }
+  };
   return {
     withSpan: async (
       name: string,
@@ -130,58 +152,72 @@ function createProbeTracerAdapter(fallbackTracer?: any) {
       onResult?: (span: any, result: any) => void
     ) => {
       const startHr = process.hrtime();
-      return withActiveSpan(name, attrs as Record<string, unknown>, async span => {
-        let result: any;
-        if (fallback && typeof fallback.withSpan === 'function') {
-          result = await fallback.withSpan(name, async () => fn(span), attrs);
-        } else {
-          result = await fn(span);
-        }
-        // Collect extra attributes set by onResult callback
-        const extraAttrs: Record<string, unknown> = {};
-        if (onResult) {
+      if (LIVE_LIFECYCLE_SPANS.has(name)) {
+        emitLifecycle(name, 'started', attrs);
+      }
+      try {
+        const result = await withActiveSpan(name, attrs as Record<string, unknown>, async span => {
+          let innerResult: any;
+          if (fallback && typeof fallback.withSpan === 'function') {
+            innerResult = await fallback.withSpan(name, async () => fn(span), attrs);
+          } else {
+            innerResult = await fn(span);
+          }
+          const extraAttrs: Record<string, unknown> = {};
+          if (onResult) {
+            try {
+              const capturingSpan = {
+                setAttributes: (a: Record<string, unknown>) => {
+                  Object.assign(extraAttrs, a);
+                  try {
+                    span.setAttributes(a);
+                  } catch {}
+                },
+                setAttribute: (k: string, v: unknown) => {
+                  extraAttrs[k] = v;
+                  try {
+                    span.setAttribute(k, v as never);
+                  } catch {}
+                },
+                addEvent: (...args: unknown[]) => {
+                  try {
+                    (span as any).addEvent(...args);
+                  } catch {}
+                },
+              };
+              onResult(capturingSpan, innerResult);
+            } catch {}
+          }
           try {
-            const capturingSpan = {
-              setAttributes: (a: Record<string, unknown>) => {
-                Object.assign(extraAttrs, a);
-                try {
-                  span.setAttributes(a);
-                } catch {}
-              },
-              setAttribute: (k: string, v: unknown) => {
-                extraAttrs[k] = v;
-                try {
-                  span.setAttribute(k, v as never);
-                } catch {}
-              },
-              addEvent: (...args: unknown[]) => {
-                try {
-                  (span as any).addEvent(...args);
-                } catch {}
-              },
-            };
-            onResult(capturingSpan, result);
+            const endHr = process.hrtime();
+            const ctx = span.spanContext?.() || {};
+            const parentCtx = (span as any).parentSpanContext || (span as any)._parentSpanContext;
+            emitNdjsonFullSpan({
+              name,
+              traceId: ctx.traceId,
+              spanId: ctx.spanId,
+              parentSpanId: parentCtx?.spanId,
+              startTime: [startHr[0], startHr[1]],
+              endTime: [endHr[0], endHr[1]],
+              attributes: { ...flattenAttrs(attrs), ...flattenAttrs(extraAttrs) },
+              events: [],
+              status: { code: 1 },
+            });
           } catch {}
+          return innerResult;
+        });
+        if (LIVE_LIFECYCLE_SPANS.has(name)) {
+          emitLifecycle(name, 'completed');
         }
-        // Emit probe-internal spans to fallback NDJSON with full span context
-        try {
-          const endHr = process.hrtime();
-          const ctx = span.spanContext?.() || {};
-          const parentCtx = (span as any).parentSpanContext || (span as any)._parentSpanContext;
-          emitNdjsonFullSpan({
-            name,
-            traceId: ctx.traceId,
-            spanId: ctx.spanId,
-            parentSpanId: parentCtx?.spanId,
-            startTime: [startHr[0], startHr[1]],
-            endTime: [endHr[0], endHr[1]],
-            attributes: { ...flattenAttrs(attrs), ...flattenAttrs(extraAttrs) },
-            events: [],
-            status: { code: 1 },
-          });
-        } catch {}
         return result;
-      });
+      } catch (error) {
+        if (LIVE_LIFECYCLE_SPANS.has(name)) {
+          emitLifecycle(name, 'failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        throw error;
+      }
     },
     recordEvent: (name: string, attrs?: Record<string, unknown>) => {
       emitEvent(name, attrs);
@@ -220,6 +256,11 @@ function createProbeTracerAdapter(fallbackTracer?: any) {
         'tool.success': success,
         ...(metadata || {}),
       });
+      emitImmediateSpan(success ? 'probe.tool.completed' : 'probe.tool.failed', {
+        'tool.name': toolName,
+        'tool.duration_ms': durationMs,
+        'tool.success': success,
+      });
       if (fallback && typeof fallback.recordToolResult === 'function') {
         try {
           fallback.recordToolResult(toolName, result, success, durationMs, metadata);
@@ -228,6 +269,11 @@ function createProbeTracerAdapter(fallbackTracer?: any) {
     },
     recordToolDecision: (toolName: string, params: unknown, metadata?: Record<string, unknown>) => {
       const paramsStr = typeof params === 'string' ? params : JSON.stringify(params || {});
+      emitImmediateSpan('probe.tool.started', {
+        'tool.name': toolName,
+        'tool.params.length': paramsStr.length,
+        ...(flattenAttrs(metadata) as Record<string, unknown>),
+      });
       emitEvent('tool.decision', {
         'tool.name': toolName,
         'tool.params': paramsStr.substring(0, 5000),
@@ -263,6 +309,67 @@ function createProbeTracerAdapter(fallbackTracer?: any) {
           fallback.recordJsonValidationEvent(phase, attrs);
         } catch {}
       }
+    },
+    createToolSpan: (toolName: string, attrs?: Record<string, unknown>) => {
+      let fallbackSpan: any = null;
+      if (fallback && typeof fallback.createToolSpan === 'function') {
+        try {
+          fallbackSpan = fallback.createToolSpan(toolName, attrs);
+        } catch {}
+      }
+      emitImmediateSpan('probe.tool.started', {
+        'tool.name': toolName,
+        ...(flattenAttrs(attrs) as Record<string, unknown>),
+      });
+      const tracer = otTrace.getTracer('visor');
+      const span = tracer.startSpan(`probe.tool.${toolName}`, {
+        attributes: {
+          'tool.name': toolName,
+          ...(flattenAttrs(attrs) as Record<string, unknown>),
+        },
+      });
+      return {
+        setAttributes: (spanAttrs?: Record<string, unknown>) => {
+          try {
+            if (spanAttrs) span.setAttributes(spanAttrs as Record<string, unknown>);
+          } catch {}
+          if (fallbackSpan?.setAttributes) {
+            try {
+              fallbackSpan.setAttributes(spanAttrs);
+            } catch {}
+          }
+        },
+        setStatus: (status: unknown) => {
+          try {
+            span.setStatus(status as never);
+          } catch {}
+          if (fallbackSpan?.setStatus) {
+            try {
+              fallbackSpan.setStatus(status);
+            } catch {}
+          }
+        },
+        addEvent: (eventName: string, eventAttrs?: Record<string, unknown>) => {
+          try {
+            span.addEvent(eventName, (flattenAttrs(eventAttrs) as Record<string, unknown>) || {});
+          } catch {}
+          if (fallbackSpan?.addEvent) {
+            try {
+              fallbackSpan.addEvent(eventName, eventAttrs);
+            } catch {}
+          }
+        },
+        end: () => {
+          try {
+            span.end();
+          } catch {}
+          if (fallbackSpan?.end) {
+            try {
+              fallbackSpan.end();
+            } catch {}
+          }
+        },
+      };
     },
     createDelegationSpan: (sessionId: string, task: string) => {
       let fallbackSpan: any = null;
@@ -1577,7 +1684,27 @@ ${this.escapeXml(processedFallbackDiff)}
     <text>${this.escapeXml(String(current.text || ''))}</text>
     <timestamp>${this.escapeXml(String(current.timestamp || ''))}</timestamp>
     <origin>${this.escapeXml(String(current.origin || ''))}</origin>${this.formatFilesXml((current as any).files)}
-  </current>
+  </current>`;
+
+      // Active tasks in this thread (so AI can avoid duplicate work)
+      const activeTasks = (prInfo as any)?.activeTasks;
+      if (Array.isArray(activeTasks) && activeTasks.length > 0) {
+        xml += `
+  <active_tasks hint="These tasks are already in progress in this thread. If the current message is asking about the same thing as an active task, inform the user that you are already working on it. If it is a different question or a follow-up, proceed normally.">`;
+        for (const t of activeTasks) {
+          xml += `
+    <task>
+      <id>${this.escapeXml(String(t.id || ''))}</id>
+      <state>${this.escapeXml(String(t.state || ''))}</state>
+      <started>${this.escapeXml(String(t.created_at || ''))}</started>
+      <trigger_message>${this.escapeXml(String(t.trigger_message || ''))}</trigger_message>
+    </task>`;
+        }
+        xml += `
+  </active_tasks>`;
+      }
+
+      xml += `
 </slack_context>`;
 
       return xml;
@@ -2960,6 +3087,20 @@ ${'='.repeat(60)}
         }
       }
 
+      const buildPlainTextOutput = (text: string, rawOutput?: string): Record<string, unknown> => {
+        const trimmed = typeof text === 'string' ? text.trim() : '';
+        const out: Record<string, unknown> = {};
+        if (trimmed) {
+          // Keep both keys for compatibility:
+          // - output.text is what Oel and chat frontends consume today
+          // - output.content satisfies the built-in "plain" renderer schema/template contract
+          out.text = trimmed;
+          out.content = trimmed;
+        }
+        if (rawOutput) out._rawOutput = rawOutput;
+        return out;
+      };
+
       // Handle plain schema or no schema - no JSON parsing, treat as assistant-style text output
       if (_schema === 'plain' || !_schema) {
         log(
@@ -2969,8 +3110,7 @@ ${'='.repeat(60)}
         // For plain schema / no schema, return the raw response as a text-like output
         // instead of a synthetic AI_RESPONSE issue. This is more natural for chat-style
         // integrations (Slack, GitHub comments, CLI assistant mode).
-        const trimmed = typeof response === 'string' ? response.trim() : '';
-        const out: any = trimmed ? { text: trimmed } : {};
+        const out = buildPlainTextOutput(response);
 
         return {
           issues: [],
@@ -3038,9 +3178,10 @@ ${'='.repeat(60)}
               response.toLowerCase().includes('unable to')
             ) {
               console.error('🚫 AI refused to analyze - returning refusal as output');
-              const trimmed = responseForParsing.trim();
-              const out: any = trimmed ? { text: trimmed } : {};
-              if (rawOutputBlocks.length > 0) out._rawOutput = rawOutputBlocks.join('\n\n');
+              const out = buildPlainTextOutput(
+                responseForParsing,
+                rawOutputBlocks.length > 0 ? rawOutputBlocks.join('\n\n') : undefined
+              );
               return {
                 issues: [],
                 output: out,
@@ -3052,9 +3193,10 @@ ${'='.repeat(60)}
             // This allows Probe (or other AI providers) to handle JSON validation
             // and avoids false positives from bracket-matching (e.g., mermaid diagrams)
             log('🔧 Treating response as plain text (no JSON extraction)');
-            const trimmed = responseForParsing.trim();
-            const fallbackOut: any = { text: trimmed };
-            if (rawOutputBlocks.length > 0) fallbackOut._rawOutput = rawOutputBlocks.join('\n\n');
+            const fallbackOut = buildPlainTextOutput(
+              responseForParsing,
+              rawOutputBlocks.length > 0 ? rawOutputBlocks.join('\n\n') : undefined
+            );
             return {
               issues: [],
               output: fallbackOut,

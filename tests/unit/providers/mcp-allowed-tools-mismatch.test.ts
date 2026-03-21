@@ -75,7 +75,7 @@ describe('MCP tool allowedTools name mismatch', () => {
   describe('bug: whitelist allowedTools uses server name, not workflow.id', () => {
     // Simulate the real scenario:
     // - ai_mcp_servers_js returns: { "code-explorer": { workflow: "code-talk", inputs: {...} } }
-    // - ai_allowed_tools_js returns: ["readImage", "code-explorer", "slack-send-dm"]
+    // - ai_allowed_tools_js returns: ["readMedia", "code-explorer", "slack-send-dm"]
     // - But the SSE server registers the tool under workflow.id, e.g. "tyk-code-talk"
 
     const serverName = 'code-explorer'; // name in ai_mcp_servers / ai_allowed_tools
@@ -84,7 +84,7 @@ describe('MCP tool allowedTools name mismatch', () => {
     it('whitelist with server name should NOT match the actual MCP tool name', () => {
       // This is the buggy behavior: ai_allowed_tools_js builds a whitelist
       // using the server names from build-config output
-      const allowedTools = parseAllowedTools(['readImage', serverName, 'slack-send-dm']);
+      const allowedTools = parseAllowedTools(['readMedia', serverName, 'slack-send-dm']);
 
       expect(allowedTools.mode).toBe('whitelist');
 
@@ -119,8 +119,8 @@ describe('MCP tool allowedTools name mismatch', () => {
       expect(allowedTools.isEnabled('extract')).toBe(false);
       expect(allowedTools.isEnabled('delegate')).toBe(false);
 
-      // readImage and other non-excluded tools pass
-      expect(allowedTools.isEnabled('readImage')).toBe(true);
+      // readMedia and other non-excluded tools pass
+      expect(allowedTools.isEnabled('readMedia')).toBe(true);
       expect(allowedTools.isEnabled('bash')).toBe(true);
     });
   });
@@ -175,7 +175,7 @@ describe('MCP tool allowedTools name mismatch', () => {
       expect(tool!.__workflowId).toBe('customer-insights-talk');
 
       // Now whitelist-based allowedTools works correctly
-      const whitelist = parseAllowedTools(['readImage', serverEntryName]);
+      const whitelist = parseAllowedTools(['readMedia', serverEntryName]);
       expect(isMcpToolAllowed(tool!.name, whitelist)).toBe(true);
     });
 
@@ -197,17 +197,17 @@ describe('MCP tool allowedTools name mismatch', () => {
       expect(tool!.name).not.toBe(serverEntryName);
 
       // Whitelist with server name does NOT match the workflow.id tool name
-      const whitelist = parseAllowedTools(['readImage', serverEntryName]);
+      const whitelist = parseAllowedTools(['readMedia', serverEntryName]);
       expect(isMcpToolAllowed(tool!.name, whitelist)).toBe(false);
     });
   });
 
   describe('ai_allowed_tools_js patterns', () => {
     it('whitelist pattern: only listed tools pass', () => {
-      // Simulates: const tools = ['readImage']; ... tools.push(name); return tools;
-      const tools = parseAllowedTools(['readImage', 'code-explorer', 'slack-send-dm']);
+      // Simulates: const tools = ['readMedia']; ... tools.push(name); return tools;
+      const tools = parseAllowedTools(['readMedia', 'code-explorer', 'slack-send-dm']);
 
-      expect(tools.isEnabled('readImage')).toBe(true);
+      expect(tools.isEnabled('readMedia')).toBe(true);
       expect(tools.isEnabled('code-explorer')).toBe(true);
       expect(tools.isEnabled('slack-send-dm')).toBe(true);
       // Everything else blocked
@@ -237,7 +237,7 @@ describe('MCP tool allowedTools name mismatch', () => {
       expect(tools.isEnabled('bash')).toBe(false);
 
       // Everything else allowed — including MCP tools regardless of naming
-      expect(tools.isEnabled('readImage')).toBe(true);
+      expect(tools.isEnabled('readMedia')).toBe(true);
       expect(tools.isEnabled('code-explorer')).toBe(true);
       expect(tools.isEnabled('tyk-code-talk')).toBe(true);
       expect(tools.isEnabled('slack-send-dm')).toBe(true);
@@ -284,26 +284,26 @@ describe('MCP tool allowedTools name mismatch', () => {
     });
 
     it('glob patterns pass through unchanged (ProbeAgent handles them)', () => {
-      const result = intersectAllowedTools(['*', '!search', '!delegate'], ['readImage', 'bash']);
+      const result = intersectAllowedTools(['*', '!search', '!delegate'], ['readMedia', 'bash']);
       // Glob patterns must survive — Probe resolves them, not Visor
       expect(result).toEqual(['*', '!search', '!delegate']);
     });
 
     it('literal whitelist is intersected with policy', () => {
       const result = intersectAllowedTools(
-        ['readImage', 'code-explorer', 'slack-send-dm'],
-        ['readImage', 'slack-send-dm']
+        ['readMedia', 'code-explorer', 'slack-send-dm'],
+        ['readMedia', 'slack-send-dm']
       );
-      expect(result).toEqual(['readImage', 'slack-send-dm']);
+      expect(result).toEqual(['readMedia', 'slack-send-dm']);
     });
 
     it('undefined configTools adopts policy tools', () => {
-      const result = intersectAllowedTools(undefined, ['readImage', 'bash']);
-      expect(result).toEqual(['readImage', 'bash']);
+      const result = intersectAllowedTools(undefined, ['readMedia', 'bash']);
+      expect(result).toEqual(['readMedia', 'bash']);
     });
 
     it('empty configTools intersected with policy yields empty', () => {
-      const result = intersectAllowedTools([], ['readImage', 'bash']);
+      const result = intersectAllowedTools([], ['readMedia', 'bash']);
       expect(result).toEqual([]);
     });
 
@@ -315,26 +315,26 @@ describe('MCP tool allowedTools name mismatch', () => {
 
     it('single "!" entry triggers glob passthrough', () => {
       // Even without "*", a "!" prefix indicates pattern syntax
-      const result = intersectAllowedTools(['readImage', '!search'], ['readImage']);
+      const result = intersectAllowedTools(['readMedia', '!search'], ['readMedia']);
       // Has glob-like entry ("!search") → pass through unchanged
-      expect(result).toEqual(['readImage', '!search']);
+      expect(result).toEqual(['readMedia', '!search']);
     });
 
     it('real-world scenario: assistant.yaml whitelist vs policy restriction', () => {
       // Simulates: ai_allowed_tools_js returns explicit tool names,
       // policy allows a subset
-      const fromAssistantYaml = ['readImage', 'atlassian', 'code-explorer', 'bash'];
-      const fromPolicy = ['readImage', 'atlassian', 'code-explorer'];
+      const fromAssistantYaml = ['readMedia', 'atlassian', 'code-explorer', 'bash'];
+      const fromPolicy = ['readMedia', 'atlassian', 'code-explorer'];
       const result = intersectAllowedTools(fromAssistantYaml, fromPolicy);
       // bash is removed by policy
-      expect(result).toEqual(['readImage', 'atlassian', 'code-explorer']);
+      expect(result).toEqual(['readMedia', 'atlassian', 'code-explorer']);
     });
 
     it('real-world scenario: wildcard-exclusion pattern survives policy', () => {
       // Simulates: ai_allowed_tools_js returns ["*", "!search", "!delegate"],
       // policy tries to restrict to specific tools
       const fromConfig = ['*', '!search', '!query', '!delegate'];
-      const fromPolicy = ['readImage', 'bash'];
+      const fromPolicy = ['readMedia', 'bash'];
       const result = intersectAllowedTools(fromConfig, fromPolicy);
       // Pattern must survive intact — Probe handles the resolution
       expect(result).toEqual(['*', '!search', '!query', '!delegate']);

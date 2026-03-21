@@ -58,6 +58,8 @@ export interface GroupedCheckResults {
 export interface ReviewSummary {
   issues?: ReviewIssue[];
   debug?: AIDebugInfo;
+  output?: unknown;
+  content?: string;
   /** Session ID created for this check (for cleanup tracking) */
   sessionId?: string;
 }
