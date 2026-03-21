@@ -576,28 +576,29 @@ export class McpServerRunner implements Runner {
 
     // The output history (reviewSummary.history) contains outputs keyed by step ID.
     // For assistant workflows the steps are e.g. chat.route-intent, chat.build-config,
-    // chat.generate-response. The final AI response is the LAST step that has a .text
-    // field with substantial content (not a short routing label).
+    // chat.generate-response. The final AI response is the LAST step that produced
+    // a text output — not the longest, since routing/classification steps can produce
+    // longer text than the actual response.
     const history = result?.reviewSummary?.history;
     if (history && typeof history === 'object') {
-      // Collect all candidate text outputs, keeping the last (deepest) one
-      let bestText = '';
+      // Pick the last step's text output (iteration order preserves insertion order)
+      let lastText = '';
       for (const [, outputs] of Object.entries(history)) {
         if (!Array.isArray(outputs)) continue;
         for (const item of outputs as any[]) {
           const text = item?.text ?? item?.output?.text;
-          if (typeof text === 'string' && text.length > bestText.length) {
-            bestText = text;
+          if (typeof text === 'string' && text.trim().length > 0) {
+            lastText = text;
           }
         }
       }
-      if (bestText) return bestText;
+      if (lastText) return lastText;
     }
 
-    // Grouped results from execution statistics
+    // Grouped results from execution statistics — pick the last text output
     const grouped = result?.executionStatistics?.groupedResults;
     if (grouped && typeof grouped === 'object') {
-      let bestText = '';
+      let lastText = '';
       for (const checkResults of Object.values(grouped)) {
         if (!Array.isArray(checkResults)) continue;
         for (const cr of checkResults as any[]) {
@@ -605,12 +606,12 @@ export class McpServerRunner implements Runner {
             cr?.output?.text ??
             (typeof cr?.output === 'string' ? cr.output : null) ??
             (typeof cr?.content === 'string' && cr.content.trim() ? cr.content : null);
-          if (typeof text === 'string' && text.length > bestText.length) {
-            bestText = text;
+          if (typeof text === 'string' && text.trim().length > 0) {
+            lastText = text;
           }
         }
       }
-      if (bestText) return bestText;
+      if (lastText) return lastText;
     }
 
     // Direct properties on result

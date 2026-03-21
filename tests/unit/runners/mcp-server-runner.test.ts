@@ -213,7 +213,7 @@ describe('extractResponseText', () => {
     expect(extractResponseText(undefined)).toBe('No response from workflow.');
   });
 
-  it('picks the longest text from history (final AI response, not intent)', () => {
+  it('picks the last step text from history (final AI response, not routing)', () => {
     const result = {
       reviewSummary: {
         issues: [],
@@ -243,7 +243,7 @@ describe('extractResponseText', () => {
     expect(text).not.toBe('Short routing label');
   });
 
-  it('does not pick short intent/routing text over long response', () => {
+  it('does not pick short intent/routing text over last response', () => {
     const result = {
       reviewSummary: {
         issues: [],
@@ -259,6 +259,36 @@ describe('extractResponseText', () => {
     const text = extractResponseText(result);
     expect(text).toContain('rate limiting');
     expect(text).not.toBe('chat');
+  });
+
+  it('picks last step even when routing output is longer than final response', () => {
+    const result = {
+      reviewSummary: {
+        issues: [],
+        history: {
+          'chat.route-intent': [
+            {
+              text:
+                'Based on analysis of the user query, I have determined this is a request about ' +
+                'API gateway configuration. The user wants to understand how to set up rate limiting ' +
+                'with multiple policies across different API endpoints. Classifying as: engineering-task. ' +
+                'Relevant skills: api-gateway, rate-limiting, policy-management.',
+            },
+          ],
+          'chat.build-config': [{ mcp_servers: {}, text: 'config built' }],
+          'chat.generate-response': [
+            {
+              text: 'To set up rate limiting, use the Tyk Dashboard.',
+            },
+          ],
+        },
+      },
+    };
+
+    const text = extractResponseText(result);
+    // Should pick the last step (generate-response), NOT the longest (route-intent)
+    expect(text).toBe('To set up rate limiting, use the Tyk Dashboard.');
+    expect(text).not.toContain('Based on analysis');
   });
 
   it('falls back to grouped results when history has no text', () => {
@@ -307,7 +337,7 @@ describe('extractResponseText', () => {
     expect(() => JSON.parse(text)).not.toThrow();
   });
 
-  it('handles multi-step workflow with multiple text outputs, picks longest', () => {
+  it('handles multi-step workflow with multiple text outputs, picks last', () => {
     const result = {
       reviewSummary: {
         issues: [],
@@ -321,6 +351,29 @@ describe('extractResponseText', () => {
 
     const text = extractResponseText(result);
     expect(text).toContain('comprehensive response');
+  });
+
+  it('picks last grouped result, not longest', () => {
+    const result = {
+      reviewSummary: { issues: [], history: {} },
+      executionStatistics: {
+        groupedResults: {
+          routing: [
+            {
+              checkName: 'route',
+              output: {
+                text: 'Detailed routing analysis with lots of context about the user intent and classification',
+              },
+              issues: [],
+            },
+          ],
+          response: [{ checkName: 'respond', output: { text: 'Short final answer.' }, issues: [] }],
+        },
+      },
+    };
+
+    const text = extractResponseText(result);
+    expect(text).toBe('Short final answer.');
   });
 });
 
