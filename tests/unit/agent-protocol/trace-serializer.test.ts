@@ -84,6 +84,45 @@ describe('renderSpanYaml', () => {
     expect(result).not.toContain('my-check [');
   });
 
+  it('renders route skills and activated skills in check output', () => {
+    const routeIntent = makeTree({
+      name: 'visor.check.route-intent',
+      spanId: 's2',
+      parentSpanId: 's1',
+      durationMs: 1200,
+      attributes: {
+        'visor.check.id': 'route-intent',
+        'visor.check.type': 'ai',
+        'visor.check.output': JSON.stringify({
+          intent: 'chat',
+          topic: 'Investigate CI failures',
+          skills: ['code-explorer', 'engineer'],
+        }),
+      },
+    });
+    const buildConfig = makeTree({
+      name: 'visor.check.build-config',
+      spanId: 's3',
+      parentSpanId: 's1',
+      durationMs: 900,
+      attributes: {
+        'visor.check.id': 'build-config',
+        'visor.check.type': 'workflow',
+        'visor.check.output': JSON.stringify({
+          activated_skills: ['code-explorer', 'engineer', 'jira'],
+        }),
+      },
+    });
+    const root = makeTree({ name: 'visor.run', spanId: 's1', durationMs: 3000 }, [
+      routeIntent,
+      buildConfig,
+    ]);
+    const result = renderSpanYaml(root, [root.span, routeIntent.span, buildConfig.span]);
+
+    expect(result).toContain('skills: [code-explorer, engineer]');
+    expect(result).toContain('activated_skills: [code-explorer, engineer, jira]');
+  });
+
   it('renders tool calls with input and result size', () => {
     const tool = makeTree({
       name: 'probe.event.tool.result',
@@ -413,6 +452,30 @@ describe('renderSpanYaml', () => {
     expect(result).toContain('search.delegate("auth middleware")');
     expect(result).not.toContain('probe.ai_request.started');
     expect(result).not.toContain('probe.search_delegate.started');
+  });
+
+  it('lifts children when a skipped lifecycle helper span is the root node', () => {
+    const childCheck = makeTree({
+      name: 'visor.check.generate-response',
+      spanId: 's2',
+      parentSpanId: 's1',
+      durationMs: 1200,
+      attributes: { 'visor.check.id': 'generate-response', 'visor.check.type': 'ai' },
+    });
+    const rootLifecycle = makeTree(
+      {
+        name: 'visor.check.generate-response.started',
+        spanId: 's1',
+        durationMs: 0,
+        attributes: { 'visor.check.id': 'generate-response', 'visor.check.type': 'ai' },
+      },
+      [childCheck]
+    );
+
+    const result = renderSpanYaml(rootLifecycle, [rootLifecycle.span, childCheck.span]);
+
+    expect(result).toContain('generate-response:');
+    expect(result).not.toContain('generate-response [started]');
   });
 
   it('renders child spans using real semantics instead of generic child names', () => {

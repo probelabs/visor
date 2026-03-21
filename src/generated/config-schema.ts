@@ -228,6 +228,18 @@ export const configSchema = {
           description:
             'Automatically evaluate completed tasks using an LLM judge. Requires task_tracking to be enabled. Runs asynchronously after task completion. Set to `true` for defaults, or provide an object to configure.',
         },
+        task_live_updates: {
+          anyOf: [
+            {
+              type: 'boolean',
+            },
+            {
+              $ref: '#/definitions/TaskLiveUpdatesConfig',
+            },
+          ],
+          description:
+            'Live progress updates for long-running tracked tasks on supported frontends.',
+        },
       },
       required: ['version'],
       patternProperties: {
@@ -1135,7 +1147,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1152,7 +1164,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1896,7 +1908,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1911,14 +1923,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047>>':
+    'Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-61047>': {
+    'Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422>': {
       type: 'object',
       additionalProperties: false,
     },
@@ -3868,6 +3880,105 @@ export const configSchema = {
       },
       additionalProperties: false,
       description: 'Configuration for automatic task evaluation via LLM judge.',
+      patternProperties: {
+        '^x-': {},
+      },
+    },
+    TaskLiveUpdatesConfig: {
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'boolean',
+          description:
+            'Enable live task progress updates (default: true when config object is present)',
+        },
+        interval_seconds: {
+          type: 'number',
+          description: 'Update interval in seconds (default: 10)',
+        },
+        model: {
+          type: 'string',
+          description: 'LLM model to use for progress summarization',
+        },
+        provider: {
+          type: 'string',
+          description: 'AI provider to use for progress summarization',
+        },
+        prompt: {
+          type: 'string',
+          description: 'Custom system prompt for the progress summarizer',
+        },
+        initial_message: {
+          type: 'string',
+          description: 'Immediate placeholder text posted before the first summary is generated',
+        },
+        max_trace_chars: {
+          type: 'number',
+          description:
+            'Maximum serialized trace characters passed into the summarizer (default: 12000)',
+        },
+        frontends: {
+          type: 'object',
+          properties: {
+            slack: {
+              type: 'object',
+              properties: {
+                enabled: {
+                  type: 'boolean',
+                },
+              },
+              additionalProperties: false,
+              patternProperties: {
+                '^x-': {},
+              },
+            },
+            telegram: {
+              type: 'object',
+              properties: {
+                enabled: {
+                  type: 'boolean',
+                },
+              },
+              additionalProperties: false,
+              patternProperties: {
+                '^x-': {},
+              },
+            },
+            teams: {
+              type: 'object',
+              properties: {
+                enabled: {
+                  type: 'boolean',
+                },
+              },
+              additionalProperties: false,
+              patternProperties: {
+                '^x-': {},
+              },
+            },
+            whatsapp: {
+              type: 'object',
+              properties: {
+                enabled: {
+                  type: 'boolean',
+                },
+              },
+              additionalProperties: false,
+              patternProperties: {
+                '^x-': {},
+              },
+            },
+          },
+          additionalProperties: false,
+          description: 'Per-frontend enablement overrides',
+          patternProperties: {
+            '^x-': {},
+          },
+        },
+      },
+      additionalProperties: false,
+      description:
+        'Live task progress updates for supported interactive frontends.\n\nWhen enabled, Visor posts a "working on it" placeholder and periodically updates the same message using a cheap internal LLM summary of the current execution trace. The final answer replaces that same message.',
       patternProperties: {
         '^x-': {},
       },

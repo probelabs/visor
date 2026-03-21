@@ -108,6 +108,51 @@ export class TelegramClient {
   }
 
   /**
+   * Edit an existing text message.
+   * Returns ok=false if Telegram rejects the edit (e.g. message too old or unchanged).
+   */
+  async editMessageText(opts: {
+    chat_id: number | string;
+    message_id: number;
+    text: string;
+    parse_mode?: 'HTML';
+  }): Promise<TelegramSendResult> {
+    try {
+      const params: Record<string, unknown> = {
+        link_preview_options: { is_disabled: true },
+      };
+      if (opts.parse_mode) params.parse_mode = opts.parse_mode;
+      const msg = await this.bot.api.editMessageText(
+        opts.chat_id,
+        opts.message_id,
+        opts.text,
+        params as any
+      );
+      const messageId = (msg as any)?.message_id || opts.message_id;
+      return { ok: true, message_id: messageId };
+    } catch (err: any) {
+      const errMsg = err?.description || err?.message || String(err);
+      console.warn(`Telegram editMessageText failed (non-fatal): ${errMsg}`);
+      return { ok: false, error: errMsg };
+    }
+  }
+
+  /**
+   * Delete a message.
+   */
+  async deleteMessage(opts: { chat_id: number | string; message_id: number }): Promise<boolean> {
+    try {
+      await this.bot.api.deleteMessage(opts.chat_id, opts.message_id);
+      return true;
+    } catch (err: any) {
+      console.warn(
+        `Telegram deleteMessage failed (non-fatal): ${err?.description || err?.message || String(err)}`
+      );
+      return false;
+    }
+  }
+
+  /**
    * Send a document/file.
    */
   async sendDocument(opts: {

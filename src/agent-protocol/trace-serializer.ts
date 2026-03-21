@@ -844,15 +844,22 @@ export async function serializeTraceForPrompt(
     (!isFilePath ? traceIdOrPath : (await readTraceIdFromFile(traceIdOrPath)) || undefined);
   const preferLocalFirst = backendOrder[0] === 'file';
 
+  logger.debug(
+    `[TraceSerializer] serializeTraceForPrompt ref=${traceIdOrPath} remoteTraceId=${remoteTraceId || '-'} backendOrder=${backendOrder.join('>')}`
+  );
+
   if (preferLocalFirst && localTracePath) {
+    logger.debug(`[TraceSerializer] Trying local trace file first: ${localTracePath}`);
     spans = await fetchTraceSpans(localTracePath, { ...cfg, type: 'file' });
   }
 
   if (spans.length === 0 && remoteTraceId) {
+    logger.debug(`[TraceSerializer] Trying remote trace backends for trace_id=${remoteTraceId}`);
     spans = await fetchTraceSpans(remoteTraceId, cfg);
   }
 
   if (spans.length === 0 && localTracePath) {
+    logger.debug(`[TraceSerializer] Falling back to local trace file: ${localTracePath}`);
     spans = await fetchTraceSpans(localTracePath, { ...cfg, type: 'file' });
   }
 
@@ -990,6 +997,19 @@ function renderYamlNode(
   parentSpan?: NormalizedSpan
 ): void {
   if (shouldSkipLifecycleSpan(node.span, renderContext)) {
+    for (const child of node.children) {
+      renderYamlNode(
+        child,
+        indent,
+        lines,
+        dedup,
+        renderContext,
+        fallbackIntent,
+        fullOutput,
+        maxLen,
+        parentSpan
+      );
+    }
     return;
   }
 
@@ -1335,7 +1355,12 @@ function renderYamlOutput(
   // and {text: "..."} → render text inline
   if (typeof obj === 'object' && !Array.isArray(obj)) {
     const keys = Object.keys(obj);
-    if (keys.length === 1 && typeof obj[keys[0]] === 'object' && obj[keys[0]] !== null) {
+    if (
+      keys.length === 1 &&
+      typeof obj[keys[0]] === 'object' &&
+      obj[keys[0]] !== null &&
+      !Array.isArray(obj[keys[0]])
+    ) {
       obj = obj[keys[0]]; // unwrap {answer: {...}} → {...}
     }
     // If single text key, render inline
@@ -2103,7 +2128,7 @@ function formatJsonPreview(obj: any, maxLen: number): string {
   let len = 2; // for { }
   for (const [key, val] of Object.entries(obj)) {
     // Skip internal/verbose keys
-    if (key === 'raw' || key === 'skills' || key === 'tags') continue;
+    if (key === 'raw' || key === 'tags') continue;
     let valStr: string;
     if (val === null || val === undefined) continue;
     if (typeof val === 'boolean') valStr = String(val);
@@ -2118,8 +2143,16 @@ function formatJsonPreview(obj: any, maxLen: number): string {
         .replace(/`/g, '')
         .trim();
       valStr = `"${truncate(clean.split('\n')[0], Math.min(80, maxLen / 3))}"`;
-    } else if (Array.isArray(val)) valStr = `[${val.length}]`;
-    else if (typeof val === 'object') valStr = `{${Object.keys(val).length} keys}`;
+    } else if (Array.isArray(val)) {
+      if (
+        val.every(item => typeof item === 'string') &&
+        val.join(', ').length < Math.min(120, maxLen / 2)
+      ) {
+        valStr = `[${val.join(', ')}]`;
+      } else {
+        valStr = `[${val.length}]`;
+      }
+    } else if (typeof val === 'object') valStr = `{${Object.keys(val).length} keys}`;
     else valStr = '...';
 
     const part = `${key}: ${valStr}`;

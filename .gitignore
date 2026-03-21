@@ -78,5 +78,6 @@ visor-public.pem
 # Local scratch
 scripts/.schema-tmp/
 tmp/
+.enterprise-stash/
 .visor-agent-files.json
 .visor/

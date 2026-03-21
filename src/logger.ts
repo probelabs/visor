@@ -4,6 +4,7 @@
  * - Supports levels: silent < error < warn < info < verbose < debug
  * - Routes logs to stderr to keep stdout clean for machine-readable output
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { context as otContext, trace } from './telemetry/lazy-otel';
 
 export type LogLevel = 'silent' | 'error' | 'warn' | 'info' | 'verbose' | 'debug';
@@ -36,6 +37,7 @@ const OTEL_SEVERITY: Record<LogLevel, number> = {
 };
 
 class Logger {
+  private readonly taskContextStorage = new AsyncLocalStorage<{ taskId?: string }>();
   private level: LogLevel = 'info';
   private isJsonLike: boolean = false;
   private isTTY: boolean = typeof process !== 'undefined' ? !!process.stderr.isTTY : false;
@@ -110,9 +112,27 @@ class Logger {
     return true;
   }
 
-  private getTraceSuffix(msg: string): string {
+  withTaskContext<T>(taskId: string, fn: () => T): T {
+    const current = this.taskContextStorage.getStore() || {};
+    return this.taskContextStorage.run({ ...current, taskId }, fn);
+  }
+
+  getCurrentTaskId(): string | undefined {
+    return this.taskContextStorage.getStore()?.taskId;
+  }
+
+  private getContextSuffix(msg: string): string {
     if (!msg) return '';
-    if (msg.includes('trace_id=') || msg.includes('trace_id:')) return '';
+    if (
+      msg.includes('task_id=') ||
+      msg.includes('task_id:') ||
+      msg.includes('trace_id=') ||
+      msg.includes('trace_id:')
+    ) {
+      return '';
+    }
+    const taskId = this.getCurrentTaskId();
+    if (taskId) return ` [task_id=${taskId}]`;
     try {
       const span = trace.getSpan(otContext.active()) || trace.getActiveSpan();
       const ctx = span?.spanContext?.();
@@ -140,12 +160,14 @@ class Logger {
 
       const span = trace.getSpan(otContext.active()) || trace.getActiveSpan();
       const spanCtx = span?.spanContext?.();
+      const taskId = this.getCurrentTaskId();
       this.otelLogger.emit({
         severityNumber: OTEL_SEVERITY[level] || 9,
         severityText: level.toUpperCase(),
         body: msg,
         attributes: {
           'visor.logger': true,
+          ...(taskId ? { task_id: taskId } : {}),
           ...(spanCtx?.traceId ? { trace_id: spanCtx.traceId, span_id: spanCtx.spanId } : {}),
         },
       });
@@ -156,7 +178,7 @@ class Logger {
 
   private write(msg: string, level?: LogLevel): void {
     // Always route to stderr to keep stdout clean for results
-    const suffix = this.getTraceSuffix(msg);
+    const suffix = this.getContextSuffix(msg);
     const decoratedMsg = suffix ? `${msg}${suffix}` : msg;
     const lvl = level || 'info';
 

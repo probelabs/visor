@@ -10,6 +10,7 @@ import type { Frontend, FrontendContext } from './host';
 import { TeamsClient } from '../teams/client';
 import { formatTeamsText } from '../teams/markdown';
 import type { ConversationReference } from 'botbuilder';
+import { isFrontendLiveUpdatesEnabled } from '../agent-protocol/task-live-updates';
 
 type TeamsFrontendConfig = {
   appId?: string;
@@ -145,6 +146,7 @@ export class TeamsFrontend implements Frontend {
       const isWorkflow = providerType === 'workflow';
       if (!isAi && !isLogChat && !isWorkflow) return;
       if (checkCfg.criticality === 'internal') return;
+      if (isFrontendLiveUpdatesEnabled((cfg as any).task_live_updates, 'teams')) return;
 
       // For AI checks, only post simple schemas
       if (isAi) {

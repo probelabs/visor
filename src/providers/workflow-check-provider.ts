@@ -1071,10 +1071,10 @@ export class WorkflowCheckProvider extends CheckProvider {
 
     // Log final outputs
     const outputKeys = Object.keys(outputs);
-    const nullOutputs = outputKeys.filter(k => outputs[k] === null || outputs[k] === undefined);
-    if (nullOutputs.length > 0) {
+    const undefinedOutputs = outputKeys.filter(k => outputs[k] === undefined);
+    if (undefinedOutputs.length > 0) {
       logger.warn(
-        `[WorkflowProvider] Workflow '${workflow.id}' has null/undefined outputs: [${nullOutputs.join(', ')}]. ` +
+        `[WorkflowProvider] Workflow '${workflow.id}' has undefined outputs: [${undefinedOutputs.join(', ')}]. ` +
           `This may indicate value_js expressions are not finding expected data.`
       );
     }

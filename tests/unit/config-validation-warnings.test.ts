@@ -39,6 +39,21 @@ unknown_root: 123
     );
   });
 
+  it('does not warn for supported top-level task_live_updates config', async () => {
+    const yaml = `
+version: "1.0"
+task_live_updates:
+  enabled: true
+  interval_seconds: 30
+checks: {}
+`;
+    const cm = new ConfigManager();
+    await cm.loadConfig(writeConfig(yaml));
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("Unknown top-level key 'task_live_updates'")
+    );
+  });
+
   it('warns on unknown keys within a check (typo preserved)', async () => {
     const yaml = `
 version: "1.0"

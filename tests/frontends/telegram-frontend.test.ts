@@ -84,6 +84,47 @@ describe('TelegramFrontend (event-bus)', () => {
     expect(call.reply_to_message_id).toBe(42);
   });
 
+  test('does not post a second direct reply when task live updates are enabled', async () => {
+    const bus = new EventBus();
+    const telegram = makeFakeTelegram();
+    const map = new Map<string, unknown>();
+    map.set('/bots/telegram/message', {
+      event: {
+        type: 'message',
+        chat_id: 12345,
+        message_id: 42,
+        text: 'Hello bot',
+        from: { id: 777, is_bot: false, first_name: 'User' },
+        chat: { id: 12345, type: 'private' },
+      },
+    });
+
+    const fe = new TelegramFrontend();
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: {
+        task_live_updates: { enabled: true },
+        checks: {
+          reply: { type: 'ai', schema: 'text' },
+        },
+      },
+      run: { runId: 'r1' },
+      webhookContext: { webhookData: map },
+      telegram,
+    } as any);
+    (fe as any).getTelegram = () => telegram;
+
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'reply',
+      scope: [],
+      result: { issues: [], output: { text: 'Hello from AI!' } },
+    });
+
+    expect(telegram.sendMessage).not.toHaveBeenCalled();
+  });
+
   test('does not post for non-AI / structured schema checks', async () => {
     const bus = new EventBus();
     const telegram = makeFakeTelegram();

@@ -249,6 +249,12 @@ export class TelegramPollingRunner implements Runner {
 
       if (this.taskStore) {
         const { trackExecution } = await import('../agent-protocol/track-execution');
+        const { isFrontendLiveUpdatesEnabled } = await import(
+          '../agent-protocol/task-live-updates'
+        );
+        const { TelegramTaskLiveUpdateSink } = await import(
+          '../agent-protocol/task-live-update-telegram'
+        );
         await trackExecution(
           {
             taskStore: this.taskStore,
@@ -260,6 +266,17 @@ export class TelegramPollingRunner implements Runner {
               telegram_chat_id: String(msg.chat.id),
               telegram_chat_type: msg.chat.type,
               telegram_user: msg.from ? String(msg.from.id) : 'unknown',
+            },
+            liveUpdates: {
+              config: (cfgForRun as any).task_live_updates,
+              sink: isFrontendLiveUpdatesEnabled((cfgForRun as any).task_live_updates, 'telegram')
+                ? new TelegramTaskLiveUpdateSink(
+                    this.client,
+                    msg.chat.id,
+                    msg.message_id,
+                    msg.message_thread_id
+                  )
+                : undefined,
             },
           },
           execFn

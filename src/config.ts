@@ -1894,6 +1894,7 @@ export class ConfigManager {
               'sandbox',
               'sandbox_defaults',
               'policy',
+              'task_live_updates',
               // Workflow metadata fields used when configs are imported as reusable workflows
               'id',
               'name',

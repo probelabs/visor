@@ -11,6 +11,7 @@
 
 import type { CustomToolDefinition } from '../types/config';
 import { logger } from '../logger';
+import { resolveTaskTraceReference } from './task-trace-resolution';
 
 // ---------------------------------------------------------------------------
 // Tool definition
@@ -177,8 +178,9 @@ async function handleTrace(taskId: string, taskStore: any): Promise<TaskProgress
     return { success: false, error: `Task not found: ${taskId}` };
   }
 
-  const traceId = task.metadata?.trace_id;
-  const traceFile = task.metadata?.trace_file;
+  const resolvedTrace = await resolveTaskTraceReference(task.metadata);
+  const traceId = resolvedTrace.traceId;
+  const traceFile = resolvedTrace.traceFile;
 
   if (!traceId && !traceFile) {
     // No trace available — return basic status info
@@ -200,24 +202,18 @@ async function handleTrace(taskId: string, taskStore: any): Promise<TaskProgress
   }
 
   // Lazy-import the trace serializer to avoid circular dependencies
-  const { serializeTraceForPrompt, readTraceIdFromFile } = await import('./trace-serializer');
-
-  // Get trace ID from file if needed
-  let resolvedTraceId = traceId;
-  if (!resolvedTraceId && traceFile) {
-    resolvedTraceId = await readTraceIdFromFile(traceFile);
-  }
+  const { serializeTraceForPrompt } = await import('./trace-serializer');
 
   // Get the task response for full output context
   const taskResponse = task.status?.message?.parts?.[0]?.text;
 
   // Serialize the trace — use generous char limit for AI consumption
   const traceTree = await serializeTraceForPrompt(
-    traceFile || resolvedTraceId || '',
+    resolvedTrace.primaryRef || '',
     8000, // generous limit so AI gets good context
     undefined,
     taskResponse,
-    resolvedTraceId || undefined
+    traceId || undefined
   );
 
   const trigger = task.metadata?.slack_trigger_text || '';
