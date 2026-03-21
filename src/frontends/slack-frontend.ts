@@ -30,6 +30,7 @@ import {
   replaceFileSections,
 } from '../slack/markdown';
 import { context as otContext, trace } from '../telemetry/lazy-otel';
+import { isFrontendLiveUpdatesEnabled } from '../agent-protocol/task-live-updates';
 
 type SlackFrontendConfig = {
   defaultChannel?: string;
@@ -283,12 +284,22 @@ export class SlackFrontend implements Frontend {
     }
   }
 
+  private isLiveTaskUpdatesMode(ctx: FrontendContext): boolean {
+    try {
+      if (!this.getInboundSlackPayload(ctx)) return false;
+      return isFrontendLiveUpdatesEnabled((ctx.config as any)?.task_live_updates, 'slack');
+    } catch {
+      return false;
+    }
+  }
+
   private async maybePostError(
     ctx: FrontendContext,
     title: string,
     message: string,
     checkId?: string
   ): Promise<void> {
+    if (this.isLiveTaskUpdatesMode(ctx)) return;
     if (this.errorNotified) return;
     return this.postErrorToSlack(ctx, title, message, checkId);
   }
@@ -303,6 +314,7 @@ export class SlackFrontend implements Frontend {
     message: string,
     checkId?: string
   ): Promise<void> {
+    if (this.isLiveTaskUpdatesMode(ctx)) return;
     return this.postErrorToSlack(ctx, title, message, checkId);
   }
 
@@ -384,6 +396,7 @@ export class SlackFrontend implements Frontend {
     result: { issues?: any[] }
   ): Promise<void> {
     try {
+      if (this.isLiveTaskUpdatesMode(ctx)) return;
       if (this.errorNotified) return;
       const cfg: any = ctx.config || {};
       const checkCfg: any = cfg.checks?.[checkId];
@@ -489,6 +502,7 @@ export class SlackFrontend implements Frontend {
     result: { output?: any; content?: string }
   ): Promise<void> {
     try {
+      if (this.isLiveTaskUpdatesMode(ctx)) return;
       const cfg: any = ctx.config || {};
       const checkCfg: any = cfg.checks?.[checkId];
       if (!checkCfg) return;

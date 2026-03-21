@@ -1670,6 +1670,8 @@ export interface VisorConfig {
    *  Requires task_tracking to be enabled. Runs asynchronously after task completion.
    *  Set to `true` for defaults, or provide an object to configure. */
   task_evaluate?: boolean | TaskEvaluateConfig;
+  /** Live progress updates for long-running tracked tasks on supported frontends. */
+  task_live_updates?: boolean | TaskLiveUpdatesConfig;
 }
 
 /**
@@ -1684,6 +1686,45 @@ export interface TaskEvaluateConfig {
   provider?: string;
   /** Custom system prompt for the evaluator (overrides the default evaluation prompt) */
   prompt?: string;
+}
+
+/**
+ * Live task progress updates for supported interactive frontends.
+ *
+ * When enabled, Visor posts a "working on it" placeholder and periodically
+ * updates the same message using a cheap internal LLM summary of the current
+ * execution trace. The final answer replaces that same message.
+ */
+export interface TaskLiveUpdatesConfig {
+  /** Enable live task progress updates (default: true when config object is present) */
+  enabled?: boolean;
+  /** Update interval in seconds (default: 10) */
+  interval_seconds?: number;
+  /** LLM model to use for progress summarization */
+  model?: string;
+  /** AI provider to use for progress summarization */
+  provider?: string;
+  /** Custom system prompt for the progress summarizer */
+  prompt?: string;
+  /** Immediate placeholder text posted before the first summary is generated */
+  initial_message?: string;
+  /** Maximum serialized trace characters passed into the summarizer (default: 12000) */
+  max_trace_chars?: number;
+  /** Per-frontend enablement overrides */
+  frontends?: {
+    slack?: {
+      enabled?: boolean;
+    };
+    telegram?: {
+      enabled?: boolean;
+    };
+    teams?: {
+      enabled?: boolean;
+    };
+    whatsapp?: {
+      enabled?: boolean;
+    };
+  };
 }
 
 /**

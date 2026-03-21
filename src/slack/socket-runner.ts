@@ -961,6 +961,19 @@ export class SlackSocketRunner implements Runner {
               } as any);
             if (this.taskStore) {
               const { trackExecution } = await import('../agent-protocol/track-execution');
+              const { isFrontendLiveUpdatesEnabled } = await import(
+                '../agent-protocol/task-live-updates'
+              );
+              const { SlackTaskLiveUpdateSink } = await import(
+                '../agent-protocol/task-live-update-slack'
+              );
+              const slackTelemetryCfg =
+                (cfgForRun as any)?.slack?.telemetry ?? (cfgForRun as any)?.telemetry;
+              const includeTraceId =
+                slackTelemetryCfg === true ||
+                (slackTelemetryCfg &&
+                  typeof slackTelemetryCfg === 'object' &&
+                  slackTelemetryCfg.enabled === true);
               await trackExecution(
                 {
                   taskStore: this.taskStore,
@@ -973,6 +986,15 @@ export class SlackSocketRunner implements Runner {
                     slack_thread_ts: threadTs,
                     slack_user: userId,
                     slack_trigger_text: String(ev.text || '').slice(0, 500),
+                  },
+                  liveUpdates: {
+                    config: (cfgForRun as any).task_live_updates,
+                    includeTraceId,
+                    sink:
+                      this.client &&
+                      isFrontendLiveUpdatesEnabled((cfgForRun as any).task_live_updates, 'slack')
+                        ? new SlackTaskLiveUpdateSink(this.client, channelId, threadTs)
+                        : undefined,
                   },
                 },
                 execFn
@@ -1192,6 +1214,19 @@ export class SlackSocketRunner implements Runner {
             } as any);
           if (this.taskStore) {
             const { trackExecution } = await import('../agent-protocol/track-execution');
+            const { isFrontendLiveUpdatesEnabled } = await import(
+              '../agent-protocol/task-live-updates'
+            );
+            const { SlackTaskLiveUpdateSink } = await import(
+              '../agent-protocol/task-live-update-slack'
+            );
+            const slackTelemetryCfg =
+              (cfgForRun as any)?.slack?.telemetry ?? (cfgForRun as any)?.telemetry;
+            const includeTraceId =
+              slackTelemetryCfg === true ||
+              (slackTelemetryCfg &&
+                typeof slackTelemetryCfg === 'object' &&
+                slackTelemetryCfg.enabled === true);
             await trackExecution(
               {
                 taskStore: this.taskStore,
@@ -1205,6 +1240,15 @@ export class SlackSocketRunner implements Runner {
                   slack_user: user,
                   slack_trigger_text: String(ev.text || '').slice(0, 500),
                   trigger_id: id,
+                },
+                liveUpdates: {
+                  config: (cfgForRun as any).task_live_updates,
+                  includeTraceId,
+                  sink:
+                    this.client &&
+                    isFrontendLiveUpdatesEnabled((cfgForRun as any).task_live_updates, 'slack')
+                      ? new SlackTaskLiveUpdateSink(this.client, channel, threadTs || ts)
+                      : undefined,
                 },
               },
               triggerExecFn

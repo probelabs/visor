@@ -10,6 +10,8 @@ jest.mock('../../../src/agent-protocol/trace-serializer', () => ({
   readTraceIdFromFile: jest.fn().mockResolvedValue('abc123'),
 }));
 
+const traceSerializer = jest.requireMock('../../../src/agent-protocol/trace-serializer');
+
 describe('task-progress-tool', () => {
   describe('getTaskProgressToolDefinition', () => {
     it('should return a valid tool definition', () => {
@@ -159,6 +161,13 @@ describe('task-progress-tool', () => {
         expect(result.success).toBe(true);
         expect(result.message).toContain('Execution Trace');
         expect(result.message).toContain('mock-trace-tree');
+        expect(traceSerializer.serializeTraceForPrompt).toHaveBeenCalledWith(
+          'abc123',
+          8000,
+          undefined,
+          undefined,
+          'abc123'
+        );
       });
 
       it('should return trace tree when trace_file available', async () => {
@@ -178,6 +187,44 @@ describe('task-progress-tool', () => {
         expect(result.success).toBe(true);
         expect(result.message).toContain('Execution Trace');
         expect(result.message).toContain('mock-trace-tree');
+        expect(traceSerializer.readTraceIdFromFile).toHaveBeenCalledWith(
+          '/tmp/traces/trace-1.ndjson'
+        );
+        expect(traceSerializer.serializeTraceForPrompt).toHaveBeenCalledWith(
+          'abc123',
+          8000,
+          undefined,
+          undefined,
+          'abc123'
+        );
+      });
+
+      it('should prefer trace_id over trace_file when both are available', async () => {
+        mockStore.getTask.mockReturnValue({
+          state: 'working',
+          created_at: new Date().toISOString(),
+          workflow_id: 'assistant',
+          metadata: {
+            trace_id: 'trace-from-metadata',
+            trace_file: '/tmp/traces/trace-1.ndjson',
+          },
+        });
+
+        const result = await handleTaskProgressAction(
+          { action: 'trace', task_id: 'task-3' },
+          {},
+          mockStore
+        );
+
+        expect(result.success).toBe(true);
+        expect(traceSerializer.readTraceIdFromFile).not.toHaveBeenCalled();
+        expect(traceSerializer.serializeTraceForPrompt).toHaveBeenCalledWith(
+          'trace-from-metadata',
+          8000,
+          undefined,
+          undefined,
+          'trace-from-metadata'
+        );
       });
     });
 

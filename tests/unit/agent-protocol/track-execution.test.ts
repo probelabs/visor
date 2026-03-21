@@ -3,6 +3,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { SqliteTaskStore } from '../../../src/agent-protocol/task-store';
 import { trackExecution } from '../../../src/agent-protocol/track-execution';
+import { trace } from '../../../src/telemetry/lazy-otel';
 
 describe('trackExecution', () => {
   let store: SqliteTaskStore;
@@ -168,5 +169,116 @@ describe('trackExecution', () => {
 
     // The result should still be returned to the caller
     expect(result).toEqual({ data: 'important result' });
+  });
+
+  it('should publish live updates when a sink is configured', async () => {
+    const sink = {
+      kind: 'test',
+      start: jest.fn(async () => null),
+      update: jest.fn(async () => ({ ref: { message_id: 'msg-1' } })),
+      complete: jest.fn(async () => ({ ref: { message_id: 'msg-1' } })),
+      fail: jest.fn(async () => null),
+    };
+
+    const { task } = await trackExecution(
+      {
+        taskStore: store,
+        source: 'slack',
+        messageText: 'live update execution',
+        liveUpdates: {
+          config: true,
+          sink,
+        },
+      },
+      async () => ({
+        reviewSummary: {
+          history: {
+            'generate-response': [{ text: 'Final response text' }],
+          },
+        },
+      })
+    );
+
+    expect(sink.start).toHaveBeenCalledTimes(1);
+    expect(sink.complete).toHaveBeenCalledWith('Final response text');
+    const updated = store.getTask(task.id);
+    expect(updated?.metadata?.message_id).toBe('msg-1');
+  });
+
+  it('should prefer trace_id over trace_file for live updates', async () => {
+    const sink = {
+      kind: 'test',
+      start: jest.fn(async () => null),
+      update: jest.fn(async () => null),
+      complete: jest.fn(async () => null),
+      fail: jest.fn(async () => null),
+    };
+
+    const originalTraceFile = process.env.VISOR_FALLBACK_TRACE_FILE;
+    process.env.VISOR_FALLBACK_TRACE_FILE = '/tmp/test-trace.ndjson';
+
+    const originalGetActiveSpan = (trace as any).getActiveSpan;
+    (trace as any).getActiveSpan = jest.fn(() => ({
+      spanContext: () => ({ traceId: 'trace-123', spanId: 'span-123' }),
+    }));
+
+    try {
+      await trackExecution(
+        {
+          taskStore: store,
+          source: 'slack',
+          messageText: 'trace preference test',
+          liveUpdates: {
+            config: true,
+            sink,
+          },
+        },
+        async () => ({ value: 1 })
+      );
+
+      expect(sink.start).toHaveBeenCalledTimes(1);
+      const { tasks } = store.listTasks({ state: ['completed'] });
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].metadata?.trace_id).toBe('trace-123');
+      expect(tasks[0].metadata?.trace_file).toBe('/tmp/test-trace.ndjson');
+    } finally {
+      (trace as any).getActiveSpan = originalGetActiveSpan;
+      if (originalTraceFile === undefined) delete process.env.VISOR_FALLBACK_TRACE_FILE;
+      else process.env.VISOR_FALLBACK_TRACE_FILE = originalTraceFile;
+    }
+  });
+
+  it('should not publish live updates when the feature is disabled', async () => {
+    const sink = {
+      kind: 'test',
+      start: jest.fn(async () => null),
+      update: jest.fn(async () => null),
+      complete: jest.fn(async () => null),
+      fail: jest.fn(async () => null),
+    };
+
+    await trackExecution(
+      {
+        taskStore: store,
+        source: 'slack',
+        messageText: 'live update disabled',
+        liveUpdates: {
+          config: { enabled: false },
+          sink,
+        },
+      },
+      async () => ({
+        reviewSummary: {
+          history: {
+            'generate-response': [{ text: 'Final response text' }],
+          },
+        },
+      })
+    );
+
+    expect(sink.start).not.toHaveBeenCalled();
+    expect(sink.update).not.toHaveBeenCalled();
+    expect(sink.complete).not.toHaveBeenCalled();
+    expect(sink.fail).not.toHaveBeenCalled();
   });
 });

@@ -271,6 +271,12 @@ export class TeamsWebhookRunner implements Runner {
 
       if (this.taskStore) {
         const { trackExecution } = await import('../agent-protocol/track-execution');
+        const { isFrontendLiveUpdatesEnabled } = await import(
+          '../agent-protocol/task-live-updates'
+        );
+        const { TeamsTaskLiveUpdateSink } = await import(
+          '../agent-protocol/task-live-update-teams'
+        );
         await trackExecution(
           {
             taskStore: this.taskStore,
@@ -282,6 +288,16 @@ export class TeamsWebhookRunner implements Runner {
               teams_conversation_id: msg.conversationId,
               teams_conversation_type: msg.conversationType,
               teams_from: msg.from.id,
+            },
+            liveUpdates: {
+              config: (cfgForRun as any).task_live_updates,
+              sink: isFrontendLiveUpdatesEnabled((cfgForRun as any).task_live_updates, 'teams')
+                ? new TeamsTaskLiveUpdateSink(
+                    this.client,
+                    msg.conversationReference,
+                    msg.activityId
+                  )
+                : undefined,
             },
           },
           execFn

@@ -89,4 +89,58 @@ export class TeamsClient {
 
     return { ok: true, activityId: lastActivityId };
   }
+
+  /**
+   * Update an existing bot message.
+   * For safety, only supports single-activity payloads. Oversized content returns msg_too_long.
+   */
+  async updateMessage(opts: {
+    conversationReference: ConversationReference;
+    activityId: string;
+    text: string;
+  }): Promise<TeamsSendResult> {
+    const chunks = chunkText(opts.text, 28000);
+    if (chunks.length > 1) {
+      return { ok: false, error: 'msg_too_long' };
+    }
+
+    try {
+      await this.adapter.continueConversationAsync(
+        this.appId,
+        opts.conversationReference,
+        async (turnContext: TurnContext) => {
+          const activity = MessageFactory.text(chunks[0] || '');
+          activity.id = opts.activityId;
+          await turnContext.updateActivity(activity);
+        }
+      );
+      return { ok: true, activityId: opts.activityId };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  /**
+   * Delete a previously sent bot message.
+   */
+  async deleteMessage(opts: {
+    conversationReference: ConversationReference;
+    activityId: string;
+  }): Promise<boolean> {
+    try {
+      await this.adapter.continueConversationAsync(
+        this.appId,
+        opts.conversationReference,
+        async (turnContext: TurnContext) => {
+          await turnContext.deleteActivity(opts.activityId);
+        }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }

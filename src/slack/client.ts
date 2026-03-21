@@ -132,6 +132,31 @@ export class SlackClient {
         };
       }
     },
+    delete: async ({ channel, ts }: { channel: string; ts: string }) => {
+      try {
+        const resp: any = await this.api('chat.delete', { channel, ts });
+        if (!resp || resp.ok !== true) {
+          const err = (resp && resp.error) || 'unknown_error';
+          console.warn(
+            `Slack chat.delete failed (non-fatal): error=${err} channel=${channel} ts=${ts}`
+          );
+          return { ok: false as const, ts, error: err, data: resp };
+        }
+        return { ok: true as const, ts: resp.ts || ts, error: undefined, data: resp };
+      } catch (e) {
+        console.warn(
+          `Slack chat.delete threw (non-fatal): channel=${channel} ts=${ts} error=${
+            e instanceof Error ? e.message : String(e)
+          }`
+        );
+        return {
+          ok: false as const,
+          ts,
+          error: e instanceof Error ? e.message : String(e),
+          data: undefined,
+        };
+      }
+    },
   };
 
   async getBotUserId(): Promise<string> {

@@ -112,6 +112,56 @@ describe('TeamsFrontend (event-bus)', () => {
     expect(call.replyToActivityId).toBe('act.msg1');
   });
 
+  test('does not send a second direct reply when task live updates are enabled', async () => {
+    const bus = new EventBus();
+    const teams = makeFakeTeams();
+    const map = new Map<string, unknown>();
+    map.set('/bots/teams/message', {
+      event: {
+        type: 'teams_message',
+        conversation_id: 'conv-1',
+        activity_id: 'act.msg1',
+        text: 'Hello bot',
+        from_id: 'user-1',
+        from_name: 'Test User',
+      },
+      teams_conversation: {
+        transport: 'teams',
+        thread: { id: 'conv-1' },
+        messages: [],
+        current: { role: 'user', text: 'Hello bot', timestamp: '2024-01-01T00:00:00.000Z' },
+        attributes: {},
+      },
+      teams_conversation_reference: fakeConversationRef,
+    });
+
+    const fe = new TeamsFrontend();
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: {
+        task_live_updates: { enabled: true },
+        checks: {
+          reply: { type: 'ai', schema: 'text' },
+        },
+      },
+      run: { runId: 'r1' },
+      webhookContext: { webhookData: map },
+      teams,
+      teamsClient: teams,
+    } as any);
+    (fe as any).getTeams = () => teams;
+
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'reply',
+      scope: [],
+      result: { issues: [], output: { text: 'Hello from AI!' } },
+    });
+
+    expect(teams.sendMessage).not.toHaveBeenCalled();
+  });
+
   test('does not send for non-AI / structured schema checks', async () => {
     const bus = new EventBus();
     const teams = makeFakeTeams();

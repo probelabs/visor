@@ -9,6 +9,7 @@
 import type { Frontend, FrontendContext } from './host';
 import { TelegramClient } from '../telegram/client';
 import { formatTelegramText } from '../telegram/markdown';
+import { isFrontendLiveUpdatesEnabled } from '../agent-protocol/task-live-updates';
 
 type TelegramFrontendConfig = {
   defaultChatId?: string | number;
@@ -225,6 +226,7 @@ export class TelegramFrontend implements Frontend {
       const isWorkflow = providerType === 'workflow';
       if (!isAi && !isLogChat && !isWorkflow) return;
       if (checkCfg.criticality === 'internal') return;
+      if (isFrontendLiveUpdatesEnabled((cfg as any).task_live_updates, 'telegram')) return;
 
       // For AI checks, only post simple schemas
       if (isAi) {

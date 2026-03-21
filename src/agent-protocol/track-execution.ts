@@ -14,8 +14,15 @@ import path from 'path';
 import { logger } from '../logger';
 import { trace } from '../telemetry/lazy-otel';
 import { getInstanceId } from '../utils/instance-id';
+import type { TaskLiveUpdatesConfig } from '../types/config';
 import type { TaskStore } from './task-store';
 import type { AgentMessage, AgentTask } from './types';
+import {
+  resolveTaskLiveUpdatesConfig,
+  TaskLiveUpdateManager,
+  type TaskLiveUpdateSink,
+} from './task-live-updates';
+import { resolveTaskTraceReference } from './task-trace-resolution';
 
 function getPackageVersion(): string {
   try {
@@ -61,6 +68,12 @@ export interface TrackExecutionOptions {
   messageText: string;
   /** Run LLM evaluation after task completion (non-blocking). */
   autoEvaluate?: boolean;
+  /** Optional live progress updates for supported interactive frontends. */
+  liveUpdates?: {
+    config?: boolean | TaskLiveUpdatesConfig;
+    sink?: TaskLiveUpdateSink;
+    includeTraceId?: boolean;
+  };
 }
 
 /**
@@ -110,6 +123,79 @@ export async function trackExecution<T>(
     `[TaskTracking] Task ${task.id} started (source=${source}, workflow=${workflowId || '-'}, instance=${instanceId})`
   );
 
+  const liveUpdateConfig = resolveTaskLiveUpdatesConfig(opts.liveUpdates?.config);
+  const initialTraceId =
+    trace.getActiveSpan()?.spanContext().traceId || (task.metadata?.trace_id as string | undefined);
+  if (initialTraceId && !task.metadata?.trace_id) {
+    try {
+      taskStore.updateMetadata(task.id, { trace_id: initialTraceId });
+    } catch {
+      // best-effort only
+    }
+  }
+  const initialResolvedTrace = await resolveTaskTraceReference({
+    trace_id: initialTraceId || (task.metadata?.trace_id as string | undefined),
+    trace_file: task.metadata?.trace_file as string | undefined,
+  });
+  const liveUpdateManager =
+    liveUpdateConfig && opts.liveUpdates?.sink
+      ? new TaskLiveUpdateManager({
+          taskId: task.id,
+          requestText: messageText,
+          traceRef: initialResolvedTrace.primaryRef,
+          traceId: initialResolvedTrace.traceId,
+          includeTraceId: opts.liveUpdates?.includeTraceId === true,
+          resolveTraceState: () => {
+            let current;
+            try {
+              current = taskStore.getTask(task.id);
+            } catch {
+              return {
+                traceRef: initialResolvedTrace.primaryRef,
+                traceId: initialResolvedTrace.traceId,
+              };
+            }
+            return {
+              traceRef:
+                (current?.metadata?.trace_id as string | undefined) ||
+                (current?.metadata?.trace_file as string | undefined) ||
+                initialResolvedTrace.primaryRef,
+              traceId: current?.metadata?.trace_id as string | undefined,
+            };
+          },
+          sink: opts.liveUpdates.sink,
+          config: liveUpdateConfig,
+          onPostedRef: ref => {
+            try {
+              taskStore.updateMetadata(task.id, ref);
+            } catch {
+              // best-effort only
+            }
+          },
+          appendHistory: (text, stage) => {
+            try {
+              taskStore.appendHistory(task.id, {
+                message_id: crypto.randomUUID(),
+                role: 'agent',
+                parts: [{ text }],
+                metadata: { kind: 'task_live_update', stage, source },
+              });
+            } catch {
+              // best-effort only
+            }
+          },
+        })
+      : null;
+  if (liveUpdateConfig && !opts.liveUpdates?.sink) {
+    logger.debug(
+      `[TaskTracking] Live updates requested for task ${task.id} but no sink is available for source=${source}`
+    );
+  } else if (liveUpdateManager) {
+    logger.info(
+      `[TaskTracking] Live updates enabled for task ${task.id} (source=${source}, trace_id=${initialTraceId || '-'})`
+    );
+  }
+
   // Heartbeat: periodically touch updated_at so stale-task detection
   // can distinguish live tasks from orphans (works across nodes).
   const HEARTBEAT_INTERVAL = 60_000; // 1 minute
@@ -122,6 +208,9 @@ export async function trackExecution<T>(
   }, HEARTBEAT_INTERVAL);
 
   try {
+    if (liveUpdateManager) {
+      await liveUpdateManager.start();
+    }
     const result = await executor();
 
     // Now that execution is done, capture the trace ID from the active span.
@@ -191,6 +280,10 @@ export async function trackExecution<T>(
       scheduleEvaluation(task.id, taskStore);
     }
 
+    if (liveUpdateManager) {
+      await liveUpdateManager.complete(responseText);
+    }
+
     return { task, result };
   } catch (err) {
     const errorText = err instanceof Error ? err.message : String(err);
@@ -205,9 +298,13 @@ export async function trackExecution<T>(
     } catch {
       // ignore double-failure
     }
+    if (liveUpdateManager) {
+      await liveUpdateManager.fail(`:warning: ${errorText}`);
+    }
     throw err; // re-throw to preserve original behavior
   } finally {
     clearInterval(heartbeatTimer);
+    liveUpdateManager?.stop();
   }
 }
 
