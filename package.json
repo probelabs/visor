@@ -33,7 +33,8 @@
   "scripts": {
     "build:cli": "ncc build src/index.ts -o dist && cp -r defaults dist/ && cp -r output dist/ && cp -r docs dist/ && cp -r examples dist/ && cp -r src/debug-visualizer/ui dist/debug-visualizer/ && node scripts/inject-version.js && echo '#!/usr/bin/env node' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js",
     "build:sdk": "tsup src/sdk.ts --dts --sourcemap --format esm,cjs --out-dir dist/sdk",
-    "build": "./scripts/build-oss.sh",
+    "build": "npm run build:oss",
+    "build:oss": "./scripts/build-oss.sh",
     "build:ee": "npm run build:cli && npm run build:sdk",
     "test": "jest && npm run test:yaml",
     "test:unit": "jest",

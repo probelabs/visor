@@ -1,31 +1,61 @@
 #!/bin/bash
 # Build OSS-only version of Visor (without enterprise code).
 #
-# Strategy: temporarily move src/enterprise/ aside so ncc doesn't bundle it.
-# The dynamic import in state-machine-execution-engine.ts is already wrapped
-# in try/catch, so the missing module is handled gracefully at runtime.
+# Strategy: build inside an isolated temporary workspace, remove enterprise
+# code only there, then copy dist/ back to the real repo. This avoids mutating
+# tracked source files in the working tree.
 
-set -e
+set -euo pipefail
 
-ENTERPRISE_DIR="src/enterprise"
-STASH_DIR=".enterprise-stash"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/visor-oss-build-XXXXXX")"
+BUILD_CLI_CMD="${VISOR_OSS_BUILD_CLI_CMD:-npm run build:cli}"
+BUILD_SDK_CMD="${VISOR_OSS_BUILD_SDK_CMD:-npm run build:sdk}"
 
-# Stash enterprise code
-if [ -d "$ENTERPRISE_DIR" ]; then
-  mv "$ENTERPRISE_DIR" "$STASH_DIR"
-  echo "📦 Building OSS (enterprise code excluded)"
+cleanup() {
+  rm -rf "$BUILD_DIR"
+}
+trap cleanup EXIT INT TERM HUP
+
+echo "📦 Building OSS in isolated workspace: $BUILD_DIR"
+
+(
+  cd "$ROOT_DIR"
+  tar \
+    --exclude='./.git' \
+    --exclude='./node_modules' \
+    --exclude='./dist' \
+    --exclude='./coverage' \
+    --exclude='./tmp' \
+    --exclude='./.visor' \
+    --exclude='./.enterprise-stash' \
+    -cf - .
+) | (
+  cd "$BUILD_DIR"
+  tar -xf -
+)
+
+if [ -d "$ROOT_DIR/node_modules" ] && [ ! -e "$BUILD_DIR/node_modules" ]; then
+  ln -s "$ROOT_DIR/node_modules" "$BUILD_DIR/node_modules"
 fi
 
-# Ensure we restore even on error
-restore() {
-  if [ -d "$STASH_DIR" ]; then
-    mv "$STASH_DIR" "$ENTERPRISE_DIR"
-  fi
-}
-trap restore EXIT
+rm -rf "$BUILD_DIR/src/enterprise"
 
-# Run the standard build
-npm run build:cli
-npm run build:sdk
+(
+  cd "$BUILD_DIR"
+  bash -lc "$BUILD_CLI_CMD"
+  bash -lc "$BUILD_SDK_CMD"
+)
+
+rm -rf "$ROOT_DIR/dist"
+mkdir -p "$ROOT_DIR/dist"
+
+(
+  cd "$BUILD_DIR"
+  tar -cf - dist
+) | (
+  cd "$ROOT_DIR"
+  tar -xf -
+)
 
 echo "✅ OSS build complete (dist/index.js)"
