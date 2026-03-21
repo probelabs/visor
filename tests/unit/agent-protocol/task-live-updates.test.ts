@@ -200,7 +200,7 @@ describe('task-live-updates', () => {
     expect(sink.update).not.toHaveBeenCalled();
   });
 
-  it('appends trace id to progress and final updates when enabled', async () => {
+  it('appends task id to progress and final updates when enabled', async () => {
     jest.useFakeTimers();
 
     const sink = {
@@ -237,10 +237,10 @@ describe('task-live-updates', () => {
 
     await manager.start();
     await jest.advanceTimersByTimeAsync(10_000);
-    expect(sink.update).toHaveBeenCalledWith(expect.stringContaining('`trace_id: trace-123`'));
+    expect(sink.update).toHaveBeenCalledWith(expect.stringContaining('`task_id: task-trace`'));
 
     await manager.complete('Final answer');
-    expect(sink.complete).toHaveBeenCalledWith('Final answer\n\n`trace_id: trace-123`');
+    expect(sink.complete).toHaveBeenCalledWith('Final answer\n\n`task_id: task-trace`');
   });
 
   it('passes elapsed and previous-update timing context into progress summarization', async () => {
@@ -577,7 +577,7 @@ describe('task-live-updates', () => {
       'Timing metadata is provided only so you understand task pace and recency'
     );
     expect(DEFAULT_TASK_LIVE_UPDATE_PROMPT).toContain(
-      'The system will append timing and trace metadata separately'
+      'The system will append timing and task metadata separately'
     );
     expect(DEFAULT_TASK_LIVE_UPDATE_PROMPT).toContain('This is NOT the final answer');
     expect(DEFAULT_TASK_LIVE_UPDATE_PROMPT).toContain("Do NOT answer the user's original request");
@@ -623,7 +623,7 @@ describe('task-live-updates', () => {
       expect.stringContaining('time_since_last_update: 17s')
     );
     expect(DEFAULT_TASK_LIVE_UPDATE_PROMPT).toContain(
-      'The system will append timing and trace metadata separately'
+      'The system will append timing and task metadata separately'
     );
   });
 });

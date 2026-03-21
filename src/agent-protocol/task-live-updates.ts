@@ -41,9 +41,9 @@ Rules:
 - Keep it short: exactly 4 short bullet points
 - Use the exact bullet labels below
 - Do NOT generate timing metadata lines
-- Do NOT generate trace_id lines
+- Do NOT generate task_id lines
 - Timing metadata is provided only so you understand task pace and recency
-- The system will append timing and trace metadata separately
+- The system will append timing and task metadata separately
 - Prefer concrete progress over generic wording
 - Mention the most recent completed action before the current action
 - Do not claim completion unless the task is actually done
@@ -431,12 +431,10 @@ export class TaskLiveUpdateManager {
     };
   }
 
-  private decorateText(text: string, traceId?: string): string {
+  private decorateText(text: string, _traceId?: string): string {
     if (!this.ctx.includeTraceId) return text;
-    const resolvedTraceId = traceId || this.getTraceState().traceId;
-    if (!resolvedTraceId) return text;
-    if (text.includes(`trace_id: ${resolvedTraceId}`)) return text;
-    return `${text}\n\n\`trace_id: ${resolvedTraceId}\``;
+    if (text.includes(`task_id: ${this.ctx.taskId}`)) return text;
+    return `${text}\n\n\`task_id: ${this.ctx.taskId}\``;
   }
 
   private decorateProgressText(

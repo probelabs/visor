@@ -31,6 +31,7 @@ import {
 } from '../slack/markdown';
 import { context as otContext, trace } from '../telemetry/lazy-otel';
 import { isFrontendLiveUpdatesEnabled } from '../agent-protocol/task-live-updates';
+import { logger as sharedLogger } from '../logger';
 
 type SlackFrontendConfig = {
   defaultChannel?: string;
@@ -346,9 +347,9 @@ export class SlackFrontend implements Frontend {
     if (message) text += `\n${message}`;
 
     if (this.isTelemetryEnabled(ctx)) {
-      const traceInfo = this.getTraceInfo() || this.cachedTraceInfo;
-      if (traceInfo?.traceId) {
-        text += `\n\n\`trace_id: ${traceInfo.traceId}\``;
+      const suffix = this.getExecutionReferenceSuffix();
+      if (suffix) {
+        text += `\n\n${suffix}`;
       }
     }
 
@@ -716,9 +717,8 @@ export class SlackFrontend implements Frontend {
         telemetryCfg === true ||
         (telemetryCfg && typeof telemetryCfg === 'object' && telemetryCfg.enabled === true);
       if (telemetryEnabled) {
-        const traceInfo = this.getTraceInfo() || this.cachedTraceInfo;
-        if (traceInfo?.traceId) {
-          const suffix = `\`trace_id: ${traceInfo.traceId}\``;
+        const suffix = this.getExecutionReferenceSuffix();
+        if (suffix) {
           decoratedText = `${decoratedText}\n\n${suffix}`;
         }
       }
@@ -770,6 +770,18 @@ export class SlackFrontend implements Frontend {
       const ctx = span.spanContext();
       if (!ctx || !ctx.traceId) return null;
       return { traceId: ctx.traceId, spanId: ctx.spanId };
+    } catch {
+      return null;
+    }
+  }
+
+  private getExecutionReferenceSuffix(): string | null {
+    try {
+      const taskId = sharedLogger.getCurrentTaskId();
+      if (taskId) return `\`task_id: ${taskId}\``;
+      const traceInfo = this.getTraceInfo() || this.cachedTraceInfo;
+      if (traceInfo?.traceId) return `\`trace_id: ${traceInfo.traceId}\``;
+      return null;
     } catch {
       return null;
     }
