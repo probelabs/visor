@@ -1507,6 +1507,13 @@ export class AICheckProvider extends CheckProvider {
             auth: entry.config.auth as CustomToolDefinition['auth'],
             headers: entry.config.headers as Record<string, string>,
             timeout: (entry.config.timeout as number) || 30000,
+            // Preserve transform_js and rate_limit from the original tool config
+            ...(entry.config.transform_js
+              ? { transform_js: entry.config.transform_js as string }
+              : {}),
+            ...(entry.config.rate_limit
+              ? { rate_limit: entry.config.rate_limit as CustomToolDefinition['rate_limit'] }
+              : {}),
             inputSchema: {
               type: 'object',
               properties: {
