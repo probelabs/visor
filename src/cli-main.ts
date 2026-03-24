@@ -1818,39 +1818,21 @@ export async function main(): Promise<void> {
       const names = requestedRunners.join(', ');
       console.log(`✅ Runner(s) started: ${names}. Press Ctrl+C to exit.`);
 
-      // Config watcher (shared, broadcasts to all runners)
-      let configWatcher: { stop(): void } | undefined;
-      let configWatchStore: { shutdown(): Promise<void> } | undefined;
-      if (options.watch) {
-        if (!options.configPath) {
-          console.error('❌ --watch requires --config <path>');
-          process.exit(1);
-        }
-        try {
-          const { ConfigSnapshotStore } = await import('./config/config-snapshot-store');
-          const { ConfigReloader } = await import('./config/config-reloader');
-          const { ConfigWatcher } = await import('./config/config-watcher');
-          const watchStore = new ConfigSnapshotStore();
-          await watchStore.initialize();
-          const reloader = new ConfigReloader({
-            configPath: options.configPath,
-            configManager,
-            snapshotStore: watchStore,
-            onSwap: newConfig => {
-              config = newConfig;
-              host.broadcastConfigUpdate(newConfig);
-              logger.info('[Watch] Config updated');
-            },
-          });
-          const watcher = new ConfigWatcher(options.configPath, reloader);
-          watcher.start();
-          configWatcher = watcher;
-          configWatchStore = watchStore;
-          logger.info('Config watching enabled');
-        } catch (watchErr: unknown) {
-          logger.warn(`Config watch setup failed (runners continue without it): ${watchErr}`);
-        }
+      if (options.watch && !options.configPath) {
+        console.error('❌ --watch requires --config <path>');
+        process.exit(1);
       }
+      const { setupRunnerConfigReloadRuntime } = await import('./runners/config-reload-runtime');
+      const configReloadRuntime = await setupRunnerConfigReloadRuntime({
+        configPath: options.configPath,
+        watch: Boolean(options.watch),
+        configManager,
+        onSwap: newConfig => {
+          config = newConfig;
+          host.broadcastConfigUpdate(newConfig);
+          logger.info('[Watch] Config updated');
+        },
+      });
 
       // Unified graceful shutdown
       let shuttingDown = false;
@@ -1867,8 +1849,7 @@ export async function main(): Promise<void> {
         }, 5000);
         forceTimer.unref();
         try {
-          if (configWatcher) configWatcher.stop();
-          if (configWatchStore) configWatchStore.shutdown().catch(() => {});
+          await configReloadRuntime.cleanup();
           await host.stopAll();
           if (sharedTaskStore) {
             try {
@@ -1893,8 +1874,7 @@ export async function main(): Promise<void> {
         const restartManager = new GracefulRestartManager(host, config.graceful_restart);
         // Register cleanup callbacks for resources outside RunnerHost
         restartManager.onCleanup(async () => {
-          if (configWatcher) configWatcher.stop();
-          if (configWatchStore) await configWatchStore.shutdown().catch(() => {});
+          await configReloadRuntime.cleanup();
           if (sharedTaskStore) await sharedTaskStore.shutdown().catch(() => {});
         });
         process.on('SIGUSR1', () => {
