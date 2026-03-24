@@ -31623,6 +31623,9 @@ ${preview}`);
                 auth: entry.config.auth,
                 headers: entry.config.headers,
                 timeout: entry.config.timeout || 3e4,
+                // Preserve transform_js and rate_limit from the original tool config
+                ...entry.config.transform_js ? { transform_js: entry.config.transform_js } : {},
+                ...entry.config.rate_limit ? { rate_limit: entry.config.rate_limit } : {},
                 inputSchema: {
                   type: "object",
                   properties: {
