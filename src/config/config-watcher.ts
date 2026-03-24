@@ -113,7 +113,8 @@ export class ConfigWatcher {
     this.debounceMs = debounceMs ?? DEFAULT_DEBOUNCE_MS;
   }
 
-  start(): void {
+  start(options?: { listenForSignals?: boolean }): void {
+    const listenForSignals = options?.listenForSignals !== false;
     // Remove any previous listeners in case start() is called after stop()
     this.stop();
 
@@ -125,7 +126,7 @@ export class ConfigWatcher {
     }
 
     // Listen for SIGUSR2 (non-Windows)
-    if (process.platform !== 'win32') {
+    if (listenForSignals && process.platform !== 'win32') {
       this.signalHandler = () => {
         logger.info('[ConfigWatcher] Received SIGUSR2, triggering config reload');
         this.safeReload();
