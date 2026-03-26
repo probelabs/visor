@@ -109,7 +109,7 @@ export class WorkflowExecutor {
         if (step.if) {
           const shouldRun = this.evaluateCondition(step.if, {
             inputs: executionContext.inputs,
-            outputs: Object.fromEntries(stepResults),
+            outputs: this.unwrapOutputs(stepResults),
             pr: runOptions.prInfo,
           });
 
@@ -324,18 +324,14 @@ export class WorkflowExecutor {
             throw new Error('Expression mapping requires expression field');
           }
           const sandbox = createSecureSandbox();
+          const unwrappedExpr = this.unwrapOutputs(stepResults);
           return compileAndRun(
             sandbox,
             typedMapping.expression,
             {
               inputs: executionContext.inputs,
-              outputs: Object.fromEntries(stepResults),
-              steps: Object.fromEntries(
-                Array.from(stepResults.entries()).map(([id, result]) => [
-                  id,
-                  (result as any).output,
-                ])
-              ),
+              outputs: unwrappedExpr,
+              steps: unwrappedExpr,
             },
             { injectLog: true, logPrefix: 'workflow.input.expression' }
           );
@@ -351,7 +347,7 @@ export class WorkflowExecutor {
       if (typedMapping.template) {
         return await this.liquid.parseAndRender(typedMapping.template, {
           inputs: executionContext.inputs,
-          outputs: Object.fromEntries(stepResults),
+          outputs: this.unwrapOutputs(stepResults),
         });
       }
     }
@@ -396,33 +392,46 @@ export class WorkflowExecutor {
       if (output.value_js) {
         // JavaScript expression
         const sandbox = createSecureSandbox();
+        const unwrapped = this.unwrapOutputs(stepResults);
         outputs[output.name] = compileAndRun(
           sandbox,
           output.value_js,
           {
             inputs: executionContext.inputs,
-            steps: Object.fromEntries(
-              Array.from(stepResults.entries()).map(([id, result]) => [id, (result as any).output])
-            ),
-            outputs: Object.fromEntries(stepResults),
+            steps: unwrapped,
+            outputs: unwrapped,
             pr: prInfo,
           },
           { injectLog: true, logPrefix: `workflow.output.${output.name}` }
         );
       } else if (output.value) {
         // Liquid template
+        const unwrappedLiquid = this.unwrapOutputs(stepResults);
         outputs[output.name] = await this.liquid.parseAndRender(output.value, {
           inputs: executionContext.inputs,
-          steps: Object.fromEntries(
-            Array.from(stepResults.entries()).map(([id, result]) => [id, (result as any).output])
-          ),
-          outputs: Object.fromEntries(stepResults),
+          steps: unwrappedLiquid,
+          outputs: unwrappedLiquid,
           pr: prInfo,
         });
       }
     }
 
     return outputs;
+  }
+
+  /**
+   * Unwrap step outputs from ReviewSummary wrappers.
+   * Script steps and MCP steps store results as { issues: [], output: <actual> }.
+   * Workflow value_js/if/Liquid should see the unwrapped output, consistent with
+   * how script step contexts already unwrap via buildProviderTemplateContext.
+   */
+  private unwrapOutputs(stepResults: Map<string, ReviewSummary>): Record<string, unknown> {
+    const unwrapped: Record<string, unknown> = {};
+    for (const [id, result] of stepResults.entries()) {
+      const summary = result as ReviewSummary & { output?: unknown };
+      unwrapped[id] = summary.output !== undefined ? summary.output : summary;
+    }
+    return unwrapped;
   }
 
   /**
