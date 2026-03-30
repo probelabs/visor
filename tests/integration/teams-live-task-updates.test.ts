@@ -24,7 +24,7 @@ jest.mock('../../src/agent-protocol/task-trace-resolution', () => ({
     async (metadata?: { trace_id?: string; trace_file?: string }) => ({
       traceId: metadata?.trace_id,
       traceFile: metadata?.trace_file,
-      primaryRef: metadata?.trace_id || metadata?.trace_file,
+      primaryRef: metadata?.trace_file || metadata?.trace_id,
     })
   ),
 }));

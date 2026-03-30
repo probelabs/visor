@@ -828,10 +828,14 @@ export class WorktreeManager {
    * Remove a worktree
    */
   async removeWorktree(worktreeId: string): Promise<void> {
-    const metadata = this.activeWorktrees.get(worktreeId);
+    let metadata = this.activeWorktrees.get(worktreeId);
+    if (!metadata) {
+      const worktreePath = path.join(this.getWorktreesDir(), worktreeId);
+      metadata = (await this.loadMetadata(worktreePath)) || undefined;
+    }
 
     if (!metadata) {
-      logger.warn(`Worktree not found in active list: ${worktreeId}`);
+      logger.warn(`Worktree metadata not found: ${worktreeId}`);
       return;
     }
 

@@ -1,7 +1,12 @@
 import crypto from 'crypto';
 import { logger } from '../logger';
 import type { TaskLiveUpdatesConfig } from '../types/config';
-import { fetchTraceSpans, serializeTraceForPrompt } from './trace-serializer';
+import {
+  extractProbeTaskSummary,
+  fetchTraceSpans,
+  serializeTraceForPrompt,
+  type ProbeTaskSummary,
+} from './trace-serializer';
 
 export const DEFAULT_TASK_LIVE_UPDATE_INTERVAL_SECONDS = 10;
 export const DEFAULT_TASK_LIVE_UPDATE_MAX_TRACE_CHARS = 12_000;
@@ -119,10 +124,12 @@ interface ProgressTimingMetadata {
   previousUpdateAt?: Date;
   secondsSincePreviousUpdate?: number;
   activatedSkills?: string[];
+  taskSummary?: ProbeTaskSummary;
 }
 
 interface TaskLiveUpdateSkillMetadata {
   activatedSkills?: string[];
+  taskSummary?: ProbeTaskSummary;
 }
 
 export interface TaskLiveUpdateContext {
@@ -378,6 +385,7 @@ export class TaskLiveUpdateManager {
             ? Math.max(0, Math.floor((Date.now() - this.lastUpdateAt.getTime()) / 1000))
             : undefined,
           activatedSkills: this.lastSkillMetadata?.activatedSkills,
+          taskSummary: this.lastSkillMetadata?.taskSummary,
         },
         traceState.traceId
       );
@@ -443,10 +451,12 @@ export class TaskLiveUpdateManager {
     traceId?: string
   ): string {
     const normalized = normalizeProgressSummary(text);
+    const taskSummary = formatTaskSummary(timing.taskSummary);
     const blocks = [
       '*Live Update*',
       '_Current task is still running. This message updates in place until the final answer is ready._',
       this.lastUpdateKind === 'stall' ? DEFAULT_TASK_LIVE_UPDATE_STALL_NOTICE : '',
+      taskSummary,
       normalized,
       formatProgressMetadata(timing),
     ].filter(Boolean);
@@ -465,6 +475,7 @@ export class TaskLiveUpdateManager {
           ? Math.max(0, Math.floor((Date.now() - this.lastUpdateAt.getTime()) / 1000))
           : undefined,
         activatedSkills: this.lastSkillMetadata?.activatedSkills,
+        taskSummary: this.lastSkillMetadata?.taskSummary,
       },
       traceState.traceId
     );
@@ -526,6 +537,7 @@ export class TaskLiveUpdateManager {
           ? Math.max(0, Math.floor((Date.now() - this.lastUpdateAt.getTime()) / 1000))
           : undefined,
         activatedSkills: this.lastSkillMetadata?.activatedSkills,
+        taskSummary: this.lastSkillMetadata?.taskSummary,
       },
       traceId
     );
@@ -648,6 +660,66 @@ function formatProgressMetadata(timing: ProgressTimingMetadata): string {
   return `_Metadata: ${parts.join(' | ')}_`;
 }
 
+function formatTaskStatusMarker(status: string): string {
+  switch (status) {
+    case 'completed':
+      return '[x]';
+    case 'in_progress':
+      return '[~]';
+    case 'blocked':
+    case 'failed':
+    case 'error':
+      return '[!]';
+    case 'deleted':
+    case 'cancelled':
+    case 'canceled':
+      return '[-]';
+    default:
+      return '[ ]';
+  }
+}
+
+function formatTaskLabel(task: { id: string; title: string; status: string }): string {
+  const title = String(task.title || '').trim();
+  return title || task.id || task.status;
+}
+
+function appendTaskScopeLines(
+  lines: string[],
+  scope: NonNullable<ProbeTaskSummary['scopes']>[number],
+  depth = 0
+): void {
+  const prefix = '  '.repeat(depth);
+  if (depth > 0 || scope.label !== 'Main Agent') {
+    lines.push(`${prefix}${scope.label}`);
+  }
+  for (const task of scope.tasks.slice(0, 8)) {
+    lines.push(`${prefix}• ${formatTaskStatusMarker(task.status)} ${formatTaskLabel(task)}`);
+  }
+  if (scope.tasks.length > 8) {
+    lines.push(`${prefix}• ... ${scope.tasks.length - 8} more`);
+  }
+  for (const child of scope.children) {
+    appendTaskScopeLines(lines, child, depth + 1);
+  }
+}
+
+function formatTaskSummary(summary?: ProbeTaskSummary): string | undefined {
+  if (!summary || summary.tasks.length === 0) return undefined;
+  const lines = ['*Tasks*'];
+  if (summary.scopes.length > 0) {
+    for (const scope of summary.scopes) appendTaskScopeLines(lines, scope);
+  } else {
+    for (const task of summary.tasks.slice(0, 8)) {
+      lines.push(`• ${formatTaskStatusMarker(task.status)} ${formatTaskLabel(task)}`);
+    }
+    if (summary.tasks.length > 8) {
+      lines.push(`• ... ${summary.tasks.length - 8} more`);
+    }
+  }
+  return lines.join('\n');
+}
+
 function formatSkillList(skills: string[]): string {
   const normalized = dedupeStrings(skills);
   if (normalized.length <= 4) return normalized.join(', ');
@@ -659,13 +731,13 @@ function dedupeStrings(values: string[] | undefined): string[] {
   return [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))];
 }
 
-async function extractTraceSkillMetadata(
+export async function extractTraceSkillMetadata(
   traceRef: string,
   traceId?: string
 ): Promise<TaskLiveUpdateSkillMetadata | undefined> {
   if (!traceRef && !traceId) return undefined;
   try {
-    const spans = await fetchTraceSpans(traceId || traceRef);
+    const spans = await fetchTraceSpans(traceRef || traceId!, { targetTraceId: traceId });
     if (!spans.length) return undefined;
 
     const routeIntentSpan = spans.find(
@@ -693,8 +765,12 @@ async function extractTraceSkillMetadata(
 
     const finalActivatedSkills =
       activatedSkills.length > 0 ? activatedSkills : fallbackActivatedSkills;
-    if (!finalActivatedSkills.length) return undefined;
-    return { activatedSkills: finalActivatedSkills };
+    const taskSummary = extractProbeTaskSummary(spans);
+    if (!finalActivatedSkills.length && !taskSummary) return undefined;
+    return {
+      activatedSkills: finalActivatedSkills.length ? finalActivatedSkills : undefined,
+      taskSummary: taskSummary || undefined,
+    };
   } catch (err) {
     logger.debug(
       `[TaskLiveUpdates] Failed to extract skill metadata from trace: ${

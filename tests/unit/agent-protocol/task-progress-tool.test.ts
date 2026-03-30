@@ -191,7 +191,7 @@ describe('task-progress-tool', () => {
           '/tmp/traces/trace-1.ndjson'
         );
         expect(traceSerializer.serializeTraceForPrompt).toHaveBeenCalledWith(
-          'abc123',
+          '/tmp/traces/trace-1.ndjson',
           8000,
           undefined,
           undefined,
@@ -199,7 +199,7 @@ describe('task-progress-tool', () => {
         );
       });
 
-      it('should prefer trace_id over trace_file when both are available', async () => {
+      it('should keep trace_file for local fallback while using trace_id as the remote hint when both are available', async () => {
         mockStore.getTask.mockReturnValue({
           state: 'working',
           created_at: new Date().toISOString(),
@@ -219,7 +219,7 @@ describe('task-progress-tool', () => {
         expect(result.success).toBe(true);
         expect(traceSerializer.readTraceIdFromFile).not.toHaveBeenCalled();
         expect(traceSerializer.serializeTraceForPrompt).toHaveBeenCalledWith(
-          'trace-from-metadata',
+          '/tmp/traces/trace-1.ndjson',
           8000,
           undefined,
           undefined,

@@ -13,7 +13,7 @@ import { Scheduler } from '../scheduler/scheduler';
 import { ScheduleStore, type Schedule } from '../scheduler/schedule-store';
 import { createHash } from 'crypto';
 import { createSlackOutputAdapter } from './slack-output-adapter';
-import { WorkspaceManager } from '../utils/workspace-manager';
+import { startPeriodicStorageCleanup } from '../utils/worktree-cleanup';
 import { MessageTriggerEvaluator, type MatchedTrigger } from '../scheduler/message-trigger';
 import type { SlackMessageTrigger } from '../types/config';
 import { toSlackMessageTrigger, type MessageTrigger } from '../scheduler/store/types';
@@ -84,6 +84,7 @@ export class SlackSocketRunner implements Runner {
   private taskStore?: import('../agent-protocol/task-store').TaskStore;
   private configPath?: string;
   private staleTaskTimer?: ReturnType<typeof setInterval>;
+  private storageCleanupStop?: () => void;
 
   constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: SlackSocketConfig) {
     const app = opts.appToken || process.env.SLACK_APP_TOKEN || '';
@@ -280,8 +281,8 @@ export class SlackSocketRunner implements Runner {
     const url = await this.openConnection();
     await this.connect(url);
 
-    // Clean up stale workspace directories from previous runs
-    WorkspaceManager.cleanupStale().catch(() => {});
+    this.storageCleanupStop?.();
+    this.storageCleanupStop = startPeriodicStorageCleanup('SlackSocket');
 
     // Periodic stale task sweep — fail 'working' tasks with no heartbeat.
     // Tasks send a heartbeat every 60s, so 5 minutes without an update means
@@ -1504,6 +1505,8 @@ export class SlackSocketRunner implements Runner {
    */
   async stopListening(): Promise<void> {
     this.draining = true;
+    this.storageCleanupStop?.();
+    this.storageCleanupStop = undefined;
     logger.info(
       `[SlackSocket] Stopping listener (${this.activeThreads.size} active thread(s) will continue)`
     );
@@ -1559,6 +1562,8 @@ export class SlackSocketRunner implements Runner {
    * Stop the socket runner and clean up resources
    */
   async stop(): Promise<void> {
+    this.storageCleanupStop?.();
+    this.storageCleanupStop = undefined;
     // Stop stale task sweep timer
     if (this.staleTaskTimer) {
       clearInterval(this.staleTaskTimer);

@@ -11,7 +11,7 @@
 import crypto from 'crypto';
 import { logger } from '../logger';
 import type { SqliteTaskStore } from './task-store';
-import { serializeTraceForPrompt } from './trace-serializer';
+import { buildTraceReport } from './trace-serializer';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -226,15 +226,15 @@ export async function evaluateTask(
   if (traceFile || traceId) {
     try {
       const traceRef = traceFile || traceId!;
-      // Use full mode (1M chars) so trace is not truncated, include task response
-      traceTree = await serializeTraceForPrompt(
+      const report = await buildTraceReport(
         traceRef,
         1_000_000,
         { traceDir: config?.traceDir },
         responseText !== 'No response available' ? responseText : undefined,
         traceId
       );
-      if (traceTree === '(no trace data available)') {
+      traceTree = report?.text;
+      if (!traceTree || traceTree === '(no trace data available)') {
         traceTree = undefined;
       }
     } catch (err) {

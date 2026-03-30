@@ -10,7 +10,7 @@ import type { VisorConfig } from '../types/config';
 import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
 import { WhatsAppClient } from './client';
 import { WhatsAppAdapter, type WhatsAppMessageInfo } from './adapter';
-import { WorkspaceManager } from '../utils/workspace-manager';
+import { startPeriodicStorageCleanup } from '../utils/worktree-cleanup';
 
 export type WhatsAppWebhookConfig = {
   accessToken?: string;
@@ -38,6 +38,7 @@ export class WhatsAppWebhookRunner implements Runner {
   private taskStore?: import('../agent-protocol/task-store').TaskStore;
   private configPath?: string;
   private activeRequests = 0;
+  private storageCleanupStop?: () => void;
 
   constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: WhatsAppWebhookConfig) {
     const token = opts.accessToken || process.env.WHATSAPP_ACCESS_TOKEN || '';
@@ -123,14 +124,16 @@ export class WhatsAppWebhookRunner implements Runner {
     return new Promise<void>(resolve => {
       this.server!.listen(this.port, this.host, () => {
         logger.info(`[WhatsAppWebhook] Server listening on ${this.host}:${this.port}`);
-        // Clean up stale workspace directories
-        WorkspaceManager.cleanupStale().catch(() => {});
+        this.storageCleanupStop?.();
+        this.storageCleanupStop = startPeriodicStorageCleanup('WhatsAppWebhook');
         resolve();
       });
     });
   }
 
   async stopListening(): Promise<void> {
+    this.storageCleanupStop?.();
+    this.storageCleanupStop = undefined;
     if (this.server) {
       const srv = this.server;
       if (typeof (srv as any).closeAllConnections === 'function') {
@@ -143,6 +146,8 @@ export class WhatsAppWebhookRunner implements Runner {
   }
 
   async drain(timeoutMs = 0): Promise<void> {
+    this.storageCleanupStop?.();
+    this.storageCleanupStop = undefined;
     if (this.server) {
       this.server.close();
       this.server = undefined;
@@ -162,6 +167,8 @@ export class WhatsAppWebhookRunner implements Runner {
   }
 
   async stop(): Promise<void> {
+    this.storageCleanupStop?.();
+    this.storageCleanupStop = undefined;
     if (this.server) {
       return new Promise<void>(resolve => {
         this.server!.close(() => {

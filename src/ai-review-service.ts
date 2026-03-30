@@ -54,7 +54,7 @@ function getCurrentDateXml(): string {
   return `<current_date>${now.toISOString().split('T')[0]}</current_date>`;
 }
 
-function createProbeTracerAdapter(fallbackTracer?: any) {
+export function createProbeTracerAdapter(fallbackTracer?: any) {
   const fallback = fallbackTracer && typeof fallbackTracer === 'object' ? fallbackTracer : null;
   const LIVE_LIFECYCLE_SPANS = new Set(['visor.ai_check', 'ai.request', 'search.delegate']);
   const PROBE_LIFECYCLE_ALIASES: Record<string, string> = {
@@ -103,6 +103,8 @@ function createProbeTracerAdapter(fallbackTracer?: any) {
     'negotiated_timeout.observer_exhausted',
     'negotiated_timeout.abort_summary',
   ]);
+  const isSpanWorthyEvent = (name: string): boolean =>
+    SPAN_WORTHY_EVENTS.has(name) || name.startsWith('task.');
 
   const emitEvent = (name: string, attrs?: Record<string, unknown>) => {
     try {
@@ -110,13 +112,34 @@ function createProbeTracerAdapter(fallbackTracer?: any) {
 
       // For important events, emit a short-lived child span that ends
       // immediately so it gets exported even if the parent span never closes.
-      if (SPAN_WORTHY_EVENTS.has(name)) {
+      if (isSpanWorthyEvent(name)) {
         try {
+          const startHr = process.hrtime();
           const tracer = otTrace.getTracer('visor');
           const childSpan = tracer.startSpan(`probe.event.${name}`, {
             attributes: { 'probe.event.name': name, ...flat },
           });
           childSpan.end(); // ends immediately → gets exported by BatchSpanProcessor
+
+          // Mirror span-worthy events into the local NDJSON fallback trace too.
+          // `tasks trace` often falls back to this file when Tempo/Grafana is unavailable.
+          try {
+            const activeParent = otTrace.getActiveSpan?.();
+            const parentCtx = activeParent?.spanContext?.();
+            const childCtx = childSpan.spanContext?.();
+            const endHr = process.hrtime();
+            emitNdjsonFullSpan({
+              name: `probe.event.${name}`,
+              traceId: childCtx?.traceId || parentCtx?.traceId,
+              spanId: childCtx?.spanId,
+              parentSpanId: parentCtx?.spanId,
+              startTime: [startHr[0], startHr[1]],
+              endTime: [endHr[0], endHr[1]],
+              attributes: { 'probe.event.name': name, ...flat },
+              events: [],
+              status: { code: 1 },
+            });
+          } catch {}
         } catch {}
       }
 
@@ -307,6 +330,14 @@ function createProbeTracerAdapter(fallbackTracer?: any) {
       if (fallback && typeof fallback.recordJsonValidationEvent === 'function') {
         try {
           fallback.recordJsonValidationEvent(phase, attrs);
+        } catch {}
+      }
+    },
+    recordTaskEvent: (phase: string, attrs?: Record<string, unknown>) => {
+      emitEvent(`task.${phase}`, attrs);
+      if (fallback && typeof fallback.recordTaskEvent === 'function') {
+        try {
+          fallback.recordTaskEvent(phase, attrs);
         } catch {}
       }
     },

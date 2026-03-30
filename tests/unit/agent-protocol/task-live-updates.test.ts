@@ -1,5 +1,9 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import {
   DEFAULT_TASK_LIVE_UPDATE_PROMPT,
+  extractTraceSkillMetadata,
   isFrontendLiveUpdatesEnabled,
   resolveTaskLiveUpdatesConfig,
   summarizeTaskProgress,
@@ -80,6 +84,35 @@ describe('task-live-updates', () => {
           .mockResolvedValueOnce('trace-2'),
         extractSkillMetadata: jest.fn(async () => ({
           activatedSkills: ['code-explorer', 'engineer'],
+          taskSummary: {
+            tasksEnabled: true,
+            source: 'snapshot',
+            eventCount: 4,
+            snapshotCount: 1,
+            tasks: [
+              { id: 'explore', title: 'Explore codebase', status: 'completed' },
+              { id: 'implement', title: 'Implement changes', status: 'in_progress' },
+            ],
+            scopes: [
+              {
+                label: 'Main Agent',
+                source: 'snapshot',
+                eventCount: 2,
+                snapshotCount: 1,
+                tasks: [{ id: 'explore', title: 'Explore codebase', status: 'completed' }],
+                children: [
+                  {
+                    label: 'Code Explorer',
+                    source: 'snapshot',
+                    eventCount: 2,
+                    snapshotCount: 1,
+                    tasks: [{ id: 'implement', title: 'Implement changes', status: 'in_progress' }],
+                    children: [],
+                  },
+                ],
+              },
+            ],
+          },
         })),
         summarizeProgress: jest
           .fn()
@@ -94,6 +127,10 @@ describe('task-live-updates', () => {
 
     await jest.advanceTimersByTimeAsync(10_000);
     expect(sink.update).toHaveBeenCalledWith(expect.stringContaining('*Live Update*'));
+    expect(sink.update).toHaveBeenCalledWith(expect.stringContaining('*Tasks*'));
+    expect(sink.update).toHaveBeenCalledWith(expect.stringContaining('• [x] Explore codebase'));
+    expect(sink.update).toHaveBeenCalledWith(expect.stringContaining('Code Explorer'));
+    expect(sink.update).toHaveBeenCalledWith(expect.stringContaining('• [~] Implement changes'));
     expect(sink.update).toHaveBeenCalledWith(expect.stringContaining('- looking at logs'));
     expect(sink.update).toHaveBeenCalledWith(
       expect.stringContaining('_Metadata: elapsed 10s | first live update')
@@ -305,6 +342,133 @@ describe('task-live-updates', () => {
         secondsSincePreviousUpdate: 15,
       })
     );
+  });
+
+  it('prefers trace_file over trace_id when refreshed trace state contains both', async () => {
+    jest.useFakeTimers();
+
+    const sink = {
+      kind: 'test',
+      start: jest.fn(async () => null),
+      update: jest.fn(async () => null),
+      complete: jest.fn(async () => null),
+      fail: jest.fn(async () => null),
+    };
+    const serializeTrace = jest.fn(async () => 'trace-snapshot');
+
+    const manager = new TaskLiveUpdateManager(
+      {
+        taskId: 'task-trace-preference',
+        requestText: 'Investigate the issue',
+        traceRef: 'trace-id-only',
+        traceId: 'trace-id-only',
+        resolveTraceState: () => ({
+          traceRef: '/tmp/real-trace.ndjson',
+          traceId: 'trace-id-only',
+        }),
+        sink,
+        config: {
+          enabled: true,
+          intervalSeconds: 30,
+          model: 'gemini-3.1-flash-lite-preview',
+          prompt: 'prompt',
+          initialMessage: '',
+          maxTraceChars: 4000,
+        },
+      },
+      {
+        serializeTrace,
+        extractSkillMetadata: jest.fn(async () => undefined),
+        summarizeProgress: jest.fn(async () => '- Progress: tracing'),
+      }
+    );
+
+    await manager.start();
+    await jest.advanceTimersByTimeAsync(10_000);
+
+    expect(serializeTrace).toHaveBeenCalledWith('/tmp/real-trace.ndjson', 4000, 'trace-id-only');
+    expect(sink.update).toHaveBeenCalled();
+  });
+
+  it('extracts task metadata from the requested trace when a local NDJSON file contains multiple traces', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-live-updates-'));
+    const traceFile = path.join(tempDir, 'mixed.ndjson');
+    const wrongTraceId = '11111111111111111111111111111111';
+    const rightTraceId = '22222222222222222222222222222222';
+
+    const lines = [
+      JSON.stringify({
+        name: 'probe.event.task.created',
+        traceId: wrongTraceId,
+        spanId: 'span-wrong-task',
+        startTime: [1, 0],
+        endTime: [1, 1000],
+        attributes: {
+          'probe.event.name': 'task.created',
+          'task.action': 'create',
+          'task.id': 'fetch-pipeline-activity',
+          'task.title': 'Fetch Pipeline Activity',
+        },
+        events: [],
+        status: { code: 1 },
+      }),
+      JSON.stringify({
+        name: 'visor.check',
+        traceId: rightTraceId,
+        spanId: 'span-build-config',
+        startTime: [2, 0],
+        endTime: [2, 1000],
+        attributes: {
+          'visor.check.id': 'build-config',
+          'visor.check.output': JSON.stringify({ activated_skills: ['code-explorer'] }),
+        },
+        events: [],
+        status: { code: 1 },
+      }),
+      JSON.stringify({
+        name: 'probe.event.task.created',
+        traceId: rightTraceId,
+        spanId: 'span-right-task',
+        startTime: [3, 0],
+        endTime: [3, 1000],
+        attributes: {
+          'probe.event.name': 'task.created',
+          'task.action': 'create',
+          'task.id': 'validate-gateway',
+          'task.title': 'Validate Gateway',
+        },
+        events: [],
+        status: { code: 1 },
+      }),
+      JSON.stringify({
+        name: 'probe.event.task.updated',
+        traceId: rightTraceId,
+        spanId: 'span-right-task-update',
+        startTime: [4, 0],
+        endTime: [4, 1000],
+        attributes: {
+          'probe.event.name': 'task.updated',
+          'task.action': 'update',
+          'task.id': 'validate-gateway',
+          'task.new_status': 'in_progress',
+          'task.fields_updated': 'status',
+        },
+        events: [],
+        status: { code: 1 },
+      }),
+    ];
+
+    fs.writeFileSync(traceFile, `${lines.join('\n')}\n`, 'utf8');
+
+    try {
+      const metadata = await extractTraceSkillMetadata(traceFile, rightTraceId);
+      expect(metadata?.activatedSkills).toEqual(['code-explorer']);
+      expect(metadata?.taskSummary?.tasks).toEqual([
+        { id: 'validate-gateway', title: 'Validate Gateway', status: 'in_progress' },
+      ]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('refreshes only metadata every 5 seconds without making another LLM call', async () => {

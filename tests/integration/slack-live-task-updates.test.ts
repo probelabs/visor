@@ -45,7 +45,7 @@ jest.mock('../../src/agent-protocol/task-trace-resolution', () => ({
     async (metadata?: { trace_id?: string; trace_file?: string }) => ({
       traceId: metadata?.trace_id,
       traceFile: metadata?.trace_file,
-      primaryRef: metadata?.trace_id || metadata?.trace_file,
+      primaryRef: metadata?.trace_file || metadata?.trace_id,
     })
   ),
 }));
@@ -141,6 +141,9 @@ describe('Slack live task updates integration', () => {
       model: 'gemini-3.1-flash-lite-preview',
       frontends: { slack: { enabled: true } },
     };
+    serializeTraceForPrompt.mockImplementation(async (ref: string) =>
+      ref === traceFile ? 'trace snapshot' : '(no trace data available)'
+    );
 
     const pending = deferred<any>();
     executeChecksSpy.mockImplementation(() => pending.promise as any);
@@ -168,6 +171,8 @@ describe('Slack live task updates integration', () => {
     await flushAsyncWork();
 
     expect(serializeTraceForPrompt).toHaveBeenCalled();
+    expect(serializeTraceForPrompt.mock.calls.some(call => call[0] === traceFile)).toBe(true);
+    expect(serializeTraceForPrompt.mock.calls.some(call => call[0] !== traceFile)).toBe(false);
     expect(
       probeAnswer.mock.calls.some(call => String(call[0] || '').includes('<execution_trace>'))
     ).toBe(true);

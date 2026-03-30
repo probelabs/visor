@@ -11,7 +11,7 @@ import type { VisorConfig } from '../types/config';
 import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
 import { TeamsClient } from './client';
 import { TeamsAdapter, type TeamsMessageInfo } from './adapter';
-import { WorkspaceManager } from '../utils/workspace-manager';
+import { startPeriodicStorageCleanup } from '../utils/worktree-cleanup';
 
 export type TeamsWebhookConfig = {
   appId?: string;
@@ -37,6 +37,7 @@ export class TeamsWebhookRunner implements Runner {
   private taskStore?: import('../agent-protocol/task-store').TaskStore;
   private configPath?: string;
   private activeRequests = 0;
+  private storageCleanupStop?: () => void;
 
   constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: TeamsWebhookConfig) {
     const appId = opts.appId || process.env.TEAMS_APP_ID || '';
@@ -132,14 +133,16 @@ export class TeamsWebhookRunner implements Runner {
     return new Promise<void>(resolve => {
       this.server!.listen(this.port, this.host, () => {
         logger.info(`[TeamsWebhook] Server listening on ${this.host}:${this.port}`);
-        // Clean up stale workspace directories
-        WorkspaceManager.cleanupStale().catch(() => {});
+        this.storageCleanupStop?.();
+        this.storageCleanupStop = startPeriodicStorageCleanup('TeamsWebhook');
         resolve();
       });
     });
   }
 
   async stopListening(): Promise<void> {
+    this.storageCleanupStop?.();
+    this.storageCleanupStop = undefined;
     if (this.server) {
       const srv = this.server;
       if (typeof (srv as any).closeAllConnections === 'function') {
@@ -152,6 +155,8 @@ export class TeamsWebhookRunner implements Runner {
   }
 
   async drain(timeoutMs = 0): Promise<void> {
+    this.storageCleanupStop?.();
+    this.storageCleanupStop = undefined;
     if (this.server) {
       this.server.close();
       this.server = undefined;
@@ -169,6 +174,8 @@ export class TeamsWebhookRunner implements Runner {
   }
 
   async stop(): Promise<void> {
+    this.storageCleanupStop?.();
+    this.storageCleanupStop = undefined;
     if (this.server) {
       return new Promise<void>(resolve => {
         this.server!.close(() => {

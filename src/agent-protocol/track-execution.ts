@@ -161,8 +161,8 @@ export async function trackExecution<T>(
               }
               return {
                 traceRef:
-                  (current?.metadata?.trace_id as string | undefined) ||
                   (current?.metadata?.trace_file as string | undefined) ||
+                  (current?.metadata?.trace_id as string | undefined) ||
                   initialResolvedTrace.primaryRef,
                 traceId: current?.metadata?.trace_id as string | undefined,
               };
