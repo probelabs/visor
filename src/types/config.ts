@@ -1424,8 +1424,8 @@ export interface SlackMessageTrigger {
 export interface StaticCronJob {
   /** Cron expression (e.g., "0 9 * * 1" for every Monday at 9am) */
   schedule: string;
-  /** Workflow/check ID to run */
-  workflow: string;
+  /** Workflow/check ID to run. Omit to treat inputs.text as a user message through the full pipeline. */
+  workflow?: string;
   /** Optional workflow inputs */
   inputs?: Record<string, unknown>;
   /** Output destination configuration */

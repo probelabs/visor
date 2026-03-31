@@ -6,6 +6,8 @@ import type { TaskLiveUpdateSink } from './task-live-updates';
 export class SlackTaskLiveUpdateSink implements TaskLiveUpdateSink {
   readonly kind = 'slack';
   private messageTs?: string;
+  /** Serialize all publish calls to prevent concurrent postMessage races */
+  private publishQueue: Promise<{ ref?: Record<string, unknown> } | null> = Promise.resolve(null);
 
   constructor(
     private readonly slack: SlackClient,
@@ -24,15 +26,30 @@ export class SlackTaskLiveUpdateSink implements TaskLiveUpdateSink {
   }
 
   async update(text: string): Promise<{ ref?: Record<string, unknown> } | null> {
-    return this.publish(text, 'progress');
+    return this.enqueue(text, 'progress');
   }
 
   async complete(text: string): Promise<{ ref?: Record<string, unknown> } | null> {
-    return this.publish(text, 'final');
+    return this.enqueue(text, 'final');
   }
 
   async fail(text: string): Promise<{ ref?: Record<string, unknown> } | null> {
-    return this.publish(text, 'final');
+    return this.enqueue(text, 'final');
+  }
+
+  /**
+   * Enqueue a publish call so they execute serially.
+   * This prevents the race where tick() and complete() both see messageTs=undefined
+   * and each call chat.postMessage, creating duplicate messages.
+   */
+  private enqueue(
+    text: string,
+    mode: 'progress' | 'final'
+  ): Promise<{ ref?: Record<string, unknown> } | null> {
+    this.publishQueue = this.publishQueue
+      .catch(() => {}) // don't let a prior failure block the queue
+      .then(() => this.publish(text, mode));
+    return this.publishQueue;
   }
 
   private async publish(

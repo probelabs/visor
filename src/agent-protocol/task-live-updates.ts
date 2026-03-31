@@ -207,6 +207,7 @@ export class TaskLiveUpdateManager {
   private firstTickTimer?: ReturnType<typeof setTimeout>;
   private metadataRefreshTimer?: ReturnType<typeof setInterval>;
   private running = false;
+  private inflightTick?: Promise<void>;
   private started = false;
   private completed = false;
   private readonly startedAt = new Date();
@@ -258,6 +259,12 @@ export class TaskLiveUpdateManager {
     if (this.completed) return;
     this.completed = true;
     this.stop();
+    // Wait for any in-flight tick to finish so the sink's publish queue is drained
+    if (this.running && this.inflightTick) {
+      try {
+        await this.inflightTick;
+      } catch {}
+    }
     try {
       logger.info(`[TaskLiveUpdates] Publishing final success update for task ${this.ctx.taskId}`);
       const result = await this.ctx.sink.complete(this.decorateText(finalText));
@@ -276,6 +283,12 @@ export class TaskLiveUpdateManager {
     if (this.completed) return;
     this.completed = true;
     this.stop();
+    // Wait for any in-flight tick to finish so the sink's publish queue is drained
+    if (this.running && this.inflightTick) {
+      try {
+        await this.inflightTick;
+      } catch {}
+    }
     try {
       logger.info(`[TaskLiveUpdates] Publishing final failure update for task ${this.ctx.taskId}`);
       const result = await this.ctx.sink.fail(this.decorateText(finalText));
@@ -411,10 +424,11 @@ export class TaskLiveUpdateManager {
   private async runFirstTick(): Promise<void> {
     if (this.completed) return;
     logger.debug(`[TaskLiveUpdates] Running first scheduled tick for task ${this.ctx.taskId}`);
-    await this.tick();
+    this.inflightTick = this.tick();
+    await this.inflightTick;
     if (this.completed) return;
     this.timer = setInterval(() => {
-      void this.tick();
+      this.inflightTick = this.tick();
     }, this.ctx.config.intervalSeconds * 1000);
     if (typeof (this.timer as any)?.unref === 'function') {
       (this.timer as any).unref();

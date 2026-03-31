@@ -109,8 +109,12 @@ export class SlackOutputAdapter implements ScheduleOutputAdapter {
         return target;
       }
 
-      // Try to resolve channel name to ID
-      // For now, just return the target and let Slack API handle it
+      // Resolve channel name to ID via conversations.list
+      if (this.client.resolveChannelName) {
+        const resolved = await this.client.resolveChannelName(target);
+        if (resolved) return resolved;
+        logger.warn(`[SlackOutputAdapter] Could not resolve channel name '${target}', using as-is`);
+      }
       return target;
     }
 

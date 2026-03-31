@@ -1147,7 +1147,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62495%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1164,7 +1164,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62495%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1908,7 +1908,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62495%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1923,14 +1923,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422>>':
+    'Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-62495>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62495%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-62422>': {
+    'Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-62495>': {
       type: 'object',
       additionalProperties: false,
     },
@@ -3316,7 +3316,8 @@ export const configSchema = {
         },
         workflow: {
           type: 'string',
-          description: 'Workflow/check ID to run',
+          description:
+            'Workflow/check ID to run. Omit to treat inputs.text as a user message through the full pipeline.',
         },
         inputs: {
           $ref: '#/definitions/Record%3Cstring%2Cunknown%3E',
@@ -3359,7 +3360,7 @@ export const configSchema = {
           description: 'Timezone for schedule (default: UTC or scheduler default)',
         },
       },
-      required: ['schedule', 'workflow'],
+      required: ['schedule'],
       additionalProperties: false,
       description:
         'Static cron job defined in YAML configuration These are always executed by the scheduler daemon',

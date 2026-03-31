@@ -611,7 +611,13 @@ export class SlackSocketRunner implements Runner {
       return;
     }
     // Only skip our own bot messages, allow other bots to trigger Visor
-    if (this.botUserId && ev.user && String(ev.user) === String(this.botUserId)) {
+    const isSelfByUser = this.botUserId && ev.user && String(ev.user) === String(this.botUserId);
+    const isSelfByBotId =
+      !isSelfByUser &&
+      ev.bot_id &&
+      this.client?._botId &&
+      String(ev.bot_id) === String(this.client._botId);
+    if (isSelfByUser || isSelfByBotId) {
       if (process.env.VISOR_DEBUG === 'true') {
         logger.debug('[SlackSocket] Dropping self-bot message');
       }
@@ -1124,6 +1130,27 @@ export class SlackSocketRunner implements Runner {
         }
       } catch {}
 
+      // If trigger has inputs.text, use it as the message the AI sees
+      // (the original Slack message is still available in conversation context).
+      // This allows on_message triggers to give the AI specific instructions.
+      const triggerInputText = trigger.inputs?.text as string | undefined;
+      const messageForAI = triggerInputText
+        ? `${triggerInputText}\n\n---\nOriginal message:\n${conversationContext?.current?.text || String(ev.text || '')}`
+        : conversationContext?.current?.text || String(ev.text || '');
+
+      // Override conversation.current.text with the trigger's instructions
+      if (triggerInputText && conversationContext?.current) {
+        conversationContext.current.text = messageForAI;
+        // Also update the messages array if the current message is there
+        if (
+          Array.isArray(conversationContext.messages) &&
+          conversationContext.messages.length > 0
+        ) {
+          const last = conversationContext.messages[conversationContext.messages.length - 1];
+          if (last && last.ts === ts) last.text = messageForAI;
+        }
+      }
+
       // Build synthetic webhook payload
       const triggerPayload = {
         ...payload,
@@ -1142,6 +1169,16 @@ export class SlackSocketRunner implements Runner {
       if (this.taskStore) {
         webhookData.set('__taskStore', this.taskStore);
       }
+
+      // Seed the first message for human_input checks — same as normal message path.
+      // Without this, the chat workflow's human_input check blocks waiting for input
+      // and never reaches the intent router / tool-loading checks.
+      try {
+        const { getPromptStateManager } = await import('./prompt-state');
+        const mgr = getPromptStateManager();
+        const rootTs = threadTs || ts;
+        if (channel && rootTs && messageForAI) mgr.setFirstMessage(channel, rootTs, messageForAI);
+      } catch {}
 
       // Clone config for this run with Slack frontend
       const cfgForRun: VisorConfig = (() => {
