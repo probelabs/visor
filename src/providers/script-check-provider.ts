@@ -382,6 +382,12 @@ export class ScriptCheckProvider extends CheckProvider {
             env,
             stderr: 'pipe',
           });
+          // Prevent EIO errors on the stderr pipe from crashing the process
+          if (transport.stderr) {
+            transport.stderr.on('error', (err: Error) => {
+              logger.debug(`MCP transport stderr error: ${err.message}`);
+            });
+          }
           await Promise.race([
             client.connect(transport),
             new Promise((_, reject) =>

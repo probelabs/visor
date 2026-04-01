@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 
+// Register global handler for transient child-process I/O errors (EIO, EPIPE)
+// before any other code runs so broken pipes from MCP servers etc. don't crash
+// the process.
+import './utils/child-process-error-handler';
+
 // Load environment variables from .env file (override existing to allow .env to take precedence)
 import * as dotenv from 'dotenv';
 dotenv.config({ override: true, quiet: true });

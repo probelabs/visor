@@ -10,6 +10,7 @@ import * as fsp from 'fs/promises';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { commandExecutor } from './command-executor';
+import { isChildProcessIOError } from './child-process-error-handler';
 import { logger } from '../logger';
 import type {
   WorktreeMetadata,
@@ -1041,6 +1042,12 @@ export class WorktreeManager {
 
       // Cleanup on uncaught exception
       process.on('uncaughtException', async error => {
+        // EIO errors from child process stdio streams (e.g. MCP servers dying)
+        // are transient and should not crash the entire process.
+        if (isChildProcessIOError(error)) {
+          logger.warn(`Ignoring transient child-process I/O error: ${error.message}`);
+          return;
+        }
         logger.error(`Uncaught exception, cleaning up worktrees: ${error}`);
         await this.cleanupProcessWorktrees();
         process.exit(1);

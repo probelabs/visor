@@ -597,6 +597,18 @@ export class McpCheckProvider extends CheckProvider {
 
       const transport = createTransport();
 
+      // Attach error handler on the transport's stderr stream (if piped) so
+      // that EIO / EPIPE errors from a dying child process don't become
+      // uncaught exceptions that crash the whole visor process.
+      if ('stderr' in transport && transport.stderr) {
+        const stderrStream = transport.stderr as any;
+        if (typeof stderrStream.on === 'function') {
+          stderrStream.on('error', (err: Error) => {
+            logger.debug(`MCP transport stderr error (${transportName}): ${err.message}`);
+          });
+        }
+      }
+
       try {
         // Connect with timeout
         let timeoutId: NodeJS.Timeout | undefined;
