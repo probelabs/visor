@@ -39,6 +39,7 @@ import { FailureConditionEvaluator } from '../../failure-condition-evaluator';
 import { resolveWorkflowInputs } from '../context/workflow-inputs';
 import { executeWithSandboxRouting } from '../dispatch/sandbox-routing';
 import { applyPolicyGate } from '../dispatch/policy-gate';
+import { getDebounceManager } from '../dispatch/debounce-manager';
 import { createExtendedLiquid } from '../../liquid-extensions';
 
 function isEngineerCheck(checkId: string): boolean {
@@ -1106,6 +1107,38 @@ async function executeCheckWithForEachItems(
             wave: state.wave,
           },
           async span => {
+            // Debounce support: coalesce rapid invocations of the same step
+            if (checkConfig.debounce && checkConfig.debounce > 0) {
+              const debounceKey = checkConfig.debounce_key || checkId;
+              const outcome = await getDebounceManager().enqueue(
+                debounceKey,
+                checkConfig.debounce,
+                async () => {
+                  const r = await executeWithSandboxRouting(
+                    checkId,
+                    checkConfig,
+                    context,
+                    prInfo,
+                    dependencyResults,
+                    checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
+                    () =>
+                      provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+                  );
+                  try {
+                    captureCheckOutput(span, (r as any).output);
+                  } catch {}
+                  return r;
+                }
+              );
+              if (outcome === 'debounced') {
+                logger.info(
+                  `[LevelDispatch] ${checkId}: debounced (superseded by later invocation)`
+                );
+                return { issues: [], output: { debounced: true } };
+              }
+              // outcome === 'executed' — the fn above already ran
+              return { issues: [], output: { debounced: false } };
+            }
             const res = await executeWithSandboxRouting(
               checkId,
               checkConfig,
@@ -2568,6 +2601,35 @@ async function executeSingleCheck(
           wave: state.wave,
         },
         async span => {
+          // Debounce support: coalesce rapid invocations of the same step
+          if (checkConfig.debounce && checkConfig.debounce > 0) {
+            const debounceKey = checkConfig.debounce_key || checkId;
+            const outcome = await getDebounceManager().enqueue(
+              debounceKey,
+              checkConfig.debounce,
+              async () => {
+                const r = await executeWithSandboxRouting(
+                  checkId,
+                  checkConfig,
+                  context,
+                  prInfo,
+                  dependencyResults,
+                  checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
+                  () =>
+                    provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+                );
+                try {
+                  captureCheckOutput(span, (r as any).output);
+                } catch {}
+                return r;
+              }
+            );
+            if (outcome === 'debounced') {
+              logger.info(`[LevelDispatch] ${checkId}: debounced (superseded by later invocation)`);
+              return { issues: [], output: { debounced: true } };
+            }
+            return { issues: [], output: { debounced: false } };
+          }
           const res = await executeWithSandboxRouting(
             checkId,
             checkConfig,

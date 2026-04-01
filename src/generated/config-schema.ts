@@ -926,6 +926,16 @@ export const configSchema = {
           description:
             'Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"])',
         },
+        debounce: {
+          type: 'number',
+          description:
+            "Debounce window in milliseconds. When set, multiple invocations of this step (across concurrent engine instances) within the window are coalesced — only the last invocation actually executes after the window expires. Useful for steps that should run once after a burst of triggers settles.\n\nThe debounce key defaults to the step's fully-qualified check ID. Use `debounce_key` to group different steps under the same debounce.",
+        },
+        debounce_key: {
+          type: 'string',
+          description:
+            'Custom debounce key. Steps sharing the same key share the same debounce window.',
+        },
         criticality: {
           type: 'string',
           enum: ['external', 'internal', 'policy', 'info'],
@@ -1147,7 +1157,7 @@ export const configSchema = {
           description: 'Arguments/inputs for the workflow',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62495%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-31208-src_types_config.ts-0-63102%3E%3E',
           description: 'Override specific step configurations in the workflow',
         },
         output_mapping: {
@@ -1164,7 +1174,7 @@ export const configSchema = {
             'Config file path - alternative to workflow ID (loads a Visor config file as workflow)',
         },
         workflow_overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62495%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-31208-src_types_config.ts-0-63102%3E%3E',
           description: 'Alias for overrides - workflow step overrides (backward compatibility)',
         },
         ref: {
@@ -1908,7 +1918,7 @@ export const configSchema = {
           description: 'Custom output name (defaults to workflow name)',
         },
         overrides: {
-          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62495%3E%3E',
+          $ref: '#/definitions/Record%3Cstring%2CPartial%3Cinterface-src_types_config.ts-15521-31208-src_types_config.ts-0-63102%3E%3E',
           description: 'Step overrides',
         },
         output_mapping: {
@@ -1923,14 +1933,14 @@ export const configSchema = {
         '^x-': {},
       },
     },
-    'Record<string,Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-62495>>':
+    'Record<string,Partial<interface-src_types_config.ts-15521-31208-src_types_config.ts-0-63102>>':
       {
         type: 'object',
         additionalProperties: {
-          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-15521-30601-src_types_config.ts-0-62495%3E',
+          $ref: '#/definitions/Partial%3Cinterface-src_types_config.ts-15521-31208-src_types_config.ts-0-63102%3E',
         },
       },
-    'Partial<interface-src_types_config.ts-15521-30601-src_types_config.ts-0-62495>': {
+    'Partial<interface-src_types_config.ts-15521-31208-src_types_config.ts-0-63102>': {
       type: 'object',
       additionalProperties: false,
     },
