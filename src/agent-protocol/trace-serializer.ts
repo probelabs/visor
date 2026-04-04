@@ -949,6 +949,20 @@ function parseTaskIds(value: unknown): string[] {
     .filter(Boolean);
 }
 
+/** Parse task.items_json from enriched batch events (probe rc313+). */
+function parseBatchItemsJson(
+  value: unknown
+): Array<{ id: string; title?: string; status?: string }> {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(String(value));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item: any) => item && typeof item.id === 'string');
+  } catch {
+    return [];
+  }
+}
+
 function isTaskTelemetrySpan(span: NormalizedSpan): boolean {
   const toolName = span.attributes['tool.name'] || span.attributes['visor.tool.name'];
   if (toolName === 'task') return true;
@@ -1030,22 +1044,53 @@ function summarizeTaskTelemetrySpans(spans: NormalizedSpan[]): ProbeTaskSummary 
       case 'deleted':
         if (taskId) upsertTask(taskId, { title: taskTitle || undefined, status: 'deleted' });
         break;
-      case 'batch_created':
-        for (const id of taskIds) upsertTask(id, { status: 'pending' });
-        break;
-      case 'batch_updated':
-        for (const id of taskIds) {
-          upsertTask(id, {
-            status: newStatus && newStatus !== 'unchanged' ? newStatus : undefined,
-          });
+      case 'batch_created': {
+        const items = parseBatchItemsJson(attrs['task.items_json']);
+        if (items.length > 0) {
+          for (const item of items)
+            upsertTask(item.id, { title: item.title || '', status: item.status || 'pending' });
+        } else {
+          for (const id of taskIds) upsertTask(id, { status: 'pending' });
         }
         break;
-      case 'batch_completed':
-        for (const id of taskIds) upsertTask(id, { status: 'completed' });
+      }
+      case 'batch_updated': {
+        const items = parseBatchItemsJson(attrs['task.items_json']);
+        if (items.length > 0) {
+          for (const item of items)
+            upsertTask(item.id, {
+              title: item.title || undefined,
+              status: item.status || undefined,
+            });
+        } else {
+          for (const id of taskIds) {
+            upsertTask(id, {
+              status: newStatus && newStatus !== 'unchanged' ? newStatus : undefined,
+            });
+          }
+        }
         break;
-      case 'batch_deleted':
-        for (const id of taskIds) upsertTask(id, { status: 'deleted' });
+      }
+      case 'batch_completed': {
+        const items = parseBatchItemsJson(attrs['task.items_json']);
+        if (items.length > 0) {
+          for (const item of items)
+            upsertTask(item.id, { title: item.title || undefined, status: 'completed' });
+        } else {
+          for (const id of taskIds) upsertTask(id, { status: 'completed' });
+        }
         break;
+      }
+      case 'batch_deleted': {
+        const items = parseBatchItemsJson(attrs['task.items_json']);
+        if (items.length > 0) {
+          for (const item of items)
+            upsertTask(item.id, { title: item.title || undefined, status: 'deleted' });
+        } else {
+          for (const id of taskIds) upsertTask(id, { status: 'deleted' });
+        }
+        break;
+      }
       default:
         break;
     }
@@ -1137,15 +1182,155 @@ function findImmediateNestedTaskScopeNodes(node: SpanTree): SpanTree[] {
   return scopes;
 }
 
+/** Checks IDs whose scopes should show a single synthesized task item
+ * from tool calls instead of their internal task.* event noise. */
+const SUB_AGENT_SCOPE_CHECKS = new Set(['engineer-task', 'explore-code']);
+
+function isSubAgentScope(span: NormalizedSpan): boolean {
+  const checkId = getTaskScopeCheckId(span);
+  if (checkId && SUB_AGENT_SCOPE_CHECKS.has(checkId)) return true;
+  const normalized = normalizeSpanName(span.name);
+  return normalized.startsWith('engineer.') || normalized === 'search.delegate';
+}
+
+// Note: when probelabs/probe#550 lands, task events will carry full agent scope
+// fields (agent.session_id, agent.parent_session_id) and proper titles, enabling
+// proper nested task tree reconstruction without relying on span ancestry.
+
+/** Determine the completion status of a sub-agent scope from its span lifecycle. */
+function getSubAgentStatus(node: SpanTree): string {
+  const normalized = normalizeSpanName(node.span.name);
+  if (normalized.endsWith('.completed')) return 'completed';
+  if (normalized.endsWith('.started') || normalized.endsWith('.progress')) return 'in_progress';
+  // Check children for completed/progress events
+  let hasCompleted = false;
+  let hasProgress = false;
+  const visit = (current: SpanTree) => {
+    const n = normalizeSpanName(current.span.name);
+    if (n.endsWith('.completed')) hasCompleted = true;
+    if (n.endsWith('.progress')) hasProgress = true;
+    for (const child of current.children) visit(child);
+  };
+  visit(node);
+  if (hasCompleted) return 'completed';
+  if (hasProgress) return 'in_progress';
+  return 'pending';
+}
+
 function buildProbeTaskScopeSummary(
   node: SpanTree,
   label: string,
-  isRootScope = false
+  isRootScope = false,
+  allSpans?: NormalizedSpan[]
 ): ProbeTaskScopeSummary | null {
+  const nestedScopeNodes = findImmediateNestedTaskScopeNodes(node);
+
+  // For sub-agent scopes, check if they have meaningful task titles from
+  // task snapshots. If not, synthesize a description from tool calls.
+  if (!isRootScope && isSubAgentScope(node.span)) {
+    const localTasks = summarizeTaskTelemetrySpans(collectTaskSpansForScope(node, true));
+    const hasMeaningfulTitles =
+      localTasks &&
+      localTasks.tasks.some(
+        t => t.title && t.title.length > 3 && !/^(task|engineer|code.?explorer)\s*/i.test(t.title)
+      );
+
+    if (hasMeaningfulTitles) {
+      // Sub-agent has proper task titles from task tool — use them
+      return {
+        label: isRootScope ? ROOT_TASK_SCOPE_LABEL : label,
+        source: localTasks!.source,
+        eventCount: localTasks!.eventCount,
+        snapshotCount: localTasks!.snapshotCount,
+        tasks: localTasks!.tasks,
+        children: [],
+      };
+    }
+
+    // No meaningful task tool titles — show scope as a single status line
+    const status = getSubAgentStatus(node);
+    const scopeLabel = getTaskScopeLabel(node.span);
+
+    return {
+      label: isRootScope ? ROOT_TASK_SCOPE_LABEL : label,
+      source: 'events',
+      eventCount: 0,
+      snapshotCount: 0,
+      tasks: [{ id: `__scope_${node.span.spanId}`, title: scopeLabel, status }],
+      children: [],
+    };
+  }
+
   const local = summarizeTaskTelemetrySpans(collectTaskSpansForScope(node, true));
-  const children = findImmediateNestedTaskScopeNodes(node)
-    .map(child => buildProbeTaskScopeSummary(child, getTaskScopeLabel(child.span)))
-    .filter((child): child is ProbeTaskScopeSummary => child !== null);
+
+  // For children that are sub-agent scopes, group repeated iterations
+  // (e.g., 13 engineer-task iterations) into a compact list
+  const children: ProbeTaskScopeSummary[] = [];
+  const subAgentGroups = new Map<string, SpanTree[]>();
+  const nonSubAgentNodes: SpanTree[] = [];
+
+  for (const child of nestedScopeNodes) {
+    if (isSubAgentScope(child.span)) {
+      const checkId = getTaskScopeCheckId(child.span) || normalizeSpanName(child.span.name);
+      const group = subAgentGroups.get(checkId) || [];
+      group.push(child);
+      subAgentGroups.set(checkId, group);
+    } else {
+      nonSubAgentNodes.push(child);
+    }
+  }
+
+  // Render non-sub-agent children normally
+  for (const child of nonSubAgentNodes) {
+    const childScope = buildProbeTaskScopeSummary(
+      child,
+      getTaskScopeLabel(child.span),
+      false,
+      allSpans
+    );
+    if (childScope) children.push(childScope);
+  }
+
+  // Render sub-agent groups as a single scope with one task per iteration.
+  // If a sub-agent has proper task titles (from task tool snapshots), use those.
+  for (const [checkId, nodes] of subAgentGroups) {
+    const scopeLabel =
+      checkId === 'engineer-task'
+        ? 'Engineer'
+        : checkId === 'explore-code'
+          ? 'Code Explorer'
+          : titleCaseWords(checkId);
+    const tasks: ProbeTaskSummaryItem[] = [];
+    for (const n of nodes) {
+      // Check if this iteration has meaningful task titles from the task tool
+      const iterScope = buildProbeTaskScopeSummary(n, scopeLabel, false, allSpans);
+      if (iterScope && iterScope.tasks.length > 0) {
+        tasks.push(...iterScope.tasks);
+      } else {
+        const status = getSubAgentStatus(n);
+        tasks.push({
+          id: `__scope_${n.span.spanId}`,
+          title: scopeLabel,
+          status,
+        });
+      }
+    }
+    // Deduplicate consecutive identical titles
+    const dedupedTasks: ProbeTaskSummaryItem[] = [];
+    for (const task of tasks) {
+      const prev = dedupedTasks[dedupedTasks.length - 1];
+      if (prev && prev.title === task.title && prev.status === task.status) continue;
+      dedupedTasks.push(task);
+    }
+    children.push({
+      label: scopeLabel,
+      source: 'events',
+      eventCount: nodes.length,
+      snapshotCount: 0,
+      tasks: dedupedTasks,
+      children: [],
+    });
+  }
 
   if (!local && children.length === 0) return null;
 
@@ -1467,7 +1652,8 @@ export function extractProbeTaskSummary(spans: NormalizedSpan[]): ProbeTaskSumma
   const rootScope = buildProbeTaskScopeSummary(
     buildTaskSummaryRoot(spans),
     ROOT_TASK_SCOPE_LABEL,
-    true
+    true,
+    spans
   );
   let scopes = rootScope ? [rootScope] : [];
   if (scopes.length === 0 || scopes[0].children.length === 0) {

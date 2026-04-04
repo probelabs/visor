@@ -649,6 +649,7 @@ export class SlackSocketRunner implements Runner {
     } catch {}
 
     // Evaluate message triggers (before mention gate so non-@mention messages can trigger workflows)
+    let triggerMatched = false;
     if (this.messageTriggerEvaluator) {
       try {
         const matches = this.messageTriggerEvaluator.evaluate({
@@ -664,6 +665,7 @@ export class SlackSocketRunner implements Runner {
           const triggerKey = `trigger:${match.id}:${String(ev.channel || '-')}:${String(ev.ts || ev.event_ts || '-')}`;
           if (!this.processedKeys.has(triggerKey)) {
             this.processedKeys.set(triggerKey, Date.now());
+            triggerMatched = true;
             this.dispatchMessageTrigger(match, env.payload).catch(err => {
               logger.error(
                 `[SlackSocket] Message trigger dispatch failed (${match.id}): ${err instanceof Error ? err.message : err}`
@@ -676,6 +678,13 @@ export class SlackSocketRunner implements Runner {
           `[SlackSocket] Message trigger evaluation error: ${err instanceof Error ? err.message : err}`
         );
       }
+    }
+
+    // If a message trigger matched and dispatched, do not also process as a normal chat message.
+    // This prevents double execution (trigger workflow + chat check for the same message).
+    if (triggerMatched) {
+      logger.info('[SlackSocket] Message handled by trigger — skipping normal chat dispatch');
+      return;
     }
 
     // If this is a bot message that was only allowed through for trigger evaluation,
@@ -1055,11 +1064,22 @@ export class SlackSocketRunner implements Runner {
         logger.error(`[SlackSocket] Message trigger '${id}': no checks configured`);
         return;
       }
+      // If trigger.workflow isn't a check name, check if it's an imported workflow
+      // and dynamically create a check that wraps it
       if (trigger.workflow !== 'default' && !allChecks.includes(trigger.workflow)) {
-        logger.error(
-          `[SlackSocket] Message trigger '${id}': workflow "${trigger.workflow}" not found in configuration`
-        );
-        return;
+        const { WorkflowRegistry } = await import('../workflow-registry');
+        const registry = WorkflowRegistry.getInstance();
+        if (registry.has(trigger.workflow)) {
+          logger.info(
+            `[SlackSocket] Message trigger '${id}': creating dynamic check for imported workflow "${trigger.workflow}"`
+          );
+          // Will inject the check into cfgForRun later (after it's created)
+        } else {
+          logger.error(
+            `[SlackSocket] Message trigger '${id}': workflow "${trigger.workflow}" not found in checks or imported workflows`
+          );
+          return;
+        }
       }
 
       // Build conversation context
@@ -1192,6 +1212,22 @@ export class SlackSocketRunner implements Runner {
           return this.cfg;
         }
       })();
+
+      // If trigger.workflow is an imported workflow (not a check), inject a dynamic check
+      if (trigger.workflow !== 'default' && !(cfgForRun.checks || ({} as any))[trigger.workflow]) {
+        if (!cfgForRun.checks) (cfgForRun as any).checks = {};
+        (cfgForRun as any).checks[trigger.workflow] = {
+          type: 'workflow',
+          on: ['slack_message'],
+          criticality: 'external',
+          workflow: trigger.workflow,
+          assume: ['true'],
+          args: trigger.inputs || {},
+        };
+        logger.info(
+          `[SlackSocket] Injected dynamic check '${trigger.workflow}' into config for trigger '${id}'`
+        );
+      }
 
       // Derive stable workspace name from thread identity
       const wsThreadTs = threadTs || ts;

@@ -14,7 +14,7 @@ interface PendingEntry {
   timer: ReturnType<typeof setTimeout>;
   invocations: number;
   firstInvocationTime: number;
-  resolve: (value: 'executed' | 'debounced') => void;
+  resolve: (value: { outcome: 'executed'; result: unknown } | { outcome: 'debounced' }) => void;
   reject: (err: unknown) => void;
   fn: () => Promise<unknown>;
 }
@@ -26,6 +26,9 @@ interface PendingEntry {
  * window are coalesced — only the LAST invocation actually executes, after
  * the window expires with no new invocations.
  *
+ * Additionally, if the function is currently executing, new invocations are
+ * skipped (resolved as 'debounced') to prevent parallel executions.
+ *
  * Key: typically `workflow:stepId` — callers decide the grouping.
  *
  * Earlier invocations resolve with 'debounced' (skipped).
@@ -34,73 +37,91 @@ interface PendingEntry {
 export class DebounceManager {
   private pending = new Map<string, PendingEntry>();
   /** Waiters that were superseded and should resolve as 'debounced' */
-  private superseded = new Map<string, Array<(v: 'debounced') => void>>();
+  private superseded = new Map<string, Array<(v: { outcome: 'debounced' }) => void>>();
+  /** Keys currently executing — prevents parallel runs */
+  private executing = new Set<string>();
 
   /**
    * Enqueue an execution. Returns 'executed' if this invocation won the
-   * debounce race, or 'debounced' if it was superseded by a later one.
+   * debounce race, or 'debounced' if it was superseded by a later one
+   * or if the function is already executing for this key.
    */
   enqueue(
     key: string,
     debounceMs: number,
     fn: () => Promise<unknown>
-  ): Promise<'executed' | 'debounced'> {
+  ): Promise<{ outcome: 'executed'; result: unknown } | { outcome: 'debounced' }> {
+    // If already executing for this key, skip immediately
+    if (this.executing.has(key)) {
+      logger.info(`[DebounceManager] ${key}: already executing, skipping this invocation`);
+      return Promise.resolve({ outcome: 'debounced' });
+    }
+
     const actualMs = effectiveDebounceMs(debounceMs);
-    return new Promise<'executed' | 'debounced'>((resolve, reject) => {
-      const existing = this.pending.get(key);
+    return new Promise<{ outcome: 'executed'; result: unknown } | { outcome: 'debounced' }>(
+      (resolve, reject) => {
+        const existing = this.pending.get(key);
 
-      if (existing) {
-        // Supersede previous invocation — it resolves as 'debounced'
-        clearTimeout(existing.timer);
-        // Move the previous resolve to superseded list
-        if (!this.superseded.has(key)) {
-          this.superseded.set(key, []);
+        if (existing) {
+          // Supersede previous invocation — it resolves as 'debounced'
+          clearTimeout(existing.timer);
+          // Move the previous resolve to superseded list
+          if (!this.superseded.has(key)) {
+            this.superseded.set(key, []);
+          }
+          this.superseded.get(key)!.push(existing.resolve as (v: { outcome: 'debounced' }) => void);
+          existing.invocations++;
+
+          logger.info(
+            `[DebounceManager] ${key}: invocation #${existing.invocations}, resetting ${actualMs}ms timer`
+          );
+        } else {
+          logger.info(
+            `[DebounceManager] ${key}: first invocation, starting ${actualMs}ms debounce`
+          );
         }
-        this.superseded.get(key)!.push(existing.resolve as (v: 'debounced') => void);
-        existing.invocations++;
 
-        logger.info(
-          `[DebounceManager] ${key}: invocation #${existing.invocations}, resetting ${actualMs}ms timer`
-        );
-      } else {
-        logger.info(`[DebounceManager] ${key}: first invocation, starting ${actualMs}ms debounce`);
+        const invocations = existing ? existing.invocations : 1;
+        const firstTime = existing ? existing.firstInvocationTime : Date.now();
+
+        const timer = setTimeout(async () => {
+          this.pending.delete(key);
+
+          // Resolve all superseded waiters as 'debounced'
+          const waiters = this.superseded.get(key) || [];
+          this.superseded.delete(key);
+          for (const w of waiters) {
+            w({ outcome: 'debounced' });
+          }
+
+          const elapsed = Date.now() - firstTime;
+          logger.info(
+            `[DebounceManager] ${key}: executing after ${invocations} invocation(s) over ${elapsed}ms`
+          );
+
+          // Mark as executing so concurrent invocations are skipped
+          this.executing.add(key);
+          try {
+            const result = await fn();
+            resolve({ outcome: 'executed', result });
+          } catch (err) {
+            reject(err);
+          } finally {
+            this.executing.delete(key);
+            logger.info(`[DebounceManager] ${key}: execution finished`);
+          }
+        }, actualMs);
+
+        this.pending.set(key, {
+          timer,
+          invocations,
+          firstInvocationTime: firstTime,
+          resolve,
+          reject,
+          fn,
+        });
       }
-
-      const invocations = existing ? existing.invocations : 1;
-      const firstTime = existing ? existing.firstInvocationTime : Date.now();
-
-      const timer = setTimeout(async () => {
-        this.pending.delete(key);
-
-        // Resolve all superseded waiters as 'debounced'
-        const waiters = this.superseded.get(key) || [];
-        this.superseded.delete(key);
-        for (const w of waiters) {
-          w('debounced');
-        }
-
-        const elapsed = Date.now() - firstTime;
-        logger.info(
-          `[DebounceManager] ${key}: executing after ${invocations} invocation(s) over ${elapsed}ms`
-        );
-
-        try {
-          await fn();
-          resolve('executed');
-        } catch (err) {
-          reject(err);
-        }
-      }, actualMs);
-
-      this.pending.set(key, {
-        timer,
-        invocations,
-        firstInvocationTime: firstTime,
-        resolve,
-        reject,
-        fn,
-      });
-    });
+    );
   }
 
   /** Cancel a pending debounce. All waiters resolve as 'debounced'. */
@@ -109,11 +130,11 @@ export class DebounceManager {
     if (!entry) return false;
     clearTimeout(entry.timer);
     this.pending.delete(key);
-    entry.resolve('debounced');
+    entry.resolve({ outcome: 'debounced' });
     const waiters = this.superseded.get(key) || [];
     this.superseded.delete(key);
     for (const w of waiters) {
-      w('debounced');
+      w({ outcome: 'debounced' });
     }
     return true;
   }
@@ -128,6 +149,11 @@ export class DebounceManager {
   /** Number of pending debounce keys. */
   get size(): number {
     return this.pending.size;
+  }
+
+  /** Check if a key is currently executing. */
+  isExecuting(key: string): boolean {
+    return this.executing.has(key);
   }
 }
 

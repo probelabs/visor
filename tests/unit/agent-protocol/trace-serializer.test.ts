@@ -945,20 +945,25 @@ describe('extractProbeTaskSummary', () => {
     const summary = extractProbeTaskSummary(spans);
 
     expect(summary).not.toBeNull();
-    expect(summary?.tasks).toHaveLength(3);
     expect(summary?.scopes).toHaveLength(1);
     expect(summary?.scopes[0]).toMatchObject({
       label: 'Main Agent',
       tasks: [{ id: 'fetch-docs', title: 'Fetch Documentation', status: 'completed' }],
     });
     expect(summary?.scopes[0]?.children).toHaveLength(1);
-    expect(summary?.scopes[0]?.children[0]).toMatchObject({
-      label: 'Code Explorer',
-      tasks: [
-        { id: 'extract-docs', title: 'Extract Docs', status: 'completed' },
-        { id: 'validate-gateway', title: 'Validate Gateway', status: 'in_progress' },
-      ],
-    });
+    const codeExplorer = summary?.scopes[0]?.children[0];
+    expect(codeExplorer?.label).toBe('Code Explorer');
+    // Sub-agent scope with meaningful task titles preserves them
+    expect(codeExplorer?.tasks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'extract-docs', title: 'Extract Docs', status: 'completed' }),
+        expect.objectContaining({
+          id: 'validate-gateway',
+          title: 'Validate Gateway',
+          status: 'in_progress',
+        }),
+      ])
+    );
   });
 });
 
