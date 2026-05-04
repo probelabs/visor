@@ -1,5 +1,6 @@
 import {
   buildTraceReport,
+  buildTraceHeaderLines,
   extractProbeTaskSummary,
   fetchTraceSpans,
   renderSpanYaml,
@@ -48,6 +49,65 @@ describe('renderSpanYaml', () => {
     expect(result).toContain('visor.run:');
     expect(result).toContain('trace_id: abc123');
     expect(result).toContain('duration: 5.0s');
+  });
+
+  it('does not render synthesized scope placeholder tasks in the header task list', () => {
+    const lines = buildTraceHeaderLines(
+      { spans: [], source: 'file' as any },
+      {
+        tasksEnabled: true,
+        source: 'snapshot',
+        eventCount: 3,
+        snapshotCount: 1,
+        tasks: [{ id: 'real-1', title: 'Find OAS Path Compilers', status: 'in_progress' }],
+        scopes: [
+          {
+            label: 'Main Agent',
+            source: 'snapshot',
+            eventCount: 1,
+            snapshotCount: 1,
+            tasks: [{ id: 'real-1', title: 'Find OAS Path Compilers', status: 'in_progress' }],
+            children: [
+              {
+                label: 'Code Explorer',
+                source: 'events',
+                eventCount: 1,
+                snapshotCount: 0,
+                tasks: [
+                  {
+                    id: '__scope_1',
+                    title: 'Code Explorer',
+                    status: 'in_progress',
+                    synthetic: true,
+                  },
+                ],
+                children: [
+                  {
+                    label: 'Search Delegate',
+                    source: 'events',
+                    eventCount: 1,
+                    snapshotCount: 0,
+                    tasks: [
+                      {
+                        id: '__scope_2',
+                        title: 'Search Delegate',
+                        status: 'completed',
+                        synthetic: true,
+                      },
+                    ],
+                    children: [],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }
+    );
+
+    expect(lines.join('\n')).toContain('[~] Find OAS Path Compilers');
+    expect(lines.join('\n')).not.toContain('Code Explorer\n');
+    expect(lines.join('\n')).not.toContain('Search Delegate');
   });
 
   it('renders visor.run with version and source attributes', () => {
@@ -361,6 +421,28 @@ describe('renderSpanYaml', () => {
     expect(result).toContain('gemini-flash');
     expect(result).toContain('search()');
     expect(result).toContain('5.0k chars');
+  });
+
+  it('renders dedup errors in search.delegate.dedup spans', () => {
+    const dedup = makeTree({
+      name: 'search.delegate.dedup',
+      spanId: 's2',
+      parentSpanId: 's1',
+      durationMs: 250,
+      attributes: {
+        'dedup.query': 'graphql complexity depth',
+        'dedup.previous_count': '3',
+        'dedup.action': 'allow',
+        'dedup.reason': 'dedup check failed',
+        'dedup.error': 'Error: 503 model overloaded',
+      },
+    });
+    const root = makeTree({ name: 'visor.run', spanId: 's1', durationMs: 1000 }, [dedup]);
+    const result = renderSpanYaml(root, [root.span, dedup.span]);
+
+    expect(result).toContain('dedup("graphql complexity depth") [3 prior]: allow');
+    expect(result).toContain('dedup check failed');
+    expect(result).toContain('503 model overloaded');
   });
 
   it('filters mixed local NDJSON files by fallback trace id even when the target trace is not first', async () => {

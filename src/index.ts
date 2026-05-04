@@ -306,7 +306,7 @@ export async function run(): Promise<void> {
       console.log(
         `🧹 Cleaning up ${sessionRegistry.getActiveSessionIds().length} active AI sessions...`
       );
-      sessionRegistry.clearAllSessions();
+      await sessionRegistry.clearAllSessions();
     }
   }
 }

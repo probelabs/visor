@@ -29,6 +29,7 @@ import { getScheduleToolDefinition } from '../scheduler/schedule-tool';
 import { getTaskProgressToolDefinition } from '../agent-protocol/task-progress-tool';
 // Legacy Slack context extraction for backwards compatibility
 import { extractSlackContext } from '../slack/schedule-tool-handler';
+import { formatUserFacingExecutionError } from '../utils/user-facing-error';
 
 /**
  * AI-powered check provider using probe agent
@@ -2133,6 +2134,7 @@ export class AICheckProvider extends CheckProvider {
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      const userFacingMessage = formatUserFacingExecutionError(error);
 
       // Log detailed error information
       console.error(`❌ AI Check Provider Error for check: ${errorMessage}`);
@@ -2151,7 +2153,7 @@ export class AICheckProvider extends CheckProvider {
       }
 
       // Re-throw with more context
-      throw new Error(`AI analysis failed: ${errorMessage}`);
+      throw new Error(userFacingMessage);
     } finally {
       // Cleanup custom tools server
       // When AI check is complete (success or error), stop immediately without grace period.

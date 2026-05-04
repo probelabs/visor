@@ -9,6 +9,7 @@
 import type { Frontend, FrontendContext } from './host';
 import { EmailClient, type EmailSendOptions } from '../email/client';
 import { formatEmailText, wrapInEmailTemplate, addRePrefix } from '../email/markdown';
+import { formatUserFacingExecutionMessage } from '../utils/user-facing-error';
 
 type EmailFrontendConfig = {
   send?: {
@@ -117,13 +118,15 @@ export class EmailFrontend implements Frontend {
 
     let text = `${title}`;
     if (checkId) text += `\nCheck: ${checkId}`;
-    if (message) text += `\n${message}`;
+    if (message) text += `\n${formatUserFacingExecutionMessage(message)}`;
 
     const sendOpts: EmailSendOptions = {
       to: ev.from,
       subject: ev.subject ? addRePrefix(ev.subject) : `Visor: ${title}`,
       text,
-      html: wrapInEmailTemplate(`<p><strong>${title}</strong></p><p>${message}</p>`),
+      html: wrapInEmailTemplate(
+        `<p><strong>${title}</strong></p><p>${formatUserFacingExecutionMessage(message)}</p>`
+      ),
     };
 
     // Thread the reply
@@ -192,6 +195,23 @@ export class EmailFrontend implements Frontend {
       // Append raw output
       if (out && typeof out._rawOutput === 'string' && out._rawOutput.trim().length > 0) {
         text = (text || '') + '\n\n' + out._rawOutput.trim();
+      }
+
+      if (!text) {
+        const issues: any[] = (result as any)?.issues || [];
+        const errorIssues = issues.filter(
+          (i: any) =>
+            i.severity === 'error' &&
+            (i.ruleId?.startsWith('system/') || i.ruleId?.endsWith('/error'))
+        );
+        if (errorIssues.length > 0) {
+          text = errorIssues
+            .map((i: any) =>
+              formatUserFacingExecutionMessage(String(i.message || 'Execution error'))
+            )
+            .join('\n');
+          this.errorNotified = true;
+        }
       }
 
       if (!text) {

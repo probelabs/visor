@@ -395,8 +395,11 @@ Subcommands:
   visor test                                                 # Run YAML tests
   visor review                                               # Run built-in code review
   visor build <agent.yaml>                                   # Run agent builder
+  visor process list|restart|reload|stop                     # Manage running Visor processes
+  visor tasks list|show|logs                                 # Inspect tracked agent tasks
   visor config snapshots                                     # Manage config snapshots
   visor schedule start                                       # Start scheduler
+  visor policy-check                                         # Run policy evaluation helpers
 
 Examples:
   visor --check performance --output table

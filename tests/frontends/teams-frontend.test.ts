@@ -228,7 +228,9 @@ describe('TeamsFrontend (event-bus)', () => {
     const call = teams.sendMessage.mock.calls[0][0];
     expect(call.conversationReference).toEqual(fakeConversationRef);
     expect(call.text).toContain('Check failed');
-    expect(call.text).toContain('AI provider timeout');
+    expect(call.text).toContain(
+      'The AI request timed out before a response could be generated. Please retry.'
+    );
     expect(call.replyToActivityId).toBe('act.msg1');
   });
 

@@ -59,7 +59,7 @@ describe('Session Reuse Integration', () => {
     engine = new CheckExecutionEngine(tempDir);
     configManager = new ConfigManager();
     sessionRegistry = SessionRegistry.getInstance();
-    sessionRegistry.clearAllSessions();
+    await sessionRegistry.clearAllSessions();
 
     // Setup mock clone() to return a cloned agent with the same answer behavior
     mockProbeAgent.clone.mockImplementation(options => ({
@@ -101,13 +101,13 @@ describe('Session Reuse Integration', () => {
       );
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     // Clean up temp directory
     if (tempDir && fs.existsSync(tempDir)) {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
 
-    sessionRegistry.clearAllSessions();
+    await sessionRegistry.clearAllSessions();
 
     // Clean up environment
     delete process.env.GOOGLE_API_KEY;

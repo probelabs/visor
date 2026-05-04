@@ -575,7 +575,7 @@ export class StateMachineExecutionEngine {
       try {
         const { SessionRegistry } = await import('./session-registry');
         const sessionRegistry = SessionRegistry.getInstance();
-        sessionRegistry.clearAllSessions();
+        await sessionRegistry.clearAllSessions();
       } catch (error) {
         logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
       }
@@ -1430,7 +1430,7 @@ export async function resumeFromSnapshot(
   try {
     const { SessionRegistry } = await import('./session-registry');
     const sessionRegistry = SessionRegistry.getInstance();
-    sessionRegistry.clearAllSessions();
+    await sessionRegistry.clearAllSessions();
   } catch (error) {
     logger.debug(`[StateMachine] Failed to cleanup sessions: ${error}`);
   }

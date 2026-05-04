@@ -10,6 +10,7 @@ import { emitNdjsonFullSpan } from './telemetry/fallback-ndjson';
 import { initializeTracer } from './utils/tracer-init';
 import { processDiffWithOutline } from './utils/diff-processor';
 import { shouldFilterVisorReviewComment } from './utils/comment-metadata';
+import { formatUserFacingExecutionError } from './utils/user-facing-error';
 import { extractFileSections, replaceFileSections } from './slack/markdown';
 
 /**
@@ -1172,8 +1173,8 @@ export class AIReviewService {
   /**
    * Cleanup a session from the registry
    */
-  cleanupSession(sessionId: string): void {
-    this.sessionRegistry.unregisterSession(sessionId);
+  async cleanupSession(sessionId: string): Promise<void> {
+    await this.sessionRegistry.unregisterSession(sessionId);
   }
 
   /**
@@ -2972,9 +2973,7 @@ ${'='.repeat(60)}
       return { response, effectiveSchema, sessionId };
     } catch (error) {
       console.error('❌ ProbeAgent failed:', error);
-      throw new Error(
-        `ProbeAgent execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
+      throw new Error(formatUserFacingExecutionError(error));
     } finally {
       // Restore original environment variables
       Object.keys(originalEnv).forEach(key => {

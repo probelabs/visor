@@ -11,6 +11,7 @@ import { TeamsClient } from '../teams/client';
 import { formatTeamsText } from '../teams/markdown';
 import type { ConversationReference } from 'botbuilder';
 import { isFrontendLiveUpdatesEnabled } from '../agent-protocol/task-live-updates';
+import { formatUserFacingExecutionMessage } from '../utils/user-facing-error';
 
 type TeamsFrontendConfig = {
   appId?: string;
@@ -120,7 +121,7 @@ export class TeamsFrontend implements Frontend {
 
     let text = `${title}`;
     if (_checkId) text += `\nCheck: ${_checkId}`;
-    if (message) text += `\n${message}`;
+    if (message) text += `\n${formatUserFacingExecutionMessage(message)}`;
 
     await teams.sendMessage({
       conversationReference: conversationRef,
@@ -191,6 +192,23 @@ export class TeamsFrontend implements Frontend {
       // Append raw output
       if (out && typeof out._rawOutput === 'string' && out._rawOutput.trim().length > 0) {
         text = (text || '') + '\n\n' + out._rawOutput.trim();
+      }
+
+      if (!text) {
+        const issues: any[] = (result as any)?.issues || [];
+        const errorIssues = issues.filter(
+          (i: any) =>
+            i.severity === 'error' &&
+            (i.ruleId?.startsWith('system/') || i.ruleId?.endsWith('/error'))
+        );
+        if (errorIssues.length > 0) {
+          text = errorIssues
+            .map((i: any) =>
+              formatUserFacingExecutionMessage(String(i.message || 'Execution error'))
+            )
+            .join('\n');
+          this.errorNotified = true;
+        }
       }
 
       if (!text) {

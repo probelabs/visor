@@ -3,14 +3,14 @@ import { SessionRegistry } from '../../src/session-registry';
 describe('Session Cloning with History Filtering', () => {
   let registry: SessionRegistry;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     registry = SessionRegistry.getInstance();
     // Clear any existing sessions
-    registry.clearAllSessions();
+    await registry.clearAllSessions();
   });
 
-  afterEach(() => {
-    registry.clearAllSessions();
+  afterEach(async () => {
+    await registry.clearAllSessions();
   });
 
   it('should use ProbeAgent.clone() with correct filtering options', async () => {

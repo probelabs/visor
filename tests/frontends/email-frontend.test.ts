@@ -172,7 +172,9 @@ describe('EmailFrontend (event-bus)', () => {
     const call = emailClient.sendEmail.mock.calls[0][0];
     expect(call.to).toBe('user@test.com');
     expect(call.text).toContain('Check failed');
-    expect(call.text).toContain('AI provider timeout');
+    expect(call.text).toContain(
+      'The AI request timed out before a response could be generated. Please retry.'
+    );
     // Should still thread the error
     expect(call.inReplyTo).toBe('<msg1@test>');
   });

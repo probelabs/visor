@@ -61,7 +61,7 @@ beforeEach(() => {
   for (const k of gitVars) delete (process.env as NodeJS.ProcessEnv)[k];
 });
 
-afterEach(() => {
+afterEach(async () => {
   // Reset environment (individual tests may override this)
   Object.keys(process.env).forEach(key => {
     if (key.includes('API_KEY') || key === 'MODEL_NAME') {
@@ -81,7 +81,7 @@ afterEach(() => {
     MemoryStore.resetInstance();
   } catch {}
   try {
-    SessionRegistry.getInstance().clearAllSessions();
+    await SessionRegistry.getInstance().clearAllSessions();
   } catch {}
 });
 

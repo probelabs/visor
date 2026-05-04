@@ -114,6 +114,7 @@ export interface ProbeTaskSummaryItem {
   id: string;
   title: string;
   status: string;
+  synthetic?: boolean;
 }
 
 export interface ProbeTaskScopeSummary {
@@ -1256,7 +1257,7 @@ function buildProbeTaskScopeSummary(
       source: 'events',
       eventCount: 0,
       snapshotCount: 0,
-      tasks: [{ id: `__scope_${node.span.spanId}`, title: scopeLabel, status }],
+      tasks: [{ id: `__scope_${node.span.spanId}`, title: scopeLabel, status, synthetic: true }],
       children: [],
     };
   }
@@ -1312,6 +1313,7 @@ function buildProbeTaskScopeSummary(
           id: `__scope_${n.span.spanId}`,
           title: scopeLabel,
           status,
+          synthetic: true,
         });
       }
     }
@@ -1387,6 +1389,7 @@ function flattenTaskScopes(scopes: ProbeTaskScopeSummary[]): ProbeTaskSummaryIte
   const items: ProbeTaskSummaryItem[] = [];
   const visit = (scope: ProbeTaskScopeSummary) => {
     for (const task of scope.tasks) {
+      if (task.synthetic) continue;
       if (seen.has(task.id)) continue;
       seen.add(task.id);
       items.push(task);
@@ -1578,12 +1581,18 @@ function formatTaskLabel(task: { id: string; title: string; status: string }): s
   return title || task.id || task.status;
 }
 
+function scopeHasRenderableTasks(scope: ProbeTaskScopeSummary): boolean {
+  if (scope.tasks.some(task => !task.synthetic)) return true;
+  return scope.children.some(child => scopeHasRenderableTasks(child));
+}
+
 function appendTaskScopeLines(lines: string[], scope: ProbeTaskScopeSummary, depth = 0): void {
+  if (!scopeHasRenderableTasks(scope)) return;
   const prefix = '  '.repeat(depth);
   if (depth > 0 || scope.label !== ROOT_TASK_SCOPE_LABEL) {
     lines.push(`${prefix}${scope.label}`);
   }
-  for (const task of scope.tasks) {
+  for (const task of scope.tasks.filter(task => !task.synthetic)) {
     lines.push(`${prefix}  ${formatTaskStatus(task.status)} ${formatTaskLabel(task)}`);
   }
   for (const child of scope.children) {
@@ -1596,7 +1605,7 @@ export function buildTraceHeaderLines(
   taskSummary: ProbeTaskSummary | null
 ): string[] {
   const lines = [`Trace source: ${traceData.source || 'unknown'}`];
-  if (!taskSummary) {
+  if (!taskSummary || taskSummary.tasks.length === 0) {
     lines.push('Tasks: no task telemetry found in this trace');
     return lines;
   }
@@ -1883,10 +1892,12 @@ function renderYamlNode(
     const action = attrs['dedup.action'] || '?';
     const reason = attrs['dedup.reason'] || '';
     const rewritten = attrs['dedup.rewritten'] || '';
+    const error = attrs['dedup.error'] || '';
     const prevCount = attrs['dedup.previous_count'] || '0';
     let detail = `${action}`;
     if (rewritten) detail += ` → "${truncate(String(rewritten), 60)}"`;
     if (reason) detail += ` (${truncate(String(reason), 80)})`;
+    if (error) detail += ` [error: ${truncate(String(error), 120)}]`;
     lines.push(
       `${pad}dedup("${truncate(String(query), 60)}") [${prevCount} prior]: ${detail} — ${duration}`
     );
@@ -2630,9 +2641,11 @@ function formatSpanLine(
     const action = attrs['dedup.action'] || '?';
     const reason = attrs['dedup.reason'] || '';
     const rewritten = attrs['dedup.rewritten'] || '';
+    const error = attrs['dedup.error'] || '';
     let detail = `${action}`;
     if (rewritten) detail += ` → "${truncate(String(rewritten), 50)}"`;
     if (reason) detail += ` — ${truncate(String(reason), 60)}`;
+    if (error) detail += ` [error: ${truncate(String(error), 80)}]`;
     return { line: `dedup("${truncate(String(query), 50)}") ${detail} (${duration})` };
   }
 

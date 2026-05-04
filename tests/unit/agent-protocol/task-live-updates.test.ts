@@ -107,7 +107,23 @@ describe('task-live-updates', () => {
                     eventCount: 2,
                     snapshotCount: 1,
                     tasks: [{ id: 'implement', title: 'Implement changes', status: 'in_progress' }],
-                    children: [],
+                    children: [
+                      {
+                        label: 'Search Delegate',
+                        source: 'events',
+                        eventCount: 1,
+                        snapshotCount: 0,
+                        tasks: [
+                          {
+                            id: '__scope_1',
+                            title: 'Search Delegate',
+                            status: 'completed',
+                            synthetic: true,
+                          },
+                        ],
+                        children: [],
+                      },
+                    ],
                   },
                 ],
               },
@@ -131,6 +147,7 @@ describe('task-live-updates', () => {
     expect(sink.update).toHaveBeenCalledWith(expect.stringContaining('• [x] Explore codebase'));
     expect(sink.update).toHaveBeenCalledWith(expect.stringContaining('Code Explorer'));
     expect(sink.update).toHaveBeenCalledWith(expect.stringContaining('• [~] Implement changes'));
+    expect(sink.update).not.toHaveBeenCalledWith(expect.stringContaining('Search Delegate'));
     expect(sink.update).toHaveBeenCalledWith(expect.stringContaining('- looking at logs'));
     expect(sink.update).toHaveBeenCalledWith(
       expect.stringContaining('_Metadata: elapsed 10s | first live update')
@@ -229,12 +246,127 @@ describe('task-live-updates', () => {
     const tickPromise = manager.tick();
     await Promise.resolve();
 
-    await manager.complete('Final answer');
+    const completionPromise = manager.complete('Final answer');
     resolveSummary?.('- Progress: stale progress update');
+    await completionPromise;
     await tickPromise;
 
     expect(sink.complete).toHaveBeenCalledWith('Final answer');
     expect(sink.update).not.toHaveBeenCalled();
+  });
+
+  it('does not delay final completion while a progress summary is still running', async () => {
+    let resolveSummary: ((value: string | null) => void) | undefined;
+    const summaryPromise = new Promise<string | null>(resolve => {
+      resolveSummary = resolve;
+    });
+
+    const sink = {
+      kind: 'test',
+      start: jest.fn(async () => null),
+      update: jest.fn(async () => null),
+      complete: jest.fn(async () => null),
+      fail: jest.fn(async () => null),
+    };
+
+    const manager = new TaskLiveUpdateManager(
+      {
+        taskId: 'task-complete-fast',
+        requestText: 'Investigate the issue',
+        traceRef: '/tmp/trace.ndjson',
+        sink,
+        config: {
+          enabled: true,
+          intervalSeconds: 10,
+          model: 'gemini-3.1-flash-lite-preview',
+          prompt: 'prompt',
+          initialMessage: '',
+          maxTraceChars: 4000,
+        },
+      },
+      {
+        serializeTrace: jest.fn(async () => 'trace-race-1'),
+        extractSkillMetadata: jest.fn(async () => undefined),
+        summarizeProgress: jest.fn(async () => summaryPromise),
+      }
+    );
+
+    void manager.tick();
+    await Promise.resolve();
+
+    await manager.complete('Final answer');
+
+    expect(sink.complete).toHaveBeenCalledWith('Final answer');
+    expect(sink.update).not.toHaveBeenCalled();
+
+    resolveSummary?.('- Progress: stale progress update');
+    await Promise.resolve();
+  });
+
+  it('does not let a later interval callback lose track of the real in-flight tick before completion', async () => {
+    jest.useFakeTimers();
+
+    let resolveMetadata: ((value: undefined) => void) | undefined;
+    const metadataPromise = new Promise<undefined>(resolve => {
+      resolveMetadata = resolve;
+    });
+
+    const sink = {
+      kind: 'test',
+      start: jest.fn(async () => null),
+      update: jest.fn(async () => null),
+      complete: jest.fn(async () => null),
+      fail: jest.fn(async () => null),
+    };
+
+    const manager = new TaskLiveUpdateManager(
+      {
+        taskId: 'task-scheduled-race',
+        requestText: 'Investigate the issue',
+        traceRef: '/tmp/trace.ndjson',
+        sink,
+        config: {
+          enabled: true,
+          intervalSeconds: 1,
+          model: 'gemini-3.1-flash-lite-preview',
+          prompt: 'prompt',
+          initialMessage: '',
+          maxTraceChars: 4000,
+        },
+      },
+      {
+        serializeTrace: jest
+          .fn()
+          .mockResolvedValueOnce('trace-initial')
+          .mockResolvedValueOnce('trace-stale'),
+        extractSkillMetadata: jest
+          .fn()
+          .mockResolvedValueOnce(undefined)
+          .mockImplementationOnce(() => metadataPromise),
+        summarizeProgress: jest
+          .fn()
+          .mockResolvedValueOnce('- Progress: initial live update')
+          .mockResolvedValueOnce('- Progress: stale scheduled update'),
+      }
+    );
+
+    await manager.start();
+    await jest.advanceTimersByTimeAsync(10_000);
+    expect(sink.update).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(1_000);
+    await Promise.resolve();
+
+    await jest.advanceTimersByTimeAsync(1_000);
+    const completionPromise = manager.complete('Final answer');
+    await Promise.resolve();
+
+    resolveMetadata?.(undefined);
+    await completionPromise;
+
+    expect(sink.complete).toHaveBeenCalledWith('Final answer');
+    expect(sink.update).toHaveBeenCalledTimes(1);
+    expect(sink.update).not.toHaveBeenCalledWith(expect.stringContaining('stale scheduled update'));
   });
 
   it('appends task id to progress and final updates when enabled', async () => {

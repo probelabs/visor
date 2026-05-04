@@ -428,7 +428,7 @@ describe('Slack socket message triggers', () => {
     expect(triggerCalls.length).toBe(0);
   });
 
-  test('trigger and mention path can both fire for the same message', async () => {
+  test('trigger dispatch suppresses the normal mention path for the same message', async () => {
     const cfg: VisorConfig = {
       ...baseCfg,
       scheduler: {
@@ -464,13 +464,13 @@ describe('Slack socket message triggers', () => {
     );
     await new Promise(r => setTimeout(r, 50));
 
-    // Should have both: trigger dispatch (handle-cicd only) + mention dispatch (all checks)
+    // Trigger dispatch should win and prevent a second normal mention dispatch.
     const triggerCalls = spy.mock.calls.filter(
       (call: any[]) => call[0]?.checks?.length === 1 && call[0]?.checks?.[0] === 'handle-cicd'
     );
     const mentionCalls = spy.mock.calls.filter((call: any[]) => call[0]?.checks?.length > 1);
     expect(triggerCalls.length).toBe(1);
-    expect(mentionCalls.length).toBe(1);
+    expect(mentionCalls.length).toBe(0);
   });
 
   test('workflow "default" resolves to all checks', async () => {

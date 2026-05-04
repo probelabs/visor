@@ -228,10 +228,9 @@ export async function trackExecution<T>(
         // best-effort — don't fail the task over metadata
       }
 
-      // Extract AI response text from the result.
+      // Extract response text from the result.
       // result.reviewSummary.history is keyed by checkId with arrays of outputs.
-      // We want the LAST check's text output (the final AI response), not the
-      // first (which is typically the intent router).
+      // We want the LAST check's text output (the final AI response or workflow text output).
       let responseText = 'Execution completed';
       try {
         const history = (result as any)?.reviewSummary?.history as
@@ -245,7 +244,9 @@ export async function trackExecution<T>(
             if (!Array.isArray(outputs)) continue;
             // Within a check, look at the last output first too
             for (let j = outputs.length - 1; j >= 0; j--) {
-              const text = (outputs[j] as any)?.text;
+              const out = outputs[j] as any;
+              // Direct text field (AI response or workflow text output)
+              const text = out?.text;
               if (typeof text === 'string' && text.trim().length > 0) {
                 responseText = text.trim();
                 break;

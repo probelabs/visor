@@ -1,4 +1,5 @@
 import { ProbeAgent } from '@probelabs/probe';
+import { logger } from './logger';
 
 /**
  * Extended ProbeAgent interface that includes tracing properties
@@ -15,12 +16,8 @@ interface TracedProbeAgent extends ProbeAgent {
 export class SessionRegistry {
   private static instance: SessionRegistry;
   private sessions: Map<string, TracedProbeAgent> = new Map();
-  private exitHandlerRegistered = false;
 
-  private constructor() {
-    // Register process exit handlers to cleanup sessions
-    this.registerExitHandlers();
-  }
+  private constructor() {}
 
   /**
    * Get the singleton instance of SessionRegistry
@@ -36,7 +33,7 @@ export class SessionRegistry {
    * Register a ProbeAgent session
    */
   public registerSession(sessionId: string, agent: TracedProbeAgent): void {
-    console.error(`🔄 Registering AI session: ${sessionId}`);
+    logger.debug(`[SessionRegistry] Registering AI session: ${sessionId}`);
     this.sessions.set(sessionId, agent);
   }
 
@@ -46,7 +43,7 @@ export class SessionRegistry {
   public getSession(sessionId: string): TracedProbeAgent | undefined {
     const agent = this.sessions.get(sessionId);
     if (agent) {
-      console.error(`♻️  Reusing AI session: ${sessionId}`);
+      logger.debug(`[SessionRegistry] Reusing AI session: ${sessionId}`);
     }
     return agent;
   }
@@ -54,9 +51,8 @@ export class SessionRegistry {
   /**
    * Remove a session from the registry
    */
-  public unregisterSession(sessionId: string): void {
+  public async unregisterSession(sessionId: string): Promise<void> {
     if (this.sessions.has(sessionId)) {
-      console.error(`🗑️  Unregistering AI session: ${sessionId}`);
       const agent = this.sessions.get(sessionId);
       this.sessions.delete(sessionId);
 
@@ -65,9 +61,11 @@ export class SessionRegistry {
       if (agent && typeof (agent as any).cleanup === 'function') {
         try {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (agent as any).cleanup();
+          await (agent as any).cleanup();
         } catch (error) {
-          console.error(`⚠️  Warning: Failed to cleanup ProbeAgent: ${error}`);
+          logger.warn(
+            `[SessionRegistry] Failed to cleanup ProbeAgent session ${sessionId}: ${error}`
+          );
         }
       }
     }
@@ -76,23 +74,32 @@ export class SessionRegistry {
   /**
    * Clear all sessions (useful for cleanup)
    */
-  public clearAllSessions(): void {
-    console.error(`🧹 Clearing all AI sessions (${this.sessions.size} sessions)`);
-
-    // Cleanup each ProbeAgent instance before clearing
-    for (const [, agent] of this.sessions.entries()) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if (agent && typeof (agent as any).cleanup === 'function') {
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (agent as any).cleanup();
-        } catch {
-          // Silent fail during bulk cleanup
-        }
-      }
+  public async clearAllSessions(): Promise<void> {
+    if (this.sessions.size === 0) {
+      return;
     }
 
+    logger.debug(`[SessionRegistry] Clearing all AI sessions (${this.sessions.size} sessions)`);
+
+    // Cleanup each ProbeAgent instance before clearing
+    const sessions = Array.from(this.sessions.entries());
     this.sessions.clear();
+
+    await Promise.allSettled(
+      sessions.map(async ([sessionId, agent]) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (agent && typeof (agent as any).cleanup === 'function') {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            await (agent as any).cleanup();
+          } catch (error) {
+            logger.warn(
+              `[SessionRegistry] Failed to cleanup ProbeAgent session ${sessionId}: ${error}`
+            );
+          }
+        }
+      })
+    );
   }
 
   /**
@@ -124,7 +131,7 @@ export class SessionRegistry {
   ): Promise<ProbeAgent | undefined> {
     const sourceAgent = this.sessions.get(sourceSessionId);
     if (!sourceAgent) {
-      console.error(`⚠️  Cannot clone session: ${sourceSessionId} not found`);
+      logger.warn(`[SessionRegistry] Cannot clone session: ${sourceSessionId} not found`);
       return undefined;
     }
 
@@ -150,9 +157,8 @@ export class SessionRegistry {
             clonedAgent._traceFilePath = tracerResult.filePath;
           }
         } catch (traceError) {
-          console.error(
-            '⚠️  Warning: Failed to initialize tracing for cloned session:',
-            traceError
+          logger.warn(
+            `[SessionRegistry] Failed to initialize tracing for cloned session ${newSessionId}: ${traceError}`
           );
         }
       }
@@ -164,17 +170,21 @@ export class SessionRegistry {
       ) {
         try {
           await (clonedAgent as any).initialize();
-          console.error(`🔧 Initialized MCP tools for cloned session`);
+          logger.debug(
+            `[SessionRegistry] Initialized MCP tools for cloned session ${newSessionId}`
+          );
         } catch (initError) {
-          console.error(`⚠️  Warning: Failed to initialize cloned agent: ${initError}`);
+          logger.warn(
+            `[SessionRegistry] Failed to initialize cloned agent ${newSessionId}: ${initError}`
+          );
         }
       }
 
       // Get history length for logging
       const historyLength = (clonedAgent as any).history?.length || 0;
 
-      console.error(
-        `📋 Cloned session ${sourceSessionId} → ${newSessionId} using ProbeAgent.clone() (${historyLength} messages, internal messages filtered)`
+      logger.debug(
+        `[SessionRegistry] Cloned session ${sourceSessionId} -> ${newSessionId} using ProbeAgent.clone() (${historyLength} messages, internal messages filtered)`
       );
 
       // Register the cloned session
@@ -182,58 +192,8 @@ export class SessionRegistry {
 
       return clonedAgent;
     } catch (error) {
-      console.error(`⚠️  Failed to clone session ${sourceSessionId}:`, error);
+      logger.warn(`[SessionRegistry] Failed to clone session ${sourceSessionId}: ${error}`);
       return undefined;
     }
-  }
-
-  /**
-   * Register process exit handlers to cleanup sessions on exit
-   */
-  private registerExitHandlers(): void {
-    if (this.exitHandlerRegistered) {
-      return;
-    }
-
-    const cleanupAndExit = (signal: string) => {
-      if (this.sessions.size > 0) {
-        console.error(`\n🧹 [${signal}] Cleaning up ${this.sessions.size} active AI sessions...`);
-        this.clearAllSessions();
-      }
-    };
-
-    // Handle normal process exit
-    process.on('exit', () => {
-      if (this.sessions.size > 0) {
-        console.error(`🧹 [exit] Cleaning up ${this.sessions.size} active AI sessions...`);
-        // Note: async operations won't complete here, but sync cleanup methods will
-        for (const [, agent] of this.sessions.entries()) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          if (agent && typeof (agent as any).cleanup === 'function') {
-            try {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              (agent as any).cleanup();
-            } catch {
-              // Silent fail on exit
-            }
-          }
-        }
-        this.sessions.clear();
-      }
-    });
-
-    // Handle SIGINT (Ctrl+C)
-    process.on('SIGINT', () => {
-      cleanupAndExit('SIGINT');
-      process.exit(0);
-    });
-
-    // Handle SIGTERM
-    process.on('SIGTERM', () => {
-      cleanupAndExit('SIGTERM');
-      process.exit(0);
-    });
-
-    this.exitHandlerRegistered = true;
   }
 }

@@ -195,7 +195,7 @@ describe('AIReviewService', () => {
       const service = new AIReviewService();
 
       await expect(service.executeReview(mockPRInfo, 'performance')).rejects.toThrow(
-        'ProbeAgent execution failed: API rate limit exceeded'
+        'The AI provider rate limit was reached before a response could be generated. Please retry shortly.'
       );
     });
 
@@ -216,7 +216,9 @@ describe('AIReviewService', () => {
 
       await expect(
         service.executeReview(mockPRInfo, 'Review this code for all issues')
-      ).rejects.toThrow('ProbeAgent execution failed: Request timed out');
+      ).rejects.toThrow(
+        'The AI request timed out before a response could be generated. Please retry.'
+      );
 
       expect(MockedProbeAgent).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -228,6 +230,29 @@ describe('AIReviewService', () => {
             /^visor-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-unknown$/
           ),
         })
+      );
+    });
+
+    it('should normalize no-output provider failures', async () => {
+      process.env.GOOGLE_API_KEY = 'test-key';
+
+      const mockAnswer = jest
+        .fn()
+        .mockRejectedValue(
+          new Error('Error: Failed to get response from AI model. No output generated.')
+        );
+      MockedProbeAgent.mockImplementation(
+        () =>
+          ({
+            initialize: jest.fn().mockResolvedValue(undefined),
+            answer: mockAnswer,
+          }) as any
+      );
+
+      const service = new AIReviewService();
+
+      await expect(service.executeReview(mockPRInfo, 'chat prompt')).rejects.toThrow(
+        'The AI provider failed before generating any response. This is usually caused by a provider-side limit, rate limit, or outage. Please retry.'
       );
     });
   });

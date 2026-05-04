@@ -333,4 +333,44 @@ describe('SlackFrontend (event-bus)', () => {
     expect(req.text).toContain('Check failed');
     expect(req.text).toContain('Command execution timed out');
   });
+
+  test('sanitizes raw AI provider failures before posting error notices', async () => {
+    const bus = new EventBus();
+    const slack = makeFakeSlack();
+    const fe = new SlackFrontend({ defaultChannel: 'C1', debounceMs: 0 });
+    const map = new Map<string, unknown>();
+    map.set('/bots/slack/support', {
+      event: { type: 'app_mention', channel: 'C1', ts: '111.222', text: 'hi' },
+    });
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: {
+        slack: { endpoint: '/bots/slack/support' },
+        checks: {
+          chat: { type: 'workflow', workflow: 'assistant' },
+        },
+      },
+      run: { runId: 'r6' },
+      webhookContext: { webhookData: map },
+    } as any);
+    (fe as any).getSlack = () => slack;
+
+    await bus.emit({
+      type: 'CheckErrored',
+      checkId: 'generate-response',
+      scope: [],
+      error: {
+        message:
+          'AI analysis failed: ProbeAgent execution failed: Error: Failed to get response from AI model. No output generated. Check the stream for errors.',
+      },
+    });
+
+    expect(slack.chat.postMessage).toHaveBeenCalledTimes(1);
+    const [req] = slack.chat.postMessage.mock.calls[0];
+    expect(req.text).toContain(
+      'The AI provider failed before generating any response. This is usually caused by a provider-side limit, rate limit, or outage. Please retry.'
+    );
+    expect(req.text).not.toContain('ProbeAgent execution failed');
+  });
 });

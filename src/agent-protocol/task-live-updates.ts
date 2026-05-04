@@ -208,6 +208,8 @@ export class TaskLiveUpdateManager {
   private metadataRefreshTimer?: ReturnType<typeof setInterval>;
   private running = false;
   private inflightTick?: Promise<void>;
+  private inflightMetadataRefresh?: Promise<void>;
+  private readonly inflightPublishes = new Set<Promise<unknown>>();
   private started = false;
   private completed = false;
   private readonly startedAt = new Date();
@@ -259,12 +261,7 @@ export class TaskLiveUpdateManager {
     if (this.completed) return;
     this.completed = true;
     this.stop();
-    // Wait for any in-flight tick to finish so the sink's publish queue is drained
-    if (this.running && this.inflightTick) {
-      try {
-        await this.inflightTick;
-      } catch {}
-    }
+    await this.waitForInflightSinkPublishes();
     try {
       logger.info(`[TaskLiveUpdates] Publishing final success update for task ${this.ctx.taskId}`);
       const result = await this.ctx.sink.complete(this.decorateText(finalText));
@@ -283,12 +280,7 @@ export class TaskLiveUpdateManager {
     if (this.completed) return;
     this.completed = true;
     this.stop();
-    // Wait for any in-flight tick to finish so the sink's publish queue is drained
-    if (this.running && this.inflightTick) {
-      try {
-        await this.inflightTick;
-      } catch {}
-    }
+    await this.waitForInflightSinkPublishes();
     try {
       logger.info(`[TaskLiveUpdates] Publishing final failure update for task ${this.ctx.taskId}`);
       const result = await this.ctx.sink.fail(this.decorateText(finalText));
@@ -319,6 +311,17 @@ export class TaskLiveUpdateManager {
   }
 
   async tick(): Promise<void> {
+    if (this.inflightTick) return this.inflightTick;
+    const promise = this.runTick().finally(() => {
+      if (this.inflightTick === promise) {
+        this.inflightTick = undefined;
+      }
+    });
+    this.inflightTick = promise;
+    return promise;
+  }
+
+  private async runTick(): Promise<void> {
     if (this.completed || this.running) return;
     const traceState = this.getTraceState();
     if (!traceState.traceRef && !traceState.traceId) {
@@ -402,7 +405,13 @@ export class TaskLiveUpdateManager {
         },
         traceState.traceId
       );
-      const result = await this.ctx.sink.update(message);
+      if (this.completed) {
+        logger.debug(
+          `[TaskLiveUpdates] Aborting progress publish for task ${this.ctx.taskId}: task already completed before sink update`
+        );
+        return;
+      }
+      const result = await this.trackPublish(this.ctx.sink.update(message));
       this.recordSinkRef(result);
       this.ctx.appendHistory?.(cleaned, 'progress');
       this.lastUpdateText = cleaned;
@@ -424,25 +433,41 @@ export class TaskLiveUpdateManager {
   private async runFirstTick(): Promise<void> {
     if (this.completed) return;
     logger.debug(`[TaskLiveUpdates] Running first scheduled tick for task ${this.ctx.taskId}`);
-    this.inflightTick = this.tick();
-    await this.inflightTick;
+    await this.tick();
     if (this.completed) return;
     this.timer = setInterval(() => {
-      this.inflightTick = this.tick();
+      void this.tick();
     }, this.ctx.config.intervalSeconds * 1000);
     if (typeof (this.timer as any)?.unref === 'function') {
       (this.timer as any).unref();
     }
     this.metadataRefreshTimer = setInterval(() => {
-      void this.refreshProgressMetadata();
+      void this.scheduleMetadataRefresh();
     }, DEFAULT_TASK_LIVE_UPDATE_METADATA_REFRESH_SECONDS * 1000);
     if (typeof (this.metadataRefreshTimer as any)?.unref === 'function') {
       (this.metadataRefreshTimer as any).unref();
     }
   }
 
+  private async waitForInflightSinkPublishes(): Promise<void> {
+    const pending = [...this.inflightPublishes];
+    if (pending.length === 0) return;
+    try {
+      await Promise.allSettled(pending);
+    } catch {}
+  }
+
   private recordSinkRef(result: { ref?: Record<string, unknown> } | null | undefined): void {
     if (result?.ref) this.ctx.onPostedRef?.(result.ref);
+  }
+
+  private async trackPublish<T>(publish: Promise<T>): Promise<T> {
+    this.inflightPublishes.add(publish);
+    try {
+      return await publish;
+    } finally {
+      this.inflightPublishes.delete(publish);
+    }
   }
 
   private getTraceState(): { traceRef?: string; traceId?: string } {
@@ -462,7 +487,7 @@ export class TaskLiveUpdateManager {
   private decorateProgressText(
     text: string,
     timing: ProgressTimingMetadata,
-    traceId?: string
+    _traceId?: string
   ): string {
     const normalized = normalizeProgressSummary(text);
     const taskSummary = formatTaskSummary(timing.taskSummary);
@@ -473,8 +498,21 @@ export class TaskLiveUpdateManager {
       taskSummary,
       normalized,
       formatProgressMetadata(timing),
+      `\`task_id: ${this.ctx.taskId}\``,
+      '`live_update: true`',
     ].filter(Boolean);
-    return this.decorateText(blocks.join('\n\n'), traceId);
+    return blocks.join('\n\n');
+  }
+
+  private scheduleMetadataRefresh(): Promise<void> {
+    if (this.inflightMetadataRefresh) return this.inflightMetadataRefresh;
+    const promise = this.refreshProgressMetadata().finally(() => {
+      if (this.inflightMetadataRefresh === promise) {
+        this.inflightMetadataRefresh = undefined;
+      }
+    });
+    this.inflightMetadataRefresh = promise;
+    return promise;
   }
 
   private async refreshProgressMetadata(): Promise<void> {
@@ -499,7 +537,7 @@ export class TaskLiveUpdateManager {
       logger.debug(
         `[TaskLiveUpdates] Refreshing metadata-only live update for task ${this.ctx.taskId}`
       );
-      const result = await this.ctx.sink.update(message);
+      const result = await this.trackPublish(this.ctx.sink.update(message));
       this.recordSinkRef(result);
       this.lastPostedMessage = message;
     } catch (err) {
@@ -559,7 +597,8 @@ export class TaskLiveUpdateManager {
       this.lastStallFallbackAt = now;
       return;
     }
-    const result = await this.ctx.sink.update(message);
+    if (this.completed) return;
+    const result = await this.trackPublish(this.ctx.sink.update(message));
     this.recordSinkRef(result);
     if (!this.lastUpdateText) {
       this.ctx.appendHistory?.(baseText, 'progress');
@@ -698,20 +737,28 @@ function formatTaskLabel(task: { id: string; title: string; status: string }): s
   return title || task.id || task.status;
 }
 
+function scopeHasRenderableTasks(scope: NonNullable<ProbeTaskSummary['scopes']>[number]): boolean {
+  if (scope.tasks.some(task => !task.synthetic)) return true;
+  return scope.children.some(child => scopeHasRenderableTasks(child));
+}
+
 function appendTaskScopeLines(
   lines: string[],
   scope: NonNullable<ProbeTaskSummary['scopes']>[number],
   depth = 0
 ): void {
+  if (!scopeHasRenderableTasks(scope)) return;
   const prefix = '  '.repeat(depth);
   if (depth > 0 || scope.label !== 'Main Agent') {
     lines.push(`${prefix}${scope.label}`);
   }
-  for (const task of scope.tasks.slice(0, 8)) {
+  const visibleTasks = scope.tasks.filter(task => !task.synthetic).slice(0, 8);
+  for (const task of visibleTasks) {
     lines.push(`${prefix}• ${formatTaskStatusMarker(task.status)} ${formatTaskLabel(task)}`);
   }
-  if (scope.tasks.length > 8) {
-    lines.push(`${prefix}• ... ${scope.tasks.length - 8} more`);
+  const hiddenCount = scope.tasks.filter(task => !task.synthetic).length - visibleTasks.length;
+  if (hiddenCount > 0) {
+    lines.push(`${prefix}• ... ${hiddenCount} more`);
   }
   for (const child of scope.children) {
     appendTaskScopeLines(lines, child, depth + 1);
@@ -724,14 +771,16 @@ function formatTaskSummary(summary?: ProbeTaskSummary): string | undefined {
   if (summary.scopes.length > 0) {
     for (const scope of summary.scopes) appendTaskScopeLines(lines, scope);
   } else {
-    for (const task of summary.tasks.slice(0, 8)) {
+    const visibleTasks = summary.tasks.filter(task => !task.synthetic).slice(0, 8);
+    for (const task of visibleTasks) {
       lines.push(`• ${formatTaskStatusMarker(task.status)} ${formatTaskLabel(task)}`);
     }
-    if (summary.tasks.length > 8) {
-      lines.push(`• ... ${summary.tasks.length - 8} more`);
+    const hiddenCount = summary.tasks.filter(task => !task.synthetic).length - visibleTasks.length;
+    if (hiddenCount > 0) {
+      lines.push(`• ... ${hiddenCount} more`);
     }
   }
-  return lines.join('\n');
+  return lines.length > 1 ? lines.join('\n') : undefined;
 }
 
 function formatSkillList(skills: string[]): string {

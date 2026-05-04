@@ -32,6 +32,7 @@ import {
 import { context as otContext, trace } from '../telemetry/lazy-otel';
 import { isFrontendLiveUpdatesEnabled } from '../agent-protocol/task-live-updates';
 import { logger as sharedLogger } from '../logger';
+import { formatUserFacingExecutionMessage } from '../utils/user-facing-error';
 
 type SlackFrontendConfig = {
   defaultChannel?: string;
@@ -344,7 +345,7 @@ export class SlackFrontend implements Frontend {
 
     let text = `❌ ${title}`;
     if (checkId) text += `\nCheck: ${checkId}`;
-    if (message) text += `\n${message}`;
+    if (message) text += `\n${formatUserFacingExecutionMessage(message)}`;
 
     if (this.isTelemetryEnabled(ctx)) {
       const suffix = this.getExecutionReferenceSuffix();
@@ -594,7 +595,11 @@ export class SlackFrontend implements Frontend {
             (i.ruleId?.startsWith('system/') || i.ruleId?.endsWith('/error'))
         );
         if (errorIssues.length > 0) {
-          const errorMessages = errorIssues.map((i: any) => i.message).join('\n');
+          const errorMessages = errorIssues
+            .map((i: any) =>
+              formatUserFacingExecutionMessage(String(i.message || 'Execution error'))
+            )
+            .join('\n');
           text = `:warning: Something went wrong while processing your request:\n${errorMessages}`;
           // Prevent maybePostExecutionFailure from double-posting the same error
           this.errorNotified = true;

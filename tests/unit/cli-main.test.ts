@@ -50,6 +50,12 @@ describe('CLI Main Entry Point', () => {
     await main();
 
     expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('Usage: visor [options]'));
+    expect(mockConsoleLog).toHaveBeenCalledWith(
+      expect.stringContaining('visor process list|restart|reload|stop')
+    );
+    expect(mockConsoleLog).toHaveBeenCalledWith(
+      expect.stringContaining('visor tasks list|show|logs')
+    );
     expect(mockConsoleLog).toHaveBeenCalledWith(expect.stringContaining('Examples:'));
     expect(mockProcessExit).toHaveBeenCalledWith(0);
   });
