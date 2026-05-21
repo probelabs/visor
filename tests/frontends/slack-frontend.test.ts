@@ -289,6 +289,52 @@ describe('SlackFrontend (event-bus)', () => {
     expect(req.text).toContain('timed out');
   });
 
+  test('posts error fallback when workflow output.text is empty and only a guarantee failure is present', async () => {
+    const bus = new EventBus();
+    const slack = makeFakeSlack();
+    const fe = new SlackFrontend({ defaultChannel: 'C1', debounceMs: 0 });
+    const map = new Map<string, unknown>();
+    map.set('/bots/slack/support', {
+      event: { type: 'app_mention', channel: 'C1', ts: '888.2', text: 'do something else' },
+    });
+    fe.start({
+      eventBus: bus,
+      logger: console as any,
+      config: {
+        slack: { endpoint: '/bots/slack/support' },
+        checks: {
+          chat: { type: 'workflow', workflow: 'assistant' },
+        },
+      },
+      run: { runId: 'r5b' },
+      webhookContext: { webhookData: map },
+    } as any);
+    (fe as any).getSlack = () => slack;
+
+    await bus.emit({
+      type: 'CheckCompleted',
+      checkId: 'chat',
+      scope: [],
+      result: {
+        issues: [
+          {
+            file: 'contract',
+            line: 0,
+            ruleId: 'contract/guarantee_failed',
+            message: "Guarantee failed: (output?.text ?? '').length > 0",
+            severity: 'error',
+            category: 'logic',
+          },
+        ],
+        output: { text: '', intent: 'chat' },
+      },
+    });
+
+    expect(slack.chat.postMessage).toHaveBeenCalledTimes(1);
+    const [req] = slack.chat.postMessage.mock.calls[0];
+    expect(req.text).toContain('failed to produce a response');
+  });
+
   test('posts error notice for execution failures on completed checks', async () => {
     const bus = new EventBus();
     const slack = makeFakeSlack();

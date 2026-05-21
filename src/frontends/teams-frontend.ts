@@ -11,7 +11,10 @@ import { TeamsClient } from '../teams/client';
 import { formatTeamsText } from '../teams/markdown';
 import type { ConversationReference } from 'botbuilder';
 import { isFrontendLiveUpdatesEnabled } from '../agent-protocol/task-live-updates';
-import { formatUserFacingExecutionMessage } from '../utils/user-facing-error';
+import {
+  formatUserFacingExecutionMessage,
+  summarizeUserFacingIssues,
+} from '../utils/user-facing-error';
 
 type TeamsFrontendConfig = {
   appId?: string;
@@ -195,18 +198,9 @@ export class TeamsFrontend implements Frontend {
       }
 
       if (!text) {
-        const issues: any[] = (result as any)?.issues || [];
-        const errorIssues = issues.filter(
-          (i: any) =>
-            i.severity === 'error' &&
-            (i.ruleId?.startsWith('system/') || i.ruleId?.endsWith('/error'))
-        );
-        if (errorIssues.length > 0) {
-          text = errorIssues
-            .map((i: any) =>
-              formatUserFacingExecutionMessage(String(i.message || 'Execution error'))
-            )
-            .join('\n');
+        const issueSummary = summarizeUserFacingIssues((result as any)?.issues || []);
+        if (issueSummary) {
+          text = issueSummary;
           this.errorNotified = true;
         }
       }

@@ -67,6 +67,14 @@ function matchUserFacingErrorMessage(raw: string): string | null {
     return 'The AI provider budget limit was exceeded before a response could be generated. Please retry later or switch model/provider.';
   }
 
+  if (
+    /currently experiencing high demand|status.?unavailable|spikes in demand are usually temporary/i.test(
+      raw
+    )
+  ) {
+    return 'The AI provider is currently experiencing high demand and did not generate a response. Please retry shortly.';
+  }
+
   if (/rate limit/i.test(raw)) {
     return 'The AI provider rate limit was reached before a response could be generated. Please retry shortly.';
   }
@@ -108,4 +116,63 @@ export function formatUserFacingExecutionError(error: unknown): string {
 
 export function formatUserFacingExecutionMessage(message: string): string {
   return formatUserFacingExecutionError(message);
+}
+
+type IssueLike = {
+  ruleId?: string;
+  message?: string;
+  severity?: string;
+};
+
+function issuePriority(issue: IssueLike): number {
+  const ruleId = String(issue.ruleId || '');
+  const message = String(issue.message || '');
+
+  if (ruleId.startsWith('system/') || ruleId.endsWith('/error')) return 0;
+  if (ruleId.includes('timeout') || /timed out|timeout/i.test(message)) return 1;
+  if (
+    ruleId.includes('contract/guarantee_failed') &&
+    /output\??\.\s*text|\btext\b.*length\s*>\s*0|\btext\b.*trim/i.test(message)
+  ) {
+    return 2;
+  }
+  return 3;
+}
+
+function formatGuaranteeFailureMessage(issue: IssueLike): string | null {
+  const ruleId = String(issue.ruleId || '');
+  const message = String(issue.message || '');
+  if (!ruleId.includes('contract/guarantee_failed')) return null;
+  if (/output\??\.\s*text|\btext\b.*length\s*>\s*0|\btext\b.*trim/i.test(message)) {
+    return 'The assistant failed to produce a response. This is usually caused by a provider-side limit, outage, or invalid structured output. Please retry.';
+  }
+  return null;
+}
+
+export function summarizeUserFacingIssues(issues: unknown): string | null {
+  if (!Array.isArray(issues) || issues.length === 0) return null;
+
+  const candidates = issues.filter(
+    (issue): issue is IssueLike =>
+      !!issue &&
+      typeof issue === 'object' &&
+      String((issue as IssueLike).severity || '').toLowerCase() === 'error'
+  );
+  if (candidates.length === 0) return null;
+
+  const prioritized = [...candidates].sort((a, b) => issuePriority(a) - issuePriority(b));
+  const seen = new Set<string>();
+  const messages: string[] = [];
+
+  for (const issue of prioritized) {
+    const formatted =
+      formatGuaranteeFailureMessage(issue) ||
+      formatUserFacingExecutionMessage(String(issue.message || 'Execution error'));
+    if (!formatted || seen.has(formatted)) continue;
+    seen.add(formatted);
+    messages.push(formatted);
+    if (messages.length >= 2) break;
+  }
+
+  return messages.length > 0 ? messages.join('\n') : null;
 }

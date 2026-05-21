@@ -23,6 +23,7 @@ import {
   type TaskLiveUpdateSink,
 } from './task-live-updates';
 import { resolveTaskTraceReference } from './task-trace-resolution';
+import { summarizeUserFacingIssues } from '../utils/user-facing-error';
 
 function getPackageVersion(): string {
   try {
@@ -253,6 +254,12 @@ export async function trackExecution<T>(
               }
             }
             if (responseText !== 'Execution completed') break;
+          }
+        }
+        if (responseText === 'Execution completed') {
+          const issueSummary = summarizeUserFacingIssues((result as any)?.reviewSummary?.issues);
+          if (issueSummary) {
+            responseText = issueSummary;
           }
         }
       } catch {
