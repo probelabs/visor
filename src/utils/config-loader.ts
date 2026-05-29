@@ -325,35 +325,10 @@ export class ConfigLoader {
     if (defaultConfigPath) {
       // Always log to stderr to avoid contaminating formatted output
       console.error(`📦 Loading bundled default configuration from ${defaultConfigPath}`);
-      const content = fs.readFileSync(defaultConfigPath, 'utf8');
-      let config = yaml.load(content) as Partial<VisorConfig>;
-
-      if (!config || typeof config !== 'object') {
-        throw new Error('Invalid default configuration');
-      }
-
-      // Alias: support 'include' as 'extends' in packaged defaults
-      if ((config as any).include && !(config as any).extends) {
-        const inc = (config as any).include;
-        (config as any).extends = Array.isArray(inc) ? inc : [inc];
-        delete (config as any).include;
-      }
-
+      const defaultConfigDir = path.dirname(defaultConfigPath);
+      let config = await this.fetchBundledConfigFile(defaultConfigPath, defaultConfigDir);
       // Normalize 'checks' and 'steps' for backward compatibility
       config = this.normalizeStepsAndChecks(config);
-
-      // Default configs shouldn't have extends, but handle it just in case
-      if (config.extends) {
-        // Ensure relative paths (e.g., ./code-review.yaml) resolve from the defaults directory
-        const previousBaseDir = this.options.baseDir;
-        try {
-          this.options.baseDir = path.dirname(defaultConfigPath);
-          return await this.processExtends(config);
-        } finally {
-          this.options.baseDir = previousBaseDir;
-        }
-      }
-
       return config;
     }
 
@@ -370,6 +345,90 @@ export class ConfigLoader {
         },
       },
     };
+  }
+
+  /**
+   * Load a bundled config and its includes without using project-local path resolution.
+   *
+   * `extends: default` is a built-in source. Its sibling includes are part of the Visor
+   * package/action bundle, so they must resolve inside that bundle rather than inside the
+   * caller's repository root.
+   */
+  private async fetchBundledConfigFile(
+    filePath: string,
+    bundledRoot: string,
+    currentDepth: number = 0,
+    seen: Set<string> = new Set()
+  ): Promise<Partial<VisorConfig>> {
+    if (currentDepth >= (this.options.maxDepth || 10)) {
+      throw new Error(
+        `Maximum bundled default include depth (${this.options.maxDepth}) exceeded. Check for circular dependencies.`
+      );
+    }
+
+    const resolvedPath = path.resolve(filePath);
+    this.validateBundledPath(resolvedPath, bundledRoot);
+
+    if (seen.has(resolvedPath)) {
+      throw new Error(`Circular dependency detected in bundled defaults: ${resolvedPath}`);
+    }
+
+    seen.add(resolvedPath);
+
+    try {
+      const content = fs.readFileSync(resolvedPath, 'utf8');
+      const config = yaml.load(content) as Partial<VisorConfig>;
+
+      if (!config || typeof config !== 'object') {
+        throw new Error(`Invalid default configuration: ${resolvedPath}`);
+      }
+
+      const extendsValue = (config as any).extends || (config as any).include;
+      delete (config as any).extends;
+      delete (config as any).include;
+
+      this.annotateToolsBaseDir(config, path.dirname(resolvedPath));
+
+      if (!extendsValue) {
+        return config;
+      }
+
+      const { ConfigMerger } = await import('./config-merger');
+      const merger = new ConfigMerger();
+      const sources = Array.isArray(extendsValue) ? extendsValue : [extendsValue];
+      let mergedParents: Partial<VisorConfig> = {};
+
+      for (const source of sources) {
+        if (typeof source !== 'string' || this.getSourceType(source) !== ConfigSourceType.LOCAL) {
+          throw new Error(
+            `Bundled default configuration can only include local bundled files: ${String(source)}`
+          );
+        }
+
+        const parentPath = path.isAbsolute(source)
+          ? source
+          : path.resolve(path.dirname(resolvedPath), source);
+        const parentConfig = await this.fetchBundledConfigFile(
+          parentPath,
+          bundledRoot,
+          currentDepth + 1,
+          seen
+        );
+        mergedParents = merger.merge(mergedParents, parentConfig);
+      }
+
+      return merger.merge(mergedParents, config);
+    } catch (error: any) {
+      if (error && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) {
+        throw new Error(`Bundled default configuration file not found: ${resolvedPath}`);
+      }
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw error;
+    } finally {
+      seen.delete(resolvedPath);
+    }
   }
 
   /**
@@ -489,6 +548,31 @@ export class ConfigLoader {
       if (lowerPath.includes(pattern)) {
         throw new Error(`Security error: Cannot access potentially sensitive file: ${pattern}`);
       }
+    }
+  }
+
+  /**
+   * Validate that bundled default includes stay inside the Visor package/action bundle.
+   */
+  private validateBundledPath(resolvedPath: string, bundledRoot: string): void {
+    const canonicalize = (p: string): string => {
+      const resolved = path.resolve(p);
+      try {
+        return path.normalize(fs.realpathSync.native(resolved));
+      } catch {
+        return path.normalize(resolved);
+      }
+    };
+    const normalizedPath = canonicalize(resolvedPath);
+    const normalizedRoot = canonicalize(bundledRoot);
+
+    if (
+      normalizedPath !== normalizedRoot &&
+      !normalizedPath.startsWith(`${normalizedRoot}${path.sep}`)
+    ) {
+      throw new Error(
+        `Security error: Bundled default include resolves outside bundled defaults directory: ${bundledRoot}`
+      );
     }
   }
 
