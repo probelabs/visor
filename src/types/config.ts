@@ -654,6 +654,18 @@ export interface CheckConfig {
   /** Tags for categorizing and filtering checks (e.g., ["local", "fast", "security"]) */
   tags?: string[];
   /**
+   * Debounce window in milliseconds. When set, multiple invocations of this
+   * step (across concurrent engine instances) within the window are coalesced
+   * — only the last invocation actually executes after the window expires.
+   * Useful for steps that should run once after a burst of triggers settles.
+   *
+   * The debounce key defaults to the step's fully-qualified check ID.
+   * Use `debounce_key` to group different steps under the same debounce.
+   */
+  debounce?: number;
+  /** Custom debounce key. Steps sharing the same key share the same debounce window. */
+  debounce_key?: string;
+  /**
    * Operational criticality of this step. Drives default safety policies
    * (contracts, retries, loop budgets) at load time. Behavior can still be
    * overridden explicitly per step via on_*, fail_if, assume/guarantee, etc.
@@ -1424,8 +1436,8 @@ export interface SlackMessageTrigger {
 export interface StaticCronJob {
   /** Cron expression (e.g., "0 9 * * 1" for every Monday at 9am) */
   schedule: string;
-  /** Workflow/check ID to run */
-  workflow: string;
+  /** Workflow/check ID to run. Omit to treat inputs.text as a user message through the full pipeline. */
+  workflow?: string;
   /** Optional workflow inputs */
   inputs?: Record<string, unknown>;
   /** Output destination configuration */

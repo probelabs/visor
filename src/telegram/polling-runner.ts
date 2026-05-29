@@ -12,7 +12,7 @@ import { TelegramClient } from './client';
 import { TelegramAdapter, type TelegramMessageInfo } from './adapter';
 import { createHash } from 'crypto';
 import { run, type RunnerHandle } from '@grammyjs/runner';
-import { WorkspaceManager } from '../utils/workspace-manager';
+import { startPeriodicStorageCleanup } from '../utils/worktree-cleanup';
 
 export type TelegramPollingConfig = {
   botToken?: string;
@@ -35,6 +35,7 @@ export class TelegramPollingRunner implements Runner {
   private activeChats = new Set<string>();
   private taskStore?: import('../agent-protocol/task-store').TaskStore;
   private configPath?: string;
+  private storageCleanupStop?: () => void;
 
   constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: TelegramPollingConfig) {
     const token = opts.botToken || process.env.TELEGRAM_BOT_TOKEN || '';
@@ -121,11 +122,13 @@ export class TelegramPollingRunner implements Runner {
     this.runnerHandle = run(bot);
     logger.info('[TelegramPolling] Polling started');
 
-    // Clean up stale workspace directories
-    WorkspaceManager.cleanupStale().catch(() => {});
+    this.storageCleanupStop?.();
+    this.storageCleanupStop = startPeriodicStorageCleanup('TelegramPolling');
   }
 
   async stopListening(): Promise<void> {
+    this.storageCleanupStop?.();
+    this.storageCleanupStop = undefined;
     if (this.runnerHandle) {
       this.runnerHandle.stop();
       logger.info('[TelegramPolling] Polling stopped');
@@ -133,6 +136,8 @@ export class TelegramPollingRunner implements Runner {
   }
 
   async drain(timeoutMs = 0): Promise<void> {
+    this.storageCleanupStop?.();
+    this.storageCleanupStop = undefined;
     if (this.runnerHandle) {
       this.runnerHandle.stop();
     }
@@ -148,6 +153,8 @@ export class TelegramPollingRunner implements Runner {
   }
 
   async stop(): Promise<void> {
+    this.storageCleanupStop?.();
+    this.storageCleanupStop = undefined;
     if (this.runnerHandle) {
       this.runnerHandle.stop();
       logger.info('[TelegramPolling] Polling stopped');

@@ -165,8 +165,13 @@ export class SlackClient {
       console.warn('Slack auth.test failed (non-fatal); bot user id unavailable');
       return 'UNKNOWN_BOT';
     }
+    // Cache bot_id (different from user_id) for self-message detection on bot_message events
+    if (resp.bot_id) this._botId = String(resp.bot_id);
     return String(resp.user_id);
   }
+
+  /** The bot's bot_id (from auth.test), used to detect own bot_message events */
+  _botId?: string;
 
   /**
    * Fetch user info from Slack API.
@@ -219,6 +224,35 @@ export class SlackClient {
    * Open a DM channel with a user.
    * Returns the DM channel ID.
    */
+  /**
+   * Resolve a channel name (e.g. "function-cve-alerts") to a channel ID.
+   * Uses conversations.list with pagination. Results are cached for the process lifetime.
+   */
+  private channelNameCache = new Map<string, string>();
+
+  async resolveChannelName(name: string): Promise<string | undefined> {
+    const normalized = name.startsWith('#') ? name.slice(1) : name;
+    if (this.channelNameCache.has(normalized)) return this.channelNameCache.get(normalized);
+
+    let cursor: string | undefined;
+    do {
+      const params: Record<string, unknown> = {
+        types: 'public_channel,private_channel',
+        limit: 200,
+      };
+      if (cursor) params.cursor = cursor;
+      const resp: any = await this.api('conversations.list', params);
+      if (!resp?.ok) break;
+      for (const ch of resp.channels || []) {
+        this.channelNameCache.set(ch.name, ch.id);
+        if (ch.name === normalized) return ch.id;
+      }
+      cursor = resp.response_metadata?.next_cursor;
+    } while (cursor);
+
+    return undefined;
+  }
+
   async openDM(userId: string): Promise<{ ok: boolean; channel?: string }> {
     try {
       const resp: any = await this.api('conversations.open', { users: userId });

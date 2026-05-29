@@ -1,7 +1,12 @@
 import crypto from 'crypto';
 import { logger } from '../logger';
 import type { TaskLiveUpdatesConfig } from '../types/config';
-import { fetchTraceSpans, serializeTraceForPrompt } from './trace-serializer';
+import {
+  extractProbeTaskSummary,
+  fetchTraceSpans,
+  serializeTraceForPrompt,
+  type ProbeTaskSummary,
+} from './trace-serializer';
 
 export const DEFAULT_TASK_LIVE_UPDATE_INTERVAL_SECONDS = 10;
 export const DEFAULT_TASK_LIVE_UPDATE_MAX_TRACE_CHARS = 12_000;
@@ -119,10 +124,12 @@ interface ProgressTimingMetadata {
   previousUpdateAt?: Date;
   secondsSincePreviousUpdate?: number;
   activatedSkills?: string[];
+  taskSummary?: ProbeTaskSummary;
 }
 
 interface TaskLiveUpdateSkillMetadata {
   activatedSkills?: string[];
+  taskSummary?: ProbeTaskSummary;
 }
 
 export interface TaskLiveUpdateContext {
@@ -200,6 +207,9 @@ export class TaskLiveUpdateManager {
   private firstTickTimer?: ReturnType<typeof setTimeout>;
   private metadataRefreshTimer?: ReturnType<typeof setInterval>;
   private running = false;
+  private inflightTick?: Promise<void>;
+  private inflightMetadataRefresh?: Promise<void>;
+  private readonly inflightPublishes = new Set<Promise<unknown>>();
   private started = false;
   private completed = false;
   private readonly startedAt = new Date();
@@ -251,6 +261,7 @@ export class TaskLiveUpdateManager {
     if (this.completed) return;
     this.completed = true;
     this.stop();
+    await this.waitForInflightSinkPublishes();
     try {
       logger.info(`[TaskLiveUpdates] Publishing final success update for task ${this.ctx.taskId}`);
       const result = await this.ctx.sink.complete(this.decorateText(finalText));
@@ -269,6 +280,7 @@ export class TaskLiveUpdateManager {
     if (this.completed) return;
     this.completed = true;
     this.stop();
+    await this.waitForInflightSinkPublishes();
     try {
       logger.info(`[TaskLiveUpdates] Publishing final failure update for task ${this.ctx.taskId}`);
       const result = await this.ctx.sink.fail(this.decorateText(finalText));
@@ -299,6 +311,17 @@ export class TaskLiveUpdateManager {
   }
 
   async tick(): Promise<void> {
+    if (this.inflightTick) return this.inflightTick;
+    const promise = this.runTick().finally(() => {
+      if (this.inflightTick === promise) {
+        this.inflightTick = undefined;
+      }
+    });
+    this.inflightTick = promise;
+    return promise;
+  }
+
+  private async runTick(): Promise<void> {
     if (this.completed || this.running) return;
     const traceState = this.getTraceState();
     if (!traceState.traceRef && !traceState.traceId) {
@@ -378,10 +401,17 @@ export class TaskLiveUpdateManager {
             ? Math.max(0, Math.floor((Date.now() - this.lastUpdateAt.getTime()) / 1000))
             : undefined,
           activatedSkills: this.lastSkillMetadata?.activatedSkills,
+          taskSummary: this.lastSkillMetadata?.taskSummary,
         },
         traceState.traceId
       );
-      const result = await this.ctx.sink.update(message);
+      if (this.completed) {
+        logger.debug(
+          `[TaskLiveUpdates] Aborting progress publish for task ${this.ctx.taskId}: task already completed before sink update`
+        );
+        return;
+      }
+      const result = await this.trackPublish(this.ctx.sink.update(message));
       this.recordSinkRef(result);
       this.ctx.appendHistory?.(cleaned, 'progress');
       this.lastUpdateText = cleaned;
@@ -412,15 +442,32 @@ export class TaskLiveUpdateManager {
       (this.timer as any).unref();
     }
     this.metadataRefreshTimer = setInterval(() => {
-      void this.refreshProgressMetadata();
+      void this.scheduleMetadataRefresh();
     }, DEFAULT_TASK_LIVE_UPDATE_METADATA_REFRESH_SECONDS * 1000);
     if (typeof (this.metadataRefreshTimer as any)?.unref === 'function') {
       (this.metadataRefreshTimer as any).unref();
     }
   }
 
+  private async waitForInflightSinkPublishes(): Promise<void> {
+    const pending = [...this.inflightPublishes];
+    if (pending.length === 0) return;
+    try {
+      await Promise.allSettled(pending);
+    } catch {}
+  }
+
   private recordSinkRef(result: { ref?: Record<string, unknown> } | null | undefined): void {
     if (result?.ref) this.ctx.onPostedRef?.(result.ref);
+  }
+
+  private async trackPublish<T>(publish: Promise<T>): Promise<T> {
+    this.inflightPublishes.add(publish);
+    try {
+      return await publish;
+    } finally {
+      this.inflightPublishes.delete(publish);
+    }
   }
 
   private getTraceState(): { traceRef?: string; traceId?: string } {
@@ -440,17 +487,32 @@ export class TaskLiveUpdateManager {
   private decorateProgressText(
     text: string,
     timing: ProgressTimingMetadata,
-    traceId?: string
+    _traceId?: string
   ): string {
     const normalized = normalizeProgressSummary(text);
+    const taskSummary = formatTaskSummary(timing.taskSummary);
     const blocks = [
       '*Live Update*',
       '_Current task is still running. This message updates in place until the final answer is ready._',
       this.lastUpdateKind === 'stall' ? DEFAULT_TASK_LIVE_UPDATE_STALL_NOTICE : '',
+      taskSummary,
       normalized,
       formatProgressMetadata(timing),
+      `\`task_id: ${this.ctx.taskId}\``,
+      '`live_update: true`',
     ].filter(Boolean);
-    return this.decorateText(blocks.join('\n\n'), traceId);
+    return blocks.join('\n\n');
+  }
+
+  private scheduleMetadataRefresh(): Promise<void> {
+    if (this.inflightMetadataRefresh) return this.inflightMetadataRefresh;
+    const promise = this.refreshProgressMetadata().finally(() => {
+      if (this.inflightMetadataRefresh === promise) {
+        this.inflightMetadataRefresh = undefined;
+      }
+    });
+    this.inflightMetadataRefresh = promise;
+    return promise;
   }
 
   private async refreshProgressMetadata(): Promise<void> {
@@ -465,6 +527,7 @@ export class TaskLiveUpdateManager {
           ? Math.max(0, Math.floor((Date.now() - this.lastUpdateAt.getTime()) / 1000))
           : undefined,
         activatedSkills: this.lastSkillMetadata?.activatedSkills,
+        taskSummary: this.lastSkillMetadata?.taskSummary,
       },
       traceState.traceId
     );
@@ -474,7 +537,7 @@ export class TaskLiveUpdateManager {
       logger.debug(
         `[TaskLiveUpdates] Refreshing metadata-only live update for task ${this.ctx.taskId}`
       );
-      const result = await this.ctx.sink.update(message);
+      const result = await this.trackPublish(this.ctx.sink.update(message));
       this.recordSinkRef(result);
       this.lastPostedMessage = message;
     } catch (err) {
@@ -526,6 +589,7 @@ export class TaskLiveUpdateManager {
           ? Math.max(0, Math.floor((Date.now() - this.lastUpdateAt.getTime()) / 1000))
           : undefined,
         activatedSkills: this.lastSkillMetadata?.activatedSkills,
+        taskSummary: this.lastSkillMetadata?.taskSummary,
       },
       traceId
     );
@@ -533,7 +597,8 @@ export class TaskLiveUpdateManager {
       this.lastStallFallbackAt = now;
       return;
     }
-    const result = await this.ctx.sink.update(message);
+    if (this.completed) return;
+    const result = await this.trackPublish(this.ctx.sink.update(message));
     this.recordSinkRef(result);
     if (!this.lastUpdateText) {
       this.ctx.appendHistory?.(baseText, 'progress');
@@ -648,6 +713,76 @@ function formatProgressMetadata(timing: ProgressTimingMetadata): string {
   return `_Metadata: ${parts.join(' | ')}_`;
 }
 
+function formatTaskStatusMarker(status: string): string {
+  switch (status) {
+    case 'completed':
+      return '[x]';
+    case 'in_progress':
+      return '[~]';
+    case 'blocked':
+    case 'failed':
+    case 'error':
+      return '[!]';
+    case 'deleted':
+    case 'cancelled':
+    case 'canceled':
+      return '[-]';
+    default:
+      return '[ ]';
+  }
+}
+
+function formatTaskLabel(task: { id: string; title: string; status: string }): string {
+  const title = String(task.title || '').trim();
+  return title || task.id || task.status;
+}
+
+function scopeHasRenderableTasks(scope: NonNullable<ProbeTaskSummary['scopes']>[number]): boolean {
+  if (scope.tasks.some(task => !task.synthetic)) return true;
+  return scope.children.some(child => scopeHasRenderableTasks(child));
+}
+
+function appendTaskScopeLines(
+  lines: string[],
+  scope: NonNullable<ProbeTaskSummary['scopes']>[number],
+  depth = 0
+): void {
+  if (!scopeHasRenderableTasks(scope)) return;
+  const prefix = '  '.repeat(depth);
+  if (depth > 0 || scope.label !== 'Main Agent') {
+    lines.push(`${prefix}${scope.label}`);
+  }
+  const visibleTasks = scope.tasks.filter(task => !task.synthetic).slice(0, 8);
+  for (const task of visibleTasks) {
+    lines.push(`${prefix}• ${formatTaskStatusMarker(task.status)} ${formatTaskLabel(task)}`);
+  }
+  const hiddenCount = scope.tasks.filter(task => !task.synthetic).length - visibleTasks.length;
+  if (hiddenCount > 0) {
+    lines.push(`${prefix}• ... ${hiddenCount} more`);
+  }
+  for (const child of scope.children) {
+    appendTaskScopeLines(lines, child, depth + 1);
+  }
+}
+
+function formatTaskSummary(summary?: ProbeTaskSummary): string | undefined {
+  if (!summary || summary.tasks.length === 0) return undefined;
+  const lines = ['*Tasks*'];
+  if (summary.scopes.length > 0) {
+    for (const scope of summary.scopes) appendTaskScopeLines(lines, scope);
+  } else {
+    const visibleTasks = summary.tasks.filter(task => !task.synthetic).slice(0, 8);
+    for (const task of visibleTasks) {
+      lines.push(`• ${formatTaskStatusMarker(task.status)} ${formatTaskLabel(task)}`);
+    }
+    const hiddenCount = summary.tasks.filter(task => !task.synthetic).length - visibleTasks.length;
+    if (hiddenCount > 0) {
+      lines.push(`• ... ${hiddenCount} more`);
+    }
+  }
+  return lines.length > 1 ? lines.join('\n') : undefined;
+}
+
 function formatSkillList(skills: string[]): string {
   const normalized = dedupeStrings(skills);
   if (normalized.length <= 4) return normalized.join(', ');
@@ -659,13 +794,13 @@ function dedupeStrings(values: string[] | undefined): string[] {
   return [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))];
 }
 
-async function extractTraceSkillMetadata(
+export async function extractTraceSkillMetadata(
   traceRef: string,
   traceId?: string
 ): Promise<TaskLiveUpdateSkillMetadata | undefined> {
   if (!traceRef && !traceId) return undefined;
   try {
-    const spans = await fetchTraceSpans(traceId || traceRef);
+    const spans = await fetchTraceSpans(traceRef || traceId!, { targetTraceId: traceId });
     if (!spans.length) return undefined;
 
     const routeIntentSpan = spans.find(
@@ -693,8 +828,12 @@ async function extractTraceSkillMetadata(
 
     const finalActivatedSkills =
       activatedSkills.length > 0 ? activatedSkills : fallbackActivatedSkills;
-    if (!finalActivatedSkills.length) return undefined;
-    return { activatedSkills: finalActivatedSkills };
+    const taskSummary = extractProbeTaskSummary(spans);
+    if (!finalActivatedSkills.length && !taskSummary) return undefined;
+    return {
+      activatedSkills: finalActivatedSkills.length ? finalActivatedSkills : undefined,
+      taskSummary: taskSummary || undefined,
+    };
   } catch (err) {
     logger.debug(
       `[TaskLiveUpdates] Failed to extract skill metadata from trace: ${

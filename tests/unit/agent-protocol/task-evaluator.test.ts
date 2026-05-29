@@ -16,7 +16,7 @@ jest.mock('@probelabs/probe', () => ({
 jest.mock('../../../src/agent-protocol/trace-serializer', () => ({
   findTraceFile: jest.fn().mockResolvedValue(null),
   fetchTraceSpans: jest.fn().mockResolvedValue([]),
-  serializeTraceForPrompt: jest.fn().mockResolvedValue('(no trace data available)'),
+  buildTraceReport: jest.fn().mockResolvedValue(null),
 }));
 
 import {
@@ -24,7 +24,7 @@ import {
   evaluateAndStore,
   type TaskEvaluationResult,
 } from '../../../src/agent-protocol/task-evaluator';
-import { serializeTraceForPrompt } from '../../../src/agent-protocol/trace-serializer';
+import { buildTraceReport } from '../../../src/agent-protocol/trace-serializer';
 
 // ---------------------------------------------------------------------------
 // Mock task store
@@ -86,7 +86,7 @@ function createMockStore(taskData: {
 describe('evaluateTask', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (serializeTraceForPrompt as jest.Mock).mockResolvedValue('(no trace data available)');
+    (buildTraceReport as jest.Mock).mockResolvedValue(null);
   });
 
   const sampleEvalResult: TaskEvaluationResult = {
@@ -146,9 +146,18 @@ describe('evaluateTask', () => {
   });
 
   it('includes trace in prompt when available', async () => {
-    (serializeTraceForPrompt as jest.Mock).mockResolvedValue(
-      'visor.run (5.0s)\n└── check-a (2.0s)'
-    );
+    (buildTraceReport as jest.Mock).mockResolvedValue({
+      traceData: {
+        spans: [],
+        source: 'file',
+        remoteTraceId: 'trace-abc',
+        localTracePath: undefined,
+      },
+      taskSummary: null,
+      headerText: 'Trace source: file\nTasks: no task telemetry found in this trace',
+      tree: 'visor.run (5.0s)\n└── check-a (2.0s)',
+      text: 'Trace source: file\nTasks: no task telemetry found in this trace\n\nvisor.run (5.0s)\n└── check-a (2.0s)',
+    });
 
     const evalWithExec: TaskEvaluationResult = {
       ...sampleEvalResult,
@@ -170,8 +179,7 @@ describe('evaluateTask', () => {
 
     const result = await evaluateTask('task-003', store as any);
 
-    // Verify serializeTraceForPrompt called with full mode and task response
-    expect(serializeTraceForPrompt).toHaveBeenCalledWith(
+    expect(buildTraceReport).toHaveBeenCalledWith(
       'trace-abc',
       1_000_000,
       expect.objectContaining({}),
@@ -185,6 +193,7 @@ describe('evaluateTask', () => {
     // Verify trace is in XML tags, no separate agent_response
     const prompt = mockAnswer.mock.calls[0][0];
     expect(prompt).toContain('<execution_trace>');
+    expect(prompt).toContain('Trace source: file');
     expect(prompt).toContain('visor.run (5.0s)');
     expect(prompt).toContain('</execution_trace>');
     expect(prompt).not.toContain('<agent_response>');
@@ -246,7 +255,7 @@ describe('evaluateTask', () => {
 describe('evaluateAndStore', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (serializeTraceForPrompt as jest.Mock).mockResolvedValue('(no trace data available)');
+    (buildTraceReport as jest.Mock).mockResolvedValue(null);
   });
 
   it('stores evaluation result as artifact', async () => {
@@ -303,7 +312,7 @@ describe('provider/model resolution', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (serializeTraceForPrompt as jest.Mock).mockResolvedValue('(no trace data available)');
+    (buildTraceReport as jest.Mock).mockResolvedValue(null);
     mockAnswer.mockResolvedValue(JSON.stringify(sampleResult));
     delete process.env.VISOR_EVAL_MODEL;
     delete process.env.VISOR_EVAL_PROVIDER;

@@ -1377,6 +1377,11 @@ export class CustomToolsSSEServer implements CustomMCPServer {
       if (authType === 'bearer' && tool.auth.token) {
         const token = String(EnvironmentResolver.resolveValue(tool.auth.token));
         resolvedHeaders['Authorization'] = `Bearer ${token}`;
+      } else if (authType === 'oauth2_client_credentials' && tool.auth.token_url) {
+        const { OAuth2TokenCache } = await import('../utils/oauth2-token-cache');
+        const tokenCache = OAuth2TokenCache.getInstance();
+        const token = await tokenCache.getToken(tool.auth as any);
+        resolvedHeaders['Authorization'] = `Bearer ${token}`;
       }
     }
 

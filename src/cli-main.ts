@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 
+// Register global handler for transient child-process I/O errors (EIO, EPIPE)
+// before any other code runs so broken pipes from MCP servers etc. don't crash
+// the process.
+import './utils/child-process-error-handler';
+
 // Load environment variables from .env file (override existing to allow .env to take precedence)
 import * as dotenv from 'dotenv';
 dotenv.config({ override: true, quiet: true });
@@ -1833,6 +1838,8 @@ export async function main(): Promise<void> {
           logger.info('[Watch] Config updated');
         },
       });
+      const { SessionRegistry } = await import('./session-registry');
+      const sessionRegistry = SessionRegistry.getInstance();
 
       // Unified graceful shutdown
       let shuttingDown = false;
@@ -1850,6 +1857,7 @@ export async function main(): Promise<void> {
         forceTimer.unref();
         try {
           await configReloadRuntime.cleanup();
+          await sessionRegistry.clearAllSessions();
           await host.stopAll();
           if (sharedTaskStore) {
             try {
@@ -2664,7 +2672,7 @@ export async function main(): Promise<void> {
       logger.debug(
         `🧹 Cleaning up ${sessionRegistry.getActiveSessionIds().length} active AI sessions...`
       );
-      sessionRegistry.clearAllSessions();
+      await sessionRegistry.clearAllSessions();
     }
 
     // Force exit to prevent hanging from unclosed resources (MCP connections, etc.)

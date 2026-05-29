@@ -135,6 +135,9 @@ export async function renderMermaidToPng(mermaidCode: string): Promise<Buffer | 
       proc.stderr?.on('data', data => {
         stderr += data.toString();
       });
+      // Prevent EIO errors on stderr from becoming uncaught exceptions
+      proc.stderr?.on('error', () => {});
+      proc.stdout?.on('error', () => {});
 
       proc.on('close', code => {
         if (code === 0) {

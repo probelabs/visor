@@ -35,6 +35,8 @@ export interface TraceBackendConfig {
   traceDir?: string;
   /** Auth token for remote APIs */
   authToken?: string;
+  /** Optional trace ID to filter mixed local NDJSON files down to a single trace */
+  targetTraceId?: string;
 }
 
 type TraceBackendKind = Exclude<TraceBackendConfig['type'], 'auto'>;
@@ -49,6 +51,7 @@ function resolveBackendConfig(overrides?: Partial<TraceBackendConfig>): TraceBac
     jaegerUrl: overrides?.jaegerUrl || process.env.JAEGER_URL,
     traceDir: overrides?.traceDir || process.env.VISOR_TRACE_DIR || 'output/traces',
     authToken: overrides?.authToken || process.env.GRAFANA_TOKEN,
+    targetTraceId: overrides?.targetTraceId,
   };
 }
 
@@ -82,7 +85,7 @@ function isTraceFilePath(ref: string): boolean {
 // Unified span type (normalized from all backends)
 // ---------------------------------------------------------------------------
 
-interface NormalizedSpan {
+export interface NormalizedSpan {
   traceId: string;
   spanId: string;
   parentSpanId?: string;
@@ -98,6 +101,46 @@ interface NormalizedSpan {
 interface SpanTree {
   span: NormalizedSpan;
   children: SpanTree[];
+}
+
+export interface ResolvedTraceData {
+  spans: NormalizedSpan[];
+  source: TraceBackendKind | null;
+  remoteTraceId?: string;
+  localTracePath?: string;
+}
+
+export interface ProbeTaskSummaryItem {
+  id: string;
+  title: string;
+  status: string;
+  synthetic?: boolean;
+}
+
+export interface ProbeTaskScopeSummary {
+  label: string;
+  source: 'snapshot' | 'events';
+  eventCount: number;
+  snapshotCount: number;
+  tasks: ProbeTaskSummaryItem[];
+  children: ProbeTaskScopeSummary[];
+}
+
+export interface ProbeTaskSummary {
+  tasksEnabled: boolean;
+  source: 'snapshot' | 'events';
+  eventCount: number;
+  snapshotCount: number;
+  tasks: ProbeTaskSummaryItem[];
+  scopes: ProbeTaskScopeSummary[];
+}
+
+export interface TraceReport {
+  traceData: ResolvedTraceData;
+  tree: string;
+  taskSummary: ProbeTaskSummary | null;
+  headerText: string;
+  text: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +344,72 @@ export async function fetchTraceSpans(
   return [];
 }
 
+export async function resolveTraceSpans(
+  traceIdOrPath: string,
+  backendConfig?: Partial<TraceBackendConfig>,
+  fallbackTraceId?: string
+): Promise<ResolvedTraceData> {
+  const cfg = resolveBackendConfig(backendConfig);
+  const backendOrder = getBackendOrder(cfg);
+  const isFilePath = isTraceFilePath(traceIdOrPath);
+  const localTracePath = isFilePath ? traceIdOrPath : undefined;
+  const remoteTraceId =
+    fallbackTraceId ||
+    (!isFilePath ? traceIdOrPath : (await readTraceIdFromFile(traceIdOrPath)) || undefined);
+  const preferLocalFirst = backendOrder[0] === 'file';
+
+  logger.debug(
+    `[TraceSerializer] serializeTraceForPrompt ref=${traceIdOrPath} remoteTraceId=${remoteTraceId || '-'} backendOrder=${backendOrder.join('>')}`
+  );
+
+  if (preferLocalFirst && localTracePath) {
+    logger.debug(`[TraceSerializer] Trying local trace file first: ${localTracePath}`);
+    const spans = await fetchTraceSpans(localTracePath, {
+      ...cfg,
+      type: 'file',
+      targetTraceId: remoteTraceId,
+    });
+    if (spans.length > 0) {
+      return { spans, source: 'file', remoteTraceId, localTracePath };
+    }
+  }
+
+  if (remoteTraceId) {
+    logger.debug(`[TraceSerializer] Trying remote trace backends for trace_id=${remoteTraceId}`);
+    const remoteCfg = resolveBackendConfig(backendConfig);
+    const remoteOrder = getBackendOrder(remoteCfg).filter(kind => kind !== 'file');
+    for (const backend of remoteOrder) {
+      if (backend === 'grafana') {
+        const spans = await fetchFromGrafanaTempo(remoteTraceId, remoteCfg);
+        if (spans && spans.length > 0) {
+          return { spans, source: 'grafana', remoteTraceId, localTracePath };
+        }
+        continue;
+      }
+      if (backend === 'jaeger') {
+        const spans = await fetchFromJaeger(remoteTraceId, remoteCfg);
+        if (spans && spans.length > 0) {
+          return { spans, source: 'jaeger', remoteTraceId, localTracePath };
+        }
+      }
+    }
+  }
+
+  if (localTracePath) {
+    logger.debug(`[TraceSerializer] Falling back to local trace file: ${localTracePath}`);
+    const spans = await fetchTraceSpans(localTracePath, {
+      ...cfg,
+      type: 'file',
+      targetTraceId: remoteTraceId,
+    });
+    if (spans.length > 0) {
+      return { spans, source: 'file', remoteTraceId, localTracePath };
+    }
+  }
+
+  return { spans: [], source: null, remoteTraceId, localTracePath };
+}
+
 async function fetchFromGrafanaTempo(
   traceId: string,
   cfg: TraceBackendConfig
@@ -399,9 +508,35 @@ async function fetchFromLocalFiles(
   if (!traceFile) return null;
 
   try {
-    const { parseNDJSONTrace } = await import('../debug-visualizer/trace-reader');
-    const trace = await parseNDJSONTrace(traceFile);
-    return parseLocalNDJSONSpans(trace.spans as any[]);
+    const targetTraceId =
+      cfg.targetTraceId ||
+      (!isTraceFilePath(traceRef) ? traceRef : (await readTraceIdFromFile(traceFile)) || undefined);
+
+    const rawSpans: any[] = [];
+    const rl = readline.createInterface({
+      input: fs.createReadStream(traceFile, { encoding: 'utf8' }),
+      crlfDelay: Infinity,
+    });
+
+    try {
+      for await (const line of rl) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (!targetTraceId || parsed.traceId === targetTraceId) {
+            rawSpans.push(parsed);
+          }
+        } catch {
+          // skip malformed records
+        }
+      }
+    } finally {
+      rl.close();
+    }
+
+    if (rawSpans.length === 0) return [];
+    return parseLocalNDJSONSpans(rawSpans);
   } catch (err) {
     logger.debug(`[TraceSerializer] Local file parse failed: ${err}`);
     return null;
@@ -453,10 +588,23 @@ export async function findTraceFile(traceId: string, traceDir?: string): Promise
   for (const file of files) {
     const filePath = path.join(dir, file);
     try {
-      const firstLine = await readFirstLine(filePath);
-      if (!firstLine) continue;
-      const parsed = JSON.parse(firstLine);
-      if (parsed.traceId === traceId) return filePath;
+      const rl = readline.createInterface({
+        input: fs.createReadStream(filePath, { encoding: 'utf8' }),
+        crlfDelay: Infinity,
+      });
+
+      try {
+        for await (const line of rl) {
+          if (!line.trim()) continue;
+          const parsed = JSON.parse(line);
+          if (parsed.traceId === traceId) {
+            rl.close();
+            return filePath;
+          }
+        }
+      } finally {
+        rl.close();
+      }
     } catch {
       // skip malformed files
     }
@@ -490,26 +638,6 @@ export async function readTraceIdFromFile(traceFile: string): Promise<string | n
   }
 
   return null;
-}
-
-async function readFirstLine(filePath: string): Promise<string | null> {
-  return new Promise((resolve, reject) => {
-    const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
-    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-    let resolved = false;
-    rl.on('line', (line: string) => {
-      if (!resolved) {
-        resolved = true;
-        rl.close();
-        stream.destroy();
-        resolve(line.trim() || null);
-      }
-    });
-    rl.on('close', () => {
-      if (!resolved) resolve(null);
-    });
-    rl.on('error', reject);
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -676,6 +804,12 @@ interface LifecycleSpanInfo {
   kind: 'check' | 'sandbox-child' | 'generic' | 'engineer';
 }
 
+interface ParsedTaskStatusItem {
+  id: string;
+  status: string;
+  title: string;
+}
+
 /** Normalize text for dedup comparison: lowercase, collapse whitespace, take prefix */
 function dedupeKey(text: string): string {
   return text.replace(/\s+/g, ' ').trim().slice(0, 100).toLowerCase();
@@ -789,6 +923,563 @@ function getLifecycleSpanInfo(name: string): LifecycleSpanInfo | null {
   return null;
 }
 
+function parseTaskStatusSnapshot(raw: string): ParsedTaskStatusItem[] {
+  if (!raw || !raw.includes('<task_status>')) return [];
+
+  const items: ParsedTaskStatusItem[] = [];
+  const taskRegex =
+    /<task\s+id="([^"]+)"\s+status="([^"]+)"(?:\s+priority="[^"]*")?>([\s\S]*?)<\/task>/g;
+
+  let match: RegExpExecArray | null;
+  while ((match = taskRegex.exec(raw)) !== null) {
+    items.push({
+      id: match[1],
+      status: match[2],
+      title: match[3].replace(/\s+/g, ' ').trim(),
+    });
+  }
+
+  return items;
+}
+
+function parseTaskIds(value: unknown): string[] {
+  if (!value) return [];
+  return String(value)
+    .split(',')
+    .map(part => part.trim())
+    .filter(Boolean);
+}
+
+/** Parse task.items_json from enriched batch events (probe rc313+). */
+function parseBatchItemsJson(
+  value: unknown
+): Array<{ id: string; title?: string; status?: string }> {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(String(value));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item: any) => item && typeof item.id === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function isTaskTelemetrySpan(span: NormalizedSpan): boolean {
+  const toolName = span.attributes['tool.name'] || span.attributes['visor.tool.name'];
+  if (toolName === 'task') return true;
+  return /(?:^probe\.event\.)?task\.[a-z_]+$/.test(normalizeSpanName(span.name));
+}
+
+function summarizeTaskTelemetrySpans(spans: NormalizedSpan[]): ProbeTaskSummary | null {
+  const ordered = [...spans].sort((a, b) => {
+    if (a.startTimeMs !== b.startTimeMs) return a.startTimeMs - b.startTimeMs;
+    if (a.endTimeMs !== b.endTimeMs) return a.endTimeMs - b.endTimeMs;
+    return a.spanId.localeCompare(b.spanId);
+  });
+
+  const tasks = new Map<string, ProbeTaskSummaryItem>();
+  let tasksEnabled = false;
+  let snapshotCount = 0;
+  let eventCount = 0;
+  let sawSnapshot = false;
+
+  const upsertTask = (id: string, patch: Partial<ProbeTaskSummaryItem>) => {
+    const existing = tasks.get(id) || { id, title: '', status: 'pending' };
+    const next: ProbeTaskSummaryItem = {
+      id,
+      title: patch.title ?? existing.title,
+      status: patch.status ?? existing.status,
+    };
+    tasks.set(id, next);
+  };
+
+  for (const span of ordered) {
+    const name = normalizeSpanName(span.name);
+    const attrs = span.attributes;
+
+    const toolName = attrs['tool.name'] || attrs['visor.tool.name'];
+    if (toolName === 'task') {
+      const snapshot = parseTaskStatusSnapshot(String(attrs['tool.result'] || ''));
+      if (snapshot.length > 0) {
+        tasksEnabled = true;
+        snapshotCount += 1;
+        sawSnapshot = true;
+        tasks.clear();
+        for (const task of snapshot) {
+          tasks.set(task.id, {
+            id: task.id,
+            title: task.title,
+            status: task.status,
+          });
+        }
+      }
+    }
+
+    const taskEventMatch = name.match(/(?:^probe\.event\.)?task\.([a-z_]+)$/);
+    if (!taskEventMatch) continue;
+
+    tasksEnabled = true;
+    eventCount += 1;
+
+    const eventType = taskEventMatch[1];
+    const taskId = attrs['task.id'] ? String(attrs['task.id']) : '';
+    const taskTitle = attrs['task.title'] ? String(attrs['task.title']).trim() : '';
+    const newStatus = attrs['task.new_status'] ? String(attrs['task.new_status']) : '';
+    const taskIds = parseTaskIds(attrs['task.ids']);
+
+    switch (eventType) {
+      case 'created':
+        if (taskId) upsertTask(taskId, { title: taskTitle, status: 'pending' });
+        break;
+      case 'updated':
+        if (taskId) {
+          upsertTask(taskId, {
+            title: taskTitle || undefined,
+            status: newStatus && newStatus !== 'unchanged' ? newStatus : undefined,
+          });
+        }
+        break;
+      case 'completed':
+        if (taskId) upsertTask(taskId, { title: taskTitle || undefined, status: 'completed' });
+        break;
+      case 'deleted':
+        if (taskId) upsertTask(taskId, { title: taskTitle || undefined, status: 'deleted' });
+        break;
+      case 'batch_created': {
+        const items = parseBatchItemsJson(attrs['task.items_json']);
+        if (items.length > 0) {
+          for (const item of items)
+            upsertTask(item.id, { title: item.title || '', status: item.status || 'pending' });
+        } else {
+          for (const id of taskIds) upsertTask(id, { status: 'pending' });
+        }
+        break;
+      }
+      case 'batch_updated': {
+        const items = parseBatchItemsJson(attrs['task.items_json']);
+        if (items.length > 0) {
+          for (const item of items)
+            upsertTask(item.id, {
+              title: item.title || undefined,
+              status: item.status || undefined,
+            });
+        } else {
+          for (const id of taskIds) {
+            upsertTask(id, {
+              status: newStatus && newStatus !== 'unchanged' ? newStatus : undefined,
+            });
+          }
+        }
+        break;
+      }
+      case 'batch_completed': {
+        const items = parseBatchItemsJson(attrs['task.items_json']);
+        if (items.length > 0) {
+          for (const item of items)
+            upsertTask(item.id, { title: item.title || undefined, status: 'completed' });
+        } else {
+          for (const id of taskIds) upsertTask(id, { status: 'completed' });
+        }
+        break;
+      }
+      case 'batch_deleted': {
+        const items = parseBatchItemsJson(attrs['task.items_json']);
+        if (items.length > 0) {
+          for (const item of items)
+            upsertTask(item.id, { title: item.title || undefined, status: 'deleted' });
+        } else {
+          for (const id of taskIds) upsertTask(id, { status: 'deleted' });
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  if (!tasksEnabled) return null;
+
+  return {
+    tasksEnabled,
+    source: sawSnapshot ? 'snapshot' : 'events',
+    eventCount,
+    snapshotCount,
+    tasks: [...tasks.values()].sort((a, b) => a.id.localeCompare(b.id)),
+    scopes: [],
+  };
+}
+
+const ROOT_TASK_SCOPE_LABEL = 'Main Agent';
+const TASK_SCOPE_EXCLUDED_CHECKS = new Set([
+  'chat',
+  'route-intent',
+  'classify',
+  'build-config',
+  'generate-response',
+  'setup-projects',
+  'checkout-docs',
+  'route-projects',
+  'project-items',
+  'checkout-projects',
+]);
+
+function titleCaseWords(raw: string): string {
+  return raw
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+function getTaskScopeCheckId(span: NormalizedSpan): string | null {
+  const concreteName = getConcreteCheckName(span);
+  if (!concreteName) return null;
+  return concreteName.replace(/^visor\.check\./, '');
+}
+
+function isTaskScopeNode(span: NormalizedSpan): boolean {
+  const checkId = getTaskScopeCheckId(span);
+  if (checkId) return !TASK_SCOPE_EXCLUDED_CHECKS.has(checkId);
+  const normalized = normalizeSpanName(span.name);
+  return normalized === 'search.delegate' || normalized.startsWith('engineer.');
+}
+
+function getTaskScopeLabel(span?: NormalizedSpan): string {
+  if (!span) return ROOT_TASK_SCOPE_LABEL;
+  const checkId = getTaskScopeCheckId(span);
+  if (checkId) {
+    if (checkId === 'explore-code') return 'Code Explorer';
+    return titleCaseWords(checkId);
+  }
+  const normalized = normalizeSpanName(span.name);
+  if (normalized === 'search.delegate') return 'Search Delegate';
+  if (normalized.startsWith('engineer.')) {
+    return `Engineer ${titleCaseWords(normalized.slice('engineer.'.length))}`;
+  }
+  return titleCaseWords(normalized);
+}
+
+function collectTaskSpansForScope(node: SpanTree, stopAtNestedScopes: boolean): NormalizedSpan[] {
+  const spans: NormalizedSpan[] = [];
+  const visit = (current: SpanTree, isRoot: boolean) => {
+    if (!isRoot && stopAtNestedScopes && isTaskScopeNode(current.span)) return;
+    if (isTaskTelemetrySpan(current.span)) spans.push(current.span);
+    for (const child of current.children) visit(child, false);
+  };
+  visit(node, true);
+  return spans;
+}
+
+function findImmediateNestedTaskScopeNodes(node: SpanTree): SpanTree[] {
+  const scopes: SpanTree[] = [];
+  const visit = (current: SpanTree, isRoot: boolean) => {
+    if (!isRoot && isTaskScopeNode(current.span)) {
+      scopes.push(current);
+      return;
+    }
+    for (const child of current.children) visit(child, false);
+  };
+  visit(node, true);
+  return scopes;
+}
+
+/** Checks IDs whose scopes should show a single synthesized task item
+ * from tool calls instead of their internal task.* event noise. */
+const SUB_AGENT_SCOPE_CHECKS = new Set(['engineer-task', 'explore-code']);
+
+function isSubAgentScope(span: NormalizedSpan): boolean {
+  const checkId = getTaskScopeCheckId(span);
+  if (checkId && SUB_AGENT_SCOPE_CHECKS.has(checkId)) return true;
+  const normalized = normalizeSpanName(span.name);
+  return normalized.startsWith('engineer.') || normalized === 'search.delegate';
+}
+
+// Note: when probelabs/probe#550 lands, task events will carry full agent scope
+// fields (agent.session_id, agent.parent_session_id) and proper titles, enabling
+// proper nested task tree reconstruction without relying on span ancestry.
+
+/** Determine the completion status of a sub-agent scope from its span lifecycle. */
+function getSubAgentStatus(node: SpanTree): string {
+  const normalized = normalizeSpanName(node.span.name);
+  if (normalized.endsWith('.completed')) return 'completed';
+  if (normalized.endsWith('.started') || normalized.endsWith('.progress')) return 'in_progress';
+  // Check children for completed/progress events
+  let hasCompleted = false;
+  let hasProgress = false;
+  const visit = (current: SpanTree) => {
+    const n = normalizeSpanName(current.span.name);
+    if (n.endsWith('.completed')) hasCompleted = true;
+    if (n.endsWith('.progress')) hasProgress = true;
+    for (const child of current.children) visit(child);
+  };
+  visit(node);
+  if (hasCompleted) return 'completed';
+  if (hasProgress) return 'in_progress';
+  return 'pending';
+}
+
+function buildProbeTaskScopeSummary(
+  node: SpanTree,
+  label: string,
+  isRootScope = false,
+  allSpans?: NormalizedSpan[]
+): ProbeTaskScopeSummary | null {
+  const nestedScopeNodes = findImmediateNestedTaskScopeNodes(node);
+
+  // For sub-agent scopes, check if they have meaningful task titles from
+  // task snapshots. If not, synthesize a description from tool calls.
+  if (!isRootScope && isSubAgentScope(node.span)) {
+    const localTasks = summarizeTaskTelemetrySpans(collectTaskSpansForScope(node, true));
+    const hasMeaningfulTitles =
+      localTasks &&
+      localTasks.tasks.some(
+        t => t.title && t.title.length > 3 && !/^(task|engineer|code.?explorer)\s*/i.test(t.title)
+      );
+
+    if (hasMeaningfulTitles) {
+      // Sub-agent has proper task titles from task tool — use them
+      return {
+        label: isRootScope ? ROOT_TASK_SCOPE_LABEL : label,
+        source: localTasks!.source,
+        eventCount: localTasks!.eventCount,
+        snapshotCount: localTasks!.snapshotCount,
+        tasks: localTasks!.tasks,
+        children: [],
+      };
+    }
+
+    // No meaningful task tool titles — show scope as a single status line
+    const status = getSubAgentStatus(node);
+    const scopeLabel = getTaskScopeLabel(node.span);
+
+    return {
+      label: isRootScope ? ROOT_TASK_SCOPE_LABEL : label,
+      source: 'events',
+      eventCount: 0,
+      snapshotCount: 0,
+      tasks: [{ id: `__scope_${node.span.spanId}`, title: scopeLabel, status, synthetic: true }],
+      children: [],
+    };
+  }
+
+  const local = summarizeTaskTelemetrySpans(collectTaskSpansForScope(node, true));
+
+  // For children that are sub-agent scopes, group repeated iterations
+  // (e.g., 13 engineer-task iterations) into a compact list
+  const children: ProbeTaskScopeSummary[] = [];
+  const subAgentGroups = new Map<string, SpanTree[]>();
+  const nonSubAgentNodes: SpanTree[] = [];
+
+  for (const child of nestedScopeNodes) {
+    if (isSubAgentScope(child.span)) {
+      const checkId = getTaskScopeCheckId(child.span) || normalizeSpanName(child.span.name);
+      const group = subAgentGroups.get(checkId) || [];
+      group.push(child);
+      subAgentGroups.set(checkId, group);
+    } else {
+      nonSubAgentNodes.push(child);
+    }
+  }
+
+  // Render non-sub-agent children normally
+  for (const child of nonSubAgentNodes) {
+    const childScope = buildProbeTaskScopeSummary(
+      child,
+      getTaskScopeLabel(child.span),
+      false,
+      allSpans
+    );
+    if (childScope) children.push(childScope);
+  }
+
+  // Render sub-agent groups as a single scope with one task per iteration.
+  // If a sub-agent has proper task titles (from task tool snapshots), use those.
+  for (const [checkId, nodes] of subAgentGroups) {
+    const scopeLabel =
+      checkId === 'engineer-task'
+        ? 'Engineer'
+        : checkId === 'explore-code'
+          ? 'Code Explorer'
+          : titleCaseWords(checkId);
+    const tasks: ProbeTaskSummaryItem[] = [];
+    for (const n of nodes) {
+      // Check if this iteration has meaningful task titles from the task tool
+      const iterScope = buildProbeTaskScopeSummary(n, scopeLabel, false, allSpans);
+      if (iterScope && iterScope.tasks.length > 0) {
+        tasks.push(...iterScope.tasks);
+      } else {
+        const status = getSubAgentStatus(n);
+        tasks.push({
+          id: `__scope_${n.span.spanId}`,
+          title: scopeLabel,
+          status,
+          synthetic: true,
+        });
+      }
+    }
+    // Deduplicate consecutive identical titles
+    const dedupedTasks: ProbeTaskSummaryItem[] = [];
+    for (const task of tasks) {
+      const prev = dedupedTasks[dedupedTasks.length - 1];
+      if (prev && prev.title === task.title && prev.status === task.status) continue;
+      dedupedTasks.push(task);
+    }
+    children.push({
+      label: scopeLabel,
+      source: 'events',
+      eventCount: nodes.length,
+      snapshotCount: 0,
+      tasks: dedupedTasks,
+      children: [],
+    });
+  }
+
+  if (!local && children.length === 0) return null;
+
+  return {
+    label: isRootScope ? ROOT_TASK_SCOPE_LABEL : label,
+    source: local?.source ?? 'events',
+    eventCount: local?.eventCount ?? 0,
+    snapshotCount: local?.snapshotCount ?? 0,
+    tasks: local?.tasks ?? [],
+    children,
+  };
+}
+
+function buildTaskSummaryRoot(spans: NormalizedSpan[]): SpanTree {
+  const nodeMap = new Map<string, SpanTree>();
+  for (const span of spans) {
+    nodeMap.set(span.spanId, { span, children: [] });
+  }
+
+  const roots: SpanTree[] = [];
+  for (const span of spans) {
+    const node = nodeMap.get(span.spanId)!;
+    if (span.parentSpanId && nodeMap.has(span.parentSpanId)) {
+      nodeMap.get(span.parentSpanId)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  const sortChildren = (node: SpanTree) => {
+    node.children.sort((a, b) => a.span.startTimeMs - b.span.startTimeMs);
+    node.children.forEach(sortChildren);
+  };
+  roots.forEach(sortChildren);
+
+  return {
+    span: {
+      traceId: spans[0]?.traceId || '',
+      spanId: '__task-root__',
+      name: '__task_root__',
+      startTimeMs: roots[0]?.span.startTimeMs || 0,
+      endTimeMs: roots[roots.length - 1]?.span.endTimeMs || 0,
+      durationMs: 0,
+      attributes: {},
+      events: [],
+      status: 'ok',
+    },
+    children: roots,
+  };
+}
+
+function flattenTaskScopes(scopes: ProbeTaskScopeSummary[]): ProbeTaskSummaryItem[] {
+  const seen = new Set<string>();
+  const items: ProbeTaskSummaryItem[] = [];
+  const visit = (scope: ProbeTaskScopeSummary) => {
+    for (const task of scope.tasks) {
+      if (task.synthetic) continue;
+      if (seen.has(task.id)) continue;
+      seen.add(task.id);
+      items.push(task);
+    }
+    for (const child of scope.children) visit(child);
+  };
+  for (const scope of scopes) visit(scope);
+  return items;
+}
+
+function buildTemporalTaskScopes(spans: NormalizedSpan[]): ProbeTaskScopeSummary[] {
+  const ordered = [...spans].sort((a, b) => {
+    if (a.startTimeMs !== b.startTimeMs) return a.startTimeMs - b.startTimeMs;
+    if (a.endTimeMs !== b.endTimeMs) return a.endTimeMs - b.endTimeMs;
+    return a.spanId.localeCompare(b.spanId);
+  });
+
+  const grouped = new Map<string, NormalizedSpan[]>();
+  const scopeOrder: string[] = [];
+  const ensureGroup = (label: string) => {
+    if (!grouped.has(label)) {
+      grouped.set(label, []);
+      scopeOrder.push(label);
+    }
+    return grouped.get(label)!;
+  };
+
+  for (let i = 0; i < ordered.length; i += 1) {
+    const span = ordered[i];
+    if (!isTaskTelemetrySpan(span)) continue;
+
+    let label = ROOT_TASK_SCOPE_LABEL;
+    for (let j = i - 1; j >= 0; j -= 1) {
+      if (isTaskScopeNode(ordered[j])) {
+        label = getTaskScopeLabel(ordered[j]);
+        break;
+      }
+    }
+    ensureGroup(label).push(span);
+  }
+
+  if (grouped.size === 0) return [];
+
+  const rootSummary = summarizeTaskTelemetrySpans(grouped.get(ROOT_TASK_SCOPE_LABEL) || []);
+  const children: ProbeTaskScopeSummary[] = [];
+  for (const label of scopeOrder) {
+    if (label === ROOT_TASK_SCOPE_LABEL) continue;
+    const summary = summarizeTaskTelemetrySpans(grouped.get(label) || []);
+    if (!summary) continue;
+    children.push({
+      label,
+      source: summary.source,
+      eventCount: summary.eventCount,
+      snapshotCount: summary.snapshotCount,
+      tasks: summary.tasks,
+      children: [],
+    });
+  }
+
+  return [
+    {
+      label: ROOT_TASK_SCOPE_LABEL,
+      source: rootSummary?.source ?? 'events',
+      eventCount: rootSummary?.eventCount ?? 0,
+      snapshotCount: rootSummary?.snapshotCount ?? 0,
+      tasks: rootSummary?.tasks ?? [],
+      children,
+    },
+  ];
+}
+
+function formatTaskStatusMarker(status: string): string {
+  switch (status) {
+    case 'completed':
+      return '[x]';
+    case 'in_progress':
+      return '[~]';
+    case 'blocked':
+    case 'failed':
+    case 'error':
+      return '[!]';
+    case 'cancelled':
+    case 'canceled':
+    case 'deleted':
+      return '[-]';
+    default:
+      return '[ ]';
+  }
+}
+
 function buildRenderContext(allSpans: NormalizedSpan[]): TraceRenderContext {
   const realSpanNames = new Set<string>();
   let hasChildWorkSpans = false;
@@ -834,34 +1525,7 @@ export async function serializeTraceForPrompt(
   /** Trace ID to try remote backends first (preferred over local file) */
   fallbackTraceId?: string
 ): Promise<string> {
-  let spans: NormalizedSpan[] = [];
-  const cfg = resolveBackendConfig(backendConfig);
-  const backendOrder = getBackendOrder(cfg);
-  const isFilePath = isTraceFilePath(traceIdOrPath);
-  const localTracePath = isFilePath ? traceIdOrPath : undefined;
-  const remoteTraceId =
-    fallbackTraceId ||
-    (!isFilePath ? traceIdOrPath : (await readTraceIdFromFile(traceIdOrPath)) || undefined);
-  const preferLocalFirst = backendOrder[0] === 'file';
-
-  logger.debug(
-    `[TraceSerializer] serializeTraceForPrompt ref=${traceIdOrPath} remoteTraceId=${remoteTraceId || '-'} backendOrder=${backendOrder.join('>')}`
-  );
-
-  if (preferLocalFirst && localTracePath) {
-    logger.debug(`[TraceSerializer] Trying local trace file first: ${localTracePath}`);
-    spans = await fetchTraceSpans(localTracePath, { ...cfg, type: 'file' });
-  }
-
-  if (spans.length === 0 && remoteTraceId) {
-    logger.debug(`[TraceSerializer] Trying remote trace backends for trace_id=${remoteTraceId}`);
-    spans = await fetchTraceSpans(remoteTraceId, cfg);
-  }
-
-  if (spans.length === 0 && localTracePath) {
-    logger.debug(`[TraceSerializer] Falling back to local trace file: ${localTracePath}`);
-    spans = await fetchTraceSpans(localTracePath, { ...cfg, type: 'file' });
-  }
+  const { spans } = await resolveTraceSpans(traceIdOrPath, backendConfig, fallbackTraceId);
 
   if (spans.length === 0) {
     return '(no trace data available)';
@@ -881,6 +1545,138 @@ export async function serializeTraceForPrompt(
     fullOutput,
     taskResponse,
   });
+}
+
+function renderTraceTreeFromSpans(
+  spans: NormalizedSpan[],
+  maxChars?: number,
+  taskResponse?: string
+): string {
+  const tree = buildSpanTree(spans);
+  const routeIntentTopic = extractRouteIntentTopic(spans);
+  const fullOutput = (maxChars ?? 4000) > 100000;
+
+  return renderSpanYaml(tree, spans, {
+    maxChars: maxChars ?? 4000,
+    fallbackIntent: routeIntentTopic,
+    fullOutput,
+    taskResponse,
+  });
+}
+
+function formatTaskStatus(status: string): string {
+  return status === 'completed'
+    ? '[x]'
+    : status === 'in_progress'
+      ? '[~]'
+      : status === 'blocked' || status === 'failed' || status === 'error'
+        ? '[!]'
+        : status === 'deleted' || status === 'cancelled' || status === 'canceled'
+          ? '[-]'
+          : '[ ]';
+}
+
+function formatTaskLabel(task: { id: string; title: string; status: string }): string {
+  const title = String(task.title || '').trim();
+  return title || task.id || task.status;
+}
+
+function scopeHasRenderableTasks(scope: ProbeTaskScopeSummary): boolean {
+  if (scope.tasks.some(task => !task.synthetic)) return true;
+  return scope.children.some(child => scopeHasRenderableTasks(child));
+}
+
+function appendTaskScopeLines(lines: string[], scope: ProbeTaskScopeSummary, depth = 0): void {
+  if (!scopeHasRenderableTasks(scope)) return;
+  const prefix = '  '.repeat(depth);
+  if (depth > 0 || scope.label !== ROOT_TASK_SCOPE_LABEL) {
+    lines.push(`${prefix}${scope.label}`);
+  }
+  for (const task of scope.tasks.filter(task => !task.synthetic)) {
+    lines.push(`${prefix}  ${formatTaskStatus(task.status)} ${formatTaskLabel(task)}`);
+  }
+  for (const child of scope.children) {
+    appendTaskScopeLines(lines, child, depth + 1);
+  }
+}
+
+export function buildTraceHeaderLines(
+  traceData: ResolvedTraceData,
+  taskSummary: ProbeTaskSummary | null
+): string[] {
+  const lines = [`Trace source: ${traceData.source || 'unknown'}`];
+  if (!taskSummary || taskSummary.tasks.length === 0) {
+    lines.push('Tasks: no task telemetry found in this trace');
+    return lines;
+  }
+
+  const eventsSuffix =
+    taskSummary.snapshotCount > 0
+      ? `, ${taskSummary.eventCount} task events, ${taskSummary.snapshotCount} snapshots`
+      : `, ${taskSummary.eventCount} task events`;
+  lines.push(`Tasks: ${taskSummary.tasks.length} tracked (${taskSummary.source}${eventsSuffix})`);
+  if (taskSummary.scopes.length > 0) {
+    for (const scope of taskSummary.scopes) {
+      appendTaskScopeLines(lines, scope);
+    }
+  } else {
+    for (const task of taskSummary.tasks) {
+      lines.push(`  ${formatTaskStatus(task.status)} ${formatTaskLabel(task)}`);
+    }
+  }
+
+  return lines;
+}
+
+export async function buildTraceReport(
+  traceIdOrPath: string,
+  maxChars?: number,
+  backendConfig?: Partial<TraceBackendConfig>,
+  taskResponse?: string,
+  fallbackTraceId?: string
+): Promise<TraceReport | null> {
+  const traceData = await resolveTraceSpans(traceIdOrPath, backendConfig, fallbackTraceId);
+  if (traceData.spans.length === 0) {
+    return null;
+  }
+
+  const taskSummary = extractProbeTaskSummary(traceData.spans);
+  const headerLines = buildTraceHeaderLines(traceData, taskSummary);
+  const headerText = headerLines.join('\n');
+  const tree = renderTraceTreeFromSpans(traceData.spans, maxChars, taskResponse);
+
+  return {
+    traceData,
+    tree,
+    taskSummary,
+    headerText,
+    text: `${headerText}\n\n${tree}`,
+  };
+}
+
+export function extractProbeTaskSummary(spans: NormalizedSpan[]): ProbeTaskSummary | null {
+  const overall = summarizeTaskTelemetrySpans(spans);
+  if (!overall) return null;
+
+  const rootScope = buildProbeTaskScopeSummary(
+    buildTaskSummaryRoot(spans),
+    ROOT_TASK_SCOPE_LABEL,
+    true,
+    spans
+  );
+  let scopes = rootScope ? [rootScope] : [];
+  if (scopes.length === 0 || scopes[0].children.length === 0) {
+    const temporalScopes = buildTemporalTaskScopes(spans);
+    if (temporalScopes.length > 0 && temporalScopes[0].children.length > 0) {
+      scopes = temporalScopes;
+    }
+  }
+
+  return {
+    ...overall,
+    tasks: scopes.length > 0 ? flattenTaskScopes(scopes) : overall.tasks,
+    scopes,
+  };
 }
 
 /**
@@ -1061,6 +1857,20 @@ function renderYamlNode(
     const toolInput = extractToolInput(String(toolName), attrs);
     const toolResultLen = attrs['tool.result.length'] || attrs['tool.result.count'];
     const tn = String(toolName);
+    const taskSnapshot =
+      tn === 'task' ? parseTaskStatusSnapshot(String(attrs['tool.result'] || '')) : [];
+    if (tn === 'task' && taskSnapshot.length > 0) {
+      lines.push(`${pad}tasks snapshot${childSuffix}:`);
+      for (const task of taskSnapshot) {
+        lines.push(
+          `${pad}  ${formatTaskStatusMarker(task.status)} ${task.id}: ${truncate(task.title, 100)}`
+        );
+      }
+      return;
+    }
+    if (tn === 'task') {
+      return;
+    }
     // Detect "no results" for search tools: probe header is ~350-450 chars,
     // so result.length < 500 for search means no actual matches
     const isSearchTool = tn === 'search' || tn === 'searchCode' || tn === 'search_code';
@@ -1082,10 +1892,12 @@ function renderYamlNode(
     const action = attrs['dedup.action'] || '?';
     const reason = attrs['dedup.reason'] || '';
     const rewritten = attrs['dedup.rewritten'] || '';
+    const error = attrs['dedup.error'] || '';
     const prevCount = attrs['dedup.previous_count'] || '0';
     let detail = `${action}`;
     if (rewritten) detail += ` → "${truncate(String(rewritten), 60)}"`;
     if (reason) detail += ` (${truncate(String(reason), 80)})`;
+    if (error) detail += ` [error: ${truncate(String(error), 120)}]`;
     lines.push(
       `${pad}dedup("${truncate(String(query), 60)}") [${prevCount} prior]: ${detail} — ${duration}`
     );
@@ -1304,6 +2116,97 @@ function renderYamlNode(
       }
     }
     return;
+  }
+
+  // --- Probe task events ---
+  const taskEventMatch = name.match(/(?:^probe\.event\.)?task\.([a-z_]+)$/);
+  if (taskEventMatch) {
+    const eventType = taskEventMatch[1];
+    const taskId = attrs['task.id'] ? String(attrs['task.id']) : '';
+    const taskTitle = attrs['task.title'] ? truncate(String(attrs['task.title']), 80) : '';
+    const taskIds = attrs['task.ids'] ? truncate(String(attrs['task.ids']), 120) : '';
+    const count = attrs['task.count'] ? Number(attrs['task.count']) : undefined;
+    const totalCount = attrs['task.total_count'] ? Number(attrs['task.total_count']) : undefined;
+    const incompleteCount = attrs['task.incomplete_count']
+      ? Number(attrs['task.incomplete_count'])
+      : undefined;
+    const completedCount = attrs['task.completed_count']
+      ? Number(attrs['task.completed_count'])
+      : undefined;
+    const remaining = attrs['task.incomplete_remaining']
+      ? Number(attrs['task.incomplete_remaining'])
+      : undefined;
+    const newStatus = attrs['task.new_status'] ? String(attrs['task.new_status']) : '';
+    const fieldsUpdated = attrs['task.fields_updated']
+      ? truncate(String(attrs['task.fields_updated']), 80)
+      : '';
+    const error = attrs['task.error'] ? truncate(String(attrs['task.error']), 100) : '';
+    const action = attrs['task.action'] ? String(attrs['task.action']) : '';
+
+    switch (eventType) {
+      case 'session_started':
+        lines.push(`${pad}tasks enabled — ${duration}`);
+        return;
+      case 'created':
+        lines.push(`${pad}[ ] ${taskId}${taskTitle ? `: ${taskTitle}` : ''} — ${duration}`);
+        return;
+      case 'batch_created': {
+        const totalSuffix = totalCount !== undefined ? `, total ${totalCount}` : '';
+        lines.push(
+          `${pad}tasks created (${count ?? '?'}${totalSuffix}): ${taskIds || 'unknown'} — ${duration}`
+        );
+        return;
+      }
+      case 'updated': {
+        const statusSuffix = newStatus && newStatus !== 'unchanged' ? ` -> ${newStatus}` : '';
+        const fieldSuffix = fieldsUpdated ? ` [${fieldsUpdated}]` : '';
+        lines.push(`${pad}task updated: ${taskId}${statusSuffix}${fieldSuffix} — ${duration}`);
+        return;
+      }
+      case 'batch_updated':
+        lines.push(`${pad}tasks updated (${count ?? '?'}): ${taskIds || 'unknown'} — ${duration}`);
+        return;
+      case 'completed': {
+        const remainingSuffix = remaining !== undefined ? ` (${remaining} remaining)` : '';
+        lines.push(
+          `${pad}[x] ${taskId}${taskTitle ? `: ${taskTitle}` : ''}${remainingSuffix} — ${duration}`
+        );
+        return;
+      }
+      case 'batch_completed': {
+        const remainingSuffix = remaining !== undefined ? `, ${remaining} remaining` : '';
+        lines.push(
+          `${pad}tasks completed (${count ?? '?'}${remainingSuffix}): ${taskIds || 'unknown'} — ${duration}`
+        );
+        return;
+      }
+      case 'deleted':
+        lines.push(`${pad}task deleted: ${taskId} — ${duration}`);
+        return;
+      case 'batch_deleted':
+        lines.push(`${pad}tasks deleted (${count ?? '?'}): ${taskIds || 'unknown'} — ${duration}`);
+        return;
+      case 'listed': {
+        const stats: string[] = [];
+        if (totalCount !== undefined) stats.push(`${totalCount} total`);
+        if (incompleteCount !== undefined) stats.push(`${incompleteCount} incomplete`);
+        if (completedCount !== undefined) stats.push(`${completedCount} completed`);
+        lines.push(
+          `${pad}tasks listed${stats.length > 0 ? ` (${stats.join(', ')})` : ''} — ${duration}`
+        );
+        return;
+      }
+      case 'validation_error':
+      case 'error':
+        lines.push(`${pad}task.${eventType}: ${error || 'unknown error'} — ${duration}`);
+        return;
+      case 'unknown_action':
+        lines.push(`${pad}task.unknown_action: ${action || 'unknown'} — ${duration}`);
+        return;
+      default:
+        lines.push(`${pad}task.${eventType}${taskId ? `: ${taskId}` : ''} — ${duration}`);
+        return;
+    }
   }
 
   // --- Generic span ---
@@ -1738,9 +2641,11 @@ function formatSpanLine(
     const action = attrs['dedup.action'] || '?';
     const reason = attrs['dedup.reason'] || '';
     const rewritten = attrs['dedup.rewritten'] || '';
+    const error = attrs['dedup.error'] || '';
     let detail = `${action}`;
     if (rewritten) detail += ` → "${truncate(String(rewritten), 50)}"`;
     if (reason) detail += ` — ${truncate(String(reason), 60)}`;
+    if (error) detail += ` [error: ${truncate(String(error), 80)}]`;
     return { line: `dedup("${truncate(String(query), 50)}") ${detail} (${duration})` };
   }
 
@@ -1977,6 +2882,83 @@ function formatSpanLine(
     const reason = attrs['graceful_stop.reason'] || attrs['reason'] || '';
     const reasonStr = reason ? `: ${truncate(String(reason), 80)}` : '';
     return { line: `graceful_stop${reasonStr} (${duration})` };
+  }
+
+  // --- Probe task events ---
+  const taskEventMatch = name.match(/(?:^probe\.event\.)?task\.([a-z_]+)$/);
+  if (taskEventMatch) {
+    const eventType = taskEventMatch[1];
+    const taskId = attrs['task.id'] ? String(attrs['task.id']) : '';
+    const taskTitle = attrs['task.title'] ? truncate(String(attrs['task.title']), 80) : '';
+    const taskIds = attrs['task.ids'] ? truncate(String(attrs['task.ids']), 120) : '';
+    const count = attrs['task.count'] ? Number(attrs['task.count']) : undefined;
+    const totalCount = attrs['task.total_count'] ? Number(attrs['task.total_count']) : undefined;
+    const incompleteCount = attrs['task.incomplete_count']
+      ? Number(attrs['task.incomplete_count'])
+      : undefined;
+    const completedCount = attrs['task.completed_count']
+      ? Number(attrs['task.completed_count'])
+      : undefined;
+    const remaining = attrs['task.incomplete_remaining']
+      ? Number(attrs['task.incomplete_remaining'])
+      : undefined;
+    const newStatus = attrs['task.new_status'] ? String(attrs['task.new_status']) : '';
+    const fieldsUpdated = attrs['task.fields_updated']
+      ? truncate(String(attrs['task.fields_updated']), 80)
+      : '';
+    const error = attrs['task.error'] ? truncate(String(attrs['task.error']), 100) : '';
+    const action = attrs['task.action'] ? String(attrs['task.action']) : '';
+    const tail = ` (${duration})`;
+
+    switch (eventType) {
+      case 'session_started':
+        return { line: `tasks enabled${tail}` };
+      case 'created':
+        return { line: `[ ] ${taskId}${taskTitle ? `: ${taskTitle}` : ''}${tail}` };
+      case 'batch_created': {
+        const totalSuffix = totalCount !== undefined ? `, total ${totalCount}` : '';
+        return {
+          line: `tasks created (${count ?? '?'}${totalSuffix}): ${taskIds || 'unknown'}${tail}`,
+        };
+      }
+      case 'updated': {
+        const statusSuffix = newStatus && newStatus !== 'unchanged' ? ` -> ${newStatus}` : '';
+        const fieldSuffix = fieldsUpdated ? ` [${fieldsUpdated}]` : '';
+        return { line: `task updated: ${taskId}${statusSuffix}${fieldSuffix}${tail}` };
+      }
+      case 'batch_updated':
+        return { line: `tasks updated (${count ?? '?'}): ${taskIds || 'unknown'}${tail}` };
+      case 'completed': {
+        const remainingSuffix = remaining !== undefined ? ` (${remaining} remaining)` : '';
+        return {
+          line: `[x] ${taskId}${taskTitle ? `: ${taskTitle}` : ''}${remainingSuffix}${tail}`,
+        };
+      }
+      case 'batch_completed': {
+        const remainingSuffix = remaining !== undefined ? `, ${remaining} remaining` : '';
+        return {
+          line: `tasks completed (${count ?? '?'}${remainingSuffix}): ${taskIds || 'unknown'}${tail}`,
+        };
+      }
+      case 'deleted':
+        return { line: `task deleted: ${taskId}${tail}` };
+      case 'batch_deleted':
+        return { line: `tasks deleted (${count ?? '?'}): ${taskIds || 'unknown'}${tail}` };
+      case 'listed': {
+        const stats: string[] = [];
+        if (totalCount !== undefined) stats.push(`${totalCount} total`);
+        if (incompleteCount !== undefined) stats.push(`${incompleteCount} incomplete`);
+        if (completedCount !== undefined) stats.push(`${completedCount} completed`);
+        return { line: `tasks listed${stats.length > 0 ? ` (${stats.join(', ')})` : ''}${tail}` };
+      }
+      case 'validation_error':
+      case 'error':
+        return { line: `task.${eventType}: ${error || 'unknown error'}${tail}` };
+      case 'unknown_action':
+        return { line: `task.unknown_action: ${action || 'unknown'}${tail}` };
+      default:
+        return { line: `task.${eventType}${taskId ? `: ${taskId}` : ''}${tail}` };
+    }
   }
 
   // --- Generic span ---

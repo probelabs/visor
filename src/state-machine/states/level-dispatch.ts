@@ -39,6 +39,7 @@ import { FailureConditionEvaluator } from '../../failure-condition-evaluator';
 import { resolveWorkflowInputs } from '../context/workflow-inputs';
 import { executeWithSandboxRouting } from '../dispatch/sandbox-routing';
 import { applyPolicyGate } from '../dispatch/policy-gate';
+import { getDebounceManager } from '../dispatch/debounce-manager';
 import { createExtendedLiquid } from '../../liquid-extensions';
 
 function isEngineerCheck(checkId: string): boolean {
@@ -1106,6 +1107,38 @@ async function executeCheckWithForEachItems(
             wave: state.wave,
           },
           async span => {
+            // Debounce support: coalesce rapid invocations of the same step
+            if (checkConfig.debounce && checkConfig.debounce > 0) {
+              const debounceKey = checkConfig.debounce_key || checkId;
+              const debounceResult = await getDebounceManager().enqueue(
+                debounceKey,
+                checkConfig.debounce,
+                async () => {
+                  const r = await executeWithSandboxRouting(
+                    checkId,
+                    checkConfig,
+                    context,
+                    prInfo,
+                    dependencyResults,
+                    checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
+                    () =>
+                      provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+                  );
+                  try {
+                    captureCheckOutput(span, (r as any).output);
+                  } catch {}
+                  return r;
+                }
+              );
+              if (debounceResult.outcome === 'debounced') {
+                logger.info(
+                  `[LevelDispatch] ${checkId}: debounced (superseded by later invocation)`
+                );
+                return { issues: [], output: { debounced: true } };
+              }
+              // outcome === 'executed' — return the actual result
+              return debounceResult.result as any;
+            }
             const res = await executeWithSandboxRouting(
               checkId,
               checkConfig,
@@ -2568,6 +2601,36 @@ async function executeSingleCheck(
           wave: state.wave,
         },
         async span => {
+          // Debounce support: coalesce rapid invocations of the same step
+          if (checkConfig.debounce && checkConfig.debounce > 0) {
+            const debounceKey = checkConfig.debounce_key || checkId;
+            const debounceResult = await getDebounceManager().enqueue(
+              debounceKey,
+              checkConfig.debounce,
+              async () => {
+                const r = await executeWithSandboxRouting(
+                  checkId,
+                  checkConfig,
+                  context,
+                  prInfo,
+                  dependencyResults,
+                  checkConfig.timeout || checkConfig.ai?.timeout || 1800000,
+                  () =>
+                    provider.execute(prInfo, providerConfig, dependencyResults, executionContext)
+                );
+                try {
+                  captureCheckOutput(span, (r as any).output);
+                } catch {}
+                return r;
+              }
+            );
+            if (debounceResult.outcome === 'debounced') {
+              logger.info(`[LevelDispatch] ${checkId}: debounced (superseded by later invocation)`);
+              return { issues: [], output: { debounced: true } };
+            }
+            // outcome === 'executed' — return the actual result
+            return debounceResult.result as any;
+          }
           const res = await executeWithSandboxRouting(
             checkId,
             checkConfig,
@@ -2720,15 +2783,10 @@ async function executeSingleCheck(
     let isForEach = (result as any).isForEach;
     let forEachItems = (result as any).forEachItems;
 
-    // DEBUG: Log forEach handling
-    logger.info(
-      `[LevelDispatch][DEBUG] After execution ${checkId}: checkConfig.forEach=${checkConfig.forEach}, output type=${typeof (result as any).output}, isArray=${Array.isArray((result as any).output)}`
-    );
-
     if (checkConfig.forEach === true) {
       const output = (result as any).output;
-      logger.info(
-        `[LevelDispatch][DEBUG] Processing forEach=true for ${checkId}, output=${JSON.stringify(output)?.substring(0, 200)}`
+      logger.debug(
+        `[LevelDispatch] Processing forEach=true for ${checkId}, output=${JSON.stringify(output)?.substring(0, 200)}`
       );
 
       // Validate forEach output (must not be undefined)

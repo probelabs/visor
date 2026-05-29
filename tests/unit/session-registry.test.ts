@@ -13,16 +13,16 @@ const mockAgent2 = {
 describe('SessionRegistry', () => {
   let registry: SessionRegistry;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     // Get a fresh instance for each test
     registry = SessionRegistry.getInstance();
     // Clear all sessions before each test
-    registry.clearAllSessions();
+    await registry.clearAllSessions();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     // Clean up after each test
-    registry.clearAllSessions();
+    await registry.clearAllSessions();
   });
 
   describe('getInstance', () => {
@@ -80,18 +80,18 @@ describe('SessionRegistry', () => {
   });
 
   describe('unregisterSession', () => {
-    it('should remove existing session', () => {
+    it('should remove existing session', async () => {
       const sessionId = 'test-session-1';
       registry.registerSession(sessionId, mockAgent1);
 
       expect(registry.hasSession(sessionId)).toBe(true);
-      registry.unregisterSession(sessionId);
+      await registry.unregisterSession(sessionId);
       expect(registry.hasSession(sessionId)).toBe(false);
     });
 
-    it('should do nothing for non-existent session', () => {
+    it('should do nothing for non-existent session', async () => {
       // Should not throw error
-      expect(() => registry.unregisterSession('non-existent')).not.toThrow();
+      await expect(registry.unregisterSession('non-existent')).resolves.toBeUndefined();
     });
   });
 
@@ -113,17 +113,29 @@ describe('SessionRegistry', () => {
   });
 
   describe('clearAllSessions', () => {
-    it('should remove all sessions', () => {
+    it('should remove all sessions', async () => {
       registry.registerSession('session-1', mockAgent1);
       registry.registerSession('session-2', mockAgent2);
 
       expect(registry.getActiveSessionIds()).toHaveLength(2);
 
-      registry.clearAllSessions();
+      await registry.clearAllSessions();
 
       expect(registry.getActiveSessionIds()).toHaveLength(0);
       expect(registry.hasSession('session-1')).toBe(false);
       expect(registry.hasSession('session-2')).toBe(false);
+    });
+
+    it('awaits async agent cleanup before returning', async () => {
+      const cleanup = jest.fn().mockResolvedValue(undefined);
+      const asyncAgent = { cleanup } as unknown as ProbeAgent;
+
+      registry.registerSession('session-1', asyncAgent);
+
+      await registry.clearAllSessions();
+
+      expect(cleanup).toHaveBeenCalledTimes(1);
+      expect(registry.getActiveSessionIds()).toHaveLength(0);
     });
   });
 

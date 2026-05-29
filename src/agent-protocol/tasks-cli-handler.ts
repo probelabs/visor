@@ -890,7 +890,7 @@ async function handleTrace(
       return;
     }
 
-    const { serializeTraceForPrompt, fetchTraceSpans, readTraceIdFromFile } = await import(
+    const { buildTraceReport, fetchTraceSpans, readTraceIdFromFile } = await import(
       './trace-serializer'
     );
 
@@ -952,17 +952,16 @@ async function handleTrace(
       }
 
       let tree: string;
+      let report;
       try {
-        // Pass traceId as both primary ref (for remote lookup) and fallback.
-        // serializeTraceForPrompt tries remote first when fallbackTraceId is set,
-        // then falls back to local file.
-        tree = await serializeTraceForPrompt(
+        report = await buildTraceReport(
           traceFile || traceId!,
           maxChars,
           undefined,
           taskResponse,
           traceId
         );
+        tree = report?.tree || '(no trace data available)';
       } catch (traceErr) {
         console.error(
           `Trace rendering failed: ${traceErr instanceof Error ? traceErr.stack : traceErr}`
@@ -976,6 +975,9 @@ async function handleTrace(
         process.exitCode = 1;
         return;
       }
+      const header = report?.headerText || '';
+      if (header) console.log(header);
+      console.log('');
       console.log(tree);
     }
   });

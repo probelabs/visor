@@ -6,6 +6,10 @@ import type { TaskLiveUpdateSink } from './task-live-updates';
 export class SlackTaskLiveUpdateSink implements TaskLiveUpdateSink {
   readonly kind = 'slack';
   private messageTs?: string;
+  /** Serialize all publish calls to prevent concurrent postMessage races */
+  private publishQueue: Promise<{ ref?: Record<string, unknown> } | null> = Promise.resolve(null);
+  /** Count consecutive chat.update failures for observability and final-message fallback decisions */
+  private consecutiveUpdateFailures = 0;
 
   constructor(
     private readonly slack: SlackClient,
@@ -24,15 +28,30 @@ export class SlackTaskLiveUpdateSink implements TaskLiveUpdateSink {
   }
 
   async update(text: string): Promise<{ ref?: Record<string, unknown> } | null> {
-    return this.publish(text, 'progress');
+    return this.enqueue(text, 'progress');
   }
 
   async complete(text: string): Promise<{ ref?: Record<string, unknown> } | null> {
-    return this.publish(text, 'final');
+    return this.enqueue(text, 'final');
   }
 
   async fail(text: string): Promise<{ ref?: Record<string, unknown> } | null> {
-    return this.publish(text, 'final');
+    return this.enqueue(text, 'final');
+  }
+
+  /**
+   * Enqueue a publish call so they execute serially.
+   * This prevents the race where tick() and complete() both see messageTs=undefined
+   * and each call chat.postMessage, creating duplicate messages.
+   */
+  private enqueue(
+    text: string,
+    mode: 'progress' | 'final'
+  ): Promise<{ ref?: Record<string, unknown> } | null> {
+    this.publishQueue = this.publishQueue
+      .catch(() => {}) // don't let a prior failure block the queue
+      .then(() => this.publish(text, mode));
+    return this.publishQueue;
   }
 
   private async publish(
@@ -48,10 +67,23 @@ export class SlackTaskLiveUpdateSink implements TaskLiveUpdateSink {
         ts: this.messageTs,
         text: formatSlackText(text),
       });
-      if (updated?.ok) return null;
+      if (updated?.ok) {
+        this.consecutiveUpdateFailures = 0;
+        return null;
+      }
+      this.consecutiveUpdateFailures++;
       logger.warn(
-        `[TaskLiveUpdates][Slack] chat.update failed for ts=${this.messageTs} error=${updated?.error || 'unknown_error'}; falling back to chat.postMessage`
+        `[TaskLiveUpdates][Slack] chat.update failed for ts=${this.messageTs} error=${updated?.error || 'unknown_error'} (failure #${this.consecutiveUpdateFailures})`
       );
+      // Never create a new progress message when an update fails.
+      // Keeping the existing live-update message in place is less noisy than
+      // attempting a post+delete recovery that can leave orphaned messages.
+      if (mode === 'progress') {
+        logger.warn(
+          `[TaskLiveUpdates][Slack] Preserving existing live update ts=${this.messageTs}; suppressing progress post fallback to avoid Slack spam`
+        );
+        return null;
+      }
     }
     logger.info(
       `[TaskLiveUpdates][Slack] Posting live update message in channel=${this.channel} thread=${this.threadTs}`
@@ -64,7 +96,8 @@ export class SlackTaskLiveUpdateSink implements TaskLiveUpdateSink {
     if (posted?.ok && posted.ts) {
       const previousTs = this.messageTs;
       this.messageTs = posted.ts;
-      if (mode === 'final' && previousTs && previousTs !== posted.ts) {
+      // Clean up the old stale message to avoid orphaned progress messages
+      if (previousTs && previousTs !== posted.ts) {
         const deleted = await this.slack.chat.delete({
           channel: this.channel,
           ts: previousTs,
@@ -75,7 +108,7 @@ export class SlackTaskLiveUpdateSink implements TaskLiveUpdateSink {
           );
         } else {
           logger.info(
-            `[TaskLiveUpdates][Slack] Removed stale live update message ts=${previousTs} after final fallback post`
+            `[TaskLiveUpdates][Slack] Removed stale live update message ts=${previousTs} after fallback post`
           );
         }
       }

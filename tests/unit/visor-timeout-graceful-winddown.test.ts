@@ -118,13 +118,13 @@ function wireTimeoutEvents(agent: { events: EventEmitter }, extender?: TimeoutEx
 describe('Dynamic timeout extension via timeout.extended events', () => {
   let registry: SessionRegistry;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     registry = SessionRegistry.getInstance();
-    registry.clearAllSessions();
+    await registry.clearAllSessions();
   });
 
-  afterEach(() => {
-    registry.clearAllSessions();
+  afterEach(async () => {
+    await registry.clearAllSessions();
   });
 
   it('should extend deadline when agent emits timeout.extended', async () => {
@@ -298,13 +298,13 @@ describe('Dynamic timeout extension via timeout.extended events', () => {
 describe('withTimeout triggers graceful wind-down before hard kill', () => {
   let registry: SessionRegistry;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     registry = SessionRegistry.getInstance();
-    registry.clearAllSessions();
+    await registry.clearAllSessions();
   });
 
-  afterEach(() => {
-    registry.clearAllSessions();
+  afterEach(async () => {
+    await registry.clearAllSessions();
   });
 
   it('should call triggerGracefulWindDown on the agent before rejecting', async () => {
@@ -379,13 +379,13 @@ describe('withTimeout triggers graceful wind-down before hard kill', () => {
 describe('End-to-end: explore-code with dynamic timeout, MCP tools, and wind-down', () => {
   let registry: SessionRegistry;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     registry = SessionRegistry.getInstance();
-    registry.clearAllSessions();
+    await registry.clearAllSessions();
   });
 
-  afterEach(() => {
-    registry.clearAllSessions();
+  afterEach(async () => {
+    await registry.clearAllSessions();
   });
 
   it('should extend visor timeout when agent extends, then resolve normally', async () => {

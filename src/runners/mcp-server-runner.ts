@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { validateBearerToken, SERVER_INFO } from '../mcp-server';
 import { withVisorRun, getVisorRunAttributes } from '../telemetry/trace-helpers';
+import { summarizeUserFacingIssues } from '../utils/user-facing-error';
 
 export interface McpFrontendOptions {
   /** Port for HTTP transport (default: 8080). */
@@ -617,6 +618,9 @@ export class McpServerRunner implements Runner {
     // Direct properties on result
     if (result?.text) return String(result.text);
     if (result?.output?.text) return String(result.output.text);
+
+    const issueSummary = summarizeUserFacingIssues(result?.reviewSummary?.issues);
+    if (issueSummary) return issueSummary;
 
     // Fallback: JSON dump (compact to avoid huge responses)
     try {

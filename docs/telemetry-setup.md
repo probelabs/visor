@@ -56,9 +56,25 @@ VISOR_TRACE_REPORT=true \
 visor --config ./.visor.yaml
 ```
 
-## Local Development with Grafana LGTM
+## Local Development with the Visor Observability Stack
 
-The easiest way to get a full observability stack locally is [Grafana LGTM](https://github.com/grafana/docker-otel-lgtm) — a single Docker container with Grafana, Tempo (traces), Loki (logs), Prometheus (metrics), and an OpenTelemetry Collector:
+The preferred local setup is the Visor-maintained multi-container stack under [`deploy/observability/local`](../deploy/observability/local). It gives you separate Tempo, OTel Collector, Prometheus, and Grafana services with health checks and automatic recovery:
+
+```bash
+# Start the Visor local observability stack
+docker compose -f deploy/observability/local/docker-compose.yml up -d
+
+# Run Visor with OTLP telemetry
+VISOR_TELEMETRY_ENABLED=true \
+VISOR_TELEMETRY_SINK=otlp \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+GRAFANA_URL=http://localhost:8001 \
+visor --config .visor.yaml
+
+# Open Grafana at http://localhost:8001
+```
+
+If you want the old all-in-one option for quick experimentation, Grafana LGTM still works:
 
 ```bash
 # Start the all-in-one observability stack

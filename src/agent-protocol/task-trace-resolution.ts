@@ -27,6 +27,6 @@ export async function resolveTaskTraceReference(
   return {
     traceId,
     traceFile,
-    primaryRef: traceId || traceFile || undefined,
+    primaryRef: traceFile || traceId || undefined,
   };
 }

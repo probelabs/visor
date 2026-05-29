@@ -9,6 +9,10 @@
 import type { Frontend, FrontendContext } from './host';
 import { WhatsAppClient } from '../whatsapp/client';
 import { formatWhatsAppText } from '../whatsapp/markdown';
+import {
+  formatUserFacingExecutionMessage,
+  summarizeUserFacingIssues,
+} from '../utils/user-facing-error';
 
 type WhatsAppFrontendConfig = {
   accessToken?: string;
@@ -115,7 +119,7 @@ export class WhatsAppFrontend implements Frontend {
 
     let text = `${title}`;
     if (checkId) text += `\nCheck: ${checkId}`;
-    if (message) text += `\n${message}`;
+    if (message) text += `\n${formatUserFacingExecutionMessage(message)}`;
 
     await whatsapp.sendMessage({
       to: from,
@@ -184,6 +188,14 @@ export class WhatsAppFrontend implements Frontend {
       // Append raw output
       if (out && typeof out._rawOutput === 'string' && out._rawOutput.trim().length > 0) {
         text = (text || '') + '\n\n' + out._rawOutput.trim();
+      }
+
+      if (!text) {
+        const issueSummary = summarizeUserFacingIssues((result as any)?.issues || []);
+        if (issueSummary) {
+          text = issueSummary;
+          this.errorNotified = true;
+        }
       }
 
       if (!text) {

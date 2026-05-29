@@ -142,7 +142,9 @@ describe('WhatsAppFrontend (event-bus)', () => {
     const call = whatsapp.sendMessage.mock.calls[0][0];
     expect(call.to).toBe('15551234567');
     expect(call.text).toContain('Check failed');
-    expect(call.text).toContain('AI provider timeout');
+    expect(call.text).toContain(
+      'The AI request timed out before a response could be generated. Please retry.'
+    );
     expect(call.replyToMessageId).toBe('wamid.msg1');
   });
 

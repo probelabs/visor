@@ -310,6 +310,7 @@ steps:
       # ──────────────────────────────────────────────────────────────────
       skip_code_context: true
       enableDelegate: true
+      enableTasks: true
       enableExecutePlan: false
       max_iterations: 100
       prompt_type: code-explorer
@@ -463,8 +464,19 @@ steps:
 
       Delegate usage:
 
+      Task protocol:
+      - Before substantive work begins, create the task or tasks first.
+      - This applies to long-running single-goal investigations too, not only multi-goal requests.
+      - If there is a clear list of independent investigation jobs, create one task per job before starting.
+      - When a task starts, mark it in_progress immediately.
+      - When a task is actually done, complete it immediately before moving on.
+      - Do not leave finished tasks pending or in_progress.
+      - Prefer one active in_progress task at a time unless work is truly parallel.
+      - Before the final answer, every created task must be completed or cancelled.
+
       - Each delegate should answer ONE specific question (not "look at the code")
       - Run multiple delegates in PARALLEL for different hypotheses or components
+      - If you spawn delegates for independent jobs, create matching tasks first and keep them updated in real time
       - Ask delegates to return specific file paths and line numbers
       - Do NOT delegate or re-search the same question twice in one investigation
       - If a delegate returns enough evidence for the current claim, stop and use it
@@ -473,6 +485,7 @@ steps:
         delegate 4 for "session context metadata" again. Use the results you have.
       - Before spawning a delegate, review results from ALL prior delegates.
         If the information is already available, use it instead of re-delegating.
+      - If jobs are not truly independent, do not parallelize them. Keep work sequential and keep task state accurate.
 
       Relay complete data from tools — do not summarize or compress tool output.
 

@@ -2,6 +2,11 @@
 // GitHub event objects have complex dynamic structures that are difficult to fully type
 // Using 'any' for these objects is acceptable as they come from external GitHub webhooks
 
+// Register global handler for transient child-process I/O errors (EIO, EPIPE)
+// before any other code runs so broken pipes from MCP servers etc. don't crash
+// the process.
+import './utils/child-process-error-handler';
+
 // Load environment variables from .env file (override existing to allow .env to take precedence)
 import * as dotenv from 'dotenv';
 dotenv.config({ override: true, quiet: true });
@@ -301,7 +306,7 @@ export async function run(): Promise<void> {
       console.log(
         `🧹 Cleaning up ${sessionRegistry.getActiveSessionIds().length} active AI sessions...`
       );
-      sessionRegistry.clearAllSessions();
+      await sessionRegistry.clearAllSessions();
     }
   }
 }

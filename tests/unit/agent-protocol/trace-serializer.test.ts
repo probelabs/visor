@@ -1,4 +1,7 @@
 import {
+  buildTraceReport,
+  buildTraceHeaderLines,
+  extractProbeTaskSummary,
   fetchTraceSpans,
   renderSpanYaml,
   findTraceFile,
@@ -46,6 +49,65 @@ describe('renderSpanYaml', () => {
     expect(result).toContain('visor.run:');
     expect(result).toContain('trace_id: abc123');
     expect(result).toContain('duration: 5.0s');
+  });
+
+  it('does not render synthesized scope placeholder tasks in the header task list', () => {
+    const lines = buildTraceHeaderLines(
+      { spans: [], source: 'file' as any },
+      {
+        tasksEnabled: true,
+        source: 'snapshot',
+        eventCount: 3,
+        snapshotCount: 1,
+        tasks: [{ id: 'real-1', title: 'Find OAS Path Compilers', status: 'in_progress' }],
+        scopes: [
+          {
+            label: 'Main Agent',
+            source: 'snapshot',
+            eventCount: 1,
+            snapshotCount: 1,
+            tasks: [{ id: 'real-1', title: 'Find OAS Path Compilers', status: 'in_progress' }],
+            children: [
+              {
+                label: 'Code Explorer',
+                source: 'events',
+                eventCount: 1,
+                snapshotCount: 0,
+                tasks: [
+                  {
+                    id: '__scope_1',
+                    title: 'Code Explorer',
+                    status: 'in_progress',
+                    synthetic: true,
+                  },
+                ],
+                children: [
+                  {
+                    label: 'Search Delegate',
+                    source: 'events',
+                    eventCount: 1,
+                    snapshotCount: 0,
+                    tasks: [
+                      {
+                        id: '__scope_2',
+                        title: 'Search Delegate',
+                        status: 'completed',
+                        synthetic: true,
+                      },
+                    ],
+                    children: [],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }
+    );
+
+    expect(lines.join('\n')).toContain('[~] Find OAS Path Compilers');
+    expect(lines.join('\n')).not.toContain('Code Explorer\n');
+    expect(lines.join('\n')).not.toContain('Search Delegate');
   });
 
   it('renders visor.run with version and source attributes', () => {
@@ -140,6 +202,83 @@ describe('renderSpanYaml', () => {
 
     expect(result).toContain('search_code(auth middleware)');
     expect(result).toContain('1.5k chars');
+  });
+
+  it('renders Probe task events as readable task state lines', () => {
+    const created = makeTree({
+      name: 'probe.event.task.created',
+      spanId: 's2',
+      parentSpanId: 's1',
+      durationMs: 50,
+      attributes: {
+        'task.id': 'task-1',
+        'task.title': 'Investigate timeout failure',
+      },
+    });
+    const completed = makeTree({
+      name: 'probe.event.task.completed',
+      spanId: 's3',
+      parentSpanId: 's1',
+      durationMs: 40,
+      attributes: {
+        'task.id': 'task-1',
+        'task.title': 'Investigate timeout failure',
+        'task.incomplete_remaining': 1,
+      },
+    });
+    const batchCreated = makeTree({
+      name: 'probe.event.task.batch_created',
+      spanId: 's4',
+      parentSpanId: 's1',
+      durationMs: 70,
+      attributes: {
+        'task.count': 2,
+        'task.ids': 'task-1, task-2',
+        'task.total_count': 2,
+      },
+    });
+    const root = makeTree({ name: 'visor.run', spanId: 's1', durationMs: 500 }, [
+      batchCreated,
+      created,
+      completed,
+    ]);
+
+    const result = renderSpanYaml(root, [
+      root.span,
+      batchCreated.span,
+      created.span,
+      completed.span,
+    ]);
+
+    expect(result).toContain('tasks created (2, total 2): task-1, task-2');
+    expect(result).toContain('[ ] task-1: Investigate timeout failure');
+    expect(result).toContain('[x] task-1: Investigate timeout failure (1 remaining)');
+  });
+
+  it('renders task tool snapshots as checkbox lists instead of opaque task() blobs', () => {
+    const tool = makeTree({
+      name: 'probe.event.tool.result',
+      spanId: 's2',
+      parentSpanId: 's1',
+      durationMs: 20,
+      attributes: {
+        'tool.name': 'task',
+        'tool.result': `Created 2 tasks: live-updates, trace-spans
+
+<task_status>
+  <task id="live-updates" status="in_progress" priority="medium">Inspect how live updates resolve task traces</task>
+  <task id="trace-spans" status="pending" priority="medium">Inspect how tasks trace renders event spans</task>
+</task_status>`,
+      },
+    });
+    const root = makeTree({ name: 'visor.run', spanId: 's1', durationMs: 100 }, [tool]);
+
+    const result = renderSpanYaml(root, [root.span, tool.span]);
+
+    expect(result).toContain('tasks snapshot:');
+    expect(result).toContain('[~] live-updates: Inspect how live updates resolve task traces');
+    expect(result).toContain('[ ] trace-spans: Inspect how tasks trace renders event spans');
+    expect(result).not.toContain('task()');
   });
 
   it('renders AI request with model and token info', () => {
@@ -282,6 +421,158 @@ describe('renderSpanYaml', () => {
     expect(result).toContain('gemini-flash');
     expect(result).toContain('search()');
     expect(result).toContain('5.0k chars');
+  });
+
+  it('renders dedup errors in search.delegate.dedup spans', () => {
+    const dedup = makeTree({
+      name: 'search.delegate.dedup',
+      spanId: 's2',
+      parentSpanId: 's1',
+      durationMs: 250,
+      attributes: {
+        'dedup.query': 'graphql complexity depth',
+        'dedup.previous_count': '3',
+        'dedup.action': 'allow',
+        'dedup.reason': 'dedup check failed',
+        'dedup.error': 'Error: 503 model overloaded',
+      },
+    });
+    const root = makeTree({ name: 'visor.run', spanId: 's1', durationMs: 1000 }, [dedup]);
+    const result = renderSpanYaml(root, [root.span, dedup.span]);
+
+    expect(result).toContain('dedup("graphql complexity depth") [3 prior]: allow');
+    expect(result).toContain('dedup check failed');
+    expect(result).toContain('503 model overloaded');
+  });
+
+  it('filters mixed local NDJSON files by fallback trace id even when the target trace is not first', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-serializer-mixed-'));
+    const filePath = path.join(tmpDir, 'mixed.ndjson');
+
+    const lines = [
+      JSON.stringify({
+        name: 'visor.run',
+        traceId: 'trace-b',
+        spanId: 'root-b',
+        startTime: [3, 0],
+        endTime: [4, 0],
+        attributes: { started: true },
+        events: [],
+      }),
+      JSON.stringify({
+        name: 'ai.request.started',
+        traceId: 'trace-b',
+        spanId: 'child-b',
+        parentSpanId: 'root-b',
+        startTime: [3, 1000],
+        endTime: [3, 2000],
+        attributes: { 'probe.lifecycle.target': 'ai.request' },
+        events: [],
+      }),
+      JSON.stringify({
+        name: 'visor.run',
+        traceId: 'trace-a',
+        spanId: 'root-a',
+        startTime: [1, 0],
+        endTime: [2, 0],
+        attributes: { started: true },
+        events: [],
+      }),
+      JSON.stringify({
+        name: 'visor.check.chat.started',
+        traceId: 'trace-a',
+        spanId: 'child-a',
+        parentSpanId: 'root-a',
+        startTime: [1, 1000],
+        endTime: [1, 2000],
+        attributes: { 'visor.check.id': 'chat', 'visor.check.type': 'workflow' },
+        events: [],
+      }),
+    ];
+
+    fs.writeFileSync(filePath, lines.join('\n') + '\n', 'utf8');
+
+    const result = await serializeTraceForPrompt(
+      filePath,
+      8000,
+      { type: 'file' },
+      undefined,
+      'trace-a'
+    );
+
+    expect(result).toContain('trace_id: trace-a');
+    expect(result).toContain('chat [started]');
+    expect(result).not.toContain('ai.request');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('buildTraceReport uses the same filtered span set for header and body when the target trace is not first', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-report-mixed-'));
+    const filePath = path.join(tmpDir, 'mixed.ndjson');
+
+    const lines = [
+      JSON.stringify({
+        name: 'probe.event.task.batch_created',
+        traceId: 'trace-b',
+        spanId: 'b-task',
+        startTime: [3, 0],
+        endTime: [3, 1],
+        attributes: {
+          'probe.event.name': 'task.batch_created',
+          'task.action': 'create',
+          'task.count': 1,
+          'task.ids': 'wrong-task',
+          'task.total_count': 1,
+        },
+        events: [],
+      }),
+      JSON.stringify({
+        name: 'visor.run',
+        traceId: 'trace-b',
+        spanId: 'root-b',
+        startTime: [3, 0],
+        endTime: [4, 0],
+        attributes: {},
+        events: [],
+      }),
+      JSON.stringify({
+        name: 'probe.event.task.batch_created',
+        traceId: 'trace-a',
+        spanId: 'a-task',
+        startTime: [1, 0],
+        endTime: [1, 1],
+        attributes: {
+          'probe.event.name': 'task.batch_created',
+          'task.action': 'create',
+          'task.count': 1,
+          'task.ids': 'correct-task',
+          'task.total_count': 1,
+        },
+        events: [],
+      }),
+      JSON.stringify({
+        name: 'visor.run',
+        traceId: 'trace-a',
+        spanId: 'root-a',
+        startTime: [1, 0],
+        endTime: [2, 0],
+        attributes: {},
+        events: [],
+      }),
+    ];
+
+    fs.writeFileSync(filePath, lines.join('\n') + '\n', 'utf8');
+
+    const report = await buildTraceReport(filePath, 8000, { type: 'file' }, undefined, 'trace-a');
+
+    expect(report).not.toBeNull();
+    expect(report!.headerText).toContain('correct-task');
+    expect(report!.headerText).not.toContain('wrong-task');
+    expect(report!.tree).toContain('trace_id: trace-a');
+    expect(report!.tree).not.toContain('trace_id: trace-b');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it('does not truncate the YAML output', () => {
@@ -583,6 +874,181 @@ describe('renderSpanYaml', () => {
   });
 });
 
+describe('extractProbeTaskSummary', () => {
+  it('prefers the latest task snapshot and keeps current statuses', () => {
+    const spans = [
+      makeSpan({
+        spanId: 's1',
+        name: 'probe.event.task.created',
+        attributes: {
+          'task.id': 'live-updates',
+          'task.title': 'Inspect live update flow',
+        },
+      }),
+      makeSpan({
+        spanId: 's2',
+        startTimeMs: 1001000,
+        endTimeMs: 1001001,
+        name: 'probe.event.task.updated',
+        attributes: {
+          'task.id': 'live-updates',
+          'task.new_status': 'in_progress',
+        },
+      }),
+      makeSpan({
+        spanId: 's3',
+        startTimeMs: 1002000,
+        endTimeMs: 1002001,
+        name: 'probe.event.tool.result',
+        attributes: {
+          'tool.name': 'task',
+          'tool.result': `<task_status>
+  <task id="live-updates" status="completed" priority="medium">Inspect live update flow</task>
+  <task id="trace-spans" status="pending" priority="medium">Inspect trace rendering</task>
+</task_status>`,
+        },
+      }),
+    ];
+
+    const summary = extractProbeTaskSummary(spans);
+
+    expect(summary).not.toBeNull();
+    expect(summary?.source).toBe('snapshot');
+    expect(summary?.eventCount).toBe(2);
+    expect(summary?.snapshotCount).toBe(1);
+    expect(summary?.tasks).toEqual([
+      { id: 'live-updates', title: 'Inspect live update flow', status: 'completed' },
+      { id: 'trace-spans', title: 'Inspect trace rendering', status: 'pending' },
+    ]);
+    expect(summary?.scopes[0]?.label).toBe('Main Agent');
+  });
+
+  it('derives task states from events when no snapshot exists', () => {
+    const spans = [
+      makeSpan({
+        spanId: 's1',
+        name: 'probe.event.task.batch_created',
+        attributes: {
+          'task.ids': 'live-updates, trace-spans',
+          'task.count': 2,
+        },
+      }),
+      makeSpan({
+        spanId: 's2',
+        startTimeMs: 1001000,
+        endTimeMs: 1001001,
+        name: 'probe.event.task.updated',
+        attributes: {
+          'task.id': 'live-updates',
+          'task.new_status': 'in_progress',
+        },
+      }),
+      makeSpan({
+        spanId: 's3',
+        startTimeMs: 1002000,
+        endTimeMs: 1002001,
+        name: 'probe.event.task.completed',
+        attributes: {
+          'task.id': 'trace-spans',
+        },
+      }),
+    ];
+
+    const summary = extractProbeTaskSummary(spans);
+
+    expect(summary).not.toBeNull();
+    expect(summary?.source).toBe('events');
+    expect(summary?.tasks).toEqual([
+      { id: 'live-updates', title: '', status: 'in_progress' },
+      { id: 'trace-spans', title: '', status: 'completed' },
+    ]);
+    expect(summary?.scopes[0]?.label).toBe('Main Agent');
+  });
+
+  it('groups nested task snapshots under child scopes', () => {
+    const spans = [
+      makeSpan({
+        spanId: 'root',
+        name: 'visor.run',
+        startTimeMs: 1000000,
+        endTimeMs: 1005000,
+      }),
+      makeSpan({
+        spanId: 'generate',
+        parentSpanId: 'root',
+        name: 'visor.check.generate-response',
+        startTimeMs: 1000100,
+        endTimeMs: 1004900,
+        attributes: {
+          'visor.check.id': 'generate-response',
+          'visor.check.type': 'ai',
+        },
+      }),
+      makeSpan({
+        spanId: 'top-task',
+        parentSpanId: 'generate',
+        name: 'probe.event.tool.result',
+        startTimeMs: 1000200,
+        endTimeMs: 1000210,
+        attributes: {
+          'tool.name': 'task',
+          'tool.result': `<task_status>
+  <task id="fetch-docs" status="completed" priority="medium">Fetch Documentation</task>
+</task_status>`,
+        },
+      }),
+      makeSpan({
+        spanId: 'explore',
+        parentSpanId: 'generate',
+        name: 'visor.check.explore-code',
+        startTimeMs: 1000300,
+        endTimeMs: 1004800,
+        attributes: {
+          'visor.check.id': 'explore-code',
+          'visor.check.type': 'ai',
+        },
+      }),
+      makeSpan({
+        spanId: 'child-task',
+        parentSpanId: 'explore',
+        name: 'probe.event.tool.result',
+        startTimeMs: 1000400,
+        endTimeMs: 1000410,
+        attributes: {
+          'tool.name': 'task',
+          'tool.result': `<task_status>
+  <task id="extract-docs" status="completed" priority="medium">Extract Docs</task>
+  <task id="validate-gateway" status="in_progress" priority="medium">Validate Gateway</task>
+</task_status>`,
+        },
+      }),
+    ];
+
+    const summary = extractProbeTaskSummary(spans);
+
+    expect(summary).not.toBeNull();
+    expect(summary?.scopes).toHaveLength(1);
+    expect(summary?.scopes[0]).toMatchObject({
+      label: 'Main Agent',
+      tasks: [{ id: 'fetch-docs', title: 'Fetch Documentation', status: 'completed' }],
+    });
+    expect(summary?.scopes[0]?.children).toHaveLength(1);
+    const codeExplorer = summary?.scopes[0]?.children[0];
+    expect(codeExplorer?.label).toBe('Code Explorer');
+    // Sub-agent scope with meaningful task titles preserves them
+    expect(codeExplorer?.tasks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'extract-docs', title: 'Extract Docs', status: 'completed' }),
+        expect.objectContaining({
+          id: 'validate-gateway',
+          title: 'Validate Gateway',
+          status: 'in_progress',
+        }),
+      ])
+    );
+  });
+});
+
 // ---------------------------------------------------------------------------
 // findTraceFile
 // ---------------------------------------------------------------------------
@@ -627,6 +1093,20 @@ describe('findTraceFile', () => {
 
     const result = await findTraceFile('target', tmpDir);
     expect(result).toBe(path.join(tmpDir, 'good.ndjson'));
+  });
+
+  it('finds a trace id that is not on the first line of a mixed NDJSON file', async () => {
+    const filePath = path.join(tmpDir, 'mixed.ndjson');
+    fs.writeFileSync(
+      filePath,
+      [
+        JSON.stringify({ traceId: 'other-trace', spanId: 's1', name: 'visor.run' }),
+        JSON.stringify({ traceId: 'target-trace', spanId: 's2', name: 'visor.check.chat' }),
+      ].join('\n') + '\n'
+    );
+
+    const result = await findTraceFile('target-trace', tmpDir);
+    expect(result).toBe(filePath);
   });
 
   it('reads a trace id directly from a trace file', async () => {

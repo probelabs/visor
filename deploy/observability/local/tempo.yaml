@@ -1,0 +1,65 @@
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9095
+  log_level: info
+
+query_frontend:
+  search:
+    duration_slo: 5s
+    throughput_bytes_slo: 1.073741824e+09
+  trace_by_id:
+    duration_slo: 5s
+  max_outstanding_per_tenant: 8192
+
+querier:
+  frontend_worker:
+    frontend_address: 127.0.0.1:9095
+    parallelism: 4
+  max_concurrent_queries: 20
+
+compactor:
+  compaction:
+    block_retention: 168h
+
+metrics_generator:
+  storage:
+    path: /var/tempo/generator/wal
+  traces_storage:
+    path: /var/tempo/generator/traces
+  processor:
+    local_blocks:
+      filter_server_spans: false
+    span_metrics:
+      dimensions:
+        - service.name
+        - operation
+        - status.code
+  registry:
+    external_labels:
+      source: oel-local
+
+ingester:
+  max_block_duration: 5m
+  trace_idle_period: 10s
+  flush_check_period: 30s
+  lifecycler:
+    ring:
+      kvstore:
+        store: inmemory
+      replication_factor: 1
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+memberlist:
+  abort_if_cluster_join_fails: false
+  bind_addr:
+    - 127.0.0.1
+
+overrides:
+  max_bytes_per_trace: 5000000

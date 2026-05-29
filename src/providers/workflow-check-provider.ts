@@ -17,6 +17,7 @@ import { Liquid } from 'liquidjs';
 import { createExtendedLiquid } from '../liquid-extensions';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
+import { formatUserFacingExecutionMessage } from '../utils/user-facing-error';
 
 /**
  * Provider that executes workflows as checks
@@ -911,6 +912,19 @@ export class WorkflowCheckProvider extends CheckProvider {
       if (typedResult.score) {
         totalScore += typedResult.score;
         scoreCount++;
+      }
+    }
+
+    for (const checkStats of result.statistics?.checks || []) {
+      if (checkStats.errorMessage) {
+        allIssues.push({
+          file: 'system',
+          line: 0,
+          ruleId: 'system/error',
+          message: formatUserFacingExecutionMessage(checkStats.errorMessage),
+          severity: 'error',
+          category: 'logic',
+        } as any);
       }
     }
 

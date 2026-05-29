@@ -329,6 +329,26 @@ describe('extractResponseText', () => {
     expect(extractResponseText(result)).toBe('Nested output text');
   });
 
+  it('returns a user-facing issue summary instead of JSON when output.text is empty', () => {
+    const result = {
+      reviewSummary: {
+        issues: [
+          {
+            ruleId: 'contract/guarantee_failed',
+            message: "Guarantee failed: (output?.text ?? '').length > 0",
+            severity: 'error',
+          },
+        ],
+        history: {},
+      },
+      output: { text: '' },
+    };
+
+    expect(extractResponseText(result)).toBe(
+      'The assistant failed to produce a response. This is usually caused by a provider-side limit, outage, or invalid structured output. Please retry.'
+    );
+  });
+
   it('JSON-dumps when no text found anywhere', () => {
     const result = {
       reviewSummary: { issues: [], history: { chat: [{ numbers: [1, 2, 3] }] } },

@@ -425,7 +425,7 @@ export class VisorTestRunner {
     } catch {}
     // Always clear AI sessions between cases to prevent cross-case leakage
     try {
-      SessionRegistry.getInstance().clearAllSessions();
+      void SessionRegistry.getInstance().clearAllSessions();
     } catch {}
     // Always use StateMachineExecutionEngine
     const engine = new StateMachineExecutionEngine(undefined as any, recorder as unknown as any);
@@ -1662,7 +1662,7 @@ export class VisorTestRunner {
         } catch {}
         // Clear AI sessions before each stage to avoid leakage across stages
         try {
-          SessionRegistry.getInstance().clearAllSessions();
+          await SessionRegistry.getInstance().clearAllSessions();
         } catch {}
         // Prepare default tag filters for this flow (inherit suite defaults)
         const parseTags = (v: unknown): string[] | undefined => {

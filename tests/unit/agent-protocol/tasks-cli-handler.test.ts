@@ -3,6 +3,25 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { SqliteTaskStore } from '../../../src/agent-protocol/task-store';
 import type { AgentMessage } from '../../../src/agent-protocol/types';
+import { handleTasksCommand } from '../../../src/agent-protocol/tasks-cli-handler';
+import { buildTraceReport } from '../../../src/agent-protocol/trace-serializer';
+
+jest.mock('../../../src/agent-protocol/trace-serializer', () => ({
+  buildTraceReport: jest.fn().mockResolvedValue({
+    traceData: {
+      spans: [],
+      source: 'file',
+      remoteTraceId: 'trace-correct-123',
+      localTracePath: '/tmp/mixed-process-traces.ndjson',
+    },
+    taskSummary: null,
+    headerText: 'Trace source: file\nTasks: no task telemetry found in this trace',
+    tree: 'mock-trace-tree',
+    text: 'Trace source: file\nTasks: no task telemetry found in this trace\n\nmock-trace-tree',
+  }),
+  fetchTraceSpans: jest.fn().mockResolvedValue([]),
+  readTraceIdFromFile: jest.fn().mockResolvedValue(undefined),
+}));
 
 function makeMessage(text = 'Hello agent'): AgentMessage {
   return {
@@ -15,13 +34,19 @@ function makeMessage(text = 'Hello agent'): AgentMessage {
 describe('tasks CLI handler', () => {
   let store: SqliteTaskStore;
   let dbPath: string;
+  let originalCwd: string;
 
   beforeEach(async () => {
+    originalCwd = process.cwd();
     const tmpDir = path.join(__dirname, '../../fixtures/tmp-agent-tasks');
     fs.mkdirSync(tmpDir, { recursive: true });
-    dbPath = path.join(tmpDir, `test-cli-${crypto.randomUUID()}.db`);
+    const testDir = path.join(tmpDir, `case-${crypto.randomUUID()}`);
+    fs.mkdirSync(path.join(testDir, '.visor'), { recursive: true });
+    process.chdir(testDir);
+    dbPath = path.join(testDir, '.visor', 'agent-tasks.db');
     store = new SqliteTaskStore(dbPath);
     await store.initialize();
+    jest.clearAllMocks();
   });
 
   afterEach(async () => {
@@ -31,6 +56,7 @@ describe('tasks CLI handler', () => {
       fs.unlinkSync(dbPath + '-wal');
       fs.unlinkSync(dbPath + '-shm');
     } catch {}
+    process.chdir(originalCwd);
   });
 
   // -------------------------------------------------------------------------
@@ -204,6 +230,106 @@ describe('tasks CLI handler', () => {
       store.updateTaskState(task.id, 'completed');
 
       expect(() => store.updateTaskState(task.id, 'canceled')).toThrow();
+    });
+
+    it('tasks trace keeps trace_file for local fallback while preferring trace_id remotely', async () => {
+      const task = store.createTask({
+        contextId: 'ctx-1',
+        requestMessage: makeMessage('Trace me'),
+        requestMetadata: {
+          trace_id: 'trace-correct-123',
+          trace_file: '/tmp/mixed-process-traces.ndjson',
+        },
+      });
+
+      await handleTasksCommand(['trace', task.id.slice(0, 8)]);
+
+      expect(buildTraceReport).toHaveBeenCalledWith(
+        '/tmp/mixed-process-traces.ndjson',
+        8000,
+        undefined,
+        undefined,
+        'trace-correct-123'
+      );
+      expect(errorOutput).toEqual([]);
+      expect(logOutput.some(line => line.includes('Trace source: file'))).toBe(true);
+      expect(
+        logOutput.some(line => line.includes('Tasks: no task telemetry found in this trace'))
+      ).toBe(true);
+      expect(logOutput).toContain('mock-trace-tree');
+    });
+
+    it('tasks trace prints a probe task summary when task telemetry exists', async () => {
+      const task = store.createTask({
+        contextId: 'ctx-1',
+        requestMessage: makeMessage('Trace me'),
+        requestMetadata: {
+          trace_id: 'trace-correct-123',
+          trace_file: '/tmp/mixed-process-traces.ndjson',
+        },
+      });
+
+      (buildTraceReport as jest.Mock).mockResolvedValue({
+        traceData: {
+          spans: [],
+          source: 'file',
+          remoteTraceId: 'trace-correct-123',
+          localTracePath: '/tmp/mixed-process-traces.ndjson',
+        },
+        taskSummary: {
+          tasksEnabled: true,
+          source: 'snapshot',
+          eventCount: 5,
+          snapshotCount: 2,
+          tasks: [
+            { id: 'live-updates', title: 'Inspect live update flow', status: 'in_progress' },
+            { id: 'trace-spans', title: 'Inspect trace rendering', status: 'completed' },
+          ],
+          scopes: [
+            {
+              label: 'Main Agent',
+              source: 'snapshot',
+              eventCount: 3,
+              snapshotCount: 1,
+              tasks: [
+                { id: 'live-updates', title: 'Inspect live update flow', status: 'in_progress' },
+              ],
+              children: [
+                {
+                  label: 'Code Explorer',
+                  source: 'snapshot',
+                  eventCount: 2,
+                  snapshotCount: 1,
+                  tasks: [
+                    {
+                      id: 'trace-spans',
+                      title: 'Inspect trace rendering',
+                      status: 'completed',
+                    },
+                  ],
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+        headerText:
+          'Trace source: file\nTasks: 2 tracked (snapshot, 5 task events, 2 snapshots)\n  [~] Inspect live update flow\n  Code Explorer\n    [x] Inspect trace rendering',
+        tree: 'mock-trace-tree',
+        text: 'Trace source: file\nTasks: 2 tracked (snapshot, 5 task events, 2 snapshots)\n  [~] Inspect live update flow\n  Code Explorer\n    [x] Inspect trace rendering\n\nmock-trace-tree',
+      });
+
+      await handleTasksCommand(['trace', task.id.slice(0, 8)]);
+
+      expect(logOutput.some(line => line.includes('Trace source: file'))).toBe(true);
+      expect(
+        logOutput.some(line =>
+          line.includes('Tasks: 2 tracked (snapshot, 5 task events, 2 snapshots)')
+        )
+      ).toBe(true);
+      expect(logOutput.some(line => line.includes('  [~] Inspect live update flow'))).toBe(true);
+      expect(logOutput.some(line => line.includes('  Code Explorer'))).toBe(true);
+      expect(logOutput.some(line => line.includes('    [x] Inspect trace rendering'))).toBe(true);
     });
   });
 

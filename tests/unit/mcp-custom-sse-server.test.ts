@@ -592,7 +592,7 @@ describe('CustomToolsSSEServer', () => {
       }
       // Clean up any sessions we registered
       const { SessionRegistry } = require('../../src/session-registry');
-      SessionRegistry.getInstance().clearAllSessions();
+      await SessionRegistry.getInstance().clearAllSessions();
     });
 
     it('should NOT signal the parent/caller session during graceful_stop', async () => {

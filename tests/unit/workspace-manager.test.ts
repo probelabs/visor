@@ -302,6 +302,48 @@ describe('WorkspaceManager', () => {
       fs.rmSync(testOriginalPath, { recursive: true, force: true });
       fs.rmSync(worktreePath, { recursive: true, force: true });
     });
+
+    it('rehydrates existing persisted symlinks and updates them in place', async () => {
+      const { commandExecutor } = require('../../src/utils/command-executor');
+      commandExecutor.execute.mockResolvedValue({ exitCode: 1, stdout: '', stderr: '' });
+
+      if (!fs.existsSync(testOriginalPath)) {
+        fs.mkdirSync(testOriginalPath, { recursive: true });
+      }
+
+      const workspaceDir = path.join(testBasePath, testSessionId);
+      fs.mkdirSync(workspaceDir, { recursive: true });
+
+      const oldWorktreePath = '/tmp/test-worktree-old';
+      const newWorktreePath = '/tmp/test-worktree-new';
+      fs.mkdirSync(oldWorktreePath, { recursive: true });
+      fs.mkdirSync(newWorktreePath, { recursive: true });
+      fs.writeFileSync(
+        `${oldWorktreePath}.metadata.json`,
+        JSON.stringify({
+          repository: 'TykTechnologies/tyk',
+          worktree_path: oldWorktreePath,
+        })
+      );
+
+      const existingSymlink = path.join(workspaceDir, 'tyk');
+      fs.symlinkSync(oldWorktreePath, existingSymlink);
+
+      const manager = WorkspaceManager.getInstance(testSessionId, testOriginalPath, {
+        basePath: testBasePath,
+      });
+
+      await manager.initialize();
+      const result = await manager.addProject('TykTechnologies/tyk', newWorktreePath);
+
+      expect(result).toBe(existingSymlink);
+      expect(fs.realpathSync(existingSymlink)).toBe(newWorktreePath);
+      expect(fs.existsSync(path.join(workspaceDir, 'tyk-2'))).toBe(false);
+
+      fs.rmSync(testOriginalPath, { recursive: true, force: true });
+      fs.rmSync(oldWorktreePath, { recursive: true, force: true });
+      fs.rmSync(newWorktreePath, { recursive: true, force: true });
+    });
   });
 
   describe('listProjects', () => {

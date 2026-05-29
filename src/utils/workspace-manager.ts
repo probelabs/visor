@@ -5,6 +5,7 @@
  * Each run gets its own workspace in /tmp containing worktrees for all projects.
  */
 
+import * as fs from 'fs';
 import * as fsp from 'fs/promises';
 import * as path from 'path';
 import { commandExecutor } from './command-executor';
@@ -318,16 +319,10 @@ export class WorkspaceManager {
       }
     }
 
-    // Scan existing entries in the workspace directory to populate usedNames.
-    // This handles reused workspaces (e.g. Slack threads) where a previous run
-    // left symlinks on disk but the in-memory state was cleared by cleanup().
+    // Rehydrate existing entries in persisted workspaces (e.g. Slack threads)
+    // so repeated runs update the same symlink names instead of growing suffixes.
     try {
-      const entries = await fsp.readdir(this.workspacePath, { withFileTypes: true });
-      for (const entry of entries) {
-        if (entry.name !== mainProjectName) {
-          this.usedNames.add(entry.name);
-        }
-      }
+      await this.loadExistingProjects(mainProjectName);
     } catch {
       // Best-effort — workspace just created, nothing to scan
     }
@@ -523,6 +518,51 @@ export class WorkspaceManager {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Rehydrate existing symlinked projects in a persisted workspace so future
+   * runs update them in place instead of allocating project-2, project-3, etc.
+   */
+  private async loadExistingProjects(mainProjectName: string): Promise<void> {
+    const entries = await fsp.readdir(this.workspacePath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name === mainProjectName) {
+        continue;
+      }
+
+      const entryPath = path.join(this.workspacePath, entry.name);
+      this.usedNames.add(entry.name);
+
+      if (!entry.isSymbolicLink()) {
+        continue;
+      }
+
+      try {
+        const targetPath = await fsp.realpath(entryPath);
+        const metadataPath = `${targetPath.replace(/\/?$/, '')}.metadata.json`;
+        if (!fs.existsSync(metadataPath)) {
+          continue;
+        }
+
+        const metadata = JSON.parse(await fsp.readFile(metadataPath, 'utf8')) as {
+          repository?: string;
+          worktree_path?: string;
+        };
+        if (!metadata.repository) {
+          continue;
+        }
+
+        this.projects.set(entry.name, {
+          name: entry.name,
+          path: entryPath,
+          worktreePath: metadata.worktree_path || targetPath,
+          repository: metadata.repository,
+        });
+      } catch {
+        // Best-effort — leave unknown entries untouched.
+      }
     }
   }
 

@@ -205,7 +205,7 @@ describe('trackExecution', () => {
     expect(updated?.metadata?.message_id).toBe('msg-1');
   });
 
-  it('should prefer trace_id over trace_file for live updates', async () => {
+  it('should keep trace_file as the live update ref while preserving trace_id for remote lookup', async () => {
     const sink = {
       kind: 'test',
       start: jest.fn(async () => null),

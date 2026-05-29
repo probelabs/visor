@@ -308,4 +308,39 @@ describe('WorktreeManager', () => {
       }
     });
   });
+
+  it('removes a worktree using on-disk metadata when it is not in the active map', async () => {
+    const { commandExecutor } = require('../../src/utils/command-executor');
+    const execMock = commandExecutor.execute as jest.Mock;
+    execMock.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+    const manager = WorktreeManager.getInstance();
+    const worktreesDir = `${manager.getConfig().base_path}/worktrees`;
+    fs.mkdirSync(worktreesDir, { recursive: true });
+
+    const worktreeId = 'TykTechnologies-tyk-main-deadbeef';
+    const worktreePath = `${worktreesDir}/${worktreeId}`;
+    fs.mkdirSync(worktreePath, { recursive: true });
+    fs.writeFileSync(
+      `${worktreePath}.metadata.json`,
+      JSON.stringify({
+        worktree_id: worktreeId,
+        created_at: new Date().toISOString(),
+        ref: 'main',
+        commit: 'abc123',
+        repository: 'TykTechnologies/tyk',
+        pid: 12345,
+        cleanup_on_exit: true,
+        bare_repo_path: `${manager.getConfig().base_path}/repos/TykTechnologies-tyk.git`,
+        worktree_path: worktreePath,
+      })
+    );
+
+    await manager.removeWorktree(worktreeId);
+
+    const calls = execMock.mock.calls.map((c: any[]) => c[0] as string);
+    expect(calls.some(cmd => cmd.includes('worktree remove') && cmd.includes(worktreePath))).toBe(
+      true
+    );
+  });
 });

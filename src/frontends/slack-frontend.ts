@@ -32,6 +32,10 @@ import {
 import { context as otContext, trace } from '../telemetry/lazy-otel';
 import { isFrontendLiveUpdatesEnabled } from '../agent-protocol/task-live-updates';
 import { logger as sharedLogger } from '../logger';
+import {
+  formatUserFacingExecutionMessage,
+  summarizeUserFacingIssues,
+} from '../utils/user-facing-error';
 
 type SlackFrontendConfig = {
   defaultChannel?: string;
@@ -344,7 +348,7 @@ export class SlackFrontend implements Frontend {
 
     let text = `❌ ${title}`;
     if (checkId) text += `\nCheck: ${checkId}`;
-    if (message) text += `\n${message}`;
+    if (message) text += `\n${formatUserFacingExecutionMessage(message)}`;
 
     if (this.isTelemetryEnabled(ctx)) {
       const suffix = this.getExecutionReferenceSuffix();
@@ -587,19 +591,13 @@ export class SlackFrontend implements Frontend {
       // Fallback: if no text was extracted, check for error issues (e.g. timeout)
       // and post an error message so the user isn't left with silence.
       if (!text) {
-        const issues: any[] = (result as any)?.issues || [];
-        const errorIssues = issues.filter(
-          (i: any) =>
-            i.severity === 'error' &&
-            (i.ruleId?.startsWith('system/') || i.ruleId?.endsWith('/error'))
-        );
-        if (errorIssues.length > 0) {
-          const errorMessages = errorIssues.map((i: any) => i.message).join('\n');
+        const errorMessages = summarizeUserFacingIssues((result as any)?.issues || []);
+        if (errorMessages) {
           text = `:warning: Something went wrong while processing your request:\n${errorMessages}`;
           // Prevent maybePostExecutionFailure from double-posting the same error
           this.errorNotified = true;
           ctx.logger.warn(
-            `[slack-frontend] posting error fallback for ${checkId}: ${errorIssues.length} system error(s)`
+            `[slack-frontend] posting error fallback for ${checkId}: issue-derived error message`
           );
         }
       }

@@ -190,7 +190,9 @@ describe('TelegramFrontend (event-bus)', () => {
     expect(telegram.sendMessage).toHaveBeenCalledTimes(1);
     const call = telegram.sendMessage.mock.calls[0][0];
     expect(call.text).toContain('Check failed');
-    expect(call.text).toContain('AI provider timeout');
+    expect(call.text).toContain(
+      'The AI request timed out before a response could be generated. Please retry.'
+    );
     expect(call.reply_to_message_id).toBe(42);
   });
 

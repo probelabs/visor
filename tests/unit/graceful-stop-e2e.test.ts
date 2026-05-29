@@ -182,18 +182,18 @@ describe('graceful_stop end-to-end propagation', () => {
   let server: CustomToolsSSEServer;
   let registry: SessionRegistry;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     // Get a fresh registry for each test
     registry = SessionRegistry.getInstance();
     // Clear any leftover sessions
-    registry.clearAllSessions();
+    await registry.clearAllSessions();
   });
 
   afterEach(async () => {
     if (server) {
       await server.stop();
     }
-    registry.clearAllSessions();
+    await registry.clearAllSessions();
   });
 
   describe('Scenario: Assistant → Engineer sub-workflow', () => {

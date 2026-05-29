@@ -289,8 +289,13 @@ export class Scheduler {
       throw new Error(`Invalid cron expression: ${job.schedule}`);
     }
 
-    // Check if workflow exists ("default" is a special alias for "run all checks")
-    if (job.workflow !== 'default') {
+    // If no workflow is set, treat as a reminder (runs inputs.text through full pipeline)
+    if (!job.workflow) {
+      if (!job.inputs?.text) {
+        throw new Error('Cron job without a workflow must have inputs.text set');
+      }
+      // No workflow validation needed — executeWorkflow will route to executeSimpleReminder
+    } else if (job.workflow !== 'default') {
       const allChecks = Object.keys(this.visorConfig.checks || {});
       if (!allChecks.includes(job.workflow)) {
         throw new Error(`Workflow "${job.workflow}" not found in configuration`);
@@ -320,7 +325,7 @@ export class Scheduler {
       const nextRun = getNextRunTime(job.schedule, job.timezone || this.defaultTimezone);
       const description = job.description ? ` (${job.description})` : '';
       logger.debug(
-        `[Scheduler] Scheduled static cron job '${jobId}'${description}: ${job.schedule} → ${job.workflow}, next run: ${nextRun.toISOString()}`
+        `[Scheduler] Scheduled static cron job '${jobId}'${description}: ${job.schedule} → ${job.workflow || '(reminder)'}, next run: ${nextRun.toISOString()}`
       );
     } catch {
       // Best effort logging

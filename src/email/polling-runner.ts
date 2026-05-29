@@ -13,7 +13,7 @@ import { StateMachineExecutionEngine } from '../state-machine-execution-engine';
 import { EmailClient, type EmailMessage } from './client';
 import { EmailAdapter } from './adapter';
 import { createHash } from 'crypto';
-import { WorkspaceManager } from '../utils/workspace-manager';
+import { startPeriodicStorageCleanup } from '../utils/worktree-cleanup';
 
 export type EmailPollingConfig = {
   receive?: {
@@ -59,6 +59,7 @@ export class EmailPollingRunner implements Runner {
   private resendLastSeenId?: string; // cursor for Resend polling
   private hasWebhookSecret: boolean;
   private activeProcessing = 0;
+  private storageCleanupStop?: () => void;
 
   constructor(engine: StateMachineExecutionEngine, cfg: VisorConfig, opts: EmailPollingConfig) {
     this.receiveType = (opts.receive?.type as 'imap' | 'resend') || 'imap';
@@ -104,11 +105,13 @@ export class EmailPollingRunner implements Runner {
       await this.startResendPolling();
     }
 
-    // Clean up stale workspace directories
-    WorkspaceManager.cleanupStale().catch(() => {});
+    this.storageCleanupStop?.();
+    this.storageCleanupStop = startPeriodicStorageCleanup('EmailPolling');
   }
 
   async stopListening(): Promise<void> {
+    this.storageCleanupStop?.();
+    this.storageCleanupStop = undefined;
     this.stopped = true;
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
@@ -118,6 +121,8 @@ export class EmailPollingRunner implements Runner {
   }
 
   async drain(timeoutMs = 0): Promise<void> {
+    this.storageCleanupStop?.();
+    this.storageCleanupStop = undefined;
     if (!this.stopped) {
       await this.stopListening();
     }
@@ -137,6 +142,8 @@ export class EmailPollingRunner implements Runner {
   }
 
   async stop(): Promise<void> {
+    this.storageCleanupStop?.();
+    this.storageCleanupStop = undefined;
     this.stopped = true;
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
