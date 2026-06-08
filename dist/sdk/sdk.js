@@ -5160,6 +5160,11 @@ var init_snapshot_store = __esm({
         this.scope = scope;
         this.event = event;
       }
+      journal;
+      sessionId;
+      snapshotId;
+      scope;
+      event;
       /** Return the nearest result for a check in this scope (exact item → ancestor → latest). */
       get(checkId) {
         const visible = this.journal.readVisible(this.sessionId, this.snapshotId, this.event).filter((e) => e.checkId === checkId);
@@ -15141,6 +15146,7 @@ var init_config_loader = __esm({
           ...options
         };
       }
+      options;
       cache = /* @__PURE__ */ new Map();
       loadedConfigs = /* @__PURE__ */ new Set();
       /**
@@ -15349,26 +15355,9 @@ var init_config_loader = __esm({
         }
         if (defaultConfigPath) {
           console.error(`\u{1F4E6} Loading bundled default configuration from ${defaultConfigPath}`);
-          const content = fs11.readFileSync(defaultConfigPath, "utf8");
-          let config = yaml3.load(content);
-          if (!config || typeof config !== "object") {
-            throw new Error("Invalid default configuration");
-          }
-          if (config.include && !config.extends) {
-            const inc = config.include;
-            config.extends = Array.isArray(inc) ? inc : [inc];
-            delete config.include;
-          }
+          const defaultConfigDir = path13.dirname(defaultConfigPath);
+          let config = await this.fetchBundledConfigFile(defaultConfigPath, defaultConfigDir);
           config = this.normalizeStepsAndChecks(config);
-          if (config.extends) {
-            const previousBaseDir = this.options.baseDir;
-            try {
-              this.options.baseDir = path13.dirname(defaultConfigPath);
-              return await this.processExtends(config);
-            } finally {
-              this.options.baseDir = previousBaseDir;
-            }
-          }
           return config;
         }
         console.warn("\u26A0\uFE0F  Bundled default configuration not found, using minimal defaults");
@@ -15383,6 +15372,70 @@ var init_config_loader = __esm({
             }
           }
         };
+      }
+      /**
+       * Load a bundled config and its includes without using project-local path resolution.
+       *
+       * `extends: default` is a built-in source. Its sibling includes are part of the Visor
+       * package/action bundle, so they must resolve inside that bundle rather than inside the
+       * caller's repository root.
+       */
+      async fetchBundledConfigFile(filePath, bundledRoot, currentDepth = 0, seen = /* @__PURE__ */ new Set()) {
+        if (currentDepth >= (this.options.maxDepth || 10)) {
+          throw new Error(
+            `Maximum bundled default include depth (${this.options.maxDepth}) exceeded. Check for circular dependencies.`
+          );
+        }
+        const resolvedPath = path13.resolve(filePath);
+        this.validateBundledPath(resolvedPath, bundledRoot);
+        if (seen.has(resolvedPath)) {
+          throw new Error(`Circular dependency detected in bundled defaults: ${resolvedPath}`);
+        }
+        seen.add(resolvedPath);
+        try {
+          const content = fs11.readFileSync(resolvedPath, "utf8");
+          const config = yaml3.load(content);
+          if (!config || typeof config !== "object") {
+            throw new Error(`Invalid default configuration: ${resolvedPath}`);
+          }
+          const extendsValue = config.extends || config.include;
+          delete config.extends;
+          delete config.include;
+          this.annotateToolsBaseDir(config, path13.dirname(resolvedPath));
+          if (!extendsValue) {
+            return config;
+          }
+          const { ConfigMerger: ConfigMerger2 } = await Promise.resolve().then(() => (init_config_merger(), config_merger_exports));
+          const merger = new ConfigMerger2();
+          const sources = Array.isArray(extendsValue) ? extendsValue : [extendsValue];
+          let mergedParents = {};
+          for (const source of sources) {
+            if (typeof source !== "string" || this.getSourceType(source) !== "local" /* LOCAL */) {
+              throw new Error(
+                `Bundled default configuration can only include local bundled files: ${String(source)}`
+              );
+            }
+            const parentPath = path13.isAbsolute(source) ? source : path13.resolve(path13.dirname(resolvedPath), source);
+            const parentConfig = await this.fetchBundledConfigFile(
+              parentPath,
+              bundledRoot,
+              currentDepth + 1,
+              seen
+            );
+            mergedParents = merger.merge(mergedParents, parentConfig);
+          }
+          return merger.merge(mergedParents, config);
+        } catch (error) {
+          if (error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+            throw new Error(`Bundled default configuration file not found: ${resolvedPath}`);
+          }
+          if (error instanceof Error) {
+            throw error;
+          }
+          throw error;
+        } finally {
+          seen.delete(resolvedPath);
+        }
       }
       /**
        * Process extends directive in a configuration
@@ -15468,6 +15521,26 @@ var init_config_loader = __esm({
           if (lowerPath.includes(pattern)) {
             throw new Error(`Security error: Cannot access potentially sensitive file: ${pattern}`);
           }
+        }
+      }
+      /**
+       * Validate that bundled default includes stay inside the Visor package/action bundle.
+       */
+      validateBundledPath(resolvedPath, bundledRoot) {
+        const canonicalize = (p) => {
+          const resolved = path13.resolve(p);
+          try {
+            return path13.normalize(fs11.realpathSync.native(resolved));
+          } catch {
+            return path13.normalize(resolved);
+          }
+        };
+        const normalizedPath = canonicalize(resolvedPath);
+        const normalizedRoot = canonicalize(bundledRoot);
+        if (normalizedPath !== normalizedRoot && !normalizedPath.startsWith(`${normalizedRoot}${path13.sep}`)) {
+          throw new Error(
+            `Security error: Bundled default include resolves outside bundled defaults directory: ${bundledRoot}`
+          );
         }
       }
       /**
@@ -25715,6 +25788,7 @@ Good update example:
           extractSkillMetadata: deps?.extractSkillMetadata || extractTraceSkillMetadata
         };
       }
+      ctx;
       deps;
       timer;
       firstTickTimer;
@@ -31623,6 +31697,9 @@ ${preview}`);
                 auth: entry.config.auth,
                 headers: entry.config.headers,
                 timeout: entry.config.timeout || 3e4,
+                // Preserve transform_js and rate_limit from the original tool config
+                ...entry.config.transform_js ? { transform_js: entry.config.transform_js } : {},
+                ...entry.config.rate_limit ? { rate_limit: entry.config.rate_limit } : {},
                 inputSchema: {
                   type: "object",
                   properties: {
@@ -56997,6 +57074,8 @@ var init_types = __esm({
         this.toState = toState;
         this.name = "InvalidStateTransitionError";
       }
+      fromState;
+      toState;
     };
     TaskNotFoundError = class extends Error {
       constructor(taskId) {
@@ -57004,6 +57083,7 @@ var init_types = __esm({
         this.taskId = taskId;
         this.name = "TaskNotFoundError";
       }
+      taskId;
     };
     ContextMismatchError = class extends Error {
       constructor(providedContextId, existingContextId) {
@@ -57014,6 +57094,8 @@ var init_types = __esm({
         this.existingContextId = existingContextId;
         this.name = "ContextMismatchError";
       }
+      providedContextId;
+      existingContextId;
     };
     InvalidRequestError = class extends Error {
       constructor(message) {
@@ -57034,6 +57116,8 @@ var init_types = __esm({
         this.timeoutMs = timeoutMs;
         this.name = "A2ATimeoutError";
       }
+      taskId;
+      timeoutMs;
     };
     A2ARequestError = class extends Error {
       constructor(url, statusCode, body) {
@@ -57043,6 +57127,9 @@ var init_types = __esm({
         this.body = body;
         this.name = "A2ARequestError";
       }
+      url;
+      statusCode;
+      body;
     };
     A2AMaxTurnsExceededError = class extends Error {
       constructor(taskId, maxTurns) {
@@ -57051,6 +57138,8 @@ var init_types = __esm({
         this.maxTurns = maxTurns;
         this.name = "A2AMaxTurnsExceededError";
       }
+      taskId;
+      maxTurns;
     };
     A2AInputRequiredError = class extends Error {
       constructor(taskId, prompt) {
@@ -57059,6 +57148,8 @@ var init_types = __esm({
         this.prompt = prompt;
         this.name = "A2AInputRequiredError";
       }
+      taskId;
+      prompt;
     };
     A2AAuthRequiredError = class extends Error {
       constructor(taskId) {
@@ -57066,6 +57157,7 @@ var init_types = __esm({
         this.taskId = taskId;
         this.name = "A2AAuthRequiredError";
       }
+      taskId;
     };
     A2ATaskFailedError = class extends Error {
       constructor(taskId, detail) {
@@ -57074,6 +57166,8 @@ var init_types = __esm({
         this.detail = detail;
         this.name = "A2ATaskFailedError";
       }
+      taskId;
+      detail;
     };
     A2ATaskRejectedError = class extends Error {
       constructor(taskId, state) {
@@ -57082,6 +57176,8 @@ var init_types = __esm({
         this.state = state;
         this.name = "A2ATaskRejectedError";
       }
+      taskId;
+      state;
     };
     AgentCardFetchError = class extends Error {
       constructor(url, statusCode, statusText) {
@@ -57091,6 +57187,9 @@ var init_types = __esm({
         this.statusText = statusText;
         this.name = "AgentCardFetchError";
       }
+      url;
+      statusCode;
+      statusText;
     };
     InvalidAgentCardError = class extends Error {
       constructor(url, detail) {
@@ -57099,6 +57198,8 @@ var init_types = __esm({
         this.detail = detail;
         this.name = "InvalidAgentCardError";
       }
+      url;
+      detail;
     };
   }
 });
@@ -67416,6 +67517,7 @@ var require_applicationIn = __commonJS({
           metadata: object["metadata"],
           name: object["name"],
           rateLimit: object["rateLimit"],
+          throttleRate: object["throttleRate"],
           uid: object["uid"]
         };
       },
@@ -67424,6 +67526,7 @@ var require_applicationIn = __commonJS({
           metadata: self.metadata,
           name: self.name,
           rateLimit: self.rateLimit,
+          throttleRate: self.throttleRate,
           uid: self.uid
         };
       }
@@ -67445,6 +67548,7 @@ var require_applicationOut = __commonJS({
           metadata: object["metadata"],
           name: object["name"],
           rateLimit: object["rateLimit"],
+          throttleRate: object["throttleRate"],
           uid: object["uid"],
           updatedAt: new Date(object["updatedAt"])
         };
@@ -67456,6 +67560,7 @@ var require_applicationOut = __commonJS({
           metadata: self.metadata,
           name: self.name,
           rateLimit: self.rateLimit,
+          throttleRate: self.throttleRate,
           uid: self.uid,
           updatedAt: self.updatedAt
         };
@@ -67576,7 +67681,7 @@ var require_request3 = __commonJS({
     exports2.SvixRequest = exports2.HttpMethod = exports2.LIB_VERSION = void 0;
     var util_1 = require_util8();
     var uuid_1 = require("uuid");
-    exports2.LIB_VERSION = "1.86.0";
+    exports2.LIB_VERSION = "1.90.0";
     var USER_AGENT = `svix-libs/${exports2.LIB_VERSION}/javascript`;
     var HttpMethod;
     (function(HttpMethod2) {
@@ -67736,6 +67841,7 @@ var require_application = __commonJS({
         request.setQueryParams({
           exclude_apps_with_no_endpoints: options === null || options === void 0 ? void 0 : options.excludeAppsWithNoEndpoints,
           exclude_apps_with_disabled_endpoints: options === null || options === void 0 ? void 0 : options.excludeAppsWithDisabledEndpoints,
+          exclude_apps_with_svix_play_endpoints: options === null || options === void 0 ? void 0 : options.excludeAppsWithSvixPlayEndpoints,
           limit: options === null || options === void 0 ? void 0 : options.limit,
           iterator: options === null || options === void 0 ? void 0 : options.iterator,
           order: options === null || options === void 0 ? void 0 : options.order
@@ -67968,6 +68074,29 @@ var require_streamPortalAccessIn = __commonJS({
   }
 });
 
+// ../../home/runner/work/visor/visor/node_modules/svix/dist/models/streamTokenExpireIn.js
+var require_streamTokenExpireIn = __commonJS({
+  "../../home/runner/work/visor/visor/node_modules/svix/dist/models/streamTokenExpireIn.js"(exports2) {
+    "use strict";
+    Object.defineProperty(exports2, "__esModule", { value: true });
+    exports2.StreamTokenExpireInSerializer = void 0;
+    exports2.StreamTokenExpireInSerializer = {
+      _fromJsonObject(object) {
+        return {
+          expiry: object["expiry"],
+          sessionIds: object["sessionIds"]
+        };
+      },
+      _toJsonObject(self) {
+        return {
+          expiry: self.expiry,
+          sessionIds: self.sessionIds
+        };
+      }
+    };
+  }
+});
+
 // ../../home/runner/work/visor/visor/node_modules/svix/dist/models/dashboardAccessOut.js
 var require_dashboardAccessOut = __commonJS({
   "../../home/runner/work/visor/visor/node_modules/svix/dist/models/dashboardAccessOut.js"(exports2) {
@@ -68003,6 +68132,7 @@ var require_authentication = __commonJS({
     var applicationTokenExpireIn_1 = require_applicationTokenExpireIn();
     var rotatePollerTokenIn_1 = require_rotatePollerTokenIn();
     var streamPortalAccessIn_1 = require_streamPortalAccessIn();
+    var streamTokenExpireIn_1 = require_streamTokenExpireIn();
     var dashboardAccessOut_1 = require_dashboardAccessOut();
     var request_1 = require_request3();
     var Authentication = class {
@@ -68034,12 +68164,24 @@ var require_authentication = __commonJS({
         request.setHeaderParam("idempotency-key", options === null || options === void 0 ? void 0 : options.idempotencyKey);
         return request.sendNoResponseBody(this.requestCtx);
       }
+      streamLogout(options) {
+        const request = new request_1.SvixRequest(request_1.HttpMethod.POST, "/api/v1/auth/stream-logout");
+        request.setHeaderParam("idempotency-key", options === null || options === void 0 ? void 0 : options.idempotencyKey);
+        return request.sendNoResponseBody(this.requestCtx);
+      }
       streamPortalAccess(streamId, streamPortalAccessIn, options) {
         const request = new request_1.SvixRequest(request_1.HttpMethod.POST, "/api/v1/auth/stream-portal-access/{stream_id}");
         request.setPathParam("stream_id", streamId);
         request.setHeaderParam("idempotency-key", options === null || options === void 0 ? void 0 : options.idempotencyKey);
         request.setBody(streamPortalAccessIn_1.StreamPortalAccessInSerializer._toJsonObject(streamPortalAccessIn));
         return request.send(this.requestCtx, appPortalAccessOut_1.AppPortalAccessOutSerializer._fromJsonObject);
+      }
+      streamExpireAll(streamId, streamTokenExpireIn, options) {
+        const request = new request_1.SvixRequest(request_1.HttpMethod.POST, "/api/v1/auth/stream/{stream_id}/expire-all");
+        request.setPathParam("stream_id", streamId);
+        request.setHeaderParam("idempotency-key", options === null || options === void 0 ? void 0 : options.idempotencyKey);
+        request.setBody(streamTokenExpireIn_1.StreamTokenExpireInSerializer._toJsonObject(streamTokenExpireIn));
+        return request.sendNoResponseBody(this.requestCtx);
       }
       getStreamPollerToken(streamId, sinkId) {
         const request = new request_1.SvixRequest(request_1.HttpMethod.GET, "/api/v1/auth/stream/{stream_id}/sink/{sink_id}/poller/token");
@@ -68098,7 +68240,7 @@ var require_backgroundTaskType = __commonJS({
       BackgroundTaskType2["SdkGenerate"] = "sdk.generate";
       BackgroundTaskType2["EventTypeAggregate"] = "event-type.aggregate";
       BackgroundTaskType2["ApplicationPurgeContent"] = "application.purge_content";
-      BackgroundTaskType2["EndpointBulkReplay"] = "endpoint.bulk_replay";
+      BackgroundTaskType2["EndpointBulkReplay"] = "endpoint.bulk-replay";
     })(BackgroundTaskType = exports2.BackgroundTaskType || (exports2.BackgroundTaskType = {}));
     exports2.BackgroundTaskTypeSerializer = {
       _fromJsonObject(object) {
@@ -68125,7 +68267,8 @@ var require_backgroundTaskOut = __commonJS({
           data: object["data"],
           id: object["id"],
           status: backgroundTaskStatus_1.BackgroundTaskStatusSerializer._fromJsonObject(object["status"]),
-          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._fromJsonObject(object["task"])
+          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._fromJsonObject(object["task"]),
+          updatedAt: new Date(object["updatedAt"])
         };
       },
       _toJsonObject(self) {
@@ -68133,7 +68276,8 @@ var require_backgroundTaskOut = __commonJS({
           data: self.data,
           id: self.id,
           status: backgroundTaskStatus_1.BackgroundTaskStatusSerializer._toJsonObject(self.status),
-          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._toJsonObject(self.task)
+          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._toJsonObject(self.task),
+          updatedAt: self.updatedAt
         };
       }
     };
@@ -68516,6 +68660,91 @@ var require_connector = __commonJS({
   }
 });
 
+// ../../home/runner/work/visor/visor/node_modules/svix/dist/models/messageStatus.js
+var require_messageStatus = __commonJS({
+  "../../home/runner/work/visor/visor/node_modules/svix/dist/models/messageStatus.js"(exports2) {
+    "use strict";
+    Object.defineProperty(exports2, "__esModule", { value: true });
+    exports2.MessageStatusSerializer = exports2.MessageStatus = void 0;
+    var MessageStatus;
+    (function(MessageStatus2) {
+      MessageStatus2[MessageStatus2["Success"] = 0] = "Success";
+      MessageStatus2[MessageStatus2["Pending"] = 1] = "Pending";
+      MessageStatus2[MessageStatus2["Fail"] = 2] = "Fail";
+      MessageStatus2[MessageStatus2["Sending"] = 3] = "Sending";
+    })(MessageStatus = exports2.MessageStatus || (exports2.MessageStatus = {}));
+    exports2.MessageStatusSerializer = {
+      _fromJsonObject(object) {
+        return object;
+      },
+      _toJsonObject(self) {
+        return self;
+      }
+    };
+  }
+});
+
+// ../../home/runner/work/visor/visor/node_modules/svix/dist/models/statusCodeClass.js
+var require_statusCodeClass = __commonJS({
+  "../../home/runner/work/visor/visor/node_modules/svix/dist/models/statusCodeClass.js"(exports2) {
+    "use strict";
+    Object.defineProperty(exports2, "__esModule", { value: true });
+    exports2.StatusCodeClassSerializer = exports2.StatusCodeClass = void 0;
+    var StatusCodeClass;
+    (function(StatusCodeClass2) {
+      StatusCodeClass2[StatusCodeClass2["CodeNone"] = 0] = "CodeNone";
+      StatusCodeClass2[StatusCodeClass2["Code1xx"] = 100] = "Code1xx";
+      StatusCodeClass2[StatusCodeClass2["Code2xx"] = 200] = "Code2xx";
+      StatusCodeClass2[StatusCodeClass2["Code3xx"] = 300] = "Code3xx";
+      StatusCodeClass2[StatusCodeClass2["Code4xx"] = 400] = "Code4xx";
+      StatusCodeClass2[StatusCodeClass2["Code5xx"] = 500] = "Code5xx";
+    })(StatusCodeClass = exports2.StatusCodeClass || (exports2.StatusCodeClass = {}));
+    exports2.StatusCodeClassSerializer = {
+      _fromJsonObject(object) {
+        return object;
+      },
+      _toJsonObject(self) {
+        return self;
+      }
+    };
+  }
+});
+
+// ../../home/runner/work/visor/visor/node_modules/svix/dist/models/bulkReplayIn.js
+var require_bulkReplayIn = __commonJS({
+  "../../home/runner/work/visor/visor/node_modules/svix/dist/models/bulkReplayIn.js"(exports2) {
+    "use strict";
+    Object.defineProperty(exports2, "__esModule", { value: true });
+    exports2.BulkReplayInSerializer = void 0;
+    var messageStatus_1 = require_messageStatus();
+    var statusCodeClass_1 = require_statusCodeClass();
+    exports2.BulkReplayInSerializer = {
+      _fromJsonObject(object) {
+        return {
+          channel: object["channel"],
+          eventTypes: object["eventTypes"],
+          since: new Date(object["since"]),
+          status: object["status"] != null ? messageStatus_1.MessageStatusSerializer._fromJsonObject(object["status"]) : void 0,
+          statusCodeClass: object["statusCodeClass"] != null ? statusCodeClass_1.StatusCodeClassSerializer._fromJsonObject(object["statusCodeClass"]) : void 0,
+          tag: object["tag"],
+          until: object["until"] ? new Date(object["until"]) : null
+        };
+      },
+      _toJsonObject(self) {
+        return {
+          channel: self.channel,
+          eventTypes: self.eventTypes,
+          since: self.since,
+          status: self.status != null ? messageStatus_1.MessageStatusSerializer._toJsonObject(self.status) : void 0,
+          statusCodeClass: self.statusCodeClass != null ? statusCodeClass_1.StatusCodeClassSerializer._toJsonObject(self.statusCodeClass) : void 0,
+          tag: self.tag,
+          until: self.until
+        };
+      }
+    };
+  }
+});
+
 // ../../home/runner/work/visor/visor/node_modules/svix/dist/models/endpointHeadersIn.js
 var require_endpointHeadersIn = __commonJS({
   "../../home/runner/work/visor/visor/node_modules/svix/dist/models/endpointHeadersIn.js"(exports2) {
@@ -68600,6 +68829,7 @@ var require_endpointIn = __commonJS({
           metadata: object["metadata"],
           rateLimit: object["rateLimit"],
           secret: object["secret"],
+          throttleRate: object["throttleRate"],
           uid: object["uid"],
           url: object["url"],
           version: object["version"]
@@ -68615,6 +68845,7 @@ var require_endpointIn = __commonJS({
           metadata: self.metadata,
           rateLimit: self.rateLimit,
           secret: self.secret,
+          throttleRate: self.throttleRate,
           uid: self.uid,
           url: self.url,
           version: self.version
@@ -68641,6 +68872,7 @@ var require_endpointOut = __commonJS({
           id: object["id"],
           metadata: object["metadata"],
           rateLimit: object["rateLimit"],
+          throttleRate: object["throttleRate"],
           uid: object["uid"],
           updatedAt: new Date(object["updatedAt"]),
           url: object["url"],
@@ -68657,6 +68889,7 @@ var require_endpointOut = __commonJS({
           id: self.id,
           metadata: self.metadata,
           rateLimit: self.rateLimit,
+          throttleRate: self.throttleRate,
           uid: self.uid,
           updatedAt: self.updatedAt,
           url: self.url,
@@ -68683,6 +68916,7 @@ var require_endpointPatch = __commonJS({
           metadata: object["metadata"],
           rateLimit: object["rateLimit"],
           secret: object["secret"],
+          throttleRate: object["throttleRate"],
           uid: object["uid"],
           url: object["url"],
           version: object["version"]
@@ -68697,6 +68931,7 @@ var require_endpointPatch = __commonJS({
           metadata: self.metadata,
           rateLimit: self.rateLimit,
           secret: self.secret,
+          throttleRate: self.throttleRate,
           uid: self.uid,
           url: self.url,
           version: self.version
@@ -68861,6 +69096,7 @@ var require_endpointUpdate = __commonJS({
           filterTypes: object["filterTypes"],
           metadata: object["metadata"],
           rateLimit: object["rateLimit"],
+          throttleRate: object["throttleRate"],
           uid: object["uid"],
           url: object["url"],
           version: object["version"]
@@ -68874,6 +69110,7 @@ var require_endpointUpdate = __commonJS({
           filterTypes: self.filterTypes,
           metadata: self.metadata,
           rateLimit: self.rateLimit,
+          throttleRate: self.throttleRate,
           uid: self.uid,
           url: self.url,
           version: self.version
@@ -69005,14 +69242,16 @@ var require_recoverOut = __commonJS({
         return {
           id: object["id"],
           status: backgroundTaskStatus_1.BackgroundTaskStatusSerializer._fromJsonObject(object["status"]),
-          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._fromJsonObject(object["task"])
+          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._fromJsonObject(object["task"]),
+          updatedAt: new Date(object["updatedAt"])
         };
       },
       _toJsonObject(self) {
         return {
           id: self.id,
           status: backgroundTaskStatus_1.BackgroundTaskStatusSerializer._toJsonObject(self.status),
-          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._toJsonObject(self.task)
+          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._toJsonObject(self.task),
+          updatedAt: self.updatedAt
         };
       }
     };
@@ -69055,14 +69294,16 @@ var require_replayOut = __commonJS({
         return {
           id: object["id"],
           status: backgroundTaskStatus_1.BackgroundTaskStatusSerializer._fromJsonObject(object["status"]),
-          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._fromJsonObject(object["task"])
+          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._fromJsonObject(object["task"]),
+          updatedAt: new Date(object["updatedAt"])
         };
       },
       _toJsonObject(self) {
         return {
           id: self.id,
           status: backgroundTaskStatus_1.BackgroundTaskStatusSerializer._toJsonObject(self.status),
-          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._toJsonObject(self.task)
+          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._toJsonObject(self.task),
+          updatedAt: self.updatedAt
         };
       }
     };
@@ -69075,6 +69316,7 @@ var require_endpoint = __commonJS({
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.Endpoint = void 0;
+    var bulkReplayIn_1 = require_bulkReplayIn();
     var endpointHeadersIn_1 = require_endpointHeadersIn();
     var endpointHeadersOut_1 = require_endpointHeadersOut();
     var endpointHeadersPatchIn_1 = require_endpointHeadersPatchIn();
@@ -69142,6 +69384,14 @@ var require_endpoint = __commonJS({
         request.setPathParam("endpoint_id", endpointId);
         request.setBody(endpointPatch_1.EndpointPatchSerializer._toJsonObject(endpointPatch));
         return request.send(this.requestCtx, endpointOut_1.EndpointOutSerializer._fromJsonObject);
+      }
+      bulkReplay(appId, endpointId, bulkReplayIn, options) {
+        const request = new request_1.SvixRequest(request_1.HttpMethod.POST, "/api/v1/app/{app_id}/endpoint/{endpoint_id}/bulk-replay");
+        request.setPathParam("app_id", appId);
+        request.setPathParam("endpoint_id", endpointId);
+        request.setHeaderParam("idempotency-key", options === null || options === void 0 ? void 0 : options.idempotencyKey);
+        request.setBody(bulkReplayIn_1.BulkReplayInSerializer._toJsonObject(bulkReplayIn));
+        return request.send(this.requestCtx, replayOut_1.ReplayOutSerializer._fromJsonObject);
       }
       getHeaders(appId, endpointId) {
         const request = new request_1.SvixRequest(request_1.HttpMethod.GET, "/api/v1/app/{app_id}/endpoint/{endpoint_id}/headers");
@@ -70256,6 +70506,29 @@ var require_hubspotConfig = __commonJS({
   }
 });
 
+// ../../home/runner/work/visor/visor/node_modules/svix/dist/models/metaConfig.js
+var require_metaConfig = __commonJS({
+  "../../home/runner/work/visor/visor/node_modules/svix/dist/models/metaConfig.js"(exports2) {
+    "use strict";
+    Object.defineProperty(exports2, "__esModule", { value: true });
+    exports2.MetaConfigSerializer = void 0;
+    exports2.MetaConfigSerializer = {
+      _fromJsonObject(object) {
+        return {
+          secret: object["secret"],
+          verifyToken: object["verifyToken"]
+        };
+      },
+      _toJsonObject(self) {
+        return {
+          secret: self.secret,
+          verifyToken: self.verifyToken
+        };
+      }
+    };
+  }
+});
+
 // ../../home/runner/work/visor/visor/node_modules/svix/dist/models/orumIoConfig.js
 var require_orumIoConfig = __commonJS({
   "../../home/runner/work/visor/visor/node_modules/svix/dist/models/orumIoConfig.js"(exports2) {
@@ -70543,6 +70816,7 @@ var require_ingestSourceIn = __commonJS({
     var easypostConfig_1 = require_easypostConfig();
     var githubConfig_1 = require_githubConfig();
     var hubspotConfig_1 = require_hubspotConfig();
+    var metaConfig_1 = require_metaConfig();
     var orumIoConfig_1 = require_orumIoConfig();
     var pandaDocConfig_1 = require_pandaDocConfig();
     var portIoConfig_1 = require_portIoConfig();
@@ -70589,6 +70863,8 @@ var require_ingestSourceIn = __commonJS({
               return svixConfig_1.SvixConfigSerializer._fromJsonObject(object["config"]);
             case "lithic":
               return svixConfig_1.SvixConfigSerializer._fromJsonObject(object["config"]);
+            case "meta":
+              return metaConfig_1.MetaConfigSerializer._fromJsonObject(object["config"]);
             case "nash":
               return svixConfig_1.SvixConfigSerializer._fromJsonObject(object["config"]);
             case "orum-io":
@@ -70598,6 +70874,8 @@ var require_ingestSourceIn = __commonJS({
             case "port-io":
               return portIoConfig_1.PortIoConfigSerializer._fromJsonObject(object["config"]);
             case "pleo":
+              return svixConfig_1.SvixConfigSerializer._fromJsonObject(object["config"]);
+            case "psi-fi":
               return svixConfig_1.SvixConfigSerializer._fromJsonObject(object["config"]);
             case "replicate":
               return svixConfig_1.SvixConfigSerializer._fromJsonObject(object["config"]);
@@ -70692,6 +70970,9 @@ var require_ingestSourceIn = __commonJS({
           case "lithic":
             config = svixConfig_1.SvixConfigSerializer._toJsonObject(self.config);
             break;
+          case "meta":
+            config = metaConfig_1.MetaConfigSerializer._toJsonObject(self.config);
+            break;
           case "nash":
             config = svixConfig_1.SvixConfigSerializer._toJsonObject(self.config);
             break;
@@ -70705,6 +70986,9 @@ var require_ingestSourceIn = __commonJS({
             config = portIoConfig_1.PortIoConfigSerializer._toJsonObject(self.config);
             break;
           case "pleo":
+            config = svixConfig_1.SvixConfigSerializer._toJsonObject(self.config);
+            break;
+          case "psi-fi":
             config = svixConfig_1.SvixConfigSerializer._toJsonObject(self.config);
             break;
           case "replicate":
@@ -70883,6 +71167,23 @@ var require_hubspotConfigOut = __commonJS({
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.HubspotConfigOutSerializer = void 0;
     exports2.HubspotConfigOutSerializer = {
+      _fromJsonObject(_object) {
+        return {};
+      },
+      _toJsonObject(_self) {
+        return {};
+      }
+    };
+  }
+});
+
+// ../../home/runner/work/visor/visor/node_modules/svix/dist/models/metaConfigOut.js
+var require_metaConfigOut = __commonJS({
+  "../../home/runner/work/visor/visor/node_modules/svix/dist/models/metaConfigOut.js"(exports2) {
+    "use strict";
+    Object.defineProperty(exports2, "__esModule", { value: true });
+    exports2.MetaConfigOutSerializer = void 0;
+    exports2.MetaConfigOutSerializer = {
       _fromJsonObject(_object) {
         return {};
       },
@@ -71136,6 +71437,7 @@ var require_ingestSourceOut = __commonJS({
     var easypostConfigOut_1 = require_easypostConfigOut();
     var githubConfigOut_1 = require_githubConfigOut();
     var hubspotConfigOut_1 = require_hubspotConfigOut();
+    var metaConfigOut_1 = require_metaConfigOut();
     var orumIoConfigOut_1 = require_orumIoConfigOut();
     var pandaDocConfigOut_1 = require_pandaDocConfigOut();
     var portIoConfigOut_1 = require_portIoConfigOut();
@@ -71182,6 +71484,8 @@ var require_ingestSourceOut = __commonJS({
               return svixConfigOut_1.SvixConfigOutSerializer._fromJsonObject(object["config"]);
             case "lithic":
               return svixConfigOut_1.SvixConfigOutSerializer._fromJsonObject(object["config"]);
+            case "meta":
+              return metaConfigOut_1.MetaConfigOutSerializer._fromJsonObject(object["config"]);
             case "nash":
               return svixConfigOut_1.SvixConfigOutSerializer._fromJsonObject(object["config"]);
             case "orum-io":
@@ -71190,6 +71494,8 @@ var require_ingestSourceOut = __commonJS({
               return pandaDocConfigOut_1.PandaDocConfigOutSerializer._fromJsonObject(object["config"]);
             case "port-io":
               return portIoConfigOut_1.PortIoConfigOutSerializer._fromJsonObject(object["config"]);
+            case "psi-fi":
+              return svixConfigOut_1.SvixConfigOutSerializer._fromJsonObject(object["config"]);
             case "pleo":
               return svixConfigOut_1.SvixConfigOutSerializer._fromJsonObject(object["config"]);
             case "replicate":
@@ -71289,6 +71595,9 @@ var require_ingestSourceOut = __commonJS({
           case "lithic":
             config = svixConfigOut_1.SvixConfigOutSerializer._toJsonObject(self.config);
             break;
+          case "meta":
+            config = metaConfigOut_1.MetaConfigOutSerializer._toJsonObject(self.config);
+            break;
           case "nash":
             config = svixConfigOut_1.SvixConfigOutSerializer._toJsonObject(self.config);
             break;
@@ -71300,6 +71609,9 @@ var require_ingestSourceOut = __commonJS({
             break;
           case "port-io":
             config = portIoConfigOut_1.PortIoConfigOutSerializer._toJsonObject(self.config);
+            break;
+          case "psi-fi":
+            config = svixConfigOut_1.SvixConfigOutSerializer._toJsonObject(self.config);
             break;
           case "pleo":
             config = svixConfigOut_1.SvixConfigOutSerializer._toJsonObject(self.config);
@@ -71721,14 +72033,16 @@ var require_expungeAllContentsOut = __commonJS({
         return {
           id: object["id"],
           status: backgroundTaskStatus_1.BackgroundTaskStatusSerializer._fromJsonObject(object["status"]),
-          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._fromJsonObject(object["task"])
+          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._fromJsonObject(object["task"]),
+          updatedAt: new Date(object["updatedAt"])
         };
       },
       _toJsonObject(self) {
         return {
           id: self.id,
           status: backgroundTaskStatus_1.BackgroundTaskStatusSerializer._toJsonObject(self.status),
-          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._toJsonObject(self.task)
+          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._toJsonObject(self.task),
+          updatedAt: self.updatedAt
         };
       }
     };
@@ -72112,30 +72426,6 @@ var require_emptyResponse = __commonJS({
   }
 });
 
-// ../../home/runner/work/visor/visor/node_modules/svix/dist/models/messageStatus.js
-var require_messageStatus = __commonJS({
-  "../../home/runner/work/visor/visor/node_modules/svix/dist/models/messageStatus.js"(exports2) {
-    "use strict";
-    Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.MessageStatusSerializer = exports2.MessageStatus = void 0;
-    var MessageStatus;
-    (function(MessageStatus2) {
-      MessageStatus2[MessageStatus2["Success"] = 0] = "Success";
-      MessageStatus2[MessageStatus2["Pending"] = 1] = "Pending";
-      MessageStatus2[MessageStatus2["Fail"] = 2] = "Fail";
-      MessageStatus2[MessageStatus2["Sending"] = 3] = "Sending";
-    })(MessageStatus = exports2.MessageStatus || (exports2.MessageStatus = {}));
-    exports2.MessageStatusSerializer = {
-      _fromJsonObject(object) {
-        return object;
-      },
-      _toJsonObject(self) {
-        return self;
-      }
-    };
-  }
-});
-
 // ../../home/runner/work/visor/visor/node_modules/svix/dist/models/messageStatusText.js
 var require_messageStatusText = __commonJS({
   "../../home/runner/work/visor/visor/node_modules/svix/dist/models/messageStatusText.js"(exports2) {
@@ -72349,6 +72639,7 @@ var require_messageEndpointOut = __commonJS({
           rateLimit: object["rateLimit"],
           status: messageStatus_1.MessageStatusSerializer._fromJsonObject(object["status"]),
           statusText: messageStatusText_1.MessageStatusTextSerializer._fromJsonObject(object["statusText"]),
+          throttleRate: object["throttleRate"],
           uid: object["uid"],
           updatedAt: new Date(object["updatedAt"]),
           url: object["url"],
@@ -72367,6 +72658,7 @@ var require_messageEndpointOut = __commonJS({
           rateLimit: self.rateLimit,
           status: messageStatus_1.MessageStatusSerializer._toJsonObject(self.status),
           statusText: messageStatusText_1.MessageStatusTextSerializer._toJsonObject(self.statusText),
+          throttleRate: self.throttleRate,
           uid: self.uid,
           updatedAt: self.updatedAt,
           url: self.url,
@@ -72844,14 +73136,16 @@ var require_aggregateEventTypesOut = __commonJS({
         return {
           id: object["id"],
           status: backgroundTaskStatus_1.BackgroundTaskStatusSerializer._fromJsonObject(object["status"]),
-          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._fromJsonObject(object["task"])
+          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._fromJsonObject(object["task"]),
+          updatedAt: new Date(object["updatedAt"])
         };
       },
       _toJsonObject(self) {
         return {
           id: self.id,
           status: backgroundTaskStatus_1.BackgroundTaskStatusSerializer._toJsonObject(self.status),
-          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._toJsonObject(self.task)
+          task: backgroundTaskType_1.BackgroundTaskTypeSerializer._toJsonObject(self.task),
+          updatedAt: self.updatedAt
         };
       }
     };
@@ -72897,7 +73191,8 @@ var require_appUsageStatsOut = __commonJS({
           id: object["id"],
           status: backgroundTaskStatus_1.BackgroundTaskStatusSerializer._fromJsonObject(object["status"]),
           task: backgroundTaskType_1.BackgroundTaskTypeSerializer._fromJsonObject(object["task"]),
-          unresolvedAppIds: object["unresolvedAppIds"]
+          unresolvedAppIds: object["unresolvedAppIds"],
+          updatedAt: new Date(object["updatedAt"])
         };
       },
       _toJsonObject(self) {
@@ -72905,7 +73200,8 @@ var require_appUsageStatsOut = __commonJS({
           id: self.id,
           status: backgroundTaskStatus_1.BackgroundTaskStatusSerializer._toJsonObject(self.status),
           task: backgroundTaskType_1.BackgroundTaskTypeSerializer._toJsonObject(self.task),
-          unresolvedAppIds: self.unresolvedAppIds
+          unresolvedAppIds: self.unresolvedAppIds,
+          updatedAt: self.updatedAt
         };
       }
     };
@@ -73402,6 +73698,7 @@ var require_s3Config = __commonJS({
         return {
           accessKeyId: object["accessKeyId"],
           bucket: object["bucket"],
+          endpointUrl: object["endpointUrl"],
           region: object["region"],
           secretAccessKey: object["secretAccessKey"]
         };
@@ -73410,6 +73707,7 @@ var require_s3Config = __commonJS({
         return {
           accessKeyId: self.accessKeyId,
           bucket: self.bucket,
+          endpointUrl: self.endpointUrl,
           region: self.region,
           secretAccessKey: self.secretAccessKey
         };
@@ -73767,6 +74065,7 @@ var require_amazonS3PatchConfig = __commonJS({
         return {
           accessKeyId: object["accessKeyId"],
           bucket: object["bucket"],
+          endpointUrl: object["endpointUrl"],
           region: object["region"],
           secretAccessKey: object["secretAccessKey"]
         };
@@ -73775,6 +74074,7 @@ var require_amazonS3PatchConfig = __commonJS({
         return {
           accessKeyId: self.accessKeyId,
           bucket: self.bucket,
+          endpointUrl: self.endpointUrl,
           region: self.region,
           secretAccessKey: self.secretAccessKey
         };
@@ -75160,32 +75460,6 @@ var require_ordering = __commonJS({
       Ordering2["Descending"] = "descending";
     })(Ordering = exports2.Ordering || (exports2.Ordering = {}));
     exports2.OrderingSerializer = {
-      _fromJsonObject(object) {
-        return object;
-      },
-      _toJsonObject(self) {
-        return self;
-      }
-    };
-  }
-});
-
-// ../../home/runner/work/visor/visor/node_modules/svix/dist/models/statusCodeClass.js
-var require_statusCodeClass = __commonJS({
-  "../../home/runner/work/visor/visor/node_modules/svix/dist/models/statusCodeClass.js"(exports2) {
-    "use strict";
-    Object.defineProperty(exports2, "__esModule", { value: true });
-    exports2.StatusCodeClassSerializer = exports2.StatusCodeClass = void 0;
-    var StatusCodeClass;
-    (function(StatusCodeClass2) {
-      StatusCodeClass2[StatusCodeClass2["CodeNone"] = 0] = "CodeNone";
-      StatusCodeClass2[StatusCodeClass2["Code1xx"] = 100] = "Code1xx";
-      StatusCodeClass2[StatusCodeClass2["Code2xx"] = 200] = "Code2xx";
-      StatusCodeClass2[StatusCodeClass2["Code3xx"] = 300] = "Code3xx";
-      StatusCodeClass2[StatusCodeClass2["Code4xx"] = 400] = "Code4xx";
-      StatusCodeClass2[StatusCodeClass2["Code5xx"] = 500] = "Code5xx";
-    })(StatusCodeClass = exports2.StatusCodeClass || (exports2.StatusCodeClass = {}));
-    exports2.StatusCodeClassSerializer = {
       _fromJsonObject(object) {
         return object;
       },
@@ -77594,6 +77868,8 @@ var init_task_queue = __esm({
         this.config = { ...DEFAULT_CONFIG, ...config };
         this.workerId = workerId ?? import_crypto12.default.randomUUID();
       }
+      taskStore;
+      executor;
       running = false;
       timer = null;
       activeCount = 0;
