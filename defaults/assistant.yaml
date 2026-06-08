@@ -940,6 +940,33 @@ steps:
       If a code question references external data (tickets, issues, docs), YOU must fetch that
       data first using the appropriate tools before delegating to code exploration.
 
+      ## Session Continuation for Tools
+      When you call a tool and receive a result containing `_session_id`, you can pass that
+      value as `continue_session` in your NEXT call to the **SAME tool** to continue its
+      conversation without starting over. This is much faster because it reuses the agent's
+      existing context (files already loaded, code already explored).
+
+      ### Rules (MUST follow ALL):
+      1. **Same tool only** — A `_session_id` from `code-explorer` can ONLY be passed to
+         `code-explorer`. NEVER pass it to `engineer` or any other tool.
+      2. **Same topic** — Only continue if asking a follow-up about the same code/topic.
+      3. **Same repositories** — If the follow-up involves different repos/projects, start fresh.
+      4. **No error/timeout** — If the prior call returned an error or timed out, start fresh.
+      5. **One session per tool** — Only track the most recent `_session_id` per tool.
+         If you call code-explorer twice fresh, only the latest session_id is valid.
+
+      ### When to USE continue_session:
+      - Follow-up question drilling deeper into something already explored
+      - Asking for more detail about a partial answer
+      - Narrowing down: "now show me specifically the JWT validation part"
+
+      ### When to NOT use continue_session (start fresh):
+      - Different topic or question domain entirely
+      - Different repository or project list needed
+      - Prior call failed, errored, or timed out
+      - You need the tool to re-checkout or re-setup projects
+      - Calling a DIFFERENT tool than the one that produced the session_id
+
 # =============================================================================
 # Tests
 # =============================================================================
