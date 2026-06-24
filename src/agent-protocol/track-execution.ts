@@ -25,6 +25,116 @@ import {
 import { resolveTaskTraceReference } from './task-trace-resolution';
 import { summarizeUserFacingIssues } from '../utils/user-facing-error';
 
+/**
+ * If `text` looks like a JSON object with a `.text` field, extract it.
+ * Handles the edge case where the AI double-wraps its response as
+ * `{"text":"actual content"}` instead of returning the string directly.
+ */
+function unwrapJsonText(text: string): string {
+  if (text.startsWith('{') && text.includes('"text"')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (typeof parsed?.text === 'string' && parsed.text.trim().length > 0) {
+        return parsed.text.trim();
+      }
+    } catch {
+      // JSON.parse fails when the string contains unescaped control characters
+      // (newlines, tabs) inside JSON string values — common with markdown content.
+      // Escape them and retry.
+      try {
+        const sanitized = text.replace(
+          /[\x00-\x1F\x7F]/g,
+          ch => '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0')
+        );
+        const parsed = JSON.parse(sanitized);
+        if (typeof parsed?.text === 'string' && parsed.text.trim().length > 0) {
+          return parsed.text.trim();
+        }
+      } catch {
+        // genuine malformed JSON — give up
+      }
+    }
+  }
+  return text;
+}
+
+/**
+ * Detect text that is ProbeAgent tool/task management output rather than
+ * the AI's actual response. This output leaks into .text when answer()
+ * concatenates tool output with the response.
+ */
+function isToolOutput(text: string): boolean {
+  // ProbeAgent task tool tree output (├─┬, │, └─)
+  if (/^[├│└─┬┘┤┼]{1,3}/.test(text)) return true;
+  // Task tool markers
+  if (text.startsWith('[task:')) return true;
+  return false;
+}
+
+/**
+ * Extract the last .text from a set of history entries (array of output arrays).
+ * Returns undefined if no text found.
+ */
+function extractTextFromEntries(entries: unknown[][]): string | undefined {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const outputs = entries[i];
+    if (!Array.isArray(outputs)) continue;
+    for (let j = outputs.length - 1; j >= 0; j--) {
+      const text = (outputs[j] as any)?.text;
+      if (typeof text === 'string' && text.trim().length > 0) {
+        return unwrapJsonText(text.trim());
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Multi-pass extraction: prefer top-level entries, but fall back to
+ * generate-response entries if the top-level text is tool output.
+ */
+function extractBestResponseText(history: Record<string, unknown[]>, allKeys: string[]): string {
+  // Pass 1: top-level entries (no dots) — the workflow's computed output
+  const topLevelEntries = Object.entries(history)
+    .filter(([key]) => !key.includes('.'))
+    .map(([, v]) => v);
+  const topLevelText = extractTextFromEntries(topLevelEntries);
+
+  if (topLevelText && !isToolOutput(topLevelText)) {
+    logger.info(
+      `[TaskTracking] Extracted responseText (${topLevelText.length} chars): "${topLevelText.substring(0, 100)}..."`
+    );
+    return topLevelText;
+  }
+
+  // Pass 2: look for generate-response entries specifically — the AI step
+  // that produces the final user-facing response in assistant workflows.
+  const genResponseKeys = allKeys.filter(
+    k => k.endsWith('.generate-response') || k === 'generate-response'
+  );
+  if (genResponseKeys.length > 0) {
+    const genEntries = genResponseKeys.map(k => history[k]);
+    const genText = extractTextFromEntries(genEntries);
+    if (genText && !isToolOutput(genText)) {
+      logger.info(
+        `[TaskTracking] Fallback to generate-response entry (${genText.length} chars): "${genText.substring(0, 100)}..."`
+      );
+      return genText;
+    }
+  }
+
+  // Pass 3: if top-level text exists but was tool output, use it anyway
+  // as a last resort — better than "Execution completed"
+  if (topLevelText) {
+    logger.warn(
+      `[TaskTracking] Using tool output as responseText (${topLevelText.length} chars) — no better candidate found`
+    );
+    return topLevelText;
+  }
+
+  return 'Execution completed';
+}
+
 function getPackageVersion(): string {
   try {
     return require('../../package.json')?.version || 'dev';
@@ -229,32 +339,15 @@ export async function trackExecution<T>(
         // best-effort — don't fail the task over metadata
       }
 
-      // Extract response text from the result.
-      // result.reviewSummary.history is keyed by checkId with arrays of outputs.
-      // We want the LAST check's text output (the final AI response or workflow text output).
+      // Extract response text via multi-pass extraction.
       let responseText = 'Execution completed';
       try {
         const history = (result as any)?.reviewSummary?.history as
           | Record<string, unknown[]>
           | undefined;
         if (history) {
-          const entries = Object.values(history);
-          // Iterate in reverse — last check output is the final response
-          for (let i = entries.length - 1; i >= 0; i--) {
-            const outputs = entries[i];
-            if (!Array.isArray(outputs)) continue;
-            // Within a check, look at the last output first too
-            for (let j = outputs.length - 1; j >= 0; j--) {
-              const out = outputs[j] as any;
-              // Direct text field (AI response or workflow text output)
-              const text = out?.text;
-              if (typeof text === 'string' && text.trim().length > 0) {
-                responseText = text.trim();
-                break;
-              }
-            }
-            if (responseText !== 'Execution completed') break;
-          }
+          const allKeys = Object.keys(history);
+          responseText = extractBestResponseText(history, allKeys);
         }
         if (responseText === 'Execution completed') {
           const issueSummary = summarizeUserFacingIssues((result as any)?.reviewSummary?.issues);

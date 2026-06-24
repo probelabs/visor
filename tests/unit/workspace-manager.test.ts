@@ -758,10 +758,13 @@ describe('WorkspaceManager', () => {
       const subDir = path.join(staleDir, 'my-project');
       fs.mkdirSync(subDir, { recursive: true });
 
-      // Simulate a git worktree .git file
+      // Simulate a git worktree .git file — repo must be inside basePath
+      // so cleanupStale's safety guard allows the worktree removal.
+      const fakeRepoPath = path.join(staleBasePath, 'repos', 'my-repo');
+      fs.mkdirSync(fakeRepoPath, { recursive: true });
       fs.writeFileSync(
         path.join(subDir, '.git'),
-        'gitdir: /home/user/repo/.git/worktrees/my-project'
+        `gitdir: ${fakeRepoPath}/.git/worktrees/my-project`
       );
 
       const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
@@ -775,7 +778,7 @@ describe('WorkspaceManager', () => {
         String(call[0]).includes('worktree remove')
       );
       expect(worktreeRemoveCalls.length).toBe(1);
-      expect(worktreeRemoveCalls[0][0]).toContain('/home/user/repo');
+      expect(worktreeRemoveCalls[0][0]).toContain(fakeRepoPath);
     });
   });
 

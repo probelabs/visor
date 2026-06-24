@@ -584,6 +584,22 @@ export class WorkspaceManager {
         try {
           const stat = await fsp.stat(dirPath);
           if (now - stat.mtimeMs > maxAgeMs) {
+            // Safety: skip directories that are real git repos (have a .git directory),
+            // not visor-created worktree directories. Worktrees have a .git *file*
+            // (containing "gitdir: ..."), not a .git directory.
+            const topGitPath = path.join(dirPath, '.git');
+            try {
+              const topGitStat = await fsp.stat(topGitPath);
+              if (topGitStat.isDirectory()) {
+                logger.warn(
+                  `[Workspace] Skipping ${dirPath} — it is a real git repository, not a visor workspace`
+                );
+                continue;
+              }
+            } catch {
+              // .git doesn't exist — safe to proceed
+            }
+
             // Prune any git worktrees before removing the directory
             try {
               const subdirs = await fsp.readdir(dirPath, { withFileTypes: true });
@@ -596,7 +612,21 @@ export class WorkspaceManager {
                   const match = gitContent.match(/gitdir:\s*(.+)/);
                   if (match) {
                     const worktreeGitDir = match[1].trim();
+                    // Only proceed if this is actually a worktree (gitdir points into .git/worktrees/)
+                    if (!worktreeGitDir.includes('/.git/worktrees/')) {
+                      logger.warn(
+                        `[Workspace] Skipping worktree removal for ${subPath} — gitdir does not point to a worktree`
+                      );
+                      continue;
+                    }
                     const repoGitDir = worktreeGitDir.replace(/\/\.git\/worktrees\/.*$/, '');
+                    // Don't remove worktrees from repos outside the workspace basePath
+                    if (!repoGitDir.startsWith(basePath)) {
+                      logger.warn(
+                        `[Workspace] Skipping worktree removal for ${subPath} — parent repo ${repoGitDir} is outside workspace`
+                      );
+                      continue;
+                    }
                     await commandExecutor.execute(
                       `git -C ${shellEscape(repoGitDir)} worktree remove ${shellEscape(subPath)} --force`,
                       { timeout: 10000 }

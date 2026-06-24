@@ -281,4 +281,168 @@ describe('trackExecution', () => {
     expect(sink.complete).not.toHaveBeenCalled();
     expect(sink.fail).not.toHaveBeenCalled();
   });
+
+  // ---------------------------------------------------------------------------
+  // Multi-pass response extraction tests
+  // ---------------------------------------------------------------------------
+
+  describe('response text extraction', () => {
+    function runWithHistory(history: Record<string, unknown[]>) {
+      return trackExecution(
+        { taskStore: store, source: 'test' as any, messageText: 'extraction test' },
+        async () => ({ reviewSummary: { history } })
+      );
+    }
+
+    it('should extract plain text from top-level entry', async () => {
+      const { task } = await runWithHistory({
+        'generate-response': [{ text: 'Hello world' }],
+      });
+      const updated = store.getTask(task.id);
+      expect(updated!.status.message!.parts[0]).toEqual({ text: 'Hello world' });
+    });
+
+    it('should prefer top-level over dotted sub-workflow entries', async () => {
+      const { task } = await runWithHistory({
+        'parent.sub-step': [{ text: 'sub-step output' }],
+        'generate-response': [{ text: 'Top-level response' }],
+      });
+      const updated = store.getTask(task.id);
+      expect(updated!.status.message!.parts[0]).toEqual({ text: 'Top-level response' });
+    });
+
+    it('should unwrap JSON-wrapped text', async () => {
+      const { task } = await runWithHistory({
+        'generate-response': [{ text: '{"text":"Unwrapped content"}' }],
+      });
+      const updated = store.getTask(task.id);
+      expect(updated!.status.message!.parts[0]).toEqual({ text: 'Unwrapped content' });
+    });
+
+    it('should unwrap JSON text with unescaped control characters', async () => {
+      const jsonWithControlChars = '{"text":"Line one\\nLine two\tTabbed"}';
+      const { task } = await runWithHistory({
+        'generate-response': [{ text: jsonWithControlChars }],
+      });
+      const updated = store.getTask(task.id);
+      const msg = (updated!.status.message!.parts[0] as any).text;
+      expect(msg).toContain('Line one');
+    });
+
+    it('should fall back to generate-response when top-level is tool output', async () => {
+      const { task } = await runWithHistory({
+        'check-0': [{ text: '├─┬ Running analysis' }],
+        'check-0.generate-response': [{ text: 'The actual AI response' }],
+      });
+      const updated = store.getTask(task.id);
+      expect(updated!.status.message!.parts[0]).toEqual({ text: 'The actual AI response' });
+    });
+
+    it('should fall back to generate-response when top-level starts with [task:', async () => {
+      const { task } = await runWithHistory({
+        main: [{ text: '[task: completed successfully]' }],
+        'main.generate-response': [{ text: 'Here is the answer' }],
+      });
+      const updated = store.getTask(task.id);
+      expect(updated!.status.message!.parts[0]).toEqual({ text: 'Here is the answer' });
+    });
+
+    it('should use tool output as last resort when no generate-response exists', async () => {
+      const { task } = await runWithHistory({
+        'only-step': [{ text: '├─┬ Tool tree output only' }],
+      });
+      const updated = store.getTask(task.id);
+      expect((updated!.status.message!.parts[0] as any).text).toBe('├─┬ Tool tree output only');
+    });
+
+    it('should return "Execution completed" for empty history', async () => {
+      const { task } = await runWithHistory({});
+      const updated = store.getTask(task.id);
+      expect(updated!.status.message!.parts[0]).toEqual({ text: 'Execution completed' });
+    });
+
+    it('should return "Execution completed" for history with only empty arrays', async () => {
+      const { task } = await runWithHistory({ 'step-0': [] });
+      const updated = store.getTask(task.id);
+      expect(updated!.status.message!.parts[0]).toEqual({ text: 'Execution completed' });
+    });
+
+    it('should pick the last entry text when multiple entries exist', async () => {
+      const { task } = await runWithHistory({
+        'step-1': [{ text: 'First step output' }],
+        'step-2': [{ text: 'Second step output' }],
+      });
+      const updated = store.getTask(task.id);
+      // Should pick the last one (reverse iteration)
+      expect((updated!.status.message!.parts[0] as any).text).toBe('Second step output');
+    });
+
+    it('should handle production-like multi-step workflow with tool outputs', async () => {
+      const { task } = await runWithHistory({
+        setup: [{ text: '├─┬ Setting up workspace' }],
+        analyze: [{ text: '│ Analyzing files...' }],
+        'generate-response': [
+          {
+            text: '{"text":"Based on the analysis, here are the findings:\\n\\n1. The code is clean\\n2. No issues found"}',
+          },
+        ],
+      });
+      const updated = store.getTask(task.id);
+      const msg = (updated!.status.message!.parts[0] as any).text;
+      expect(msg).toContain('Based on the analysis');
+      expect(msg).not.toContain('{');
+    });
+
+    it('should handle nested workflow with dotted keys', async () => {
+      const { task } = await runWithHistory({
+        'code-talk': [{ text: '├─┬ code-talk' }],
+        'code-talk.setup-projects': [{ text: 'Setting up...' }],
+        'code-talk.explore-code': [{ text: 'The detailed analysis of the code shows...' }],
+      });
+      const updated = store.getTask(task.id);
+      // Top-level "code-talk" is tool output, but code-talk.explore-code
+      // is a dotted key. The generate-response fallback should kick in for
+      // entries ending in .generate-response. Since neither matches, it falls
+      // back to tool output from top-level.
+      const msg = (updated!.status.message!.parts[0] as any).text;
+      expect(msg).toBeDefined();
+      expect(msg.length).toBeGreaterThan(0);
+    });
+
+    it('should skip entries with only whitespace text', async () => {
+      const { task } = await runWithHistory({
+        'step-1': [{ text: '   ' }],
+        'step-2': [{ text: 'Actual response' }],
+      });
+      const updated = store.getTask(task.id);
+      expect((updated!.status.message!.parts[0] as any).text).toBe('Actual response');
+    });
+
+    it('should handle entries with non-text outputs', async () => {
+      const { task } = await runWithHistory({
+        'step-1': [{ image: 'base64...' }, { audio: 'data...' }],
+        'step-2': [{ text: 'Text response after non-text' }],
+      });
+      const updated = store.getTask(task.id);
+      expect((updated!.status.message!.parts[0] as any).text).toBe('Text response after non-text');
+    });
+
+    it('should fall back to issue summary when history has no usable text', async () => {
+      const { task } = await trackExecution(
+        { taskStore: store, source: 'test' as any, messageText: 'issue fallback test' },
+        async () => ({
+          reviewSummary: {
+            history: {},
+            issues: [
+              { severity: 'error', title: 'Build failed', description: 'Compile error in main.ts' },
+            ],
+          },
+        })
+      );
+      const updated = store.getTask(task.id);
+      const msg = (updated!.status.message!.parts[0] as any).text;
+      expect(msg).not.toBe('Execution completed');
+      expect(msg.length).toBeGreaterThan(0);
+    });
+  });
 });

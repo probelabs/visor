@@ -848,9 +848,30 @@ export class CustomToolsSSEServer implements CustomMCPServer {
       return record;
     };
 
+    // Gemini rejects schemas where `required` lists properties not in `properties`
+    const fixRequiredFields = (obj: unknown): unknown => {
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
+      const record = obj as Record<string, unknown>;
+      if (
+        Array.isArray(record.required) &&
+        record.properties &&
+        typeof record.properties === 'object'
+      ) {
+        const validProps = Object.keys(record.properties as Record<string, unknown>);
+        record.required = (record.required as string[]).filter(r => validProps.includes(r));
+      }
+      for (const key of Object.keys(record)) {
+        if (typeof record[key] === 'object' && record[key] !== null) {
+          fixRequiredFields(record[key]);
+        }
+      }
+      return record;
+    };
+
     const normalizeInputSchema = (schema: Record<string, unknown> | undefined): MCPInputSchema => {
       if (schema && schema.type === 'object') {
         fixArraySchemas(schema);
+        fixRequiredFields(schema);
         return schema as unknown as MCPInputSchema;
       }
       return {
@@ -860,7 +881,10 @@ export class CustomToolsSSEServer implements CustomMCPServer {
       };
     };
 
-    const regularTools = await this.toolExecutor.listMcpTools();
+    const regularTools = (await this.toolExecutor.listMcpTools()).map(tool => ({
+      ...tool,
+      inputSchema: normalizeInputSchema(tool.inputSchema as Record<string, unknown> | undefined),
+    }));
     const workflowTools = Array.from(this.tools.values())
       .filter(isWorkflowTool)
       .map(tool => ({
