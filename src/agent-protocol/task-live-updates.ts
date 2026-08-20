@@ -16,6 +16,7 @@ export const DEFAULT_TASK_LIVE_UPDATE_STALL_FALLBACK_SECONDS = 60;
 export const DEFAULT_TASK_LIVE_UPDATE_MODEL = 'gemini-3.1-flash-lite-preview';
 const DEFAULT_TASK_LIVE_UPDATE_STALL_NOTICE =
   '_No new meaningful progress is visible yet. Some steps can stay quiet for up to 5 minutes before there is new news._';
+const GENERIC_COMPLETION_FALLBACK = 'Execution completed';
 
 export const DEFAULT_TASK_LIVE_UPDATE_PROMPT = `You are generating a short live progress update for a user while an AI task is still running.
 
@@ -262,6 +263,13 @@ export class TaskLiveUpdateManager {
     this.completed = true;
     this.stop();
     await this.waitForInflightSinkPublishes();
+    const cleanedFinalText = finalText.trim();
+    if (!this.lastPostedMessage && cleanedFinalText === GENERIC_COMPLETION_FALLBACK) {
+      logger.info(
+        `[TaskLiveUpdates] Suppressing generic final update for task ${this.ctx.taskId}: no progress update was posted`
+      );
+      return;
+    }
     try {
       logger.info(`[TaskLiveUpdates] Publishing final success update for task ${this.ctx.taskId}`);
       const result = await this.ctx.sink.complete(this.decorateText(finalText));

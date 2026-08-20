@@ -1,3 +1,6 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { StateMachineExecutionEngine } from '../../../src/state-machine-execution-engine';
 import type { VisorConfig } from '../../../src/types/config';
 import type { McpFrontendOptions } from '../../../src/runners/mcp-server-runner';
@@ -166,6 +169,43 @@ describe('MCP conversation flow through engine', () => {
     expect(slackStats['chat']?.totalRuns).toBe(1);
     expect(mcpStats['chat']?.skipped).not.toBe(true);
     expect(slackStats['chat']?.skipped).not.toBe(true);
+  });
+
+  it('runs slack_conversation checks from a non-git working directory', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'visor-slack-non-git-'));
+    try {
+      const message = 'Hey, are you still online?';
+      const cfg = makeConfig({ assumeExpr: 'conversation.current.text != null' });
+      const engine = new StateMachineExecutionEngine();
+      const webhookData = new Map<string, unknown>();
+      webhookData.set('/bots/slack/support', {
+        event: { type: 'app_mention', channel: 'C1', ts: '1234.5', text: message },
+        slack_conversation: {
+          transport: 'slack',
+          thread: { id: 'test-thread' },
+          current: { role: 'user', text: message, timestamp: Date.now() },
+          messages: [{ role: 'user', text: message, timestamp: Date.now() }],
+        },
+      });
+
+      const res = await engine.executeChecks({
+        checks: ['chat'],
+        config: cfg,
+        workingDirectory: tmpDir,
+        webhookContext: { webhookData, eventType: 'manual' },
+      } as any);
+
+      const stats = statsById(res);
+      expect(
+        res.reviewSummary.issues?.some(issue =>
+          String(issue.message || '').includes('Not a git repository')
+        )
+      ).not.toBe(true);
+      expect(stats['chat']?.totalRuns).toBe(1);
+      expect(stats['chat']?.skipped).not.toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it('conversation.current.text is accessible in script check via eventContext', async () => {

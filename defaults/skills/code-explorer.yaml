@@ -35,6 +35,12 @@ knowledge: |
   - If `references` is empty and confidence is low, treat that as "not answered yet",
     not as a usable code answer.
 
+  IMPORTANT: After receiving a HIGH-confidence code-explorer result, your task is DONE.
+  Do NOT call code-explorer again to verify speculative details mentioned in the answer
+  (ticket IDs, version numbers, changelog entries, Jira references). These are secondary
+  details that do not warrant a full re-exploration costing 10+ minutes. Report what was
+  found and flag unverified details as speculative instead of triggering another search.
+
   ## Usage Instructions
   1. Call the `code-explorer` tool with the user's question — do NOT try to answer code questions yourself
   2. Use the answer from the tool result as your response

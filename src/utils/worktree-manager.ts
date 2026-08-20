@@ -234,6 +234,7 @@ export class WorktreeManager {
 
         if (result.exitCode === 0) {
           logger.debug(`Successfully updated bare repository`);
+          await this.gcBareRepo(bareRepoPath);
           return;
         }
 
@@ -252,6 +253,39 @@ export class WorktreeManager {
     // Both attempts failed — log a warning but don't throw.
     // fetchRef() will also try to fetch the specific ref, giving another chance.
     logger.warn(`Failed to update bare repository after 2 attempts (will rely on per-ref fetch)`);
+  }
+
+  /**
+   * Consolidate pack files after fetch to prevent unbounded pack accumulation.
+   * Each `git fetch` creates a new pack file; without periodic repacking these
+   * pile up and waste disk (especially on COW filesystems like BTRFS).
+   */
+  private async gcBareRepo(bareRepoPath: string): Promise<void> {
+    try {
+      const packDir = path.join(bareRepoPath, 'objects', 'pack');
+      if (!fs.existsSync(packDir)) return;
+
+      const packFiles = fs.readdirSync(packDir).filter(f => f.endsWith('.pack'));
+      if (packFiles.length <= 3) return;
+
+      if (packFiles.length > 10) {
+        logger.info(`Repacking bare repo (${packFiles.length} packs): ${bareRepoPath}`);
+        const repackCmd = `git -C ${this.escapeShellArg(bareRepoPath)} repack -a -d --unpack-unreachable=now`;
+        const result = await this.executeGitCommand(repackCmd, { timeout: 300000 });
+        if (result.exitCode === 0) {
+          logger.info(`Repack complete for ${bareRepoPath}`);
+          const pruneCmd = `git -C ${this.escapeShellArg(bareRepoPath)} prune --expire=now`;
+          await this.executeGitCommand(pruneCmd, { timeout: 60000 });
+        } else {
+          logger.warn(`Repack failed: ${result.stderr}`);
+        }
+      } else {
+        const gcCmd = `git -C ${this.escapeShellArg(bareRepoPath)} gc --auto`;
+        await this.executeGitCommand(gcCmd, { timeout: 120000 });
+      }
+    } catch (error) {
+      logger.debug(`gc/repack non-fatal error: ${error}`);
+    }
   }
 
   /**

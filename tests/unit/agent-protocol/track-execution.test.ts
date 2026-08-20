@@ -205,6 +205,40 @@ describe('trackExecution', () => {
     expect(updated?.metadata?.message_id).toBe('msg-1');
   });
 
+  it('should not publish generic completion fallback as a live update', async () => {
+    const sink = {
+      kind: 'test',
+      start: jest.fn(async () => null),
+      update: jest.fn(async () => null),
+      complete: jest.fn(async () => ({ ref: { message_id: 'msg-1' } })),
+      fail: jest.fn(async () => null),
+    };
+
+    const { task } = await trackExecution(
+      {
+        taskStore: store,
+        source: 'slack',
+        messageText: 'live update execution with empty history',
+        liveUpdates: {
+          config: true,
+          sink,
+        },
+      },
+      async () => ({
+        reviewSummary: {
+          history: {},
+        },
+      })
+    );
+
+    expect(sink.start).toHaveBeenCalledTimes(1);
+    expect(sink.update).not.toHaveBeenCalled();
+    expect(sink.complete).not.toHaveBeenCalled();
+    const updated = store.getTask(task.id);
+    expect((updated!.status.message!.parts[0] as any).text).toBe('Execution completed');
+    expect(updated!.history).toHaveLength(0);
+  });
+
   it('should keep trace_file as the live update ref while preserving trace_id for remote lookup', async () => {
     const sink = {
       kind: 'test',
