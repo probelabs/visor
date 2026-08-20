@@ -50,5 +50,5 @@ module.exports = {
   // Use child processes on CI for better memory reclamation
   workerThreads: process.env.CI ? false : true,
   // Recycle workers if they retain too much memory
-  workerIdleMemoryLimit: process.env.CI ? '256MB' : undefined,
+  workerIdleMemoryLimit: process.env.CI ? '512MB' : undefined,
 };
