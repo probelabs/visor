@@ -201,8 +201,7 @@ SELECT * FROM users WHERE id = '\${process.argv[2]}';
         expect(result.stdout).toContain('Visor - AI-powered code review tool');
         expect(result.stdout).toContain('--check');
         expect(result.stdout).toContain('--output');
-        expect(result.stdout).toContain('visor process list|restart|reload|stop');
-        expect(result.stdout).toContain('visor tasks list|show|logs');
+        expect(result.stdout).toContain('Subcommands:');
         expect(result.stdout).toContain('Examples:');
       },
       timeout

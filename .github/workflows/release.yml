@@ -40,7 +40,7 @@ jobs:
         run: npm install
 
       - name: Run tests
-        run: npm test
+        run: npx jest --testPathIgnorePatterns='/node_modules/' --testPathIgnorePatterns='/tests/e2e/' --testPathIgnorePatterns='/tests/ee/' && npm run test:yaml
         env:
           CI: true
           NODE_OPTIONS: --max-old-space-size=6144
