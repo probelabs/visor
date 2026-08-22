@@ -79,6 +79,7 @@ export class SlackSocketRunner implements Runner {
   private activeThreads = new Set<string>();
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private lastPong = 0;
+  private lastSlackEvent = 0; // last Slack application-level event (not just pong)
   private closing = false; // prevent duplicate reconnects
   private draining = false; // drain mode: reject new work, wait for in-flight
   private taskStore?: import('../agent-protocol/task-store').TaskStore;
@@ -332,6 +333,7 @@ export class SlackSocketRunner implements Runner {
     ws.on('open', () => {
       this.retryCount = 0; // Reset on successful connection
       this.lastPong = Date.now();
+      this.lastSlackEvent = Date.now();
       logger.info('[SlackSocket] WebSocket connected');
       this.startHeartbeat();
     });
@@ -380,6 +382,10 @@ export class SlackSocketRunner implements Runner {
     this.stopHeartbeat();
     const PING_INTERVAL_MS = 30_000; // ping every 30s
     const PONG_TIMEOUT_MS = 60_000; // dead if no pong for 60s
+    // Slack sends events frequently (typing, presence, etc). If we receive
+    // nothing for 10 minutes the session is likely dead server-side even
+    // though WebSocket pings still succeed.
+    const EVENT_SILENCE_MS = 600_000;
 
     this.heartbeatTimer = setInterval(() => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
@@ -389,6 +395,19 @@ export class SlackSocketRunner implements Runner {
       if (this.lastPong > 0 && sincePong > PONG_TIMEOUT_MS) {
         logger.warn(
           `[SlackSocket] No pong received for ${Math.round(sincePong / 1000)}s, forcing reconnect`
+        );
+        this.closeWebSocket();
+        this.closing = true;
+        this.restart();
+        return;
+      }
+
+      // Check for application-level silence — WebSocket alive but Slack
+      // stopped routing events (session expired/rotated server-side)
+      const sinceEvent = Date.now() - this.lastSlackEvent;
+      if (this.lastSlackEvent > 0 && sinceEvent > EVENT_SILENCE_MS) {
+        logger.warn(
+          `[SlackSocket] No Slack events for ${Math.round(sinceEvent / 1000)}s, forcing reconnect`
         );
         this.closeWebSocket();
         this.closing = true;
@@ -508,6 +527,7 @@ export class SlackSocketRunner implements Runner {
       }
       return;
     }
+    this.lastSlackEvent = Date.now();
     if (env.type === 'hello') return;
     if (env.envelope_id) this.send({ envelope_id: env.envelope_id }); // ack ASAP
 
