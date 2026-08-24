@@ -633,6 +633,19 @@ export class StateMachineExecutionEngine {
     );
   }
 
+  /** Queue a compiled catalog owner on the currently active runner/journal. */
+  public requestCatalogReconciliation(ownerCheck: string) {
+    const runner = this._lastRunner;
+    if (!runner) {
+      const error = new Error('Catalog reconciliation requires an active run') as Error & {
+        code: string;
+      };
+      error.code = 'RUN_NOT_ACTIVE';
+      throw error;
+    }
+    return runner.requestCatalogReconciliation(ownerCheck);
+  }
+
   /**
    * Get output history snapshot for test framework compatibility
    * Extracts output history from the journal

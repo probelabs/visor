@@ -21,6 +21,7 @@ import { ConfigMerger } from './utils/config-merger';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import { validateJsSyntax } from './utils/sandbox';
+import { compileClaimPlan } from './state-machine/graph/claim-plan';
 
 /**
  * Valid event triggers for checks
@@ -824,6 +825,22 @@ export class ConfigManager {
           // best-effort hints; never fail validation here
         }
       }
+    }
+
+    // Graph v2 claim and expansion cross-reference semantics cannot be expressed by generated
+    // JSON Schema. Compile at the real ConfigManager boundary so malformed
+    // refs, duplicate emitters, unsupported scope, and cycles fail prelaunch.
+    try {
+      compileClaimPlan(config);
+    } catch (error) {
+      const code =
+        error && typeof error === 'object' && 'code' in error
+          ? String((error as { code: unknown }).code)
+          : undefined;
+      errors.push({
+        field: 'claim_types/subgraphs',
+        message: `${code ? `${code}: ` : ''}${error instanceof Error ? error.message : String(error)}`,
+      });
     }
 
     // Validate sandbox configuration

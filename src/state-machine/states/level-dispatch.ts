@@ -23,8 +23,18 @@ import type {
 import { logger } from '../../logger';
 import type { ReviewSummary, ReviewIssue } from '../../reviewer';
 import type { CheckExecutionStats } from '../../types/execution';
-import type { CheckProviderConfig } from '../../providers/check-provider.interface';
+import type {
+  CandidateClaimInput,
+  CheckProviderConfig,
+} from '../../providers/check-provider.interface';
 import type { CheckConfig } from '../../types/config';
+import type {
+  CatalogRequestAttemptStartedEvent,
+  CatalogRequestProjection,
+  GeneratedAttemptStartedEvent,
+  KeyedScopePath,
+  NodeGenerationProjection,
+} from '../graph/instance-kernel';
 import { handleRouting, checkLoopBudget } from './routing';
 import {
   withActiveSpan,
@@ -41,6 +51,19 @@ import { executeWithSandboxRouting } from '../dispatch/sandbox-routing';
 import { applyPolicyGate } from '../dispatch/policy-gate';
 import { getDebounceManager } from '../dispatch/debounce-manager';
 import { createExtendedLiquid } from '../../liquid-extensions';
+
+type DynamicExecution =
+  | {
+      readonly kind: 'generated';
+      readonly attempt: GeneratedAttemptStartedEvent;
+      readonly checkConfig: CheckConfig;
+      readonly claims: Readonly<Record<string, CandidateClaimInput>>;
+    }
+  | {
+      readonly kind: 'catalog-request';
+      readonly attempt: CatalogRequestAttemptStartedEvent;
+      readonly checkConfig: CheckConfig;
+    };
 
 function isEngineerCheck(checkId: string): boolean {
   return checkId === 'engineer-task';
@@ -203,6 +226,19 @@ function buildOutputHistoryFromJournal(context: EngineContext): Map<string, unkn
   return outputHistory;
 }
 
+function buildExactClaimResults(
+  claims: Readonly<Record<string, CandidateClaimInput>>
+): Map<string, ReviewSummary> {
+  const results = new Map<string, ReviewSummary>();
+  for (const claim of Object.values(claims)) {
+    const summary: ReviewSummary = { issues: [], output: claim.payload };
+    Object.freeze(summary.issues);
+    Object.freeze(summary);
+    results.set(claim.producerCheckId, summary);
+  }
+  return results;
+}
+
 /**
  * Evaluate 'if' condition for a check
  *
@@ -214,7 +250,8 @@ async function evaluateIfCondition(
   checkId: string,
   checkConfig: CheckConfig,
   context: EngineContext,
-  state: RunState
+  state: RunState,
+  exactPreviousResults?: ReadonlyMap<string, ReviewSummary>
 ): Promise<boolean> {
   const ifExpression = checkConfig.if;
   if (!ifExpression) {
@@ -253,7 +290,9 @@ async function evaluateIfCondition(
     // avoid wrongly skipping top-level prompts like 'ask'.
     const useGlobalOutputs = hasDeps || (useGlobalOutputsFlag && waveKind === 'forward');
 
-    if (useGlobalOutputs) {
+    if (exactPreviousResults) {
+      for (const [key, result] of exactPreviousResults) previousResults.set(key, result);
+    } else if (useGlobalOutputs) {
       // Forward-run wave: allow guards to consult latest outputs from the entire
       // journal so follow-up steps (e.g., post-verified after run-review) can
       // see the outputs produced in the prior wave that scheduled this forward-run.
@@ -343,6 +382,11 @@ export async function handleLevelDispatch(
   transition: (newState: EngineState) => void,
   emitEvent: (event: EngineEvent) => void
 ): Promise<void> {
+  if (context.claimPlan?.active) {
+    await handleClaimReadyDispatch(context, state, transition, emitEvent);
+    return;
+  }
+
   // Pop next level from queue
   const level = state.levelQueue.shift();
 
@@ -431,6 +475,204 @@ export async function handleLevelDispatch(
   } else {
     logger.info('[LevelDispatch] Skipping transition to WavePlanning - already in Error state');
   }
+}
+
+/**
+ * C1 claim-mode scheduler. It drains the current wave into one ready-data queue
+ * so an exact committed claim can release its consumer without a level barrier.
+ * Claim truth remains exclusively in ExecutionJournal's projection.
+ */
+async function handleClaimReadyDispatch(
+  context: EngineContext,
+  state: RunState,
+  transition: (newState: EngineState) => void,
+  emitEvent: (event: EngineEvent) => void
+): Promise<void> {
+  const queued = state.levelQueue.flatMap(level => level.parallel);
+  state.levelQueue = [];
+  const pending = new Set(queued);
+  const running = new Map<string, Promise<void>>();
+  const maxParallelism = context.maxParallelism || 10;
+  const failed = ((state as any).failedChecks ||= new Set<string>()) as Set<string>;
+
+  emitEvent({ type: 'LevelReady', level: { level: 0, parallel: queued }, wave: state.wave });
+
+  const isReady = (checkId: string): boolean => {
+    const plan = context.claimPlan!;
+    const consumes = plan.consumptionsByCheck[checkId] || [];
+    if (!context.journal.isCheckReady(checkId)) return false;
+
+    const consumedEmitters = new Set(consumes.map(input => plan.emitterByClaim[input.claim]));
+    for (const dependency of plan.effectiveDependenciesByCheck[checkId] || []) {
+      if (consumedEmitters.has(dependency)) continue;
+      if (!state.completedChecks.has(dependency)) return false;
+      if (failed.has(dependency) && !context.config.checks?.[dependency]?.continue_on_failure) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const launch = (checkId: string): void => {
+    pending.delete(checkId);
+    const startedAt = Date.now();
+    const task = (async () => {
+      try {
+        const result = await executeSingleCheck(checkId, context, state, emitEvent, transition);
+        updateStats([{ checkId, result, duration: Date.now() - startedAt }], state);
+        if (hasFatalIssues(result)) failed.add(checkId);
+        if (context.failFast && hasFatalIssues(result)) state.flags.failFastTriggered = true;
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        failed.add(checkId);
+        updateStats(
+          [{ checkId, result: { issues: [] }, error: err, duration: Date.now() - startedAt }],
+          state
+        );
+        if (context.failFast) state.flags.failFastTriggered = true;
+      } finally {
+        state.completedChecks.add(checkId);
+        running.delete(checkId);
+      }
+    })();
+    running.set(checkId, task);
+  };
+
+  const launchGenerated = (generation: NodeGenerationProjection): void => {
+    const attempt = context.journal.startGeneratedAttempt(generation.nodeGenerationId);
+    const execution = context.journal.getGeneratedExecution(generation.nodeGenerationId);
+    const key = generation.nodeGenerationId;
+    const startedAt = Date.now();
+    const generatedState: RunState = {
+      ...state,
+      levelQueue: [],
+      eventQueue: [],
+      activeDispatches: new Map(),
+      completedChecks: new Set(),
+      flags: { ...state.flags },
+      stats: new Map(),
+      forwardRunGuards: new Set(),
+      currentLevelChecks: new Set(),
+      pendingRunScopes: new Map(),
+      pendingRunArgs: new Map(),
+      allowedFailedDeps: new Map(),
+    };
+    (generatedState as any).failedChecks = new Set<string>();
+    const task = (async () => {
+      try {
+        const result = await executeSingleCheck(
+          generation.checkId, context, generatedState, emitEvent, transition,
+          generation.scope,
+          { kind: 'generated', attempt, checkConfig: execution.node.check, claims: execution.claims }
+        );
+        updateStats([{ checkId: key, result, duration: Date.now() - startedAt }], state);
+      } catch (error) {
+        updateStats([{ checkId: key, result: { issues: [] },
+          error: error instanceof Error ? error : new Error(String(error)), duration: Date.now() - startedAt }], state);
+        const projected = context.journal.getInstanceProjection().generationsById[
+          attempt.nodeGenerationId
+        ];
+        if (
+          projected?.status === 'running' &&
+          projected.attemptId === attempt.attemptId &&
+          projected.fence === attempt.fence
+        ) {
+          context.journal.failGeneratedAttempt(attempt, 'PROVIDER_EXECUTION_FAILED');
+        }
+      } finally { running.delete(key); }
+    })();
+    running.set(key, task);
+  };
+
+  const launchCatalogRequest = (request: CatalogRequestProjection): void => {
+    const checkConfig = context.config.checks?.[request.expansionOwnerCheck];
+    if (!checkConfig) {
+      throw new Error(`Check configuration not found: ${request.expansionOwnerCheck}`);
+    }
+    const attempt = context.journal.startCatalogRequestAttempt(request.requestId);
+    const key = request.requestId;
+    const startedAt = Date.now();
+    const task = (async () => {
+      try {
+        await executeSingleCheck(request.expansionOwnerCheck, context, state, emitEvent, transition,
+          [], { kind: 'catalog-request', attempt,
+            checkConfig });
+      } catch (error) {
+        updateStats([{ checkId: request.expansionOwnerCheck, result: { issues: [] },
+          error: error instanceof Error ? error : new Error(String(error)),
+          duration: Date.now() - startedAt }], state);
+        const projected = context.journal.getInstanceProjection().requestsById[attempt.requestId];
+        if (
+          projected?.status === 'running' &&
+          projected.attemptId === attempt.attemptId &&
+          projected.fence === attempt.fence
+        ) {
+          context.journal.failAttempt({
+            sessionId: attempt.sessionId,
+            checkId: attempt.checkId,
+            scope: attempt.scope,
+            attemptId: attempt.attemptId,
+            fence: attempt.fence,
+            reason: 'PROVIDER_EXECUTION_FAILED',
+          });
+        }
+      } finally { running.delete(key); }
+    })();
+    running.set(key, task);
+  };
+
+  while (true) {
+    let launched = false;
+    if (!state.flags.failFastTriggered) {
+      for (const generation of context.journal.queryReadyWork()) {
+        if (running.size >= maxParallelism) break;
+        launchGenerated(generation);
+        launched = true;
+      }
+      for (const checkId of [...pending]) {
+        if (context.journal.queryReadyWork().length > 0) break;
+        if (running.size >= maxParallelism) break;
+        if (!isReady(checkId)) continue;
+        launch(checkId);
+        launched = true;
+      }
+    }
+
+    if (running.size > 0) {
+      await Promise.race([...running.values()]);
+      continue;
+    }
+
+    if (context.journal.queryReadyWork().length > 0) continue;
+
+    if (!launched && pending.size > 0) {
+      // No provider is running and no exact data can make progress. Mark the
+      // blocked consumers as dependency failures without scheduling them.
+      for (const checkId of pending) {
+        const result: ReviewSummary = { issues: [] };
+        try {
+          Object.defineProperty(result, '__skipped', {
+            value: 'dependency_failed',
+            enumerable: false,
+          });
+        } catch {}
+        state.completedChecks.add(checkId);
+        failed.add(checkId);
+        updateStats([{ checkId, result }], state);
+      }
+      pending.clear();
+      continue;
+    }
+    const request = context.journal.getOldestPendingCatalogRequest();
+    if (request && context.journal.queryReadyWork().length === 0) {
+      launchCatalogRequest(request);
+      continue;
+    }
+    break;
+  }
+
+  emitEvent({ type: 'LevelDepleted', level: 0, wave: state.wave });
+  transition(state.currentState === 'Error' ? 'Error' : 'WavePlanning');
 }
 
 /**
@@ -1915,14 +2157,61 @@ async function executeSingleCheck(
   state: RunState,
   emitEvent: (event: EngineEvent) => void,
   transition: (newState: EngineState) => void,
-  scopeOverride?: Array<{ check: string; index: number }>
+  scopeOverride?: Array<{ check: string; index: number }> | KeyedScopePath,
+  dynamic?: DynamicExecution
 ): Promise<ReviewSummary> {
   // Check if this check depends on a forEach parent
-  const checkConfig = context.config.checks?.[checkId];
+  const checkConfig = dynamic?.checkConfig || context.config.checks?.[checkId];
+  const dynamicScope = (scopeOverride || []) as unknown as Array<{
+    check: string;
+    index: number;
+  }>;
+  const exactClaims =
+    dynamic?.kind === 'generated' ? dynamic.claims : Object.freeze({});
+  const exactControlResults =
+    dynamic?.kind === 'generated' ? buildExactClaimResults(exactClaims) : undefined;
+
+  if (dynamic) {
+    emitEvent({
+      type: 'CheckScheduled',
+      checkId,
+      scope: dynamicScope,
+      attemptId: dynamic.attempt.attemptId,
+      fence: dynamic.attempt.fence,
+      ...(dynamic.kind === 'generated'
+        ? {
+            nodeInstanceId: dynamic.attempt.nodeInstanceId,
+            nodeGenerationId: dynamic.attempt.nodeGenerationId,
+          }
+        : { requestId: dynamic.attempt.requestId }),
+    });
+  }
+
+  const failDynamicAttempt = (reason: string): void => {
+    if (!dynamic) return;
+    if (dynamic.kind === 'generated') {
+      context.journal.failGeneratedAttempt(dynamic.attempt, reason);
+      return;
+    }
+    context.journal.failAttempt({
+      sessionId: context.sessionId,
+      checkId,
+      scope: dynamicScope,
+      attemptId: dynamic.attempt.attemptId,
+      fence: dynamic.attempt.fence,
+      reason,
+    });
+  };
 
   // Evaluate 'if' condition before execution
   if (checkConfig?.if) {
-    const shouldRun = await evaluateIfCondition(checkId, checkConfig, context, state);
+    const shouldRun = await evaluateIfCondition(
+      checkId,
+      checkConfig,
+      context,
+      state,
+      exactControlResults
+    );
 
     if (!shouldRun) {
       // Log skip message at info level (visible without debug mode)
@@ -1964,6 +2253,8 @@ async function executeSingleCheck(
       state.stats.set(checkId, stats);
       logger.info(`[LevelDispatch] Recorded skip stats for ${checkId}: skipReason=if_condition`);
 
+      failDynamicAttempt('IF_CONDITION_NOT_MET');
+
       // Store empty result in journal
       try {
         context.journal.commitEntry({
@@ -1971,7 +2262,7 @@ async function executeSingleCheck(
           checkId,
           result: emptyResult as any,
           event: context.event || 'manual',
-          scope: [],
+          scope: dynamic ? dynamicScope : [],
         });
       } catch (error) {
         logger.warn(`[LevelDispatch] Failed to commit skipped result to journal: ${error}`);
@@ -1981,7 +2272,7 @@ async function executeSingleCheck(
       emitEvent({
         type: 'CheckCompleted',
         checkId,
-        scope: [],
+        scope: dynamic ? dynamicScope : [],
         result: emptyResult,
       });
 
@@ -2023,13 +2314,14 @@ async function executeSingleCheck(
       };
       state.stats.set(checkId, stats);
       logger.info(`[LevelDispatch] Recorded skip stats for ${checkId}: skipReason=policy_denied`);
+      failDynamicAttempt('POLICY_DENIED');
       try {
         context.journal.commitEntry({
           sessionId: context.sessionId,
           checkId,
           result: emptyResult as any,
           event: context.event || 'manual',
-          scope: [],
+          scope: dynamic ? dynamicScope : [],
         });
       } catch (error) {
         logger.warn(`[LevelDispatch] Failed to commit policy-denied result to journal: ${error}`);
@@ -2037,14 +2329,14 @@ async function executeSingleCheck(
       emitEvent({
         type: 'CheckCompleted',
         checkId,
-        scope: [],
+        scope: dynamic ? dynamicScope : [],
         result: emptyResult,
       });
       return emptyResult;
     }
   }
 
-  const dependencies = checkConfig?.depends_on || [];
+  const dependencies = dynamic?.kind === 'generated' ? [] : checkConfig?.depends_on || [];
   const depList = Array.isArray(dependencies) ? dependencies : [dependencies];
 
   // Dependency gating with continue_on_failure and OR groups ("A|B")
@@ -2309,10 +2601,32 @@ async function executeSingleCheck(
   }
 
   // Normal execution without forEach
-  const scope: Array<{ check: string; index: number }> = scopeOverride || [];
+  const scope: Array<{ check: string; index: number }> = dynamicScope;
+
+  const providerClaims = dynamic?.kind === 'generated'
+    ? exactClaims
+    : context.claimPlan?.active
+    ? context.journal.readCheckClaims(checkId)
+    : Object.freeze({});
+  const claimAttempt = dynamic?.attempt || (context.claimPlan?.active
+    ? context.journal.startAttempt({ sessionId: context.sessionId, checkId, scope })
+    : undefined);
+  let claimAttemptFinished = false;
 
   // Emit scheduled event
-  emitEvent({ type: 'CheckScheduled', checkId, scope });
+  if (!dynamic) {
+    emitEvent({
+      type: 'CheckScheduled',
+      checkId,
+      scope,
+      ...(claimAttempt
+        ? {
+            attemptId: claimAttempt.attemptId,
+            fence: claimAttempt.fence,
+          }
+        : {}),
+    });
+  }
 
   // Track start time for duration calculation
   const startTime = Date.now();
@@ -2331,7 +2645,6 @@ async function executeSingleCheck(
 
   try {
     // Get check configuration
-    const checkConfig = context.config.checks?.[checkId];
     if (!checkConfig) {
       throw new Error(`Check configuration not found: ${checkId}`);
     }
@@ -2355,7 +2668,9 @@ async function executeSingleCheck(
     const provider = providerRegistry.getProviderOrThrow(providerType);
 
     // Build output history for template rendering
-    const outputHistory = buildOutputHistoryFromJournal(context);
+    const outputHistory = dynamic?.kind === 'generated'
+      ? new Map<string, unknown[]>()
+      : buildOutputHistoryFromJournal(context);
 
     // Resolve workflow inputs from config or context (centralized logic)
     const workflowInputs = resolveWorkflowInputs(checkConfig, context);
@@ -2454,7 +2769,9 @@ async function executeSingleCheck(
     } catch {}
 
     // Build dependency results
-    const dependencyResults = buildDependencyResults(checkId, checkConfig, context, state);
+    const dependencyResults = dynamic?.kind === 'generated'
+      ? buildExactClaimResults(exactClaims)
+      : buildDependencyResults(checkId, checkConfig, context, state);
 
     // Build PR info (use real prInfo from context if available, otherwise use defaults)
     const prInfo: any = context.prInfo || {
@@ -2479,13 +2796,28 @@ async function executeSingleCheck(
     const renderedArgs = rawPendingArgs
       ? await renderTemplateArgs(rawPendingArgs, depResultsObj, context)
       : undefined;
+    const inheritedExecutionContext = (() => {
+      if (dynamic?.kind !== 'generated') return context.executionContext;
+      const inherited = { ...(context.executionContext || {}) } as Record<string, unknown>;
+      delete inherited._parentContext;
+      delete inherited._parentState;
+      delete inherited.journal;
+      return inherited;
+    })();
     const executionContext = {
-      ...context.executionContext,
+      ...inheritedExecutionContext,
       _engineMode: context.mode,
-      _parentContext: context,
-      _parentState: state,
+      ...(dynamic?.kind === 'generated'
+        ? {}
+        : { _parentContext: context, _parentState: state }),
       // Make checks metadata available to providers that want it
       checksMeta,
+      ...(context.claimPlan?.active ? { claims: providerClaims } : {}),
+      ...(dynamic?.kind === 'generated' ? {
+        nodeInstanceId: dynamic.attempt.nodeInstanceId,
+        nodeGenerationId: dynamic.attempt.nodeGenerationId,
+        scope: Object.freeze(scope.map((part: any) => Object.freeze({ ...part }))),
+      } : {}),
       // Inject args from on_success.run with directives (merged with existing args)
       args: renderedArgs
         ? { ...((context.executionContext as any)?.args || {}), ...renderedArgs }
@@ -2551,6 +2883,18 @@ async function executeSingleCheck(
             });
           } catch {}
           try {
+            if (claimAttempt && !claimAttemptFinished) {
+              if (dynamic?.kind === 'generated') context.journal.failGeneratedAttempt(dynamic.attempt, 'ASSUMPTION_NOT_MET');
+              else context.journal.failAttempt({
+                sessionId: context.sessionId,
+                checkId,
+                scope,
+                attemptId: claimAttempt.attemptId,
+                fence: claimAttempt.fence,
+                reason: 'ASSUMPTION_NOT_MET',
+              });
+              claimAttemptFinished = true;
+            }
             context.journal.commitEntry({
               sessionId: context.sessionId,
               checkId,
@@ -2755,7 +3099,10 @@ async function executeSingleCheck(
         const exprs = Array.isArray(guaranteeExpr) ? guaranteeExpr : [guaranteeExpr];
         for (const ex of exprs) {
           const holds = await evaluator.evaluateIfCondition(checkId, ex, {
-            previousResults: dependencyResults as any,
+            previousResults:
+              dynamic?.kind === 'generated'
+                ? buildExactClaimResults(exactClaims)
+                : dependencyResults,
             event: context.event || 'manual',
             output: enrichedResult.output,
           } as any);
@@ -2814,6 +3161,18 @@ async function executeSingleCheck(
           }
           (state as any).failedChecks.add(checkId);
         } catch {}
+        if (claimAttempt && !claimAttemptFinished) {
+          if (dynamic?.kind === 'generated') context.journal.failGeneratedAttempt(dynamic.attempt, 'UNDEFINED_RESULT');
+          else context.journal.failAttempt({
+            sessionId: context.sessionId,
+            checkId,
+            scope,
+            attemptId: claimAttempt.attemptId,
+            fence: claimAttempt.fence,
+            reason: 'UNDEFINED_RESULT',
+          });
+          claimAttemptFinished = true;
+        }
         // Early exit: persist result and stop further processing to avoid
         // undefined-state follow-on work (routing/template/per-item commits).
         try {
@@ -2979,7 +3338,58 @@ async function executeSingleCheck(
       result: enrichedResult,
       checkConfig: checkConfig as CheckConfig,
       success: !hasFatalIssues(enrichedResult),
+      ...(dynamic?.kind === 'generated'
+        ? { exactPreviousResults: buildExactClaimResults(exactClaims) }
+        : {}),
     });
+
+    // Terminal claim processing happens only after provider output enrichment,
+    // fail_if, routing, and halt/fatal determination. ExecutionJournal owns the
+    // immutable plan and atomically commits all emissions plus completion.
+    if (claimAttempt) {
+      if (wasHalted || hasFatalIssues(enrichedResult)) {
+        if (dynamic?.kind === 'generated') context.journal.failGeneratedAttempt(
+          dynamic.attempt,
+          wasHalted ? 'HALT_EXECUTION' : 'TERMINAL_RESULT_FAILED'
+        );
+        else context.journal.failAttempt({
+          sessionId: context.sessionId,
+          checkId,
+          scope,
+          attemptId: claimAttempt.attemptId,
+          fence: claimAttempt.fence,
+          reason: wasHalted ? 'HALT_EXECUTION' : 'TERMINAL_RESULT_FAILED',
+        });
+        claimAttemptFinished = true;
+      } else {
+        try {
+          if (dynamic?.kind === 'generated') {
+            context.journal.completeGeneratedAttempt({ attempt: dynamic.attempt, payload: (result as any).output });
+          } else context.journal.completeAttempt({
+            sessionId: context.sessionId,
+            checkId,
+            scope,
+            attemptId: claimAttempt.attemptId,
+            fence: claimAttempt.fence,
+            payload: (result as any).output,
+          });
+          claimAttemptFinished = true;
+        } catch (error) {
+          const reason = (error as any)?.code || 'CLAIM_PUBLICATION_FAILED';
+          if (dynamic?.kind === 'generated') context.journal.failGeneratedAttempt(dynamic.attempt, reason);
+          else context.journal.failAttempt({
+            sessionId: context.sessionId,
+            checkId,
+            scope,
+            attemptId: claimAttempt.attemptId,
+            fence: claimAttempt.fence,
+            reason,
+          });
+          claimAttemptFinished = true;
+          throw error;
+        }
+      }
+    }
 
     // If execution was halted by halt_execution, commit the result (with halt issue) then return
     if (wasHalted) {
@@ -3102,6 +3512,21 @@ async function executeSingleCheck(
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     logger.error(`[LevelDispatch] Error executing check ${checkId}: ${err.message}`);
+
+    if (claimAttempt && !claimAttemptFinished) {
+      try {
+        if (dynamic?.kind === 'generated') context.journal.failGeneratedAttempt(dynamic.attempt, 'PROVIDER_EXECUTION_FAILED');
+        else context.journal.failAttempt({
+          sessionId: context.sessionId,
+          checkId,
+          scope,
+          attemptId: claimAttempt.attemptId,
+          fence: claimAttempt.fence,
+          reason: 'PROVIDER_EXECUTION_FAILED',
+        });
+        claimAttemptFinished = true;
+      } catch {}
+    }
 
     state.activeDispatches.delete(checkId);
 

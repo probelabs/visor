@@ -1,6 +1,37 @@
 import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { EnvConfig, HumanInputRequest } from '../types/config';
+import type { ScopePath } from '../snapshot-store';
+import type { KeyedScopePath } from '../state-machine/graph/instance-kernel';
+
+interface CandidateClaimInputBase {
+  readonly claimId: string;
+  readonly claim: string;
+  readonly payload: unknown;
+  readonly payloadFingerprint: string;
+  readonly producerCheckId: string;
+  readonly scope: Readonly<ScopePath> | KeyedScopePath;
+  readonly parentClaimIds: readonly string[];
+}
+
+/** Exact, immutable candidate claim view granted to a consuming provider. */
+export type CandidateClaimInput = CandidateClaimInputBase &
+  (
+    | {
+        /** Root and generated claims retain their actual producer attempt authority. */
+        readonly provenance?: 'attempt';
+        readonly attemptId: string;
+        readonly fence: number;
+      }
+    | {
+        /** Controller item claims are derived from an expansion and have no fake attempt. */
+        readonly provenance: 'controller';
+        readonly catalogClaimId: string;
+        readonly incarnation: number;
+        readonly attemptId?: never;
+        readonly fence?: never;
+      }
+  );
 
 /**
  * Configuration for a check provider
@@ -60,6 +91,14 @@ export interface ExecutionContext {
   workflowInputs?: Record<string, unknown>;
   /** Custom arguments passed from on_init 'with' directive */
   args?: Record<string, unknown>;
+  /** Exact declared candidate claims. No global/nearest output fallback is applied. */
+  claims?: Readonly<Record<string, CandidateClaimInput>>;
+  /** Journal-derived dynamic node identity; present only for generated C2 work. */
+  nodeInstanceId?: string;
+  /** Journal-derived active generation identity; present only for generated C2 work. */
+  nodeGenerationId?: string;
+  /** Exact immutable keyed scope for generated C2 work. */
+  scope?: Readonly<ScopePath> | KeyedScopePath;
   /** SDK hooks for human input and check completion */
   hooks?: {
     onHumanInput?: (request: HumanInputRequest) => Promise<string>;

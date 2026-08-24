@@ -5,8 +5,66 @@
 
 import type { ReviewSummary } from './reviewer';
 import type { EventTrigger } from './types/config';
+import type { CandidateClaimInput } from './providers/check-provider.interface';
+import {
+  buildClaimPublishedEvent,
+  canonicalJson,
+  createInitialClaimProjection,
+  exactActiveClaimIds,
+  immutableCanonicalValue,
+  immutableRuntimeEvent,
+  ClaimKernelError,
+  reduceClaimEvent,
+  replayClaimEvents,
+  sha256Canonical,
+  type AttemptCompletedEvent,
+  type AttemptFailedEvent,
+  type AttemptStartedEvent,
+  type CheckScheduledEvent,
+  type ClaimProjection,
+  type ClaimRuntimeEvent,
+} from './state-machine/graph/claim-kernel';
+import type { ClaimPlan } from './state-machine/graph/claim-plan';
+import {
+  createInitialInstanceProjection,
+  deriveCatalogRequestId,
+  canonicalCatalogKey,
+  deriveControllerItemClaimId,
+  deriveItemFingerprint,
+  deriveNodeGenerationId,
+  deriveNodeInstanceId,
+  deriveSubgraphInstanceId,
+  immutableInstanceEvent,
+  queryReadyGenerations,
+  reduceInstanceEvent,
+  replayInstanceEvents,
+  type CatalogReconciliationRequestedEvent,
+  type CatalogRequestAttemptStartedEvent,
+  type CatalogRequestCheckScheduledEvent,
+  type InstanceProjection,
+  type InstanceRuntimeEvent,
+  type NodeGenerationProjection,
+  type KeyedScopePath,
+  type RootScopePath,
+  type GeneratedAttemptStartedEvent,
+  type GeneratedCheckScheduledEvent,
+} from './state-machine/graph/instance-kernel';
+import { resolveJsonPointer } from './state-machine/graph/instance-plan';
 
 export type ScopePath = Array<{ check: string; index: number }>;
+
+type CatalogAttemptStartedEvent = AttemptStartedEvent & CatalogRequestAttemptStartedEvent;
+type CatalogCheckScheduledEvent = CheckScheduledEvent & CatalogRequestCheckScheduledEvent;
+type CatalogScheduleAuthority = Pick<
+  CatalogRequestAttemptStartedEvent,
+  'requestId' | 'attemptId' | 'fence'
+>;
+type GeneratedScheduleAuthority = Pick<
+  GeneratedAttemptStartedEvent,
+  'nodeGenerationId' | 'attemptId' | 'fence'
+>;
+type WithoutEventId<T> = T extends { readonly eventId: number } ? Omit<T, 'eventId'> : never;
+type StagedInstanceRuntimeEvent = WithoutEventId<InstanceRuntimeEvent>;
 
 export interface JournalEntry {
   commitId: number;
@@ -20,6 +78,14 @@ export interface JournalEntry {
 export class ExecutionJournal {
   private commit = 0;
   private entries: JournalEntry[] = [];
+  private runtimeEvents: Array<ClaimRuntimeEvent | InstanceRuntimeEvent> = [];
+  private claimProjection: ClaimProjection = createInitialClaimProjection();
+  private instanceProjection: InstanceProjection = createInitialInstanceProjection();
+  private nextFence = 0;
+  private attemptOrdinals = new Map<string, number>();
+  private requestOrdinals = new Map<string, number>();
+
+  constructor(private readonly claimPlan?: ClaimPlan) {}
 
   beginSnapshot(): number {
     return this.commit;
@@ -49,6 +115,782 @@ export class ExecutionJournal {
       e =>
         e.sessionId === sessionId && e.commitId <= commitMax && (event ? e.event === event : true)
     );
+  }
+
+  private requireClaimPlan(): ClaimPlan {
+    if (!this.claimPlan?.active) {
+      throw new ClaimKernelError('CLAIM_MODE_INACTIVE', 'Runtime claim journal is inactive');
+    }
+    return this.claimPlan;
+  }
+
+  private appendRuntimeEvent<T extends ClaimRuntimeEvent>(event: T): T {
+    const plan = this.requireClaimPlan();
+    const stored = immutableRuntimeEvent(event);
+    const projected = reduceClaimEvent(this.claimProjection, stored, plan);
+    this.runtimeEvents.push(stored);
+    this.claimProjection = projected;
+    return stored;
+  }
+
+  private nextRuntimeEventId(): number {
+    return Math.max(this.claimProjection.lastEventId, this.instanceProjection.lastEventId) + 1;
+  }
+
+  private appendInstanceEvent<T extends InstanceRuntimeEvent>(event: T): T {
+    this.requireClaimPlan();
+    const stored = immutableInstanceEvent(event);
+    const projected = reduceInstanceEvent(this.instanceProjection, stored);
+    this.runtimeEvents.push(stored);
+    this.instanceProjection = projected;
+    return stored;
+  }
+
+  requestCatalogReconciliation(input: {
+    sessionId: string;
+    ownerCheck: string;
+  }): CatalogReconciliationRequestedEvent {
+    const expansion = this.requireClaimPlan().expansionPlan?.byOwner[input.ownerCheck];
+    if (!expansion) {
+      throw new ClaimKernelError('UNKNOWN_EXPANSION_OWNER', `Unknown expansion owner ${input.ownerCheck}`);
+    }
+    const ordinal = (this.requestOrdinals.get(input.ownerCheck) || 0) + 1;
+    this.requestOrdinals.set(input.ownerCheck, ordinal);
+    return this.appendInstanceEvent({
+      version: 1,
+      type: 'CatalogReconciliationRequested',
+      eventId: this.nextRuntimeEventId(),
+      sessionId: input.sessionId,
+      scope: [],
+      requestId: deriveCatalogRequestId({
+        sessionId: input.sessionId,
+        expansionOwnerCheck: input.ownerCheck,
+        ordinal,
+      }),
+      requestOrdinal: ordinal,
+      expansionOwnerCheck: input.ownerCheck,
+      status: 'pending',
+    });
+  }
+
+  getOldestPendingCatalogRequest() {
+    const id = this.instanceProjection.requestOrder.find(
+      requestId => this.instanceProjection.requestsById[requestId].status === 'pending'
+    );
+    return id ? this.instanceProjection.requestsById[id] : undefined;
+  }
+
+  startCatalogRequestAttempt(requestId: string): CatalogAttemptStartedEvent {
+    const request = this.instanceProjection.requestsById[requestId];
+    if (!request || request.status !== 'pending') throw new ClaimKernelError('INVALID_REQUEST_STATE', `Request ${requestId} is not pending`);
+    const scope: ScopePath & RootScopePath = [];
+    const authority = { sessionId: request.sessionId, checkId: request.expansionOwnerCheck, scope };
+    const ordinalKey = canonicalJson(authority); const ordinal=(this.attemptOrdinals.get(ordinalKey)||0)+1;
+    this.attemptOrdinals.set(ordinalKey,ordinal); const fence=++this.nextFence;
+    const event = immutableCanonicalValue<CatalogAttemptStartedEvent>({version:1,type:'AttemptStarted',eventId:this.nextRuntimeEventId(),...authority,attemptId:sha256Canonical({...authority,ordinal}),fence,requestId});
+    const claim = reduceClaimEvent(this.claimProjection,event,this.requireClaimPlan());
+    const instance = reduceInstanceEvent(this.instanceProjection,event);
+    this.runtimeEvents.push(event); this.claimProjection=claim; this.instanceProjection=instance;
+    return event;
+  }
+
+  scheduleCatalogRequestAttempt(input: CatalogScheduleAuthority): CatalogCheckScheduledEvent {
+    const request = this.instanceProjection.requestsById[input.requestId];
+    if (!request) {
+      throw new ClaimKernelError('UNKNOWN_REQUEST', `Unknown catalog request ${input.requestId}`);
+    }
+    const scope: ScopePath & RootScopePath = [];
+    const claimIds = exactActiveClaimIds(
+      this.requireClaimPlan(),
+      this.claimProjection,
+      request.expansionOwnerCheck
+    );
+    const event = immutableCanonicalValue<CatalogCheckScheduledEvent>({
+      version: 1,
+      type: 'CheckScheduled',
+      eventId: this.nextRuntimeEventId(),
+      sessionId: request.sessionId,
+      checkId: request.expansionOwnerCheck,
+      scope,
+      requestId: request.requestId,
+      attemptId: input.attemptId,
+      fence: input.fence,
+      claimIds: [...claimIds],
+    });
+    const claim=reduceClaimEvent(this.claimProjection,event,this.requireClaimPlan());
+    const instance=reduceInstanceEvent(this.instanceProjection,event);
+    this.runtimeEvents.push(event); this.claimProjection=claim; this.instanceProjection=instance;
+    return event;
+  }
+
+  startGeneratedAttempt(nodeGenerationId: string): GeneratedAttemptStartedEvent {
+    const generation = this.instanceProjection.generationsById[nodeGenerationId];
+    if (!generation || generation.status !== 'ready') {
+      throw new ClaimKernelError('GENERATION_NOT_READY', `Generation ${nodeGenerationId} is not ready`);
+    }
+    const fence = ++this.nextFence;
+    const ordinalKey = canonicalJson({ nodeGenerationId, scope: generation.scope });
+    const ordinal = (this.attemptOrdinals.get(ordinalKey) || 0) + 1;
+    this.attemptOrdinals.set(ordinalKey, ordinal);
+    return this.appendInstanceEvent({
+      version: 1,
+      type: 'AttemptStarted',
+      eventId: this.nextRuntimeEventId(),
+      sessionId: this.instanceProjection.instancesById[generation.subgraphInstanceId].sessionId,
+      checkId: generation.checkId,
+      scope: generation.scope,
+      attemptId: sha256Canonical({ nodeGenerationId, ordinal }),
+      fence,
+      nodeInstanceId: generation.nodeInstanceId,
+      nodeGenerationId,
+    });
+  }
+
+  scheduleGeneratedAttempt(input: GeneratedScheduleAuthority): GeneratedCheckScheduledEvent {
+    const generation = this.instanceProjection.generationsById[input.nodeGenerationId];
+    if (!generation) {
+      throw new ClaimKernelError(
+        'UNKNOWN_GENERATION',
+        `Unknown generation ${input.nodeGenerationId}`
+      );
+    }
+    const instance = this.instanceProjection.instancesById[generation.subgraphInstanceId];
+    return this.appendInstanceEvent({
+      version: 1,
+      type: 'CheckScheduled',
+      eventId: this.nextRuntimeEventId(),
+      sessionId: instance.sessionId,
+      checkId: generation.checkId,
+      scope: generation.scope,
+      attemptId: input.attemptId,
+      fence: input.fence,
+      nodeInstanceId: generation.nodeInstanceId,
+      nodeGenerationId: generation.nodeGenerationId,
+      claimIds: [...generation.activeInputClaimIds],
+    });
+  }
+
+  getGeneratedExecution(nodeGenerationId: string) {
+    const generation = this.instanceProjection.generationsById[nodeGenerationId];
+    if (!generation) throw new ClaimKernelError('UNKNOWN_GENERATION', `Unknown generation ${nodeGenerationId}`);
+    const instance = this.instanceProjection.instancesById[generation.subgraphInstanceId];
+    const expansion = this.requireClaimPlan().expansionPlan!.byOwner[instance.expansionOwnerCheck];
+    const node = expansion.template.nodesByKey[generation.templateNodeKey];
+    const claims: Record<string, CandidateClaimInput> = {};
+    for (const consumption of node.consumptions) {
+      const claim = generation.activeInputClaimIds
+        .map(id => this.instanceProjection.claimsById[id])
+        .find(candidate => candidate?.claim === consumption.claim);
+      if (!claim) throw new ClaimKernelError('CLAIM_NOT_READY', `Missing generated input ${consumption.claim}`);
+      if (
+        (claim.kind === 'controller-item' && !claim.controllerCatalogClaimId) ||
+        (claim.kind === 'generated-output' &&
+          (!claim.producerAttemptId || claim.producerFence === undefined))
+      ) {
+        throw new ClaimKernelError(
+          'INVALID_CLAIM_PROVENANCE',
+          `Claim ${claim.claimId} lacks authoritative producer provenance`
+        );
+      }
+      const provenance = claim.kind === 'controller-item'
+        ? {
+            provenance: 'controller' as const,
+            catalogClaimId: claim.controllerCatalogClaimId as string,
+            incarnation: claim.incarnation,
+          }
+        : {
+            provenance: 'attempt' as const,
+            attemptId: claim.producerAttemptId as string,
+            fence: claim.producerFence as number,
+          };
+      claims[consumption.as] = Object.freeze({
+        claimId: claim.claimId,
+        claim: claim.claim,
+        payload: claim.payload,
+        payloadFingerprint: claim.payloadFingerprint,
+        producerCheckId: claim.producerCheckId,
+        scope: claim.scope,
+        parentClaimIds: claim.parentClaimIds,
+        ...provenance,
+      });
+    }
+    return Object.freeze({ generation, node, claims: Object.freeze(claims) });
+  }
+
+  completeGeneratedAttempt(input: {
+    attempt: GeneratedAttemptStartedEvent;
+    payload: unknown;
+  }): void {
+    const { attempt, payload } = input;
+    const before = this.instanceProjection;
+    const generation = before.generationsById[attempt.nodeGenerationId];
+    const instance = before.instancesById[generation.subgraphInstanceId];
+    const expansion = this.requireClaimPlan().expansionPlan!.byOwner[instance.expansionOwnerCheck];
+    const node = expansion.template.nodesByKey[generation.templateNodeKey];
+    let staged = before;
+    const events: InstanceRuntimeEvent[] = [];
+    const stage = (event: InstanceRuntimeEvent): void => {
+      const stored = immutableInstanceEvent(event);
+      staged = reduceInstanceEvent(staged, stored);
+      events.push(stored);
+    };
+    for (const emission of node.emissions) {
+      this.requireClaimPlan().validatorsByClaim[emission.claim](payload);
+      const immutablePayload = immutableCanonicalValue(payload);
+      const payloadFingerprint = sha256Canonical(immutablePayload);
+      const parentClaimIds = [...generation.activeInputClaimIds].sort();
+      const eventId = Math.max(this.claimProjection.lastEventId, staged.lastEventId) + 1;
+      stage({
+        version: 1, type: 'ClaimPublished', eventId,
+        sessionId: attempt.sessionId, checkId: attempt.checkId, scope: attempt.scope,
+        attemptId: attempt.attemptId, fence: attempt.fence,
+        nodeInstanceId: attempt.nodeInstanceId, nodeGenerationId: attempt.nodeGenerationId,
+        claim: emission.claim, payload: immutablePayload, payloadFingerprint,
+        producerCheckId: attempt.checkId, parentClaimIds,
+        claimId: sha256Canonical({ claim: emission.claim, payloadFingerprint,
+          producerCheckId: attempt.checkId, scope: attempt.scope, attemptId: attempt.attemptId,
+          fence: attempt.fence, parentClaimIds }),
+      });
+    }
+    for (const nodeKey of expansion.template.topology) {
+      const candidate = expansion.template.nodesByKey[nodeKey];
+      const nodeInstanceId = instance.nodeInstanceIdsByTemplateNode[nodeKey];
+      if (staged.activeGenerationIdByNode[nodeInstanceId]) continue;
+      const dependenciesCompleted = candidate.dependencyNodeKeys.every(dependencyNodeKey => {
+        const dependencyNodeId = instance.nodeInstanceIdsByTemplateNode[dependencyNodeKey];
+        const dependencyGenerationId = staged.activeGenerationIdByNode[dependencyNodeId];
+        const isCompletingGeneration =
+          dependencyGenerationId === generation.nodeGenerationId &&
+          generation.nodeInstanceId === attempt.nodeInstanceId &&
+          generation.status === 'running' &&
+          generation.scheduled &&
+          generation.attemptId === attempt.attemptId &&
+          generation.fence === attempt.fence;
+        return (
+          dependencyGenerationId !== undefined &&
+          (isCompletingGeneration ||
+            staged.generationsById[dependencyGenerationId]?.status === 'completed')
+        );
+      });
+      if (!dependenciesCompleted) continue;
+      const inputIds: string[] = [];
+      let ready = true;
+      for (const consumption of candidate.consumptions) {
+        const claims = Object.values(staged.claimsById)
+          .filter(value =>
+            value.active &&
+            value.subgraphInstanceId === instance.subgraphInstanceId &&
+            value.incarnation === instance.incarnation &&
+            value.claim === consumption.claim
+          )
+          .sort((left, right) => left.claimId.localeCompare(right.claimId));
+        if (claims.length !== 1) {
+          ready = false;
+          break;
+        }
+        inputIds.push(claims[0].claimId);
+      }
+      if (!ready) continue;
+      inputIds.sort();
+      const item = instance.activeItemClaimId
+        ? staged.claimsById[instance.activeItemClaimId]
+        : undefined;
+      if (!item?.active) {
+        throw new ClaimKernelError(
+          'INACTIVE_ITEM_CLAIM',
+          `Instance ${instance.subgraphInstanceId} lacks an active item claim`
+        );
+      }
+      const nodeGenerationId = deriveNodeGenerationId({ nodeInstanceId,
+        incarnation: instance.incarnation, itemFingerprint: item.payloadFingerprint,
+        executionConfigDigest: candidate.executionConfigDigest, activeInputClaimIds: inputIds });
+      stage({ version: 1, type: 'NodeGenerationActivated',
+        eventId: Math.max(this.claimProjection.lastEventId, staged.lastEventId) + 1,
+        sessionId: attempt.sessionId, scope: instance.scope,
+        subgraphInstanceId: instance.subgraphInstanceId, nodeInstanceId, nodeGenerationId,
+        templateNodeKey: nodeKey, checkId: nodeKey, incarnation: instance.incarnation,
+        itemFingerprint: item.payloadFingerprint, executionConfigDigest: candidate.executionConfigDigest,
+        activeInputClaimIds: inputIds });
+    }
+    stage({ ...attempt, type: 'AttemptCompleted',
+      eventId: Math.max(this.claimProjection.lastEventId, staged.lastEventId) + 1 });
+    this.runtimeEvents.push(...events);
+    this.instanceProjection = staged;
+  }
+
+  failGeneratedAttempt(attempt: GeneratedAttemptStartedEvent, reason: string): void {
+    this.appendInstanceEvent({ ...attempt, type: 'AttemptFailed', reason,
+      eventId: this.nextRuntimeEventId() });
+  }
+
+  queryReadyWork(): readonly NodeGenerationProjection[] {
+    return queryReadyGenerations(this.instanceProjection);
+  }
+
+  getInstanceProjection(): InstanceProjection {
+    return immutableCanonicalValue(this.instanceProjection);
+  }
+
+  replayInstanceProjection(): InstanceProjection {
+    return replayInstanceEvents(
+      this.runtimeEvents.filter(event =>
+        ['CatalogReconciliationRequested','SubgraphExpanded','ControllerItemClaimPublished','NodeGenerationInactivated','NodeGenerationActivated','SubgraphTombstoned'].includes(event.type) ||
+        'nodeGenerationId' in event || 'requestId' in event
+      ) as InstanceRuntimeEvent[]
+    );
+  }
+
+  startAttempt(input: {
+    sessionId: string;
+    checkId: string;
+    scope: ScopePath;
+  }): AttemptStartedEvent {
+    const plan = this.requireClaimPlan();
+    if (!Object.prototype.hasOwnProperty.call(plan.effectiveDependenciesByCheck, input.checkId)) {
+      throw new ClaimKernelError('UNKNOWN_CHECK', `Unknown claim-mode check ${input.checkId}`);
+    }
+    const authoritativeInput = {
+      sessionId: input.sessionId,
+      checkId: input.checkId,
+      scope: input.scope.map(part => ({ ...part })),
+    };
+    const ordinalKey = canonicalJson(authoritativeInput);
+    const ordinal = (this.attemptOrdinals.get(ordinalKey) || 0) + 1;
+    this.attemptOrdinals.set(ordinalKey, ordinal);
+    const fence = ++this.nextFence;
+    const attemptId = sha256Canonical({ ...authoritativeInput, ordinal });
+    return this.appendRuntimeEvent({
+      version: 1,
+      type: 'AttemptStarted',
+      eventId: this.nextRuntimeEventId(),
+      ...authoritativeInput,
+      attemptId,
+      fence,
+    });
+  }
+
+  scheduleCheck(input: {
+    sessionId: string;
+    checkId: string;
+    scope: ScopePath;
+    attemptId: string;
+    fence: number;
+  }): CheckScheduledEvent {
+    const plan = this.requireClaimPlan();
+    const claimIds = exactActiveClaimIds(plan, this.claimProjection, input.checkId);
+    return this.appendRuntimeEvent({
+      version: 1,
+      type: 'CheckScheduled',
+      eventId: this.nextRuntimeEventId(),
+      sessionId: input.sessionId,
+      checkId: input.checkId,
+      scope: input.scope.map(part => ({ ...part })),
+      attemptId: input.attemptId,
+      fence: input.fence,
+      claimIds: [...claimIds],
+    });
+  }
+
+  private reconcileCatalog(input: {
+    sessionId: string;
+    owner: string;
+    payload: unknown;
+    catalogClaimId: string;
+    startEventId: number;
+  }): { events: InstanceRuntimeEvent[]; projection: InstanceProjection } {
+    const expansion = this.requireClaimPlan().expansionPlan?.byOwner[input.owner];
+    if (!expansion) return { events: [], projection: this.instanceProjection };
+    expansion.catalogValidator(input.payload);
+    const rawItems = resolveJsonPointer(input.payload, expansion.itemsPointer);
+    if (!Array.isArray(rawItems)) {
+      throw new ClaimKernelError(
+        'INVALID_CATALOG_ITEMS',
+        'Catalog items pointer must resolve to an array'
+      );
+    }
+    const items = new Map<string, unknown>();
+    for (const item of rawItems) {
+      expansion.itemValidator(item);
+      const key = canonicalCatalogKey(resolveJsonPointer(item, expansion.keyPointer));
+      if (items.has(key)) {
+        throw new ClaimKernelError('DUPLICATE_CATALOG_KEY', `Duplicate catalog key ${key}`);
+      }
+      items.set(key, immutableCanonicalValue(item));
+    }
+
+    let projection = this.instanceProjection;
+    const events: InstanceRuntimeEvent[] = [];
+    let nextId = input.startEventId;
+    const stage = (event: StagedInstanceRuntimeEvent): void => {
+      const stored = immutableInstanceEvent({ ...event, eventId: nextId++ });
+      projection = reduceInstanceEvent(projection, stored);
+      events.push(stored);
+    };
+
+    const allByKey = new Map(
+      Object.values(this.instanceProjection.instancesById)
+        .filter(instance => instance.expansionOwnerCheck === input.owner)
+        .map(instance => [instance.itemKey, instance] as const)
+    );
+    const active = [...allByKey.values()].filter(instance => instance.status === 'active');
+    const sortedItems = [...items.entries()].sort(([left], [right]) => left.localeCompare(right));
+
+    for (const [key] of sortedItems) {
+      if (allByKey.get(key)?.status === 'tombstoned') {
+        throw new ClaimKernelError(
+          'TOMBSTONED_KEY_READD_UNSUPPORTED',
+          `Key ${key} was tombstoned`
+        );
+      }
+    }
+
+    const changed = sortedItems.filter(([key, item]) => {
+      const instance = allByKey.get(key);
+      if (!instance?.activeItemClaimId || instance.status !== 'active') return false;
+      return (
+        this.instanceProjection.claimsById[instance.activeItemClaimId].payloadFingerprint !==
+        deriveItemFingerprint(item)
+      );
+    });
+    const added = sortedItems.filter(([key]) => !allByKey.has(key));
+
+    const activateSources = (
+      instanceId: string,
+      itemFingerprint: string
+    ): void => {
+      const instance = projection.instancesById[instanceId];
+      for (const nodeKey of expansion.template.sourceNodeKeys) {
+        const node = expansion.template.nodesByKey[nodeKey];
+        const inputIds: string[] = [];
+        let ready = true;
+        for (const consumption of node.consumptions) {
+          const matches = Object.values(projection.claimsById)
+            .filter(claim =>
+              claim.active &&
+              claim.subgraphInstanceId === instance.subgraphInstanceId &&
+              claim.incarnation === instance.incarnation &&
+              claim.claim === consumption.claim
+            )
+            .sort((left, right) => left.claimId.localeCompare(right.claimId));
+          if (matches.length !== 1) {
+            ready = false;
+            break;
+          }
+          inputIds.push(matches[0].claimId);
+        }
+        if (!ready) continue;
+        inputIds.sort();
+        const nodeInstanceId = instance.nodeInstanceIdsByTemplateNode[nodeKey];
+        const nodeGenerationId = deriveNodeGenerationId({
+          nodeInstanceId,
+          incarnation: instance.incarnation,
+          itemFingerprint,
+          executionConfigDigest: node.executionConfigDigest,
+          activeInputClaimIds: inputIds,
+        });
+        stage({
+          version: 1,
+          type: 'NodeGenerationActivated',
+          sessionId: input.sessionId,
+          scope: instance.scope,
+          subgraphInstanceId: instance.subgraphInstanceId,
+          nodeInstanceId,
+          nodeGenerationId,
+          templateNodeKey: nodeKey,
+          checkId: nodeKey,
+          incarnation: instance.incarnation,
+          itemFingerprint,
+          executionConfigDigest: node.executionConfigDigest,
+          activeInputClaimIds: inputIds,
+        });
+      }
+    };
+
+    const publishItemAndActivateSources = (
+      instanceId: string,
+      key: string,
+      item: unknown
+    ): void => {
+      let instance = projection.instancesById[instanceId];
+      const payloadFingerprint = deriveItemFingerprint(item);
+      const incarnation = instance.incarnation + 1;
+      const claimId = deriveControllerItemClaimId({
+        claim: expansion.itemClaimRef,
+        payloadFingerprint,
+        expansionSpecDigest: expansion.expansionSpecDigest,
+        catalogClaimId: input.catalogClaimId,
+        subgraphInstanceId: instance.subgraphInstanceId,
+        incarnation,
+        scope: instance.scope,
+      });
+      stage({
+        version: 1,
+        type: 'ControllerItemClaimPublished',
+        sessionId: input.sessionId,
+        scope: instance.scope,
+        expansionOwnerCheck: input.owner,
+        expansionSpecDigest: expansion.expansionSpecDigest,
+        catalogClaimId: input.catalogClaimId,
+        itemKey: key,
+        subgraphInstanceId: instance.subgraphInstanceId,
+        incarnation,
+        claimId,
+        claim: expansion.itemClaimRef,
+        payload: item,
+        payloadFingerprint,
+        parentClaimIds: [input.catalogClaimId],
+      });
+      instance = projection.instancesById[instanceId];
+      activateSources(instance.subgraphInstanceId, payloadFingerprint);
+    };
+
+    for (const instance of active
+      .filter(candidate => !items.has(candidate.itemKey))
+      .sort((left, right) => left.itemKey.localeCompare(right.itemKey))) {
+      const generations = Object.values(projection.generationsById).filter(
+        generation =>
+          generation.subgraphInstanceId === instance.subgraphInstanceId &&
+          generation.status !== 'inactive'
+      );
+      stage({
+        version: 1,
+        type: 'SubgraphTombstoned',
+        sessionId: input.sessionId,
+        scope: instance.scope,
+        expansionOwnerCheck: input.owner,
+        sourceCatalogClaimId: input.catalogClaimId,
+        itemKey: instance.itemKey,
+        subgraphInstanceId: instance.subgraphInstanceId,
+        lastIncarnation: instance.incarnation,
+        nodeGenerationIds: generations.map(value => value.nodeGenerationId).sort(),
+        outputClaimIds: generations.flatMap(value => value.completedOutputClaimIds).sort(),
+      });
+    }
+
+    for (const [key, item] of changed) {
+      let instance = projection.instancesById[allByKey.get(key)!.subgraphInstanceId];
+      for (const nodeKey of expansion.template.reverseTopology) {
+        const nodeInstanceId = instance.nodeInstanceIdsByTemplateNode[nodeKey];
+        const generationId = projection.activeGenerationIdByNode[nodeInstanceId];
+        if (!generationId) continue;
+        const generation = projection.generationsById[generationId];
+        stage({
+          version: 1,
+          type: 'NodeGenerationInactivated',
+          sessionId: input.sessionId,
+          scope: instance.scope,
+          subgraphInstanceId: instance.subgraphInstanceId,
+          nodeInstanceId,
+          nodeGenerationId: generationId,
+          incarnation: generation.incarnation,
+          outputClaimIds: [...generation.completedOutputClaimIds].sort(),
+          reason: 'superseded',
+        });
+        instance = projection.instancesById[instance.subgraphInstanceId];
+      }
+      publishItemAndActivateSources(instance.subgraphInstanceId, key, item);
+    }
+
+    for (const [key, item] of added) {
+      const subgraphInstanceId = deriveSubgraphInstanceId({
+        graphSemanticDigest: expansion.graphSemanticDigest,
+        expansionOwnerCheck: input.owner,
+        parentSubgraphInstanceId: null,
+        templateDigest: expansion.templateDigest,
+        itemKey: key,
+      });
+      const scope: KeyedScopePath = Object.freeze([
+        {
+          kind: 'keyed',
+          expansionOwnerCheck: input.owner,
+          key,
+          subgraphInstanceId,
+        },
+      ]);
+      stage({
+        version: 1,
+        type: 'SubgraphExpanded',
+        sessionId: input.sessionId,
+        scope,
+        expansionOwnerCheck: input.owner,
+        graphSemanticDigest: expansion.graphSemanticDigest,
+        expansionSpecDigest: expansion.expansionSpecDigest,
+        templateDigest: expansion.templateDigest,
+        parentSubgraphInstanceId: null,
+        catalogClaimId: input.catalogClaimId,
+        itemKey: key,
+        subgraphInstanceId,
+        nodeInstanceIdsByTemplateNode: Object.fromEntries(
+          expansion.template.templateNodeKeys.map(nodeKey => [
+            nodeKey,
+            deriveNodeInstanceId({ subgraphInstanceId, templateNodeKey: nodeKey }),
+          ])
+        ),
+      });
+      publishItemAndActivateSources(subgraphInstanceId, key, item);
+    }
+
+    return { events, projection };
+  }
+
+  completeAttempt(input: {
+    sessionId: string;
+    checkId: string;
+    scope: ScopePath;
+    attemptId: string;
+    fence: number;
+    payload: unknown;
+  }): {
+    readonly claims: readonly CandidateClaimInput[];
+    readonly completed: AttemptCompletedEvent;
+  } {
+    const plan = this.requireClaimPlan();
+    const scheduled = this.claimProjection.scheduled.find(
+      event =>
+        event.sessionId === input.sessionId &&
+        event.checkId === input.checkId &&
+        event.attemptId === input.attemptId &&
+        event.fence === input.fence &&
+        canonicalJson(event.scope) === canonicalJson(input.scope)
+    );
+    if (!scheduled) {
+      throw new ClaimKernelError(
+        'ATTEMPT_NOT_SCHEDULED',
+        `Attempt ${input.attemptId} was not scheduled before terminal processing`
+      );
+    }
+
+    let stagedProjection = this.claimProjection;
+    const stagedEvents: ClaimRuntimeEvent[] = [];
+    const claimIds: string[] = [];
+    for (const emission of plan.emissionsByCheck[input.checkId] || []) {
+      const built = buildClaimPublishedEvent({
+        eventId: Math.max(stagedProjection.lastEventId, this.instanceProjection.lastEventId, ...stagedEvents.map(event => event.eventId)) + 1,
+        sessionId: input.sessionId,
+        checkId: input.checkId,
+        scope: input.scope,
+        attemptId: input.attemptId,
+        fence: input.fence,
+        claim: emission.claim,
+        payload: input.payload,
+        parentClaimIds: scheduled.claimIds,
+        projection: stagedProjection,
+        plan,
+      });
+      const event = immutableRuntimeEvent(built);
+      stagedProjection = reduceClaimEvent(stagedProjection, event, plan);
+      stagedEvents.push(event);
+      claimIds.push(event.claimId);
+    }
+
+    const catalogClaimId = claimIds.find(id =>
+      stagedProjection.claims[id]?.claim === plan.expansionPlan?.byOwner[input.checkId]?.catalogClaimRef
+    );
+    const reconciled = catalogClaimId
+      ? this.reconcileCatalog({
+          sessionId: input.sessionId,
+          owner: input.checkId,
+          payload: input.payload,
+          catalogClaimId,
+          startEventId: Math.max(stagedProjection.lastEventId, this.instanceProjection.lastEventId) + 1,
+        })
+      : { events: [] as InstanceRuntimeEvent[], projection: this.instanceProjection };
+    const requestId = this.instanceProjection.attemptBindingsById[input.attemptId];
+
+    const completed = immutableRuntimeEvent({
+      version: 1,
+      type: 'AttemptCompleted',
+      eventId: Math.max(stagedProjection.lastEventId, reconciled.projection.lastEventId) + 1,
+      sessionId: input.sessionId,
+      checkId: input.checkId,
+      scope: input.scope.map(part => ({ ...part })),
+      attemptId: input.attemptId,
+      fence: input.fence,
+      ...(requestId ? { requestId } : {}),
+    });
+    stagedProjection = reduceClaimEvent(stagedProjection, completed, plan);
+    stagedEvents.push(completed);
+
+    const finalInstanceProjection = requestId
+      ? reduceInstanceEvent(reconciled.projection, completed as any)
+      : reconciled.projection;
+
+    this.runtimeEvents.push(...stagedEvents.slice(0, -1), ...reconciled.events, completed);
+    this.claimProjection = stagedProjection;
+    this.instanceProjection = finalInstanceProjection;
+    return Object.freeze({
+      claims: Object.freeze(claimIds.map(claimId => stagedProjection.claims[claimId])),
+      completed,
+    });
+  }
+
+  failAttempt(input: {
+    sessionId: string;
+    checkId: string;
+    scope: ScopePath;
+    attemptId: string;
+    fence: number;
+    reason: string;
+  }): AttemptFailedEvent {
+    const requestId = this.instanceProjection.attemptBindingsById[input.attemptId];
+    const event = immutableRuntimeEvent({
+      sessionId: input.sessionId,
+      checkId: input.checkId,
+      attemptId: input.attemptId,
+      fence: input.fence,
+      reason: input.reason,
+      version: 1,
+      type: 'AttemptFailed',
+      eventId: this.nextRuntimeEventId(),
+      scope: input.scope.map(part => ({ ...part })),
+      ...(requestId ? { requestId } : {}),
+    });
+    const claim = reduceClaimEvent(this.claimProjection, event, this.requireClaimPlan());
+    const instance = requestId
+      ? reduceInstanceEvent(this.instanceProjection, event as any)
+      : this.instanceProjection;
+    this.runtimeEvents.push(event); this.claimProjection = claim; this.instanceProjection = instance;
+    return event;
+  }
+
+  readRuntimeEvents(): readonly (ClaimRuntimeEvent | InstanceRuntimeEvent)[] {
+    return immutableCanonicalValue(this.runtimeEvents);
+  }
+
+  getClaimProjection(): ClaimProjection {
+    return immutableCanonicalValue(this.claimProjection);
+  }
+
+  replayClaimProjection(): ClaimProjection {
+    return replayClaimEvents(
+      this.readRuntimeEvents().filter(event =>
+        ['AttemptStarted','ClaimPublished','CheckScheduled','AttemptCompleted','AttemptFailed'].includes(event.type) &&
+        !('nodeGenerationId' in event)
+      ) as ClaimRuntimeEvent[],
+      this.requireClaimPlan()
+    );
+  }
+
+  isCheckReady(checkId: string): boolean {
+    try {
+      exactActiveClaimIds(this.requireClaimPlan(), this.claimProjection, checkId);
+      return true;
+    } catch (error) {
+      if (error instanceof ClaimKernelError && error.code === 'CLAIM_NOT_READY') return false;
+      throw error;
+    }
+  }
+
+  readCheckClaims(checkId: string): Readonly<Record<string, CandidateClaimInput>> {
+    const plan = this.requireClaimPlan();
+    const claimIds = exactActiveClaimIds(plan, this.claimProjection, checkId);
+    const selected: Record<string, CandidateClaimInput> = {};
+    for (const [index, consumption] of (plan.consumptionsByCheck[checkId] || []).entries()) {
+      const claimId = claimIds[index];
+      const claim = this.claimProjection.claims[claimId];
+      if (claim) selected[consumption.claim] = claim;
+    }
+    return Object.freeze(selected);
   }
 
   // Lightweight helpers for debugging/metrics
@@ -115,15 +957,14 @@ export class ContextView {
   }
 
   private sameScope(a: ScopePath, b: ScopePath): boolean {
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) {
-      if (a[i].check !== b[i].check || a[i].index !== b[i].index) return false;
-    }
-    return true;
+    return canonicalJson(a) === canonicalJson(b);
   }
 
   // distance from ancestor to current; -1 if not ancestor
   private ancestorDistance(ancestor: ScopePath, current: ScopePath): number {
+    if ([...ancestor, ...current].some(segment => (segment as any).kind === 'keyed')) {
+      return this.sameScope(ancestor, current) ? 0 : -1;
+    }
     if (ancestor.length > current.length) return -1;
     // Treat root scope ([]) as non-ancestor for unrelated branches
     if (ancestor.length === 0 && current.length > 0) return -1;
