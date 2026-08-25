@@ -55,6 +55,9 @@ export interface CompiledSubgraphTemplate {
 
 export interface CompiledExpansion {
   readonly expansionOwnerCheck: string;
+  readonly depth: 1 | 2;
+  readonly parentTemplateName: string | null;
+  readonly parentTemplateNodeKey: string | null;
   readonly catalogClaimRef: string;
   readonly catalogValidator: ClaimSchemaValidator;
   readonly templateName: string;
@@ -72,6 +75,7 @@ export interface ExpansionPlan {
   readonly active: boolean;
   readonly graphSemanticDigest: string;
   readonly byOwner: Readonly<Record<string, CompiledExpansion>>;
+  readonly byNestedOwner: Readonly<Record<string, CompiledExpansion>>;
   readonly templatesByName: Readonly<Record<string, CompiledSubgraphTemplate>>;
 }
 
@@ -83,6 +87,14 @@ export interface ExpansionCompileAuthority {
 
 function hasOwn(value: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+/** Unambiguous static address for one generated expansion owner. */
+export function qualifiedNestedExpansionOwner(
+  parentTemplateName: string,
+  parentTemplateNodeKey: string
+): string {
+  return JSON.stringify([parentTemplateName, parentTemplateNodeKey]);
 }
 
 function frozenRecord<T>(record: Record<string, T>): Readonly<Record<string, T>> {
@@ -268,10 +280,10 @@ function compileTemplate(
         `Template check "${name}.${nodeKey}" must be an object`
       );
     }
-    if (check.forEach || check.type === 'workflow' || hasOwn(check, 'expand') || hasRouting(check)) {
+    if (check.forEach || check.type === 'workflow' || hasRouting(check)) {
       throw new InstancePlanError(
         'UNSUPPORTED_TEMPLATE_EXECUTION',
-        `Template check "${name}.${nodeKey}" cannot use forEach, workflow, nested expansion, or lifecycle routing`
+        `Template check "${name}.${nodeKey}" cannot use forEach, workflow, or lifecycle routing`
       );
     }
     for (const field of ['emits', 'consumes'] as const) {
@@ -471,6 +483,7 @@ export function compileExpansionPlan(
       active: false,
       graphSemanticDigest: sha256Canonical({ v: 1, active: false }),
       byOwner: frozenRecord<CompiledExpansion>({}),
+      byNestedOwner: frozenRecord<CompiledExpansion>({}),
       templatesByName: frozenRecord<CompiledSubgraphTemplate>({}),
     });
   }
@@ -605,6 +618,9 @@ export function compileExpansionPlan(
     const expansion = compiled.expansion;
     byOwner[compiled.owner] = Object.freeze({
       expansionOwnerCheck: compiled.owner,
+      depth: 1,
+      parentTemplateName: null,
+      parentTemplateNodeKey: null,
       catalogClaimRef: expansion.claim,
       catalogValidator: authority.validatorsByClaim[expansion.claim],
       templateName: expansion.template,
@@ -619,10 +635,148 @@ export function compileExpansionPlan(
     });
   }
 
+  const nestedDeclarations = Object.values(templatesByName).flatMap(template =>
+    template.templateNodeKeys
+      .filter(nodeKey => hasOwn(template.nodesByKey[nodeKey].check, 'expand'))
+      .map(nodeKey => ({ template, nodeKey, check: template.nodesByKey[nodeKey].check }))
+  );
+  if (nestedDeclarations.length > 1) {
+    throw new InstancePlanError(
+      'NESTED_EXPANSION_AMBIGUOUS',
+      'Graph v2 C4 admits exactly one generated expansion owner'
+    );
+  }
+
+  const byNestedOwner: Record<string, CompiledExpansion> = {};
+  if (nestedDeclarations.length === 1) {
+    const { template: parentTemplate, nodeKey, check } = nestedDeclarations[0];
+    if (!precompiled.some(candidate => candidate.template.name === parentTemplate.name)) {
+      throw new InstancePlanError(
+        'UNREACHABLE_NESTED_EXPANSION',
+        `Nested expansion owner "${parentTemplate.name}.${nodeKey}" is not in a root-expanded template`
+      );
+    }
+    const expansion = check.expand;
+    if (!expansion || typeof expansion !== 'object' || Array.isArray(expansion)) {
+      throw new InstancePlanError(
+        'INVALID_EXPANSION_CONFIG',
+        `Template check "${parentTemplate.name}.${nodeKey}" expand must be an object`
+      );
+    }
+    const ownerAddress = qualifiedNestedExpansionOwner(parentTemplate.name, nodeKey);
+    const catalogClaim = requireNonEmptyString(
+      expansion.claim,
+      `subgraphs.${parentTemplate.name}.checks.${nodeKey}.expand.claim`
+    );
+    if (!CLAIM_REF_PATTERN.test(catalogClaim) || !authority.validatorsByClaim[catalogClaim]) {
+      throw new InstancePlanError(
+        'UNKNOWN_EXPANSION_CLAIM',
+        `Template check "${parentTemplate.name}.${nodeKey}" expands undeclared catalog claim "${catalogClaim}"`
+      );
+    }
+    const matchingEmissions = (check.emits || []).filter(
+      emission => emission.claim === catalogClaim
+    );
+    if (
+      matchingEmissions.length !== 1 ||
+      parentTemplate.emitterByClaim[catalogClaim] !== nodeKey
+    ) {
+      throw new InstancePlanError(
+        'INVALID_EXPANSION_OWNER',
+        `Template check "${parentTemplate.name}.${nodeKey}" must be the sole template emitter of expanded claim "${catalogClaim}"`
+      );
+    }
+    const itemClaim = requireNonEmptyString(
+      expansion.item_claim,
+      `subgraphs.${parentTemplate.name}.checks.${nodeKey}.expand.item_claim`
+    );
+    if (!CLAIM_REF_PATTERN.test(itemClaim) || !authority.validatorsByClaim[itemClaim]) {
+      throw new InstancePlanError(
+        'UNKNOWN_ITEM_CLAIM',
+        `Template check "${parentTemplate.name}.${nodeKey}" references undeclared item claim "${itemClaim}"`
+      );
+    }
+    if (
+      authority.rootEmitterByClaim[itemClaim] ||
+      Object.values(templatesByName).some(candidate => candidate.emitterByClaim[itemClaim])
+    ) {
+      throw new InstancePlanError(
+        'FORGED_CONTROLLER_ITEM_CLAIM',
+        `Nested item claim "${itemClaim}" is controller-owned and cannot have an emitter`
+      );
+    }
+    const templateName = requireNonEmptyString(
+      expansion.template,
+      `subgraphs.${parentTemplate.name}.checks.${nodeKey}.expand.template`
+    );
+    const childTemplate = templatesByName[templateName];
+    if (!childTemplate) {
+      throw new InstancePlanError(
+        'UNKNOWN_SUBGRAPH_TEMPLATE',
+        `Template check "${parentTemplate.name}.${nodeKey}" references unknown subgraph template "${templateName}"`
+      );
+    }
+    if (
+      childTemplate.name === parentTemplate.name ||
+      childTemplate.templateNodeKeys.some(childNodeKey =>
+        hasOwn(childTemplate.nodesByKey[childNodeKey].check, 'expand')
+      )
+    ) {
+      throw new InstancePlanError(
+        'NESTED_EXPANSION_DEPTH_EXCEEDED',
+        'Graph v2 C4 rejects recursive, cyclic, or depth-three expansion'
+      );
+    }
+    if (childTemplate.input.claim !== itemClaim) {
+      throw new InstancePlanError(
+        'ITEM_CLAIM_MISMATCH',
+        `Nested item claim "${itemClaim}" does not match template input "${childTemplate.input.claim}"`
+      );
+    }
+    const itemsPointer = compileJsonPointer(
+      expansion.items_pointer,
+      `subgraphs.${parentTemplate.name}.checks.${nodeKey}.expand.items_pointer`
+    );
+    const keyPointer = compileJsonPointer(
+      expansion.key_pointer,
+      `subgraphs.${parentTemplate.name}.checks.${nodeKey}.expand.key_pointer`
+    );
+    const expansionSpecDigest = sha256Canonical({
+      v: 1,
+      expansionOwnerCheck: ownerAddress,
+      parentTemplateName: parentTemplate.name,
+      parentTemplateNodeKey: nodeKey,
+      catalogClaimRef: catalogClaim,
+      templateName,
+      templateDigest: childTemplate.templateDigest,
+      itemsPointer: itemsPointer.source,
+      keyPointer: keyPointer.source,
+      itemClaimRef: itemClaim,
+    });
+    byNestedOwner[ownerAddress] = Object.freeze({
+      expansionOwnerCheck: ownerAddress,
+      depth: 2,
+      parentTemplateName: parentTemplate.name,
+      parentTemplateNodeKey: nodeKey,
+      catalogClaimRef: catalogClaim,
+      catalogValidator: authority.validatorsByClaim[catalogClaim],
+      templateName,
+      templateDigest: childTemplate.templateDigest,
+      expansionSpecDigest,
+      itemsPointer,
+      keyPointer,
+      itemClaimRef: itemClaim,
+      itemValidator: authority.validatorsByClaim[itemClaim],
+      template: childTemplate,
+      graphSemanticDigest,
+    });
+  }
+
   return Object.freeze({
     active: true,
     graphSemanticDigest,
     byOwner: frozenRecord(byOwner),
+    byNestedOwner: frozenRecord(byNestedOwner),
     templatesByName: frozenRecord(templatesByName),
   });
 }

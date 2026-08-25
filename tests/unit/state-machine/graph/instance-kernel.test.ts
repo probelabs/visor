@@ -326,6 +326,23 @@ function managedAttemptCompleted(attempt: GeneratedAttemptStartedEvent, eventId:
 
 describe('Graph v2 C2 instance kernel', () => {
   it('uses tagged scopes and rejects ambiguous, extra, mixed, and malformed segments', () => {
+    const parent = instanceIdentity('parent');
+    const childId = deriveSubgraphInstanceId({
+      graphSemanticDigest,
+      parentSubgraphInstanceId: parent.subgraphInstanceId,
+      expansionOwnerNodeInstanceId: parent.nodeInstanceId,
+      templateDigest,
+      itemKey: 'child',
+    });
+    const childScope: KeyedScopePath = [
+      ...parent.scope,
+      {
+        kind: 'keyed',
+        expansionOwnerCheck: 'nested-owner',
+        key: 'child',
+        subgraphInstanceId: childId,
+      },
+    ];
     expect(validateTaggedScopePath([])).toEqual([]);
     expect(
       validateTaggedScopePath([
@@ -334,6 +351,11 @@ describe('Graph v2 C2 instance kernel', () => {
       ])
     ).toHaveLength(2);
     expect(requireKeyedScopePath(instanceIdentity().scope)).toEqual(instanceIdentity().scope);
+    expect(requireKeyedScopePath(childScope, childScope)).toEqual(childScope);
+    expectKernelError(
+      () => requireKeyedScopePath(childScope, [childScope[1]]),
+      'INVALID_SCOPE'
+    );
 
     for (const invalid of [
       [{ check: 'legacy-untagged', index: 0 }],
@@ -343,7 +365,7 @@ describe('Graph v2 C2 instance kernel', () => {
         { kind: 'indexed', check: 'x', index: 0 },
         instanceIdentity().scope[0],
       ],
-      [instanceIdentity().scope[0], instanceIdentity().scope[0]],
+      [...childScope, childScope[1]],
     ]) {
       expectKernelError(() => validateTaggedScopePath(invalid), 'INVALID_SCOPE');
     }
@@ -359,6 +381,38 @@ describe('Graph v2 C2 instance kernel', () => {
     expect(canonicalCatalogKey('1')).toBe('1');
     expect(canonicalCatalogKey(-0)).toBe('0');
     expectKernelError(() => canonicalCatalogKey(''), 'INVALID_ITEM_KEY');
+  });
+
+  it('binds child identity to its exact parent and expansion-owner node', () => {
+    const parentA = instanceIdentity('A');
+    const parentB = instanceIdentity('B');
+    const childForA = deriveSubgraphInstanceId({
+      graphSemanticDigest,
+      parentSubgraphInstanceId: parentA.subgraphInstanceId,
+      expansionOwnerNodeInstanceId: parentA.nodeInstanceId,
+      templateDigest,
+      itemKey: 'same-spec',
+    });
+    const childForB = deriveSubgraphInstanceId({
+      graphSemanticDigest,
+      parentSubgraphInstanceId: parentB.subgraphInstanceId,
+      expansionOwnerNodeInstanceId: parentB.nodeInstanceId,
+      templateDigest,
+      itemKey: 'same-spec',
+    });
+    const childForDifferentOwner = deriveSubgraphInstanceId({
+      graphSemanticDigest,
+      parentSubgraphInstanceId: parentA.subgraphInstanceId,
+      expansionOwnerNodeInstanceId: deriveNodeInstanceId({
+        subgraphInstanceId: parentA.subgraphInstanceId,
+        templateNodeKey: 'different-owner',
+      }),
+      templateDigest,
+      itemKey: 'same-spec',
+    });
+
+    expect(childForA).not.toBe(childForB);
+    expect(childForA).not.toBe(childForDifferentOwner);
   });
 
   it('replays expansion, controller claim, activation, and bound generated lifecycle immutably', () => {
