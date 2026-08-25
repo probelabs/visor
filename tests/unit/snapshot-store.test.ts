@@ -1,6 +1,21 @@
-import { describe, it, expect } from '@jest/globals';
+import { describe, it, expect, jest } from '@jest/globals';
 import { ExecutionJournal, ContextView, ScopePath } from '../../src/snapshot-store';
 import { compileClaimPlan } from '../../src/state-machine/graph/claim-plan';
+import {
+  armManagedRunDeadline,
+  normalizeManagedRunOutcome,
+  normalizeManagedRunTimeout,
+  snapshotManagedRun,
+  snapshotManagedRunStartRequest,
+} from '../../src/state-machine/dispatch/managed-run';
+import type {
+  ManagedRunCancelReceiptV1,
+  ManagedRunCleanupReceiptV1,
+} from '../../src/providers/check-provider.interface';
+import type {
+  GeneratedAttemptStartedEvent,
+  ManagedRunBindingV1,
+} from '../../src/state-machine/graph/instance-kernel';
 
 function makeResult(val: any) {
   return { issues: [], output: val } as any;
@@ -131,6 +146,35 @@ function expectDeeplyFrozen(value: unknown, seen = new Set<object>()): void {
   seen.add(object);
   expect(Object.isFrozen(object)).toBe(true);
   for (const child of Object.values(object)) expectDeeplyFrozen(child, seen);
+}
+
+function helperManagedBinding(): ManagedRunBindingV1 {
+  return {
+    managedRunId: 'managed-helper-1',
+    sessionId: 'helper-session',
+    checkId: 'inspect',
+    scope: [{
+      kind: 'keyed',
+      expansionOwnerCheck: 'discover',
+      key: 'A',
+      subgraphInstanceId: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+    }],
+    nodeInstanceId: 'helper-node',
+    nodeGenerationId: 'helper-generation',
+    attemptId: 'helper-attempt',
+    fence: 7,
+  };
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(settle => {
+    resolve = settle;
+  });
+  return { promise, resolve };
 }
 
 describe('snapshot-store (journal + context view)', () => {
@@ -405,5 +449,546 @@ describe('snapshot-store (journal + context view)', () => {
     const joinExecution = journal.getGeneratedExecution(join.nodeGenerationId);
     expect(joinExecution.node.dependencyNodeKeys).toEqual(['first', 'second']);
     expect(joinExecution.claims.firstResult.claim).toBe('component.first@1');
+  });
+
+  it('atomically records a controller-derived managed acquisition failure', () => {
+    const journal = c2Journal();
+    publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });
+    const generation = journal.queryReadyWork().find(candidate => candidate.checkId === 'inspect')!;
+    const attempt = journal.startGeneratedAttempt(generation.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(attempt);
+    const binding = journal.deriveManagedRunBinding(attempt);
+    const before = journal.readRuntimeEvents();
+
+    journal.failManagedRunAcquisition({
+      attempt,
+      binding,
+      failureCode: 'MANAGED_HANDLE_INVALID',
+    });
+
+    expect(journal.readRuntimeEvents().slice(before.length).map(event => event.type)).toEqual([
+      'ManagedRunAcquisitionFailed',
+      'AttemptFailed',
+    ]);
+    expect(journal.getInstanceProjection().managedRunsByAttemptId[attempt.attemptId]).toEqual({
+      binding,
+      status: 'acquisition_failed',
+      controllerDecision: 'failed',
+      failureCode: 'MANAGED_HANDLE_INVALID',
+    });
+    expect(journal.replayInstanceProjection()).toEqual(journal.getInstanceProjection());
+    expectErrorCode(
+      () => journal.failGeneratedAttempt(attempt, 'PROVIDER_EXECUTION_FAILED'),
+      'STALE_FENCE'
+    );
+  });
+
+  it('derives all managed authority from projection and rejects altered attempt fields', () => {
+    const journal = c2Journal();
+    publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });
+    const generation = journal.queryReadyWork().find(candidate => candidate.checkId === 'inspect')!;
+    const attempt = journal.startGeneratedAttempt(generation.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(attempt);
+    const binding = journal.deriveManagedRunBinding(attempt);
+    const projection = journal.getInstanceProjection();
+    const projectedGeneration = projection.generationsById[generation.nodeGenerationId];
+    const instance = projection.instancesById[generation.subgraphInstanceId];
+
+    expect(binding).toMatchObject({
+      sessionId: instance.sessionId,
+      checkId: projectedGeneration.checkId,
+      scope: projectedGeneration.scope,
+      nodeInstanceId: projectedGeneration.nodeInstanceId,
+      nodeGenerationId: projectedGeneration.nodeGenerationId,
+      attemptId: projectedGeneration.attemptId,
+      fence: projectedGeneration.fence,
+    });
+
+    const mutations: Array<Partial<GeneratedAttemptStartedEvent>> = [
+      { sessionId: 'wrong-session' },
+      { checkId: 'wrong-check' },
+      { scope: [] },
+      { nodeInstanceId: 'wrong-instance' },
+      { nodeGenerationId: 'wrong-generation' },
+      { attemptId: 'wrong-attempt' },
+      { fence: attempt.fence + 1 },
+    ];
+    for (const mutation of mutations) {
+      expect(() => journal.deriveManagedRunBinding({ ...attempt, ...mutation })).toThrow();
+    }
+  });
+
+  it('detaches and deeply freezes managed outcome evidence before cleanup awaits', () => {
+    const journal = c2Journal();
+    publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });
+    const generation = journal.queryReadyWork().find(candidate => candidate.checkId === 'inspect')!;
+    const attempt = journal.startGeneratedAttempt(generation.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(attempt);
+    const binding = journal.deriveManagedRunBinding(attempt);
+    const summary = {
+      issues: [] as Array<{ message: string }>,
+      output: { nested: { value: 'before' } },
+    };
+
+    const normalized = normalizeManagedRunOutcome(
+      { version: 1, kind: 'succeeded', binding, summary },
+      binding
+    );
+    summary.output.nested.value = 'after';
+    summary.issues.push({ message: 'late mutation' });
+
+    expect(normalized.kind).toBe('succeeded');
+    if (normalized.kind !== 'succeeded') throw new Error('expected managed success');
+    expect(normalized.summary).toEqual({
+      issues: [],
+      output: { nested: { value: 'before' } },
+    });
+    expect(Object.isFrozen(normalized.summary)).toBe(true);
+    expect(Object.isFrozen(normalized.summary.output as object)).toBe(true);
+    expect(
+      Object.isFrozen((normalized.summary.output as { nested: object }).nested)
+    ).toBe(true);
+  });
+
+  it('keeps clean cleanup separate from a controller failure and replays it exactly', () => {
+    const journal = c2Journal();
+    publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });
+    const generation = journal.queryReadyWork().find(candidate => candidate.checkId === 'inspect')!;
+    const attempt = journal.startGeneratedAttempt(generation.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(attempt);
+    const binding = journal.deriveManagedRunBinding(attempt);
+
+    journal.recordManagedRunAcquired(binding);
+    journal.recordManagedRunStarted(binding);
+    journal.recordManagedRunCancelRequested(binding);
+    journal.failManagedGeneratedAttempt({
+      attempt,
+      binding,
+      cleanupStatus: 'clean',
+      failureCode: 'MANAGED_DEADLINE_EXCEEDED',
+    });
+
+    const managed = journal.getInstanceProjection().managedRunsByAttemptId[attempt.attemptId];
+    expect(managed).toEqual({
+      binding,
+      status: 'terminated',
+      cleanupStatus: 'clean',
+      controllerDecision: 'failed',
+      failureCode: 'MANAGED_DEADLINE_EXCEEDED',
+    });
+    expect(
+      journal.readRuntimeEvents().slice(-5).map(event => event.type)
+    ).toEqual([
+      'ManagedRunAcquired',
+      'ManagedRunStarted',
+      'ManagedRunCancelRequested',
+      'ManagedRunTerminated',
+      'AttemptFailed',
+    ]);
+    expect(journal.replayInstanceProjection()).toEqual(journal.getInstanceProjection());
+    expect(JSON.stringify(journal.readRuntimeEvents())).not.toContain('activeResources');
+  });
+
+  it('publishes a managed completion only with its clean terminal in one batch', () => {
+    const journal = c2Journal();
+    publishCatalog(journal, { components: [{ id: 'A', path: 'packages/a' }] });
+    const generation = journal.queryReadyWork().find(candidate => candidate.checkId === 'inspect')!;
+    const attempt = journal.startGeneratedAttempt(generation.nodeGenerationId);
+    journal.scheduleGeneratedAttempt(attempt);
+    const binding = journal.deriveManagedRunBinding(attempt);
+    journal.recordManagedRunAcquired(binding);
+    journal.recordManagedRunStarted(binding);
+    const before = journal.readRuntimeEvents();
+
+    expectErrorCode(
+      () =>
+        journal.completeManagedGeneratedAttempt({
+          attempt,
+          binding,
+          payload: { id: 'A', findings: 'not-an-array' },
+        }),
+      'CLAIM_SCHEMA_INVALID'
+    );
+    expect(journal.readRuntimeEvents()).toEqual(before);
+
+    journal.completeManagedGeneratedAttempt({
+      attempt,
+      binding,
+      payload: { id: 'A', findings: ['bounded'] },
+    });
+    const committed = journal.readRuntimeEvents().slice(before.length);
+    expect(committed[0].type).toBe('ManagedRunTerminated');
+    expect(committed.at(-1)?.type).toBe('AttemptCompleted');
+    expect(committed.some(event => event.type === 'ClaimPublished')).toBe(true);
+    expect(journal.getInstanceProjection().managedRunsByAttemptId[attempt.attemptId]).toEqual({
+      binding,
+      status: 'terminated',
+      cleanupStatus: 'clean',
+      controllerDecision: 'completed',
+    });
+    expect(journal.replayInstanceProjection()).toEqual(journal.getInstanceProjection());
+  });
+});
+
+describe('managed-run authority snapshots', () => {
+  it('starts deadline cancel and close independently without consulting provider promise methods', async () => {
+    jest.useFakeTimers();
+    const timeoutSpy = jest.spyOn(global, 'setTimeout');
+    const intervalSpy = jest.spyOn(global, 'setInterval');
+    try {
+      const binding = helperManagedBinding();
+      const cancelReturn = deferred<ManagedRunCancelReceiptV1>();
+      const closeReturn = deferred<ManagedRunCleanupReceiptV1>();
+      const providerPromiseTrap = jest.fn(() => {
+        throw new Error('provider settlement promise methods were consulted');
+      });
+      for (const promise of [cancelReturn.promise, closeReturn.promise]) {
+        Object.defineProperties(promise, {
+          then: { configurable: true, value: providerPromiseTrap },
+          catch: { configurable: true, value: providerPromiseTrap },
+        });
+      }
+
+      const callOrder: string[] = [];
+      let handle: any;
+      const cancel = jest.fn(function (this: unknown, reason: 'deadline', fence: number) {
+        expect(this).toBe(handle);
+        callOrder.push('cancel');
+        return cancelReturn.promise;
+      });
+      const close = jest.fn(function (this: unknown) {
+        expect(this).toBe(handle);
+        callOrder.push('close');
+        return closeReturn.promise;
+      });
+      handle = {
+        binding,
+        started: Promise.resolve({ version: 1 as const, kind: 'started' as const, binding }),
+        outcome: Promise.resolve({ version: 1 as const, kind: 'failed' as const, binding }),
+        cancel,
+        close,
+      };
+      const snapshot = snapshotManagedRun(() => handle, binding);
+      const onCancelRequested = jest.fn();
+      const deadline = armManagedRunDeadline({
+        snapshot,
+        timeoutMs: 25,
+        onCancelRequested,
+      });
+      let deadlineSettled = false;
+      void deadline.fired.then(() => {
+        deadlineSettled = true;
+      });
+
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+      expect(timeoutSpy.mock.calls[0][1]).toBe(25);
+      expect(intervalSpy).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(25);
+
+      expect(deadline.didFire()).toBe(true);
+      expect(onCancelRequested).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenCalledWith('deadline', binding.fence);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(callOrder).toEqual(['cancel', 'close']);
+      expect(providerPromiseTrap).not.toHaveBeenCalled();
+      expect(jest.getTimerCount()).toBe(0);
+
+      const closeReceipt: ManagedRunCleanupReceiptV1 = {
+        version: 1,
+        kind: 'cleanup',
+        binding,
+        status: 'clean',
+        activeChildren: 0,
+        activeResources: 0,
+      };
+      closeReturn.resolve(closeReceipt);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(deadlineSettled).toBe(false);
+
+      const cancelReceipt: ManagedRunCancelReceiptV1 = {
+        version: 1,
+        kind: 'cancelled',
+        binding,
+        reason: 'deadline',
+      };
+      cancelReturn.resolve(cancelReceipt);
+      await expect(deadline.fired).resolves.toEqual({
+        cancel: { status: 'fulfilled', value: cancelReceipt },
+        close: { status: 'fulfilled', value: closeReceipt },
+        cancelRequested: true,
+      });
+      expect(deadlineSettled).toBe(true);
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(callOrder).toEqual(['cancel', 'close']);
+      expect(providerPromiseTrap).not.toHaveBeenCalled();
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+      expect(intervalSpy).not.toHaveBeenCalled();
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      timeoutSpy.mockRestore();
+      intervalSpy.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['negative', -1],
+    ['positive infinity', Number.POSITIVE_INFINITY],
+  ])('arms one immediate, total deadline for a %s timeout', async (_name, timeoutMs) => {
+    jest.useFakeTimers();
+    const timeoutSpy = jest.spyOn(global, 'setTimeout');
+    const intervalSpy = jest.spyOn(global, 'setInterval');
+    try {
+      const binding = helperManagedBinding();
+      const cancel = jest.fn(() => Promise.resolve({
+        version: 1 as const,
+        kind: 'cancelled' as const,
+        binding,
+        reason: 'deadline' as const,
+      }));
+      const close = jest.fn(() => Promise.resolve({
+        version: 1 as const,
+        kind: 'cleanup' as const,
+        binding,
+        status: 'clean' as const,
+        activeChildren: 0 as const,
+        activeResources: 0 as const,
+      }));
+      const snapshot = snapshotManagedRun(() => ({
+        binding,
+        started: Promise.resolve({ version: 1, kind: 'started', binding }),
+        outcome: Promise.resolve({ version: 1, kind: 'failed', binding }),
+        cancel,
+        close,
+      } as any), binding);
+      const onCancelRequested = jest.fn();
+
+      expect(normalizeManagedRunTimeout(timeoutMs)).toBe(0);
+      const deadline = armManagedRunDeadline({ snapshot, timeoutMs, onCancelRequested });
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+      expect(timeoutSpy.mock.calls[0][1]).toBe(0);
+      expect(intervalSpy).not.toHaveBeenCalled();
+
+      jest.advanceTimersByTime(0);
+      const settlement = await deadline.fired;
+
+      expect(deadline.didFire()).toBe(true);
+      expect(onCancelRequested).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenCalledWith('deadline', binding.fence);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(settlement.cancel?.status).toBe('fulfilled');
+      expect(settlement.close.status).toBe('fulfilled');
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+      expect(intervalSpy).not.toHaveBeenCalled();
+    } finally {
+      timeoutSpy.mockRestore();
+      intervalSpy.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['started thenable', 'started', { then: jest.fn() }],
+    ['outcome object', 'outcome', {}],
+  ])('rejects a handle with a non-native $s', (_name, slot, hostileValue) => {
+    const binding = helperManagedBinding();
+    const cancel = jest.fn();
+    const close = jest.fn();
+    const started = Promise.resolve({ version: 1 as const, kind: 'started' as const, binding });
+    const outcome = Promise.resolve({ version: 1 as const, kind: 'failed' as const, binding });
+    const handle: any = { binding, started, outcome, cancel, close };
+    handle[slot] = hostileValue;
+
+    expectErrorCode(
+      () => snapshotManagedRun(() => handle, binding),
+      'MANAGED_HANDLE_INVALID'
+    );
+    expect(cancel).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+    if ('then' in hostileValue) expect(hostileValue.then).not.toHaveBeenCalled();
+  });
+
+  it.each(['own methods', 'per-object prototype'] as const)(
+    'does not reconsult %s after started and outcome are mirrored',
+    async mutation => {
+      const binding = helperManagedBinding();
+      const started = deferred<any>();
+      const outcome = deferred<any>();
+      const trap = jest.fn(() => {
+        throw new Error('provider promise mutation was consulted');
+      });
+      const snapshot = snapshotManagedRun(() => ({
+        binding,
+        started: started.promise,
+        outcome: outcome.promise,
+        cancel: () => Promise.reject(new Error('unused cancel')),
+        close: () => Promise.reject(new Error('unused close')),
+      }), binding);
+
+      for (const promise of [started.promise, outcome.promise]) {
+        if (mutation === 'own methods') {
+          Object.defineProperties(promise, {
+            then: { configurable: true, value: trap },
+            catch: { configurable: true, value: trap },
+          });
+        } else {
+          Object.setPrototypeOf(promise, Object.freeze({ then: trap, catch: trap }));
+        }
+      }
+
+      const startedValue = { version: 1 as const, kind: 'started' as const, binding };
+      const outcomeValue = { version: 1 as const, kind: 'failed' as const, binding };
+      started.resolve(startedValue);
+      outcome.resolve(outcomeValue);
+
+      await expect(snapshot.started).resolves.toBe(startedValue);
+      await expect(snapshot.outcome).resolves.toBe(outcomeValue);
+      expect(trap).not.toHaveBeenCalled();
+    }
+  );
+
+  it('mirrors first cancel and close returns and ignores later provider authority mutation', async () => {
+    const binding = helperManagedBinding();
+    const cancelReturn = deferred<any>();
+    const closeReturn = deferred<any>();
+    const originalCancel = jest.fn(() => cancelReturn.promise);
+    const originalClose = jest.fn(() => closeReturn.promise);
+    const redirectedCancel = jest.fn();
+    const redirectedClose = jest.fn();
+    const redirectedStart = jest.fn();
+    const handle: any = {
+      binding,
+      started: Promise.resolve({ version: 1 as const, kind: 'started' as const, binding }),
+      outcome: Promise.resolve({ version: 1 as const, kind: 'failed' as const, binding }),
+      cancel: originalCancel,
+      close: originalClose,
+    };
+    const provider: { startManaged: () => any } = {
+      startManaged: jest.fn(() => handle),
+    };
+    const snapshot = snapshotManagedRun(() => provider.startManaged(), binding);
+
+    provider.startManaged = redirectedStart;
+    handle.cancel = redirectedCancel;
+    handle.close = redirectedClose;
+    Object.setPrototypeOf(handle, Object.freeze({
+      cancel: redirectedCancel,
+      close: redirectedClose,
+    }));
+
+    const cancelMirror = snapshot.cancelOnce('deadline', binding.fence);
+    const closeMirror = snapshot.closeOnce();
+    const trap = jest.fn(() => {
+      throw new Error('provider completion mutation was consulted');
+    });
+    Object.defineProperties(cancelReturn.promise, {
+      then: { configurable: true, value: trap },
+      catch: { configurable: true, value: trap },
+    });
+    Object.setPrototypeOf(closeReturn.promise, Object.freeze({ then: trap, catch: trap }));
+
+    const cancelReceipt = {
+      version: 1 as const,
+      kind: 'cancelled' as const,
+      binding,
+      reason: 'deadline' as const,
+    };
+    const closeReceipt = {
+      version: 1 as const,
+      kind: 'cleanup' as const,
+      binding,
+      status: 'clean' as const,
+      activeChildren: 0 as const,
+      activeResources: 0 as const,
+    };
+    cancelReturn.resolve(cancelReceipt);
+    closeReturn.resolve(closeReceipt);
+
+    await expect(cancelMirror).resolves.toBe(cancelReceipt);
+    await expect(closeMirror).resolves.toBe(closeReceipt);
+    expect(snapshot.cancelOnce('deadline', binding.fence)).toBe(cancelMirror);
+    expect(snapshot.closeOnce()).toBe(closeMirror);
+    expect(originalCancel).toHaveBeenCalledTimes(1);
+    expect(originalCancel).toHaveBeenCalledWith('deadline', binding.fence);
+    expect(originalClose).toHaveBeenCalledTimes(1);
+    expect(redirectedStart).not.toHaveBeenCalled();
+    expect(redirectedCancel).not.toHaveBeenCalled();
+    expect(redirectedClose).not.toHaveBeenCalled();
+    expect(trap).not.toHaveBeenCalled();
+  });
+
+  it('gives the provider a cyclic, frozen copy without freezing controller inputs', () => {
+    const binding = helperManagedBinding();
+    const shared: any = { nested: { value: 'before' } };
+    shared.self = shared;
+    const dependencyResults = new Map<string, any>([['dep', { output: shared }]]);
+    const request: any = {
+      prInfo: {
+        number: 1,
+        title: 'fixture',
+        body: '',
+        author: 'fixture',
+        base: 'main',
+        head: 'feature',
+        files: [],
+        totalAdditions: 0,
+        totalDeletions: 0,
+        eventContext: shared,
+      },
+      checkConfig: { type: 'managed', metadata: shared },
+      dependencyResults,
+      executionContext: { args: shared },
+      binding,
+    };
+
+    const snapshot = snapshotManagedRunStartRequest(request);
+    const providerShared = snapshot.prInfo.eventContext as any;
+    const dependency = snapshot.dependencyResults.get('dep') as any;
+
+    expect(providerShared).not.toBe(shared);
+    expect(providerShared.self).toBe(providerShared);
+    expect((snapshot.checkConfig.metadata as any)).toBe(providerShared);
+    expect((snapshot.executionContext.args as any)).toBe(providerShared);
+    expect(dependency.output).toBe(providerShared);
+    expectDeeplyFrozen(snapshot);
+    expectDeeplyFrozen(dependency);
+    expect(snapshot.dependencyResults.size).toBe(1);
+    expect(snapshot.dependencyResults.get('dep')).toBe(dependency);
+    expect(snapshot.dependencyResults.has('dep')).toBe(true);
+    expect(Array.from(snapshot.dependencyResults.entries())).toEqual([['dep', dependency]]);
+    expect(Array.from(snapshot.dependencyResults.keys())).toEqual(['dep']);
+    expect(Array.from(snapshot.dependencyResults.values())).toEqual([dependency]);
+    const visited: Array<[
+      string,
+      unknown,
+      ReadonlyMap<string, unknown>,
+    ]> = [];
+    snapshot.dependencyResults.forEach((value, key, map) => {
+      visited.push([key, value, map]);
+    });
+    expect(visited).toEqual([['dep', dependency, snapshot.dependencyResults]]);
+    expect(Array.from(snapshot.dependencyResults)).toEqual([['dep', dependency]]);
+    expect((snapshot.dependencyResults as any).set).toBeUndefined();
+    expect((snapshot.dependencyResults as any).delete).toBeUndefined();
+    expect((snapshot.dependencyResults as any).clear).toBeUndefined();
+    expect(() => (snapshot.dependencyResults as any).set('late', {})).toThrow();
+
+    expect(Object.isFrozen(request)).toBe(false);
+    expect(Object.isFrozen(request.prInfo)).toBe(false);
+    expect(Object.isFrozen(request.checkConfig)).toBe(false);
+    expect(Object.isFrozen(request.executionContext)).toBe(false);
+    expect(Object.isFrozen(request.binding)).toBe(false);
+    expect(Object.isFrozen(dependencyResults)).toBe(false);
+    expect(Object.isFrozen(shared)).toBe(false);
+    expect(Object.isFrozen(shared.nested)).toBe(false);
+    shared.nested.value = 'after';
+    dependencyResults.set('late', { output: 'late' });
+    expect(providerShared.nested.value).toBe('before');
+    expect(snapshot.dependencyResults.has('late')).toBe(false);
   });
 });

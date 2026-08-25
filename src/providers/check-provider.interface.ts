@@ -2,7 +2,10 @@ import { PRInfo } from '../pr-analyzer';
 import { ReviewSummary } from '../reviewer';
 import { EnvConfig, HumanInputRequest } from '../types/config';
 import type { ScopePath } from '../snapshot-store';
-import type { KeyedScopePath } from '../state-machine/graph/instance-kernel';
+import type {
+  KeyedScopePath,
+  ManagedRunBindingV1,
+} from '../state-machine/graph/instance-kernel';
 
 interface CandidateClaimInputBase {
   readonly claimId: string;
@@ -144,6 +147,66 @@ export interface ExecutionContext {
   responseCapture?: (text: string) => void;
 }
 
+/** Immutable controller inputs for synchronous managed-run acquisition. */
+export interface ManagedRunStartRequest {
+  readonly prInfo: PRInfo;
+  readonly checkConfig: CheckProviderConfig;
+  readonly dependencyResults: ReadonlyMap<string, ReviewSummary>;
+  readonly executionContext: ExecutionContext;
+  readonly binding: ManagedRunBindingV1;
+}
+
+export interface ManagedRunStartedReceiptV1 {
+  readonly version: 1;
+  readonly kind: 'started';
+  readonly binding: ManagedRunBindingV1;
+}
+
+export interface ManagedRunSucceededOutcomeV1 {
+  readonly version: 1;
+  readonly kind: 'succeeded';
+  readonly binding: ManagedRunBindingV1;
+  readonly summary: ReviewSummary;
+}
+
+export interface ManagedRunFailedOutcomeV1 {
+  readonly version: 1;
+  readonly kind: 'failed';
+  readonly binding: ManagedRunBindingV1;
+}
+
+export type ManagedRunOutcomeV1 =
+  | ManagedRunSucceededOutcomeV1
+  | ManagedRunFailedOutcomeV1;
+
+export interface ManagedRunCancelReceiptV1 {
+  readonly version: 1;
+  readonly kind: 'cancelled';
+  readonly binding: ManagedRunBindingV1;
+  readonly reason: 'deadline';
+}
+
+export interface ManagedRunCleanupReceiptV1 {
+  readonly version: 1;
+  readonly kind: 'cleanup';
+  readonly binding: ManagedRunBindingV1;
+  readonly status: 'clean';
+  readonly activeChildren: 0;
+  readonly activeResources: 0;
+}
+
+/** Exact close-capable handle whose authority is snapshotted synchronously by Visor. */
+export interface ManagedAgentRun {
+  readonly binding: ManagedRunBindingV1;
+  readonly started: Promise<ManagedRunStartedReceiptV1>;
+  readonly outcome: Promise<ManagedRunOutcomeV1>;
+  readonly cancel: (
+    reason: 'deadline',
+    fence: number
+  ) => Promise<ManagedRunCancelReceiptV1>;
+  readonly close: () => Promise<ManagedRunCleanupReceiptV1>;
+}
+
 /**
  * Abstract base class for all check providers
  * Implementing classes provide specific check functionality (AI, tool, script, etc.)
@@ -180,6 +243,12 @@ export abstract class CheckProvider {
     dependencyResults?: Map<string, ReviewSummary>,
     context?: ExecutionContext
   ): Promise<ReviewSummary>;
+
+  /**
+   * Synchronously acquire an exact close-capable managed run. Visor validates
+   * and snapshots the returned handle before awaiting provider-controlled data.
+   */
+  startManaged?(request: ManagedRunStartRequest): ManagedAgentRun;
 
   /**
    * Get the list of configuration keys this provider supports
